@@ -328,6 +328,21 @@ fn sky(rd: vec3<f32>, rough: f32) -> vec3<f32> {
     return c;
 }
 
+// What shiny things reflect: the sky, plus the bright strips and horizon of a photo studio, and
+// the floor below. Rougher surfaces see a blurrier, flatter version.
+fn env_reflect(rd: vec3<f32>, rough: f32) -> vec3<f32> {
+    var c = sky(rd, rough);
+    let up = rd.z;
+    let lum = dot(G.env[2].xyz + G.env[3].xyz, vec3<f32>(0.33)) * 0.5;
+    let strip = smoothstep(0.30, 0.50, up) * (1.0 - smoothstep(0.60, 0.80, up));
+    c = c + vec3<f32>(1.0) * strip * lum * 2.0 * (1.0 - rough);
+    c = c + G.env[3].xyz * exp(-abs(up) * 12.0) * 0.7 * (1.0 - rough);
+    let floor_c = lin(G.env[1].xyz) * 0.9;
+    c = mix(c, floor_c, smoothstep(0.02, -0.12, up) * 0.85);
+    let avg = (G.env[2].xyz + G.env[3].xyz + G.env[4].xyz) * 0.33;
+    return mix(c, avg, rough * 0.75);
+}
+
 fn background(uv: vec2<f32>) -> vec3<f32> {
     // the backdrop colour, a little lighter in the middle
     let c = vec2<f32>(uv.x - 0.5, uv.y - 0.45);
@@ -359,7 +374,7 @@ fn shade_simple(p: vec3<f32>, rd: vec3<f32>, h: Hit) -> vec3<f32> {
     for (var i = 0; i < nl; i = i + 1) {
         d = d + light_col(i) * max(dot(n, light_dir(i)), 0.0);
     }
-    var c = alb * (1.0 - h.metal) * d + sky(reflect(rd, n), h.rough) * mix(0.04, 0.9, h.metal) * alb;
+    var c = alb * (1.0 - h.metal) * d + env_reflect(reflect(rd, n), h.rough) * mix(0.04, 0.9, h.metal) * alb;
     c = c + alb * h.glow * 1.4;
     return c;
 }
@@ -540,10 +555,10 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
         var c = diff_col * (amb + lit);
         c = c + spec;
         let rr = reflect(rd, n);
-        let refl = sky(rr, rough) * mix(0.5, 1.0, ao);
+        let refl = env_reflect(rr, rough) * mix(0.5, 1.0, ao);
         c = c + refl * F * refl_tint * mix(0.15, 1.0, metal) * (1.0 - rough * 0.65);
         // clear coat: a second, glossy reflection on top
-        c = c + sky(rr, 0.05) * (0.04 + 0.96 * fres) * h.coat * 0.55 * mix(0.5, 1.0, ao);
+        c = c + env_reflect(rr, 0.05) * (0.04 + 0.96 * fres) * h.coat * 0.55 * mix(0.5, 1.0, ao);
         // a thin clean rim
         c = c + vec3<f32>(0.05) * fres * ao;
 
@@ -588,7 +603,7 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
             let frost = smoothstep(0.12, 0.7, rough);
             seen = mix(seen, mix(far_view(vec3<f32>(0.0, 0.0, 0.3)), seen, 0.35), frost);
             let Fg = 0.04 + 0.96 * fres;
-            var gcol = seen * tint * (1.0 - Fg) + sky(rr, rough) * Fg * refl_tint;
+            var gcol = seen * tint * (1.0 - Fg) + env_reflect(rr, rough) * Fg * refl_tint;
             for (var i = 0; i < nl; i = i + 1) {
                 let L = light_dir(i);
                 let nh = max(dot(n, normalize(L + v)), 0.0);
