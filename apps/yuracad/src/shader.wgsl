@@ -333,6 +333,7 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
     var hit = false;
     var h: Hit;
     let has_sel = G.counts.w > 0.5;
+    let sel_carving = has_sel && G.shapes[i32(G.counts.z + 0.5)].misc.x < 0.0;
     var sel_abs = 1e9;
     var sel_hit = false;
     let foot = select(px, px, tanh <= 0.0);
@@ -346,12 +347,15 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
             if (sd < 0.02) { sel_hit = true; }
         }
         if (h.d < 0.004 * (1.0 + t * 0.002)) { hit = true; break; }
-        t = t + h.d * 0.9;
+        var step = h.d * 0.9;
+        if (has_sel && sel_carving) { step = min(step, max(abs(sel_dist(p)) * 0.8, 0.15)); }
+        t = t + step;
         if (t > 2000.0) { break; }
     }
 
     // ground
-    if (t_ground < 1e8 && (!hit || t_ground < t)) {
+    let above = ro.z >= 0.0;
+    if (above && t_ground < 1e8 && (!hit || t_ground < t)) {
         let gp = ro + rd * t_ground;
         let fade = clamp(1.0 - length(gp.xy) / 600.0, 0.0, 1.0);
         let gs = 10.0;
@@ -404,9 +408,23 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
         col = c;
     }
 
+    // seen from below the ground is see-through: only its lines are drawn
+    if (!above && t_ground < 1e8 && (!hit || t_ground < t)) {
+        let gp = ro + rd * t_ground;
+        let fade = clamp(1.0 - length(gp.xy) / 600.0, 0.0, 1.0) * 0.6;
+        let gs = 10.0;
+        let a = abs(fract(gp.xy / gs - 0.5) - 0.5) / max(fwidth(gp.xy / gs), vec2<f32>(1e-4));
+        let line = 1.0 - min(min(a.x, a.y), 1.0);
+        let axisx = 1.0 - min(abs(gp.y) / max(fwidth(gp.y), 1e-4), 1.0);
+        let axisy = 1.0 - min(abs(gp.x) / max(fwidth(gp.x), 1e-4), 1.0);
+        col = mix(col, col + vec3<f32>(0.04), line * 0.5 * fade);
+        col = mix(col, lin(vec3<f32>(0.85, 0.35, 0.35)), axisx * 0.55 * fade);
+        col = mix(col, lin(vec3<f32>(0.42, 0.78, 0.42)), axisy * 0.55 * fade);
+    }
+
     // selection outline (and a faint tint inside a shape that carves)
     if (has_sel) {
-        let carving = G.shapes[i32(G.counts.z + 0.5)].misc.x < 0.0;
+        let carving = sel_carving;
         let ring = clamp(1.0 - sel_abs / 2.0, 0.0, 1.0) * 0.9;
         var a = 0.0;
         if (carving) {

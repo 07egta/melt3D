@@ -36,18 +36,11 @@ pub struct App {
     pub folded: HashSet<usize>,
     pub export_quality: usize,
     pub export_smooth: usize,
-    shot: Option<ShotPlan>,
-}
-
-/// Screenshot and quit, for checking the picture without a person (`YURACAD_SHOT=file.ppm`).
-struct ShotPlan {
-    path: PathBuf,
-    frames: u32,
-    asked: bool,
+    shot: Option<PathBuf>,
 }
 
 impl App {
-    pub fn new(srgb: bool) -> App {
+    pub fn new(srgb: bool, open: Option<PathBuf>) -> App {
         let scene = Scene::default();
         let mut app = App {
             committed: scene.clone(),
@@ -70,10 +63,10 @@ impl App {
             folded: HashSet::new(),
             export_quality: 110,
             export_smooth: 2,
-            shot: std::env::var_os("YURACAD_SHOT").map(|p| ShotPlan { path: PathBuf::from(p), frames: 0, asked: false }),
+            shot: std::env::var_os("YURACAD_TEST_DIR").map(PathBuf::from),
         };
-        if let Some(p) = std::env::args().nth(1) {
-            app.open_path(PathBuf::from(p));
+        if let Some(p) = open {
+            app.open_path(p);
         }
         app
     }
@@ -527,11 +520,15 @@ impl App {
             });
     }
 
-    fn screenshot(&mut self, ctx: &egui::Context) {
-        let Some(plan) = &mut self.shot else { return };
-        plan.frames += 1;
-        if plan.frames > 8 && !plan.asked {
-            plan.asked = true;
+    /// For testing without a person: with `YURACAD_TEST_DIR=dir`, a file `dir/snap` asks for a
+    /// screenshot (`dir/shot.ppm`) and `dir/quit` closes the window.
+    fn test_hooks(&mut self, ctx: &egui::Context) {
+        let Some(dir) = self.shot.clone() else { return };
+        ctx.request_repaint_after(std::time::Duration::from_millis(60));
+        if dir.join("quit").exists() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+        if dir.join("snap").exists() && std::fs::remove_file(dir.join("snap")).is_ok() {
             ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
         }
         let image = ctx.input(|i| {
@@ -545,10 +542,8 @@ impl App {
             for c in &img.pixels {
                 out.extend_from_slice(&[c.r(), c.g(), c.b()]);
             }
-            let _ = std::fs::write(&plan.path, out);
-            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            let _ = std::fs::write(dir.join("shot.ppm.tmp"), out).and_then(|()| std::fs::rename(dir.join("shot.ppm.tmp"), dir.join("shot.ppm")));
         }
-        ctx.request_repaint();
     }
 }
 
@@ -566,12 +561,69 @@ impl eframe::App for App {
             self.viewport(ui);
         });
         self.settle(&ctx);
-        self.screenshot(&ctx);
+        self.test_hooks(&ctx);
         let title = format!(
             "YURACAD — {}{}",
             self.path.as_ref().and_then(|p| p.file_stem()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "名前なし".into()),
             if self.dirty { " *" } else { "" }
         );
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(title));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn adding_undoing_and_deleting_shapes() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        assert_eq!(app.scene.shape_count(), 1);
+        app.add_shape(&ctx, Kind::Box);
+        assert_eq!(app.scene.shape_count(), 2);
+        assert_eq!(app.sel, Some(Pick::Shape(0, 1)));
+        app.settle(&ctx);
+        assert_eq!(app.undo.len(), 1, "one finished edit is one undo step");
+        app.undo();
+        assert_eq!(app.scene.shape_count(), 1);
+        app.redo();
+        assert_eq!(app.scene.shape_count(), 2);
+        app.sel = Some(Pick::Shape(0, 1));
+        app.delete_selected();
+        assert_eq!(app.scene.shape_count(), 1);
+        assert_eq!(app.sel, Some(Pick::Shape(0, 0)));
+    }
+
+    #[test]
+    fn minus_shapes_carve_and_plus_minus_flips() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        app.new_op = Op::Subtract;
+        app.add_shape(&ctx, Kind::Cylinder);
+        let Some(Pick::Shape(g, s)) = app.sel else { panic!("selected") };
+        assert_eq!(app.scene.shape(g, s).map(|x| x.op), Some(Op::Subtract));
+        app.flip_op();
+        assert_eq!(app.scene.shape(g, s).map(|x| x.op), Some(Op::Add));
+    }
+
+    #[test]
+    fn the_scene_never_grows_past_its_limits() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        for _ in 0..200 {
+            app.add_shape(&ctx, Kind::Sphere);
+            app.add_group();
+        }
+        assert!(app.scene.shape_count() <= MAX_SHAPES && app.scene.groups.len() <= MAX_GROUPS);
+    }
+
+    #[test]
+    fn a_group_can_be_duplicated_and_the_copy_is_selected() {
+        let mut app = App::new(true, None);
+        app.sel = Some(Pick::Group(0));
+        app.duplicate();
+        assert_eq!(app.scene.groups.len(), 2);
+        assert_eq!(app.sel, Some(Pick::Group(1)));
     }
 }
