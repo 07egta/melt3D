@@ -1,0 +1,25 @@
+[package]
+name = "solidcraft-kernel"
+description = "SolidCraft B-rep kernel boundary: solids, extrude/revolve/booleans/fillets, tessellation, measures and STEP, behind our own API (implemented with truck)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+solidcraft-geom = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+log = { workspace = true }
+truck-modeling = { workspace = true }
+truck-shapeops = { workspace = true }
+truck-meshalgo = { workspace = true }
+truck-stepio = { workspace = true }
+truck-topology = { workspace = true }
+spade = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rayon = { workspace = true }
