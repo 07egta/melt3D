@@ -53,7 +53,7 @@ Parameters (from the command's params list in `melt.rs`):
 - `bodies`: names of the bodies, two or more. Required.
 - `strength`: blend reach in mm, default 5, range 0 to 1000. 0 gives a sharp join or cut.
 - `mode`: `join` or `cut`. Default `join`.
-- `resolution`: grid points along the longest side, 16 to 256, default 96. Higher is smoother and slower.
+- `resolution`: cells along the longest side of the shapes, 16 to 256, default 96. Higher is smoother and slower. The grid also reaches `strength` past the shapes on every side, so a big strength uses more cells; if the grid gets too big, the command says so and does nothing.
 - `smooth`: smoothing rounds, 0 to 8, default 2.
 - `keep`: keep the original bodies. Default false, so they are removed.
 - `name`: name of the new body. Default `Melt`.
