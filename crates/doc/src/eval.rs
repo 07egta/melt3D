@@ -3948,6 +3948,7 @@ fn eval_feature(doc: &Document, vals: &BTreeMap<String, Value>, f: &Feature, st:
             more::plastic_eval(doc, vals, f, st)
         }
         FeatureKind::Patch { .. }
+        | FeatureKind::BlendSurface { .. }
         | FeatureKind::Stitch { .. }
         | FeatureKind::Thicken { .. }
         | FeatureKind::SurfaceTrim { .. }

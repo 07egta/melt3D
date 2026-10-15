@@ -1224,6 +1224,23 @@ pub enum FeatureKind {
         #[walk(pos)]
         edges: Vec<Vec3>,
     },
+    /// A surface joining a free edge of one surface body to a free edge of another, at the
+    /// continuity asked for at each end (`0`: G0, `1`: G1, `2`: G2).
+    BlendSurface {
+        #[walk(body)]
+        from_body: String,
+        /// A point on the first surface's edge.
+        #[walk(pos)]
+        from_at: Vec3,
+        #[walk(body)]
+        to_body: String,
+        #[walk(pos)]
+        to_at: Vec3,
+        #[serde(default = "blend_g1")]
+        continuity: [u8; 2],
+        #[serde(default = "blend_bulge")]
+        bulge: [f64; 2],
+    },
     /// Surface bodies sewn along shared edges into the first one (a solid when they close).
     Stitch {
         #[walk(body)]
@@ -1841,6 +1858,7 @@ impl FeatureKind {
             FeatureKind::Align { .. } => "AlignFeature",
             FeatureKind::Remove { .. } => "RemoveFeature",
             FeatureKind::Patch { .. } => "PatchFeature",
+            FeatureKind::BlendSurface { .. } => "BlendSurfaceFeature",
             FeatureKind::SurfaceExtrude { .. } => "SurfaceExtrudeFeature",
             FeatureKind::SurfaceRevolve { .. } => "SurfaceRevolveFeature",
             FeatureKind::SurfaceSweep { .. } => "SurfaceSweepFeature",
@@ -1917,6 +1935,7 @@ impl FeatureKind {
             FeatureKind::Align { .. } => "Align",
             FeatureKind::Remove { .. } => "Remove",
             FeatureKind::Patch { .. } => "Patch",
+            FeatureKind::BlendSurface { .. } => "BlendSurface",
             FeatureKind::SurfaceExtrude { .. } => "SurfaceExtrude",
             FeatureKind::SurfaceRevolve { .. } => "SurfaceRevolve",
             FeatureKind::SurfaceSweep { .. } => "SurfaceSweep",
@@ -1979,6 +1998,14 @@ pub struct Feature {
 
 fn inside_str() -> String {
     "inside".into()
+}
+
+fn blend_g1() -> [u8; 2] {
+    [1, 1]
+}
+
+fn blend_bulge() -> [f64; 2] {
+    [1.0, 1.0]
 }
 
 fn all_profiles() -> ProfileSel {

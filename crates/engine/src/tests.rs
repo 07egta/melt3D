@@ -3402,3 +3402,22 @@ fn pattern_copies_added_after_a_rename_keep_their_numbers() {
     run(&mut s, "timeline.edit", json!({"feature": "Pat", "set": {"pattern": {"count1": "2"}}}));
     assert_eq!(names(&s), ["X", "Second"]);
 }
+
+/// Plane from View: a plane square to the viewing direction through a point, or the origin;
+/// hostile input is refused and leaves the design alone.
+#[test]
+fn plane_from_view_makes_a_plane_square_to_the_view() {
+    let mut s = Session::default();
+    s.execute("construct.plane.from_view", &json!({"normal": [0, 0, 2], "through": [1, 2, 7], "name": "V"})).unwrap();
+    s.execute("construct.plane.from_view_origin", &json!({"normal": [1, 0, 0], "name": "W"})).unwrap();
+    let v = s.execute("timeline.inspect", &json!({"feature": "V"})).unwrap();
+    assert_eq!(v["definition"]["plane"]["plane"]["origin"], json!([1.0, 2.0, 7.0]), "{v}");
+    let w = s.execute("timeline.inspect", &json!({"feature": "W"})).unwrap();
+    assert_eq!(w["definition"]["plane"]["plane"]["origin"], json!([0.0, 0.0, 0.0]), "{w}");
+    let before = s.doc.features.len();
+    for p in [json!({"normal": [0, 0, 0]}), json!({"normal": "up"}), json!({"through": [1e300, 0, 0]}), json!({"through": [0, 0]})] {
+        assert!(s.execute("construct.plane.from_view", &p).is_err(), "{p}");
+    }
+    assert!(s.execute("construct.plane.from_view_origin", &json!({"normal": [0, 0, 0]})).is_err());
+    assert_eq!(s.doc.features.len(), before);
+}

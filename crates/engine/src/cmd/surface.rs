@@ -58,10 +58,10 @@ pub static COMMANDS: &[CommandSpec] = &[
         .at("SURFACE", "CREATE")
         .icon("boundary")
         .params("planned: u: [curves], v?: [curves] (sketch curves, 3D sketch wires or {body, point} edges; 2–4 boundaries, more make a network); continuity?: [{curve, g: 0|1|2}] for edge boundaries; operation?: new|join"),
-    planned!("surface.blend", "Blend Surface", "764")
+    CommandSpec::new("surface.blend", "Blend Surface", surface_blend)
         .at("SURFACE", "CREATE")
         .icon("surface_blend")
-        .params("planned: from, to: {body, edges: [[x,y,z]]} (two edge chains apart); continuity?: [g0|g1|g2, g0|g1|g2] (each side); bulge?: [number, number]; align?: auto|[[x,y,z], [x,y,z]]; stitch?: bool"),
+        .params("from, to: {body, edge: [x,y,z]} (a point on a free edge of a surface body; `edges: [[x,y,z]]` also works, the first point counts); continuity?: [g0|g1|g2, g0|g1|g2] (at the first and the second surface; one value counts for both; default g1, g1); bulge?: [number, number] (how far each tangent reaches, times the gap between the edges; default 1, 1); name?, body_name?. A surface body of one patch whose boundary is the two edges. G1 and G2 are met at the sampled points and measured with inspect.continuity; G3 and Class A are not promised"),
     CommandSpec::new("surface.untrim", "Untrim", untrim)
         .at("SURFACE", "MODIFY")
         .icon("untrim")
@@ -377,6 +377,70 @@ fn trim(s: &mut Session, p: &Value) -> Result<Value> {
         None => (plane_param(s, p.get("plane"), cmd)?, None),
     };
     add_feature(s, p, FeatureKind::SurfaceTrim { body, plane, tool, keep })
+}
+
+/// One end of a blend: the body and a point on its edge.
+fn blend_end(p: &Value, key: &str, cmd: &str) -> Result<(String, solidcraft_geom::Vec3)> {
+    let side = p.get(key).ok_or_else(|| bad(cmd, format!("`{key}` is needed: {{body, edge: [x,y,z]}}")))?;
+    let body = str_(side, "body").filter(|b| !b.trim().is_empty()).ok_or_else(|| bad(cmd, format!("`{key}.body` is needed")))?;
+    let at = side
+        .get("edge")
+        .and_then(vec3)
+        .or_else(|| side.get("edges").and_then(Value::as_array).and_then(|a| a.first()).and_then(vec3))
+        .ok_or_else(|| bad(cmd, format!("`{key}.edge` must be a point [x,y,z] on a free edge")))?;
+    Ok((body.to_string(), at))
+}
+
+/// `g0`, `g1` or `g2` (or 0, 1, 2) for one or both ends.
+fn blend_levels(p: &Value, cmd: &str) -> Result<[u8; 2]> {
+    let one = |v: &Value| -> Result<u8> {
+        match v {
+            Value::String(s) => match s.trim().to_ascii_lowercase().as_str() {
+                "g0" | "0" => Ok(0),
+                "g1" | "1" => Ok(1),
+                "g2" | "2" => Ok(2),
+                other => Err(bad(cmd, format!("continuity `{other}` must be g0, g1 or g2"))),
+            },
+            Value::Number(n) => match n.as_u64() {
+                Some(k @ 0..=2) => Ok(k as u8),
+                _ => Err(bad(cmd, "continuity must be 0, 1 or 2")),
+            },
+            _ => Err(bad(cmd, "continuity must be g0, g1 or g2")),
+        }
+    };
+    match p.get("continuity") {
+        None | Some(Value::Null) => Ok([1, 1]),
+        Some(Value::Array(a)) if a.len() == 2 => Ok([one(&a[0])?, one(&a[1])?]),
+        Some(Value::Array(_)) => Err(bad(cmd, "`continuity` takes two values: the first and the second surface")),
+        Some(v) => {
+            let k = one(v)?;
+            Ok([k, k])
+        }
+    }
+}
+
+fn surface_blend(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "surface.blend";
+    let (from_body, from_at) = blend_end(p, "from", cmd)?;
+    let (to_body, to_at) = blend_end(p, "to", cmd)?;
+    let continuity = blend_levels(p, cmd)?;
+    let bulge = match p.get("bulge") {
+        None | Some(Value::Null) => [1.0, 1.0],
+        Some(Value::Array(a)) if a.len() == 2 => {
+            let g = |v: &Value| {
+                v.as_f64().filter(|x| x.is_finite() && *x > 0.0 && *x <= 20.0).ok_or_else(|| bad(cmd, "`bulge` numbers must be between 0 and 20"))
+            };
+            [g(&a[0])?, g(&a[1])?]
+        }
+        Some(_) => return Err(bad(cmd, "`bulge` takes two numbers")),
+    };
+    let st = s.model.state();
+    for b in [&from_body, &to_body] {
+        if st.body(b).is_none() {
+            return Err(bad(cmd, format!("no body `{b}`")));
+        }
+    }
+    add_feature(s, p, FeatureKind::BlendSurface { from_body, from_at, to_body, to_at, continuity, bulge })
 }
 
 #[cfg(test)]
@@ -999,7 +1063,7 @@ mod tests {
     /// as it was.
     #[test]
     fn planned_commands_refuse_and_leave_the_design_alone() {
-        let planned = ["surface.boundary", "surface.blend", "surface.fillet", "inspect.continuity"];
+        let planned = ["surface.boundary", "surface.fillet"];
         let mut s = Session::default();
         run(&mut s, "solid.box", json!({"length": 10, "width": 10, "height": 10, "body_name": "B"}));
         let before = s.doc.features.len();
@@ -1015,6 +1079,69 @@ mod tests {
             assert!(e.starts_with("not supported yet: ") && e.contains("(issue #"), "{id}: {e}");
         }
         assert_eq!(s.doc.features.len(), before, "a planned command changed the design");
+    }
+
+    /// Two walls 30 mm apart (a curved one and a flat one) joined by Blend Surface: G1 and G2
+    /// are measured with Continuity Analysis, G0 is the least that is claimed, and hostile or
+    /// wrong input is refused without touching the design.
+    #[test]
+    fn blend_surface_joins_two_walls_and_the_check_reports_what_it_measured() {
+        let mut s = Session::default();
+        run(&mut s, "sketch.create", json!({"plane": "XY", "name": "Arc"}));
+        let r = 20.0 / 2f64.sqrt();
+        let arc = run(&mut s, "sketch.arc.three_point", json!({"start": [20, 0], "end": [0, 20], "through": [r, r]}))["created"]["curves"][0]
+            .as_str()
+            .unwrap()
+            .to_string();
+        run(&mut s, "sketch.finish", json!({}));
+        run(&mut s, "surface.extrude", json!({"sketch": "Arc", "curves": [arc], "distance": 10, "body_name": "Curved"}));
+        run(&mut s, "sketch.create", json!({"plane": "XY", "name": "Flat"}));
+        let line = run(&mut s, "sketch.line", json!({"points": [[-60, 30], [-30, 30]]}))["created"]["curves"][0].as_str().unwrap().to_string();
+        run(&mut s, "sketch.finish", json!({}));
+        run(&mut s, "surface.extrude", json!({"sketch": "Flat", "curves": [line], "distance": 10, "body_name": "Wall"}));
+
+        let a = json!({"body": "Curved", "edge": [0, 20, 5]});
+        let b = json!({"body": "Wall", "edge": [-30, 30, 5]});
+        for (level, max_jump) in [("g1", f64::MAX), ("g2", 0.01)] {
+            let done = run(&mut s, "surface.blend", json!({"from": a, "to": b, "continuity": level, "body_name": "Link"}));
+            assert!(done.is_object(), "{done}");
+            let st = s.world_state();
+            let link = st.body("Link").expect("the blend is a body");
+            assert!(link.body.is_surface() && link.body.face_count() == 1);
+            drop(st);
+            let seam = run(&mut s, "inspect.continuity", json!({"a": a, "b": {"body": "Link", "edge": [0, 20, 5]}}));
+            assert!(seam["gap_mm"].as_f64().unwrap() < 1e-3, "{seam}");
+            assert!(seam["angle_deg"].as_f64().unwrap() < 0.5, "{level}: {seam}");
+            assert!(seam["curvature_jump"].as_f64().unwrap() < max_jump, "{level}: {seam}");
+            assert_eq!(seam["level"], if level == "g2" { "G2" } else { "G1" }, "{seam}");
+            let cold = Session::new(solidcraft_doc::Document::from_json(&s.doc.to_json()).unwrap());
+            assert!((area(&cold, "Link") - area(&s, "Link")).abs() < 1e-9, "reopening gives the same surface");
+            run(&mut s, "edit.undo", json!({}));
+        }
+
+        let before = s.doc.features.len();
+        for p in [
+            json!({"from": a}),
+            json!({"from": a, "to": {"body": "Nope", "edge": [0, 0, 0]}}),
+            json!({"from": a, "to": a}),
+            json!({"from": a, "to": b, "continuity": "g3"}),
+            json!({"from": a, "to": b, "continuity": [1, 2, 3]}),
+            json!({"from": a, "to": b, "bulge": [0, 1]}),
+            json!({"from": a, "to": b, "bulge": [1e300, 1]}),
+            json!({"from": a, "to": {"body": "Wall", "edge": [1e300, 0, 0]}}),
+            json!({"from": a, "to": {"body": "Wall", "edge": [-45, 30, 5]}}),
+        ] {
+            assert!(s.execute("surface.blend", &p).is_err(), "{p}");
+        }
+        for p in [
+            json!({}),
+            json!({"a": a}),
+            json!({"a": a, "b": {"body": "Nope", "edge": [0, 0, 0]}}),
+            json!({"a": a, "b": {"body": "Wall", "edge": [1e300, 0, 0]}}),
+        ] {
+            assert!(s.execute("inspect.continuity", &p).is_err(), "{p}");
+        }
+        assert_eq!(s.doc.features.len(), before);
     }
 
     /// A trim keeps its construction plane when the plane is renamed.

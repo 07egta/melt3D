@@ -146,10 +146,10 @@ impl Tokens {
         t.hover = Color32::from_rgb(54, 61, 74);
         t.hover_edge_halo = Color32::from_rgb(203, 203, 203);
         t.origin_point = Color32::from_rgb(214, 215, 218);
-        t.viewport_top = Color32::from_rgb(46, 52, 64);
-        t.viewport_bottom = Color32::from_rgb(46, 52, 64);
-        t.grid = Color32::from_rgb(59, 65, 76);
-        t.grid_major = Color32::from_rgb(73, 79, 90);
+        t.viewport_top = Color32::from_rgb(60, 60, 62);
+        t.viewport_bottom = Color32::from_rgb(60, 60, 62);
+        t.grid = Color32::from_rgb(72, 72, 75);
+        t.grid_major = Color32::from_rgb(92, 92, 96);
         t.body = Color32::from_rgb(152, 156, 162);
         t.body_edge = Color32::from_rgb(16, 16, 18);
         t.sketch = Color32::from_rgb(92, 150, 255);

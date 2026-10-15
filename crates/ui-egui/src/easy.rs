@@ -219,6 +219,7 @@ const ALIASES: &[(&str, &[&str])] = &[
     ("surface.loft", &["LoftSrf", "面ロフト"]),
     ("surface.ruled", &["RuledSrf", "ルールド面"]),
     ("surface.patch", &["Patch", "NetworkSrf", "パッチ", "穴を埋める", "ネットワーク曲面"]),
+    ("construct.plane.from_view", &["CPlane", "SetCPlane", "ViewPlane", "画面平面", "ビュー平面", "画面に平行"]),
     ("surface.blend", &["BlendSrf", "MatchSrf", "ブレンド曲面", "つなぐ曲面", "なじませる"]),
     ("surface.stitch", &["Join", "JoinSrf", "つなぐ", "縫合"]),
     ("surface.trim", &["TrimSrf", "面トリム"]),

@@ -34,11 +34,11 @@ pub static COMMANDS: &[CommandSpec] = &[
         .icon("curvature_map")
         .noundo()
         .params("radius?: mm shown red (default: a tenth of the model's size); clear?: true turns the analysis off"),
-    planned!("inspect.continuity", "Continuity Analysis", "770")
+    CommandSpec::new("inspect.continuity", "Continuity Analysis", continuity)
         .at("SURFACE", "INSPECT")
         .icon("continuity")
         .noundo()
-        .params("planned: body?; edges?: [[x,y,z]] (default: every edge of the body); returns each edge's worst gap (G0), normal angle (G1) and curvature jump (G2); clear?: true turns the analysis off"),
+        .params("a, b: {body, edge: [x,y,z]} (a point on a free edge of each surface; the edges are expected to lie together). Reads how the two surfaces meet along the edge, at 39 points, and reports the worst: gap_mm (G0), angle_deg between the normals (G1), curvature_jump and curvature_max (G2, in 1/mm), g3_jump (an estimate of the jump in the curvature's rate of change, 1/mm²; noisy), and level: the highest of G0, G1, G2 met (none when the surfaces do not even touch). Limits: gap 1e-4 of the size, 0.5 degrees, a tenth of the larger curvature. G3 and Class A are not decided by this check"),
 ];
 
 fn set(s: &mut Session, p: &Value, a: SurfaceAnalysis) -> Result<Value> {
@@ -92,6 +92,44 @@ fn curvature_map(s: &mut Session, p: &Value) -> Result<Value> {
         }
     };
     set(s, p, SurfaceAnalysis::Curvature { radius })
+}
+
+fn continuity(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "inspect.continuity";
+    let end = |key: &str| -> Result<(String, Vec3)> {
+        let side = p.get(key).ok_or_else(|| bad(cmd, format!("`{key}` is needed: {{body, edge: [x,y,z]}}")))?;
+        let body =
+            side.get("body").and_then(Value::as_str).filter(|b| !b.trim().is_empty()).ok_or_else(|| bad(cmd, format!("`{key}.body` is needed")))?;
+        let at = side
+            .get("edge")
+            .and_then(vec3)
+            .or_else(|| side.get("edges").and_then(Value::as_array).and_then(|a| a.first()).and_then(vec3))
+            .ok_or_else(|| bad(cmd, format!("`{key}.edge` must be a point [x,y,z] on a free edge")))?;
+        Ok((body.to_string(), at))
+    };
+    let (ba, pa) = end("a")?;
+    let (bb, pb) = end("b")?;
+    let st = s.model.state();
+    let a = st.body(&ba).ok_or_else(|| bad(cmd, format!("no body `{ba}`")))?;
+    let b = st.body(&bb).ok_or_else(|| bad(cmd, format!("no body `{bb}`")))?;
+    let c = solidcraft_kernel::continuity(&a.body, pa, &b.body, pb).map_err(|e| bad(cmd, e.to_string()))?;
+    let size = a.body.size().max(b.body.size());
+    let level = match c.level(size) {
+        None => "none",
+        Some(0) => "G0",
+        Some(1) => "G1",
+        _ => "G2",
+    };
+    Ok(json!({
+        "level": level,
+        "samples": c.samples,
+        "gap_mm": c.gap,
+        "angle_deg": c.angle.to_degrees(),
+        "curvature_jump": c.curvature_jump,
+        "curvature_max": c.curvature_max,
+        "g3_jump": c.g3_jump,
+        "note": "G3 and Class A are not decided by this check; g3_jump is an estimate"
+    }))
 }
 
 #[cfg(test)]

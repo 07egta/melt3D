@@ -336,6 +336,8 @@ fn plane_section(app: &mut SolveApp, ui: &mut egui::Ui) {
     let id = ui.id().with("easy_make_plane");
     egui::Popup::menu(&make).id(id).show(|ui| {
         for cid in [
+            "construct.plane.from_view",
+            "construct.plane.from_view_origin",
             "construct.plane.offset",
             "construct.plane.three_points",
             "construct.plane.midplane",

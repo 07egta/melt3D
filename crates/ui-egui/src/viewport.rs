@@ -2494,11 +2494,17 @@ pub fn show(app: &mut SolveApp, ui: &mut egui::Ui) {
     // ---- interaction ----
     let add = mods.shift || mods.command || mods.ctrl;
     crate::sketch_text::set_one_letter(mods.shift);
+    if app.view_plane_pick && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        app.view_plane_pick = false;
+        app.set_status("Plane from View cancelled", false);
+    }
     if let Some(p) = hover.filter(|_| inside) {
         if app.tool.is_some() {
             crate::tools::on_hover(app, &proj, p);
         }
-        if resp.clicked() && !held {
+        if app.view_plane_pick && resp.clicked() && !held {
+            view_plane_click(app, &proj, p);
+        } else if resp.clicked() && !held {
             if app.tool.is_some() {
                 crate::tools::on_click(app, &proj, p);
             } else if app.dialog.as_ref().is_some_and(|d| d.wants_picks()) {
@@ -3670,6 +3676,25 @@ fn view_menu(app: &mut SolveApp, ui: &mut egui::Ui, button: Rect) -> bool {
     let clicked_out = ui.input(|i| i.pointer.any_pressed())
         && ui.input(|i| i.pointer.interact_pos()).is_some_and(|p| !r.response.rect.contains(p) && !button.contains(p));
     !clicked_out
+}
+
+/// Plane from View's click: the plane parallel to the screen goes through the vertex, edge,
+/// face or plane point under the cursor, otherwise through the point on the plane of the view's
+/// target under it.
+fn view_plane_click(app: &mut SolveApp, proj: &Proj, pos: Pos2) {
+    app.view_plane_pick = false;
+    let back = app.cam.back();
+    let hit = pick(app, proj, pos).into_iter().find_map(|h| match h {
+        Hit::Vertex { point, .. } | Hit::Face { point, .. } | Hit::Plane { point, .. } => Some(point),
+        Hit::Edge { mid, .. } => Some(mid),
+        _ => None,
+    });
+    let through = hit.or_else(|| {
+        let (origin, direction) = proj.ray(pos);
+        solidcraft_engine::geom::Plane::from_normal(app.cam.target, back).and_then(|pl| pl.intersect_ray(origin, direction))
+    });
+    let Some(p) = through else { return };
+    let _ = app.run("construct.plane.from_view", serde_json::json!({"normal": [back.x, back.y, back.z], "through": [p.x, p.y, p.z]}));
 }
 
 #[cfg(test)]

@@ -39,6 +39,7 @@ impl Walk for std::sync::Arc<str> {}
 impl Walk for bool {}
 impl Walk for u64 {}
 impl Walk for i8 {}
+impl Walk for u8 {}
 impl Walk for f64 {}
 impl Walk for ProfileSel {}
 impl Walk for solidcraft_sketch::Sketch {}
