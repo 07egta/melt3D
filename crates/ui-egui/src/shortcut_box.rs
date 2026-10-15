@@ -13,7 +13,7 @@ use crate::{SolveApp, icons};
 
 /// How many recent commands are kept.
 const RECENT: usize = 12;
-const W: f32 = 340.0;
+const W: f32 = 420.0;
 
 #[derive(Default)]
 pub struct ShortcutBox {
@@ -161,6 +161,8 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
     let mut pin: Option<&'static str> = None;
     let mut menu: Option<(Pos2, &'static str)> = None;
     let h = 380.0;
+    // The easy layout opens the search in the middle, near the top, like a command palette.
+    let at = if app.ui.easy_layout { pos2(screen.center().x - W / 2.0, screen.top() + screen.height() * 0.12) } else { at };
     let pos = pos2(
         at.x.clamp(screen.left() + 4.0, (screen.right() - W - 4.0).max(screen.left())),
         at.y.clamp(screen.top() + 4.0, (screen.bottom() - h).max(screen.top())),
@@ -205,7 +207,7 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
                 ui.spacing_mut().item_spacing.y = 0.0;
                 for (i, (id, label, icon, place)) in list.iter().enumerate().take(80) {
                     let enabled = solidcraft_engine::find_command(id).is_some_and(|c| c.info(&app.session).enabled);
-                    let (r, resp) = ui.allocate_exact_size(vec2(W - 20.0, 26.0), Sense::click());
+                    let (r, resp) = ui.allocate_exact_size(vec2(W - 20.0, 30.0), Sense::click());
                     let lit = i == app.sbox.index || resp.hovered();
                     if lit {
                         ui.painter().rect_filled(r, 4.0, t.hover);
@@ -216,17 +218,32 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
                     let ink = if enabled { t.icon } else { t.border };
                     icons::paint(
                         ui.painter(),
-                        Rect::from_center_size(pos2(r.left() + 14.0, r.center().y), vec2(16.0, 16.0)),
-                        icon,
+                        Rect::from_center_size(pos2(r.left() + 16.0, r.center().y), vec2(20.0, 20.0)),
+                        if icon.is_empty() { crate::easy_glyph::fallback_icon(id) } else { icon },
                         ink,
                         t.icon_fill,
                         t.accent,
                     );
                     let col = if enabled { t.text } else { t.text_dim };
-                    ui.painter().text(pos2(r.left() + 30.0, r.center().y), Align2::LEFT_CENTER, *label, FontId::proportional(13.0), col);
+                    let galley = ui.painter().layout_no_wrap((*label).to_string(), FontId::proportional(13.0), col);
+                    let label_end = r.left() + 34.0 + galley.size().x;
+                    ui.painter().galley(pos2(r.left() + 34.0, r.center().y - galley.size().y / 2.0), galley, col);
+                    // The command's English name beside a translated one, as a second language.
+                    if let Some(c) = solidcraft_engine::find_command(id).filter(|c| c.label != *label) {
+                        ui.painter().text(
+                            pos2(label_end + 6.0, r.center().y),
+                            Align2::LEFT_CENTER,
+                            format!("({})", c.label),
+                            FontId::proportional(11.0),
+                            t.text_dim,
+                        );
+                    }
                     let key = crate::keymap::effective(app, id).unwrap_or_default();
-                    let right = if key.is_empty() { place.clone() } else { format!("{key}   {place}") };
-                    ui.painter().text(pos2(r.right() - 26.0, r.center().y), Align2::RIGHT_CENTER, right, FontId::proportional(10.5), t.text_dim);
+                    let mut right = r.right() - 28.0;
+                    if !key.is_empty() {
+                        right = crate::easy_glyph::key_cap(ui.painter(), right, r.center().y, &key, t.text_dim, t.border) - 8.0;
+                    }
+                    ui.painter().text(pos2(right, r.center().y), Align2::RIGHT_CENTER, place.as_str(), FontId::proportional(10.5), t.text_dim);
                     // The pin.
                     let pinned = app.sbox.pinned.iter().any(|p| p == id);
                     let pr = Rect::from_center_size(pos2(r.right() - 11.0, r.center().y), vec2(16.0, 16.0));

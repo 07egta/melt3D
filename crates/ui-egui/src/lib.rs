@@ -38,6 +38,7 @@ mod dimension_create_ui_tests;
 pub mod documents;
 pub mod drag_snap;
 pub mod easy;
+pub mod easy_glyph;
 pub mod easy_ui;
 pub mod fonts;
 pub mod frame;
