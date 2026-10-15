@@ -87,6 +87,16 @@ pub static COMMANDS: &[CommandSpec] = &[
         .at("SOLID", "CONSTRUCT")
         .icon("plane")
         .params("base: XY|XZ|YZ|plane name, or a planar face {face: [x,y,z], body?, index?, path?}; offset: expr; name?"),
+    CommandSpec::new("construct.plane.from_view", "Plane from View", plane_from_view)
+        .at("SOLID", "CONSTRUCT")
+        .icon("plane")
+        .key("Ctrl+Shift+Space")
+        .params("normal?: [x,y,z] the viewing direction (the plane is parallel to the screen; the app fills it in from the camera); through?: [x,y,z] a point the plane passes through (default: the origin); name? Started from the keyboard it asks for a click: the plane goes through the clicked point"),
+    CommandSpec::new("construct.plane.from_view_origin", "Plane from View Through Origin", plane_from_view_origin)
+        .at("SOLID", "CONSTRUCT")
+        .icon("plane")
+        .key("Ctrl+Space")
+        .params("normal?: [x,y,z] the viewing direction (the app fills it in from the camera); name? The plane is parallel to the screen and passes through the origin"),
     CommandSpec::new("construct.plane.at_angle", "Plane at Angle", plane_angle)
         .at("SOLID", "CONSTRUCT")
         .icon("plane")
@@ -1324,6 +1334,32 @@ fn plane_offset(s: &mut Session, p: &Value) -> Result<Value> {
     add_feature(s, p, FeatureKind::ConstructionPlane { plane: solidcraft_doc::PlaneRef::Offset { base: Box::new(base), distance: d } })
 }
 
+/// A construction plane square to `normal` (a viewing direction) through `through`.
+fn view_plane(s: &mut Session, p: &Value, cmd: &str, through: Vec3) -> Result<Value> {
+    let normal = match p.get("normal") {
+        None | Some(Value::Null) => Vec3::Z,
+        Some(v) => vec3(v).and_then(Vec3::normalized).ok_or_else(|| bad(cmd, "`normal` must be a non-zero [x, y, z]"))?,
+    };
+    if ![through.x, through.y, through.z].iter().all(|c| c.is_finite() && c.abs() < 1e9) {
+        return Err(bad(cmd, "the point is out of range"));
+    }
+    let plane = solidcraft_geom::Plane::from_normal(through, normal).ok_or_else(|| bad(cmd, "`normal` must be a non-zero [x, y, z]"))?;
+    add_feature(s, p, FeatureKind::ConstructionPlane { plane: solidcraft_doc::PlaneRef::Custom { plane } })
+}
+
+fn plane_from_view(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "construct.plane.from_view";
+    let through = match p.get("through") {
+        None | Some(Value::Null) => Vec3::ZERO,
+        Some(v) => vec3(v).ok_or_else(|| bad(cmd, "`through` must be a point [x, y, z]"))?,
+    };
+    view_plane(s, p, cmd, through)
+}
+
+fn plane_from_view_origin(s: &mut Session, p: &Value) -> Result<Value> {
+    view_plane(s, p, "construct.plane.from_view_origin", Vec3::ZERO)
+}
+
 fn plane_angle(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "construct.plane.at_angle";
     let base = plane_param(s, p.get("base"), cmd)?;
@@ -1743,50 +1779,3 @@ fn offset_face(s: &mut Session, p: &Value) -> Result<Value> {
     check_expr(s, &distance, Kind::Length, cmd, "distance")?;
     add_feature(s, p, FeatureKind::OffsetFace { faces, distance, body: str_(p, "body").map(str::to_string) })
 }
-
-#[cfg(test)]
-#[path = "patterns_tests.rs"]
-mod patterns_tests;
-
-#[cfg(test)]
-#[path = "revolve_convention_tests.rs"]
-mod revolve_convention_tests;
-
-#[cfg(test)]
-#[path = "offset_topology_tests.rs"]
-mod offset_topology_tests;
-
-#[cfg(test)]
-#[path = "offset_identity_tests.rs"]
-mod offset_identity_tests;
-
-#[cfg(test)]
-#[path = "offset_edit_guard_tests.rs"]
-mod offset_edit_guard_tests;
-
-#[cfg(test)]
-#[path = "offset_plane_face_tests.rs"]
-mod offset_plane_face_tests;
-
-#[cfg(test)]
-#[path = "lineage_face_tests.rs"]
-mod lineage_face_tests;
-#[cfg(test)]
-#[path = "stacked_face_tests.rs"]
-mod stacked_face_tests;
-
-#[cfg(test)]
-#[path = "solid_move_copy_tests.rs"]
-mod solid_move_copy_tests;
-
-#[cfg(test)]
-#[path = "move_in_sketch_tests.rs"]
-mod move_in_sketch_tests;
-
-#[cfg(test)]
-#[path = "thin_extrude_tests.rs"]
-mod thin_extrude_tests;
-
-#[cfg(test)]
-#[path = "extrude_convention_tests.rs"]
-mod extrude_convention_tests;

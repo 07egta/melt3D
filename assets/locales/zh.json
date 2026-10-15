@@ -1184,5 +1184,7 @@
   "ui.heading_easy": "简易",
   "ui.heading_output": "输出",
   "ui.heading_refine": "修整",
-  "ui.heading_shape": "造型"
+  "ui.heading_shape": "造型",
+  "cmd.construct_plane_from_view": "平行于视图的平面",
+  "cmd.construct_plane_from_view_origin": "平行于视图的平面（过原点）"
 }

@@ -31,6 +31,24 @@ pub(super) fn eval(doc: &Document, vals: &BTreeMap<String, Value>, f: &Feature, 
             }
             Ok(())
         }
+        FeatureKind::BlendSurface { from_body, from_at, to_body, to_at, continuity, bulge } => {
+            let level = |k: u8| match k {
+                0 => Ok(kernel::Continuity::G0),
+                1 => Ok(kernel::Continuity::G1),
+                2 => Ok(kernel::Continuity::G2),
+                other => Err(DocError::Invalid(format!("continuity {other} (0, 1 or 2)"))),
+            };
+            let opts =
+                kernel::BlendOptions { continuity: [level(continuity[0])?, level(continuity[1])?], bulge: *bulge, ..kernel::BlendOptions::default() };
+            let ia = body_at(st, &Some(from_body.clone()), std::slice::from_ref(from_at))?;
+            let ib = body_at(st, &Some(to_body.clone()), std::slice::from_ref(to_at))?;
+            let a = st.bodies.get(ia).ok_or_else(|| DocError::Invalid("first body".into()))?;
+            let b = st.bodies.get(ib).ok_or_else(|| DocError::Invalid("second body".into()))?;
+            let made = kernel::blend_surface(&a.body, *from_at, &b.body, *to_at, &opts)?;
+            let name = new_name(st, f, 0);
+            st.bodies.push(ModelBody::new(name, made, f.id));
+            Ok(())
+        }
         FeatureKind::Stitch { bodies, tolerance } => {
             let tol = val(vals, tolerance, Kind::Length)?;
             let idx: Vec<usize> = bodies

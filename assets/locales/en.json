@@ -1184,5 +1184,7 @@
   "ui.heading_easy": "EASY",
   "ui.heading_output": "OUTPUT",
   "ui.heading_refine": "REFINE",
-  "ui.heading_shape": "SHAPE"
+  "ui.heading_shape": "SHAPE",
+  "cmd.construct_plane_from_view": "Plane from View",
+  "cmd.construct_plane_from_view_origin": "Plane from View Through Origin"
 }

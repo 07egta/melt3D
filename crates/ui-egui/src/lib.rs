@@ -271,6 +271,8 @@ pub struct SolveApp {
     pub viewport: viewport::ViewportState,
     pub render_workspace: render_workspace::State,
     pub tool: Option<tools::Tool>,
+    /// Plane from View is waiting for a click: the plane goes through the clicked point.
+    pub view_plane_pick: bool,
     pub dialog: Option<dialogs::Dialog>,
     /// The Change Parameters window, when open.
     pub params: Option<params_dialog::ParamsDialog>,
@@ -384,6 +386,7 @@ impl SolveApp {
             viewport: viewport::ViewportState::default(),
             render_workspace,
             tool: None,
+            view_plane_pick: false,
             dialog: None,
             params: None,
             design_properties: None,
@@ -663,6 +666,20 @@ impl SolveApp {
     pub fn start(&mut self, id: &str) {
         // A file is loading: the design waits for it.
         if self.file_load.busy() || self.file_picker.is_some() {
+            return;
+        }
+        // Plane from View: parallel to the screen. Through the origin at once, or through the
+        // point the next click picks.
+        self.view_plane_pick = false;
+        if matches!(id, "construct.plane.from_view" | "construct.plane.from_view_origin") {
+            let normal = self.cam.back();
+            if id == "construct.plane.from_view_origin" {
+                let _ = self.run(id, json!({"normal": [normal.x, normal.y, normal.z]}));
+            } else {
+                self.tool = None;
+                self.view_plane_pick = true;
+                self.set_status("Plane from View: click the point it goes through (Esc cancels)", false);
+            }
             return;
         }
         // A drawing tool with no sketch open starts an XY sketch first: Rhino draws straight
