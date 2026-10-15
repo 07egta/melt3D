@@ -103,7 +103,7 @@ fn toggle_pick(app: &mut SolveApp, kind: &str) {
 fn top_left(app: &mut SolveApp, ui: &mut egui::Ui, rect: Rect) {
     let t = Tokens::get();
     let painter = ui.painter_at(rect);
-    let chip_w = 52.0;
+    let chip_w = 38.0;
     let h = 28.0;
     let switches = 2.0 * (h + 4.0);
     let width = PICK_CHIPS.len() as f32 * (chip_w + 3.0) + 10.0 + 8.0 + switches;
@@ -119,16 +119,17 @@ fn top_left(app: &mut SolveApp, ui: &mut egui::Ui, rect: Rect) {
         let resp = ui.interact(r, ui.id().with(("easy_pick", *kind)), Sense::click());
         crate::scenario::publish_handle(&format!("easy:pick:{kind}"), r.center());
         let fill = if on {
-            t.accent
+            t.accent_soft
         } else if resp.hovered() {
             t.hover
         } else {
             Color32::TRANSPARENT
         };
         painter.rect_filled(r, 6.0, fill);
-        let text = if on { t.text } else { t.text_dim };
-        painter.text(r.center(), Align2::CENTER_CENTER, tr(label), FontId::proportional(12.0), text);
-        if resp.on_hover_text(tr("easy.pick_tip")).clicked() {
+        let ink = if on { t.text } else { t.text_dim };
+        let hot = if on { t.accent } else { t.text_dim };
+        crate::easy_glyph::pick(&painter, Rect::from_center_size(r.center(), vec2(20.0, 20.0)), kind, ink, hot);
+        if resp.on_hover_text(format!("{} — {}", tr(label), tr("easy.pick_tip"))).clicked() {
             clicked = Some(kind);
         }
         x += chip_w + 3.0;
@@ -313,9 +314,19 @@ fn plane_section(app: &mut SolveApp, ui: &mut egui::Ui) {
     let w = (ui.available_width() - 2.0 * gap) / 3.0;
     ui.horizontal(|ui| {
         for plane in ["XY", "YZ", "XZ"] {
-            let r = ui.add_sized([w, 30.0], egui::Button::new(RichText::new(plane).strong()));
-            crate::scenario::publish_handle(&format!("easy:plane:{plane}"), r.rect.center());
-            if r.on_hover_text(tr("easy.plane_hint")).clicked() {
+            let (rect, resp) = ui.allocate_exact_size(vec2(w, 44.0), Sense::click());
+            crate::scenario::publish_handle(&format!("easy:plane:{plane}"), rect.center());
+            let t = Tokens::get();
+            let fill = if resp.hovered() { t.hover } else { t.panel_header };
+            ui.painter().rect(rect, 6.0, fill, Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
+            crate::easy_glyph::plane(
+                ui.painter(),
+                Rect::from_center_size(pos2(rect.left() + 22.0, rect.center().y), vec2(28.0, 28.0)),
+                plane,
+                t.text_dim,
+            );
+            ui.painter().text(pos2(rect.right() - 8.0, rect.center().y), Align2::RIGHT_CENTER, plane, FontId::proportional(12.0), t.text);
+            if resp.on_hover_text(tr("easy.plane_hint")).clicked() {
                 let _ = app.run("sketch.create", json!({"plane": plane}));
             }
         }
@@ -348,9 +359,28 @@ fn plane_section(app: &mut SolveApp, ui: &mut egui::Ui) {
 
 fn display_section(app: &mut SolveApp, ui: &mut egui::Ui) {
     header(ui, &tr("easy.display"));
-    ui.horizontal_wrapped(|ui| {
+    ui.horizontal(|ui| {
+        let gap = ui.spacing().item_spacing.x;
+        let w = (ui.available_width() - 3.0 * gap) / 4.0;
         for (i, key) in ["easy.style_shaded_edges", "easy.style_shaded", "easy.style_wire", "easy.style_hidden"].into_iter().enumerate() {
-            if ui.selectable_label(usize::from(app.ui.visual_style) == i, tr(key)).clicked() {
+            let (rect, resp) = ui.allocate_exact_size(vec2(w, 38.0), Sense::click());
+            let t = Tokens::get();
+            let on = usize::from(app.ui.visual_style) == i;
+            let fill = if on {
+                t.accent_soft
+            } else if resp.hovered() {
+                t.hover
+            } else {
+                t.panel_header
+            };
+            ui.painter().rect(rect, 6.0, fill, Stroke::new(1.0, if on { t.accent } else { t.border }), egui::StrokeKind::Inside);
+            crate::easy_glyph::display_style(
+                ui.painter(),
+                Rect::from_center_size(rect.center(), vec2(24.0, 24.0)),
+                i as u8,
+                if on { t.text } else { t.text_dim },
+            );
+            if resp.on_hover_text(tr(key)).clicked() {
                 app.ui.visual_style = i as u8;
             }
         }
