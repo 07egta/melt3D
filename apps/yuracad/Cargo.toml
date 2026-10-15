@@ -1,0 +1,28 @@
+[package]
+name = "yuracad"
+description = "YURACAD: a light Womp3D-style blob modeller"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+default-run = "yuracad"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+
+[dependencies]
+eframe = { workspace = true, features = ["default_fonts", "wgpu", "wayland", "x11"] }
+egui = { workspace = true }
+egui-wgpu = { workspace = true }
+wgpu = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+rfd = { workspace = true }
+pollster = { workspace = true }
+log = { workspace = true }
+solidcraft-geom = { workspace = true }
+ttf-parser = { workspace = true }

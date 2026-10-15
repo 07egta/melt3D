@@ -24,11 +24,14 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release -p yuracad --locked
       - run: cargo build --release -p solidcraft --locked
       - uses: actions/upload-artifact@v4
         with:
-          name: solidcraft-windows
-          path: target/release/solidcraft.exe
+          name: yuracad-windows
+          path: |
+            target/release/yuracad.exe
+            target/release/solidcraft.exe
       # A rolling "latest" release holds the newest exe, named YURACAD.exe, so it can be fetched
       # with one plain download.
       - name: Publish YURACAD.exe to the latest release
@@ -37,9 +40,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          cp target/release/solidcraft.exe YURACAD.exe
-          gh release view latest >/dev/null 2>&1 || gh release create latest --prerelease --title "Latest build" --notes "Newest Windows build (YURACAD.exe)"
-          gh release upload latest YURACAD.exe --clobber
+          cp target/release/yuracad.exe YURACAD.exe
+          cp target/release/solidcraft.exe YURACAD-Classic.exe
+          gh release view latest >/dev/null 2>&1 || gh release create latest --prerelease --title "Latest build" --notes "Newest Windows builds: YURACAD.exe (blob modeller) and YURACAD-Classic.exe (CAD)"
+          gh release upload latest YURACAD.exe YURACAD-Classic.exe --clobber
 
   web:
     name: Web app
@@ -81,7 +85,9 @@ jobs:
           s1=${PIPESTATUS[0]}
           cargo test --profile ci --locked -p solidcraft-engine --lib -- --skip robustness --skip hostile_params 2>&1 | tee test2.log
           s2=${PIPESTATUS[0]}
+          cargo test --profile ci --locked -p yuracad 2>&1 | tee test3.log
+          s3=${PIPESTATUS[0]}
           # Show what failed as annotations, so the result can be read without the full log.
-          grep -hE "^test .* FAILED|panicked at|^error(\[|:)" test1.log test2.log | head -30 | while read -r line; do echo "::error::$line"; done
-          grep -hE "test result" test1.log test2.log | while read -r line; do echo "::notice::$line"; done
-          exit $((s1 + s2))
+          grep -hE "^test .* FAILED|panicked at|^error(\[|:)" test1.log test2.log test3.log | head -30 | while read -r line; do echo "::error::$line"; done
+          grep -hE "test result" test1.log test2.log test3.log | while read -r line; do echo "::notice::$line"; done
+          exit $((s1 + s2 + s3))

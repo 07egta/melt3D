@@ -5137,6 +5137,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "yuracad"
+version = "0.11.0"
+dependencies = [
+ "eframe",
+ "egui",
+ "egui-wgpu",
+ "log",
+ "pollster 0.4.0",
+ "rfd",
+ "serde",
+ "serde_json",
+ "solidcraft-geom",
+ "ttf-parser",
+ "wgpu",
+]
+
+[[package]]
 name = "zbus"
 version = "5.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
