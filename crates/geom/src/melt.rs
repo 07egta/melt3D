@@ -25,8 +25,10 @@ pub struct TriMesh {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Params {
     /// Blend reach in mm: 0 is a sharp union or cut; the bigger, the more the shapes flow.
+    /// The grid also reaches this far past the shapes on every side, so a big reach costs memory.
     pub strength: f64,
-    /// Grid points along the longest side of the shapes' box.
+    /// Cells along the longest side of the shapes' box (the cell size is that side over this).
+    /// Clamped to 16..=400. Doubling it roughly octuples the time and memory.
     pub resolution: usize,
     /// Cut the later meshes out of the first one instead of joining them.
     pub cut: bool,
@@ -117,17 +119,27 @@ pub fn melt(meshes: &[TriMesh], params: &Params) -> Result<TriMesh, String> {
     if extent <= 1e-9 {
         return Err("the shapes have no size".into());
     }
+    if !extent.is_finite() {
+        return Err("the shapes are too big to melt (their coordinates overflow)".into());
+    }
+    let too_big = || "the shapes are too big for this resolution; lower it or the strength".to_string();
     let h = extent / resolution as f64;
     let margin = params.strength + 3.0 * h;
+    // Checked before any cast or multiplication: on 32-bit targets (wasm) `usize` is small, and a
+    // huge strength must not wrap around into a grid that looks small enough.
     let mut n = [0usize; 3];
     for a in 0..3 {
         let cells = ((hi[a] - lo[a] + 2.0 * margin) / h).ceil();
+        if cells.is_nan() || cells + 1.0 > MAX_GRID_POINTS as f64 {
+            return Err(too_big());
+        }
         n[a] = cells as usize + 1;
     }
-    let grid = Grid { origin: [lo[0] - margin, lo[1] - margin, lo[2] - margin], h, n };
-    if n.iter().product::<usize>() > MAX_GRID_POINTS {
-        return Err("the shapes are too big for this resolution; lower it or the strength".into());
+    let points = n[0].checked_mul(n[1]).and_then(|p| p.checked_mul(n[2])).ok_or_else(too_big)?;
+    if points > MAX_GRID_POINTS {
+        return Err(too_big());
     }
+    let grid = Grid { origin: [lo[0] - margin, lo[1] - margin, lo[2] - margin], h, n };
     let mut field = signed_distance(&grid, &meshes[0])?;
     for m in meshes.iter().skip(1) {
         let other = signed_distance(&grid, m)?;
@@ -138,7 +150,11 @@ pub fn melt(meshes: &[TriMesh], params: &Params) -> Result<TriMesh, String> {
     let mut out = marching_tetrahedra(&grid, &field);
     smooth_surface(&mut out, params.smooth);
     if out.triangles.is_empty() {
-        return Err("nothing is left after melting".into());
+        return Err(if params.cut {
+            "the cut removes all of the first shape, so nothing is left".into()
+        } else {
+            "nothing is left after melting: the shapes have no solid inside".into()
+        });
     }
     Ok(out)
 }
@@ -635,6 +651,35 @@ mod tests {
         assert!(is_watertight(&cut));
         assert!(volume(&cut) < ball(10.0) * 0.95);
         assert!(volume(&cut) > ball(10.0) * 0.5);
+    }
+
+    #[test]
+    fn a_sharp_cut_removes_the_analytic_lens() {
+        // A ball of radius 6 centred on the rim of a ball of radius 10 removes a lens of volume
+        // pi (R + r - d)^2 (d^2 + 2dr - 3r^2 + 2dR + 6rR - 3R^2) / (12 d) = pi * 36 * 372 / 120.
+        let big = sphere([0.0; 3], 10.0, 32, 48);
+        let tool = sphere([10.0, 0.0, 0.0], 6.0, 32, 48);
+        let cut = melt(&[big, tool], &Params { strength: 0.0, resolution: 80, cut: true, smooth: 0 }).unwrap();
+        assert!(is_watertight(&cut));
+        let lens = std::f64::consts::PI * 36.0 * 372.0 / 120.0;
+        let expected = ball(10.0) - lens;
+        let got = volume(&cut);
+        assert!((got / expected - 1.0).abs() < 0.03, "volume {got} vs {expected}");
+    }
+
+    #[test]
+    fn hostile_sizes_are_refused_before_any_grid_is_built() {
+        let a = sphere([0.0; 3], 10.0, 16, 24);
+        // A reach so large that the grid would wrap around in 32-bit arithmetic.
+        let reach = Params { strength: 1e300, resolution: 96, cut: false, smooth: 0 };
+        assert!(melt(&[a.clone(), a.clone()], &reach).is_err());
+        // A fine grid around a large reach is far over the point cap.
+        let fine = Params { strength: 100.0, resolution: 400, cut: false, smooth: 0 };
+        assert!(melt(&[a.clone(), a.clone()], &fine).is_err());
+        // Coordinates so large that the box's extent overflows.
+        let far_a = sphere([1e308, 0.0, 0.0], 10.0, 16, 24);
+        let far_b = sphere([-1e308, 0.0, 0.0], 10.0, 16, 24);
+        assert!(melt(&[far_a, far_b], &Params::default()).is_err());
     }
 
     #[test]

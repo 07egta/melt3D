@@ -16,7 +16,7 @@ use crate::{
 pub static COMMANDS: &[CommandSpec] = &[CommandSpec::new("solid.melt", "Melt", melt_cmd)
     .at("SOLID", "MODIFY")
     .icon("fillet")
-    .params("bodies: [names] (two or more); strength?: blend reach in mm (default 5; 0 = sharp); mode?: join | cut (cut removes the later bodies from the first; default join); resolution?: grid points along the longest side, 16–256 (default 96); smooth?: smoothing rounds 0–8 (default 2); keep?: keep the original bodies (default false); name? → a baked mesh body `Melt`")];
+    .params("bodies: [names] (two or more); strength?: blend reach in mm (default 5; 0 = sharp); mode?: join | cut (cut removes the later bodies from the first; default join); resolution?: cells along the longest side of the shapes, 16–256 (default 96; the grid also reaches the strength past the shapes, so a big strength adds cells); smooth?: smoothing rounds 0–8 (default 2); keep?: keep the original bodies (default false); name? → a baked mesh body `Melt`")];
 
 fn melt_cmd(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "solid.melt";
@@ -24,7 +24,14 @@ fn melt_cmd(s: &mut Session, p: &Value) -> Result<Value> {
     if names.len() < 2 {
         return Err(bad(cmd, "`bodies` must list at least two bodies"));
     }
-    let mode = str_(p, "mode").unwrap_or("join");
+    if names.iter().enumerate().any(|(i, n)| names[..i].contains(n)) {
+        return Err(bad(cmd, "`bodies` must not list a body twice"));
+    }
+    // A wrong type is an error, not a silent default: `keep` decides whether the originals are deleted.
+    let mode = match p.get("mode") {
+        None | Some(Value::Null) => "join",
+        Some(v) => v.as_str().ok_or_else(|| bad(cmd, "`mode` must be the text join or cut"))?,
+    };
     let cut = match mode {
         "join" => false,
         "cut" => true,
@@ -51,7 +58,10 @@ fn melt_cmd(s: &mut Session, p: &Value) -> Result<Value> {
     if !(0.0..=8.0).contains(&smooth) {
         return Err(bad(cmd, "`smooth` must be between 0 and 8"));
     }
-    let keep = p.get("keep").and_then(Value::as_bool).unwrap_or(false);
+    let keep = match p.get("keep") {
+        None | Some(Value::Null) => false,
+        Some(v) => v.as_bool().ok_or_else(|| bad(cmd, "`keep` must be true or false"))?,
+    };
 
     let st = s.model.state();
     let mut meshes = Vec::with_capacity(names.len());
@@ -123,15 +133,28 @@ mod tests {
     }
 
     #[test]
+    fn a_cut_with_a_separate_tool_leaves_the_first_body_whole() {
+        let mut s = two_blocks();
+        let r = run(&mut s, "solid.melt", json!({"bodies": ["A", "B"], "mode": "cut", "strength": 0, "resolution": 48}));
+        assert_eq!(r["mode"], "cut");
+        // Cutting B (which does not touch A) cannot remove anything from A's 8000 mm3.
+        let v = r["volume"].as_f64().unwrap_or(0.0);
+        assert!((v / 8000.0 - 1.0).abs() < 0.05, "cut volume {v}");
+    }
+
+    #[test]
     fn hostile_params_are_errors() {
         let mut s = two_blocks();
         for p in [
             json!({"bodies": ["A"]}),
             json!({"bodies": ["A", "Nope"]}),
+            json!({"bodies": ["A", "A"]}),
             json!({"bodies": ["A", "B"], "strength": -1}),
             json!({"bodies": ["A", "B"], "strength": 1e300}),
             json!({"bodies": ["A", "B"], "resolution": 100000}),
             json!({"bodies": ["A", "B"], "mode": "weird"}),
+            json!({"bodies": ["A", "B"], "mode": 1}),
+            json!({"bodies": ["A", "B"], "keep": "yes"}),
         ] {
             assert!(s.execute("solid.melt", &p).is_err(), "{p}");
         }
