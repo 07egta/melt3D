@@ -1,0 +1,416 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>YURA-GCODE ノードでGコード</title>
+<style>
+:root{--bg:#2b2b2d;--panel:#353538;--panel2:#3f3f43;--line:#55555b;--fg:#e6e6e8;--dim:#9a9aa2;--acc:#7cc4ff;--ok:#7ee0a0;--bad:#ff7a7a;--wire:#8fa3b8}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);font:13px/1.4 system-ui,"Yu Gothic UI",sans-serif;overflow:hidden}
+#app{display:grid;grid-template-columns:1fr 380px;grid-template-rows:42px 1fr;height:100%}
+#top{grid-column:1/3;display:flex;gap:8px;align-items:center;padding:0 10px;background:var(--panel);border-bottom:1px solid var(--line)}
+#top b{letter-spacing:.08em;margin-right:8px}
+button,select,input,textarea{font:inherit;color:var(--fg)}
+button{background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:5px 10px;cursor:pointer}
+button:hover{border-color:var(--acc)}
+button.pri{background:#2f6fa3;border-color:#4f9bd6}
+#canvas{position:relative;overflow:hidden;background:var(--bg);background-image:radial-gradient(#3a3a3d 1px,transparent 1px);background-size:24px 24px;cursor:grab}
+#world{position:absolute;left:0;top:0;transform-origin:0 0}
+#wires{position:absolute;left:0;top:0;overflow:visible;pointer-events:none}
+.node{position:absolute;width:210px;background:var(--panel);border:1px solid var(--line);border-radius:8px;box-shadow:0 2px 8px #0006;user-select:none}
+.node.sel{border-color:var(--acc)}
+.node.err{border-color:var(--bad)}
+.node .h{height:26px;line-height:26px;padding:0 8px;font-weight:600;background:var(--panel2);border-radius:7px 7px 0 0;cursor:move;display:flex;justify-content:space-between}
+.node .h i{font-style:normal;color:var(--dim);font-weight:400;font-size:11px}
+.row{height:24px;display:flex;align-items:center;position:relative;padding:0 12px}
+.row label{width:62px;color:var(--dim);font-size:12px;overflow:hidden;white-space:nowrap}
+.row input,.row select{flex:1;min-width:0;height:20px;background:#2a2a2c;border:1px solid var(--line);border-radius:4px;padding:0 4px;font-size:12px}
+.row.wired input{opacity:.35;pointer-events:none}
+.row.out{justify-content:flex-end;color:var(--dim)}
+.port{position:absolute;top:6px;width:12px;height:12px;border-radius:50%;background:#2a2a2c;border:2px solid var(--wire);cursor:crosshair}
+.port.in{left:-7px}.port.out{right:-7px}
+.port:hover{background:var(--acc)}
+.note{padding:4px 10px 6px;color:var(--bad);font-size:11px}
+#side{background:var(--panel);border-left:1px solid var(--line);display:flex;flex-direction:column;min-height:0}
+#side .sec{padding:10px;border-bottom:1px solid var(--line)}
+#pv{width:100%;height:300px;display:block;background:#242426;border-radius:6px;cursor:grab}
+#stats{color:var(--dim);font-size:12px;margin-top:6px}
+#side textarea{width:100%;height:96px;background:#2a2a2c;border:1px solid var(--line);border-radius:6px;font:11px/1.35 ui-monospace,Consolas,monospace;padding:6px}
+#side h4{margin:0 0 6px;font-size:12px;color:var(--dim)}
+.menu{position:absolute;z-index:9;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:4px;max-height:70vh;overflow:auto;box-shadow:0 6px 20px #0008}
+.menu div{padding:5px 12px;border-radius:5px;cursor:pointer}
+.menu div:hover{background:var(--panel2)}
+.menu .g{color:var(--dim);font-size:11px;padding:6px 12px 2px;cursor:default}
+.menu .g:hover{background:none}
+#hint{position:absolute;left:10px;bottom:8px;color:var(--dim);font-size:11px;pointer-events:none}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="top">
+    <b>YURA-GCODE</b>
+    <button id="add">＋ ノード追加</button>
+    <select id="preset"><option value="">サンプル…</option></select>
+    <span style="flex:1"></span>
+    <button id="save">グラフ保存</button>
+    <button id="load">グラフ読込</button>
+    <button id="copy">Gコードをコピー</button>
+    <button id="dl" class="pri">Gコードを保存 (.gcode)</button>
+  </div>
+  <div id="canvas"><div id="world"><svg id="wires" width="1" height="1"></svg></div>
+    <div id="hint">STLをここにドロップ=スライス / 背景ドラッグ=移動 / ホイール=拡大縮小 / 出力●から入力●へドラッグで接続 / 入力●クリックで切断 / Delete=ノード削除 / 右クリック=ノード追加</div></div>
+  <div id="side">
+    <div class="sec"><canvas id="pv" width="360" height="300"></canvas>
+      <input id="lay" type="range" min="0" max="1000" value="1000" style="width:100%">
+      <div id="stats"></div></div>
+    <div class="sec"><h4>スタートGコード（Bambu Studioのものを貼る）</h4><textarea id="sg"></textarea></div>
+    <div class="sec"><h4>エンドGコード</h4><textarea id="eg"></textarea></div>
+  </div>
+</div>
+<input id="file" type="file" accept=".json" hidden>
+<!--PRELOAD-->
+<script>
+"use strict";
+// ---------- math helpers ----------
+const MATHF={sin:Math.sin,cos:Math.cos,tan:Math.tan,abs:Math.abs,sqrt:Math.sqrt,pow:Math.pow,min:Math.min,max:Math.max,floor:Math.floor,round:Math.round,PI:Math.PI,exp:Math.exp,log:Math.log,atan2:Math.atan2};
+const DEG=Math.PI/180;
+const asList=v=>Array.isArray(v)?v:[v];
+const num=(v,d=0)=>{const x=Array.isArray(v)?v[0]:v;return Number.isFinite(+x)?+x:d};
+const pick=(v,i)=>{const a=asList(v);return a[Math.min(i,a.length-1)]};
+const isCurve=v=>v&&typeof v==="object"&&!Array.isArray(v)&&Array.isArray(v.pts);
+function curves(v){ if(v==null) return []; if(isCurve(v)) return [v]; if(Array.isArray(v)) return v.flatMap(curves); return []; }
+const mapC=(v,f)=>{const c=curves(v);return c.length===1&&isCurve(v)?f(c[0]):c.map(f)};
+const MAXPTS=400000;
+
+// ---------- node definitions ----------
+// ins: {n,label,def,t:'num'|'sel'|'txt'|'curve', opts}
+const DEFS={
+ number:{title:"数値スライダー",grp:"入力",ins:[{n:"value",label:"値",def:1,t:"slider"}],outs:["値"],
+   run:(a,p)=>[num(a.value)]},
+ series:{title:"連番",grp:"入力",ins:[{n:"start",label:"開始",def:0},{n:"step",label:"ステップ",def:1},{n:"count",label:"個数",def:10}],outs:["リスト"],
+   run:a=>{const n=Math.max(0,Math.min(100000,Math.floor(num(a.count))));return [Array.from({length:n},(_,i)=>num(a.start)+i*num(a.step))]}},
+ math:{title:"計算",grp:"数値",ins:[{n:"op",label:"演算",def:"add",t:"sel",opts:["add","sub","mul","div","pow","mod","min","max"]},{n:"a",label:"A",def:0},{n:"b",label:"B",def:1}],outs:["結果"],
+   run:a=>{const A=asList(a.a),B=asList(a.b),n=Math.max(A.length,B.length);const f={add:(x,y)=>x+y,sub:(x,y)=>x-y,mul:(x,y)=>x*y,div:(x,y)=>y?x/y:0,pow:Math.pow,mod:(x,y)=>y?x%y:0,min:Math.min,max:Math.max}[a.op]||((x,y)=>x);
+     const r=Array.from({length:n},(_,i)=>f(+pick(A,i),+pick(B,i)));return [n===1?r[0]:r]}},
+ formula:{title:"数式",grp:"数値",ins:[{n:"expr",label:"式",def:"sin(t*0.3)*5",t:"txt"},{n:"t",label:"t",def:0},{n:"a",label:"a",def:1},{n:"b",label:"b",def:1}],outs:["結果"],
+   run:a=>{const names=Object.keys(MATHF);const fn=new Function(...names,"t","a","b",`"use strict";return (${String(a.expr).replace(/[^0-9a-zA-Z_+\-*/%().,\s<>=?:!&|]/g,"")});`);
+     const T=asList(a.t),A=asList(a.a),B=asList(a.b),n=Math.max(T.length,A.length,B.length);
+     const r=Array.from({length:n},(_,i)=>{const v=fn(...names.map(k=>MATHF[k]),+pick(T,i),+pick(A,i),+pick(B,i));return Number.isFinite(v)?v:0});return [n===1?r[0]:r]}},
+ circle:{title:"円",grp:"曲線",ins:[{n:"r",label:"半径",def:30},{n:"seg",label:"分割数",def:96}],outs:["曲線"],
+   run:a=>[ring(num(a.r),num(a.seg,96),()=>1)]},
+ polygon:{title:"多角形",grp:"曲線",ins:[{n:"r",label:"半径",def:30},{n:"sides",label:"辺の数",def:6}],outs:["曲線"],
+   run:a=>{const s=Math.max(3,Math.floor(num(a.sides)));const pts=[];for(let i=0;i<s;i++){const t=i/s*2*Math.PI;pts.push([Math.cos(t)*num(a.r),Math.sin(t)*num(a.r),0])}return [{pts,closed:true}]}},
+ rect:{title:"長方形",grp:"曲線",ins:[{n:"w",label:"幅",def:60},{n:"h",label:"高さ",def:40}],outs:["曲線"],
+   run:a=>{const w=num(a.w)/2,h=num(a.h)/2;return [{pts:[[-w,-h,0],[w,-h,0],[w,h,0],[-w,h,0]],closed:true}]}},
+ wave:{title:"波円",grp:"曲線",ins:[{n:"r",label:"半径",def:30},{n:"amp",label:"振幅",def:3},{n:"waves",label:"波の数",def:12},{n:"seg",label:"分割数",def:240}],outs:["曲線"],
+   run:a=>[ring(num(a.r),num(a.seg,240),t=>1+num(a.amp)/Math.max(1e-6,num(a.r))*Math.sin(t*num(a.waves)))]},
+ star:{title:"星",grp:"曲線",ins:[{n:"r1",label:"外半径",def:30},{n:"r2",label:"内半径",def:15},{n:"n",label:"頂点数",def:5}],outs:["曲線"],
+   run:a=>{const n=Math.max(3,Math.floor(num(a.n))),pts=[];for(let i=0;i<n*2;i++){const t=i/(n*2)*2*Math.PI,r=i%2?num(a.r2):num(a.r1);pts.push([Math.cos(t)*r,Math.sin(t)*r,0])}return [{pts,closed:true}]}},
+ move:{title:"移動",grp:"変形",ins:[{n:"c",label:"曲線",t:"curve"},{n:"x",label:"X",def:0},{n:"y",label:"Y",def:0},{n:"z",label:"Z",def:0}],outs:["曲線"],
+   run:a=>[mapC(a.c,c=>({...c,pts:c.pts.map(p=>[p[0]+num(a.x),p[1]+num(a.y),p[2]+num(a.z)])}))]},
+ rotate:{title:"回転",grp:"変形",ins:[{n:"c",label:"曲線",t:"curve"},{n:"deg",label:"角度°",def:0}],outs:["曲線"],
+   run:a=>[mapC(a.c,c=>({...c,pts:rot(c.pts,num(a.deg)*DEG)}))]},
+ scale:{title:"拡大縮小",grp:"変形",ins:[{n:"c",label:"曲線",t:"curve"},{n:"s",label:"倍率",def:1}],outs:["曲線"],
+   run:a=>[mapC(a.c,c=>({...c,pts:c.pts.map(p=>[p[0]*num(a.s),p[1]*num(a.s),p[2]])}))]},
+ stack:{title:"積層（壺）",grp:"立体",ins:[{n:"c",label:"断面",t:"curve"},{n:"layers",label:"層数",def:100},{n:"h",label:"層高",def:0.2},{n:"scale",label:"倍率/層",def:1},{n:"rot",label:"回転°/層",def:0},{n:"dx",label:"ずれX/層",def:0}],outs:["層"],
+   run:a=>{const base=curves(a.c)[0];if(!base)throw new Error("断面の曲線をつないでください");const n=Math.max(1,Math.min(5000,Math.floor(num(a.layers))));
+     if(n*base.pts.length>MAXPTS)throw new Error("点が多すぎます（層数×分割数）");
+     const out=[];for(let i=0;i<n;i++){const s=num(pick(a.scale,i),1),r=num(pick(a.rot,i))*DEG,dx=num(pick(a.dx,i)),z=(i+1)*num(a.h);
+       out.push({closed:base.closed,pts:rot(base.pts,r).map(p=>[p[0]*s+dx,p[1]*s,z])})}return [out]}},
+ spiral:{title:"スパイラル化",grp:"立体",ins:[{n:"c",label:"層",t:"curve"}],outs:["曲線"],
+   run:a=>{const L=curves(a.c);if(L.length<2)throw new Error("2層以上が必要です");const m=L[0].pts.length;const pts=[];
+     for(let i=0;i<L.length-1;i++){const A=L[i].pts,B=L[i+1].pts;if(A.length!==m||B.length!==m)throw new Error("各層の点数が同じである必要があります");
+       for(let j=0;j<m;j++){const f=j/m;pts.push([A[j][0],A[j][1],A[j][2]+(B[j][2]-A[j][2])*f])}}
+     return [{pts,closed:false}]}},
+ slice:{title:"STLスライス",grp:"入力",ins:[{n:"lh",label:"層高",def:0.2},{n:"walls",label:"壁の数",def:2},{n:"lw",label:"線幅",def:0.45},{n:"s",label:"倍率",def:1},{n:"file",label:"STL",t:"file"}],outs:["層"],
+   run:(a,p,n)=>{if(!n.mesh)throw new Error("STLを選ぶかドロップしてください");return [sliceMesh(n.mesh,num(a.lh,.2),Math.max(1,Math.min(6,Math.floor(num(a.walls,2)))),num(a.lw,.45),num(a.s,1))]}},
+ gcode:{title:"Gコード出力",grp:"出力",ins:[{n:"c",label:"曲線/層",t:"curve"},
+   {n:"lw",label:"線幅",def:0.45},{n:"lh",label:"層高",def:0.2},{n:"speed",label:"速度mm/s",def:60},{n:"travel",label:"移動mm/s",def:200},
+   {n:"temp",label:"ノズル℃",def:220},{n:"bed",label:"ベッド℃",def:60},{n:"fan",label:"ファン%",def:100},{n:"flow",label:"流量",def:1},
+   {n:"retract",label:"リトラクト",def:0.8},{n:"bx",label:"中心X",def:90},{n:"by",label:"中心Y",def:90}],outs:[],sink:true,
+   run:()=>[null]}
+};
+function ring(r,seg,f){seg=Math.max(8,Math.min(4000,Math.floor(seg)));const pts=[];for(let i=0;i<seg;i++){const t=i/seg*2*Math.PI,k=r*f(t);pts.push([Math.cos(t)*k,Math.sin(t)*k,0])}return{pts,closed:true}}
+function rot(pts,a){const c=Math.cos(a),s=Math.sin(a);return pts.map(p=>[p[0]*c-p[1]*s,p[0]*s+p[1]*c,p[2]])}
+
+
+// ---------- STL + slicing ----------
+function parseSTL(buf){
+  const dv=new DataView(buf);let tris;
+  const n=dv.byteLength>=84?dv.getUint32(80,true):0;
+  if(84+n*50===dv.byteLength&&n>0){tris=new Float32Array(n*9);let o=84;for(let i=0;i<n;i++){o+=12;for(let k=0;k<9;k++){tris[i*9+k]=dv.getFloat32(o,true);o+=4}o+=2}}
+  else{const s=new TextDecoder().decode(buf),re=/vertex\s+(\S+)\s+(\S+)\s+(\S+)/g,v=[];let m;while((m=re.exec(s))){v.push(+m[1],+m[2],+m[3]);if(v.length>9e7)break}tris=new Float32Array(v)}
+  if(tris.length<9)throw new Error("STLを読めません");
+  return tris}
+function sliceMesh(tris,h,walls,lw,sc){
+  h=Math.max(0.05,h);const N=tris.length/9;if(N>2e6)throw new Error("三角形が多すぎます");
+  let zmin=1e18,zmax=-1e18,xmin=1e18,xmax=-1e18,ymin=1e18,ymax=-1e18;
+  for(let i=0;i<tris.length;i+=3){xmin=Math.min(xmin,tris[i]);xmax=Math.max(xmax,tris[i]);ymin=Math.min(ymin,tris[i+1]);ymax=Math.max(ymax,tris[i+1]);zmin=Math.min(zmin,tris[i+2]);zmax=Math.max(zmax,tris[i+2])}
+  const cx=(xmin+xmax)/2,cy=(ymin+ymax)/2,L=Math.floor((zmax-zmin)*sc/h);
+  if(L<1)throw new Error("高さが層高より小さいです");if(L>5000)throw new Error("層が多すぎます（層高を上げてください）");
+  const buckets=Array.from({length:L},()=>[]);
+  for(let t=0;t<N;t++){const z0=tris[t*9+2],z1=tris[t*9+5],z2=tris[t*9+8];const lo=Math.min(z0,z1,z2),hi=Math.max(z0,z1,z2);
+    const a=Math.max(0,Math.ceil(((lo-zmin)*sc)/h-.5)),b=Math.min(L-1,Math.floor(((hi-zmin)*sc)/h-.5));for(let i=a;i<=b;i++)buckets[i].push(t)}
+  const out=[];
+  for(let i=0;i<L;i++){const zc=zmin+((i+.5)*h)/sc,segs=[];
+    for(const t of buckets[i]){const o=t*9,pts=[];
+      for(let e=0;e<3;e++){const A=o+e*3,B=o+((e+1)%3)*3,za=tris[A+2]-zc,zb=tris[B+2]-zc;
+        if((za<0&&zb>=0)||(zb<0&&za>=0)){const f=za/(za-zb);pts.push([tris[A]+(tris[B]-tris[A])*f,tris[A+1]+(tris[B+1]-tris[A+1])*f])}}
+      if(pts.length===2)segs.push(pts)}
+    const loops=chain(segs);
+    const z=(i+1)*h;
+    for(let w=0;w<walls;w++)for(const lp of loops){const q=w?inset(lp,w*lw):lp;if(q.length>=3)out.push({closed:true,pts:q.map(p=>[(p[0]-cx)*sc,(p[1]-cy)*sc,z])})}
+  }
+  return out}
+function chain(segs){
+  const key=p=>Math.round(p[0]*500)+","+Math.round(p[1]*500),m=new Map();
+  segs.forEach((s,i)=>{for(const e of [0,1]){const k=key(s[e]);(m.get(k)||m.set(k,[]).get(k)).push([i,e])}});
+  const used=new Uint8Array(segs.length),loops=[];
+  for(let i=0;i<segs.length;i++){if(used[i])continue;used[i]=1;const pts=[segs[i][0],segs[i][1]];let end=segs[i][1],guard=0;
+    while(guard++<segs.length){const nxt=(m.get(key(end))||[]).find(([j])=>!used[j]);if(!nxt)break;used[nxt[0]]=1;end=segs[nxt[0]][1-nxt[1]];pts.push(end)}
+    if(pts.length>3&&key(pts[0])===key(pts[pts.length-1])){pts.pop();loops.push(pts)}}
+  return loops}
+function inset(lp,d){
+  let A=0;for(let i=0;i<lp.length;i++){const p=lp[i],q=lp[(i+1)%lp.length];A+=p[0]*q[1]-q[0]*p[1]}
+  const sgn=A>0?1:-1;const out=[];
+  for(let i=0;i<lp.length;i++){const p0=lp[(i-1+lp.length)%lp.length],p1=lp[i],p2=lp[(i+1)%lp.length];
+    const n=(a,b)=>{const dx=b[0]-a[0],dy=b[1]-a[1],l=Math.hypot(dx,dy)||1;return[-dy/l*sgn,dx/l*sgn]};
+    const n1=n(p0,p1),n2=n(p1,p2);let mx=n1[0]+n2[0],my=n1[1]+n2[1];const ml=Math.hypot(mx,my);if(ml<1e-6){out.push(p1);continue}
+    mx/=ml;my/=ml;const k=Math.min(1/Math.max(.3,mx*n1[0]+my*n1[1]),3);out.push([p1[0]+mx*d*k,p1[1]+my*d*k])}
+  return out}
+
+// ---------- state ----------
+let G={nodes:[],wires:[],nextId:1,view:{x:30,y:30,k:1},start:"",end:""};
+const DEFAULT_START=`; --- ここをBambu Studioのスタート Gコードに置き換えると安全です ---
+M104 S{temp}
+M140 S{bed}
+G28
+M190 S{bed}
+M109 S{temp}
+G90
+M82
+G92 E0
+G1 Z5 F3000
+G1 X10 Y10 F6000
+G1 Z0.3 F1200
+G1 X100 E8 F1200
+G92 E0`;
+const DEFAULT_END=`G1 E-1 F1800
+G91
+G1 Z10 F1200
+G90
+M104 S0
+M140 S0
+M107
+M84`;
+const $=id=>document.getElementById(id);
+const world=$("world"),wires=$("wires"),cv=$("canvas");
+const ROW=24,HEAD=26;
+
+function addNode(type,x,y,params){const d=DEFS[type];const n={id:G.nextId++,type,x,y,p:{}};
+  d.ins.forEach(i=>{if(i.def!==undefined)n.p[i.n]=i.def});
+  if(type==="number"){n.p.min=0;n.p.max=100}
+  Object.assign(n.p,params||{});G.nodes.push(n);return n}
+const wire=(f,t,tp)=>G.wires.push({f:f.id,t:t.id,tp});
+const node=id=>G.nodes.find(n=>n.id===id);
+
+// ---------- evaluation ----------
+let results={},errors={};
+function evaluate(){
+  results={};errors={};const busy={};
+  const get=id=>{
+    if(id in results)return results[id];
+    if(busy[id])throw new Error("ループしています");
+    busy[id]=1;const n=node(id),d=DEFS[n.type];const a={};
+    for(const i of d.ins){const w=G.wires.find(w=>w.t===id&&w.tp===i.n);
+      if(w){const r=get(w.f);a[i.n]=r?r[0]:undefined;if(r===undefined)throw new Error("入力が未接続/エラー")}
+      else a[i.n]=n.p[i.n]}
+    let r;try{r=d.run(a,n.p,n)}catch(e){errors[id]=e.message;r=undefined}
+    busy[id]=0;results[id]=r;return r};
+  for(const n of G.nodes){try{get(n.id)}catch(e){errors[n.id]=e.message;results[n.id]=undefined;}}
+}
+
+// ---------- G-code ----------
+let OUT={gcode:"",paths:[],stats:null};
+function build(){
+  OUT={gcode:"",paths:[],stats:null};
+  const sink=G.nodes.find(n=>n.type==="gcode");if(!sink)return;
+  const w=G.wires.find(w=>w.t===sink.id&&w.tp==="c");if(!w){return}
+  const r=results[w.f];if(!r)return;
+  const P=sink.p,L=curves(r[0]);
+  const lw=num(P.lw,.45),lh=num(P.lh,.2),flow=num(P.flow,1),sp=num(P.speed,60)*60,tr=num(P.travel,200)*60,ret=num(P.retract,0);
+  const k=lh*lw/(Math.PI*0.875*0.875)*flow;           // E per mm (1.75mm filament)
+  const bx=num(P.bx,90),by=num(P.by,90);
+  const f=v=>(+v).toFixed(3).replace(/\.?0+$/,"");
+  const fill=s=>s.replace(/\{temp\}/g,num(P.temp)).replace(/\{bed\}/g,num(P.bed));
+  const o=[fill(G.start||""),`; YURA-GCODE  line ${lw}mm layer ${lh}mm`,"M82","G90","G92 E0"];
+  let E=0,x=null,y=null,z=null,len=0,tlen=0,time=0,minx=1e9,maxx=-1e9,miny=1e9,maxy=-1e9,maxz=0,retracted=false;
+  const paths=[];
+  o.push(`M106 S${Math.round(num(P.fan)*2.55)}`);
+  for(const c of L){
+    const pts=c.closed?[...c.pts,c.pts[0]]:c.pts;if(pts.length<2)continue;
+    const p0=pts[0],X0=p0[0]+bx,Y0=p0[1]+by;
+    const dist=x===null?1e9:Math.hypot(X0-x,Y0-y,p0[2]-z);
+    if(dist>1.2){ // travel
+      if(ret&&!retracted&&x!==null){E-=ret;o.push(`G1 E${f(E)} F1800`);retracted=true}
+      o.push(`G0 X${f(X0)} Y${f(Y0)} Z${f(p0[2])} F${tr}`);if(x!==null){tlen+=dist;time+=dist/(tr/60)}
+      if(ret&&retracted){E+=ret;o.push(`G1 E${f(E)} F1800`);retracted=false}
+    }else if(dist>0.001){o.push(`G1 X${f(X0)} Y${f(Y0)} Z${f(p0[2])} E${f(E+=dist*k)} F${sp}`)}
+    x=X0;y=Y0;z=p0[2];const seg=[[X0,Y0,p0[2]]];
+    for(let i=1;i<pts.length;i++){const p=pts[i],X=p[0]+bx,Y=p[1]+by,d=Math.hypot(X-x,Y-y,p[2]-z);
+      if(d<1e-4)continue;E+=d*k;o.push(`G1 X${f(X)} Y${f(Y)} Z${f(p[2])} E${f(E)} F${sp}`);
+      len+=d;time+=d/(sp/60);x=X;y=Y;z=p[2];seg.push([X,Y,z]);
+      minx=Math.min(minx,X);maxx=Math.max(maxx,X);miny=Math.min(miny,Y);maxy=Math.max(maxy,Y);maxz=Math.max(maxz,z)}
+    paths.push(seg);
+  }
+  o.push(fill(G.end||""));
+  OUT={gcode:o.join("\n")+"\n",paths,stats:{len,tlen,time,filament:E,minx,maxx,miny,maxy,maxz,lines:o.length,k}};
+}
+
+// ---------- rendering the node editor ----------
+function portY(n,kind,name){const d=DEFS[n.type];if(kind==="in")return HEAD+d.ins.findIndex(i=>i.n===name)*ROW+ROW/2;
+  return HEAD+(d.ins.length+name)*ROW+ROW/2}
+function drawAll(){
+  world.querySelectorAll(".node").forEach(e=>e.remove());
+  for(const n of G.nodes){const d=DEFS[n.type];const el=document.createElement("div");el.className="node"+(n.sel?" sel":"")+(errors[n.id]?" err":"");
+    el.style.left=n.x+"px";el.style.top=n.y+"px";el.dataset.id=n.id;
+    el.innerHTML=`<div class="h"><span>${d.title}</span><i>${d.grp}</i></div>`;
+    d.ins.forEach(i=>{const wired=G.wires.some(w=>w.t===n.id&&w.tp===i.n);const row=document.createElement("div");row.className="row"+(wired?" wired":"");
+      row.innerHTML=`<span class="port in" data-n="${n.id}" data-p="${i.n}"></span><label>${i.label}</label>`;
+      if(i.t==="curve"){row.insertAdjacentHTML("beforeend",`<span style="color:var(--dim);font-size:11px">${wired?"接続中":"← つなぐ"}</span>`)}
+      else if(i.t==="file"){const b=document.createElement("button");b.textContent=n.meshName?n.meshName.slice(-16):"選ぶ…";b.style.cssText="flex:1;height:20px;padding:0 4px;font-size:12px";
+        b.onclick=()=>pickSTL(n);row.appendChild(b)}
+      else if(i.t==="sel"){const s=document.createElement("select");i.opts.forEach(o=>{const op=document.createElement("option");op.value=op.textContent=o;s.appendChild(op)});s.value=n.p[i.n];s.onchange=()=>{n.p[i.n]=s.value;changed()};row.appendChild(s)}
+      else if(i.t==="slider"){const r=document.createElement("input");r.type="range";r.min=n.p.min;r.max=n.p.max;r.step="any";r.value=n.p.value;r.style.padding="0";
+        const v=document.createElement("input");v.type="number";v.step="any";v.value=n.p.value;v.style.width="52px";v.style.flex="none";
+        r.oninput=()=>{n.p.value=+r.value;v.value=r.value;changed(true)};v.onchange=()=>{n.p.value=+v.value;if(+v.value>+r.max){n.p.max=+v.value}if(+v.value<+r.min){n.p.min=+v.value}changed()};row.append(r,v)}
+      else{const t=document.createElement("input");t.type=i.t==="txt"?"text":"number";t.step="any";t.value=n.p[i.n];
+        t.onchange=()=>{n.p[i.n]=i.t==="txt"?t.value:+t.value;changed()};row.appendChild(t)}
+      el.appendChild(row)});
+    d.outs.forEach((o,j)=>{const row=document.createElement("div");row.className="row out";row.innerHTML=`${o}<span class="port out" data-n="${n.id}" data-o="${j}"></span>`;el.appendChild(row)});
+    if(errors[n.id])el.insertAdjacentHTML("beforeend",`<div class="note">${errors[n.id]}</div>`);
+    if(n.type==="gcode"&&OUT.stats){const s=OUT.stats;if(s.minx<0||s.maxx>180||s.miny<0||s.maxy>180)el.insertAdjacentHTML("beforeend",`<div class="note">ベッド(0〜180)からはみ出しています</div>`)}
+    world.appendChild(el)}
+  drawWires();
+}
+function drawWires(){
+  let s="";for(const w of G.wires){const a=node(w.f),b=node(w.t);if(!a||!b)continue;
+    const x1=a.x+210,y1=a.y+portY(a,"out",0),x2=b.x,y2=b.y+portY(b,"in",w.tp);const dx=Math.max(40,Math.abs(x2-x1)/2);
+    s+=`<path d="M${x1} ${y1} C${x1+dx} ${y1},${x2-dx} ${y2},${x2} ${y2}" fill="none" stroke="var(--wire)" stroke-width="2"/>`}
+  if(drag&&drag.kind==="wire"){const a=node(drag.from);const x1=a.x+210,y1=a.y+portY(a,"out",0);const x2=drag.x,y2=drag.y;const dx=Math.max(40,Math.abs(x2-x1)/2);
+    s+=`<path d="M${x1} ${y1} C${x1+dx} ${y1},${x2-dx} ${y2},${x2} ${y2}" fill="none" stroke="var(--acc)" stroke-width="2" stroke-dasharray="5 4"/>`}
+  wires.innerHTML=s}
+function applyView(){world.style.transform=`translate(${G.view.x}px,${G.view.y}px) scale(${G.view.k})`}
+const toWorld=e=>{const r=cv.getBoundingClientRect();return{x:(e.clientX-r.left-G.view.x)/G.view.k,y:(e.clientY-r.top-G.view.y)/G.view.k}};
+
+// ---------- interaction ----------
+let drag=null,pending=0;
+function changed(light){clearTimeout(pending);pending=setTimeout(()=>{evaluate();build();if(!light||true){drawAll()}drawPreview()},light?30:0)}
+cv.addEventListener("mousedown",e=>{
+  if(e.target.closest(".menu"))return;closeMenu();
+  const port=e.target.closest(".port");
+  if(port&&port.classList.contains("out")){const p=toWorld(e);drag={kind:"wire",from:+port.dataset.n,x:p.x,y:p.y};e.preventDefault();return}
+  if(port&&port.classList.contains("in")){const id=+port.dataset.n,pn=port.dataset.p;const i=G.wires.findIndex(w=>w.t===id&&w.tp===pn);
+    if(i>=0){G.wires.splice(i,1);changed()}e.preventDefault();return}
+  const h=e.target.closest(".h");
+  if(h){const n=node(+h.parentElement.dataset.id);G.nodes.forEach(m=>m.sel=false);n.sel=true;const p=toWorld(e);drag={kind:"node",n,ox:p.x-n.x,oy:p.y-n.y};drawAll();e.preventDefault();return}
+  if(e.target.closest(".node"))return;
+  G.nodes.forEach(m=>m.sel=false);drawAll();drag={kind:"pan",sx:e.clientX,sy:e.clientY,vx:G.view.x,vy:G.view.y};cv.style.cursor="grabbing"});
+window.addEventListener("mousemove",e=>{if(!drag)return;
+  if(drag.kind==="pan"){G.view.x=drag.vx+e.clientX-drag.sx;G.view.y=drag.vy+e.clientY-drag.sy;applyView()}
+  else if(drag.kind==="node"){const p=toWorld(e);drag.n.x=p.x-drag.ox;drag.n.y=p.y-drag.oy;const el=world.querySelector(`.node[data-id="${drag.n.id}"]`);el.style.left=drag.n.x+"px";el.style.top=drag.n.y+"px";drawWires()}
+  else if(drag.kind==="wire"){const p=toWorld(e);drag.x=p.x;drag.y=p.y;drawWires()}});
+window.addEventListener("mouseup",e=>{if(!drag)return;
+  if(drag.kind==="wire"){const t=document.elementFromPoint(e.clientX,e.clientY);const port=t&&t.closest&&t.closest(".port.in");
+    if(port){const to=+port.dataset.n,tp=port.dataset.p;if(to!==drag.from){G.wires=G.wires.filter(w=>!(w.t===to&&w.tp===tp));G.wires.push({f:drag.from,t:to,tp})}}
+    drag=null;changed();return}
+  drag=null;cv.style.cursor="grab"});
+cv.addEventListener("wheel",e=>{e.preventDefault();const r=cv.getBoundingClientRect(),mx=e.clientX-r.left,my=e.clientY-r.top,k0=G.view.k,k=Math.max(.3,Math.min(2,k0*(e.deltaY<0?1.1:.9)));
+  G.view.x=mx-(mx-G.view.x)*k/k0;G.view.y=my-(my-G.view.y)*k/k0;G.view.k=k;applyView()},{passive:false});
+window.addEventListener("keydown",e=>{if(["INPUT","TEXTAREA","SELECT"].includes(document.activeElement.tagName))return;
+  if(e.key==="Delete"||e.key==="Backspace"){const s=G.nodes.filter(n=>n.sel);s.forEach(n=>{G.nodes=G.nodes.filter(m=>m!==n);G.wires=G.wires.filter(w=>w.f!==n.id&&w.t!==n.id)});if(s.length)changed()}});
+
+// add menu
+let menu=null;
+function closeMenu(){if(menu){menu.remove();menu=null}}
+function openMenu(px,py,wx,wy){closeMenu();menu=document.createElement("div");menu.className="menu";menu.style.left=px+"px";menu.style.top=py+"px";
+  let last="";for(const [t,d] of Object.entries(DEFS)){if(d.grp!==last){const g=document.createElement("div");g.className="g";g.textContent=d.grp;menu.appendChild(g);last=d.grp}
+    const it=document.createElement("div");it.textContent=d.title;it.onmousedown=ev=>{ev.stopPropagation();addNode(t,wx,wy);closeMenu();changed()};menu.appendChild(it)}
+  cv.appendChild(menu)}
+$("add").onclick=e=>{e.stopPropagation();const r=cv.getBoundingClientRect();openMenu(10,10,(60-G.view.x)/G.view.k,(60-G.view.y)/G.view.k)};
+cv.addEventListener("contextmenu",e=>{e.preventDefault();const r=cv.getBoundingClientRect(),p=toWorld(e);openMenu(e.clientX-r.left,e.clientY-r.top,p.x,p.y)});
+
+// ---------- preview ----------
+const pv=$("pv"),pc=pv.getContext("2d");let cam={yaw:-0.7,pitch:0.55,zoom:1.3},pd=null;
+function drawPreview(){
+  const W=pv.width,H=pv.height;pc.clearRect(0,0,W,H);pc.fillStyle="#242426";pc.fillRect(0,0,W,H);
+  const s=OUT.stats;const st=$("stats");
+  if(!s){st.textContent="「Gコード出力」に曲線/層をつなぐとここに表示されます";return}
+  const t=s.time,hh=Math.floor(t/3600),mm=Math.floor(t%3600/60);
+  st.innerHTML=`印刷長 ${(s.len/1000).toFixed(2)} m ／ 時間の目安 ${hh}時間${mm}分 ／ フィラメント ${(s.filament*Math.PI*.875*.875/1000*1.24).toFixed(1)} g前後<br>高さ ${s.maxz.toFixed(1)} mm ／ ${s.lines} 行${(s.minx<0||s.maxx>180||s.miny<0||s.maxy>180)?' ／ <span style="color:var(--bad)">ベッドからはみ出し</span>':''}`;
+  const cy=Math.cos(cam.yaw),sy=Math.sin(cam.yaw),cp=Math.cos(cam.pitch),sp=Math.sin(cam.pitch);
+  const P=(x,y,z)=>{x-=90;y-=90;const a=x*cy-y*sy,b=x*sy+y*cy;return[W/2+a*1.45*cam.zoom,H*.68+(b*sp-z*cp)*1.45*cam.zoom*(1)]};
+  // bed outline
+  pc.strokeStyle="#55555b";pc.beginPath();[[0,0],[180,0],[180,180],[0,180],[0,0]].forEach(([x,y],i)=>{const q=P(x,y,0);i?pc.lineTo(...q):pc.moveTo(...q)});pc.stroke();
+  const limit=+$("lay").value/1000*Math.max(.001,s.maxz);
+  for(const seg of OUT.paths){let on=false;pc.beginPath();
+    for(const [x,y,z] of seg){if(z>limit){on=false;continue}const q=P(x,y,z);on?pc.lineTo(...q):pc.moveTo(...q);on=true}
+    const mid=seg[Math.floor(seg.length/2)][2]/Math.max(.001,s.maxz);pc.strokeStyle=`hsl(${200-mid*160},75%,${55+mid*10}%)`;pc.lineWidth=1;pc.stroke()}
+}
+pv.addEventListener("mousedown",e=>{pd={x:e.clientX,y:e.clientY,yaw:cam.yaw,pitch:cam.pitch}});
+window.addEventListener("mousemove",e=>{if(!pd)return;cam.yaw=pd.yaw+(e.clientX-pd.x)*.01;cam.pitch=Math.max(.05,Math.min(1.5,pd.pitch+(e.clientY-pd.y)*.01));drawPreview()});
+window.addEventListener("mouseup",()=>pd=null);
+pv.addEventListener("wheel",e=>{e.preventDefault();cam.zoom=Math.max(.3,Math.min(5,cam.zoom*(e.deltaY<0?1.1:.9)));drawPreview()},{passive:false});
+$("lay").oninput=drawPreview;
+
+// ---------- files ----------
+function loadSTL(n,file){file.arrayBuffer().then(b=>{try{n.mesh=parseSTL(b);n.meshName=file.name;changed()}catch(e){alert(e.message)}})}
+function pickSTL(n){const i=document.createElement("input");i.type="file";i.accept=".stl";i.onchange=()=>i.files[0]&&loadSTL(n,i.files[0]);i.click()}
+cv.addEventListener("dragover",e=>e.preventDefault());
+cv.addEventListener("drop",e=>{e.preventDefault();const f=[...e.dataTransfer.files].find(f=>/\.stl$/i.test(f.name));if(!f)return;
+  let n=G.nodes.find(n=>n.type==="slice");if(!n){const p=toWorld(e);n=addNode("slice",p.x,p.y);const g=G.nodes.find(m=>m.type==="gcode");if(g)wire(n,g,"c")}loadSTL(n,f)});
+function download(name,text,type){const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([text],{type}));a.download=name;document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove()},500)}
+$("dl").onclick=()=>{if(!OUT.gcode){alert("まず「Gコード出力」ノードに曲線をつないでください");return}download("yura.gcode",OUT.gcode,"text/plain")};
+$("copy").onclick=async()=>{try{await navigator.clipboard.writeText(OUT.gcode);$("copy").textContent="コピーした！";setTimeout(()=>$("copy").textContent="Gコードをコピー",1200)}catch(e){alert("コピーできませんでした")}};
+$("save").onclick=()=>download("yura-graph.json",JSON.stringify(G),"application/json");
+$("load").onclick=()=>$("file").click();
+$("file").onchange=e=>{const f=e.target.files[0];if(!f)return;f.text().then(t=>{try{setGraph(JSON.parse(t))}catch(x){alert("読み込めません")}})};
+$("sg").oninput=()=>{G.start=$("sg").value;changed()};$("eg").oninput=()=>{G.end=$("eg").value;changed()};
+function setGraph(g){G=Object.assign({nodes:[],wires:[],nextId:1,view:{x:30,y:30,k:1},start:DEFAULT_START,end:DEFAULT_END},g);
+  $("sg").value=G.start;$("eg").value=G.end;applyView();changed()}
+
+// ---------- presets ----------
+const PRESETS={
+ "波うつ壺（ねじれ）":()=>{G={nodes:[],wires:[],nextId:1,view:{x:20,y:20,k:.8},start:DEFAULT_START,end:DEFAULT_END};
+   const h=addNode("number",20,20,{value:0.2,min:0.1,max:0.4}),wv=addNode("wave",20,150,{r:30,amp:3,waves:12,seg:240}),
+     ser=addNode("series",20,330,{start:0,step:1,count:150}),
+     ro=addNode("math",250,480,{op:"mul",b:1.2}),sx=addNode("formula",250,630,{expr:"1+0.35*sin(t*0.06)"}),
+     st=addNode("stack",500,150,{layers:150}),sp=addNode("spiral",740,150),out=addNode("gcode",740,320);
+   wire(h,st,"h");wire(wv,st,"c");wire(ser,ro,"a");wire(ser,sx,"t");wire(ro,st,"rot");wire(sx,st,"scale");
+   wire(st,sp,"c");wire(sp,out,"c");wire(h,out,"lh");return G},
+ "六角タワー":()=>{G={nodes:[],wires:[],nextId:1,view:{x:20,y:20,k:.8},start:DEFAULT_START,end:DEFAULT_END};
+   const pg=addNode("polygon",20,20,{r:35,sides:6}),ser=addNode("series",20,170,{start:0,step:1,count:120}),
+     ro=addNode("math",250,170,{op:"mul",b:1.5}),st=addNode("stack",490,20,{layers:120,h:0.2}),out=addNode("gcode",740,20);
+   wire(pg,st,"c");wire(ser,ro,"a");wire(ro,st,"rot");wire(st,out,"c");return G},
+ "渦巻き星":()=>{G={nodes:[],wires:[],nextId:1,view:{x:20,y:20,k:.8},start:DEFAULT_START,end:DEFAULT_END};
+   const sr=addNode("star",20,20,{r1:35,r2:20,n:7}),ser=addNode("series",20,170,{start:0,step:1,count:100}),
+     ro=addNode("math",250,170,{op:"mul",b:2}),sc=addNode("formula",250,320,{expr:"1-t*0.004"}),
+     st=addNode("stack",490,20,{layers:100}),out=addNode("gcode",740,20);
+   wire(sr,st,"c");wire(ser,ro,"a");wire(ser,sc,"t");wire(ro,st,"rot");wire(sc,st,"scale");wire(st,out,"c");return G}
+};
+Object.keys(PRESETS).forEach(k=>{const o=document.createElement("option");o.value=o.textContent=k;$("preset").appendChild(o)});
+$("preset").onchange=e=>{const k=e.target.value;if(!k)return;PRESETS[k]();$("sg").value=G.start;$("eg").value=G.end;applyView();changed()};
+
+window.__app={addNode,get G(){return G},get OUT(){return OUT},get errors(){return errors},PRESETS,changed,evaluate,build};
+PRESETS["波うつ壺（ねじれ）"]();$("sg").value=G.start;$("eg").value=G.end;applyView();evaluate();build();drawAll();drawPreview();
+
+if(window.__preload&&window.__preload.b64){try{
+  const bin=atob(window.__preload.b64),u=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)u[i]=bin.charCodeAt(i);
+  G.nodes.length=0;G.wires.length=0;G.nextId=1;
+  const s=addNode("slice",20,20);s.mesh=parseSTL(u.buffer);s.meshName=window.__preload.name||"model.stl";
+  const g=addNode("gcode",300,20);wire(s,g,"c");
+  evaluate();build();drawAll();drawPreview()}catch(e){alert("YURACADのモデルを読めませんでした: "+e.message)}}
+</script>
+</body>
+</html>

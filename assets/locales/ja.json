@@ -1186,5 +1186,6 @@
   "ui.heading_refine": "整える",
   "ui.heading_shape": "立体にする",
   "cmd.construct_plane_from_view": "画面に平行な平面",
-  "cmd.construct_plane_from_view_origin": "画面に平行な平面（原点を通る）"
+  "cmd.construct_plane_from_view_origin": "画面に平行な平面（原点を通る）",
+  "cmd.tools_gcode_nodes": "Gコードノード"
 }
