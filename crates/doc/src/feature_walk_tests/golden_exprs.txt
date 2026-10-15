@@ -192,6 +192,7 @@ offset_face
   inputs:
     Distance = offset_face.distance (Length)
   expressions: offset_face.distance
+blend_surface
 delete_face
 bounding_solid
   inputs:

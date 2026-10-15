@@ -94,6 +94,7 @@ pub(super) fn fixtures() -> Vec<(&'static str, Value)> {
         ("split_face", json!({"type": "split_face", "faces": [o], "plane": plane("split_face")})),
         ("scale", json!({"type": "scale", "bodies": ["B"], "factor": "scale.factor", "factors": ["scale.x", "scale.y", "scale.z"]})),
         ("offset_face", json!({"type": "offset_face", "faces": [o], "distance": "offset_face.distance"})),
+        ("blend_surface", json!({"type": "blend_surface", "from_body": "B", "from_at": [1, 2, 3], "to_body": "B", "to_at": [4, 5, 6], "continuity": [1, 2], "bulge": [1.0, 1.0]})),
         ("delete_face", json!({"type": "delete_face", "faces": [o]})),
         ("bounding_solid", json!({"type": "bounding_solid", "bodies": ["B"], "margin": "bounding.margin"})),
         ("pipe", json!({"type": "pipe", "path_sketch": 1, "path": ["l1"], "diameter": "pipe.diameter", "wall": "pipe.wall"})),
