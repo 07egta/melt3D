@@ -16,7 +16,8 @@ const V4_SHAPES: usize = V4_GROUPS + MAX_GROUPS;
 const V4_PER_SHAPE: usize = 9;
 const V4_POLY: usize = V4_SHAPES + MAX_SHAPES * V4_PER_SHAPE;
 const POLY_V4: usize = 128;
-const TOTAL_V4: usize = V4_POLY + POLY_V4;
+const V4_BOUND: usize = V4_POLY + POLY_V4;
+const TOTAL_V4: usize = V4_BOUND + 1;
 /// Size of the uniform buffer in bytes.
 pub const UNIFORM_BYTES: usize = TOTAL_V4 * 16;
 
@@ -96,7 +97,39 @@ pub fn pack(scene: &Scene, cam: &Camera, size: [f32; 2], selected: Option<Pick>,
         }
     }
     put(&mut u, 6, [group_n as f32, shape_n as f32, sel_first, sel_count]);
+    let (bc, br) = bounds(scene, selected);
+    put(&mut u, V4_BOUND, [bc[0], bc[1], bc[2], br]);
     u
+}
+
+/// A sphere around everything the shader can draw (centre, radius; radius 0 when there is nothing):
+/// rays that miss it skip the marching. It includes the melt's reach, the drips and the selection.
+pub fn bounds(scene: &Scene, selected: Option<Pick>) -> ([f32; 3], f32) {
+    let mut items: Vec<([f32; 3], f32)> = Vec::new();
+    for (gi, g) in scene.groups.iter().enumerate() {
+        if !g.visible {
+            continue;
+        }
+        for (si, s) in g.shapes.iter().enumerate() {
+            let is_sel = match selected {
+                Some(Pick::Shape(a, b)) => a == gi && b == si,
+                Some(Pick::Group(a)) => a == gi,
+                None => false,
+            };
+            if !s.visible || (!is_sel && (s.op == crate::model::Op::Subtract || g.op == crate::model::Op::Subtract)) {
+                continue;
+            }
+            let reach = (s.blend + g.blend) * scene.melt.amount * 1.5 + scene.melt.drip + 2.0;
+            items.push((s.pos, crate::view::radius_of(s) + reach));
+        }
+    }
+    if items.is_empty() {
+        return ([0.0; 3], 0.0);
+    }
+    let n = items.len() as f32;
+    let c = items.iter().fold([0.0; 3], |a, (p, _)| [a[0] + p[0] / n, a[1] + p[1] / n, a[2] + p[2] / n]);
+    let r = items.iter().map(|(p, r)| crate::sdf::len(crate::sdf::sub(*p, c)) + r).fold(0.0_f32, f32::max);
+    (c, r)
 }
 
 struct Resources {

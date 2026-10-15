@@ -260,6 +260,11 @@ impl App {
             if style::icon_button(ui, 30.0, "削除 (Delete)", false, glyphs::trash).clicked() {
                 self.delete_selected();
             }
+            if matches!(self.sel, Some(Pick::Shape(..)))
+                && style::pill(ui, "左右コピー", false).on_hover_text("反対がわにコピー (耳・目・うでに)").clicked()
+            {
+                self.mirror_copy();
+            }
         });
     }
 

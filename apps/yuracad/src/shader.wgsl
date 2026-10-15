@@ -23,6 +23,7 @@ struct Globals {
     groups: array<vec4<f32>, 24>,   // first shape, count, op sign, blend
     shapes: array<Shape, 64>,
     poly: array<vec4<f32>, 128>,    // outline points, two per vec4 (x y x y)
+    bound: vec4<f32>,               // centre, radius of a sphere around everything (0 = nothing)
 };
 
 @group(0) @binding(0) var<uniform> G: Globals;
@@ -337,7 +338,22 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
     var sel_abs = 1e9;
     var sel_hit = false;
     let foot = select(px, px, tanh <= 0.0);
+    // rays that miss the scene's bounding sphere skip the marching
+    var run = false;
+    var t_max = 2000.0;
+    let oc = ro - G.bound.xyz;
+    let bq = dot(oc, rd);
+    let disc = bq * bq - (dot(oc, oc) - G.bound.w * G.bound.w);
+    if (G.bound.w > 0.0 && disc > 0.0) {
+        let sq = sqrt(disc);
+        if (-bq + sq > 0.0) {
+            run = true;
+            t = max(-bq - sq, 0.0);
+            t_max = -bq + sq;
+        }
+    }
     for (var i = 0; i < 200; i = i + 1) {
+        if (!run) { break; }
         let p = ro + rd * t;
         h = map(p);
         if (has_sel) {
@@ -350,7 +366,7 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
         var step = h.d * 0.9;
         if (has_sel && sel_carving) { step = min(step, max(abs(sel_dist(p)) * 0.8, 0.15)); }
         t = t + step;
-        if (t > 2000.0) { break; }
+        if (t > t_max) { break; }
     }
 
     // ground
