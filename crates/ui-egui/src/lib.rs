@@ -668,6 +668,14 @@ impl SolveApp {
         if self.file_load.busy() || self.file_picker.is_some() {
             return;
         }
+        // G-code Nodes opens the tool in the browser with the model loaded.
+        if id == "tools.gcode_nodes" {
+            match self.run(id, json!({"open": true})) {
+                Ok(_) => self.set_status("G-code Nodes opened in your browser", false),
+                Err(e) => self.set_status(format!("G-code Nodes: {e}"), true),
+            }
+            return;
+        }
         // Plane from View: parallel to the screen. Through the origin at once, or through the
         // point the next click picks.
         self.view_plane_pick = false;

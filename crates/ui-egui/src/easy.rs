@@ -113,7 +113,8 @@ const CHECK: &[&str] = &[
     "inspect.draft",
 ];
 
-const OUTPUT: &[&str] = &["file.save_mesh", "file.export", "file.save", "parameters.change", "file.insert_step", "file.insert_mesh"];
+const OUTPUT: &[&str] =
+    &["file.save_mesh", "tools.gcode_nodes", "file.export", "file.save", "parameters.change", "file.insert_step", "file.insert_mesh"];
 
 /// The commands of an easy panel in order and how many of them get a big button.
 /// Commands that are only planned (registered, not built) are left out until they are built.
@@ -141,7 +142,7 @@ pub fn auto_sketch(id: &str) -> bool {
 const ALIASES: &[(&str, &[&str])] = &[
     // Curves
     ("sketch.create", &["Sketch", "スケッチ", "スケッチ作成"]),
-    ("sketch.line",&["Line", "Polyline", "Pline", "線", "直線", "ポリライン"]),
+    ("sketch.line", &["Line", "Polyline", "Pline", "線", "直線", "ポリライン"]),
     ("sketch.rectangle.two_point", &["Rectangle", "Rect", "四角形", "長方形"]),
     ("sketch.rectangle.center", &["RectangleCenter", "中心から四角形"]),
     ("sketch.circle.center", &["Circle", "円"]),
@@ -246,6 +247,7 @@ const ALIASES: &[(&str, &[&str])] = &[
     ("inspect.interference", &["Interference", "干渉", "干渉チェック"]),
     ("inspect.center_of_mass", &["CenterOfMass", "重心"]),
     // Files and editing
+    ("tools.gcode_nodes", &["Grasshopper", "GCode", "G-code", "Gコード", "ノード", "ジーコード", "スライス"]),
     ("file.save_mesh", &["ExportSTL", "STL", "3MF", "OBJ", "3Dプリント", "STL書き出し"]),
     ("file.export", &["Export", "ExportSTEP", "STEP", "IGES", "エクスポート", "書き出し"]),
     ("file.save", &["Save", "保存"]),

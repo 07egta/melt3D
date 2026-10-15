@@ -1186,5 +1186,6 @@
   "ui.heading_refine": "REFINE",
   "ui.heading_shape": "SHAPE",
   "cmd.construct_plane_from_view": "Plane from View",
-  "cmd.construct_plane_from_view_origin": "Plane from View Through Origin"
+  "cmd.construct_plane_from_view_origin": "Plane from View Through Origin",
+  "cmd.tools_gcode_nodes": "G-code Nodes"
 }

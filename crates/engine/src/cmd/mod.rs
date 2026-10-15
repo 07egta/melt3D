@@ -36,6 +36,7 @@ pub use features::auto_operation;
 mod component_link;
 mod config;
 mod file;
+mod gcode_nodes;
 mod inspect;
 pub(crate) mod joints;
 mod libraries;
@@ -255,6 +256,7 @@ pub fn command_specs() -> Vec<&'static CommandSpec> {
     v.extend(script::COMMANDS.iter());
     v.extend(parameters::COMMANDS.iter());
     v.extend(file::COMMANDS.iter());
+    v.extend(gcode_nodes::COMMANDS.iter());
     v.extend(metadata::COMMANDS.iter());
     v.extend(inspect::COMMANDS.iter());
     v.extend(materials::COMMANDS.iter());
