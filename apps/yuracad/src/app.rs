@@ -217,6 +217,26 @@ impl App {
         }
     }
 
+    /// Copy the selected shape to the other side of the YZ plane (x becomes -x): handy for
+    /// ears, arms and eyes.
+    pub fn mirror_copy(&mut self) {
+        let Some(Pick::Shape(g, s)) = self.sel else { return };
+        if self.scene.shape_count() >= MAX_SHAPES {
+            return;
+        }
+        if let Some(mut c) = self.scene.shape(g, s).cloned() {
+            c.pos[0] = -c.pos[0];
+            c.rot = [c.rot[0], -c.rot[1], -c.rot[2]];
+            for p in &mut c.outline {
+                p[0] = -p[0];
+            }
+            c.outline.reverse();
+            c.name = format!("{} (左右)", c.name);
+            self.scene.groups[g].shapes.insert(s + 1, c);
+            self.sel = Some(Pick::Shape(g, s + 1));
+        }
+    }
+
     pub fn delete_selected(&mut self) {
         match self.sel {
             Some(Pick::Shape(g, s)) if self.scene.shape(g, s).is_some() => {
@@ -616,6 +636,16 @@ mod tests {
             app.add_group();
         }
         assert!(app.scene.shape_count() <= MAX_SHAPES && app.scene.groups.len() <= MAX_GROUPS);
+    }
+
+    #[test]
+    fn a_mirror_copy_sits_on_the_other_side() {
+        let mut app = App::new(true, None);
+        if let Some(s) = app.scene.shape_mut(0, 0) {
+            s.pos = [12.0, 3.0, 5.0];
+        }
+        app.mirror_copy();
+        assert_eq!(app.scene.shape(0, 1).map(|s| s.pos), Some([-12.0, 3.0, 5.0]));
     }
 
     #[test]
