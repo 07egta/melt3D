@@ -159,9 +159,16 @@ pub fn op(p: &Painter, rect: Rect, o: Op, ink: Color32) {
     let f = frame(rect);
     let s = pen(rect, ink);
     p.rect_stroke(f, f.width() * 0.2, s, StrokeKind::Inside);
-    segment(p, f, (0.25, 0.5), (0.75, 0.5), s);
-    if matches!(o, Op::Add) {
-        segment(p, f, (0.5, 0.25), (0.5, 0.75), s);
+    match o {
+        Op::Add => {
+            segment(p, f, (0.25, 0.5), (0.75, 0.5), s);
+            segment(p, f, (0.5, 0.25), (0.5, 0.75), s);
+        }
+        Op::Subtract => segment(p, f, (0.25, 0.5), (0.75, 0.5), s),
+        // a stain: a drop of paint
+        Op::Paint => {
+            p.circle_filled(at(f, 0.5, 0.5), f.width() * 0.17, ink);
+        }
     }
 }
 
@@ -225,25 +232,6 @@ fn curved_arrow(p: &Painter, rect: Rect, ink: Color32, sx: f32) {
     let tip = (x(0.18), 0.62);
     segment(p, f, tip, (x(0.05), 0.50), s);
     segment(p, f, tip, (x(0.32), 0.50), s);
-}
-
-/// Floppy disk: body, shutter and label.
-pub fn save(p: &Painter, rect: Rect, ink: Color32) {
-    let f = frame(rect);
-    let s = pen(rect, ink);
-    outline(p, f, &[(0.12, 0.12), (0.74, 0.12), (0.88, 0.26), (0.88, 0.88), (0.12, 0.88)], s);
-    outline(p, f, &[(0.28, 0.12), (0.28, 0.38), (0.70, 0.38), (0.70, 0.12)], s);
-    outline(p, f, &[(0.25, 0.60), (0.75, 0.60), (0.75, 0.88), (0.25, 0.88)], s);
-}
-
-/// Folder with an arrow pointing out of it.
-pub fn open(p: &Painter, rect: Rect, ink: Color32) {
-    let f = frame(rect);
-    let s = pen(rect, ink);
-    outline(p, f, &[(0.08, 0.30), (0.40, 0.30), (0.48, 0.40), (0.92, 0.40), (0.92, 0.84), (0.08, 0.84)], s);
-    segment(p, f, (0.50, 0.62), (0.50, 0.12), s);
-    segment(p, f, (0.38, 0.24), (0.50, 0.12), s);
-    segment(p, f, (0.62, 0.24), (0.50, 0.12), s);
 }
 
 /// Open box with an arrow leaving it upwards.

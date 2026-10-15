@@ -1,45 +1,15 @@
-//! The viewport: camera controls, picking, and the move / rotate / scale handles.
+//! The viewport: camera controls, picking and the handles' input.
 
 use std::sync::Arc;
 
-use egui::{Align2, Color32, FontId, PointerButton, Pos2, Rect, Sense, Shape, Stroke, Ui, Vec2, pos2, vec2};
+use egui::{Align2, Color32, FontId, PointerButton, Pos2, Rect, Sense, Stroke, Ui, pos2, vec2};
 
 use crate::app::App;
 use crate::camera::Camera;
+use crate::gizmo;
 use crate::model::{Kind, Pick, Scene};
-use crate::sdf::{Prepared, V3, add, cross, dot, len, mul, sub};
+use crate::sdf::{V3, add, dot, len, mul, sub};
 use crate::style;
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Tool {
-    Select,
-    Move,
-    Rotate,
-    Scale,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Handle {
-    Axis(usize),
-    Centre,
-}
-
-/// A handle being dragged.
-#[derive(Clone, Debug)]
-pub struct Drag {
-    handle: Handle,
-    tool: Tool,
-    start: Pos2,
-    centre: V3,
-    /// The axis in the world, its direction on screen (unit) and its length on screen.
-    axis: V3,
-    screen_dir: Vec2,
-    len_px: f32,
-    ring_px: f32,
-    mm_px: f32,
-    /// (group, shape, position, rotation, scale) when the drag began.
-    from: Vec<(usize, usize, V3, V3, V3)>,
-}
 
 /// The shapes a pick stands for.
 pub fn targets(scene: &Scene, pick: Option<Pick>) -> Vec<(usize, usize)> {
@@ -79,94 +49,17 @@ pub fn radius_of(s: &crate::model::Shape) -> f32 {
     r * m
 }
 
-const RING_SEGS: usize = 56;
-
-struct Geom {
-    centre: Pos2,
-    /// World length of each handle and its end point on screen.
-    len_world: f32,
-    ends: [Option<Pos2>; 3],
-    rings: [Vec<Pos2>; 3],
-    axes: [V3; 3],
-}
-
-fn ring_points(cam: &Camera, rect: Rect, c: V3, axis: usize, r: f32) -> Vec<Pos2> {
-    let (a, b) = match axis {
-        0 => ([0.0, 1.0, 0.0], [0.0, 0.0, 1.0]),
-        1 => ([0.0, 0.0, 1.0], [1.0, 0.0, 0.0]),
-        _ => ([1.0, 0.0, 0.0], [0.0, 1.0, 0.0]),
-    };
-    (0..=RING_SEGS)
-        .filter_map(|i| {
-            let t = i as f32 / RING_SEGS as f32 * std::f32::consts::TAU;
-            cam.project(rect, add(c, add(mul(a, r * t.cos()), mul(b, r * t.sin()))))
-        })
-        .collect()
-}
-
-fn geom(cam: &Camera, rect: Rect, centre: V3, axes: [V3; 3], tool: Tool) -> Option<Geom> {
-    let c = cam.project(rect, centre)?;
-    let len_world = 78.0 * cam.mm_per_px(centre, rect.height());
-    let ends = [0, 1, 2].map(|i| cam.project(rect, add(centre, mul(axes[i], len_world))));
-    let rings = if tool == Tool::Rotate {
-        [0, 1, 2].map(|i| ring_points(cam, rect, centre, i, len_world * 0.9))
-    } else {
-        [Vec::new(), Vec::new(), Vec::new()]
-    };
-    Some(Geom { centre: c, len_world, ends, rings, axes })
-}
-
-fn seg_dist(p: Pos2, a: Pos2, b: Pos2) -> f32 {
-    let ab = b - a;
-    let l2 = ab.length_sq().max(1e-6);
-    let t = ((p - a).dot(ab) / l2).clamp(0.0, 1.0);
-    (p - (a + ab * t)).length()
-}
-
-fn hit(g: &Geom, tool: Tool, p: Pos2) -> Option<Handle> {
-    if (p - g.centre).length() < 9.0 && tool != Tool::Rotate {
-        return Some(Handle::Centre);
-    }
-    let mut best: Option<(f32, usize)> = None;
-    for i in 0..3 {
-        let d = if tool == Tool::Rotate {
-            g.rings[i].windows(2).map(|w| seg_dist(p, w[0], w[1])).fold(f32::MAX, f32::min)
-        } else {
-            match g.ends[i] {
-                Some(e) => seg_dist(p, g.centre, e),
-                None => f32::MAX,
-            }
-        };
-        if d < 8.0 && best.is_none_or(|(bd, _)| d < bd) {
-            best = Some((d, i));
-        }
-    }
-    best.map(|(_, i)| Handle::Axis(i))
-}
-
-/// The gizmo's axes: the world's, or for scaling the shape's own.
-fn axes_for(scene: &Scene, pick: Option<Pick>, tool: Tool) -> [V3; 3] {
-    if tool == Tool::Scale
-        && let Some(Pick::Shape(g, s)) = pick
-        && let Some(sh) = scene.shape(g, s)
-    {
-        return Prepared::new(sh).inv;
-    }
-    [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
-}
-
-fn rotate_about(p: V3, axis: V3, deg: f32) -> V3 {
-    let (s, c) = deg.to_radians().sin_cos();
-    add(add(mul(p, c), mul(cross(axis, p), s)), mul(axis, dot(axis, p) * (1.0 - c)))
-}
-
 impl App {
     /// Draw the viewport and handle the mouse. Returns nothing: it edits `self`.
     pub fn viewport(&mut self, ui: &mut Ui) {
         let rect = ui.available_rect_before_wrap();
         let resp = ui.allocate_rect(rect, Sense::click_and_drag());
+        self.view_rect = rect;
         let ppp = ui.ctx().pixels_per_point();
-        let data = crate::gpu::pack(&self.scene, &self.cam, [rect.width() * ppp, rect.height() * ppp], self.sel, self.srgb);
+        let clean = self.capture.is_some();
+        let shown_sel = if clean { None } else { self.sel };
+        let hover = if clean { None } else { self.hover };
+        let data = crate::gpu::pack(&self.scene, &self.cam, [rect.width() * ppp, rect.height() * ppp], shown_sel, hover, self.srgb);
         ui.painter().add(egui_wgpu::Callback::new_paint_callback(rect, crate::gpu::Callback { data: Arc::new(data) }));
         let painter = ui.painter_at(rect);
 
@@ -174,20 +67,32 @@ impl App {
         let pos = resp.hover_pos().or_else(|| ui.input(|i| i.pointer.interact_pos()));
 
         // The handles
-        let centre = centre_of(&self.scene, self.sel);
         let tool = self.tool;
-        let axes = axes_for(&self.scene, self.sel, tool);
-        let g = if tool != Tool::Select { centre.and_then(|c| geom(&self.cam, rect, c, axes, tool)) } else { None };
-        let over_gnomon = pos.is_some_and(|p| self.gnomon_hit(rect, p).is_some());
-        let hover_handle = match (&g, pos, &self.drag) {
-            (Some(g), Some(p), None) if resp.hovered() && !over_gnomon => hit(g, tool, p),
+        let geom = if clean { None } else { gizmo::build(&self.cam, rect, &self.scene, self.sel, tool) };
+        let over_gnomon = !clean && pos.is_some_and(|p| self.gnomon_hit(rect, p).is_some());
+        let hover_handle = match (&geom, pos, &self.drag) {
+            (Some(g), Some(p), None) if resp.hovered() && !over_gnomon => gizmo::hit(g, tool, p),
             _ => None,
         };
         if resp.hovered() {
-            ui.ctx().set_cursor_icon(if hover_handle.is_some() || over_gnomon { egui::CursorIcon::PointingHand } else { egui::CursorIcon::Default });
+            ui.ctx().set_cursor_icon(if self.drag.is_some() {
+                egui::CursorIcon::Grabbing
+            } else if hover_handle.is_some() || over_gnomon {
+                egui::CursorIcon::PointingHand
+            } else {
+                egui::CursorIcon::Default
+            });
         }
 
-        // Camera
+        // The shape under the mouse lights up a little
+        let idle = self.drag.is_none() && !ui.input(|i| i.pointer.any_down());
+        self.hover = match (resp.hovered() && idle && hover_handle.is_none() && !over_gnomon, pos) {
+            (true, Some(p)) => self.shape_at(rect, p).map(|(g, s)| Pick::Shape(g, s)),
+            _ => None,
+        };
+
+        // Camera: middle-drag turns, right-drag slides, the wheel zooms toward the mouse
+        let mut moved_camera = false;
         if resp.dragged_by(PointerButton::Middle) || (resp.dragged_by(PointerButton::Primary) && mods.alt && self.drag.is_none()) {
             let d = resp.drag_delta();
             if mods.shift {
@@ -197,40 +102,66 @@ impl App {
             } else {
                 self.cam.orbit(d.x, d.y);
             }
+            moved_camera = true;
         }
         if resp.dragged_by(PointerButton::Secondary) {
             let d = resp.drag_delta();
             self.cam.pan(d.x, d.y, rect.height());
+            moved_camera = true;
         }
         if resp.hovered() {
             let (scroll, pinch) = ui.input(|i| (i.smooth_scroll_delta.y, i.zoom_delta()));
-            if scroll != 0.0 {
-                self.cam.zoom(scroll);
-            }
-            if pinch != 1.0 {
-                self.cam.dist = (self.cam.dist / pinch).clamp(4.0, 4000.0);
+            if let Some(p) = pos {
+                if scroll != 0.0 {
+                    self.cam.zoom_at(rect, p, scroll);
+                    moved_camera = true;
+                }
+                if pinch != 1.0 {
+                    self.cam.zoom_at(rect, p, (1.0 / pinch).ln() * -660.0);
+                    moved_camera = true;
+                }
             }
         }
 
-        // Dragging a handle
+        // A drag that starts on a handle moves the thing; a drag that starts anywhere else turns the view
         if resp.drag_started_by(PointerButton::Primary) && !mods.alt {
             // where the button went down (the pointer has moved a little by now)
             let origin = ui.input(|i| i.pointer.press_origin()).or(pos);
-            if let (Some(g), Some(o), Some(c)) = (&g, origin, centre)
-                && let Some(h) = hit(g, tool, o)
-            {
-                self.drag = Some(self.begin_drag(h, g, o, c, tool));
+            let grabbed = match (&geom, origin) {
+                (Some(g), Some(o)) => gizmo::hit(g, tool, o).map(|h| (g, o, h)),
+                _ => None,
+            };
+            if let Some((g, o, h)) = grabbed {
+                self.drag = Some(self.begin_drag(h, g, rect, o, tool, mods.shift));
+                self.orbiting = false;
+            } else {
+                self.orbiting = origin.is_some_and(|o| self.gnomon_hit(rect, o).is_none());
             }
         }
-        if let Some(d) = self.drag.clone() {
+        if self.orbiting && resp.dragged_by(PointerButton::Primary) && self.drag.is_none() && !mods.alt {
+            let d = resp.drag_delta();
+            if mods.shift {
+                self.cam.pan(d.x, d.y, rect.height());
+            } else {
+                self.cam.orbit(d.x, d.y);
+            }
+            moved_camera = true;
+        }
+        if let Some(mut d) = self.drag.take() {
             if resp.dragged_by(PointerButton::Primary)
                 && let Some(p) = ui.input(|i| i.pointer.interact_pos())
             {
-                self.apply_drag(&d, p, mods.ctrl);
+                self.apply_drag(&mut d, p, mods.ctrl);
             }
-            if resp.drag_stopped() || !ui.input(|i| i.pointer.primary_down()) {
-                self.drag = None;
+            if !(resp.drag_stopped() || !ui.input(|i| i.pointer.primary_down())) {
+                self.drag = Some(d);
             }
+        }
+        if !ui.input(|i| i.pointer.primary_down()) {
+            self.orbiting = false;
+        }
+        if moved_camera {
+            self.fly = None;
         }
 
         // Clicks
@@ -250,147 +181,23 @@ impl App {
             self.pick_at(rect, p, false);
         }
         resp.context_menu(|ui| self.context_menu(ui));
-        if resp.double_clicked_by(PointerButton::Primary) && hover_handle.is_none() && self.sel.is_none() {
-            self.frame_view(false);
+        if resp.double_clicked_by(PointerButton::Primary)
+            && hover_handle.is_none()
+            && let Some(p) = pos
+            && self.gnomon_hit(rect, p).is_none()
+        {
+            self.frame_view(self.sel.is_some());
         }
 
         // Draw the handles over the picture
-        if let Some(g) = &g {
-            let active = self.drag.as_ref().map(|d| d.handle).or(hover_handle);
-            Self::draw_gizmo(&painter, g, tool, active);
+        if clean {
+            return;
+        }
+        if let Some(g) = &geom {
+            let active = self.drag.as_ref().map(gizmo::Drag::handle).or(hover_handle);
+            gizmo::draw(&painter, g, tool, active);
         }
         self.draw_gnomon(&painter, rect, pos);
-        painter.text(
-            rect.left_top() + vec2(12.0, 10.0),
-            Align2::LEFT_TOP,
-            "右ドラッグ: 移動　中ドラッグ: 回転　ホイール: ズーム　クリック: 選ぶ",
-            FontId::proportional(11.5),
-            Color32::from_white_alpha(80),
-        );
-    }
-
-    fn begin_drag(&self, handle: Handle, g: &Geom, mouse: Pos2, centre: V3, tool: Tool) -> Drag {
-        let axis_i = if let Handle::Axis(i) = handle { i } else { 0 };
-        let axis = g.axes[axis_i];
-        let end = g.ends[axis_i].unwrap_or(g.centre + vec2(1.0, 0.0));
-        let dir = end - g.centre;
-        let len_px = dir.length().max(8.0);
-        let screen_dir = if dir.length() > 1e-3 { dir / dir.length() } else { vec2(1.0, 0.0) };
-        let ring_px = {
-            let pts = &g.rings[axis_i];
-            // the ring's apparent radius: its mean distance from the centre
-            if pts.is_empty() { 60.0 } else { pts.iter().map(|p| (*p - g.centre).length()).sum::<f32>() / pts.len() as f32 }
-        };
-        // the direction along the ring where it was grabbed
-        let mut tangent = screen_dir;
-        if tool == Tool::Rotate {
-            let pts = &g.rings[axis_i];
-            if let Some((i, _)) = pts.iter().enumerate().min_by(|a, b| (*a.1 - mouse).length().total_cmp(&(*b.1 - mouse).length())) {
-                let a = pts[i.saturating_sub(1)];
-                let b = pts[(i + 1).min(pts.len() - 1)];
-                let t = b - a;
-                if t.length() > 1e-3 {
-                    tangent = t / t.length();
-                }
-            }
-        }
-        let from = targets(&self.scene, self.sel)
-            .into_iter()
-            .filter_map(|(gi, si)| self.scene.shape(gi, si).map(|s| (gi, si, s.pos, s.rot, s.scale)))
-            .collect();
-        Drag {
-            handle,
-            tool,
-            start: mouse,
-            centre,
-            axis,
-            screen_dir: if tool == Tool::Rotate { tangent } else { screen_dir },
-            len_px,
-            ring_px: ring_px.max(20.0),
-            mm_px: self.cam.mm_per_px(centre, self.last_view_height.max(1.0)),
-            from,
-        }
-    }
-
-    fn apply_drag(&mut self, d: &Drag, mouse: Pos2, snap: bool) {
-        let delta = mouse - d.start;
-        let group = matches!(self.sel, Some(Pick::Group(_)));
-        let (right, up, _) = self.cam.basis();
-        let round = |v: f32, step: f32| if snap { (v / step).round() * step } else { v };
-        for &(gi, si, pos, rot, scale) in &d.from {
-            let Some(s) = self.scene.shape_mut(gi, si) else { continue };
-            match (d.tool, d.handle) {
-                (Tool::Move, Handle::Axis(_)) => {
-                    let amt = round(delta.dot(d.screen_dir) * d.mm_px * (78.0 / d.len_px), 1.0);
-                    s.pos = add(pos, mul(d.axis, amt));
-                    if snap {
-                        s.pos = [round(s.pos[0], 1.0), round(s.pos[1], 1.0), round(s.pos[2], 1.0)];
-                    }
-                }
-                (Tool::Move, Handle::Centre) => {
-                    let off = add(mul(right, delta.x * d.mm_px), mul(up, -delta.y * d.mm_px));
-                    s.pos = add(pos, off);
-                    if snap {
-                        s.pos = [round(s.pos[0], 1.0), round(s.pos[1], 1.0), round(s.pos[2], 1.0)];
-                    }
-                }
-                (Tool::Rotate, Handle::Axis(i)) => {
-                    let deg = round(delta.dot(d.screen_dir) / d.ring_px * 57.2958, 15.0);
-                    s.rot[i] = (rot[i] + deg).rem_euclid(360.0);
-                    if group {
-                        let around = sub(pos, d.centre);
-                        s.pos = add(d.centre, rotate_about(around, d.axis, deg));
-                    }
-                }
-                (Tool::Scale, Handle::Axis(i)) if !group => {
-                    let f = (1.0 + delta.dot(d.screen_dir) / d.len_px).max(0.05);
-                    s.scale[i] = round(scale[i] * f, 0.05).clamp(0.01, 100.0);
-                }
-                (Tool::Scale, _) => {
-                    let f = ((delta.x - delta.y) / 160.0).exp();
-                    for (dst, src) in s.scale.iter_mut().zip(scale) {
-                        *dst = (src * f).clamp(0.01, 100.0);
-                    }
-                    if group {
-                        s.pos = add(d.centre, mul(sub(pos, d.centre), f));
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-
-    fn draw_gizmo(p: &egui::Painter, g: &Geom, tool: Tool, active: Option<Handle>) {
-        let c = g.centre;
-        for i in 0..3 {
-            let on = active == Some(Handle::Axis(i));
-            let col = if on { Color32::WHITE } else { style::AXIS[i] };
-            let w = if on { 3.5 } else { 2.5 };
-            match tool {
-                Tool::Rotate => {
-                    if g.rings[i].len() > 1 {
-                        p.add(Shape::line(g.rings[i].clone(), Stroke::new(w, col.gamma_multiply(if on { 1.0 } else { 0.85 }))));
-                    }
-                }
-                _ => {
-                    let Some(e) = g.ends[i] else { continue };
-                    p.line_segment([c, e], Stroke::new(w, col));
-                    let d = (e - c).normalized();
-                    if tool == Tool::Move {
-                        let n = vec2(-d.y, d.x);
-                        p.add(Shape::convex_polygon(vec![e + d * 14.0, e + n * 6.0, e - n * 6.0], col, Stroke::NONE));
-                    } else {
-                        p.rect_filled(Rect::from_center_size(e, Vec2::splat(11.0)), 2.0, col);
-                    }
-                }
-            }
-        }
-        if tool != Tool::Rotate {
-            let on = active == Some(Handle::Centre);
-            p.circle_filled(c, if on { 7.0 } else { 5.5 }, if on { Color32::WHITE } else { Color32::from_gray(225) });
-            p.circle_stroke(c, 7.5, Stroke::new(1.5, Color32::from_black_alpha(110)));
-        }
-        let _ = g.len_world;
     }
 
     fn gnomon_items(&self, rect: Rect) -> Vec<(V3, Pos2, bool)> {
@@ -444,13 +251,51 @@ impl App {
         // d points from the centre toward the viewer
         let pitch = d[2].clamp(-1.0, 1.0).asin();
         let yaw = if d[2].abs() > 0.9 { self.cam.yaw } else { d[0].atan2(-d[1]) };
-        self.cam.look(yaw, pitch);
+        self.fly_look(yaw, pitch);
+    }
+
+    /// Turn the view to look from (yaw, pitch), gliding there.
+    pub fn fly_look(&mut self, yaw: f32, pitch: f32) {
+        let mut goal = self.fly.unwrap_or(self.cam);
+        goal.look(yaw, pitch);
+        self.fly = Some(goal);
+    }
+
+    /// One step of the glide toward `self.fly`; true while it is still moving.
+    pub fn step_fly(&mut self, dt: f32) -> bool {
+        let Some(goal) = self.fly else { return false };
+        let k = 1.0 - (-dt.clamp(0.0, 0.1) * 13.0).exp();
+        let c = &mut self.cam;
+        c.target = add(c.target, mul(sub(goal.target, c.target), k));
+        c.dist = (c.dist.ln() + (goal.dist.ln() - c.dist.ln()) * k).exp();
+        let mut dy = goal.yaw - c.yaw;
+        while dy > std::f32::consts::PI {
+            dy -= std::f32::consts::TAU;
+        }
+        while dy < -std::f32::consts::PI {
+            dy += std::f32::consts::TAU;
+        }
+        c.yaw += dy * k;
+        c.pitch += (goal.pitch - c.pitch) * k;
+        let done = len(sub(goal.target, c.target)) < 0.02
+            && (goal.dist / c.dist - 1.0).abs() < 0.002
+            && dy.abs() < 0.002
+            && (goal.pitch - c.pitch).abs() < 0.002;
+        if done {
+            *c = Camera { ortho: c.ortho, ..goal };
+            self.fly = None;
+        }
+        !done
+    }
+
+    /// The shape under a screen point, if any.
+    pub fn shape_at(&self, rect: Rect, p: Pos2) -> Option<(usize, usize)> {
+        let (o, d) = self.cam.ray_at(rect, p);
+        self.field().ray(o, d, 5000.0).and_then(|(_, s)| s.nearest)
     }
 
     fn pick_at(&mut self, rect: Rect, p: Pos2, keep: bool) {
-        let (o, d) = self.cam.ray_at(rect, p);
-        let hit = self.field().ray(o, d, 5000.0).and_then(|(_, s)| s.nearest);
-        match hit {
+        match self.shape_at(rect, p) {
             Some((g, s)) => {
                 let want = Pick::Shape(g, s);
                 self.sel = if keep && self.sel == Some(want) { Some(Pick::Group(g)) } else { Some(want) };
@@ -467,7 +312,7 @@ impl App {
         };
         let shapes: Vec<_> = t.iter().filter_map(|(g, s)| self.scene.shape(*g, *s)).filter(|s| s.visible).collect();
         if shapes.is_empty() {
-            self.cam = Camera::default();
+            self.fly = Some(Camera { ortho: self.cam.ortho, ..Camera::default() });
             return;
         }
         let mut c = [0.0; 3];
@@ -476,7 +321,17 @@ impl App {
         }
         let c = mul(c, 1.0 / shapes.len() as f32);
         let r = shapes.iter().map(|s| len(sub(s.pos, c)) + radius_of(s)).fold(1.0_f32, f32::max);
-        self.cam.frame(c, r);
+        let mut goal = self.cam;
+        goal.frame(c, r);
+        self.fly = Some(goal);
+    }
+
+    /// Frame everything at once (no glide): for a freshly opened file.
+    pub fn frame_now(&mut self) {
+        self.frame_view(false);
+        if let Some(g) = self.fly.take() {
+            self.cam = g;
+        }
     }
 }
 
@@ -485,17 +340,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn rotating_about_z_turns_x_into_y() {
-        let q = rotate_about([1.0, 0.0, 0.0], [0.0, 0.0, 1.0], 90.0);
-        assert!(q[0].abs() < 1e-5 && (q[1] - 1.0).abs() < 1e-5);
-    }
-
-    #[test]
     fn a_group_pick_covers_all_its_shapes() {
         let mut s = Scene::default();
         let extra = s.groups[0].shapes[0].clone();
         s.groups[0].shapes.push(extra);
         assert_eq!(targets(&s, Some(Pick::Group(0))).len(), 2);
         assert_eq!(targets(&s, Some(Pick::Shape(0, 5))).len(), 0);
+    }
+
+    #[test]
+    fn the_view_glides_to_its_goal() {
+        let mut app = App::new(true, None);
+        app.frame_view(false);
+        let goal = app.fly.map(|g| g.dist);
+        assert!(goal.is_some());
+        for _ in 0..200 {
+            app.step_fly(0.016);
+        }
+        assert!(app.fly.is_none());
+        assert!(goal.is_some_and(|g| (app.cam.dist - g).abs() < 0.5));
     }
 }

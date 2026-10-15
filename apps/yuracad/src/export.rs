@@ -163,7 +163,7 @@ mod tests {
     fn scene_of(shapes: Vec<Shape>) -> Scene {
         let mut g = Group::new("g");
         g.shapes = shapes;
-        Scene { groups: vec![g], melt: Default::default() }
+        Scene { groups: vec![g], melt: Default::default(), env: Default::default(), saved: Vec::new() }
     }
 
     #[test]
@@ -199,6 +199,8 @@ mod tests {
         let bytes = stl_binary(&m, "test");
         assert_eq!(bytes.len(), 84 + 50 * m.triangles.len());
         assert!(!bytes.starts_with(b"solid"));
-        assert!(mesh(&Scene { groups: vec![Group::new("empty")], melt: Default::default() }, 40, 0).is_err());
+        assert!(
+            mesh(&Scene { groups: vec![Group::new("empty")], melt: Default::default(), env: Default::default(), saved: Vec::new() }, 40, 0).is_err()
+        );
     }
 }

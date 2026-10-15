@@ -13,6 +13,7 @@ pub const ACCENT: Color32 = Color32::from_rgb(146, 126, 255);
 pub const ACCENT_SOFT: Color32 = Color32::from_rgb(70, 62, 120);
 pub const ADD: Color32 = Color32::from_rgb(120, 214, 150);
 pub const CUT: Color32 = Color32::from_rgb(244, 124, 132);
+pub const PAINT: Color32 = Color32::from_rgb(120, 190, 255);
 pub const AXIS: [Color32; 3] = [Color32::from_rgb(232, 84, 84), Color32::from_rgb(110, 200, 100), Color32::from_rgb(80, 140, 240)];
 
 pub fn apply(ctx: &egui::Context) {
@@ -88,4 +89,49 @@ pub fn xyz(ui: &mut Ui, label: &str, v: &mut [f32; 3], speed: f64, range: std::o
         }
     });
     changed
+}
+
+/// A small triangle that points down when `open`, right when not.
+pub fn chevron(ui: &mut Ui, open: bool) -> Response {
+    let (rect, resp) = ui.allocate_exact_size(Vec2::splat(18.0), Sense::click());
+    let c = rect.center();
+    let pts = if open {
+        vec![c + egui::vec2(-4.5, -2.5), c + egui::vec2(4.5, -2.5), c + egui::vec2(0.0, 3.5)]
+    } else {
+        vec![c + egui::vec2(-2.5, -4.5), c + egui::vec2(-2.5, 4.5), c + egui::vec2(3.5, 0.0)]
+    };
+    ui.painter().add(egui::Shape::convex_polygon(pts, if resp.hovered() { Color32::WHITE } else { DIM }, Stroke::NONE));
+    resp
+}
+
+/// A rounded floating card that sits over the picture.
+pub fn card() -> egui::Frame {
+    egui::Frame::new()
+        .fill(Color32::from_rgba_unmultiplied(34, 34, 38, 238))
+        .corner_radius(CornerRadius::same(12))
+        .stroke(Stroke::new(1.0, Color32::from_white_alpha(18)))
+        .inner_margin(egui::Margin::symmetric(10, 8))
+        .shadow(egui::epaint::Shadow { offset: [0, 4], blur: 14, spread: 0, color: Color32::from_black_alpha(90) })
+}
+
+/// A colour button that only reports (and writes) a change the person made, so the colour is not
+/// nudged by rounding every frame.
+pub fn color_edit(ui: &mut Ui, rgb: &mut [f32; 3]) -> bool {
+    let mut c = *rgb;
+    if ui.color_edit_button_rgb(&mut c).changed() {
+        *rgb = c;
+        true
+    } else {
+        false
+    }
+}
+
+/// A slider with its name in front, in a fixed-width column.
+pub fn labeled_slider(ui: &mut Ui, label: &str, value: &mut f32, range: std::ops::RangeInclusive<f32>, tip: &str) -> bool {
+    ui.horizontal(|ui| {
+        ui.add_sized([72.0, 18.0], egui::Label::new(egui::RichText::new(label).color(DIM).size(12.0)));
+        ui.spacing_mut().slider_width = 118.0;
+        ui.add(egui::Slider::new(value, range)).on_hover_text(tip).changed()
+    })
+    .inner
 }

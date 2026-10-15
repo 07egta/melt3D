@@ -67,6 +67,25 @@ impl Camera {
     pub fn zoom(&mut self, scroll: f32) {
         self.dist = (self.dist * (-scroll * 0.0015).exp()).clamp(4.0, 4000.0);
     }
+    /// The point on the plane through the target (facing the viewer) that lies under screen point `p`.
+    fn focus_point(&self, rect: Rect, p: Pos2) -> Option<V3> {
+        let (o, d) = self.ray_at(rect, p);
+        let (_, _, fwd) = self.basis();
+        let den = dot(d, fwd);
+        if den < 1e-4 {
+            return None;
+        }
+        let t = dot(sub(self.target, o), fwd) / den;
+        t.is_finite().then(|| add(o, mul(d, t)))
+    }
+    /// Zoom, keeping the thing under the mouse where it is.
+    pub fn zoom_at(&mut self, rect: Rect, p: Pos2, scroll: f32) {
+        let before = self.focus_point(rect, p);
+        self.zoom(scroll);
+        if let (Some(b), Some(a)) = (before, self.focus_point(rect, p)) {
+            self.target = add(self.target, sub(b, a));
+        }
+    }
     pub fn look(&mut self, yaw: f32, pitch: f32) {
         self.yaw = yaw;
         self.pitch = pitch.clamp(-MAX_PITCH, MAX_PITCH);

@@ -59,40 +59,85 @@ impl Kind {
     }
 }
 
-/// Added to the group, or carved out of it.
+/// Added to the group, carved out of it, or only painted on it (a stain: colour, no shape).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Op {
     Add,
     Subtract,
+    Paint,
 }
 
 impl Op {
+    /// What the shader reads: +1 add, -1 carve, 0 paint.
     pub fn sign(self) -> f32 {
         match self {
             Op::Add => 1.0,
             Op::Subtract => -1.0,
+            Op::Paint => 0.0,
         }
     }
+    /// Plus becomes minus, minus becomes plus (a stain becomes plus).
     pub fn flip(self) -> Op {
         match self {
             Op::Add => Op::Subtract,
-            Op::Subtract => Op::Add,
+            Op::Subtract | Op::Paint => Op::Add,
+        }
+    }
+    /// Add, then carve, then paint, then add again (the list's +/- button).
+    pub fn next(self) -> Op {
+        match self {
+            Op::Add => Op::Subtract,
+            Op::Subtract => Op::Paint,
+            Op::Paint => Op::Add,
         }
     }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Material {
     pub color: [f32; 3],
     /// 0 = mirror smooth, 1 = chalky.
     pub roughness: f32,
     /// 0 = plastic, 1 = metal.
     pub metallic: f32,
+    /// How much light it gives off (0 = none, 4 = a lamp).
+    pub glow: f32,
+    /// 0 = solid, 1 = clear glass that bends the light.
+    pub glass: f32,
+    /// A shifting rainbow sheen (soap bubble, beetle shell).
+    pub iridescence: f32,
+    /// A glossy clear layer on top (car paint).
+    pub coat: f32,
+    /// Light seeping through (wax, jelly, ice): soft edges and a glow from behind.
+    pub translucency: f32,
 }
 
 impl Default for Material {
     fn default() -> Self {
-        Material { color: [0.92, 0.55, 0.42], roughness: 0.45, metallic: 0.0 }
+        Material::plain([0.92, 0.55, 0.42], 0.45, 0.0)
+    }
+}
+
+impl Material {
+    pub const fn plain(color: [f32; 3], roughness: f32, metallic: f32) -> Material {
+        Material { color, roughness, metallic, glow: 0.0, glass: 0.0, iridescence: 0.0, coat: 0.0, translucency: 0.0 }
+    }
+    /// Keep every number in the range the renderer expects.
+    pub fn sanitize(&mut self) {
+        let fix = |v: &mut f32, lo: f32, hi: f32, d: f32| {
+            *v = if v.is_finite() { v.clamp(lo, hi) } else { d };
+        };
+        for c in &mut self.color {
+            fix(c, 0.0, 1.0, 0.8);
+        }
+        fix(&mut self.roughness, 0.0, 1.0, 0.5);
+        fix(&mut self.metallic, 0.0, 1.0, 0.0);
+        fix(&mut self.glow, 0.0, 4.0, 0.0);
+        fix(&mut self.glass, 0.0, 1.0, 0.0);
+        fix(&mut self.iridescence, 0.0, 1.0, 0.0);
+        fix(&mut self.coat, 0.0, 1.0, 0.0);
+        fix(&mut self.translucency, 0.0, 1.0, 0.0);
     }
 }
 
@@ -200,18 +245,178 @@ impl Default for Melt {
     }
 }
 
+/// One light: where it shines from, how strong, what colour.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Light {
+    /// Turn about Z in degrees (0 = from the front, +Y side is behind the scene).
+    pub yaw: f32,
+    /// Height above the ground in degrees.
+    pub pitch: f32,
+    pub power: f32,
+    pub color: [f32; 3],
+}
+
+impl Light {
+    /// The direction toward the light.
+    pub fn dir(&self) -> [f32; 3] {
+        let (y, p) = (self.yaw.to_radians(), self.pitch.to_radians());
+        [y.sin() * p.cos(), -y.cos() * p.cos(), p.sin()]
+    }
+}
+
+pub const MAX_LIGHTS: usize = 3;
+
+/// The look of the room: sky colours (what shiny things reflect), backdrop, lights, exposure.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Environment {
+    pub sky_top: [f32; 3],
+    pub sky_horizon: [f32; 3],
+    pub sky_bottom: [f32; 3],
+    pub backdrop: [f32; 3],
+    pub exposure: f32,
+    /// Draw the grid and axes on the ground.
+    pub grid: bool,
+    /// The ground catches shadows.
+    pub floor: bool,
+    /// 0 = no shadows, 1 = full.
+    pub shadow: f32,
+    pub ambient: f32,
+    pub lights: Vec<Light>,
+}
+
+impl Default for Environment {
+    fn default() -> Self {
+        Environment::studio()
+    }
+}
+
+impl Environment {
+    /// Named looks: (label, environment).
+    pub fn looks() -> Vec<(&'static str, Environment)> {
+        let l = |yaw, pitch, power, color| Light { yaw, pitch, power, color };
+        let base = Environment::studio();
+        vec![
+            ("スタジオ", base.clone()),
+            (
+                "ひるま",
+                Environment {
+                    sky_top: [0.45, 0.65, 0.95],
+                    sky_horizon: [0.80, 0.88, 0.97],
+                    sky_bottom: [0.45, 0.50, 0.45],
+                    backdrop: [0.62, 0.78, 0.95],
+                    lights: vec![l(35.0, 55.0, 1.4, [1.0, 0.97, 0.88]), l(-125.0, 20.0, 0.3, [0.7, 0.8, 1.0])],
+                    ..base.clone()
+                },
+            ),
+            (
+                "ゆうやけ",
+                Environment {
+                    sky_top: [0.35, 0.28, 0.55],
+                    sky_horizon: [1.0, 0.55, 0.32],
+                    sky_bottom: [0.25, 0.18, 0.22],
+                    backdrop: [0.30, 0.20, 0.34],
+                    lights: vec![l(75.0, 12.0, 1.7, [1.0, 0.62, 0.32]), l(-110.0, 30.0, 0.45, [0.55, 0.45, 0.95])],
+                    exposure: 1.05,
+                    ..base.clone()
+                },
+            ),
+            (
+                "よる",
+                Environment {
+                    sky_top: [0.06, 0.08, 0.20],
+                    sky_horizon: [0.14, 0.18, 0.38],
+                    sky_bottom: [0.03, 0.03, 0.06],
+                    backdrop: [0.05, 0.06, 0.12],
+                    lights: vec![l(40.0, 40.0, 0.8, [0.6, 0.72, 1.0]), l(-100.0, 15.0, 0.5, [0.9, 0.45, 0.75])],
+                    exposure: 1.1,
+                    ..base.clone()
+                },
+            ),
+            (
+                "キャンディ",
+                Environment {
+                    sky_top: [1.0, 0.82, 0.92],
+                    sky_horizon: [1.0, 0.93, 0.80],
+                    sky_bottom: [0.75, 0.70, 0.95],
+                    backdrop: [0.99, 0.80, 0.88],
+                    lights: vec![l(30.0, 50.0, 1.25, [1.0, 0.96, 0.96]), l(-120.0, 25.0, 0.4, [0.8, 0.85, 1.0])],
+                    ..base.clone()
+                },
+            ),
+            (
+                "しろ",
+                Environment {
+                    sky_top: [0.97, 0.97, 0.98],
+                    sky_horizon: [0.93, 0.93, 0.94],
+                    sky_bottom: [0.70, 0.70, 0.72],
+                    backdrop: [0.93, 0.93, 0.94],
+                    lights: vec![l(35.0, 58.0, 1.0, [1.0, 1.0, 1.0]), l(-120.0, 25.0, 0.4, [1.0, 1.0, 1.0])],
+                    ..base.clone()
+                },
+            ),
+        ]
+    }
+
+    pub fn studio() -> Environment {
+        Environment {
+            sky_top: [0.62, 0.66, 0.74],
+            sky_horizon: [0.46, 0.46, 0.48],
+            sky_bottom: [0.22, 0.22, 0.23],
+            backdrop: [0.27, 0.27, 0.285],
+            exposure: 1.0,
+            grid: true,
+            floor: true,
+            shadow: 1.0,
+            ambient: 1.0,
+            lights: vec![
+                Light { yaw: 40.0, pitch: 46.0, power: 1.15, color: [1.0, 0.96, 0.9] },
+                Light { yaw: -120.0, pitch: 24.0, power: 0.35, color: [0.7, 0.78, 0.95] },
+            ],
+        }
+    }
+
+    pub fn sanitize(&mut self) {
+        let fix = |v: &mut f32, lo: f32, hi: f32, d: f32| {
+            *v = if v.is_finite() { v.clamp(lo, hi) } else { d };
+        };
+        for c in self.sky_top.iter_mut().chain(&mut self.sky_horizon).chain(&mut self.sky_bottom).chain(&mut self.backdrop) {
+            fix(c, 0.0, 1.0, 0.5);
+        }
+        fix(&mut self.exposure, 0.2, 4.0, 1.0);
+        fix(&mut self.shadow, 0.0, 1.0, 1.0);
+        fix(&mut self.ambient, 0.0, 3.0, 1.0);
+        self.lights.truncate(MAX_LIGHTS);
+        for l in &mut self.lights {
+            fix(&mut l.yaw, -3600.0, 3600.0, 0.0);
+            fix(&mut l.pitch, -89.0, 89.0, 45.0);
+            fix(&mut l.power, 0.0, 4.0, 1.0);
+            for c in &mut l.color {
+                fix(c, 0.0, 1.0, 1.0);
+            }
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Scene {
     pub groups: Vec<Group>,
     #[serde(default)]
     pub melt: Melt,
+    #[serde(default)]
+    pub env: Environment,
+    /// Materials the person saved to use again.
+    #[serde(default)]
+    pub saved: Vec<Material>,
 }
+
+pub const MAX_SAVED: usize = 24;
 
 impl Default for Scene {
     fn default() -> Self {
         let mut g = Group::new("グループ 1");
         g.shapes.push(Shape::new(Kind::Sphere, [0.0, 0.0, 20.0], Material::default()));
-        Scene { groups: vec![g], melt: Melt::default() }
+        Scene { groups: vec![g], melt: Melt::default(), env: Environment::default(), saved: Vec::new() }
     }
 }
 
@@ -249,6 +454,11 @@ impl Scene {
         fix(&mut self.melt.amount, 0.0, 10.0, 1.0);
         fix(&mut self.melt.drip, 0.0, 40.0, 0.0);
         fix(&mut self.melt.ripple, 0.3, 4.0, 1.0);
+        self.env.sanitize();
+        self.saved.truncate(MAX_SAVED);
+        for m in &mut self.saved {
+            m.sanitize();
+        }
         self.groups.truncate(MAX_GROUPS);
         let mut left = MAX_SHAPES;
         for g in &mut self.groups {
@@ -270,11 +480,7 @@ impl Scene {
                 for v in &mut s.scale {
                     fix(v, 0.01, 100.0, 1.0);
                 }
-                for c in &mut s.material.color {
-                    fix(c, 0.0, 1.0, 0.8);
-                }
-                fix(&mut s.material.roughness, 0.0, 1.0, 0.5);
-                fix(&mut s.material.metallic, 0.0, 1.0, 0.0);
+                s.material.sanitize();
                 s.outline.truncate(MAX_OUTLINE);
                 for p in &mut s.outline {
                     fix(&mut p[0], -2000.0, 2000.0, 0.0);
@@ -305,5 +511,26 @@ mod tests {
         assert!(sh.size.iter().all(|v| (0.01..=2000.0).contains(v)) && sh.scale[0] >= 0.01 && sh.pos[0] <= 5000.0);
         assert!(t.groups[0].blend <= 200.0 && sh.blend >= 0.0 && sh.material.roughness <= 1.0 && sh.outline.len() >= 3);
         assert!(Scene::from_json("{").is_err());
+    }
+
+    #[test]
+    fn old_files_without_the_new_fields_still_open() {
+        let old = r#"{"groups":[{"name":"g","op":"Add","blend":0,"visible":true,"shapes":[{"name":"s","kind":"Sphere","size":[20,1,1],"round":0,"pos":[0,0,20],"rot":[0,0,0],"scale":[1,1,1],"op":"Add","blend":6,"material":{"color":[1,0,0],"roughness":0.3,"metallic":1},"visible":true,"outline":[]}]}]}"#;
+        let t = Scene::from_json(old).unwrap();
+        let m = t.groups[0].shapes[0].material;
+        assert_eq!((m.glass, m.glow, m.coat), (0.0, 0.0, 0.0));
+        assert_eq!(t.env, Environment::default());
+        let hostile = r#"{"groups":[],"env":{"exposure":1e30,"lights":[{"yaw":1,"pitch":99999,"power":-4,"color":[9,9,9]},{"yaw":0,"pitch":0,"power":1,"color":[1,1,1]},{"yaw":0,"pitch":0,"power":1,"color":[1,1,1]},{"yaw":0,"pitch":0,"power":1,"color":[1,1,1]}]}}"#;
+        let h = Scene::from_json(hostile).unwrap();
+        assert!(h.env.exposure <= 4.0 && h.env.lights.len() == MAX_LIGHTS && h.env.lights[0].pitch <= 89.0);
+    }
+
+    #[test]
+    fn every_look_is_valid() {
+        for (_, e) in Environment::looks() {
+            let mut c = e.clone();
+            c.sanitize();
+            assert_eq!(c, e);
+        }
     }
 }
