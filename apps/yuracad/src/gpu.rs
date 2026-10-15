@@ -13,11 +13,14 @@ use crate::sdf::Prepared;
 const V4_GLOBALS: usize = 7;
 const V4_GROUPS: usize = V4_GLOBALS;
 const V4_SHAPES: usize = V4_GROUPS + MAX_GROUPS;
-const V4_PER_SHAPE: usize = 9;
+const V4_PER_SHAPE: usize = 10;
 const V4_POLY: usize = V4_SHAPES + MAX_SHAPES * V4_PER_SHAPE;
 const POLY_V4: usize = 128;
 const V4_BOUND: usize = V4_POLY + POLY_V4;
-const TOTAL_V4: usize = V4_BOUND + 1;
+const V4_HOVER: usize = V4_BOUND + 1;
+const V4_ENV: usize = V4_HOVER + 1;
+const ENV_V4: usize = 11;
+const TOTAL_V4: usize = V4_ENV + ENV_V4;
 /// Size of the uniform buffer in bytes.
 pub const UNIFORM_BYTES: usize = TOTAL_V4 * 16;
 
@@ -28,7 +31,7 @@ fn put(u: &mut [f32], slot: usize, v: [f32; 4]) {
     }
 }
 
-pub fn pack(scene: &Scene, cam: &Camera, size: [f32; 2], selected: Option<Pick>, srgb: bool) -> Vec<f32> {
+pub fn pack(scene: &Scene, cam: &Camera, size: [f32; 2], selected: Option<Pick>, hover: Option<Pick>, srgb: bool) -> Vec<f32> {
     let mut u = vec![0.0_f32; TOTAL_V4 * 4];
     let (right, up, fwd) = cam.basis();
     let eye = cam.eye();
@@ -45,6 +48,8 @@ pub fn pack(scene: &Scene, cam: &Camera, size: [f32; 2], selected: Option<Pick>,
     let mut poly_pts = 0usize;
     let mut sel_first = -1.0_f32;
     let mut sel_count = 0.0_f32;
+    let mut hover_first = -1.0_f32;
+    let mut hover_count = 0.0_f32;
     for (gi, g) in scene.groups.iter().enumerate() {
         if !g.visible {
             continue;
@@ -79,7 +84,13 @@ pub fn pack(scene: &Scene, cam: &Camera, size: [f32; 2], selected: Option<Pick>,
             };
             put(&mut u, base + 6, [s.op.sign(), s.blend, start as f32, count as f32]);
             put(&mut u, base + 7, [s.material.color[0], s.material.color[1], s.material.color[2], s.material.roughness]);
-            put(&mut u, base + 8, [s.material.metallic, 0.0, 0.0, 0.0]);
+            let m = &s.material;
+            put(&mut u, base + 8, [m.metallic, m.glow, m.glass, m.iridescence]);
+            put(&mut u, base + 9, [m.coat, m.translucency, 0.0, 0.0]);
+            if hover == Some(Pick::Shape(gi, si)) {
+                hover_first = shape_n as f32;
+                hover_count = 1.0;
+            }
             if selected == Some(Pick::Shape(gi, si)) {
                 sel_first = shape_n as f32;
                 sel_count = 1.0;
@@ -99,6 +110,19 @@ pub fn pack(scene: &Scene, cam: &Camera, size: [f32; 2], selected: Option<Pick>,
     put(&mut u, 6, [group_n as f32, shape_n as f32, sel_first, sel_count]);
     let (bc, br) = bounds(scene, selected);
     put(&mut u, V4_BOUND, [bc[0], bc[1], bc[2], br]);
+    put(&mut u, V4_HOVER, [hover_first, hover_count, 0.0, 0.0]);
+    let e = &scene.env;
+    let flags = (if e.grid { 1.0 } else { 0.0 }) + (if e.floor { 2.0 } else { 0.0 });
+    put(&mut u, V4_ENV, [e.exposure, e.ambient, e.shadow, flags]);
+    put(&mut u, V4_ENV + 1, [e.backdrop[0], e.backdrop[1], e.backdrop[2], e.lights.len() as f32]);
+    put(&mut u, V4_ENV + 2, [e.sky_top[0], e.sky_top[1], e.sky_top[2], 0.0]);
+    put(&mut u, V4_ENV + 3, [e.sky_horizon[0], e.sky_horizon[1], e.sky_horizon[2], 0.0]);
+    put(&mut u, V4_ENV + 4, [e.sky_bottom[0], e.sky_bottom[1], e.sky_bottom[2], 0.0]);
+    for (i, l) in e.lights.iter().enumerate().take(crate::model::MAX_LIGHTS) {
+        let d = l.dir();
+        put(&mut u, V4_ENV + 5 + i * 2, [d[0], d[1], d[2], l.power]);
+        put(&mut u, V4_ENV + 6 + i * 2, [l.color[0], l.color[1], l.color[2], 0.0]);
+    }
     u
 }
 
@@ -116,10 +140,12 @@ pub fn bounds(scene: &Scene, selected: Option<Pick>) -> ([f32; 3], f32) {
                 Some(Pick::Group(a)) => a == gi,
                 None => false,
             };
-            if !s.visible || (!is_sel && (s.op == crate::model::Op::Subtract || g.op == crate::model::Op::Subtract)) {
+            if !s.visible || (!is_sel && (s.op != crate::model::Op::Add || g.op != crate::model::Op::Add)) {
                 continue;
             }
-            let reach = (s.blend + g.blend) * scene.melt.amount * 1.5 + scene.melt.drip + 2.0;
+            // a lamp's glow reaches a good way out
+            let halo = if s.material.glow > 0.0 { 30.0 } else { 0.0 };
+            let reach = (s.blend + g.blend) * scene.melt.amount * 1.5 + scene.melt.drip + 2.0 + halo;
             items.push((s.pos, crate::view::radius_of(s) + reach));
         }
     }
@@ -232,8 +258,10 @@ mod tests {
 
     #[test]
     fn the_default_scene_packs_into_the_uniform_without_overflow() {
-        let u = pack(&Scene::default(), &Camera::default(), [800.0, 600.0], Some(Pick::Shape(0, 0)), true);
+        let u = pack(&Scene::default(), &Camera::default(), [800.0, 600.0], Some(Pick::Shape(0, 0)), None, true);
         assert_eq!(u.len() * 4, UNIFORM_BYTES);
         assert_eq!(&u[24..28], &[1.0, 1.0, 0.0, 1.0], "one group, one shape, shape 0 selected");
+        let e = V4_ENV * 4;
+        assert!((u[e] - 1.0).abs() < 1e-6 && (u[e + 7] - 2.0).abs() < 1e-6, "exposure 1, two lights");
     }
 }

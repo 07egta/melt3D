@@ -269,7 +269,7 @@ impl Field {
             };
             acc = Some(match acc {
                 None => {
-                    if s.op == Op::Subtract {
+                    if s.op != Op::Add {
                         continue;
                     }
                     me
@@ -288,7 +288,7 @@ impl Field {
             let Some(gs) = self.group(g, p) else { continue };
             acc = Some(match acc {
                 None => {
-                    if g.op == Op::Subtract {
+                    if g.op != Op::Add {
                         continue;
                     }
                     gs
@@ -337,6 +337,8 @@ fn combine(a: Sample, b: Sample, op: Op, k: f32, mode: BlendMode) -> Sample {
                 nearest: if h >= 0.5 { a.nearest } else { b.nearest },
             }
         }
+        // A stain never changes the shape, so the nearest thing stays what it was.
+        Op::Paint => a,
         Op::Subtract => {
             // smax(a, -b) = -smin(-a, b)
             let (d, h) = smin(-a.dist, b.dist, k, mode);
@@ -360,7 +362,7 @@ mod tests {
     fn scene_of(shapes: Vec<Shape>) -> Scene {
         let mut g = Group::new("g");
         g.shapes = shapes;
-        Scene { groups: vec![g], melt: Default::default() }
+        Scene { groups: vec![g], melt: Default::default(), env: Default::default(), saved: Vec::new() }
     }
 
     #[test]
