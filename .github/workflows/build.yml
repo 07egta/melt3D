@@ -1,0 +1,66 @@
+name: Build
+
+# Windows app (.exe), the web app, and the main tests. Run by hand from the Actions tab
+# ("Run workflow") or by every push to main. The upstream project's release, store and Pages
+# workflows are parked in .github/upstream-workflows/ so they do not run (and use up minutes) here.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  TRUNK_VERSION: v0.21.14
+
+jobs:
+  windows:
+    name: Windows app
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release -p solidcraft --locked
+      - uses: actions/upload-artifact@v4
+        with:
+          name: solidcraft-windows
+          path: target/release/solidcraft.exe
+
+  web:
+    name: Web app
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - name: Install trunk
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          curl -sSL "https://github.com/trunk-rs/trunk/releases/download/${TRUNK_VERSION}/trunk-x86_64-unknown-linux-gnu.tar.gz" | tar -xz -C "$HOME/.local/bin"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Build the web app
+        working-directory: apps/solidcraft-web
+        run: trunk build --release --public-url ./
+      - uses: actions/upload-artifact@v4
+        with:
+          name: solidcraft-web
+          path: dist/web
+
+  tests:
+    name: Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libx11-dev mesa-vulkan-drivers
+      - run: cargo test --profile ci --locked -p solidcraft-geom -p solidcraft-doc -p solidcraft-ui-egui --lib
+      - run: cargo test --profile ci --locked -p solidcraft-engine --lib -- --skip robustness
