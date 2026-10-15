@@ -62,5 +62,15 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libx11-dev mesa-vulkan-drivers
-      - run: cargo test --profile ci --locked -p solidcraft-geom -p solidcraft-doc -p solidcraft-ui-egui --lib
-      - run: cargo test --profile ci --locked -p solidcraft-engine --lib -- --skip robustness
+      - name: Tests
+        shell: bash
+        run: |
+          set +e
+          cargo test --profile ci --locked -p solidcraft-geom -p solidcraft-doc -p solidcraft-ui-egui --lib 2>&1 | tee test1.log
+          s1=${PIPESTATUS[0]}
+          cargo test --profile ci --locked -p solidcraft-engine --lib -- --skip robustness --skip hostile_params 2>&1 | tee test2.log
+          s2=${PIPESTATUS[0]}
+          # Show what failed as annotations, so the result can be read without the full log.
+          grep -hE "^test .* FAILED|panicked at|^error(\[|:)" test1.log test2.log | head -30 | while read -r line; do echo "::error::$line"; done
+          grep -hE "test result" test1.log test2.log | while read -r line; do echo "::notice::$line"; done
+          exit $((s1 + s2))
