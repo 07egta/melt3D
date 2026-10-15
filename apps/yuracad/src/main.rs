@@ -30,7 +30,7 @@ fn main() -> eframe::Result {
                 gpu::install(rs);
                 srgb = rs.target_format.is_srgb();
             }
-            Ok(Box::new(app::App::new(srgb)))
+            Ok(Box::new(app::App::new(srgb, std::env::args_os().nth(1).map(std::path::PathBuf::from))))
         }),
     )
 }

@@ -213,11 +213,14 @@ impl App {
         }
 
         // Dragging a handle
-        if resp.drag_started_by(PointerButton::Primary)
-            && !mods.alt
-            && let (Some(h), Some(g), Some(p), Some(c)) = (hover_handle, &g, pos, centre)
-        {
-            self.drag = Some(self.begin_drag(h, g, p, c, tool));
+        if resp.drag_started_by(PointerButton::Primary) && !mods.alt {
+            // where the button went down (the pointer has moved a little by now)
+            let origin = ui.input(|i| i.pointer.press_origin()).or(pos);
+            if let (Some(g), Some(o), Some(c)) = (&g, origin, centre)
+                && let Some(h) = hit(g, tool, o)
+            {
+                self.drag = Some(self.begin_drag(h, g, o, c, tool));
+            }
         }
         if let Some(d) = self.drag.clone() {
             if resp.dragged_by(PointerButton::Primary)
