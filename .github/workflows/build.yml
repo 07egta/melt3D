@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 env:
   CARGO_TERM_COLOR: always
@@ -29,6 +29,17 @@ jobs:
         with:
           name: solidcraft-windows
           path: target/release/solidcraft.exe
+      # A rolling "latest" release holds the newest exe, named YURACAD.exe, so it can be fetched
+      # with one plain download.
+      - name: Publish YURACAD.exe to the latest release
+        if: github.ref_name == 'easy-layout-and-melt' || github.ref_name == 'main'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp target/release/solidcraft.exe YURACAD.exe
+          gh release view latest >/dev/null 2>&1 || gh release create latest --prerelease --title "Latest build" --notes "Newest Windows build (YURACAD.exe)"
+          gh release upload latest YURACAD.exe --clobber
 
   web:
     name: Web app
