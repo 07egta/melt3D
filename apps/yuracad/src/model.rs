@@ -192,6 +192,7 @@ impl Kind {
             Kind::Pyramid => [4.0, 0.0, 0.0, 0.0],
             Kind::Star => [5.0, 0.45, 0.0, 0.0],
             Kind::Revolve => [360.0, 0.0, 0.0, 0.0],
+            Kind::Curve => [0.0, 0.7, 0.0, 1.0],
             _ => [0.0; 4],
         }
     }
@@ -364,8 +365,9 @@ impl Shape {
                 let y = mx(&self.outline, 1).max(mx(&self.outline2, 1));
                 [x, y, s[0] * 0.5]
             }
-            Kind::Curve | Kind::Sweep => {
-                let prof = if self.kind == Kind::Sweep { mx(&self.outline, 0).max(mx(&self.outline, 1)) * 1.5 } else { 0.0 };
+            Kind::Curve => crate::curve::half_extent(&self.path, &self.params),
+            Kind::Sweep => {
+                let prof = mx(&self.outline, 0).max(mx(&self.outline, 1)) * 1.5;
                 let mut h = [1.0_f32; 3];
                 for p in &self.path {
                     let r = if self.kind == Kind::Curve { p[3].abs() } else { prof * p[3].abs().max(1.0) };

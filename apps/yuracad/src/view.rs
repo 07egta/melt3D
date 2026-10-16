@@ -67,18 +67,21 @@ impl App {
         let mods = ui.input(|i| i.modifiers);
         let pos = resp.hover_pos().or_else(|| ui.input(|i| i.pointer.interact_pos()));
 
+        // The curve's nodes come first: they win over the gizmo only where the mouse is on one
+        let ct = if clean { crate::curve_tool::Input::default() } else { self.curve_input(ui, &resp, rect, pos, mods) };
+
         // The handles
         let tool = self.tool;
-        let geom = if clean { None } else { gizmo::build(&self.cam, rect, &self.scene, self.sel, tool) };
+        let geom = if clean || self.ct.drawing { None } else { gizmo::build(&self.cam, rect, &self.scene, self.sel, tool) };
         let over_gnomon = !clean && pos.is_some_and(|p| self.gnomon_hit(rect, p).is_some());
         let hover_handle = match (&geom, pos, &self.drag) {
-            (Some(g), Some(p), None) if resp.hovered() && !over_gnomon => gizmo::hit(g, tool, p),
+            (Some(g), Some(p), None) if resp.hovered() && !over_gnomon && !ct.over => gizmo::hit(g, tool, p),
             _ => None,
         };
         if resp.hovered() {
             ui.ctx().set_cursor_icon(if self.drag.is_some() {
                 egui::CursorIcon::Grabbing
-            } else if hover_handle.is_some() || over_gnomon {
+            } else if hover_handle.is_some() || over_gnomon || ct.over {
                 egui::CursorIcon::PointingHand
             } else {
                 egui::CursorIcon::Default
@@ -94,7 +97,7 @@ impl App {
 
         // Camera: middle-drag turns, right-drag slides, the wheel zooms toward the mouse
         let mut moved_camera = false;
-        if resp.dragged_by(PointerButton::Middle) || (resp.dragged_by(PointerButton::Primary) && mods.alt && self.drag.is_none()) {
+        if resp.dragged_by(PointerButton::Middle) || (resp.dragged_by(PointerButton::Primary) && mods.alt && self.drag.is_none() && !ct.busy) {
             let d = resp.drag_delta();
             if mods.shift {
                 self.cam.pan(d.x, d.y, rect.height());
@@ -125,7 +128,7 @@ impl App {
         }
 
         // A drag that starts on a handle moves the thing; a drag that starts anywhere else turns the view
-        if resp.drag_started_by(PointerButton::Primary) && !mods.alt {
+        if resp.drag_started_by(PointerButton::Primary) && !mods.alt && !ct.taken {
             // where the button went down (the pointer has moved a little by now)
             let origin = ui.input(|i| i.pointer.press_origin()).or(pos);
             let grabbed = match (&geom, origin) {
@@ -168,6 +171,7 @@ impl App {
         // Clicks
         if resp.clicked_by(PointerButton::Primary)
             && hover_handle.is_none()
+            && !ct.taken
             && let Some(p) = pos
         {
             if let Some(axis) = self.gnomon_hit(rect, p) {
@@ -184,6 +188,7 @@ impl App {
         resp.context_menu(|ui| self.context_menu(ui));
         if resp.double_clicked_by(PointerButton::Primary)
             && hover_handle.is_none()
+            && !ct.taken
             && let Some(p) = pos
             && self.gnomon_hit(rect, p).is_none()
         {
@@ -198,6 +203,7 @@ impl App {
             let active = self.drag.as_ref().map(gizmo::Drag::handle).or(hover_handle);
             gizmo::draw(&painter, g, tool, active);
         }
+        self.curve_paint(&painter, rect);
         self.draw_gnomon(&painter, rect, pos);
     }
 

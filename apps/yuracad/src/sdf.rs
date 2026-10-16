@@ -93,7 +93,7 @@ impl Prepared {
             // a revolve profile lives on the +x side of the axis
             outline: if s.kind == Kind::Revolve { s.outline.iter().map(|p| [p[0].max(0.0), p[1]]).collect() } else { s.outline.clone() },
             params: s.params,
-            path: s.path.clone(),
+            path: if s.kind == Kind::Curve { crate::curve::build(&s.path, &s.params) } else { s.path.clone() },
             outline2: s.outline2.clone(),
             shell: if s.shell.is_finite() { s.shell.max(0.0) } else { 0.0 },
         }
