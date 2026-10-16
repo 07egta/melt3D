@@ -22,6 +22,9 @@
 //! Hostile input: the mesh is checked (finite, indices), the grid is capped (`MAX_CELLS`), the
 //! number of ray crossings is capped, and `from_bytes` checks every length before allocating.
 
+// Not wired into the app yet (see IMPORT.md): the whole public API is unused until it is.
+#![allow(dead_code)]
+
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::Mutex;
 use std::time::Instant;
@@ -38,7 +41,7 @@ pub const DEFAULT_RES: u32 = 128;
 /// Total grid points aimed at when baking (a bit more than 128^3).
 pub const DEFAULT_MAX_CELLS: usize = 4_194_304;
 /// Ray crossings kept per axis; a mesh that needs more is refused.
-const MAX_CROSSINGS: usize = 24_000_000;
+const MAX_CROSSINGS: usize = 12_000_000;
 /// Quantisation of the saved distances: this many steps per cell.
 const STEPS_PER_CELL: u8 = 64;
 const MAGIC: &[u8; 4] = b"MSDF";
@@ -858,6 +861,39 @@ impl Volume {
     }
 }
 
+/// A half-precision float (IEEE 754 binary16) for a 32-bit one: rounded to nearest, too big values
+/// become the biggest finite half, not-a-number becomes 0. Useful for a filterable GPU texture.
+pub fn f32_to_f16_bits(x: f32) -> u16 {
+    if x.is_nan() {
+        return 0;
+    }
+    let b = x.to_bits();
+    let sign = ((b >> 16) & 0x8000) as u16;
+    let mag = x.abs();
+    if mag >= 65520.0 {
+        return sign | 0x7BFF;
+    }
+    if mag < 6.103_515_6e-5 {
+        // a subnormal half: a multiple of 2^-24
+        return sign | (mag * 16_777_216.0).round() as u16;
+    }
+    let e = ((b >> 23) & 0xFF) as i32 - 127 + 15;
+    let mant = b & 0x7F_FFFF;
+    let mut h = ((e.max(0) as u32) << 10) | (mant >> 13);
+    let rem = mant & 0x1FFF;
+    if rem > 0x1000 || (rem == 0x1000 && h & 1 == 1) {
+        h += 1;
+    }
+    sign | h as u16
+}
+
+impl Volume {
+    /// All distances as half floats (`data` order), for uploading to a 3-D texture.
+    pub fn to_f16_bits(&self) -> Vec<u16> {
+        self.data.iter().map(|v| f32_to_f16_bits(*v)).collect()
+    }
+}
+
 // ---------------------------------------------------------------- saving
 
 fn fail<T>() -> Result<T, String> {
@@ -1430,6 +1466,28 @@ mod tests {
     }
 
     #[test]
+    fn half_floats() {
+        for (x, h) in [(0.0f32, 0u16), (1.0, 0x3C00), (-2.0, 0xC000), (0.5, 0x3800), (65504.0, 0x7BFF), (1.0e9, 0x7BFF), (-1.0e9, 0xFBFF), (6.103_515_6e-5, 0x0400), (1.0e-9, 0), (f32::NAN, 0), (0.333_333_34, 0x3555), (100.1, 0x5642)] {
+            assert_eq!(f32_to_f16_bits(x), h, "{x}");
+        }
+        // within half a unit in the last place for ordinary values
+        let mut r = rng(8);
+        for _ in 0..2000 {
+            let x = (r() - 0.5) * 200.0;
+            let h = f32_to_f16_bits(x);
+            let back = {
+                let e = i32::from((h >> 10) & 31);
+                let m = f32::from(h & 1023);
+                let v = if e == 0 { m * 2f32.powi(-24) } else { (1.0 + m / 1024.0) * 2f32.powi(e - 15) };
+                if h & 0x8000 != 0 { -v } else { v }
+            };
+            assert!((back - x).abs() <= x.abs() * 0.000_5 + 1e-7, "{x} -> {back}");
+        }
+        let v = Volume { dims: [2, 1, 1], origin: [0.0; 3], cell: 1.0, data: vec![1.0, -2.0] };
+        assert_eq!(v.to_f16_bits(), vec![0x3C00, 0xC000]);
+    }
+
+    #[test]
     fn zigzag_and_the_predictor_invert() {
         for v in [0u16, 1, 2, 3, 0x7FFF, 0x8000, 0xFFFF, 12345, 54321] {
             assert_eq!(unzigzag(zigzag(v)), v);
@@ -1478,7 +1536,7 @@ mod tests {
             vec![("sphere 100k", sphere_mesh(30.0, 160, 320)), ("torus 100k", torus_mesh(30.0, 10.0, 360, 140)), ("blob 100k", blob_mesh(160, 320)), ("blob 14k", blob_mesh(60, 120))];
         for (name, m) in shapes {
             println!("{name}: {} triangles", m.triangles.len());
-            for res in [64u32, 128] {
+            for res in [64u32, 128, 160] {
                 let t = Instant::now();
                 let (v, st) = bake_with(&m, &BakeOptions { res, ..BakeOptions::default() }, &BakeControl::new()).unwrap();
                 let total = t.elapsed().as_secs_f64();
