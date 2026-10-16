@@ -4,9 +4,6 @@
 //! Not understood (and refused with a friendly message): compressed meshes (Draco, meshopt),
 //! sparse accessors and buffers stored outside the file.
 
-// Not wired into the app yet (see IMPORT.md): the whole public API is unused until it is.
-#![allow(dead_code)]
-
 use serde_json::Value;
 
 use crate::import_mesh::{Affine, BAD_INDEX, BAD_NUMBER, CUT_OFF, ImportedMesh, MAX_TRIANGLES, MAX_VERTICES, NO_SHAPE, TOO_MANY_TRIS, TOO_MANY_VERTS, append_transformed};

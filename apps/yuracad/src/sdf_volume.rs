@@ -22,9 +22,6 @@
 //! Hostile input: the mesh is checked (finite, indices), the grid is capped (`MAX_CELLS`), the
 //! number of ray crossings is capped, and `from_bytes` checks every length before allocating.
 
-// Not wired into the app yet (see IMPORT.md): the whole public API is unused until it is.
-#![allow(dead_code)]
-
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::Mutex;
 use std::time::Instant;
@@ -557,6 +554,7 @@ fn thread_count(want: usize) -> usize {
 }
 
 /// Bake a mesh into a distance volume with the default progress/cancel flags.
+#[allow(dead_code)]
 pub fn bake(mesh: &ImportedMesh, opts: &BakeOptions) -> Result<Volume, String> {
     bake_with(mesh, opts, &BakeControl::new()).map(|(v, _)| v)
 }
@@ -797,6 +795,7 @@ impl Volume {
     }
 
     /// The distance stored at a node (a large positive number outside the grid).
+    #[allow(dead_code)]
     pub fn at(&self, i: usize, j: usize, k: usize) -> f32 {
         let d = self.dims_us();
         if i >= d[0] || j >= d[1] || k >= d[2] {
@@ -848,6 +847,7 @@ impl Volume {
     }
 
     /// The direction in which the distance grows fastest (not normalised), by central differences.
+    #[allow(dead_code)]
     pub fn gradient(&self, p: [f32; 3]) -> [f32; 3] {
         let h = self.cell * 0.5;
         let mut g = [0f32; 3];

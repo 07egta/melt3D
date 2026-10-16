@@ -3,9 +3,6 @@
 //! written for hostile input: every read is bounds checked, the output size is capped (so a "zip
 //! bomb" fails instead of eating the memory) and nothing panics.
 
-// Not wired into the app yet (see IMPORT.md): the whole public API is unused until it is.
-#![allow(dead_code)]
-
 use crate::export_formats::crc32;
 
 /// Why a stream could not be decoded.
@@ -338,6 +335,7 @@ pub fn inflate_counted(data: &[u8], max_out: usize) -> Result<(Vec<u8>, usize), 
 }
 
 /// Adler-32 (the checksum of the zlib wrapper).
+#[allow(dead_code)] // part of the zlib wrapper; used by the tests
 pub fn adler32(data: &[u8]) -> u32 {
     let (mut a, mut s) = (1u32, 0u32);
     for chunk in data.chunks(5552) {
@@ -352,6 +350,7 @@ pub fn adler32(data: &[u8]) -> u32 {
 }
 
 /// Decode a zlib stream (2-byte header, DEFLATE, Adler-32).
+#[allow(dead_code)] // the zlib wrapper (GLB images, PNG); used by the tests
 pub fn inflate_zlib(data: &[u8], max_out: usize) -> Result<Vec<u8>, InflateError> {
     let (Some(&cmf), Some(&flg)) = (data.first(), data.get(1)) else { return Err(InflateError::Truncated) };
     if cmf & 15 != 8 || (u32::from(cmf) * 256 + u32::from(flg)) % 31 != 0 || flg & 0x20 != 0 {

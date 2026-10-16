@@ -102,6 +102,7 @@ fn push(list: &mut Vec<f32>, v: [f32; 4]) {
 }
 
 /// Everything the shader needs for one frame: `GLOBAL_V4` vec4 of globals, then the scene list.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn pack(scene: &Scene, cam: &Camera, size: [f32; 2], selected: Option<Pick>, hover: Option<Pick>, srgb: bool) -> Vec<f32> {
     pack_with(scene, cam, size, selected, hover, srgb, &VolumeSet::of(scene))
 }

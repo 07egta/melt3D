@@ -41,9 +41,6 @@ impl SharedVolume {
     pub fn new(v: Volume) -> SharedVolume {
         SharedVolume(Arc::new(v))
     }
-    pub fn from_arc(v: Arc<Volume>) -> SharedVolume {
-        SharedVolume(v)
-    }
     pub fn arc(&self) -> &Arc<Volume> {
         &self.0
     }
@@ -456,5 +453,244 @@ mod tests {
     fn the_node_cap_fits_the_graphics_pool_and_a_float() {
         assert!(MAX_TOTAL_NODES < (1 << 24), "a node number is exact in an f32");
         assert!(MAX_TOTAL_NODES <= crate::gpu::VOL_W * crate::gpu::VOL_H * 4);
+    }
+
+    // ------------------------------------------------------------ the model's file form
+
+    fn scene_with(shapes: Vec<Shape>) -> Scene {
+        let mut sc = Scene::default();
+        sc.groups[0].shapes.extend(shapes);
+        sc
+    }
+
+    #[test]
+    fn a_scene_with_a_mesh_round_trips_and_one_without_data_is_dropped_with_a_note() {
+        let v = SharedVolume::new(ball_volume(24));
+        let mut m = mesh_shape(&v);
+        m.name = "ボール".into();
+        m.source = "ball.stl".into();
+        m.size = [20.0; 3];
+        let sc = scene_with(vec![m]);
+        let (back, notes) = Scene::from_json_notes(&sc.to_json()).unwrap_or_default();
+        assert!(notes.is_empty(), "{notes:?}");
+        assert_eq!(back, sc, "equal, and the volume is the very same one");
+        let s = &back.groups[0].shapes[1];
+        assert_eq!((s.kind, s.name.as_str(), s.source.as_str(), s.size), (Kind::Mesh, "ボール", "ball.stl", [20.0; 3]));
+        // a mesh shape that has lost its data cannot be drawn: it is dropped, the rest of the scene opens
+        let mut empty = Shape::new(Kind::Mesh, [0.0; 3], Material::default());
+        empty.name = "からっぽ".into();
+        let sc2 = scene_with(vec![empty]);
+        let (back2, notes2) = Scene::from_json_notes(&sc2.to_json()).unwrap_or_default();
+        assert_eq!(back2.shape_count(), 1, "only the default sphere is left");
+        assert!(notes2.len() == 1 && notes2[0].contains("こわれて"), "{notes2:?}");
+        // a volume on a shape that is not a mesh is let go
+        let mut odd = Shape::new(Kind::Box, [0.0; 3], Material::default());
+        odd.volume = Some(v);
+        let sc3 = scene_with(vec![odd]);
+        let (back3, _) = Scene::from_json_notes(&sc3.to_json()).unwrap_or_default();
+        assert!(back3.groups[0].shapes[1].volume.is_none());
+        // a scene without meshes has no volume field at all (old files and new files look alike)
+        assert!(!Scene::default().to_json().contains("volume"));
+    }
+
+    #[test]
+    fn damaged_volume_text_in_a_scene_file_drops_the_shape_and_never_panics() {
+        let v = SharedVolume::new(ball_volume(20));
+        let sc = scene_with(vec![mesh_shape(&v)]);
+        let json = sc.to_json();
+        let text = v.arc().to_base64();
+        let variants = [
+            json.replace(&text, "ZZZZ"),
+            json.replace(&text, &text[..text.len() / 2]),
+            json.replace(&text, &text.replace('A', "B")),
+            json.replace(&text, &format!("{}{}", &text[..40], "!".repeat(30))),
+            json.replace(&text, &"/".repeat(5000)),
+            json.replace(&format!("\"{text}\""), "[1,2,3]"),
+            json.replace(&format!("\"{text}\""), "{\"a\":{\"b\":null}}"),
+            json.replace(&format!("\"{text}\""), "99"),
+        ];
+        for (i, j) in variants.iter().enumerate() {
+            // (forget the live copy so that the damaged text is really decoded)
+            let r = Scene::from_json_notes(j);
+            let (back, _) = r.unwrap_or_else(|e| panic!("variant {i} did not load: {e}"));
+            // the damaged variants lose the mesh (a text altered in a harmless way may still decode)
+            let meshes = back.groups[0].shapes.iter().filter(|s| s.kind == Kind::Mesh).count();
+            assert!(meshes <= 1, "variant {i}");
+            assert!(back.shape_count() >= 1);
+        }
+        // the first three damage the data for sure (the half text is cut, 'Z' is no header)
+        for j in &variants[..2] {
+            let (back, notes) = Scene::from_json_notes(j).unwrap_or_default();
+            assert!(!back.groups[0].shapes.iter().any(|s| s.kind == Kind::Mesh) && !notes.is_empty());
+        }
+    }
+
+    #[test]
+    fn a_scene_keeps_at_most_eight_mesh_shapes_and_a_total_of_data() {
+        let v = SharedVolume::new(ball_volume(12));
+        let many: Vec<Shape> = (0..MAX_VOLUME_SHAPES + 4).map(|i| mesh_shape(&v)).map(|mut s| { s.pos[0] += 1.0; s }).collect();
+        let mut sc = scene_with(many);
+        let notes = sc.sanitize_notes();
+        let kept = sc.groups[0].shapes.iter().filter(|s| s.kind == Kind::Mesh).count();
+        assert_eq!(kept, MAX_VOLUME_SHAPES);
+        assert!(notes.len() == 1 && notes[0].contains("多すぎ"), "{notes:?}");
+        // volumes that together hold too much: the one that does not fit goes (3 x 6 M nodes > 16 M)
+        let big = |n: usize| SharedVolume::new(Volume { dims: [200, 200, 150], origin: [0.0; 3], cell: 1.0, data: vec![1.0; 200 * 200 * 150 + n] });
+        // (data.len() must equal the dims for a valid volume, so make the three with exact sizes)
+        let a = big(0);
+        let b = big(0);
+        let c = big(0);
+        assert_eq!(a.nodes(), 6_000_000);
+        let mut sc = scene_with(vec![mesh_shape(&a), mesh_shape(&b), mesh_shape(&c)]);
+        let notes = sc.sanitize_notes();
+        let kept = sc.groups[0].shapes.iter().filter(|s| s.kind == Kind::Mesh).count();
+        assert_eq!(kept, 2, "two fit (12 M), the third would be 18 M");
+        assert!(!notes.is_empty());
+        // the same big volume used by three shapes counts once
+        let mut sc = scene_with(vec![mesh_shape(&a), mesh_shape(&a), mesh_shape(&a)]);
+        assert!(sc.sanitize_notes().is_empty());
+        assert_eq!(sc.groups[0].shapes.iter().filter(|s| s.kind == Kind::Mesh).count(), 3);
+    }
+
+    #[test]
+    fn cloning_and_comparing_scenes_never_touches_the_distances() {
+        let v = SharedVolume::new(Volume { dims: [160, 160, 160], origin: [0.0; 3], cell: 1.0, data: vec![1.0; 160 * 160 * 160] });
+        let sc = scene_with(vec![mesh_shape(&v), mesh_shape(&v), mesh_shape(&v)]);
+        let t0 = std::time::Instant::now();
+        let mut equal = 0;
+        for _ in 0..2000 {
+            let copy = sc.clone();
+            if copy == sc {
+                equal += 1;
+            }
+        }
+        let secs = t0.elapsed().as_secs_f64();
+        assert_eq!(equal, 2000);
+        assert!(secs < 1.0, "2000 clones and comparisons of a scene with 3 x 4 M nodes took {secs:.3} s");
+        // the clones share the one volume (no copy of the data)
+        let copy = sc.clone();
+        for (a, b) in sc.groups[0].shapes.iter().zip(&copy.groups[0].shapes) {
+            if let (Some(x), Some(y)) = (&a.volume, &b.volume) {
+                assert!(Arc::ptr_eq(x.arc(), y.arc()));
+            }
+        }
+        assert!(Arc::strong_count(v.arc()) >= 7, "one handle per shape and clone, one volume");
+    }
+
+    // ------------------------------------------------------------ copies share the volume
+
+    use crate::app::App;
+    use crate::model::Pick;
+
+    fn app_with_mesh() -> (App, SharedVolume) {
+        let mut app = App::new(true, None);
+        let v = SharedVolume::new(ball_volume(16));
+        app.scene.groups[0].shapes.push(mesh_shape(&v));
+        app.sel = Some(Pick::Shape(0, 1));
+        (app, v)
+    }
+
+    fn volumes_of(app: &App) -> Vec<usize> {
+        app.scene.groups.iter().flat_map(|g| g.shapes.iter()).filter_map(|s| s.volume.as_ref().map(SharedVolume::key)).collect()
+    }
+
+    #[test]
+    fn duplicate_array_mirror_clipboard_and_undo_share_the_volume() {
+        let ctx = egui::Context::default();
+        let (mut app, v) = app_with_mesh();
+        let key = v.key();
+        app.duplicate();
+        assert_eq!(volumes_of(&app), vec![key, key]);
+        // the array card's copies
+        app.sel = Some(Pick::Shape(0, 1));
+        app.mirror_copy();
+        assert_eq!(volumes_of(&app), vec![key; 3]);
+        // copy and paste through the clipboard text (also what another window would do)
+        app.sel = Some(Pick::Shape(0, 1));
+        let text = crate::clip::copy_text(&app).unwrap_or_default();
+        assert!(text.len() > 100);
+        assert!(crate::clip::paste_text(&mut app, &text).is_ok());
+        assert_eq!(volumes_of(&app), vec![key; 4], "the pasted copy found the live volume instead of decoding a second one");
+        // a whole group copied
+        app.sel = Some(Pick::Group(0));
+        let gtext = crate::clip::copy_text(&app).unwrap_or_default();
+        let _ = gtext;
+        // undo and redo walk back and forth over the same volume
+        app.settle(&ctx);
+        app.undo();
+        app.redo();
+        assert!(volumes_of(&app).iter().all(|k| *k == key));
+        // the CPU field of the scene points at the same data
+        app.settle(&ctx);
+        let f = app.field();
+        assert!(f.sources.iter().flat_map(|g| g.shapes.iter()).filter_map(|p| p.volume.as_ref()).all(|p| p.key() == key));
+        assert!(Arc::strong_count(v.arc()) > 5);
+    }
+
+    #[test]
+    fn copies_stop_at_eight_mesh_shapes_with_a_message() {
+        let ctx = egui::Context::default();
+        let (mut app, _v) = app_with_mesh();
+        for _ in 0..20 {
+            app.sel = Some(Pick::Shape(0, 1));
+            app.duplicate();
+        }
+        assert_eq!(volumes_of(&app).len(), MAX_VOLUME_SHAPES);
+        assert!(app.notice.is_some(), "the person is told why nothing happened");
+        // the clipboard path says no too
+        app.sel = Some(Pick::Shape(0, 1));
+        let text = crate::clip::copy_text(&app).unwrap_or_default();
+        assert_eq!(crate::clip::paste_text(&mut app, &text), Err(ERR_TOO_MANY_SHAPES.to_string()));
+        assert_eq!(volumes_of(&app).len(), MAX_VOLUME_SHAPES);
+        let _ = ctx;
+    }
+
+    #[test]
+    fn patterns_and_linked_copies_draw_the_one_volume_without_new_shapes() {
+        let ctx = egui::Context::default();
+        let (mut app, v) = app_with_mesh();
+        app.sel = Some(Pick::Group(0));
+        app.make_instance(&ctx);
+        assert_eq!(app.scene.groups.len(), 2);
+        assert!(app.scene.groups[1].shapes.is_empty(), "a linked copy holds no shapes (and so no volume of its own)");
+        app.scene.groups[0].pattern = Some(crate::pattern::Pattern::Rect { counts: [3, 2, 1], spacing: [60.0, 60.0, 0.0] });
+        app.settle(&ctx);
+        let f = app.field();
+        let users: Vec<_> = f.sources.iter().flat_map(|g| g.shapes.iter()).filter_map(|p| p.volume.as_ref()).collect();
+        assert_eq!(users.len(), 1, "prepared once, drawn through every instance");
+        assert_eq!(users[0].key(), v.key());
+        // every instance measures the volume at its own place
+        let at = |p: [f32; 3]| f.distance(p);
+        assert!(at([0.0, 0.0, 10.0]) < 0.0 && at([60.0, 0.0, 10.0]) < 0.0 && at([120.0, 60.0, 10.0]) < 0.0, "a mesh in each cell of the grid");
+        assert!(crate::mesh::Usage::of(app.scene.groups.iter().flat_map(|g| g.shapes.iter())).shapes == 1);
+    }
+
+    /// What a saved scene with one 128-cell volume weighs (`cargo test -p yuracad --release
+    /// report_scene_file_size -- --ignored --nocapture`).
+    #[test]
+    #[ignore = "timing report"]
+    fn report_scene_file_size() {
+        use crate::import_mesh::tests::sphere_mesh;
+        use crate::sdf_volume::{BakeControl, BakeOptions, bake_with};
+        for (name, mesh) in [("ball", sphere_mesh(30.0, 60, 120)), ("flat plate", crate::import_mesh::tests::box_mesh([-50.0, -50.0, 0.0], [50.0, 50.0, 4.0]))] {
+            let t0 = std::time::Instant::now();
+            let (vol, _) = bake_with(&mesh, &BakeOptions { res: 128, ..BakeOptions::default() }, &BakeControl::new()).unwrap();
+            let bake_s = t0.elapsed().as_secs_f64();
+            let nodes = vol.data.len();
+            let sv = SharedVolume::new(vol);
+            let mut m = mesh_shape(&sv);
+            m.source = "x.stl".into();
+            let sc = scene_with(vec![m]);
+            let t1 = std::time::Instant::now();
+            let json = sc.to_json();
+            let save_s = t1.elapsed().as_secs_f64();
+            let t2 = std::time::Instant::now();
+            // (forget the live volume so that the text is decoded)
+            drop(sc);
+            drop(sv);
+            let back = Scene::from_json(&json).unwrap_or_default();
+            let load_s = t2.elapsed().as_secs_f64();
+            eprintln!("{name}: {nodes} nodes, bake {bake_s:.2} s, scene file {:.2} MB, save {save_s:.2} s, load {load_s:.2} s, {} shapes back", json.len() as f64 / 1e6, back.shape_count());
+        }
     }
 }

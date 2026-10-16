@@ -5,9 +5,6 @@
 //! extension's `p:path`) are followed. The XML reader is our own and small: it needs no entity
 //! expansion, so a hostile file cannot blow up through entities.
 
-// Not wired into the app yet (see IMPORT.md): the whole public API is unused until it is.
-#![allow(dead_code)]
-
 use std::collections::HashMap;
 
 use crate::import_inflate::Zip;
