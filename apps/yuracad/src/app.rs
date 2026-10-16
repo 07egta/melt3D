@@ -415,7 +415,7 @@ impl App {
     }
 
     fn open_dialog(&mut self, ctx: &egui::Context) {
-        if let Some(p) = rfd::FileDialog::new().add_filter("YURACAD", &["yura", "json"]).pick_file() {
+        if let Some(p) = rfd::FileDialog::new().add_filter("MELTCAD", &["meltcad", "yura", "json"]).pick_file() {
             self.open_path(p);
             self.say(ctx, "開きました");
         }
@@ -424,7 +424,7 @@ impl App {
     fn save(&mut self, ctx: &egui::Context, ask: bool) {
         let path = match (&self.path, ask) {
             (Some(p), false) => Some(p.clone()),
-            _ => rfd::FileDialog::new().add_filter("YURACAD", &["yura"]).set_file_name("作品.yura").save_file(),
+            _ => rfd::FileDialog::new().add_filter("MELTCAD", &["meltcad"]).set_file_name("作品.meltcad").save_file(),
         };
         let Some(path) = path else { return };
         match std::fs::write(&path, self.scene.to_json()) {
@@ -450,9 +450,9 @@ impl App {
         };
         let Some(path) = rfd::FileDialog::new().add_filter(label, &[ext]).set_file_name(format!("作品.{ext}")).save_file() else { return };
         let res = export::mesh(&self.scene, self.export_quality, self.export_smooth).and_then(|m| match format {
-            ExportFormat::Stl => export::write_stl(&path, &export::stl_binary(&m, "YURACAD")),
-            ExportFormat::ThreeMf => export::threemf(&m, "YURACAD").and_then(|b| export::write_stl(&path, &b)),
-            ExportFormat::Obj => export::write_stl(&path, export::obj_text(&m, "YURACAD").as_bytes()),
+            ExportFormat::Stl => export::write_stl(&path, &export::stl_binary(&m, "MELTCAD")),
+            ExportFormat::ThreeMf => export::threemf(&m, "MELTCAD").and_then(|b| export::write_stl(&path, &b)),
+            ExportFormat::Obj => export::write_stl(&path, export::obj_text(&m, "MELTCAD").as_bytes()),
         });
         match res {
             Ok(()) => self.say(ctx, format!("{label}を書き出しました")),
@@ -579,7 +579,7 @@ impl App {
                     let (mark, _) = ui.allocate_exact_size(egui::vec2(18.0, 18.0), egui::Sense::hover());
                     ui.painter().circle_filled(mark.center(), 8.0, style::ACCENT);
                     ui.painter().circle_filled(mark.center() + egui::vec2(-2.5, -2.5), 2.6, Color32::from_white_alpha(120));
-                    ui.label(RichText::new("YURACAD").size(14.0).strong().color(style::TEXT));
+                    ui.label(RichText::new("MELTCAD").size(14.0).strong().color(style::TEXT));
                     style::vsep(ui);
                     style::menu_button(ui, "ファイル", false, |ui| {
                         if ui.button("新しく作る").clicked() {
@@ -1073,7 +1073,7 @@ impl eframe::App for App {
         self.settle(&ctx);
         self.test_hooks(&ctx);
         let title = format!(
-            "YURACAD — {}{}",
+            "MELTCAD — {}{}",
             self.path.as_ref().and_then(|p| p.file_stem()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "名前なし".into()),
             if self.dirty { " *" } else { "" }
         );
