@@ -21,6 +21,9 @@ fn app_preview() {
         Some("3") => Tab::Room,
         _ => Tab::Shape,
     };
+    if std::env::var("YURA_PIPE").is_ok() {
+        app.set_pipe_tool(true);
+    }
     let size = egui::vec2(1380.0, 860.0);
     let mut tex = Textures::new();
     let mut last = None;
@@ -36,6 +39,7 @@ fn app_preview() {
             });
             app.tool_strip(ui);
             app.tool_pill(ui);
+            app.pipe_card(ui.ctx());
             app.keys_card(ui);
         });
         apply_deltas(&mut tex, &out.textures_delta);

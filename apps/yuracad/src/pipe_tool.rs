@@ -643,4 +643,44 @@ mod tests {
         app.pipe_restyle_last(&before);
         assert_eq!(app.scene.shape(g, s).map(|x| x.shell), Some(0.0));
     }
+
+    /// `YT_OUT=/tmp/pipes.yura cargo test -p yuracad dump_pipe_scene -- --ignored` writes a scene with
+    /// pipes traced over a ball and over the floor, to look at with `yuracad --render`.
+    #[test]
+    #[ignore]
+    fn dump_pipe_scene() {
+        let Ok(out) = std::env::var("YT_OUT") else { return };
+        let mut app = app_with_view();
+        // a spiral over the ball (radius 20 at the default position), traced as the cursor would
+        app.cam = Camera::default();
+        let c = app.scene.shape(0, 0).map(|s| s.pos).unwrap_or([0.0; 3]);
+        app.cam.target = c;
+        app.cam.dist = 120.0;
+        app.pt.cfg.radius = 2.0;
+        app.pt.cfg.wall = 0.8;
+        app.pt.tracing = true;
+        let r = rect();
+        for k in 0..60 {
+            let t = k as f32 / 59.0;
+            app.pipe_sample(r, r.center() + vec2(-60.0 + 120.0 * t, 35.0 * (t * 9.0).sin()));
+        }
+        app.pipe_finish();
+        // a loop on the floor
+        app.pt.cfg = Config { radius: 5.0, wall: 1.5, closed: true, open_ends: false, color: [0.9, 0.5, 0.3] };
+        let ring: Vec<V3> = (0..=100).map(|i| {
+            let a = i as f32 / 100.0 * std::f32::consts::TAU;
+            [c[0] + 70.0 + 30.0 * a.cos(), c[1] + 30.0 * a.sin(), 5.0]
+        })
+        .collect();
+        app.pipe_from_stroke(&ring);
+        // an open-ended elbow, so the bore shows
+        app.pt.cfg = Config { radius: 6.0, wall: 1.5, closed: false, open_ends: true, color: [0.6, 0.75, 0.95] };
+        let elbow: Vec<V3> = (0..=40).map(|i| {
+            let t = i as f32 / 40.0;
+            if t < 0.5 { [c[0] - 70.0 + t * 80.0, c[1] - 50.0, 6.0] } else { [c[0] - 70.0 + 40.0, c[1] - 50.0, 6.0 + (t - 0.5) * 80.0] }
+        })
+        .collect();
+        app.pipe_from_stroke(&elbow);
+        let _ = std::fs::write(out, app.scene.to_json());
+    }
 }
