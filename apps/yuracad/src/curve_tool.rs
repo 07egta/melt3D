@@ -271,7 +271,7 @@ pub struct Input {
 
 impl App {
     /// The selected curve or sweep whose nodes can be edited now.
-    fn node_shape(&self) -> Option<(usize, usize)> {
+    pub(crate) fn node_shape(&self) -> Option<(usize, usize)> {
         if !self.ct.edit_nodes {
             return None;
         }
@@ -297,6 +297,11 @@ impl App {
             return self.draw_input(ui, resp, rect, pos, &mut out);
         }
         self.ct.preview = None;
+        if self.pt.on
+            && let Some(used) = self.pipe_input(ui, resp, rect, pos, mods)
+        {
+            return used;
+        }
         let Some((g, s)) = self.node_shape() else {
             self.ct.drag = None;
             self.ct.hover = None;
@@ -598,6 +603,9 @@ impl App {
             }
             self.ct.drawing = !on;
             self.ct.draw_shape = None;
+            if self.ct.drawing {
+                self.set_pipe_tool(false);
+            }
         }
     }
 
@@ -635,6 +643,7 @@ impl App {
     pub fn curve_keys(&mut self, ctx: &egui::Context) {
         use egui::{Key, Modifiers};
         let hit = |k: Key| ctx.input_mut(|i| i.consume_key(Modifiers::NONE, k));
+        self.pipe_keys(ctx);
         if self.ct.drawing {
             if hit(Key::Enter) {
                 self.finish_drawing();

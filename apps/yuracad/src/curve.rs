@@ -2,7 +2,7 @@
 //! shape's own space, like Womp's line tool. The shader copy is `shader_curve.wgsl`; keep the two
 //! in step.
 //!
-//! The nodes are first resampled with a Catmull-Rom spline into at most `MAX_POINTS` points (the
+//! The nodes are first resampled with a (centripetal) Catmull-Rom spline into at most `MAX_POINTS` points (the
 //! GPU and the CPU both measure the *resampled* points, so they always agree). The tube is then the
 //! union of round cones (a capsule whose two ends have different radii) between neighbours.
 //!
@@ -12,7 +12,7 @@
 use crate::sdf::{Prepared, V3, dot, len, mul, norm, sub};
 
 /// Most points one curve gives to the GPU.
-pub const MAX_POINTS: usize = 48;
+pub const MAX_POINTS: usize = 96;
 const MAX_STEPS: usize = 8;
 const COORD_LIMIT: f32 = 1.0e4;
 const R_MIN: f32 = 0.01;
@@ -54,15 +54,27 @@ fn lerp4(a: [f32; 4], b: [f32; 4], t: f32) -> [f32; 4] {
     [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t, a[3] + (b[3] - a[3]) * t]
 }
 
-/// Uniform Catmull-Rom between `p1` and `p2`.
+/// Centripetal Catmull-Rom between `p1` and `p2` (Barry-Goldman form). Unlike the uniform kind it
+/// does not overshoot or loop when neighbouring nodes are very unevenly spaced, which is what a
+/// traced pipe (long straight spans next to tight turns) looks like. It passes through the nodes.
 fn catmull(p0: [f32; 4], p1: [f32; 4], p2: [f32; 4], p3: [f32; 4], t: f32) -> [f32; 4] {
-    let t2 = t * t;
-    let t3 = t2 * t;
-    let mut o = [0.0; 4];
-    for (i, v) in o.iter_mut().enumerate() {
-        *v = 0.5 * (2.0 * p1[i] + (p2[i] - p0[i]) * t + (2.0 * p0[i] - 5.0 * p1[i] + 4.0 * p2[i] - p3[i]) * t2 + (3.0 * p1[i] - 3.0 * p2[i] + p3[i] - p0[i]) * t3);
-    }
-    o
+    // knot spacing: the square root of the distance (floored so coincident nodes stay finite)
+    let gap = |a: [f32; 4], b: [f32; 4]| ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt().sqrt().max(1.0e-3);
+    let t0 = 0.0_f32;
+    let t1 = t0 + gap(p0, p1);
+    let t2 = t1 + gap(p1, p2);
+    let t3 = t2 + gap(p2, p3);
+    let tt = t1 + (t2 - t1) * t;
+    let mix = |a: [f32; 4], b: [f32; 4], ta: f32, tb: f32| -> [f32; 4] {
+        let w = (tt - ta) / (tb - ta);
+        lerp4(a, b, w)
+    };
+    let a1 = mix(p0, p1, t0, t1);
+    let a2 = mix(p1, p2, t1, t2);
+    let a3 = mix(p2, p3, t2, t3);
+    let b1 = mix(a1, a2, t0, t2);
+    let b2 = mix(a2, a3, t1, t3);
+    mix(b1, b2, t1, t2)
 }
 
 /// Node `i` of the curve, where the ends of an open curve continue straight (so a two-node curve
@@ -211,25 +223,43 @@ pub fn tube(points: &[[f32; 4]], q: V3, flat: bool) -> f32 {
         let (a, b) = (w[0], w[1]);
         d = d.min(round_cone(q, [a[0], a[1], a[2]], a[3], [b[0], b[1], b[2]], b[3]));
     }
-    if flat && points.len() >= 2 {
-        let (first, second) = (points[0], points[1]);
-        let (last, before) = (points[points.len() - 1], points[points.len() - 2]);
-        let t0 = norm(sub([second[0], second[1], second[2]], [first[0], first[1], first[2]]));
-        let t1 = norm(sub([last[0], last[1], last[2]], [before[0], before[1], before[2]]));
-        let c0 = dot(sub(q, [first[0], first[1], first[2]]), mul(t0, -1.0));
-        let c1 = dot(sub(q, [last[0], last[1], last[2]]), t1);
-        d = d.max(c0).max(c1);
-    }
-    d
+    if flat { d.max(end_cut(points, q)) } else { d }
 }
 
-/// Distance from `q` (local, unscaled) to the shape. Negative inside.
+/// The two half-spaces that cut a tube flat at its first and last point (positive beyond an end).
+fn end_cut(points: &[[f32; 4]], q: V3) -> f32 {
+    if points.len() < 2 {
+        return -1.0e6;
+    }
+    let (first, second) = (points[0], points[1]);
+    let (last, before) = (points[points.len() - 1], points[points.len() - 2]);
+    let t0 = norm(sub([second[0], second[1], second[2]], [first[0], first[1], first[2]]));
+    let t1 = norm(sub([last[0], last[1], last[2]], [before[0], before[1], before[2]]));
+    let c0 = dot(sub(q, [first[0], first[1], first[2]]), mul(t0, -1.0));
+    let c1 = dot(sub(q, [last[0], last[1], last[2]]), t1);
+    c0.max(c1)
+}
+
+/// Turn a solid distance into a hollow wall of thickness `wall` (the skin just inside the surface).
+fn hollow(d: f32, wall: f32) -> f32 {
+    (d + wall * 0.5).abs() - wall * 0.5
+}
+
+/// Distance from `q` (local, unscaled) to the shape. Negative inside. A shell (wall thickness, in
+/// world mm) hollows the tube here rather than in `Prepared::distance`, so that a pipe with flat
+/// ends is cut open *after* it is hollowed: the bore shows at the ends.
 pub fn distance(p: &Prepared, q: V3) -> f32 {
     let (closed, _, flat, _) = settings(&p.params);
     if p.path.len() < 2 {
         return 1.0e6;
     }
-    tube(&p.path, q, flat && !closed)
+    let cut = flat && !closed;
+    let wall = if p.shell.is_finite() { p.shell.max(0.0) / p.min_scale().max(1.0e-6) } else { 0.0 };
+    if wall > 0.0 {
+        let d = hollow(tube(&p.path, q, false), wall);
+        return if cut { d.max(end_cut(&p.path, q)) } else { d };
+    }
+    tube(&p.path, q, cut)
 }
 
 #[cfg(test)]
