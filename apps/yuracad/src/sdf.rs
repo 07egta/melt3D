@@ -2,6 +2,7 @@
 //! shader (`shader.wgsl`) implements the same formulas; this copy picks shapes with the mouse and
 //! builds the mesh for export.
 
+use crate::corner;
 use crate::model::{BlendMode, Kind, Material, Op, Scene, Shape};
 
 pub type V3 = [f32; 3];
@@ -56,7 +57,9 @@ pub struct Prepared {
     pub outline2: Vec<[f32; 2]>,
     /// Wall thickness of the hollowed-out shape (0 = solid).
     pub shell: f32,
-    /// Winding (+1 / -1) and the largest safe rounding of the profile (revolve, sweep).
+    /// The corners are cut flat (a chamfer) instead of rounded.
+    pub chamfer: bool,
+    /// Winding (+1 / -1) and the largest safe rounding of the profile (revolve, sweep, extrude).
     pub poly_orient: f32,
     pub poly_limit: f32,
     /// Half the shape's size along the gradient direction (0 when there is no gradient).
@@ -90,7 +93,7 @@ impl Prepared {
         let outline: Vec<[f32; 2]> =
             if s.kind == Kind::Revolve { s.outline.iter().map(|p| [p[0].max(0.0), p[1]]).collect() } else { s.outline.clone() };
         let (poly_orient, poly_limit) = match s.kind {
-            Kind::Revolve | Kind::Sweep if round > 0.0 => crate::cad::inset_params(&outline, s.kind == Kind::Revolve),
+            Kind::Revolve | Kind::Sweep | Kind::Extrude if round > 0.0 => crate::cad::inset_params(&outline, s.kind == Kind::Revolve),
             _ => (1.0, 0.0),
         };
         let grad_half = if s.material.has_gradient() { gradient_half(s, &r) } else { 0.0 };
@@ -98,6 +101,7 @@ impl Prepared {
             kind: s.kind,
             size: s.size,
             round,
+            chamfer: s.corner == crate::model::Corner::Chamfer,
             pos: s.pos,
             inv,
             scale: s.scale,
@@ -141,6 +145,10 @@ impl Prepared {
         // (a curve hollows itself: its flat ends are cut after the hollowing, see curve::distance)
         if self.shell > 0.0 && self.kind != Kind::Curve { (d + self.shell * 0.5).abs() - self.shell * 0.5 } else { d }
     }
+    #[cfg(test)]
+    pub fn local_distance_for_test(&self, q: V3) -> f32 {
+        self.local_distance(q)
+    }
     fn local_distance(&self, q: V3) -> f32 {
         let s = self.size;
         match self.kind {
@@ -148,11 +156,17 @@ impl Prepared {
             Kind::Box => {
                 let b = [s[0] * 0.5, s[1] * 0.5, s[2] * 0.5];
                 let r = self.round.min(b[0]).min(b[1]).min(b[2]);
+                if self.chamfer {
+                    return corner::cut_box(q, b, r);
+                }
                 let d = [q[0].abs() - b[0] + r, q[1].abs() - b[1] + r, q[2].abs() - b[2] + r];
                 len([d[0].max(0.0), d[1].max(0.0), d[2].max(0.0)]) + d[0].max(d[1]).max(d[2]).min(0.0) - r
             }
             Kind::Cylinder => {
                 let r = self.round.min(s[0]).min(s[1] * 0.5);
+                if self.chamfer {
+                    return corner::pair(q[0].hypot(q[1]) - s[0], q[2].abs() - s[1] * 0.5, r);
+                }
                 let d = [(q[0].hypot(q[1])) - s[0] + r, q[2].abs() - s[1] * 0.5 + r];
                 d[0].max(d[1]).min(0.0) + d[0].max(0.0).hypot(d[1].max(0.0)) - r
             }
@@ -160,6 +174,7 @@ impl Prepared {
                 let a = q[0].hypot(q[1]) - s[0];
                 a.hypot(q[2]) - s[1]
             }
+            Kind::Cone if self.round > 0.0 && self.chamfer => crate::prims::chamfered_cone(q, s, self.round),
             Kind::Cone if self.round > 0.0 => crate::prims::rounded_cone(q, s, self.round),
             Kind::Cone => {
                 // Capped cone, base radius s0 at the bottom, a point at the top, height s1.
@@ -176,9 +191,16 @@ impl Prepared {
                 sg * (ca[0] * ca[0] + ca[1] * ca[1]).min(cb[0] * cb[0] + cb[1] * cb[1]).sqrt()
             }
             Kind::Extrude => {
-                let d2 = polygon(&self.outline, [q[0], q[1]]);
-                let r = self.round.min(s[0] * 0.5);
-                let w = [d2 + r, q[2].abs() - s[0] * 0.5 + r];
+                let xy = [q[0], q[1]];
+                let hh = s[0] * 0.5;
+                if self.chamfer && self.round > 0.0 {
+                    let d2 = corner::cut_polygon(polygon(&self.outline, xy), xy, &self.outline, self.poly_orient, self.round, false);
+                    return corner::pair(d2, q[2].abs() - hh, self.round.min(hh));
+                }
+                // every convex corner of the outline and the top and bottom edges are rounded
+                let r = if self.round > 0.0 { self.round.min(hh).min(self.poly_limit) } else { 0.0 };
+                let d2 = if r > 0.0 { crate::cad::polygon_inset(&self.outline, xy, r, self.poly_orient, false) } else { polygon(&self.outline, xy) };
+                let w = [d2, q[2].abs() - hh + r];
                 w[0].max(w[1]).min(0.0) + w[0].max(0.0).hypot(w[1].max(0.0)) - r
             }
             Kind::Curve => crate::curve::distance(self, q),
