@@ -8,6 +8,7 @@ mod export;
 mod fonts;
 mod gizmo;
 mod glyphs;
+mod glyphs_more;
 mod gpu;
 mod icon;
 mod materials;

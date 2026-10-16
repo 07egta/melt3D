@@ -103,7 +103,7 @@ pub fn kind(p: &Painter, rect: Rect, k: Kind, ink: Color32, fill: Color32) {
         Kind::Torus => torus(p, f, fill, s),
         Kind::Cone => cone(p, f, fill, s),
         Kind::Extrude => prism(p, f, fill, s),
-        _ => cube(p, f, fill, s),
+        _ => crate::glyphs_more::kind_more(p, rect, k, ink, fill),
     }
 }
 
