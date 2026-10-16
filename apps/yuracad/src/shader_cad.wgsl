@@ -44,8 +44,73 @@ fn wedge_d(p: vec2<f32>, deg: f32) -> f32 {
     return d;
 }
 
+// ---- rounding a profile (see cad.rs): corners are shrunk per sample from their neighbours ----
+
+fn unit2(v: vec2<f32>) -> vec2<f32> {
+    let l = length(v);
+    if (l < 1e-9) { return vec2<f32>(0.0); }
+    return v / l;
+}
+
+// the corner `cur` between `prev` and `next`, moved inwards by rr (orient +1 = counter-clockwise);
+// with `axis` a side on the Z axis counts as the mirror image of the other side
+fn inset_corner(prev: vec2<f32>, cur: vec2<f32>, next: vec2<f32>, orient: f32, rr: f32, axis: bool) -> vec2<f32> {
+    let t1 = unit2(cur - prev);
+    let t2 = unit2(next - cur);
+    var n1 = vec2<f32>(-t1.y, t1.x) * orient;
+    var n2 = vec2<f32>(-t2.y, t2.x) * orient;
+    if (axis) {
+        let on1 = prev.x <= 1e-4 && cur.x <= 1e-4;
+        let on2 = cur.x <= 1e-4 && next.x <= 1e-4;
+        if (on1 && !on2) { n1 = vec2<f32>(-n2.x, n2.y); }
+        if (on2 && !on1) { n2 = vec2<f32>(-n1.x, n1.y); }
+        if (on1 && on2) { n1 = vec2<f32>(0.0); n2 = vec2<f32>(0.0); }
+    }
+    let den = max(1.0 + dot(n1, n2), 0.1);
+    return cur + (n1 + n2) * (rr / den);
+}
+
+fn polygon_inset_d(start: i32, n: i32, p: vec2<f32>, rr: f32, orient: f32, axis: bool) -> f32 {
+    if (n < 3) { return 1e9; }
+    var d = 1e18;
+    var sgn = 1.0;
+    var j = n - 1;
+    var oj = get_pt(start + n - 1);
+    var vj = inset_corner(get_pt(start + n - 2), oj, get_pt(start), orient, rr, axis);
+    for (var i = 0; i < n; i = i + 1) {
+        let oi = get_pt(start + i);
+        let vi = inset_corner(get_pt(start + (i + n - 1) % n), oi, get_pt(start + (i + 1) % n), orient, rr, axis);
+        let e = vj - vi;
+        let w = p - vi;
+        if (!(axis && oi.x <= 1e-4 && oj.x <= 1e-4)) {
+            let t = clamp(dot(w, e) / max(dot(e, e), 1e-12), 0.0, 1.0);
+            let b = w - e * t;
+            d = min(d, dot(b, b));
+        }
+        let c1 = p.y >= vi.y;
+        let c2 = p.y < vj.y;
+        let c3 = e.x * w.y > e.y * w.x;
+        if ((c1 && c2 && c3) || (!c1 && !c2 && !c3)) { sgn = -sgn; }
+        j = i;
+        oj = oi;
+        vj = vi;
+    }
+    return sgn * sqrt(d);
+}
+
+// the rounding that really applies (round, in profile units, kept inside extra.y = the limit)
+fn profile_round(s: Shape, scale: f32) -> f32 {
+    return min(max(s.size.w, 0.0) / max(scale, 1e-3), s.extra.y);
+}
+
 fn revolve_dist(s: Shape, q: vec3<f32>) -> f32 {
-    var d = polygon_off_axis_d(i32(s.misc.z + 0.5), i32(s.misc.w + 0.5), vec2<f32>(length(q.xy), q.z));
+    var d = 0.0;
+    let rr = profile_round(s, 1.0);
+    if (rr > 0.0) {
+        d = polygon_inset_d(i32(s.misc.z + 0.5), i32(s.misc.w + 0.5), vec2<f32>(length(q.xy), q.z), rr, s.extra.z, true) - rr;
+    } else {
+        d = polygon_off_axis_d(i32(s.misc.z + 0.5), i32(s.misc.w + 0.5), vec2<f32>(length(q.xy), q.z));
+    }
     let ang = clamp(s.params.x, 1.0, 360.0);
     if (ang < 359.99) { d = max(d, wedge_d(q.xy, ang)); }
     return d;
@@ -56,8 +121,9 @@ fn loft_dist(s: Shape, q: vec3<f32>) -> f32 {
     let d1 = polygon_d(i32(s.misc.z + 0.5), i32(s.misc.w + 0.5), q.xy);
     let d2 = polygon_d(i32(s.ext.z + 0.5), i32(s.ext.w + 0.5), q.xy);
     let t = clamp(q.z / h + 0.5, 0.0, 1.0);
-    let w = vec2<f32>(d1 + (d2 - d1) * t, abs(q.z) - h * 0.5);
-    let d = min(max(w.x, w.y), 0.0) + length(max(w, vec2<f32>(0.0)));
+    let rr = min(max(s.size.w, 0.0), h * 0.5);
+    let w = vec2<f32>(d1 + (d2 - d1) * t + rr, abs(q.z) - h * 0.5 + rr);
+    let d = min(max(w.x, w.y), 0.0) + length(max(w, vec2<f32>(0.0))) - rr;
     return d / (1.0 + abs(d2 - d1) / h);
 }
 
@@ -90,7 +156,12 @@ fn sweep_dist(s: Shape, q: vec3<f32>) -> f32 {
     let c = pa.xyz + ab * bt;
     let r = max(abs(mix(pa.w, pb.w, bt)), 1e-3);
     let dd = q - c;
-    let d2 = polygon_d(i32(s.misc.z + 0.5), i32(s.misc.w + 0.5), vec2<f32>(dot(dd, nrm), dot(dd, bin)) / r) * r;
+    let uv = vec2<f32>(dot(dd, nrm), dot(dd, bin)) / r;
+    var d2 = polygon_d(i32(s.misc.z + 0.5), i32(s.misc.w + 0.5), uv) * r;
+    let rr = profile_round(s, r);
+    if (rr > 0.0) {
+        d2 = (polygon_inset_d(i32(s.misc.z + 0.5), i32(s.misc.w + 0.5), uv, rr, s.extra.z, false) - rr) * r;
+    }
     var axial = -1e5;
     if (bi == 0 && bt <= 0.0) { axial = -dot(q - pa.xyz, tn); }
     if (bi == n - 2 && bt >= 1.0) { axial = max(axial, dot(q - pb.xyz, tn)); }

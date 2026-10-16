@@ -154,11 +154,13 @@ fn prim_dist(s: Shape, q: vec3<f32>, kind: i32) -> f32 {
         return length(vec3<f32>(q.x, q.y, q.z - max(-hl, min(hl, q.z)))) - sz.x;
     } else if (kind == 12) {
         let r = sz.x;
-        let zp = q.z + r * 0.5;
+        let rr = min(rnd, r * 0.5);
+        let rad = r - rr;
+        let zp = q.z + r * 0.5 - rr;
         let rho = length(q.xy);
-        if (zp >= 0.0) { return max(length(vec2<f32>(rho, zp)) - r, -zp); }
-        if (rho <= r) { return -zp; }
-        return length(vec2<f32>(rho - r, zp));
+        if (zp >= 0.0) { return max(length(vec2<f32>(rho, zp)) - rad, -zp) - rr; }
+        if (rho <= rad) { return -zp - rr; }
+        return length(vec2<f32>(rho - rad, zp)) - rr;
     } else if (kind == 13) {
         let t = min(max(sz.y, 0.0), sz.x);
         let hw = t * 0.5;

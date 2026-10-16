@@ -56,6 +56,11 @@ pub struct Prepared {
     pub outline2: Vec<[f32; 2]>,
     /// Wall thickness of the hollowed-out shape (0 = solid).
     pub shell: f32,
+    /// Winding (+1 / -1) and the largest safe rounding of the profile (revolve, sweep).
+    pub poly_orient: f32,
+    pub poly_limit: f32,
+    /// Half the shape's size along the gradient direction (0 when there is no gradient).
+    pub grad_half: f32,
 }
 
 #[derive(Clone, Debug)]
@@ -80,22 +85,33 @@ impl Prepared {
     pub fn new(s: &Shape) -> Prepared {
         let r = rotation(s.rot);
         let inv = [[r[0][0], r[1][0], r[2][0]], [r[0][1], r[1][1], r[2][1]], [r[0][2], r[1][2], r[2][2]]];
+        let round = if s.round.is_finite() { s.round.max(0.0) } else { 0.0 };
+        // a revolve profile lives on the +x side of the axis
+        let outline: Vec<[f32; 2]> =
+            if s.kind == Kind::Revolve { s.outline.iter().map(|p| [p[0].max(0.0), p[1]]).collect() } else { s.outline.clone() };
+        let (poly_orient, poly_limit) = match s.kind {
+            Kind::Revolve | Kind::Sweep if round > 0.0 => crate::cad::inset_params(&outline, s.kind == Kind::Revolve),
+            _ => (1.0, 0.0),
+        };
+        let grad_half = if s.material.has_gradient() { gradient_half(s, &r) } else { 0.0 };
         Prepared {
             kind: s.kind,
             size: s.size,
-            round: s.round,
+            round,
             pos: s.pos,
             inv,
             scale: s.scale,
             op: s.op,
             blend: s.blend,
             material: s.material,
-            // a revolve profile lives on the +x side of the axis
-            outline: if s.kind == Kind::Revolve { s.outline.iter().map(|p| [p[0].max(0.0), p[1]]).collect() } else { s.outline.clone() },
+            outline,
             params: s.params,
             path: if s.kind == Kind::Curve { crate::curve::build(&s.path, &s.params) } else { s.path.clone() },
             outline2: s.outline2.clone(),
             shell: if s.shell.is_finite() { s.shell.max(0.0) } else { 0.0 },
+            poly_orient,
+            poly_limit,
+            grad_half,
         }
     }
     /// The point in the shape's own space.
@@ -103,6 +119,17 @@ impl Prepared {
         let d = sub(p, self.pos);
         let q = [dot(self.inv[0], d), dot(self.inv[1], d), dot(self.inv[2], d)];
         [q[0] / self.scale[0], q[1] / self.scale[1], q[2] / self.scale[2]]
+    }
+    /// The surface colour at `p`: the material's colour, or its gradient (see `Material::gradient_weight`).
+    pub fn color_at(&self, p: V3) -> V3 {
+        let m = &self.material;
+        if !m.has_gradient() {
+            return m.color;
+        }
+        let ax = usize::from(m.grad_axis).min(2);
+        let c = if m.grad_local { self.local(p)[ax] } else { p[ax] - self.pos[ax] };
+        let t = c * (if m.grad_flip { -0.5 } else { 0.5 }) / self.grad_half.max(1e-3) + 0.5;
+        mix3(m.color, m.color2, m.gradient_weight(t.max(0.0).min(1.0)))
     }
     pub fn min_scale(&self) -> f32 {
         self.scale[0].min(self.scale[1]).min(self.scale[2])
@@ -132,6 +159,7 @@ impl Prepared {
                 let a = q[0].hypot(q[1]) - s[0];
                 a.hypot(q[2]) - s[1]
             }
+            Kind::Cone if self.round > 0.0 => crate::prims::rounded_cone(q, s, self.round),
             Kind::Cone => {
                 // Capped cone, base radius s0 at the bottom, a point at the top, height s1.
                 let h = s[1] * 0.5;
@@ -157,6 +185,19 @@ impl Prepared {
             _ => crate::cad::distance(self, q),
         }
     }
+}
+
+/// Half the shape's size along its gradient direction: in the world (the box of the turned,
+/// stretched shape) or in the shape's own box.
+fn gradient_half(s: &Shape, rot: &[V3; 3]) -> f32 {
+    let ax = usize::from(s.material.grad_axis).min(2);
+    let half = s.local_half();
+    let h = if s.material.grad_local {
+        half[ax]
+    } else {
+        (0..3).map(|j| rot[ax][j].abs() * s.scale[j].abs() * half[j]).sum()
+    };
+    if h.is_finite() { h.max(1e-3) } else { 1.0 }
 }
 
 pub fn polygon(v: &[[f32; 2]], p: [f32; 2]) -> f32 {
@@ -277,7 +318,7 @@ impl Field {
             let d = s.distance(p);
             let me = Sample {
                 dist: d,
-                color: s.material.color,
+                color: s.color_at(p),
                 roughness: s.material.roughness,
                 metallic: s.material.metallic,
                 nearest: Some(g.origin[i]),

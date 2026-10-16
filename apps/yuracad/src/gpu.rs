@@ -15,7 +15,7 @@ use crate::sdf::Prepared;
 const V4_GLOBALS: usize = 7;
 const V4_GROUPS: usize = V4_GLOBALS;
 const V4_SHAPES: usize = V4_GROUPS + MAX_GROUPS;
-const V4_PER_SHAPE: usize = 13;
+const V4_PER_SHAPE: usize = 15;
 const V4_POLY: usize = V4_SHAPES + MAX_SHAPES * V4_PER_SHAPE;
 const POLY_V4: usize = 512;
 const V4_PATH: usize = V4_POLY + POLY_V4;
@@ -77,7 +77,7 @@ pub fn pack(scene: &Scene, cam: &Camera, size: [f32; 2], selected: Option<Pick>,
             put(&mut u, base + 2, [p.inv[2][0], p.inv[2][1], p.inv[2][2], 0.0]);
             put(&mut u, base + 3, [s.pos[0], s.pos[1], s.pos[2], p.min_scale()]);
             put(&mut u, base + 4, [s.scale[0], s.scale[1], s.scale[2], s.kind.id()]);
-            put(&mut u, base + 5, [s.size[0], s.size[1], s.size[2], s.round]);
+            put(&mut u, base + 5, [s.size[0], s.size[1], s.size[2], p.round]);
             let pack_outline = |pts: &[[f32; 2]], poly_pts: &mut usize, u: &mut Vec<f32>| -> (usize, usize) {
                 if pts.is_empty() || *poly_pts + pts.len() > POLY_V4 * 2 {
                     return (0, 0);
@@ -111,12 +111,17 @@ pub fn pack(scene: &Scene, cam: &Camera, size: [f32; 2], selected: Option<Pick>,
             };
             put(&mut u, base + 6, [s.op.sign(), s.blend, start as f32, count as f32]);
             put(&mut u, base + 10, s.params);
-            put(&mut u, base + 12, [p.shell, 0.0, 0.0, 0.0]);
+            put(&mut u, base + 12, [p.shell, p.poly_limit, p.poly_orient, 0.0]);
             put(&mut u, base + 11, [pstart as f32, pcount as f32, start2 as f32, count2 as f32]);
             put(&mut u, base + 7, [s.material.color[0], s.material.color[1], s.material.color[2], s.material.roughness]);
             let m = &s.material;
             put(&mut u, base + 8, [m.metallic, m.glow, m.glass, m.iridescence]);
-            put(&mut u, base + 9, [m.coat, m.translucency, 0.0, 0.0]);
+            // the gradient: slot 13 = second colour + strength, slot 14 = direction (+ 3 when it follows
+            // the shape's own box), softness, from, to; mat2.z = signed 1 / the gradient's length
+            let inv_len = if m.has_gradient() { (if m.grad_flip { -0.5 } else { 0.5 }) / p.grad_half.max(1e-3) } else { 0.0 };
+            put(&mut u, base + 9, [m.coat, m.translucency, inv_len, 0.0]);
+            put(&mut u, base + 13, [m.color2[0], m.color2[1], m.color2[2], if m.has_gradient() { m.gradient } else { 0.0 }]);
+            put(&mut u, base + 14, [f32::from(m.grad_axis.min(2)) + if m.grad_local { 3.0 } else { 0.0 }, m.grad_soft, m.grad_from, m.grad_to]);
             if let Some(dst) = u.get_mut(V4_BRAD * 4 + shape_n) {
                 *dst = crate::perf::shape_radius(s);
             }
