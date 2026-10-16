@@ -10,6 +10,7 @@ mod export;
 mod export_decimate;
 mod export_deflate;
 mod export_formats;
+mod export_job;
 mod export_mesh;
 mod fonts;
 mod gizmo;
