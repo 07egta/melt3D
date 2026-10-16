@@ -90,7 +90,7 @@ impl Prepared {
             material: s.material,
             outline: s.outline.clone(),
             params: s.params,
-            path: s.path.clone(),
+            path: if s.kind == Kind::Curve { crate::curve::build(&s.path, &s.params) } else { s.path.clone() },
             outline2: s.outline2.clone(),
         }
     }

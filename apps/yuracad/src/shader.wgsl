@@ -26,7 +26,7 @@ struct Globals {
     groups: array<vec4<f32>, 24>,   // first shape, count, op sign, blend
     shapes: array<Shape, 64>,
     poly: array<vec4<f32>, 512>,    // outline points, two per vec4 (x y x y)
-    path: array<vec4<f32>, 256>,    // curve / sweep nodes (x y z radius)
+    path: array<vec4<f32>, 512>,    // curve / sweep nodes (x y z radius)
     bound: vec4<f32>,               // centre, radius of a sphere around everything (0 = nothing)
     hover: vec4<f32>,               // first hovered shape (-1 none), count
     env: array<vec4<f32>, 11>,      // exposure/ambient/shadow/flags, backdrop+lights, 3 sky colours, 3 x (light dir+power, light colour)
