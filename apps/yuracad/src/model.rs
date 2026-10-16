@@ -12,10 +12,65 @@ pub enum Kind {
     Cone,
     /// A 2D outline (`Shape::outline`) pushed straight up.
     Extrude,
+    // ---- more primitives (ids 6..15, `prims.rs` / `shader_prims.wgsl`)
+    /// Triangular prism: `size` = circumradius, height.
+    Prism3,
+    /// Prism with `params[0]` sides: `size` = circumradius, height.
+    PrismN,
+    Octa,
+    Tetra,
+    /// Pyramid with `params[0]` sides: `size` = base circumradius, height.
+    Pyramid,
+    /// `size` = radius, straight length between the two ball centres.
+    Capsule,
+    /// Dome on the XY plane's upper side: `size` = radius.
+    Hemi,
+    /// Pipe: `size` = outer radius, wall thickness, height.
+    Tube,
+    Wedge,
+    /// Star prism: `size` = outer radius, height; `params` = points, inner ratio.
+    Star,
+    // ---- CAD features (ids 16.., `cad.rs` / `shader_cad.wgsl`)
+    /// `outline` is a profile (x = distance from the Z axis, y = height) turned about Z.
+    Revolve,
+    /// `outline` at the bottom blends into `outline2` at the top over `size[0]` mm.
+    Loft,
+    /// A tube through the `path` nodes (x, y, z, radius), like Womp's curve tool.
+    Curve,
+    /// `outline` pulled along `path`.
+    Sweep,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 6] = [Kind::Sphere, Kind::Box, Kind::Cylinder, Kind::Torus, Kind::Cone, Kind::Extrude];
+    pub const ALL: [Kind; 20] = [
+        Kind::Sphere,
+        Kind::Box,
+        Kind::Cylinder,
+        Kind::Torus,
+        Kind::Cone,
+        Kind::Extrude,
+        Kind::Prism3,
+        Kind::PrismN,
+        Kind::Octa,
+        Kind::Tetra,
+        Kind::Pyramid,
+        Kind::Capsule,
+        Kind::Hemi,
+        Kind::Tube,
+        Kind::Wedge,
+        Kind::Star,
+        Kind::Revolve,
+        Kind::Loft,
+        Kind::Curve,
+        Kind::Sweep,
+    ];
+    /// The six always shown on the top bar.
+    pub const MAIN: [Kind; 6] = [Kind::Sphere, Kind::Box, Kind::Cylinder, Kind::Torus, Kind::Cone, Kind::Extrude];
+    /// The extra solids in the "more" menu.
+    pub const MORE: [Kind; 10] =
+        [Kind::Prism3, Kind::PrismN, Kind::Octa, Kind::Tetra, Kind::Pyramid, Kind::Capsule, Kind::Hemi, Kind::Tube, Kind::Wedge, Kind::Star];
+    /// CAD-style features (profile based).
+    pub const CAD: [Kind; 4] = [Kind::Revolve, Kind::Loft, Kind::Curve, Kind::Sweep];
     pub fn label(self) -> &'static str {
         match self {
             Kind::Sphere => "球",
@@ -24,6 +79,20 @@ impl Kind {
             Kind::Torus => "ドーナツ",
             Kind::Cone => "円すい",
             Kind::Extrude => "押し出し",
+            Kind::Prism3 => "三角柱",
+            Kind::PrismN => "多角柱",
+            Kind::Octa => "正八面体",
+            Kind::Tetra => "正四面体",
+            Kind::Pyramid => "ピラミッド",
+            Kind::Capsule => "カプセル",
+            Kind::Hemi => "半球",
+            Kind::Tube => "パイプ",
+            Kind::Wedge => "くさび",
+            Kind::Star => "星柱",
+            Kind::Revolve => "回転体",
+            Kind::Loft => "ロフト",
+            Kind::Curve => "線",
+            Kind::Sweep => "スイープ",
         }
     }
     pub fn id(self) -> f32 {
@@ -34,9 +103,35 @@ impl Kind {
             Kind::Torus => 3.0,
             Kind::Cone => 4.0,
             Kind::Extrude => 5.0,
+            Kind::Prism3 => 6.0,
+            Kind::PrismN => 7.0,
+            Kind::Octa => 8.0,
+            Kind::Tetra => 9.0,
+            Kind::Pyramid => 10.0,
+            Kind::Capsule => 11.0,
+            Kind::Hemi => 12.0,
+            Kind::Tube => 13.0,
+            Kind::Wedge => 14.0,
+            Kind::Star => 15.0,
+            Kind::Revolve => 16.0,
+            Kind::Loft => 17.0,
+            Kind::Curve => 18.0,
+            Kind::Sweep => 19.0,
         }
     }
-    /// What the four size numbers mean, for the inspector.
+    /// Does the shape read `Shape::outline` (a 2D profile)?
+    pub fn uses_outline(self) -> bool {
+        matches!(self, Kind::Extrude | Kind::Revolve | Kind::Loft | Kind::Sweep)
+    }
+    /// Does the shape read `Shape::outline2` (the loft's top profile)?
+    pub fn uses_outline2(self) -> bool {
+        self == Kind::Loft
+    }
+    /// Does the shape read `Shape::path` (3D nodes)?
+    pub fn uses_path(self) -> bool {
+        matches!(self, Kind::Curve | Kind::Sweep)
+    }
+    /// What the size numbers mean, for the inspector.
     pub fn size_labels(self) -> [&'static str; 3] {
         match self {
             Kind::Sphere => ["半径", "", ""],
@@ -45,6 +140,16 @@ impl Kind {
             Kind::Torus => ["大半径", "小半径", ""],
             Kind::Cone => ["半径", "高さ", ""],
             Kind::Extrude => ["高さ", "", ""],
+            Kind::Prism3 | Kind::PrismN | Kind::Star => ["外半径", "高さ", ""],
+            Kind::Octa | Kind::Tetra | Kind::Hemi => ["半径", "", ""],
+            Kind::Pyramid => ["底の半径", "高さ", ""],
+            Kind::Capsule => ["半径", "長さ", ""],
+            Kind::Tube => ["外半径", "肉厚", "高さ"],
+            Kind::Wedge => ["幅", "奥行", "高さ"],
+            Kind::Revolve => ["", "", ""],
+            Kind::Loft => ["高さ", "", ""],
+            Kind::Curve => ["", "", ""],
+            Kind::Sweep => ["", "", ""],
         }
     }
     pub fn default_size(self) -> [f32; 3] {
@@ -55,6 +160,39 @@ impl Kind {
             Kind::Torus => [20.0, 7.0, 1.0],
             Kind::Cone => [18.0, 40.0, 1.0],
             Kind::Extrude => [20.0, 1.0, 1.0],
+            Kind::Prism3 => [22.0, 40.0, 1.0],
+            Kind::PrismN => [20.0, 40.0, 1.0],
+            Kind::Octa => [25.0, 1.0, 1.0],
+            Kind::Tetra => [25.0, 1.0, 1.0],
+            Kind::Pyramid => [22.0, 40.0, 1.0],
+            Kind::Capsule => [10.0, 30.0, 1.0],
+            Kind::Hemi => [22.0, 1.0, 1.0],
+            Kind::Tube => [18.0, 4.0, 40.0],
+            Kind::Wedge => [30.0, 30.0, 30.0],
+            Kind::Star => [24.0, 14.0, 1.0],
+            Kind::Revolve => [1.0, 1.0, 1.0],
+            Kind::Loft => [40.0, 1.0, 1.0],
+            Kind::Curve => [1.0, 1.0, 1.0],
+            Kind::Sweep => [1.0, 1.0, 1.0],
+        }
+    }
+    /// Labels of the four extra numbers (`Shape::params`); empty = unused.
+    pub fn param_labels(self) -> [&'static str; 4] {
+        match self {
+            Kind::PrismN => ["辺の数", "", "", ""],
+            Kind::Pyramid => ["辺の数", "", "", ""],
+            Kind::Star => ["とがり数", "内側の比", "", ""],
+            Kind::Revolve => ["回す角度", "", "", ""],
+            _ => ["", "", "", ""],
+        }
+    }
+    pub fn default_params(self) -> [f32; 4] {
+        match self {
+            Kind::PrismN => [6.0, 0.0, 0.0, 0.0],
+            Kind::Pyramid => [4.0, 0.0, 0.0, 0.0],
+            Kind::Star => [5.0, 0.45, 0.0, 0.0],
+            Kind::Revolve => [360.0, 0.0, 0.0, 0.0],
+            _ => [0.0; 4],
         }
     }
 }
@@ -159,9 +297,19 @@ pub struct Shape {
     pub visible: bool,
     /// Corners of an `Extrude` outline, in the shape's own XY plane.
     pub outline: Vec<[f32; 2]>,
+    /// Kind-specific extra numbers (`Kind::param_labels`).
+    #[serde(default)]
+    pub params: [f32; 4],
+    /// Nodes (x, y, z, radius) of a `Curve` or `Sweep`, in the shape's own space.
+    #[serde(default)]
+    pub path: Vec<[f32; 4]>,
+    /// The top profile of a `Loft`.
+    #[serde(default)]
+    pub outline2: Vec<[f32; 2]>,
 }
 
-pub const MAX_OUTLINE: usize = 16;
+pub const MAX_OUTLINE: usize = 64;
+pub const MAX_PATH: usize = 32;
 
 impl Shape {
     pub fn new(kind: Kind, pos: [f32; 3], material: Material) -> Shape {
@@ -177,7 +325,74 @@ impl Shape {
             blend: 6.0,
             material,
             visible: true,
-            outline: vec![[-15.0, -15.0], [15.0, -15.0], [15.0, 15.0], [-15.0, 15.0]],
+            outline: kind.default_outline(),
+            params: kind.default_params(),
+            path: kind.default_path(),
+            outline2: kind.default_outline2(),
+        }
+    }
+
+    /// Half the size of the shape's box in its own axes, before scaling. Rough for the fancy kinds
+    /// (used for framing, picking and the gizmo).
+    pub fn local_half(&self) -> [f32; 3] {
+        let s = self.size;
+        let mx = |v: &[[f32; 2]], i: usize| v.iter().map(|p| p[i].abs()).fold(1.0_f32, f32::max);
+        match self.kind {
+            Kind::Sphere => [s[0]; 3],
+            Kind::Box | Kind::Wedge => [s[0] * 0.5, s[1] * 0.5, s[2] * 0.5],
+            Kind::Cylinder | Kind::Cone => [s[0], s[0], s[1] * 0.5],
+            Kind::Torus => [s[0] + s[1], s[0] + s[1], s[1]],
+            Kind::Extrude => [mx(&self.outline, 0), mx(&self.outline, 1), s[0] * 0.5],
+            Kind::Prism3 | Kind::PrismN | Kind::Star | Kind::Pyramid => [s[0], s[0], s[1] * 0.5],
+            Kind::Octa | Kind::Tetra | Kind::Hemi => [s[0]; 3],
+            Kind::Capsule => [s[0], s[0], s[1] * 0.5 + s[0]],
+            Kind::Tube => [s[0], s[0], s[2] * 0.5],
+            Kind::Revolve => {
+                let r = mx(&self.outline, 0);
+                [r, r, mx(&self.outline, 1)]
+            }
+            Kind::Loft => {
+                let x = mx(&self.outline, 0).max(mx(&self.outline2, 0));
+                let y = mx(&self.outline, 1).max(mx(&self.outline2, 1));
+                [x, y, s[0] * 0.5]
+            }
+            Kind::Curve | Kind::Sweep => {
+                let prof = if self.kind == Kind::Sweep { mx(&self.outline, 0).max(mx(&self.outline, 1)) } else { 0.0 };
+                let mut h = [1.0_f32; 3];
+                for p in &self.path {
+                    let r = if self.kind == Kind::Curve { p[3].abs() } else { prof };
+                    for i in 0..3 {
+                        h[i] = h[i].max(p[i].abs() + r);
+                    }
+                }
+                h
+            }
+        }
+    }
+}
+
+impl Kind {
+    /// The starting profile of kinds that use one.
+    pub fn default_outline(self) -> Vec<[f32; 2]> {
+        match self {
+            // half a rounded vase: x = radius, y = height
+            Kind::Revolve => vec![[0.0, -20.0], [16.0, -20.0], [20.0, -6.0], [12.0, 8.0], [9.0, 20.0], [0.0, 20.0]],
+            Kind::Sweep => vec![[-5.0, -5.0], [5.0, -5.0], [5.0, 5.0], [-5.0, 5.0]],
+            _ => vec![[-15.0, -15.0], [15.0, -15.0], [15.0, 15.0], [-15.0, 15.0]],
+        }
+    }
+    pub fn default_outline2(self) -> Vec<[f32; 2]> {
+        match self {
+            // a triangle on top of the square
+            Kind::Loft => vec![[-10.0, -8.0], [10.0, -8.0], [0.0, 12.0]],
+            _ => Vec::new(),
+        }
+    }
+    pub fn default_path(self) -> Vec<[f32; 4]> {
+        match self {
+            Kind::Curve => vec![[-30.0, 0.0, 0.0, 6.0], [0.0, 0.0, 22.0, 6.0], [30.0, 0.0, 0.0, 6.0]],
+            Kind::Sweep => vec![[-30.0, 0.0, 0.0, 1.0], [0.0, 0.0, 25.0, 1.0], [30.0, 0.0, 0.0, 1.0]],
+            _ => Vec::new(),
         }
     }
 }
@@ -488,6 +703,27 @@ impl Scene {
                 }
                 if s.outline.len() < 3 {
                     s.outline = vec![[-15.0, -15.0], [15.0, -15.0], [0.0, 15.0]];
+                }
+                for v in &mut s.params {
+                    fix(v, -5000.0, 5000.0, 0.0);
+                }
+                s.outline2.truncate(MAX_OUTLINE);
+                for p in &mut s.outline2 {
+                    fix(&mut p[0], -2000.0, 2000.0, 0.0);
+                    fix(&mut p[1], -2000.0, 2000.0, 0.0);
+                }
+                if s.kind.uses_outline2() && s.outline2.len() < 3 {
+                    s.outline2 = s.kind.default_outline2();
+                }
+                s.path.truncate(MAX_PATH);
+                for p in &mut s.path {
+                    fix(&mut p[0], -5000.0, 5000.0, 0.0);
+                    fix(&mut p[1], -5000.0, 5000.0, 0.0);
+                    fix(&mut p[2], -5000.0, 5000.0, 0.0);
+                    fix(&mut p[3], 0.1, 500.0, 5.0);
+                }
+                if s.kind.uses_path() && s.path.len() < 2 {
+                    s.path = s.kind.default_path();
                 }
             }
         }

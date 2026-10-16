@@ -7,16 +7,18 @@ use egui_wgpu::wgpu;
 use egui_wgpu::wgpu::util::DeviceExt;
 
 use crate::camera::{Camera, TAN_HALF_FOV};
-use crate::model::{Kind, MAX_GROUPS, MAX_SHAPES, Pick, Scene};
+use crate::model::{MAX_GROUPS, MAX_SHAPES, Pick, Scene};
 use crate::sdf::Prepared;
 
 const V4_GLOBALS: usize = 7;
 const V4_GROUPS: usize = V4_GLOBALS;
 const V4_SHAPES: usize = V4_GROUPS + MAX_GROUPS;
-const V4_PER_SHAPE: usize = 10;
+const V4_PER_SHAPE: usize = 12;
 const V4_POLY: usize = V4_SHAPES + MAX_SHAPES * V4_PER_SHAPE;
-const POLY_V4: usize = 128;
-const V4_BOUND: usize = V4_POLY + POLY_V4;
+const POLY_V4: usize = 512;
+const V4_PATH: usize = V4_POLY + POLY_V4;
+const PATH_V4: usize = 256;
+const V4_BOUND: usize = V4_PATH + PATH_V4;
 const V4_HOVER: usize = V4_BOUND + 1;
 const V4_ENV: usize = V4_HOVER + 1;
 const ENV_V4: usize = 11;
@@ -46,6 +48,7 @@ pub fn pack(scene: &Scene, cam: &Camera, size: [f32; 2], selected: Option<Pick>,
     let mut shape_n = 0usize;
     let mut group_n = 0usize;
     let mut poly_pts = 0usize;
+    let mut path_n = 0usize;
     let mut sel_first = -1.0_f32;
     let mut sel_count = 0.0_f32;
     let mut hover_first = -1.0_f32;
@@ -67,9 +70,12 @@ pub fn pack(scene: &Scene, cam: &Camera, size: [f32; 2], selected: Option<Pick>,
             put(&mut u, base + 3, [s.pos[0], s.pos[1], s.pos[2], p.min_scale()]);
             put(&mut u, base + 4, [s.scale[0], s.scale[1], s.scale[2], s.kind.id()]);
             put(&mut u, base + 5, [s.size[0], s.size[1], s.size[2], s.round]);
-            let (start, count) = if s.kind == Kind::Extrude && poly_pts + s.outline.len() <= POLY_V4 * 2 {
-                let start = poly_pts;
-                for (k, pt) in s.outline.iter().enumerate() {
+            let pack_outline = |pts: &[[f32; 2]], poly_pts: &mut usize, u: &mut Vec<f32>| -> (usize, usize) {
+                if pts.is_empty() || *poly_pts + pts.len() > POLY_V4 * 2 {
+                    return (0, 0);
+                }
+                let start = *poly_pts;
+                for (k, pt) in pts.iter().enumerate() {
                     let idx = start + k;
                     let slot = V4_POLY + idx / 2;
                     let off = (idx % 2) * 2;
@@ -77,12 +83,24 @@ pub fn pack(scene: &Scene, cam: &Camera, size: [f32; 2], selected: Option<Pick>,
                         dst.copy_from_slice(pt);
                     }
                 }
-                poly_pts += s.outline.len();
-                (start, s.outline.len())
+                *poly_pts += pts.len();
+                (start, pts.len())
+            };
+            let (start, count) = if s.kind.uses_outline() { pack_outline(&s.outline, &mut poly_pts, &mut u) } else { (0, 0) };
+            let (start2, count2) = if s.kind.uses_outline2() { pack_outline(&s.outline2, &mut poly_pts, &mut u) } else { (0, 0) };
+            let (pstart, pcount) = if s.kind.uses_path() && path_n + s.path.len() <= PATH_V4 {
+                let st = path_n;
+                for (k, pt) in s.path.iter().enumerate() {
+                    put(&mut u, V4_PATH + st + k, *pt);
+                }
+                path_n += s.path.len();
+                (st, s.path.len())
             } else {
                 (0, 0)
             };
             put(&mut u, base + 6, [s.op.sign(), s.blend, start as f32, count as f32]);
+            put(&mut u, base + 10, s.params);
+            put(&mut u, base + 11, [pstart as f32, pcount as f32, start2 as f32, count2 as f32]);
             put(&mut u, base + 7, [s.material.color[0], s.material.color[1], s.material.color[2], s.material.roughness]);
             let m = &s.material;
             put(&mut u, base + 8, [m.metallic, m.glow, m.glass, m.iridescence]);
@@ -164,12 +182,17 @@ struct Resources {
     bind: wgpu::BindGroup,
 }
 
+/// The shader is one program in several files: the core, the extra solids, the CAD features.
+pub fn shader_source() -> String {
+    [include_str!("shader.wgsl"), include_str!("shader_prims.wgsl"), include_str!("shader_cad.wgsl"), include_str!("shader_curve.wgsl")].join("\n")
+}
+
 /// Build the pipeline once; call at start-up with eframe's render state.
 pub fn install(rs: &egui_wgpu::RenderState) {
     let device = &rs.device;
     let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("yuracad"),
-        source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
+        source: wgpu::ShaderSource::Wgsl(shader_source().into()),
     });
     let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("yuracad"),
@@ -263,5 +286,26 @@ mod tests {
         assert_eq!(&u[24..28], &[1.0, 1.0, 0.0, 1.0], "one group, one shape, shape 0 selected");
         let e = V4_ENV * 4;
         assert!((u[e] - 1.0).abs() < 1e-6 && (u[e + 7] - 2.0).abs() < 1e-6, "exposure 1, two lights");
+    }
+}
+
+#[cfg(test)]
+mod shader_tests {
+    use super::*;
+
+    /// The shader must parse and validate, or the viewport shows nothing.
+    #[test]
+    fn the_shader_is_valid_wgsl() {
+        let src = shader_source();
+        let module = naga::front::wgsl::parse_str(&src).unwrap_or_else(|e| panic!("{}", e.emit_to_string(&src)));
+        let mut v = naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all());
+        if let Err(e) = v.validate(&module) {
+            panic!("{}", e.emit_to_string(&src));
+        }
+    }
+
+    #[test]
+    fn the_uniform_fits_in_the_usual_limit() {
+        assert!(UNIFORM_BYTES <= 65536, "{UNIFORM_BYTES}");
     }
 }
