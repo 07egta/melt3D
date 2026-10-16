@@ -324,7 +324,7 @@ struct Pool {
     bind: wgpu::BindGroup,
 }
 
-struct Resources {
+pub(crate) struct Resources {
     /// Draws the scene (into `target`).
     pipeline: wgpu::RenderPipeline,
     buffer: wgpu::Buffer,

@@ -579,31 +579,31 @@ mod tests {
         for kind in PatternKind::ALL {
             app.set_pattern_kind(&ctx, kind);
             assert!(app.scene.groups[0].pattern.is_some(), "{kind:?}");
-            ctx.run_ui(egui::RawInput::default(), |ui| {
-                egui::CentralPanel::default().show_inside(ui, |ui| app.pattern_section(ui, 0));
+            let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+                egui::CentralPanel::default().show(ui, |ui| app.pattern_section(ui, 0));
             });
         }
         app.clear_pattern();
-        ctx.run_ui(egui::RawInput::default(), |ui| {
-            egui::CentralPanel::default().show_inside(ui, |ui| app.pattern_section(ui, 0));
+        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+            egui::CentralPanel::default().show(ui, |ui| app.pattern_section(ui, 0));
         });
         app.sel = Some(Pick::Group(1));
         app.make_instance(&ctx);
         let Some(Pick::Group(c)) = app.sel else { panic!("the copy is selected") };
-        ctx.run_ui(egui::RawInput::default(), |ui| {
-            egui::CentralPanel::default().show_inside(ui, |ui| app.pattern_section(ui, c));
+        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+            egui::CentralPanel::default().show(ui, |ui| app.pattern_section(ui, c));
         });
         // a pattern that cannot find its line says so and still draws
         app.scene.groups[0].pattern = Some(Pattern::Path { source: 4242, count: 3, mode: PathMode::Even, step: 5.0, align: true });
-        ctx.run_ui(egui::RawInput::default(), |ui| {
-            egui::CentralPanel::default().show_inside(ui, |ui| app.pattern_section(ui, 0));
+        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+            egui::CentralPanel::default().show(ui, |ui| app.pattern_section(ui, 0));
         });
     }
 
     #[test]
     fn every_pattern_icon_draws() {
         let ctx = egui::Context::default();
-        ctx.run_ui(egui::RawInput::default(), |ui| {
+        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
             for k in PatternKind::ALL {
                 icon(k, ui.painter(), Rect::from_min_size(pos2(0.0, 0.0), vec2(34.0, 34.0)), Color32::WHITE);
             }
