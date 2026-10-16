@@ -479,21 +479,23 @@ fn group_dist(gr: vec4<f32>, p: vec3<f32>, amount: f32, rm: f32, mode: i32) -> v
             let rec = shape_rec(first + si);
             let misc = D(rec + 7);
             let op = misc.x;
+            let k = misc.y * amount;
             if (!gh) {
                 if (op < 0.5) { continue; }
-                g = shape_dist(shape_at(first + si), p);
-                gh = true;
-                continue;
+            } else {
+                if (op > -0.5 && op < 0.5) { continue; }
+                if (op < 1.5) {
+                    let bs = D(rec);
+                    let lb = length(p - bs.xyz) - bs.w;
+                    if (lb >= far_enough(select(-g, g, op > 0.0), k, rm, mode)) { continue; }
+                }
             }
-            if (op > -0.5 && op < 0.5) { continue; }
-            let k = misc.y * amount;
-            if (op < 1.5) {
-                let bs = D(rec);
-                let lb = length(p - bs.xyz) - bs.w;
-                if (lb >= far_enough(select(-g, g, op > 0.0), k, rm, mode)) { continue; }
-            }
+            // (one copy of shape_dist keeps the shader small: the driver compiles every call site)
             let b = shape_dist(shape_at(first + si), p);
-            if (op > 1.5) {
+            if (!gh) {
+                g = b;
+                gh = true;
+            } else if (op > 1.5) {
                 g = -smin_h(-g, -b, k, mode).x;
             } else if (op > 0.0) {
                 g = smin_h(g, b, k, mode).x;

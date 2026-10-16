@@ -33,6 +33,7 @@ mod model;
 mod perf;
 mod prims;
 mod panels;
+mod pattern;
 mod png;
 mod sdf;
 mod sketch;
