@@ -5,7 +5,7 @@ use egui::{Align2, Color32, FontId, Pos2, Rect, RichText, Sense, Stroke, Ui, vec
 
 use crate::app::{App, Tab};
 use crate::materials::{self, Category};
-use crate::model::{BlendMode, Kind, Light, MAX_LIGHTS, MAX_OUTLINE, MAX_SAVED, Material, Melt, Op, Pick, ROUND_MAX};
+use crate::model::{BlendMode, Corner, Kind, Light, MAX_LIGHTS, MAX_OUTLINE, MAX_SAVED, Material, Melt, Op, Pick, ROUND_MAX};
 use crate::sdf;
 use crate::view::targets;
 use crate::{glyphs, style};
@@ -417,6 +417,11 @@ impl App {
             });
             if sh.kind.can_round() {
                 style::labeled_slider(ui, "丸み", &mut sh.round, 0.0..=ROUND_MAX, "角やふちの丸さ (mm)。大きすぎても、形がこわれない所でとまります");
+                let styles = [("丸", "角を丸くする (フィレット)"), ("面取り", "角をななめに平らに切り落とす (チャンファー)")];
+                let now = Corner::ALL.iter().position(|c| *c == sh.corner);
+                if let Some(i) = style::segmented(ui, "corner_style", &styles, now, true) {
+                    sh.corner = Corner::ALL.get(i).copied().unwrap_or_default();
+                }
             }
             style::labeled_slider(ui, "とけあい", &mut sh.blend, 0.0..=80.0, "この形が、まわりとどのくらい溶けてくっつくか (グープ)");
             style::labeled_slider(ui, "ちゅうぐう\nシェル", &mut sh.shell, 0.0..=40.0, "中をくり抜いて、かべの あつさ(mm)だけ のこす。0 = つまっている");

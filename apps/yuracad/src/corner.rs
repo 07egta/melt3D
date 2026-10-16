@@ -364,4 +364,28 @@ mod tests {
         assert_eq!(odd.corner, Corner::Round);
         assert_eq!(odd.kind, Kind::Box);
     }
+
+    /// `YT_OUT=/tmp/showcase.yura cargo test -p yuracad dump_round_showcase -- --ignored` writes a scene
+    /// with every kind that can round, sharp / rounded / chamfered in three rows (for looking at).
+    #[test]
+    #[ignore]
+    fn dump_round_showcase() {
+        let out = std::env::var("YT_OUT").unwrap_or_else(|_| "/tmp/showcase.yura".into());
+        let mut sc = crate::model::Scene::default();
+        sc.groups[0].shapes.clear();
+        sc.groups[0].blend = 0.0;
+        let from: usize = std::env::var("YT_FROM").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
+        let count: usize = std::env::var("YT_COUNT").ok().and_then(|v| v.parse().ok()).unwrap_or(100);
+        let kinds: Vec<Kind> = Kind::ALL.iter().copied().filter(|k| k.can_round()).skip(from).take(count).collect();
+        for (col, &k) in kinds.iter().enumerate() {
+            for (row, (round, corner)) in [(0.0, Corner::Round), (5.0, Corner::Round), (5.0, Corner::Chamfer)].into_iter().enumerate() {
+                let mut sh = Shape::new(k, [col as f32 * 48.0, row as f32 * 48.0, 0.0], Material::default());
+                sh.blend = 0.0;
+                sh.round = round;
+                sh.corner = corner;
+                sc.groups[0].shapes.push(sh);
+            }
+        }
+        let _ = std::fs::write(out, sc.to_json());
+    }
 }
