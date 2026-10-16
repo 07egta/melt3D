@@ -296,7 +296,11 @@ pub fn ply(s: &Surface, name: &str) -> Result<Vec<u8>, String> {
     let colour = s.look.is_colour();
     let mesh = &s.mesh;
     let mut out = Vec::with_capacity(200 + mesh.positions.len() * 15 + mesh.triangles.len() * 13);
-    let mut head = format!("ply\nformat binary_little_endian 1.0\ncomment YURACAD {}\nelement vertex {}\nproperty float x\nproperty float y\nproperty float z\n", name.replace(['\n', '\r'], " "), mesh.positions.len());
+    let mut head = format!(
+        "ply\nformat binary_little_endian 1.0\ncomment YURACAD {}\nelement vertex {}\nproperty float x\nproperty float y\nproperty float z\n",
+        name.replace(['\n', '\r'], " "),
+        mesh.positions.len()
+    );
     if colour {
         head.push_str("property uchar red\nproperty uchar green\nproperty uchar blue\n");
     }
@@ -555,10 +559,10 @@ pub fn glb(s: &Surface, name: &str) -> Result<Vec<u8>, String> {
         "buffers": [{"byteLength": bin.len()}]
     });
     let mut text = serde_json::to_vec(&doc).map_err(|e| e.to_string())?;
-    while text.len() % 4 != 0 {
+    while !text.len().is_multiple_of(4) {
         text.push(b' ');
     }
-    while bin.len() % 4 != 0 {
+    while !bin.len().is_multiple_of(4) {
         bin.push(0);
     }
     let total = 12 + 8 + text.len() + 8 + bin.len();
@@ -602,10 +606,12 @@ pub mod tests {
         let n = u32::from_le_bytes([b[80], b[81], b[82], b[83]]) as usize;
         assert_eq!(b.len(), 84 + 50 * n);
         let f = |o: usize| f32::from_le_bytes([b[o], b[o + 1], b[o + 2], b[o + 3]]);
-        (0..n).map(|i| {
-            let o = 84 + 50 * i + 12;
-            [[f(o), f(o + 4), f(o + 8)], [f(o + 12), f(o + 16), f(o + 20)], [f(o + 24), f(o + 28), f(o + 32)]]
-        }).collect()
+        (0..n)
+            .map(|i| {
+                let o = 84 + 50 * i + 12;
+                [[f(o), f(o + 4), f(o + 8)], [f(o + 12), f(o + 16), f(o + 20)], [f(o + 24), f(o + 28), f(o + 32)]]
+            })
+            .collect()
     }
 
     /// The files of a ZIP written with `zip`, by name (reads stored and deflated entries).
@@ -632,7 +638,12 @@ pub mod tests {
             let lx = u16at(local + 28);
             let start = local + 30 + ln + lx;
             let body = &b[start..start + csize];
-            let data = if method == 0 { body.to_vec() } else { assert_eq!(method, 8); crate::export_deflate::tests::inflate(body) };
+            let data = if method == 0 {
+                body.to_vec()
+            } else {
+                assert_eq!(method, 8);
+                crate::export_deflate::tests::inflate(body)
+            };
             assert_eq!(data.len(), usize_);
             assert_eq!(crc32(&data) as usize, crc);
             files.push((name, data));
@@ -667,7 +678,11 @@ pub mod tests {
         assert!(s.starts_with("solid my_model_\n") && s.trim_end().ends_with("endsolid my_model_"));
         assert_eq!(s.matches("facet normal").count(), 4);
         assert_eq!(s.matches("endfacet").count(), 4);
-        let verts: Vec<Vec<f64>> = s.lines().filter(|l| l.trim_start().starts_with("vertex")).map(|l| l.split_whitespace().skip(1).map(|x| x.parse().unwrap()).collect()).collect();
+        let verts: Vec<Vec<f64>> = s
+            .lines()
+            .filter(|l| l.trim_start().starts_with("vertex"))
+            .map(|l| l.split_whitespace().skip(1).map(|x| x.parse().unwrap()).collect())
+            .collect();
         assert_eq!(verts.len(), 12);
         assert_eq!(verts[9], vec![2.5, 0.0, 0.0]);
     }
@@ -680,7 +695,9 @@ pub mod tests {
         assert_eq!(obj.lines().filter(|l| l.starts_with("v ")).count(), 4);
         assert_eq!(obj.lines().filter(|l| l.starts_with("f ")).count(), 4);
         assert!(obj.contains("mtllib x.mtl") && obj.contains("usemtl yura_0") && obj.contains("usemtl yura_1"));
-        assert!(obj.lines().filter(|l| l.starts_with("f ")).all(|l| l.split(' ').skip(1).all(|i| i.parse::<usize>().is_ok_and(|i| (1..=4).contains(&i)))));
+        assert!(
+            obj.lines().filter(|l| l.starts_with("f ")).all(|l| l.split(' ').skip(1).all(|i| i.parse::<usize>().is_ok_and(|i| (1..=4).contains(&i))))
+        );
         assert!(mtl.contains("newmtl yura_0\n") && mtl.contains("Kd 1.0000 0.0000 0.0000"));
         assert!(mtl.contains("Kd 0.0000 0.0000 1.0000") && mtl.contains("Pm 1.000"));
         // no colours: no mtl, no mtllib

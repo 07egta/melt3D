@@ -41,7 +41,16 @@ fn q_add(a: &mut Q, b: &Q) {
 
 fn q_eval(q: &Q, p: V) -> f64 {
     let [a2, ab, ac, ad, b2, bc, bd, c2, cd, d2] = *q;
-    let v = a2 * p[0] * p[0] + 2.0 * ab * p[0] * p[1] + 2.0 * ac * p[0] * p[2] + 2.0 * ad * p[0] + b2 * p[1] * p[1] + 2.0 * bc * p[1] * p[2] + 2.0 * bd * p[1] + c2 * p[2] * p[2] + 2.0 * cd * p[2] + d2;
+    let v = a2 * p[0] * p[0]
+        + 2.0 * ab * p[0] * p[1]
+        + 2.0 * ac * p[0] * p[2]
+        + 2.0 * ad * p[0]
+        + b2 * p[1] * p[1]
+        + 2.0 * bc * p[1] * p[2]
+        + 2.0 * bd * p[1]
+        + c2 * p[2] * p[2]
+        + 2.0 * cd * p[2]
+        + d2;
     v.max(0.0)
 }
 
@@ -49,15 +58,22 @@ fn q_eval(q: &Q, p: V) -> f64 {
 fn q_optimum(q: &Q) -> Option<V> {
     let a = [[q[0], q[1], q[2]], [q[1], q[4], q[5]], [q[2], q[5], q[7]]];
     let rhs = [-q[3], -q[6], -q[8]];
-    let det = a[0][0] * (a[1][1] * a[2][2] - a[1][2] * a[2][1]) - a[0][1] * (a[1][0] * a[2][2] - a[1][2] * a[2][0]) + a[0][2] * (a[1][0] * a[2][1] - a[1][1] * a[2][0]);
+    let det = a[0][0] * (a[1][1] * a[2][2] - a[1][2] * a[2][1]) - a[0][1] * (a[1][0] * a[2][2] - a[1][2] * a[2][0])
+        + a[0][2] * (a[1][0] * a[2][1] - a[1][1] * a[2][0]);
     let scale = a[0][0].abs().max(a[1][1].abs()).max(a[2][2].abs());
-    if !(det.abs() > 1e-9 * scale * scale * scale) || scale <= 0.0 {
+    if det.abs().is_nan() || det.abs() <= 1e-9 * scale * scale * scale || scale <= 0.0 {
         return None;
     }
     let inv = 1.0 / det;
-    let x = (rhs[0] * (a[1][1] * a[2][2] - a[1][2] * a[2][1]) - a[0][1] * (rhs[1] * a[2][2] - a[1][2] * rhs[2]) + a[0][2] * (rhs[1] * a[2][1] - a[1][1] * rhs[2])) * inv;
-    let y = (a[0][0] * (rhs[1] * a[2][2] - a[1][2] * rhs[2]) - rhs[0] * (a[1][0] * a[2][2] - a[1][2] * a[2][0]) + a[0][2] * (a[1][0] * rhs[2] - rhs[1] * a[2][0])) * inv;
-    let z = (a[0][0] * (a[1][1] * rhs[2] - rhs[1] * a[2][1]) - a[0][1] * (a[1][0] * rhs[2] - rhs[1] * a[2][0]) + rhs[0] * (a[1][0] * a[2][1] - a[1][1] * a[2][0])) * inv;
+    let x = (rhs[0] * (a[1][1] * a[2][2] - a[1][2] * a[2][1]) - a[0][1] * (rhs[1] * a[2][2] - a[1][2] * rhs[2])
+        + a[0][2] * (rhs[1] * a[2][1] - a[1][1] * rhs[2]))
+        * inv;
+    let y = (a[0][0] * (rhs[1] * a[2][2] - a[1][2] * rhs[2]) - rhs[0] * (a[1][0] * a[2][2] - a[1][2] * a[2][0])
+        + a[0][2] * (a[1][0] * rhs[2] - rhs[1] * a[2][0]))
+        * inv;
+    let z = (a[0][0] * (a[1][1] * rhs[2] - rhs[1] * a[2][1]) - a[0][1] * (a[1][0] * rhs[2] - rhs[1] * a[2][0])
+        + rhs[0] * (a[1][0] * a[2][1] - a[1][1] * a[2][0]))
+        * inv;
     let p = [x, y, z];
     if p.iter().all(|v| v.is_finite()) { Some(p) } else { None }
 }
@@ -103,7 +119,19 @@ impl Work {
             }
         }
         let n = tris.len();
-        Work { pos, tris, pinned, frozen, alive_tri: vec![true; n], alive_vert: vec![true; nv], vtris, quad, ver: vec![0; nv], tri_count: n, quantum: quantum.max(1e-30) }
+        Work {
+            pos,
+            tris,
+            pinned,
+            frozen,
+            alive_tri: vec![true; n],
+            alive_vert: vec![true; nv],
+            vtris,
+            quad,
+            ver: vec![0; nv],
+            tri_count: n,
+            quantum: quantum.max(1e-30),
+        }
     }
 
     fn p(&self, v: u32) -> V {
@@ -173,7 +201,13 @@ impl Work {
             let d = sub(self.p(x), self.p(y));
             let len = dot(d, d) as f32;
             let bucket = (cost / self.quantum).min(1.0e18) as u64;
-            heap.push((Reverse((bucket, len.to_bits())), x, y, self.ver.get(x as usize).copied().unwrap_or(0), self.ver.get(y as usize).copied().unwrap_or(0)));
+            heap.push((
+                Reverse((bucket, len.to_bits())),
+                x,
+                y,
+                self.ver.get(x as usize).copied().unwrap_or(0),
+                self.ver.get(y as usize).copied().unwrap_or(0),
+            ));
         }
     }
 
@@ -324,13 +358,13 @@ impl Work {
                 self.push_edge(&mut heap, keep, w);
             }
             done += 1;
-            if done % 4096 == 0 {
-                if let Some(p) = prog {
-                    if p.cancelled() {
-                        return Err(CANCELLED.into());
-                    }
-                    p.set((start - self.tri_count.min(start)) as f64 / (start - target.min(start)).max(1) as f64);
+            if done.is_multiple_of(4096)
+                && let Some(p) = prog
+            {
+                if p.cancelled() {
+                    return Err(CANCELLED.into());
                 }
+                p.set((start - self.tri_count.min(start)) as f64 / (start - target.min(start)).max(1) as f64);
             }
         }
         Ok(())
@@ -348,7 +382,7 @@ fn plane_of(pos: &[V], t: &[u32; 3]) -> Option<(V, f64, f64)> {
     let c = *pos.get(t[2] as usize)?;
     let n = cross(sub(b, a), sub(c, a));
     let l = dot(n, n).sqrt();
-    if !(l > 1e-300) || !l.is_finite() {
+    if l.is_nan() || l <= 1e-300 || !l.is_finite() {
         return None;
     }
     let u = [n[0] / l, n[1] / l, n[2] / l];
@@ -557,17 +591,22 @@ fn tiled(mesh: &mut TriMesh, base_pinned: &[bool], max_cost: f64, quantum: f64, 
         let mut lpin: Vec<bool> = Vec::new();
         let mut ltris: Vec<[u32; 3]> = Vec::new();
         let mut lfrozen: Vec<bool> = Vec::new();
-        let take = |v: u32, local_of: &mut crate::export_mesh::FastMap<u32, u32>, gl: &mut Vec<u32>, lpos: &mut Vec<V>, lpin: &mut Vec<bool>| -> u32 {
-            *local_of.entry(v).or_insert_with(|| {
-                gl.push(v);
-                lpos.push(mesh_ref.positions.get(v as usize).copied().unwrap_or([0.0; 3]));
-                lpin.push(pinned_ref.get(v as usize).copied().unwrap_or(true));
-                (gl.len() - 1) as u32
-            })
-        };
+        let take =
+            |v: u32, local_of: &mut crate::export_mesh::FastMap<u32, u32>, gl: &mut Vec<u32>, lpos: &mut Vec<V>, lpin: &mut Vec<bool>| -> u32 {
+                *local_of.entry(v).or_insert_with(|| {
+                    gl.push(v);
+                    lpos.push(mesh_ref.positions.get(v as usize).copied().unwrap_or([0.0; 3]));
+                    lpin.push(pinned_ref.get(v as usize).copied().unwrap_or(true));
+                    (gl.len() - 1) as u32
+                })
+            };
         for ti in interior {
             if let Some(t) = mesh_ref.triangles.get(*ti as usize) {
-                let l = [take(t[0], &mut local_of, &mut gl, &mut lpos, &mut lpin), take(t[1], &mut local_of, &mut gl, &mut lpos, &mut lpin), take(t[2], &mut local_of, &mut gl, &mut lpos, &mut lpin)];
+                let l = [
+                    take(t[0], &mut local_of, &mut gl, &mut lpos, &mut lpin),
+                    take(t[1], &mut local_of, &mut gl, &mut lpos, &mut lpin),
+                    take(t[2], &mut local_of, &mut gl, &mut lpos, &mut lpin),
+                ];
                 ltris.push(l);
                 lfrozen.push(false);
             }
@@ -583,7 +622,11 @@ fn tiled(mesh: &mut TriMesh, base_pinned: &[bool], max_cost: f64, quantum: f64, 
                     && seen.insert(*ti)
                     && let Some(t) = mesh_ref.triangles.get(*ti as usize)
                 {
-                    let l = [take(t[0], &mut local_of, &mut gl, &mut lpos, &mut lpin), take(t[1], &mut local_of, &mut gl, &mut lpos, &mut lpin), take(t[2], &mut local_of, &mut gl, &mut lpos, &mut lpin)];
+                    let l = [
+                        take(t[0], &mut local_of, &mut gl, &mut lpos, &mut lpin),
+                        take(t[1], &mut local_of, &mut gl, &mut lpos, &mut lpin),
+                        take(t[2], &mut local_of, &mut gl, &mut lpos, &mut lpin),
+                    ];
                     ltris.push(l);
                     lfrozen.push(true);
                 }
@@ -591,10 +634,10 @@ fn tiled(mesh: &mut TriMesh, base_pinned: &[bool], max_cost: f64, quantum: f64, 
         }
         // vertices of other tiles are fixed whatever happens
         for (k, g) in gl.iter().enumerate() {
-            if vtile.get(*g as usize) != jobs_ref.get(i).map(|j| &j.0) {
-                if let Some(p) = lpin.get_mut(k) {
-                    *p = true;
-                }
+            if vtile.get(*g as usize) != jobs_ref.get(i).map(|j| &j.0)
+                && let Some(p) = lpin.get_mut(k)
+            {
+                *p = true;
             }
         }
         let mut w = Work::new(lpos, ltris, lpin, lfrozen, quantum);
@@ -606,7 +649,11 @@ fn tiled(mesh: &mut TriMesh, base_pinned: &[bool], max_cost: f64, quantum: f64, 
             if w.frozen.get(k).copied().unwrap_or(true) || !w.alive_tri.get(k).copied().unwrap_or(false) {
                 continue;
             }
-            let g = [gl.get(t[0] as usize).copied().unwrap_or(0), gl.get(t[1] as usize).copied().unwrap_or(0), gl.get(t[2] as usize).copied().unwrap_or(0)];
+            let g = [
+                gl.get(t[0] as usize).copied().unwrap_or(0),
+                gl.get(t[1] as usize).copied().unwrap_or(0),
+                gl.get(t[2] as usize).copied().unwrap_or(0),
+            ];
             tris.push(g);
         }
         for (k, g) in gl.iter().enumerate() {
@@ -740,7 +787,14 @@ mod tests {
         let before = m.triangles.len();
         let v0 = melt::volume(&m);
         let prog = Progress::new();
-        reduce(&mut m, &mut Carry::default(), Reduce { target_tris: 0, max_error: 0.005, quantum: 1e-7, tile_error: 0.002 }, 4, &prog.slice(0.0, 1.0)).unwrap();
+        reduce(
+            &mut m,
+            &mut Carry::default(),
+            Reduce { target_tris: 0, max_error: 0.005, quantum: 1e-7, tile_error: 0.002 },
+            4,
+            &prog.slice(0.0, 1.0),
+        )
+        .unwrap();
         assert!(melt::is_watertight(&m));
         assert!(m.triangles.len() < before / 20, "{} of {before}", m.triangles.len());
         let v1 = melt::volume(&m);
@@ -763,7 +817,14 @@ mod tests {
         let v0 = melt::volume(&m);
         let before = m.triangles.len();
         let prog = Progress::new();
-        reduce(&mut m, &mut Carry::default(), Reduce { target_tris: before / 10, max_error: f64::INFINITY, quantum: 1e-7, tile_error: 0.002 }, 4, &prog.slice(0.0, 1.0)).unwrap();
+        reduce(
+            &mut m,
+            &mut Carry::default(),
+            Reduce { target_tris: before / 10, max_error: f64::INFINITY, quantum: 1e-7, tile_error: 0.002 },
+            4,
+            &prog.slice(0.0, 1.0),
+        )
+        .unwrap();
         assert!(m.triangles.len() <= before / 10 + 2, "{} vs {}", m.triangles.len(), before / 10);
         assert!(melt::is_watertight(&m));
         let v1 = melt::volume(&m);
@@ -778,7 +839,14 @@ mod tests {
         let v0 = melt::volume(&m);
         let before = m.triangles.len();
         let prog = Progress::new();
-        reduce(&mut m, &mut Carry::default(), Reduce { target_tris: 0, max_error: 0.002, quantum: 1e-8, tile_error: 0.002 }, 4, &prog.slice(0.0, 1.0)).unwrap();
+        reduce(
+            &mut m,
+            &mut Carry::default(),
+            Reduce { target_tris: 0, max_error: 0.002, quantum: 1e-8, tile_error: 0.002 },
+            4,
+            &prog.slice(0.0, 1.0),
+        )
+        .unwrap();
         assert!(melt::is_watertight(&m));
         assert!(m.triangles.len() < before / 10, "{} of {before}", m.triangles.len());
         let v1 = melt::volume(&m);

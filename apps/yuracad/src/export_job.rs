@@ -326,7 +326,11 @@ fn classify(looks: &[Mat8], max: usize) -> (Vec<u16>, usize) {
         let mut class = Vec::with_capacity(looks.len());
         let mut ok = true;
         for m in looks {
-            let key = (u32::from(m.rgb[0]) >> shift) | ((u32::from(m.rgb[1]) >> shift) << 8) | ((u32::from(m.rgb[2]) >> shift) << 16) | (u32::from(m.rough >> (shift + 1)) << 24) | (u32::from(m.metal >> (shift + 1)) << 28);
+            let key = (u32::from(m.rgb[0]) >> shift)
+                | ((u32::from(m.rgb[1]) >> shift) << 8)
+                | ((u32::from(m.rgb[2]) >> shift) << 16)
+                | (u32::from(m.rough >> (shift + 1)) << 24)
+                | (u32::from(m.metal >> (shift + 1)) << 28);
             let next = map.len();
             let c = *map.entry(key).or_insert(next as u16);
             if map.len() > max {
@@ -380,7 +384,13 @@ fn finish_look(mesh: &TriMesh, carry: &Carry) -> Look {
         .iter()
         .map(|t| {
             let c = [class_of(t[0]), class_of(t[1]), class_of(t[2])];
-            if c[0] == c[1] || c[0] == c[2] { c[0] } else if c[1] == c[2] { c[1] } else { c[0] }
+            if c[0] == c[1] || c[0] == c[2] {
+                c[0]
+            } else if c[1] == c[2] {
+                c[1]
+            } else {
+                c[0]
+            }
         })
         .collect();
     if palette.len() <= 1 {
@@ -425,7 +435,19 @@ pub fn build(scene: &Scene, sel: Option<Pick>, o: &Options, prog: &Progress) -> 
     let complete = meshed.stats.complete;
     if timing {
         let s = meshed.stats;
-        eprintln!("  mesh {:.2}s (find {:.2} sample {:.2} join {:.2} build {:.2}) blocks {} cells {} evals {} ({:.1}/cell) tris {}", t_start.elapsed().as_secs_f64(), s.secs[0], s.secs[1], s.secs[2], s.secs[3], s.blocks, s.cells, s.evals, s.evals as f64 / s.cells.max(1) as f64, meshed.mesh.triangles.len());
+        eprintln!(
+            "  mesh {:.2}s (find {:.2} sample {:.2} join {:.2} build {:.2}) blocks {} cells {} evals {} ({:.1}/cell) tris {}",
+            t_start.elapsed().as_secs_f64(),
+            s.secs[0],
+            s.secs[1],
+            s.secs[2],
+            s.secs[3],
+            s.blocks,
+            s.cells,
+            s.evals,
+            s.evals as f64 / s.cells.max(1) as f64,
+            meshed.mesh.triangles.len()
+        );
     }
     let t_after = Instant::now();
     let colour = o.colour && o.format.has_colour();
@@ -447,7 +469,9 @@ pub fn build(scene: &Scene, sel: Option<Pick>, o: &Options, prog: &Progress) -> 
     let reduce = match o.lighten {
         Lighten::Off => None,
         Lighten::Flat => Some(Reduce { target_tris: 0, max_error: 0.02 * tol, quantum: (0.002 * tol).powi(2), tile_error: 0.02 * tol }),
-        Lighten::Target(n) => Some(Reduce { target_tris: n as usize, max_error: f64::INFINITY, quantum: (0.002 * tol).powi(2), tile_error: 0.02 * tol }),
+        Lighten::Target(n) => {
+            Some(Reduce { target_tris: n as usize, max_error: f64::INFINITY, quantum: (0.002 * tol).powi(2), tile_error: 0.02 * tol })
+        }
     };
     if let Some(r) = reduce {
         prog.set_phase(4);
@@ -517,6 +541,7 @@ pub fn serialize(b: &Built, o: &Options, path: &Path) -> Result<Vec<(PathBuf, Ve
 
 /// What a finished export tells the person.
 #[derive(Clone, Debug)]
+#[allow(dead_code)]
 pub struct Report {
     pub path: PathBuf,
     pub tris: usize,
@@ -527,7 +552,8 @@ pub struct Report {
     pub closed: bool,
 }
 
-pub const NAMES: [&str; 6] = ["空間をさがしています", "形をはかっています", "面をつないでいます", "なめらかにしています", "三角形をへらしています", "色をしらべています"];
+pub const NAMES: [&str; 6] =
+    ["空間をさがしています", "形をはかっています", "面をつないでいます", "なめらかにしています", "三角形をへらしています", "色をしらべています"];
 
 /// An export running on its own thread.
 pub struct Job {
@@ -591,7 +617,15 @@ impl Job {
     }
 }
 
-fn run(scene: &Scene, sel: Option<Pick>, o: &Options, path: &Path, prog: &Progress, writing: &std::sync::atomic::AtomicBool, t0: Instant) -> Result<Report, String> {
+fn run(
+    scene: &Scene,
+    sel: Option<Pick>,
+    o: &Options,
+    path: &Path,
+    prog: &Progress,
+    writing: &std::sync::atomic::AtomicBool,
+    t0: Instant,
+) -> Result<Report, String> {
     let built = build(scene, sel, o, prog)?;
     writing.store(true, std::sync::atomic::Ordering::Relaxed);
     prog.set(0.95);
@@ -605,13 +639,22 @@ fn run(scene: &Scene, sel: Option<Pick>, o: &Options, path: &Path, prog: &Progre
         bytes += data.len() as u64;
     }
     prog.set(1.0);
-    Ok(Report { path: path.to_path_buf(), tris: built.tris, verts: built.verts, bytes, secs: t0.elapsed().as_secs_f64(), size_mm: built.size_mm, closed: built.closed })
+    Ok(Report {
+        path: path.to_path_buf(),
+        tris: built.tris,
+        verts: built.verts,
+        bytes,
+        secs: t0.elapsed().as_secs_f64(),
+        size_mm: built.size_mm,
+        closed: built.closed,
+    })
 }
 
 // ---------------------------------------------------------------- print check
 
 /// What a person wants to know before printing.
 #[derive(Clone, Debug, Default)]
+#[allow(dead_code)]
 pub struct PrintCheck {
     /// Width, depth and height of the model in mm.
     pub size: [f64; 3],
@@ -654,7 +697,9 @@ pub fn print_check(scene: &Scene, sel: Option<Pick>, o: &Options, prog: &Progres
     for p in &mesh.positions {
         zmin = zmin.min(p[2]);
     }
-    let corners = |t: &[u32; 3]| -> Option<[[f64; 3]; 3]> { Some([*mesh.positions.get(t[0] as usize)?, *mesh.positions.get(t[1] as usize)?, *mesh.positions.get(t[2] as usize)?]) };
+    let corners = |t: &[u32; 3]| -> Option<[[f64; 3]; 3]> {
+        Some([*mesh.positions.get(t[0] as usize)?, *mesh.positions.get(t[1] as usize)?, *mesh.positions.get(t[2] as usize)?])
+    };
     let mut vnormal = vec![[0.0f64; 3]; mesh.positions.len()];
     let mut varea = vec![0.0f64; mesh.positions.len()];
     for t in &mesh.triangles {
@@ -741,11 +786,12 @@ impl Estimate {
         3.2 * self.area / (tolerance * tolerance).max(1e-9)
     }
     /// About how many seconds the export takes.
-    pub fn secs(&self, tolerance: f64) -> f64 {
+    pub fn secs(&self, tolerance: f64, lighten: bool) -> f64 {
         let cells = self.area / (tolerance * tolerance).max(1e-9);
         let work = cells * self.evals_per_cell * self.secs_per_eval / threads() as f64;
-        // plus joining the faces, lightening and writing
-        1.0 + work * 1.0 + cells * 3.0e-7
+        // plus joining the faces, lightening (about a microsecond a triangle on 4 threads) and writing
+        let light = if lighten { cells * 2.0 * 1.0e-6 * 4.0 / threads() as f64 } else { 0.0 };
+        1.0 + work + cells * 3.0e-7 + light
     }
 }
 
@@ -760,7 +806,11 @@ pub fn estimate(scene: &Scene, sel: Option<Pick>, o: &Options, prog: &Progress) 
     let secs = t0.elapsed().as_secs_f64();
     let mut area = 0.0;
     for t in &m.mesh.triangles {
-        let (Some(a), Some(b), Some(c)) = (m.mesh.positions.get(t[0] as usize), m.mesh.positions.get(t[1] as usize), m.mesh.positions.get(t[2] as usize)) else { continue };
+        let (Some(a), Some(b), Some(c)) =
+            (m.mesh.positions.get(t[0] as usize), m.mesh.positions.get(t[1] as usize), m.mesh.positions.get(t[2] as usize))
+        else {
+            continue;
+        };
         area += tri_normal_area([*a, *b, *c]).1;
     }
     Ok(Estimate {
@@ -881,7 +931,10 @@ mod tests {
         assert_eq!(look.palette[blue_i].metal, 255);
         // every triangle on the left is red and on the right blue
         for (i, t) in b.surface.mesh.triangles.iter().enumerate() {
-            let x = (b.surface.mesh.positions[t[0] as usize][0] + b.surface.mesh.positions[t[1] as usize][0] + b.surface.mesh.positions[t[2] as usize][0]) / 3.0;
+            let x = (b.surface.mesh.positions[t[0] as usize][0]
+                + b.surface.mesh.positions[t[1] as usize][0]
+                + b.surface.mesh.positions[t[2] as usize][0])
+                / 3.0;
             assert_eq!(usize::from(look.tri_class[i]), if x < 0.0 { red_i } else { blue_i });
         }
         // the 3MF carries both colours
@@ -1045,7 +1098,7 @@ mod tests {
         let b = build(&Scene::default(), None, &Options { lighten: Lighten::Off, tolerance: 0.25, ..Options::default() }, &Progress::new()).unwrap();
         let guess = e.raw_tris(0.25);
         assert!(guess > b.tris as f64 * 0.6 && guess < b.tris as f64 * 1.6, "guess {guess} vs {}", b.tris);
-        assert!(e.secs(0.1) > e.secs(0.5));
+        assert!(e.secs(0.1, false) > e.secs(0.5, false) && e.secs(0.1, true) > e.secs(0.1, false));
     }
 
     /// Timings on a few real models: `cargo test -p yuracad --release bench_models -- --ignored --nocapture`.
@@ -1073,7 +1126,10 @@ mod tests {
             if !only.is_empty() && !name.contains(&only) {
                 continue;
             }
-            let tols: Vec<f32> = std::env::var("YURA_BENCH_TOL").ok().map(|t| t.split(',').filter_map(|x| x.parse().ok()).collect()).unwrap_or_else(|| vec![0.2, 0.1, 0.05]);
+            let tols: Vec<f32> = std::env::var("YURA_BENCH_TOL")
+                .ok()
+                .map(|t| t.split(',').filter_map(|x| x.parse().ok()).collect())
+                .unwrap_or_else(|| vec![0.2, 0.1, 0.05]);
             for tol in tols {
                 for (lighten, tag) in [(Lighten::Off, "raw "), (Lighten::Flat, "flat")] {
                     if std::env::var_os("YURA_BENCH_FLAT_ONLY").is_some() && lighten == Lighten::Off {
@@ -1083,7 +1139,15 @@ mod tests {
                     let prog = Progress::new();
                     let t0 = Instant::now();
                     match build(sc, None, &o, &prog) {
-                        Ok(b) => println!("{name:40} tol {tol:5} {tag}: {:8.2}s  {:9} tris  closed {}  size {:.0}x{:.0}x{:.0}", t0.elapsed().as_secs_f64(), b.tris, b.closed, b.size_mm[0], b.size_mm[1], b.size_mm[2]),
+                        Ok(b) => println!(
+                            "{name:40} tol {tol:5} {tag}: {:8.2}s  {:9} tris  closed {}  size {:.0}x{:.0}x{:.0}",
+                            t0.elapsed().as_secs_f64(),
+                            b.tris,
+                            b.closed,
+                            b.size_mm[0],
+                            b.size_mm[1],
+                            b.size_mm[2]
+                        ),
                         Err(e) => println!("{name:40} tol {tol:5} {tag}: error {e} after {:.2}s", t0.elapsed().as_secs_f64()),
                     }
                 }
