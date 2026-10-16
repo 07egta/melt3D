@@ -87,6 +87,7 @@ fn kind_words(k: Kind) -> &'static str {
         Kind::Loft => "loft ろふと",
         Kind::Curve => "curve line tube せん かーぶ",
         Kind::Sweep => "sweep すいーぷ",
+        Kind::Mesh => "mesh stl obj import めっしゅ",
     }
 }
 

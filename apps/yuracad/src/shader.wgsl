@@ -229,6 +229,8 @@ fn shape_dist(s: Shape, p: vec3<f32>) -> f32 {
         r = sg * sqrt(min(dot(ca, ca), dot(cb, cb)));
     } else if (kind == 18) {
         r = curve_dist(s, q);
+    } else if (kind == 20) {
+        r = mesh_dist(s, q);
     } else if (kind >= 16) {
         r = cad_dist(s, q, kind);
     } else if (kind >= 6) {

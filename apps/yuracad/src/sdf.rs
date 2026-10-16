@@ -67,6 +67,8 @@ pub struct Prepared {
     pub poly_limit: f32,
     /// Half the shape's size along the gradient direction (0 when there is no gradient).
     pub grad_half: f32,
+    /// The baked distances of an imported mesh (shared with the scene, never copied).
+    pub volume: Option<crate::mesh::SharedVolume>,
 }
 
 /// The shapes of one group, ready to measure (a group shown through several instances, or by
@@ -138,6 +140,7 @@ impl Prepared {
             poly_orient,
             poly_limit,
             grad_half,
+            volume: if s.kind == Kind::Mesh { s.volume.clone() } else { None },
         }
     }
     /// The point in the shape's own space.
@@ -226,6 +229,8 @@ impl Prepared {
                 w[0].max(w[1]).min(0.0) + w[0].max(0.0).hypot(w[1].max(0.0)) - r
             }
             Kind::Curve => crate::curve::distance(self, q),
+            // (the volume is in the mesh's own units, so a scaled shape is handled by `distance`)
+            Kind::Mesh => self.volume.as_ref().map_or(1.0e4, |v| v.distance(q)),
             k if k.id() < 16.0 => crate::prims::distance(self, q),
             _ => crate::cad::distance(self, q),
         }

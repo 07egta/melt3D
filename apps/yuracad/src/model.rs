@@ -3,6 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::mesh::SharedVolume;
 use crate::pattern::{Pattern, Xform};
 
 fn is_zero(v: &u32) -> bool {
@@ -45,6 +46,9 @@ pub enum Kind {
     Curve,
     /// `outline` pulled along `path`.
     Sweep,
+    /// An imported mesh: a baked signed distance volume (`Shape::volume`, `mesh.rs`). It needs a
+    /// file, so it is not in `Kind::ALL` or the add menus; the import card makes it.
+    Mesh,
 }
 
 impl Kind {
@@ -99,6 +103,7 @@ impl Kind {
             Kind::Loft => "ロフト",
             Kind::Curve => "線",
             Kind::Sweep => "スイープ",
+            Kind::Mesh => "メッシュ",
         }
     }
     pub fn id(self) -> f32 {
@@ -123,12 +128,13 @@ impl Kind {
             Kind::Loft => 17.0,
             Kind::Curve => 18.0,
             Kind::Sweep => 19.0,
+            Kind::Mesh => 20.0,
         }
     }
     /// Does `Shape::round` change this kind? A sphere, a capsule, a torus and a curve are round
     /// all over already, so they ignore it.
     pub fn can_round(self) -> bool {
-        !matches!(self, Kind::Sphere | Kind::Capsule | Kind::Torus | Kind::Curve)
+        !matches!(self, Kind::Sphere | Kind::Capsule | Kind::Torus | Kind::Curve | Kind::Mesh)
     }
     /// Does the shape read `Shape::outline` (a 2D profile)?
     pub fn uses_outline(self) -> bool {
@@ -161,6 +167,8 @@ impl Kind {
             Kind::Loft => ["高さ", "", ""],
             Kind::Curve => ["", "", ""],
             Kind::Sweep => ["", "", ""],
+            // (the size is the model's size in mm, shown by the mesh inspector, not edited)
+            Kind::Mesh => ["", "", ""],
         }
     }
     pub fn default_size(self) -> [f32; 3] {
@@ -185,6 +193,7 @@ impl Kind {
             Kind::Loft => [40.0, 1.0, 1.0],
             Kind::Curve => [1.0, 1.0, 1.0],
             Kind::Sweep => [1.0, 1.0, 1.0],
+            Kind::Mesh => [1.0, 1.0, 1.0],
         }
     }
     /// Labels of the four extra numbers (`Shape::params`); empty = unused.
@@ -387,6 +396,13 @@ pub struct Shape {
     /// A number patterns and linked copies find this shape by (0 = none; see `Scene::ensure_shape_uid`).
     #[serde(default, skip_serializing_if = "is_zero")]
     pub uid: u32,
+    /// The baked distance volume of a `Kind::Mesh` shape, in the shape's own space. Shapes copied
+    /// from each other share it (it is never copied), and scenes compare it by pointer.
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "crate::mesh::lenient_volume")]
+    pub volume: Option<SharedVolume>,
+    /// Where an imported mesh came from (its file name), shown in the inspector.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub source: String,
 }
 
 /// The style of a shape's cut edges: what `Shape::round` makes of them.
@@ -433,7 +449,19 @@ impl Shape {
             shell: 0.0,
             corner: Corner::Round,
             uid: 0,
+            volume: None,
+            source: String::new(),
         }
+    }
+
+    /// An imported mesh: `volume` is its baked distances, `model_size` its size in mm.
+    pub fn mesh(volume: SharedVolume, name: &str, source: &str, model_size: [f32; 3], pos: [f32; 3], material: Material) -> Shape {
+        let mut s = Shape::new(Kind::Mesh, pos, material);
+        s.name = name.to_string();
+        s.source = source.to_string();
+        s.size = model_size;
+        s.volume = Some(volume);
+        s
     }
 
     /// Half the size of the shape's box in its own axes, before scaling. Rough for the fancy kinds
@@ -463,6 +491,14 @@ impl Shape {
                 [x, y, s[0] * 0.5]
             }
             Kind::Curve => crate::curve::half_extent(&self.path, &self.params),
+            // the box of the volume's nodes as seen from the shape's origin (the origin need not be its middle)
+            Kind::Mesh => match &self.volume {
+                Some(v) => {
+                    let (lo, hi) = v.bounds();
+                    [0, 1, 2].map(|a| lo[a].abs().max(hi[a].abs()).max(0.5))
+                }
+                None => [s[0] * 0.5, s[1] * 0.5, s[2] * 0.5],
+            },
             Kind::Sweep => {
                 let prof = mx(&self.outline, 0).max(mx(&self.outline, 1)) * 1.5;
                 let mut h = [1.0_f32; 3];
@@ -772,19 +808,37 @@ impl Scene {
         self.groups.iter().map(|g| g.shapes.len()).sum()
     }
     pub fn to_json(&self) -> String {
+        // (a volume used by several shapes is written once: see mesh.rs)
+        let _guard = crate::mesh::SaveGuard::begin();
         serde_json::to_string_pretty(self).unwrap_or_default()
     }
     /// A scene from JSON, with every number made safe (a damaged or hostile file never panics).
     pub fn from_json(text: &str) -> Result<Scene, String> {
-        let mut s: Scene = serde_json::from_str(text).map_err(|e| e.to_string())?;
-        s.sanitize();
-        Ok(s)
+        Scene::from_json_notes(text).map(|(s, _)| s)
+    }
+    /// `from_json`, and short Japanese notes about what had to be dropped (meshes that were
+    /// damaged or too many).
+    pub fn from_json_notes(text: &str) -> Result<(Scene, Vec<String>), String> {
+        let mut s: Scene = {
+            let _guard = crate::mesh::LoadGuard::begin();
+            serde_json::from_str(text).map_err(|e| e.to_string())?
+        };
+        let notes = s.sanitize_notes();
+        Ok((s, notes))
     }
     /// Clamp every number to a range the renderer and the mesher cope with.
     pub fn sanitize(&mut self) {
+        let _ = self.sanitize_notes();
+    }
+    /// `sanitize`, saying what it had to take out (see `from_json_notes`).
+    pub fn sanitize_notes(&mut self) -> Vec<String> {
         let fix = |v: &mut f32, lo: f32, hi: f32, d: f32| {
             *v = if v.is_finite() { v.clamp(lo, hi) } else { d };
         };
+        let (mut lost, mut over) = (0usize, 0usize);
+        let mut vol_shapes = 0usize;
+        let mut vol_nodes = 0usize;
+        let mut vol_seen: Vec<usize> = Vec::new();
         fix(&mut self.melt.amount, 0.0, 10.0, 1.0);
         fix(&mut self.melt.drip, 0.0, 40.0, 0.0);
         fix(&mut self.melt.ripple, 0.3, 4.0, 1.0);
@@ -854,8 +908,41 @@ impl Scene {
                 if s.kind.uses_path() && s.path.len() < 2 {
                     s.path = s.kind.default_path();
                 }
+                if s.kind != Kind::Mesh {
+                    s.volume = None;
+                }
             }
+            // a mesh whose data is gone or damaged cannot be drawn: it goes, with a note; so do
+            // the meshes past the limits of a scene (mesh.rs)
+            g.shapes.retain(|s| {
+                if s.kind != Kind::Mesh {
+                    return true;
+                }
+                let Some(v) = &s.volume else {
+                    lost += 1;
+                    return false;
+                };
+                let new = !vol_seen.contains(&v.key());
+                if vol_shapes >= crate::mesh::MAX_VOLUME_SHAPES || (new && vol_nodes.saturating_add(v.nodes()) > crate::mesh::MAX_TOTAL_NODES) {
+                    over += 1;
+                    return false;
+                }
+                vol_shapes += 1;
+                if new {
+                    vol_seen.push(v.key());
+                    vol_nodes += v.nodes();
+                }
+                true
+            });
         }
+        let mut notes = Vec::new();
+        if lost > 0 {
+            notes.push(format!("こわれていて読めないメッシュが{lost}個あったので、取りのぞきました"));
+        }
+        if over > 0 {
+            notes.push(format!("メッシュが多すぎるので、{over}個を取りのぞきました（{}個・データ量に上限があります）", crate::mesh::MAX_VOLUME_SHAPES));
+        }
+        notes
     }
 }
 
