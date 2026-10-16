@@ -1,5 +1,7 @@
 //! The viewport on the GPU: one full-screen triangle whose shader sphere-traces the blob scene
-//! (`shader.wgsl`). The scene travels in one uniform buffer, repacked every frame (a few KB).
+//! (`shader.wgsl`). The scene travels in one uniform buffer. The picture is rendered into an
+//! offscreen texture only when its inputs changed (see `perf::FrameCache`); every egui frame just
+//! copies that texture into the window.
 
 use std::sync::Arc;
 
@@ -22,7 +24,13 @@ const V4_BOUND: usize = V4_PATH + PATH_V4;
 const V4_HOVER: usize = V4_BOUND + 1;
 const V4_ENV: usize = V4_HOVER + 1;
 const ENV_V4: usize = 11;
-const TOTAL_V4: usize = V4_ENV + ENV_V4;
+/// Speed-up data for the shader: a bounding radius per shape (64 floats = 16 vec4), then the
+/// selection's bounding sphere (centre, radius).
+const V4_BRAD: usize = V4_ENV + ENV_V4;
+const BRAD_V4: usize = 16;
+const _: () = assert!(BRAD_V4 * 4 >= MAX_SHAPES, "a bounding radius slot for every shape");
+const V4_SELSPH: usize = V4_BRAD + BRAD_V4;
+const TOTAL_V4: usize = V4_SELSPH + 1;
 /// Size of the uniform buffer in bytes.
 pub const UNIFORM_BYTES: usize = TOTAL_V4 * 16;
 
@@ -105,6 +113,9 @@ pub fn pack(scene: &Scene, cam: &Camera, size: [f32; 2], selected: Option<Pick>,
             let m = &s.material;
             put(&mut u, base + 8, [m.metallic, m.glow, m.glass, m.iridescence]);
             put(&mut u, base + 9, [m.coat, m.translucency, 0.0, 0.0]);
+            if let Some(dst) = u.get_mut(V4_BRAD * 4 + shape_n) {
+                *dst = crate::perf::shape_radius(s);
+            }
             if hover == Some(Pick::Shape(gi, si)) {
                 hover_first = shape_n as f32;
                 hover_count = 1.0;
@@ -129,6 +140,7 @@ pub fn pack(scene: &Scene, cam: &Camera, size: [f32; 2], selected: Option<Pick>,
     let (bc, br) = bounds(scene, selected);
     put(&mut u, V4_BOUND, [bc[0], bc[1], bc[2], br]);
     put(&mut u, V4_HOVER, [hover_first, hover_count, 0.0, 0.0]);
+    put(&mut u, V4_SELSPH, crate::perf::sphere_of(scene, &crate::view::targets(scene, selected)));
     let e = &scene.env;
     let flags = (if e.grid { 1.0 } else { 0.0 }) + (if e.floor { 2.0 } else { 0.0 });
     put(&mut u, V4_ENV, [e.exposure, e.ambient, e.shadow, flags]);
@@ -176,10 +188,36 @@ pub fn bounds(scene: &Scene, selected: Option<Pick>) -> ([f32; 3], f32) {
     (c, r)
 }
 
+/// Set the shader's flag word (`G.view.w`): see `perf::view_flags`.
+pub fn set_view_flags(data: &mut [f32], flags: f32) {
+    if let Some(dst) = data.get_mut(4 * 4 + 3) {
+        *dst = flags;
+    }
+}
+
 struct Resources {
+    /// Draws the scene (into `target`).
     pipeline: wgpu::RenderPipeline,
     buffer: wgpu::Buffer,
     bind: wgpu::BindGroup,
+    /// Copies `target` into egui's picture.
+    blit: wgpu::RenderPipeline,
+    blit_layout: wgpu::BindGroupLayout,
+    linear: wgpu::Sampler,
+    nearest: wgpu::Sampler,
+    format: wgpu::TextureFormat,
+    /// The finished picture of the scene. It stays until the scene changes, so a repaint that
+    /// is only about the panels costs one textured triangle, not a ray march.
+    target: Option<Target>,
+    cache: crate::perf::FrameCache,
+}
+
+struct Target {
+    view: wgpu::TextureView,
+    size: [u32; 2],
+    /// Smooth copy (the picture is smaller than the viewport) and exact copy (same size).
+    linear: wgpu::BindGroup,
+    nearest: wgpu::BindGroup,
 }
 
 /// The shader is one program in several files: the core, the extra solids, the CAD features.
@@ -187,13 +225,15 @@ pub fn shader_source() -> String {
     [include_str!("shader.wgsl"), include_str!("shader_prims.wgsl"), include_str!("shader_cad.wgsl"), include_str!("shader_curve.wgsl")].join("\n")
 }
 
-/// Build the pipeline once; call at start-up with eframe's render state.
-pub fn install(rs: &egui_wgpu::RenderState) {
-    let device = &rs.device;
+const BLIT_SOURCE: &str = include_str!("blit.wgsl");
+
+/// Build the pipelines (this is the slow part of start-up: the driver compiles the shader).
+fn build(device: &wgpu::Device, format: wgpu::TextureFormat) -> Resources {
     let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("yuracad"),
         source: wgpu::ShaderSource::Wgsl(shader_source().into()),
     });
+    crate::perf::mark("shader module created");
     let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("yuracad"),
         entries: &[wgpu::BindGroupLayoutEntry {
@@ -218,12 +258,13 @@ pub fn install(rs: &egui_wgpu::RenderState) {
         fragment: Some(wgpu::FragmentState {
             module: &module,
             entry_point: Some("fs"),
-            targets: &[Some(wgpu::ColorTargetState { format: rs.target_format, blend: None, write_mask: wgpu::ColorWrites::ALL })],
+            targets: &[Some(wgpu::ColorTargetState { format, blend: None, write_mask: wgpu::ColorWrites::ALL })],
             compilation_options: Default::default(),
         }),
         multiview_mask: None,
         cache: None,
     });
+    crate::perf::mark("scene pipeline created");
     let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("yuracad"),
         contents: &vec![0u8; UNIFORM_BYTES],
@@ -234,43 +275,180 @@ pub fn install(rs: &egui_wgpu::RenderState) {
         layout: &bgl,
         entries: &[wgpu::BindGroupEntry { binding: 0, resource: buffer.as_entire_binding() }],
     });
-    rs.renderer.write().callback_resources.insert(Resources { pipeline, buffer, bind });
+
+    // the copy of the finished picture into egui's frame
+    let blit_module = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("yuracad blit"), source: wgpu::ShaderSource::Wgsl(BLIT_SOURCE.into()) });
+    let blit_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("yuracad blit"),
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            },
+        ],
+    });
+    let blit_pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("yuracad blit"),
+        bind_group_layouts: &[Some(&blit_layout)],
+        immediate_size: 0,
+    });
+    let blit = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("yuracad blit"),
+        layout: Some(&blit_pl),
+        vertex: wgpu::VertexState { module: &blit_module, entry_point: Some("vs"), buffers: &[], compilation_options: Default::default() },
+        primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, ..Default::default() },
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        fragment: Some(wgpu::FragmentState {
+            module: &blit_module,
+            entry_point: Some("fs"),
+            targets: &[Some(wgpu::ColorTargetState { format, blend: None, write_mask: wgpu::ColorWrites::ALL })],
+            compilation_options: Default::default(),
+        }),
+        multiview_mask: None,
+        cache: None,
+    });
+    let sampler = |filter| {
+        device.create_sampler(&wgpu::SamplerDescriptor { label: Some("yuracad"), mag_filter: filter, min_filter: filter, ..Default::default() })
+    };
+    Resources {
+        pipeline,
+        buffer,
+        bind,
+        blit,
+        blit_layout,
+        linear: sampler(wgpu::FilterMode::Linear),
+        nearest: sampler(wgpu::FilterMode::Nearest),
+        format,
+        target: None,
+        cache: crate::perf::FrameCache::default(),
+    }
+}
+
+/// Start building the pipeline once, at start-up. The compile runs on its own thread so that the
+/// window can show first; the viewport stays empty until it is done and then a repaint is asked for.
+pub fn install(rs: &egui_wgpu::RenderState, ctx: &egui::Context) {
+    let device = rs.device.clone();
+    let format = rs.target_format;
+    let renderer = rs.renderer.clone();
+    let ctx = ctx.clone();
+    let job = Arc::new(move || {
+        let res = build(&device, format);
+        renderer.write().callback_resources.insert(res);
+        crate::perf::mark("gpu ready");
+        ctx.request_repaint();
+    });
+    let job2 = job.clone();
+    if std::thread::Builder::new().name("yuracad-gpu-init".into()).spawn(move || job2()).is_err() {
+        job();
+    }
+}
+
+impl Target {
+    fn new(device: &wgpu::Device, res: &Resources, size: [u32; 2]) -> Target {
+        let tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("yuracad picture"),
+            size: wgpu::Extent3d { width: size[0], height: size[1], depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: res.format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+        let group = |sampler: &wgpu::Sampler| {
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("yuracad blit"),
+                layout: &res.blit_layout,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) },
+                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(sampler) },
+                ],
+            })
+        };
+        Target { linear: group(&res.linear), nearest: group(&res.nearest), view, size }
+    }
 }
 
 /// One frame of the viewport, as an egui paint callback.
 pub struct Callback {
     pub data: Arc<Vec<f32>>,
+    /// The size of the picture to draw, in pixels (the viewport's size times the quality scale).
+    pub size: [u32; 2],
 }
 
 impl egui_wgpu::CallbackTrait for Callback {
     fn prepare(
         &self,
-        _device: &wgpu::Device,
+        device: &wgpu::Device,
         queue: &wgpu::Queue,
         _screen: &egui_wgpu::ScreenDescriptor,
-        _encoder: &mut wgpu::CommandEncoder,
+        encoder: &mut wgpu::CommandEncoder,
         resources: &mut egui_wgpu::CallbackResources,
     ) -> Vec<wgpu::CommandBuffer> {
-        if let Some(res) = resources.get::<Resources>() {
-            let mut bytes = Vec::with_capacity(UNIFORM_BYTES);
-            for v in self.data.iter() {
-                bytes.extend_from_slice(&v.to_le_bytes());
-            }
-            bytes.resize(UNIFORM_BYTES, 0);
-            queue.write_buffer(&res.buffer, 0, &bytes);
+        let Some(res) = resources.get_mut::<Resources>() else { return Vec::new() };
+        let size = crate::perf::render_size(self.size, 1.0, device.limits().max_texture_dimension_2d);
+        if res.target.as_ref().is_none_or(|t| t.size != size) {
+            res.target = Some(Target::new(device, res, size));
+            res.cache.invalidate();
         }
+        // nothing changed since the picture was drawn: keep it
+        if !res.cache.needs_render(&self.data, size) {
+            return Vec::new();
+        }
+        let Some(target) = res.target.as_ref() else { return Vec::new() };
+        let mut bytes = Vec::with_capacity(UNIFORM_BYTES);
+        for v in self.data.iter() {
+            bytes.extend_from_slice(&v.to_le_bytes());
+        }
+        bytes.resize(UNIFORM_BYTES, 0);
+        queue.write_buffer(&res.buffer, 0, &bytes);
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("yuracad scene"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &target.view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        pass.set_pipeline(&res.pipeline);
+        pass.set_bind_group(0, &res.bind, &[]);
+        pass.draw(0..3, 0..1);
+        drop(pass);
+        static FIRST: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        crate::perf::mark_once(&FIRST, "first scene picture queued");
         Vec::new()
     }
 
     fn paint(&self, info: egui::PaintCallbackInfo, pass: &mut wgpu::RenderPass<'static>, resources: &egui_wgpu::CallbackResources) {
         let Some(res) = resources.get::<Resources>() else { return };
+        let Some(target) = res.target.as_ref() else { return };
         let vp = info.viewport_in_pixels();
         if vp.width_px <= 0 || vp.height_px <= 0 {
             return;
         }
         pass.set_viewport(vp.left_px as f32, vp.top_px as f32, vp.width_px as f32, vp.height_px as f32, 0.0, 1.0);
-        pass.set_pipeline(&res.pipeline);
-        pass.set_bind_group(0, &res.bind, &[]);
+        pass.set_pipeline(&res.blit);
+        let exact = target.size == [vp.width_px as u32, vp.height_px as u32];
+        pass.set_bind_group(0, if exact { &target.nearest } else { &target.linear }, &[]);
         pass.draw(0..3, 0..1);
     }
 }
@@ -301,6 +479,28 @@ mod shader_tests {
         let mut v = naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all());
         if let Err(e) = v.validate(&module) {
             panic!("{}", e.emit_to_string(&src));
+        }
+    }
+
+    /// The uniform buffer must be exactly as big as the shader's `Globals` struct, or wgpu rejects
+    /// the bind group (and the viewport never draws).
+    #[test]
+    fn the_shader_struct_is_as_big_as_the_uniform_buffer() {
+        let src = shader_source();
+        let module = naga::front::wgsl::parse_str(&src).unwrap_or_else(|e| panic!("{}", e.emit_to_string(&src)));
+        let size = module.types.iter().find_map(|(_, t)| match (&t.name, &t.inner) {
+            (Some(name), naga::TypeInner::Struct { span, .. }) if name == "Globals" => Some(*span as usize),
+            _ => None,
+        });
+        assert_eq!(size, Some(UNIFORM_BYTES));
+    }
+
+    #[test]
+    fn the_blit_shader_is_valid_wgsl() {
+        let module = naga::front::wgsl::parse_str(BLIT_SOURCE).unwrap_or_else(|e| panic!("{}", e.emit_to_string(BLIT_SOURCE)));
+        let mut v = naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all());
+        if let Err(e) = v.validate(&module) {
+            panic!("{}", e.emit_to_string(BLIT_SOURCE));
         }
     }
 

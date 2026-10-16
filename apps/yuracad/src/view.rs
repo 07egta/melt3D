@@ -8,6 +8,7 @@ use crate::app::App;
 use crate::camera::Camera;
 use crate::gizmo;
 use crate::model::{Kind, Pick, Scene};
+use crate::perf::Gate;
 use crate::sdf::{V3, add, dot, len, mul, sub};
 use crate::style;
 
@@ -58,11 +59,8 @@ impl App {
         self.view_rect = rect;
         let ppp = ui.ctx().pixels_per_point();
         let clean = self.capture.is_some();
-        let shown_sel = if clean { None } else { self.sel };
-        let hover = if clean { None } else { self.hover };
-        let data = crate::gpu::pack(&self.scene, &self.cam, [rect.width() * ppp, rect.height() * ppp], shown_sel, hover, self.srgb);
-        ui.painter().add(egui_wgpu::Callback::new_paint_callback(rect, crate::gpu::Callback { data: Arc::new(data) }));
-        let painter = ui.painter_at(rect);
+        let now = ui.input(|i| i.time);
+        let scene_changed = self.perf.drawn.scene_changed(&self.scene);
 
         let mods = ui.input(|i| i.modifiers);
         let pos = resp.hover_pos().or_else(|| ui.input(|i| i.pointer.interact_pos()));
@@ -85,12 +83,22 @@ impl App {
             });
         }
 
-        // The shape under the mouse lights up a little
+        // The shape under the mouse lights up a little (looked up only when the mouse moved, 30 times a second at most)
         let idle = self.drag.is_none() && !ui.input(|i| i.pointer.any_down());
-        self.hover = match (resp.hovered() && idle && hover_handle.is_none() && !over_gnomon, pos) {
-            (true, Some(p)) => self.shape_at(rect, p).map(|(g, s)| Pick::Shape(g, s)),
-            _ => None,
-        };
+        match (resp.hovered() && idle && hover_handle.is_none() && !over_gnomon, pos) {
+            (true, Some(p)) => {
+                let dirty = scene_changed || crate::perf::cam_key(&self.cam) != self.perf.last_cam;
+                match self.perf.hover_gate.check([p.x, p.y], now, dirty) {
+                    Gate::Pick => self.hover = self.shape_at(rect, p).map(|(g, s)| Pick::Shape(g, s)),
+                    Gate::Wait(w) => ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(w)),
+                    Gate::Same => {}
+                }
+            }
+            _ => {
+                self.hover = None;
+                self.perf.hover_gate.reset();
+            }
+        }
 
         // Camera: middle-drag turns, right-drag slides, the wheel zooms toward the mouse
         let mut moved_camera = false;
@@ -189,6 +197,30 @@ impl App {
         {
             self.frame_view(self.sel.is_some());
         }
+
+        // The picture itself. It is made after the input above so that it shows this frame's state.
+        // Fast mode (cheap shading, fewer pixels) runs while the view or a handle moves, and for a
+        // moment after; then one full-quality frame follows.
+        let cam_now = crate::perf::cam_key(&self.cam);
+        if cam_now != self.perf.last_cam || self.drag.is_some() || (scene_changed && ui.input(|i| i.pointer.any_down())) {
+            self.perf.activity.touch(now);
+        }
+        self.perf.last_cam = cam_now;
+        let fast = !clean && self.perf.activity.is_fast(now);
+        if let Some(wait) = self.perf.activity.settle_in(now)
+            && !clean
+        {
+            ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(wait));
+        }
+        let scale = if clean { 1.0 } else { self.perf.quality.scale(fast) };
+        let size = crate::perf::render_size(crate::perf::viewport_px(rect, ppp), scale, 16384);
+        let shown_sel = if clean { None } else { self.sel };
+        let shown_hover = if clean { None } else { self.hover };
+        let mut data = crate::gpu::pack(&self.scene, &self.cam, [size[0] as f32, size[1] as f32], shown_sel, shown_hover, self.srgb);
+        crate::gpu::set_view_flags(&mut data, crate::perf::view_flags(self.srgb, fast, crate::perf::scene_has_glow(&self.scene)));
+        ui.painter().add(egui_wgpu::Callback::new_paint_callback(rect, crate::gpu::Callback { data: Arc::new(data), size }));
+        self.perf.drawn.note(&self.scene, shown_sel, shown_hover, &self.cam, clean);
+        let painter = ui.painter_at(rect);
 
         // Draw the handles over the picture
         if clean {
