@@ -419,6 +419,9 @@ impl App {
         if outline_changed {
             self.sketch_editor(ui, g, s);
         }
+        if self.scene.shape(g, s).is_some_and(|x| x.kind.uses_path()) {
+            self.curve_inspector(ui, g, s);
+        }
         ui.add_space(4.0);
         ui.horizontal(|ui| {
             if ui.add_enabled(s > 0, egui::Button::new("↑")).on_hover_text("ひとつ前へ").clicked() {

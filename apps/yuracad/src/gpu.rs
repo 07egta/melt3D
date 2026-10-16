@@ -17,7 +17,7 @@ const V4_PER_SHAPE: usize = 12;
 const V4_POLY: usize = V4_SHAPES + MAX_SHAPES * V4_PER_SHAPE;
 const POLY_V4: usize = 512;
 const V4_PATH: usize = V4_POLY + POLY_V4;
-const PATH_V4: usize = 256;
+const PATH_V4: usize = 512;
 const V4_BOUND: usize = V4_PATH + PATH_V4;
 const V4_HOVER: usize = V4_BOUND + 1;
 const V4_ENV: usize = V4_HOVER + 1;
@@ -88,7 +88,9 @@ pub fn pack(scene: &Scene, cam: &Camera, size: [f32; 2], selected: Option<Pick>,
             };
             let (start, count) = if s.kind.uses_outline() { pack_outline(&s.outline, &mut poly_pts, &mut u) } else { (0, 0) };
             let (start2, count2) = if s.kind.uses_outline2() { pack_outline(&s.outline2, &mut poly_pts, &mut u) } else { (0, 0) };
-            let (pstart, pcount) = if s.kind.uses_path() && path_n + s.path.len() <= PATH_V4 {
+            let (pstart, pcount) = if s.kind == crate::model::Kind::Curve {
+                pack_curve(s, &mut path_n, &mut u)
+            } else if s.kind.uses_path() && path_n + s.path.len() <= PATH_V4 {
                 let st = path_n;
                 for (k, pt) in s.path.iter().enumerate() {
                     put(&mut u, V4_PATH + st + k, *pt);
@@ -142,6 +144,28 @@ pub fn pack(scene: &Scene, cam: &Camera, size: [f32; 2], selected: Option<Pick>,
         put(&mut u, V4_ENV + 6 + i * 2, [l.color[0], l.color[1], l.color[2], 0.0]);
     }
     u
+}
+
+/// A curve's smoothed points go into the path list behind two header entries (the low and high
+/// corner of a box around the tube). Returns (first point, count); (0, 0) when there is no room.
+fn pack_curve(s: &crate::model::Shape, path_n: &mut usize, u: &mut [f32]) -> (usize, usize) {
+    let room = PATH_V4.saturating_sub(*path_n + 2);
+    let mut pts = crate::curve::build(&s.path, &s.params);
+    if pts.len() > room {
+        pts = crate::curve::build_max(&s.path, &s.params, room);
+    }
+    if pts.len() < 2 || pts.len() > room {
+        return (0, 0);
+    }
+    let (lo, hi) = crate::curve::bounds(&pts);
+    put(u, V4_PATH + *path_n, [lo[0], lo[1], lo[2], 0.0]);
+    put(u, V4_PATH + *path_n + 1, [hi[0], hi[1], hi[2], 0.0]);
+    let st = *path_n + 2;
+    for (k, pt) in pts.iter().enumerate() {
+        put(u, V4_PATH + st + k, *pt);
+    }
+    *path_n = st + pts.len();
+    (st, pts.len())
 }
 
 /// A sphere around everything the shader can draw (centre, radius; radius 0 when there is nothing):
@@ -286,6 +310,59 @@ mod tests {
         assert_eq!(&u[24..28], &[1.0, 1.0, 0.0, 1.0], "one group, one shape, shape 0 selected");
         let e = V4_ENV * 4;
         assert!((u[e] - 1.0).abs() < 1e-6 && (u[e + 7] - 2.0).abs() < 1e-6, "exposure 1, two lights");
+    }
+}
+
+#[cfg(test)]
+mod curve_tests {
+    use super::*;
+    use crate::model::{Group, Kind, Material, Shape};
+
+    fn scene_with_curves(n: usize) -> Scene {
+        let mut g = Group::new("g");
+        for i in 0..n {
+            let mut s = Shape::new(Kind::Curve, [i as f32 * 3.0, 0.0, 10.0], Material::default());
+            s.path = (0..32).map(|k| [k as f32 * 2.0, (k * k) as f32 * 0.1, 0.0, 3.0]).collect();
+            g.shapes.push(s);
+        }
+        Scene { groups: vec![g], melt: Default::default(), env: Default::default(), saved: Vec::new() }
+    }
+
+    #[test]
+    fn a_curve_is_packed_as_a_box_then_its_smooth_points() {
+        let scene = scene_with_curves(1);
+        let u = pack(&scene, &Camera::default(), [800.0, 600.0], None, None, true);
+        let ext = (V4_SHAPES + 11) * 4;
+        let (start, count) = (u[ext] as usize, u[ext + 1] as usize);
+        assert!((2..=crate::curve::MAX_POINTS).contains(&count) && start == 2);
+        let at = |slot: usize| &u[(V4_PATH + slot) * 4..(V4_PATH + slot) * 4 + 4];
+        let (lo, hi) = (at(start - 2), at(start - 1));
+        for k in 0..count {
+            let p = at(start + k);
+            for i in 0..3 {
+                assert!(p[i] >= lo[i] && p[i] <= hi[i], "point {k} axis {i} outside the box");
+            }
+        }
+        let want = crate::curve::build(&scene.groups[0].shapes[0].path, &scene.groups[0].shapes[0].params);
+        assert_eq!(want.len(), count);
+        assert_eq!(at(start), &want[0][..]);
+    }
+
+    #[test]
+    fn too_many_curves_never_overflow_the_path_list() {
+        let scene = scene_with_curves(40);
+        let u = pack(&scene, &Camera::default(), [800.0, 600.0], None, None, true);
+        assert_eq!(u.len() * 4, UNIFORM_BYTES);
+        let mut used = 0;
+        for i in 0..scene.shape_count() {
+            let ext = (V4_SHAPES + i * V4_PER_SHAPE + 11) * 4;
+            let (start, count) = (u[ext] as usize, u[ext + 1] as usize);
+            if count > 0 {
+                assert!(start + count <= PATH_V4, "curve {i} runs past the list");
+                used = used.max(start + count);
+            }
+        }
+        assert!(used > 0);
     }
 }
 
