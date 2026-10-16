@@ -344,7 +344,9 @@ impl Shape {
             Kind::Torus => [s[0] + s[1], s[0] + s[1], s[1]],
             Kind::Extrude => [mx(&self.outline, 0), mx(&self.outline, 1), s[0] * 0.5],
             Kind::Prism3 | Kind::PrismN | Kind::Star | Kind::Pyramid => [s[0], s[0], s[1] * 0.5],
-            Kind::Octa | Kind::Tetra | Kind::Hemi => [s[0]; 3],
+            Kind::Octa | Kind::Tetra => [s[0]; 3],
+            // the dome fills z in -r/2 ..= r/2 (flat face at the bottom of its box)
+            Kind::Hemi => [s[0], s[0], s[0] * 0.5],
             Kind::Capsule => [s[0], s[0], s[1] * 0.5 + s[0]],
             Kind::Tube => [s[0], s[0], s[2] * 0.5],
             Kind::Revolve => {
