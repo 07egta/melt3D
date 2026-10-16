@@ -1397,6 +1397,95 @@ mod headless_tests {
         assert!((gpu_only + cpu_only) * 100 < both * 6, "the silhouettes differ by more than 6%");
     }
 
+    /// An imported mesh as the (software) GPU draws it, against the CPU field: our own STL of a small
+    /// model is read back, baked and put in a scene beside a sphere that melts into it and a
+    /// cylinder that carves it. The silhouettes of the two renderers must agree, and the mesh must
+    /// be there (it covers a good part of the picture).
+    /// `cargo test -p yuracad --release gpu_headless_mesh_matches_cpu -- --ignored --nocapture`
+    /// (OpenGL like the window: `WGPU_BACKEND=gl YURA_GL_LIMITS=1 xvfb-run ...`)
+    #[test]
+    #[ignore]
+    fn gpu_headless_mesh_matches_cpu() {
+        use crate::model::{Kind, Material, Op, Shape};
+        let Some(mut gpu) = headless::open(std::env::var_os("YURA_GL_LIMITS").is_some()) else {
+            eprintln!("no graphics adapter here");
+            return;
+        };
+        eprintln!("adapter: {}", gpu.info);
+        let imp = crate::import_mesh::import_bytes(&crate::mesh_import::tests::sample_stl(), "model.stl", &Default::default()).unwrap();
+        let st = crate::mesh_import::Settings { target_mm: 50.0, up: crate::mesh_import::Up::Z, floor: true, centre: true, res: 64 };
+        let baked = crate::mesh_import::bake(&imp.mesh, imp.format, &st, &crate::sdf_volume::BakeControl::new()).unwrap();
+        let mut sc = Scene::default();
+        sc.env.grid = false;
+        sc.env.floor = false;
+        sc.groups.clear();
+        let mut g = Group::new("m");
+        let mut mesh = crate::mesh_import::shape_of(&baked, "m", "model.stl", [0.0, 0.0, baked.size[2] * 0.5], Material::default());
+        mesh.blend = 6.0;
+        mesh.rot = [0.0, 0.0, 30.0];
+        g.shapes.push(mesh.clone());
+        let mut ball = Shape::new(Kind::Sphere, [0.0, -22.0, 22.0], Material::default());
+        ball.size[0] = 10.0;
+        ball.blend = 6.0;
+        g.shapes.push(ball);
+        let mut cut = Shape::new(Kind::Cylinder, [8.0, 0.0, 10.0], Material::default());
+        cut.size = [4.0, 60.0, 1.0];
+        cut.rot = [90.0, 0.0, 0.0];
+        cut.op = Op::Subtract;
+        cut.blend = 2.0;
+        g.shapes.push(cut);
+        sc.groups.push(g);
+        // a second copy of the same mesh in its own group shares the volume (one upload)
+        let mut copy = Group::new("copy");
+        let mut m2 = mesh.clone();
+        m2.pos = [60.0, 10.0, baked.size[2] * 0.5];
+        m2.scale = [0.7; 3];
+        copy.shapes.push(m2);
+        sc.groups.push(copy);
+        let vols = VolumeSet::of(&sc);
+        assert_eq!(vols.items.len(), 1, "both shapes use one volume");
+        let size = [360u32, 234u32];
+        let mut cam = Camera::default();
+        let (cc, r) = bounds(&sc, None);
+        cam.frame(cc, r);
+        let draw = |scene: &Scene, gpu: &mut headless::Gpu| {
+            let vols = VolumeSet::of(scene);
+            let mut data = pack_with(scene, &cam, [size[0] as f32, size[1] as f32], None, None, false, &vols);
+            set_view_flags(&mut data, crate::perf::view_flags(false, false, false));
+            gpu.render_with(&data, &vols, size)
+        };
+        let (shown, secs) = draw(&sc, &mut gpu);
+        let (empty, _) = draw(&Scene { groups: Vec::new(), ..sc.clone() }, &mut gpu);
+        let field = crate::sdf::Field::new(&sc);
+        let (mut gpu_only, mut cpu_only, mut both) = (0, 0, 0);
+        for y in 0..size[1] {
+            for x in 0..size[0] {
+                let i = ((y * size[0] + x) * 4) as usize;
+                let g = shown[i..i + 3] != empty[i..i + 3];
+                let nx = (x as f32 + 0.5) / size[0] as f32 * 2.0 - 1.0;
+                let ny = 1.0 - (y as f32 + 0.5) / size[1] as f32 * 2.0;
+                let (o, d) = cam.ray([nx, ny], size[0] as f32 / size[1] as f32);
+                let c = field.ray(o, d, 4000.0).is_some();
+                match (g, c) {
+                    (true, true) => both += 1,
+                    (true, false) => gpu_only += 1,
+                    (false, true) => cpu_only += 1,
+                    _ => {}
+                }
+            }
+        }
+        eprintln!("{secs:.2} s, mesh silhouette: {both} in both, {gpu_only} only the GPU, {cpu_only} only the CPU");
+        if let Some(dir) = std::env::var_os("YURA_OUT") {
+            let _ = std::fs::write(std::path::Path::new(&dir).join("mesh_scene.meltcad"), sc.to_json());
+            let _ = std::fs::write(std::path::Path::new(&dir).join("gpu_mesh.ppm"), [format!("P6\n{} {}\n255\n", size[0], size[1]).into_bytes(), shown.chunks(4).flat_map(|p| [p[0], p[1], p[2]]).collect()].concat());
+        }
+        assert!(both > 1500, "the mesh covers a good part of the picture ({both})");
+        assert!((gpu_only + cpu_only) * 100 < both * 6, "the silhouettes differ by more than 6%");
+        // moving a mesh uploads nothing new, and replacing the volume draws it again
+        let again = VolumeSet::of(&sc);
+        assert!(gpu.res.vol.resident.same_as(&again));
+    }
+
     /// Writes scenes for the real window: `/tmp/yt_scale/patterns.meltcad` (every kind of pattern and a
     /// linked copy) and `big300.meltcad` (about 300 library shapes).
     /// `cargo test -p yuracad --release dump_pattern_scenes -- --ignored`

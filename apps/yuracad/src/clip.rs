@@ -35,6 +35,7 @@ pub fn copy_text(app: &App) -> Option<String> {
 /// Put the text into the scene. Returns what was added ("" when the text is not something MELTCAD knows).
 pub fn paste_text(app: &mut App, text: &str) -> Result<String, String> {
     let text = text.trim();
+    let _guard = crate::mesh::LoadGuard::begin();
     if let Ok(clip) = serde_json::from_str::<Clip>(text) {
         if clip.yuracad_clip != 1 {
             return Err("このコピーは新しいバージョンのものです".into());
@@ -77,6 +78,7 @@ fn add_shapes(app: &mut App, mut shapes: Vec<Shape>) -> Result<String, String> {
         Some(Pick::Shape(g, _)) | Some(Pick::Group(g)) if g < app.scene.groups.len() => g,
         _ => app.scene.groups.len() - 1,
     };
+    crate::mesh::can_add(&app.scene, shapes.iter())?;
     shifted(&mut shapes, STEP);
     for s in &mut shapes {
         s.name = format!("{} コピー", s.name.trim_end_matches(" コピー"));
@@ -94,6 +96,7 @@ fn add_group(app: &mut App, mut group: Group, offset: bool) -> Result<String, St
     if app.scene.shape_count() + group.shapes.len() > MAX_SHAPES {
         return Err(format!("形は{MAX_SHAPES}個までです"));
     }
+    crate::mesh::can_add(&app.scene, group.shapes.iter())?;
     if offset {
         shifted(&mut group.shapes, STEP);
     }

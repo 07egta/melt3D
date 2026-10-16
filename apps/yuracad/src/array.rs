@@ -70,6 +70,8 @@ impl App {
                 if self.scene.shape_count() + copies as usize > MAX_SHAPES {
                     return Err(format!("形は{MAX_SHAPES}個までです"));
                 }
+                let more: Vec<Shape> = (0..copies).map(|_| base.clone()).collect();
+                crate::mesh::can_add(&self.scene, more.iter())?;
                 for k in 1..=copies {
                     let mut c = base.clone();
                     place(&mut c, d, k);
@@ -84,6 +86,7 @@ impl App {
                 if self.scene.groups.len() + copies as usize > MAX_GROUPS || self.scene.shape_count() + base.shapes.len() * copies as usize > MAX_SHAPES {
                     return Err("ふやせる数をこえます".into());
                 }
+                crate::mesh::can_add(&self.scene, (0..copies).flat_map(|_| base.shapes.iter()))?;
                 for k in 1..=copies {
                     let mut c = base.clone();
                     for s in &mut c.shapes {

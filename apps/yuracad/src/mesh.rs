@@ -306,6 +306,19 @@ impl Usage {
     }
 }
 
+/// Can these shapes join the scene without passing the limits for meshes? (Copies of a mesh share
+/// its volume, so they cost no data, but each one is a shape the graphics card must march through.)
+pub fn can_add<'a>(scene: &'a crate::model::Scene, extra: impl IntoIterator<Item = &'a crate::model::Shape>) -> Result<(), &'static str> {
+    let u = Usage::of(scene.groups.iter().flat_map(|g| g.shapes.iter()).chain(extra));
+    if u.shapes > MAX_VOLUME_SHAPES {
+        Err(ERR_TOO_MANY_SHAPES)
+    } else if u.nodes > MAX_TOTAL_NODES {
+        Err(ERR_TOO_BIG)
+    } else {
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
