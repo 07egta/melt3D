@@ -13,6 +13,7 @@ mod icon;
 mod materials;
 mod cad;
 mod curve;
+mod curve_tool;
 mod model;
 mod prims;
 mod panels;

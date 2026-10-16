@@ -59,6 +59,8 @@ pub struct App {
     pub mat_cat: Option<crate::materials::Category>,
     /// A material picked from the list goes to the whole group.
     pub mat_group: bool,
+    /// The curve tool (nodes, drawing).
+    pub ct: crate::curve_tool::State,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -112,6 +114,7 @@ impl App {
             tab: Tab::Shape,
             mat_cat: Some(crate::materials::Category::Basic),
             mat_group: false,
+            ct: Default::default(),
         };
         if let Some(p) = open {
             app.open_path(p);
@@ -424,6 +427,7 @@ impl App {
             return;
         }
         use egui::{Key, Modifiers};
+        self.curve_keys(ctx);
         let cmd = Modifiers::COMMAND;
         let cmd_shift = Modifiers::COMMAND | Modifiers::SHIFT;
         let hit = |m: Modifiers, k: Key| ctx.input_mut(|i| i.consume_key(m, k));
@@ -569,7 +573,7 @@ impl App {
                     });
                 });
                 // the shapes to add, in the middle of the bar like Womp's
-                let w = 470.0;
+                let w = 510.0;
                 let rect = egui::Rect::from_center_size(bar.center(), egui::vec2(w, 36.0));
                 ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
                     ui.horizontal_centered(|ui| {
@@ -581,6 +585,7 @@ impl App {
                                 self.add_shape(&ctx, k);
                             }
                         }
+                        self.curve_button(ui);
                         ui.menu_button("もっと ▾", |ui| {
                             ui.set_min_width(190.0);
                             ui.label(egui::RichText::new("ほかの形").size(11.0).color(style::DIM));
@@ -870,6 +875,7 @@ impl eframe::App for App {
         if self.capture.is_none() {
             self.scene_card(ui);
             self.tool_pill(ui);
+            self.draw_card(&ctx);
             self.keys_card(ui);
         }
         self.capture_step(&ctx);
