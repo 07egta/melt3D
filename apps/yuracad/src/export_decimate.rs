@@ -346,22 +346,66 @@ fn plane_of(pos: &[V], t: &[u32; 3]) -> Option<(V, f64, f64)> {
     Some((u, -dot(u, a), 0.5 * l))
 }
 
-/// Keep only the vertices some triangle uses, and renumber.
-pub fn compact(mesh: &mut TriMesh) {
+/// Keep only the vertices some triangle uses, and renumber. Returns, for each new vertex, the old one.
+pub fn compact(mesh: &mut TriMesh) -> Vec<u32> {
     let mut map = vec![u32::MAX; mesh.positions.len()];
     let mut positions = Vec::new();
+    let mut origin = Vec::new();
     for t in &mut mesh.triangles {
         for v in t.iter_mut() {
             if let Some(slot) = map.get_mut(*v as usize) {
                 if *slot == u32::MAX {
                     *slot = positions.len() as u32;
                     positions.push(mesh.positions.get(*v as usize).copied().unwrap_or([0.0; 3]));
+                    origin.push(*v);
                 }
                 *v = *slot;
             }
         }
     }
     mesh.positions = positions;
+    origin
+}
+
+/// Per-vertex looks that travel with the mesh while it is simplified. Empty: nothing to carry.
+/// Where the class changes between neighbours, the vertices are kept, so colour borders stay put.
+#[derive(Clone, Debug, Default)]
+pub struct Carry {
+    pub class: Vec<u16>,
+    pub rgb: Vec<[u8; 3]>,
+    pub rm: Vec<[u8; 2]>,
+}
+
+impl Carry {
+    fn remap(&mut self, origin: &[u32]) {
+        fn pick<T: Copy>(v: &mut Vec<T>, origin: &[u32]) {
+            if v.is_empty() {
+                return;
+            }
+            let new: Vec<T> = origin.iter().filter_map(|o| v.get(*o as usize).copied()).collect();
+            *v = new;
+        }
+        pick(&mut self.class, origin);
+        pick(&mut self.rgb, origin);
+        pick(&mut self.rm, origin);
+    }
+    fn pins(&self, mesh: &TriMesh) -> Vec<bool> {
+        let mut pinned = vec![false; mesh.positions.len()];
+        if self.class.len() != mesh.positions.len() {
+            return pinned;
+        }
+        for t in &mesh.triangles {
+            let c = [self.class.get(t[0] as usize), self.class.get(t[1] as usize), self.class.get(t[2] as usize)];
+            if c[0] != c[1] || c[1] != c[2] {
+                for v in t {
+                    if let Some(p) = pinned.get_mut(*v as usize) {
+                        *p = true;
+                    }
+                }
+            }
+        }
+        pinned
+    }
 }
 
 /// What to do to a mesh to make it lighter.
@@ -374,29 +418,33 @@ pub struct Reduce {
 }
 
 /// Simplify `mesh` in place. Big meshes go through tiles on `threads` threads first.
-pub fn reduce(mesh: &mut TriMesh, opts: Reduce, threads: usize, prog: &Slice) -> Result<(), String> {
+pub fn reduce(mesh: &mut TriMesh, carry: &mut Carry, opts: Reduce, threads: usize, prog: &Slice) -> Result<(), String> {
     if mesh.triangles.len() < 4 {
         return Ok(());
     }
     let max_cost = opts.max_error * opts.max_error;
+    let mut pinned = carry.pins(mesh);
     if mesh.triangles.len() > 300_000 {
-        tiled(mesh, max_cost, threads, &prog.sub(0.0, 0.7))?;
+        let origin = tiled(mesh, &pinned, max_cost, threads, &prog.sub(0.0, 0.7))?;
+        carry.remap(&origin);
+        pinned = origin.iter().map(|o| pinned.get(*o as usize).copied().unwrap_or(false)).collect();
     }
     let pos = std::mem::take(&mut mesh.positions);
     let tris = std::mem::take(&mut mesh.triangles);
-    let nv = pos.len();
     let nt = tris.len();
-    let mut w = Work::new(pos, tris, vec![false; nv], vec![false; nt]);
+    pinned.resize(pos.len(), false);
+    let mut w = Work::new(pos, tris, pinned, vec![false; nt]);
     w.run(opts.target_tris, max_cost, Some(&prog.sub(0.7, 1.0)))?;
     let (pos, tris) = w.finish();
     mesh.positions = pos;
     mesh.triangles = tris;
-    compact(mesh);
+    let origin = compact(mesh);
+    carry.remap(&origin);
     Ok(())
 }
 
 /// Simplify tile by tile in parallel; the triangles across tile borders are left for the last pass.
-fn tiled(mesh: &mut TriMesh, max_cost: f64, threads: usize, prog: &Slice) -> Result<(), String> {
+fn tiled(mesh: &mut TriMesh, base_pinned: &[bool], max_cost: f64, threads: usize, prog: &Slice) -> Result<Vec<u32>, String> {
     let (mut lo, mut hi) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
     for p in &mesh.positions {
         for a in 0..3 {
@@ -406,7 +454,7 @@ fn tiled(mesh: &mut TriMesh, max_cost: f64, threads: usize, prog: &Slice) -> Res
     }
     let extent = (0..3).map(|a| hi[a] - lo[a]).fold(0.0_f64, f64::max);
     if !extent.is_finite() || extent <= 0.0 {
-        return Ok(());
+        return Ok((0..mesh.positions.len() as u32).collect());
     }
     // tiles that hold roughly 150k triangles each, at least a few per thread
     let per_tile = 150_000.0;
@@ -419,7 +467,7 @@ fn tiled(mesh: &mut TriMesh, max_cost: f64, threads: usize, prog: &Slice) -> Res
     };
     let vtile: Vec<u32> = mesh.positions.iter().map(|p| tile_of(*p)).collect();
     // a vertex is pinned when some triangle reaches into another tile
-    let mut pinned = vec![false; mesh.positions.len()];
+    let mut pinned: Vec<bool> = (0..mesh.positions.len()).map(|v| base_pinned.get(v).copied().unwrap_or(false)).collect();
     let mut seam = vec![false; mesh.triangles.len()];
     for (i, t) in mesh.triangles.iter().enumerate() {
         let tl = [vtile.get(t[0] as usize), vtile.get(t[1] as usize), vtile.get(t[2] as usize)];
@@ -575,8 +623,7 @@ fn tiled(mesh: &mut TriMesh, max_cost: f64, threads: usize, prog: &Slice) -> Res
         }
     }
     mesh.triangles = new_tris;
-    compact(mesh);
-    Ok(())
+    Ok(compact(mesh))
 }
 
 // ---------------------------------------------------------------- smoothing
@@ -675,7 +722,7 @@ mod tests {
         let before = m.triangles.len();
         let v0 = melt::volume(&m);
         let prog = Progress::new();
-        reduce(&mut m, Reduce { target_tris: 0, max_error: 0.005 }, 4, &prog.slice(0.0, 1.0)).unwrap();
+        reduce(&mut m, &mut Carry::default(), Reduce { target_tris: 0, max_error: 0.005 }, 4, &prog.slice(0.0, 1.0)).unwrap();
         assert!(melt::is_watertight(&m));
         assert!(m.triangles.len() < before / 20, "{} of {before}", m.triangles.len());
         let v1 = melt::volume(&m);
@@ -698,7 +745,7 @@ mod tests {
         let v0 = melt::volume(&m);
         let before = m.triangles.len();
         let prog = Progress::new();
-        reduce(&mut m, Reduce { target_tris: before / 10, max_error: f64::INFINITY }, 4, &prog.slice(0.0, 1.0)).unwrap();
+        reduce(&mut m, &mut Carry::default(), Reduce { target_tris: before / 10, max_error: f64::INFINITY }, 4, &prog.slice(0.0, 1.0)).unwrap();
         assert!(m.triangles.len() <= before / 10 + 2, "{} vs {}", m.triangles.len(), before / 10);
         assert!(melt::is_watertight(&m));
         let v1 = melt::volume(&m);
@@ -713,7 +760,7 @@ mod tests {
         let v0 = melt::volume(&m);
         let before = m.triangles.len();
         let prog = Progress::new();
-        reduce(&mut m, Reduce { target_tris: 0, max_error: 0.002 }, 4, &prog.slice(0.0, 1.0)).unwrap();
+        reduce(&mut m, &mut Carry::default(), Reduce { target_tris: 0, max_error: 0.002 }, 4, &prog.slice(0.0, 1.0)).unwrap();
         assert!(melt::is_watertight(&m));
         assert!(m.triangles.len() < before / 10, "{} of {before}", m.triangles.len());
         let v1 = melt::volume(&m);
