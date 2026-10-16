@@ -8,6 +8,8 @@ mod camera;
 mod clip;
 mod export;
 mod export_decimate;
+mod export_deflate;
+mod export_formats;
 mod export_mesh;
 mod fonts;
 mod gizmo;
