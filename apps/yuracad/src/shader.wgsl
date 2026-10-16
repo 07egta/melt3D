@@ -11,6 +11,8 @@ struct Shape {
     color: vec4<f32>,   // rgb, roughness
     mat: vec4<f32>,     // metallic, glow, glass, iridescence
     mat2: vec4<f32>,    // x = clear coat
+    params: vec4<f32>,  // kind-specific extra numbers
+    ext: vec4<f32>,     // x = path start, y = path count, z = outline2 start, w = outline2 count
 };
 
 struct Globals {
@@ -23,7 +25,8 @@ struct Globals {
     counts: vec4<f32>,    // groups, shapes, selected first shape (-1 none), selected count
     groups: array<vec4<f32>, 24>,   // first shape, count, op sign, blend
     shapes: array<Shape, 64>,
-    poly: array<vec4<f32>, 128>,    // outline points, two per vec4 (x y x y)
+    poly: array<vec4<f32>, 512>,    // outline points, two per vec4 (x y x y)
+    path: array<vec4<f32>, 256>,    // curve / sweep nodes (x y z radius)
     bound: vec4<f32>,               // centre, radius of a sphere around everything (0 = nothing)
     hover: vec4<f32>,               // first hovered shape (-1 none), count
     env: array<vec4<f32>, 11>,      // exposure/ambient/shadow/flags, backdrop+lights, 3 sky colours, 3 x (light dir+power, light colour)
@@ -134,6 +137,12 @@ fn shape_dist(s: Shape, p: vec3<f32>) -> f32 {
         var sg = 1.0;
         if (cb.x < 0.0 && ca.y < 0.0) { sg = -1.0; }
         r = sg * sqrt(min(dot(ca, ca), dot(cb, cb)));
+    } else if (kind == 18) {
+        r = curve_dist(s, q);
+    } else if (kind >= 16) {
+        r = cad_dist(s, q, kind);
+    } else if (kind >= 6) {
+        r = prim_dist(s, q, kind);
     } else {
         let d2 = polygon_d(i32(s.misc.z + 0.5), i32(s.misc.w + 0.5), q.xy);
         let rr = min(rd, sz.x * 0.5);

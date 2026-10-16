@@ -20,6 +20,7 @@ fn reach_of(s: &Shape) -> f64 {
             let wide = s.outline.iter().map(|p| f64::from(p[0]).hypot(f64::from(p[1]))).fold(0.0_f64, f64::max);
             wide.hypot(sz[0] * 0.5)
         }
+        _ => s.local_half().iter().map(|v| f64::from(*v) * f64::from(*v)).sum::<f64>().sqrt(),
     };
     let scale = s.scale.iter().map(|v| f64::from(*v)).fold(0.0_f64, f64::max);
     local * scale

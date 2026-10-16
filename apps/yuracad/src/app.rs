@@ -211,6 +211,7 @@ impl App {
             Kind::Cylinder | Kind::Cone => size[1] * 0.5,
             Kind::Torus => size[1],
             Kind::Extrude => size[0] * 0.5,
+            _ => Shape::new(kind, [0.0; 3], Material::default()).local_half()[2],
         };
         let pos = match self.sel.and_then(|p| centre_of(&self.scene, Some(p))) {
             Some(c) if self.scene.shape_count() > 0 => [c[0] + 18.0, c[1] + 6.0, c[2].max(rest) + 4.0],
@@ -568,18 +569,46 @@ impl App {
                     });
                 });
                 // the shapes to add, in the middle of the bar like Womp's
-                let w = 420.0;
+                let w = 470.0;
                 let rect = egui::Rect::from_center_size(bar.center(), egui::vec2(w, 36.0));
                 ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
                     ui.horizontal_centered(|ui| {
                         ui.spacing_mut().item_spacing.x = 4.0;
-                        for k in Kind::ALL {
+                        for k in Kind::MAIN {
                             let r =
                                 style::icon_button(ui, 34.0, k.label(), false, |p, r, ink| glyphs::kind(p, r, k, ink, Color32::from_white_alpha(18)));
                             if r.clicked() {
                                 self.add_shape(&ctx, k);
                             }
                         }
+                        ui.menu_button("もっと ▾", |ui| {
+                            ui.set_min_width(190.0);
+                            ui.label(egui::RichText::new("ほかの形").size(11.0).color(style::DIM));
+                            for k in Kind::MORE {
+                                let r = ui.horizontal(|ui| {
+                                    let (rc, _) = ui.allocate_exact_size(egui::vec2(22.0, 22.0), egui::Sense::hover());
+                                    glyphs::kind(ui.painter(), rc, k, ui.visuals().text_color(), Color32::from_white_alpha(18));
+                                    ui.selectable_label(false, k.label())
+                                });
+                                if r.inner.clicked() {
+                                    self.add_shape(&ctx, k);
+                                    ui.close();
+                                }
+                            }
+                            ui.separator();
+                            ui.label(egui::RichText::new("CADの機能").size(11.0).color(style::DIM));
+                            for k in Kind::CAD {
+                                let r = ui.horizontal(|ui| {
+                                    let (rc, _) = ui.allocate_exact_size(egui::vec2(22.0, 22.0), egui::Sense::hover());
+                                    glyphs::kind(ui.painter(), rc, k, ui.visuals().text_color(), Color32::from_white_alpha(18));
+                                    ui.selectable_label(false, k.label())
+                                });
+                                if r.inner.clicked() {
+                                    self.add_shape(&ctx, k);
+                                    ui.close();
+                                }
+                            }
+                        });
                         ui.add_space(6.0);
                         for op in [Op::Add, Op::Subtract, Op::Paint] {
                             let on = self.new_op == op;

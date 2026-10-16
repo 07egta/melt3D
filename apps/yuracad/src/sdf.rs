@@ -51,6 +51,9 @@ pub struct Prepared {
     pub blend: f32,
     pub material: Material,
     pub outline: Vec<[f32; 2]>,
+    pub params: [f32; 4],
+    pub path: Vec<[f32; 4]>,
+    pub outline2: Vec<[f32; 2]>,
 }
 
 #[derive(Clone, Debug)]
@@ -86,6 +89,9 @@ impl Prepared {
             blend: s.blend,
             material: s.material,
             outline: s.outline.clone(),
+            params: s.params,
+            path: s.path.clone(),
+            outline2: s.outline2.clone(),
         }
     }
     /// The point in the shape's own space.
@@ -140,11 +146,14 @@ impl Prepared {
                 let w = [d2 + r, q[2].abs() - s[0] * 0.5 + r];
                 w[0].max(w[1]).min(0.0) + w[0].max(0.0).hypot(w[1].max(0.0)) - r
             }
+            Kind::Curve => crate::curve::distance(self, q),
+            k if k.id() < 16.0 => crate::prims::distance(self, q),
+            _ => crate::cad::distance(self, q),
         }
     }
 }
 
-fn polygon(v: &[[f32; 2]], p: [f32; 2]) -> f32 {
+pub fn polygon(v: &[[f32; 2]], p: [f32; 2]) -> f32 {
     let n = v.len();
     if n < 3 {
         return 1e9;

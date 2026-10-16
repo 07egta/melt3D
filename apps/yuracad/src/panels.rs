@@ -362,7 +362,7 @@ impl App {
             ui.text_edit_singleline(&mut sh.name);
             Self::op_pills(ui, &mut sh.op);
             // change what kind of shape this is, keeping where it sits
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 ui.label(RichText::new("入れかえ").color(style::DIM).size(12.0));
                 ui.spacing_mut().item_spacing.x = 2.0;
                 for k in Kind::ALL {
@@ -375,6 +375,16 @@ impl App {
                         }
                         sh.kind = k;
                         sh.size = k.default_size();
+                        sh.params = k.default_params();
+                        if k.uses_path() && sh.path.len() < 2 {
+                            sh.path = k.default_path();
+                        }
+                        if k.uses_outline2() && sh.outline2.len() < 3 {
+                            sh.outline2 = k.default_outline2();
+                        }
+                        if matches!(k, Kind::Revolve | Kind::Sweep) {
+                            sh.outline = k.default_outline();
+                        }
                     }
                 }
             });
@@ -390,11 +400,19 @@ impl App {
                     }
                 }
             });
+            ui.horizontal_wrapped(|ui| {
+                for (i, l) in sh.kind.param_labels().iter().enumerate() {
+                    if !l.is_empty() {
+                        ui.label(RichText::new(*l).color(style::DIM).size(12.0));
+                        ui.add(egui::DragValue::new(&mut sh.params[i]).speed(0.1).max_decimals(2));
+                    }
+                }
+            });
             if matches!(sh.kind, Kind::Box | Kind::Cylinder | Kind::Extrude) {
                 style::labeled_slider(ui, "かどの丸み", &mut sh.round, 0.0..=40.0, "角の丸さ (mm)");
             }
             style::labeled_slider(ui, "とけあい", &mut sh.blend, 0.0..=80.0, "この形が、まわりとどのくらい溶けてくっつくか (グープ)");
-            if sh.kind == Kind::Extrude {
+            if sh.kind.uses_outline() {
                 outline_changed = true;
             }
         }

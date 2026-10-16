@@ -119,6 +119,7 @@ pub fn half_extents(s: &crate::model::Shape) -> V3 {
             let y = s.outline.iter().map(|p| p[1].abs()).fold(1.0_f32, f32::max);
             [x, y, s.size[0] * 0.5]
         }
+        _ => s.local_half(),
     };
     [h[0] * s.scale[0], h[1] * s.scale[1], h[2] * s.scale[2]]
 }

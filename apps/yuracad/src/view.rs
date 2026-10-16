@@ -45,6 +45,7 @@ pub fn radius_of(s: &crate::model::Shape) -> f32 {
             let w = s.outline.iter().map(|p| (p[0] * p[0] + p[1] * p[1]).sqrt()).fold(0.0_f32, f32::max);
             len([w, s.size[0] * 0.5, 0.0])
         }
+        _ => len(s.local_half()),
     };
     r * m
 }
