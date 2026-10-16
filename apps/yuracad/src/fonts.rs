@@ -47,11 +47,34 @@ const CJK_FONT_KEYWORDS: &[&str] =
 
 /// Install the system CJK font as the last fallback of the Proportional and Monospace families.
 /// Does nothing when no usable CJK font is found.
+#[allow(dead_code)]
 pub fn setup(ctx: &egui::Context) {
-    let Some(bytes) = find_cjk_font() else {
-        return;
-    };
-    ctx.set_fonts(with_cjk_fallback(egui::FontDefinitions::default(), bytes));
+    install(ctx, find_cjk_font());
+}
+
+/// Install font bytes found earlier (see [`FontJob`]); `None` changes nothing.
+pub fn install(ctx: &egui::Context, bytes: Option<Vec<u8>>) {
+    if let Some(bytes) = bytes {
+        ctx.set_fonts(with_cjk_fallback(egui::FontDefinitions::default(), bytes));
+    }
+}
+
+/// Looking for and reading the CJK font (a file of several MB) can take a while on a cold disk,
+/// so it runs on its own thread from the first moment of start-up, while the window opens.
+pub struct FontJob(Option<std::thread::JoinHandle<Option<Vec<u8>>>>);
+
+impl FontJob {
+    pub fn start() -> FontJob {
+        FontJob(std::thread::Builder::new().name("yuracad-font".into()).spawn(find_cjk_font).ok())
+    }
+
+    /// The font bytes (waits for the thread if it is still busy). Without a thread, searches now.
+    pub fn finish(self) -> Option<Vec<u8>> {
+        match self.0 {
+            Some(handle) => handle.join().ok().flatten(),
+            None => find_cjk_font(),
+        }
+    }
 }
 
 /// `fonts` with `bytes` appended as the last fallback of the Proportional and Monospace families.
