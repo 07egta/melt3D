@@ -687,6 +687,7 @@ impl App {
                             ui.selectable_value(&mut self.export_quality, 64, "ふつう (軽い)");
                             ui.selectable_value(&mut self.export_quality, 110, "きれい");
                             ui.selectable_value(&mut self.export_quality, 170, "とてもきれい (重い)");
+                            ui.selectable_value(&mut self.export_quality, 320, "さいこう (すき間のあるもの用・とても重い)");
                         });
                         crate::perf::quality_menu(ui, &mut self.perf.quality);
                     });
@@ -796,9 +797,12 @@ impl App {
                     });
                     if self.scene_open {
                         ui.separator();
-                        egui::ScrollArea::vertical().max_height(max_h).auto_shrink([true, true]).show(ui, |ui| {
+                        let out = egui::ScrollArea::vertical().max_height(max_h).auto_shrink([true, true]).show(ui, |ui| {
                             self.layers(ui);
                         });
+                        if self.shot.is_some() {
+                            eprintln!("scene list: max_h {max_h} content {:?} inner {:?} rows {}", out.content_size, out.inner_rect, self.row_rects.len());
+                        }
                     }
                 });
             },
@@ -1004,6 +1008,18 @@ impl App {
         ctx.request_repaint_after(std::time::Duration::from_millis(60));
         if dir.join("png").exists() && std::fs::remove_file(dir.join("png")).is_ok() {
             self.capture = Some(Capture { path: dir.join("out.png"), frames: 0 });
+        }
+        // `lib` opens the library card; `insert` puts the first people-model and a few more into the scene
+        if dir.join("lib").exists() && std::fs::remove_file(dir.join("lib")).is_ok() {
+            self.lib_open = true;
+        }
+        if dir.join("insert").exists() && std::fs::remove_file(dir.join("insert")).is_ok() {
+            for (c, i) in [(0, 0), (2, 1), (4, 6)] {
+                if let Some(item) = crate::library::all().get(c).and_then(|c| c.items.get(i)) {
+                    crate::library_ui::insert(self, ctx, item);
+                }
+            }
+            self.lib_open = false;
         }
         if dir.join("quit").exists() {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);

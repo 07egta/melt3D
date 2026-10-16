@@ -6,7 +6,7 @@ use solidcraft_geom::melt::{self, TriMesh};
 
 /// Cells along the longest side of the model.
 const MIN_RES: usize = 24;
-const MAX_RES: usize = 220;
+const MAX_RES: usize = 400;
 
 /// A radius around the shape's position that surely holds all of it (before blending).
 fn reach_of(s: &Shape) -> f64 {
@@ -61,22 +61,29 @@ pub fn mesh(scene: &Scene, resolution: usize, smooth: usize) -> Result<TriMesh, 
     if !extent.is_finite() || extent <= 1e-9 {
         return Err("the shapes have no size".into());
     }
-    let h = extent / resolution.clamp(MIN_RES, MAX_RES) as f64;
-    let pad = 3.0 * h;
-    let origin = [lo[0] - pad, lo[1] - pad, lo[2] - pad];
-    let mut n = [0usize; 3];
-    for a in 0..3 {
-        let cells = ((hi[a] - lo[a] + 2.0 * pad) / h).ceil();
-        if !cells.is_finite() || cells + 1.0 > melt::MAX_GRID_POINTS as f64 {
-            return Err("the model is too big for this resolution".into());
+    // as fine as asked, but coarser when the grid would be too big (a flat model can go finer than a tall one)
+    let mut res = resolution.clamp(MIN_RES, MAX_RES);
+    let (h, origin, n, points) = loop {
+        let h = extent / res as f64;
+        let pad = 3.0 * h;
+        let origin = [lo[0] - pad, lo[1] - pad, lo[2] - pad];
+        let mut n = [0usize; 3];
+        let mut fits = true;
+        for a in 0..3 {
+            let cells = ((hi[a] - lo[a] + 2.0 * pad) / h).ceil();
+            if !cells.is_finite() || cells + 1.0 > melt::MAX_GRID_POINTS as f64 {
+                fits = false;
+                break;
+            }
+            n[a] = cells as usize + 1;
         }
-        n[a] = cells as usize + 1;
-    }
-    let points = n[0]
-        .checked_mul(n[1])
-        .and_then(|p| p.checked_mul(n[2]))
-        .filter(|p| *p <= melt::MAX_GRID_POINTS)
-        .ok_or_else(|| "the model is too big for this resolution".to_string())?;
+        let points = if fits { n[0].checked_mul(n[1]).and_then(|p| p.checked_mul(n[2])).filter(|p| *p <= melt::MAX_GRID_POINTS) } else { None };
+        match points {
+            Some(points) => break (h, origin, n, points),
+            None if res > MIN_RES => res = (res * 9 / 10).max(MIN_RES),
+            None => return Err("the model is too big for this resolution".into()),
+        }
+    };
     let field = Field::new(scene);
     let mut values = vec![1.0_f32; points];
     let row = n[0];
@@ -243,7 +250,6 @@ pub struct PrintCheck {
     pub volume_cm3: f64,
     /// Is the surface closed (no holes in the mesh)?
     pub closed: bool,
-    pub triangles: usize,
 }
 
 pub fn print_check(scene: &Scene) -> Result<PrintCheck, String> {
@@ -262,7 +268,6 @@ pub fn print_check(scene: &Scene) -> Result<PrintCheck, String> {
         size: [hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]],
         volume_cm3: melt::volume(&m).abs() / 1000.0,
         closed: melt::is_watertight(&m),
-        triangles: m.triangles.len(),
     })
 }
 
@@ -314,6 +319,21 @@ mod tests {
         cut.size[0] = 10.0;
         let m = mesh(&scene_of(vec![sphere_at(0.0), cut]), 80, 2).unwrap();
         assert!(melt::volume(&m) < one - 300.0, "{} vs {one}", melt::volume(&m));
+    }
+
+    #[test]
+    fn a_huge_resolution_falls_back_instead_of_failing_and_a_thin_gap_survives() {
+        assert!(mesh(&Scene::default(), 400, 0).is_ok());
+        // two flat slabs 0.6 mm apart (a print-in-place gap) stay two slabs at the finest setting
+        let slab = |x: f32| {
+            let mut s = Shape::new(Kind::Box, [x, 0.0, 2.0], Material::default());
+            s.size = [20.0, 20.0, 4.0];
+            s.blend = 0.0;
+            s
+        };
+        let m = mesh(&scene_of(vec![slab(-10.3), slab(10.3)]), 320, 0).unwrap();
+        let v = melt::volume(&m);
+        assert!((v / 3200.0 - 1.0).abs() < 0.02, "volume {v}: the gap was filled in");
     }
 
     #[test]

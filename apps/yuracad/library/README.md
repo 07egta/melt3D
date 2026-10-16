@@ -45,3 +45,11 @@ python3 animals.py                            # writes ../animals.json and rende
 then open the PNGs with the Read tool: four views (3/4, front, right, top). Iterate until each model
 looks like what its name says. Do **not** run `cargo`.
 Only edit your own `gen/<file>.py` and `<file>.json`.
+
+## Things learnt the hard way
+
+- Revolve profiles are centred on `pos` in Z; Box/Cylinder `pos` is the centre of the shape. A 4-sided
+  Pyramid shows a corner toward -Y unless rotated 45 degrees about Z.
+- A small part melted into a neighbour of a different colour takes a mixed colour: keep details
+  (hair, eyes, buttons) at blend 0.5-1.5.
+- The headless preview ignores `Paint`, the app does not. Colour with real shapes when in doubt.
