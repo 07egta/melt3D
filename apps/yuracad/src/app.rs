@@ -718,6 +718,8 @@ impl App {
         egui::Area::new(egui::Id::new("tool_strip")).order(egui::Order::Middle).fixed_pos(rect.left_top() + egui::vec2(12.0, 12.0)).show(&ctx, |ui| {
             style::strip().show(ui, |ui| {
                 ui.spacing_mut().item_spacing = egui::vec2(0.0, 4.0);
+                // a tall strip scrolls instead of running off a small window
+                egui::ScrollArea::vertical().max_height((rect.height() - 40.0).max(120.0)).auto_shrink([true, true]).show(ui, |ui| {
                 ui.vertical_centered(|ui| {
                     for k in Kind::MAIN {
                         let r = style::icon_button(ui, 38.0, k.label(), false, |p, r, ink| glyphs::kind(p, r, k, ink, Color32::from_white_alpha(18)));
@@ -774,6 +776,7 @@ impl App {
                     if style::icon_button(ui, 38.0, "グループを作る", false, glyphs::group).clicked() {
                         self.add_group();
                     }
+                });
                 });
             });
         });
