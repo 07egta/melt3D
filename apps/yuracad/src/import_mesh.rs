@@ -9,9 +9,6 @@
 //! The entry points are `import_file` / `import_bytes`; the helpers on `ImportedMesh` weld the
 //! vertices, find the bounds, move the model to the middle of the floor and scale it.
 
-// Not wired into the app yet (see IMPORT.md): the whole public API is unused until it is.
-#![allow(dead_code)]
-
 use crate::export_mesh::FastMap;
 
 /// A bigger file is refused.
@@ -78,10 +75,12 @@ pub struct Imported {
     pub mesh: ImportedMesh,
     pub format: MeshFormat,
     /// The mesh was turned from Y up to Z up.
+    #[allow(dead_code)] // (the card turns the model itself, from the choice of 向き)
     pub turned_y_up: bool,
     /// Triangles thrown away because they have no area.
     pub dropped_triangles: usize,
-    /// What `ImportedMesh::health` found.
+    /// What `ImportedMesh::health` found (its words are already in `notes`).
+    #[allow(dead_code)]
     pub health: Health,
     /// Short friendly remarks for the person (holes, flat meshes, ...).
     pub notes: Vec<String>,
@@ -97,6 +96,7 @@ pub struct Health {
 }
 
 impl Health {
+    #[allow(dead_code)]
     pub fn is_closed(&self) -> bool {
         self.open_edges == 0 && self.nonmanifold_edges == 0
     }
@@ -184,6 +184,7 @@ impl Affine {
         m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0]) + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0])
     }
 
+    #[allow(dead_code)]
     pub fn is_finite(&self) -> bool {
         self.0.iter().flatten().all(|v| v.is_finite())
     }
@@ -618,6 +619,7 @@ impl ImportedMesh {
 
     /// Merge points closer than `tol` (0 merges only identical points). Triangles that collapse
     /// are dropped and unused points are removed. Returns how many triangles were dropped.
+    #[allow(dead_code)] // helpers of the readers' API, used by the tests
     pub fn weld(&mut self, tol: f32) -> usize {
         let mut remap = vec![0u32; self.positions.len()];
         let mut kept: Vec<[f32; 3]> = Vec::new();
@@ -699,6 +701,7 @@ impl ImportedMesh {
     }
 
     /// Move the model so that its bottom is at z = 0 and its middle is at x = y = 0.
+    #[allow(dead_code)] // helpers of the readers' API, used by the tests
     pub fn centre_and_ground(&mut self) {
         let Some((lo, hi)) = self.bounds() else { return };
         let (cx, cy) = ((lo[0] + hi[0]) * 0.5, (lo[1] + hi[1]) * 0.5);
@@ -718,6 +721,7 @@ impl ImportedMesh {
     }
 
     /// Scale about the origin so that the longest side of the box is `target_mm`.
+    #[allow(dead_code)] // helpers of the readers' API, used by the tests
     pub fn scale_to_size(&mut self, target_mm: f32) {
         let longest = self.size().into_iter().fold(0.0f32, f32::max);
         if longest > 0.0 && target_mm.is_finite() && target_mm > 0.0 {
@@ -726,6 +730,7 @@ impl ImportedMesh {
     }
 
     /// The volume inside the surface (positive when the triangles face outwards).
+    #[allow(dead_code)] // helpers of the readers' API, used by the tests
     pub fn signed_volume(&self) -> f64 {
         let at = |i: u32| self.positions.get(i as usize).map(|p| [f64::from(p[0]), f64::from(p[1]), f64::from(p[2])]);
         let mut v = 0.0;
@@ -738,6 +743,7 @@ impl ImportedMesh {
     }
 
     /// The area of the surface.
+    #[allow(dead_code)] // helpers of the readers' API, used by the tests
     pub fn surface_area(&self) -> f64 {
         let at = |i: u32| self.positions.get(i as usize).map(|p| [f64::from(p[0]), f64::from(p[1]), f64::from(p[2])]);
         let mut s = 0.0;

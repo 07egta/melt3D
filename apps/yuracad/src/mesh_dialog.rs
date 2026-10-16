@@ -169,7 +169,8 @@ fn finish(app: &mut App, ctx: &egui::Context, b: &BakeJob, baked: &Baked) -> boo
     let gi = app.scene.groups.len() - 1;
     app.sel = Some(Pick::Shape(gi, 0));
     app.frame_view(true);
-    app.say(ctx, format!("メッシュを入れました: {}（{}）", b.loaded.file_name, size_text(baked.size)));
+    let secs = baked.stats.bvh_secs + baked.stats.sign_secs + baked.stats.dist_secs;
+    app.say(ctx, format!("メッシュを入れました: {}（{}・{:.1}秒）", b.loaded.file_name, size_text(baked.size), secs));
     true
 }
 
@@ -305,7 +306,8 @@ fn options(ui: &mut egui::Ui, d: &mut Dlg, app: &App, pick: &mut bool) {
     let Some(l) = d.loaded.clone() else { return };
     ui.add_space(2.0);
     let imp = &l.imported;
-    ui.label(RichText::new(format!("{}　{}　三角形 {}", l.file_name, imp.format.label(), count_text(imp.mesh.triangles.len()))).size(12.5));
+    let dropped = if imp.dropped_triangles > 0 { format!("（面積のない {} 個はのぞきました）", imp.dropped_triangles) } else { String::new() };
+    ui.label(RichText::new(format!("{}　{}　三角形 {}{}", l.file_name, imp.format.label(), count_text(imp.mesh.triangles.len()), dropped)).size(12.5));
     let y_up = d.st.up.is_y(imp.format);
     ui.label(RichText::new(format!("もとの大きさ {}", size_text(mesh_import::upright_size(l.size, y_up)))).size(11.5).color(style::DIM));
     for n in &imp.notes {
