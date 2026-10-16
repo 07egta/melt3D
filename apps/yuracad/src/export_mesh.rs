@@ -332,7 +332,7 @@ fn clean(d: f32, h: f64) -> f32 {
 }
 
 #[derive(Default)]
-struct KeyHasher(u64);
+pub struct KeyHasher(u64);
 
 impl Hasher for KeyHasher {
     fn finish(&self) -> u64 {
@@ -343,13 +343,16 @@ impl Hasher for KeyHasher {
             self.0 = (self.0 ^ u64::from(*b)).wrapping_mul(0x0100_0000_01b3);
         }
     }
+    fn write_u32(&mut self, v: u32) {
+        self.write_u64(u64::from(v));
+    }
     fn write_u64(&mut self, v: u64) {
         let x = (v ^ (v >> 29)).wrapping_mul(0x9E37_79B9_7F4A_7C15);
         self.0 = x ^ (x >> 32);
     }
 }
 
-type FastMap<K, V> = HashMap<K, V, BuildHasherDefault<KeyHasher>>;
+pub type FastMap<K, V> = HashMap<K, V, BuildHasherDefault<KeyHasher>>;
 
 fn key_of(b: [i64; 3]) -> u64 {
     ((b[2] as u64) << 42) | ((b[1] as u64) << 21) | (b[0] as u64)
@@ -410,6 +413,10 @@ pub struct Stats {
     pub blocks: usize,
     pub cells: usize,
     pub evals: u64,
+    /// Seconds spent finding blocks, sampling them, joining the faces and building the mesh.
+    pub secs: [f64; 4],
+    /// Every crossed edge found its four cells (the mesh is closed by construction).
+    pub complete: bool,
 }
 
 /// Is the block's centre farther from the surface than the block is wide? Then it holds none.
@@ -513,6 +520,7 @@ pub fn mesh_sparse(sdf: &dyn Sdf, lo: V, hi: V, cell: f64, threads: usize, prog:
 
     // 1. the octree over blocks: keep the ones that may hold surface
     prog.phase(0);
+    let t0 = std::time::Instant::now();
     let top = nb.iter().copied().max().unwrap_or(1);
     let mut level = 0u32;
     while (1usize << level) < top {
@@ -585,6 +593,7 @@ pub fn mesh_sparse(sdf: &dyn Sdf, lo: V, hi: V, cell: f64, threads: usize, prog:
 
     // 2. sample and place the vertices, block by block
     prog.phase(1);
+    let t1 = std::time::Instant::now();
     let part = prog.sub(0.0, 1.0);
     let results = par_for(threads, blocks.len(), 4, &part, || (Scratch::new(), Vec::<(usize, BlockOut)>::new()), |st, i| {
         let Some(b) = blocks.get(i) else { return Ok(()) };
@@ -626,12 +635,13 @@ pub fn mesh_sparse(sdf: &dyn Sdf, lo: V, hi: V, cell: f64, threads: usize, prog:
 
     // 3. one quad for every crossed edge, from the four cells around it
     prog.phase(2);
+    let t2 = std::time::Instant::now();
     let part = prog.sub(0.0, 1.0);
     let tab = table();
     let positions_ref = &positions;
     let outs_ref = &outs;
     let map_ref = &map;
-    let results = par_for(threads, outs.len(), 8, &part, || Vec::<(usize, Vec<[u32; 3]>)>::new(), |st, i| {
+    let results = par_for(threads, outs.len(), 8, &part, || (Vec::<(usize, Vec<[u32; 3]>)>::new(), 0usize), |st, i| {
         let Some(o) = outs_ref.get(i) else { return Ok(()) };
         let mut tris: Vec<[u32; 3]> = Vec::with_capacity(o.edges.len() * 2);
         let bx = (o.key & 0x1F_FFFF) as i64;
@@ -655,6 +665,7 @@ pub fn mesh_sparse(sdf: &dyn Sdf, lo: V, hi: V, cell: f64, threads: usize, prog:
                 }
             }
             if !ok {
+                st.1 += 1;
                 continue;
             }
             if !below_inside {
@@ -671,12 +682,14 @@ pub fn mesh_sparse(sdf: &dyn Sdf, lo: V, hi: V, cell: f64, threads: usize, prog:
                 tris.push([q[1], q[2], q[3]]);
             }
         }
-        st.push((i, tris));
+        st.0.push((i, tris));
         Ok(())
     })?;
     let mut by_block: Vec<Vec<[u32; 3]>> = Vec::with_capacity(outs.len());
     by_block.resize_with(outs.len(), Vec::new);
-    for part in results {
+    let mut skipped = 0usize;
+    for (part, miss) in results {
+        skipped += miss;
         for (i, t) in part {
             if let Some(s) = by_block.get_mut(i) {
                 *s = t;
@@ -689,11 +702,19 @@ pub fn mesh_sparse(sdf: &dyn Sdf, lo: V, hi: V, cell: f64, threads: usize, prog:
         triangles.append(&mut t);
     }
     drop(outs);
+    let t3 = std::time::Instant::now();
     if triangles.is_empty() {
         return Err("there is nothing to export: the shapes are empty".into());
     }
     let mesh = TriMesh { positions: positions.iter().map(|p| [f64::from(p[0]), f64::from(p[1]), f64::from(p[2])]).collect(), triangles };
-    Ok(Meshed { mesh, sharp, stats: Stats { blocks: blocks.len(), cells, evals } })
+    Ok(Meshed { mesh, sharp, stats: Stats {
+            blocks: blocks.len(),
+            cells,
+            evals,
+            secs: [(t1 - t0).as_secs_f64(), (t2 - t1).as_secs_f64(), (t3 - t2).as_secs_f64(), t3.elapsed().as_secs_f64()],
+            complete: skipped == 0,
+        },
+    })
 }
 
 fn dist2(a: [f32; 3], b: [f32; 3]) -> f32 {
