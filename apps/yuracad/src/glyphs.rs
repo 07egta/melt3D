@@ -170,6 +170,13 @@ pub fn op(p: &Painter, rect: Rect, o: Op, ink: Color32) {
         Op::Paint => {
             p.circle_filled(at(f, 0.5, 0.5), f.width() * 0.17, ink);
         }
+        // overlap: two rings with the common part marked
+        Op::Intersect => {
+            let r = f.width() * 0.2;
+            p.circle_stroke(at(f, 0.38, 0.5), r, s);
+            p.circle_stroke(at(f, 0.62, 0.5), r, s);
+            p.circle_filled(at(f, 0.5, 0.5), f.width() * 0.07, ink);
+        }
     }
 }
 
