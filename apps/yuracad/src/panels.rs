@@ -94,6 +94,24 @@ impl App {
         self.row_rects.clear();
         ui.spacing_mut().item_spacing.y = 2.0;
         let ngroups = self.scene.groups.len();
+        // "x12" after a patterned group, "link" after a linked copy (looked up once for the whole list)
+        let badges: Vec<String> = if self.scene.groups.iter().any(|g| g.pattern.is_some() || g.is_linked()) {
+            let resolved = crate::pattern::resolve(&self.scene);
+            (0..ngroups)
+                .map(|gi| {
+                    let g = &self.scene.groups[gi];
+                    let n = resolved.iter().find(|r| r.gi == gi).map_or(0, |r| r.insts.len().max(1));
+                    match (g.is_linked(), g.pattern.is_some()) {
+                        (true, true) => format!("リンク ×{n}"),
+                        (true, false) => "リンク".to_string(),
+                        (false, true) => format!("×{n}"),
+                        _ => String::new(),
+                    }
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
         for gi in 0..ngroups {
             let folded = self.folded.contains(&gi);
             let sel = self.sel == Some(Pick::Group(gi));
@@ -102,7 +120,8 @@ impl App {
                 (g.name.clone(), g.op, g.visible, g.shapes.len())
             };
             let id = ui.id().with(("g", gi));
-            let row = self.row(ui, id, sel, 0.0, name, Pick::Group(gi), op, visible, glyphs::group, !folded, true);
+            let badge = badges.get(gi).cloned().unwrap_or_default();
+            let row = self.row(ui, id, sel, 0.0, name, Pick::Group(gi), op, visible, glyphs::group, !folded, true, &badge);
             if row.chevron {
                 if folded {
                     self.folded.remove(&gi);
@@ -140,6 +159,7 @@ impl App {
                         move |p, r, _| materials::swatch(p, r.center(), 8.5, &material),
                         false,
                         false,
+                        "",
                     );
                     if row.select {
                         self.sel = Some(Pick::Shape(gi, si));
@@ -202,6 +222,7 @@ impl App {
         icon: impl FnOnce(&egui::Painter, Rect, Color32),
         chevron_open: bool,
         has_chevron: bool,
+        badge: &str,
     ) -> RowResult {
         let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 30.0), Sense::click_and_drag());
         self.row_rects.push((pick, rect));
@@ -251,13 +272,11 @@ impl App {
             }
         } else {
             let col = if visible { style::TEXT } else { style::DIM };
-            ui.painter().with_clip_rect(name_rect).text(
-                egui::pos2(name_rect.left(), rect.center().y),
-                Align2::LEFT_CENTER,
-                &name,
-                FontId::proportional(13.0),
-                col,
-            );
+            let clipped = ui.painter().with_clip_rect(name_rect);
+            let used = clipped.text(egui::pos2(name_rect.left(), rect.center().y), Align2::LEFT_CENTER, &name, FontId::proportional(13.0), col);
+            if !badge.is_empty() {
+                clipped.text(egui::pos2(used.right() + 6.0, rect.center().y), Align2::LEFT_CENTER, badge, FontId::proportional(11.5), style::ACCENT);
+            }
         }
         let er = ui.interact(eye, id.with("e"), Sense::click());
         let orr = ui.interact(opr, id.with("o"), Sense::click());
@@ -352,8 +371,11 @@ impl App {
             self.scene.groups.swap(a, b);
             self.sel = Some(Pick::Group(b));
         }
+        self.pattern_section(ui, g);
         self.actions(ui);
-        ui.label(RichText::new("グループごと動かす・回す・大きさを変えられます").size(12.0).color(style::DIM));
+        let linked = self.scene.groups.get(g).is_some_and(crate::model::Group::is_linked);
+        let hint = if linked { "リンクコピーの位置・回転・大きさは、上のらんで変えます" } else { "グループごと動かす・回す・大きさを変えられます" };
+        ui.label(RichText::new(hint).size(12.0).color(style::DIM));
     }
 
     fn shape_inspector(&mut self, ui: &mut Ui, g: usize, s: usize) {

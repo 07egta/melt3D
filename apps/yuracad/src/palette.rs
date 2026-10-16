@@ -7,6 +7,7 @@ use egui::{Align2, Color32, Key, RichText, Vec2};
 use super::{App, ExportFormat, Tool};
 use crate::library;
 use crate::model::{Kind, Op};
+use crate::pattern::PatternKind;
 use crate::style;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -24,6 +25,13 @@ pub enum Action {
     MirrorCopy,
     Delete,
     Array,
+    /// A live pattern on the selected group.
+    Pattern(crate::pattern::PatternKind),
+    /// Turn the mirror about world axis 0 / 1 / 2 on or off.
+    MirrorAxis(usize),
+    ClearPattern,
+    /// A linked copy of the selected group.
+    MakeInstance,
     NewScene,
     Open,
     Save,
@@ -113,6 +121,15 @@ pub fn entries() -> Vec<Entry> {
         cmd("左右コピー", "mirror symmetric みらー", Action::MirrorCopy),
         cmd("削除", "delete remove けす さくじょ", Action::Delete),
         cmd("ならべてコピー", "array pattern repeat はいれつ", Action::Array),
+        cmd("パターン: 矩形状（たて・よこ・高さにならべる）", "pattern rectangular grid くけいじょう", Action::Pattern(PatternKind::Rect)),
+        cmd("パターン: 円形状（ぐるっとならべる）", "pattern circular polar circle えんけいじょう", Action::Pattern(PatternKind::Circular)),
+        cmd("パターン: パス上（線にそってならべる）", "pattern path along curve ぱすじょう", Action::Pattern(PatternKind::Path)),
+        cmd("パターン: ジオメトリ（点ごとにおく）", "pattern geometry points vertices じおめとり", Action::Pattern(PatternKind::Geometry)),
+        cmd("ミラー X（左右にうつす）", "mirror symmetry live x みらー さゆう", Action::MirrorAxis(0)),
+        cmd("ミラー Y（前後にうつす）", "mirror symmetry live y みらー ぜんご", Action::MirrorAxis(1)),
+        cmd("ミラー Z（上下にうつす）", "mirror symmetry live z みらー じょうげ", Action::MirrorAxis(2)),
+        cmd("パターンをやめる", "pattern remove clear off やめる", Action::ClearPattern),
+        cmd("インスタンスを作る（リンクコピー）", "instance linked copy いんすたんす りんく", Action::MakeInstance),
         cmd("新しく作る", "new あたらしく", Action::NewScene),
         cmd("開く", "open load ひらく", Action::Open),
         cmd("保存", "save ほぞん", Action::Save),
@@ -228,6 +245,10 @@ impl App {
             Action::MirrorCopy => self.mirror_copy(),
             Action::Delete => self.delete_selected(),
             Action::Array => crate::array::open(ctx),
+            Action::Pattern(k) => self.set_pattern_kind(ctx, k),
+            Action::MirrorAxis(a) => self.toggle_mirror(ctx, a),
+            Action::ClearPattern => self.clear_pattern(),
+            Action::MakeInstance => self.make_instance(ctx),
             Action::NewScene => {
                 self.new_scene(crate::model::Scene::default());
                 self.path = None;
