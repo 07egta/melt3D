@@ -6,6 +6,7 @@ mod app;
 mod array;
 mod camera;
 mod clip;
+mod corner;
 mod export;
 mod export_decimate;
 mod export_dialog;

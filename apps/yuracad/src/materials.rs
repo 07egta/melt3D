@@ -34,7 +34,13 @@ pub struct Preset {
 }
 
 const fn m(color: [f32; 3], roughness: f32, metallic: f32, glow: f32, glass: f32, iridescence: f32, coat: f32) -> Material {
-    Material { color, roughness, metallic, glow, glass, iridescence, coat, translucency: 0.0 }
+    Material { glow, glass, iridescence, coat, ..Material::plain(color, roughness, metallic) }
+}
+
+/// The same material with a gradient from its colour to `color2` (bottom to top; `soft` is the
+/// width of the blend).
+const fn grad(base: Material, color2: [f32; 3], soft: f32) -> Material {
+    Material { color2, gradient: 1.0, grad_soft: soft, ..base }
 }
 
 /// The same material with light seeping through it.
@@ -107,6 +113,12 @@ static PRESETS: &[Preset] = &[
     p("夜空", Fun, m([0.10, 0.12, 0.35], 0.20, 0.5, 0.2, 0.0, 0.6, 0.7)),
     p("マシュマロ", Fun, t(m([1.00, 0.92, 0.94], 0.75, 0.0, 0.0, 0.0, 0.0, 0.0), 0.7)),
     p("チョコ", Fun, m([0.30, 0.16, 0.10], 0.35, 0.0, 0.0, 0.0, 0.0, 0.7)),
+    p("サンセット", Fun, grad(m([0.99, 0.74, 0.28], 0.40, 0.0, 0.0, 0.0, 0.0, 0.0), [0.55, 0.22, 0.78], 0.9)),
+    p("うみ", Fun, grad(m([0.05, 0.22, 0.62], 0.25, 0.0, 0.0, 0.0, 0.0, 0.5), [0.30, 0.92, 0.85], 0.8)),
+    p("ラムネ", Fun, grad(t(m([0.55, 0.85, 1.00], 0.15, 0.0, 0.0, 0.3, 0.0, 0.6), 0.4), [0.90, 0.98, 1.00], 0.7)),
+    p("いちごミルク", Fun, grad(m([1.00, 0.45, 0.60], 0.45, 0.0, 0.0, 0.0, 0.0, 0.3), [1.00, 0.93, 0.92], 0.6)),
+    p("オーロラ", Fun, grad(m([0.20, 0.95, 0.60], 0.30, 0.0, 0.5, 0.0, 0.0, 0.4), [0.60, 0.25, 0.95], 1.0)),
+    p("もりのあさ", Fun, grad(m([0.14, 0.40, 0.22], 0.70, 0.0, 0.0, 0.0, 0.0, 0.0), [0.88, 0.96, 0.55], 0.8)),
     p("ミントアイス", Fun, t(m([0.62, 0.95, 0.85], 0.55, 0.0, 0.0, 0.0, 0.0, 0.3), 0.4)),
 ];
 
@@ -126,6 +138,32 @@ fn shade(c: [f32; 3], k: f32) -> Color32 {
 
 fn lighten(c: [f32; 3], t: f32) -> Color32 {
     color32([c[0] + (1.0 - c[0]) * t, c[1] + (1.0 - c[1]) * t, c[2] + (1.0 - c[2]) * t])
+}
+
+/// The gradient over a swatch: the second colour fades in from the bottom to the top of the ball
+/// (the swatch always shows the vertical direction, whichever axis the material uses).
+fn gradient_tint(painter: &Painter, centre: Pos2, r: f32, m: &Material, body_alpha: f32) {
+    use egui::epaint::Mesh;
+    const STEPS: usize = 40;
+    let tint = |y: f32| {
+        // y from the centre, down is positive: t = 0 at the bottom of the ball, 1 at the top
+        let t = (0.5 - y / (2.0 * r)).clamp(0.0, 1.0);
+        let t = if m.grad_flip { 1.0 - t } else { t };
+        let a = (m.gradient_weight(t) * 0.8 * body_alpha).clamp(0.0, 1.0);
+        let c = color32(m.color2);
+        Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), (a * 255.0) as u8)
+    };
+    let mut mesh = Mesh::default();
+    mesh.colored_vertex(centre, tint(0.0));
+    for i in 0..=STEPS {
+        let a = i as f32 / STEPS as f32 * std::f32::consts::TAU;
+        let (sn, cs) = a.sin_cos();
+        mesh.colored_vertex(centre + vec2(cs * r, sn * r), tint(sn * r));
+    }
+    for i in 1..=STEPS as u32 {
+        mesh.add_triangle(0, i, i + 1);
+    }
+    painter.add(egui::Shape::mesh(mesh));
 }
 
 /// A small shaded ball showing roughly what the material looks like.
@@ -162,6 +200,9 @@ pub fn swatch(painter: &Painter, centre: Pos2, radius: f32, m: &Material) {
         vec2(-0.34, -0.38),
         &[(0.0, lighten(c, 0.22).gamma_multiply(body_alpha)), (0.45, shade(c, 0.92).gamma_multiply(body_alpha)), (1.0, base.gamma_multiply(body_alpha))],
     );
+    if m.has_gradient() {
+        gradient_tint(painter, centre, r, m, body_alpha);
+    }
     if metal > 0.3 {
         // a bright horizon band
         let y = centre.y + r * 0.1;
@@ -233,5 +274,45 @@ mod tests {
             }
         });
         out.textures_delta.clear();
+    }
+
+    /// `YT_OUT=/tmp/grad.yura cargo test -p yuracad dump_gradient_showcase -- --ignored` writes a scene with the
+    /// gradient presets and a few directions, for looking at.
+    #[test]
+    #[ignore]
+    fn dump_gradient_showcase() {
+        use crate::model::{Kind, Op, Shape};
+        let out = std::env::var("YT_OUT").unwrap_or_else(|_| "/tmp/grad.yura".into());
+        let mut sc = crate::model::Scene::default();
+        sc.groups[0].shapes.clear();
+        sc.groups[0].blend = 0.0;
+        let grads: Vec<&Preset> = presets().iter().filter(|p| p.material.has_gradient()).collect();
+        for (i, pr) in grads.iter().enumerate() {
+            let mut sh = Shape::new(Kind::Sphere, [i as f32 * 28.0, 0.0, 12.0], pr.material);
+            sh.size = [12.0, 1.0, 1.0];
+            sh.blend = 0.0;
+            sc.groups[0].shapes.push(sh);
+        }
+        // directions, flip, follow the shape, a stain over a gradient
+        let base = Material { color: [1.0, 0.2, 0.2], color2: [0.2, 0.3, 1.0], gradient: 1.0, grad_soft: 0.5, ..Material::default() };
+        for (i, (axis, flip, local, rot)) in [(0u8, false, false, 0.0), (1, false, false, 0.0), (2, true, false, 0.0), (2, false, true, 35.0), (2, false, false, 35.0)].into_iter().enumerate() {
+            let mut sh = Shape::new(Kind::Box, [i as f32 * 28.0, 40.0, 12.0], Material { grad_axis: axis, grad_flip: flip, grad_local: local, ..base });
+            sh.size = [20.0, 20.0, 24.0];
+            sh.rot = [rot, 0.0, 0.0];
+            sh.blend = 0.0;
+            sh.round = 4.0;
+            sc.groups[0].shapes.push(sh);
+        }
+        let mut stain = Shape::new(Kind::Sphere, [0.0, 82.0, 12.0], Material { color: [0.1, 0.9, 0.3], ..Material::default() });
+        stain.size = [9.0, 1.0, 1.0];
+        stain.op = Op::Paint;
+        stain.blend = 3.0;
+        let mut cyl = Shape::new(Kind::Cylinder, [0.0, 80.0, 12.0], base);
+        cyl.size = [14.0, 24.0, 1.0];
+        cyl.blend = 0.0;
+        cyl.round = 3.0;
+        sc.groups[0].shapes.push(cyl);
+        sc.groups[0].shapes.push(stain);
+        let _ = std::fs::write(out, sc.to_json());
     }
 }

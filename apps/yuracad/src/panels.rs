@@ -5,7 +5,7 @@ use egui::{Align2, Color32, FontId, Pos2, Rect, RichText, Sense, Stroke, Ui, vec
 
 use crate::app::{App, Tab};
 use crate::materials::{self, Category};
-use crate::model::{BlendMode, Kind, Light, MAX_LIGHTS, MAX_OUTLINE, MAX_SAVED, Material, Melt, Op, Pick};
+use crate::model::{BlendMode, Corner, Kind, Light, MAX_LIGHTS, MAX_OUTLINE, MAX_SAVED, Material, Melt, Op, Pick, ROUND_MAX};
 use crate::sdf;
 use crate::view::targets;
 use crate::{glyphs, style};
@@ -415,8 +415,13 @@ impl App {
                     }
                 }
             });
-            if matches!(sh.kind, Kind::Box | Kind::Cylinder | Kind::Extrude) {
-                style::labeled_slider(ui, "かどの丸み", &mut sh.round, 0.0..=40.0, "角の丸さ (mm)");
+            if sh.kind.can_round() {
+                style::labeled_slider(ui, "丸み", &mut sh.round, 0.0..=ROUND_MAX, "角やふちの丸さ (mm)。大きすぎても、形がこわれない所でとまります");
+                let styles = [("丸", "角を丸くする (フィレット)"), ("面取り", "角をななめに平らに切り落とす (チャンファー)")];
+                let now = Corner::ALL.iter().position(|c| *c == sh.corner);
+                if let Some(i) = style::segmented(ui, "corner_style", &styles, now, true) {
+                    sh.corner = Corner::ALL.get(i).copied().unwrap_or_default();
+                }
             }
             style::labeled_slider(ui, "とけあい", &mut sh.blend, 0.0..=80.0, "この形が、まわりとどのくらい溶けてくっつくか (グープ)");
             style::labeled_slider(ui, "ちゅうぐう\nシェル", &mut sh.shell, 0.0..=40.0, "中をくり抜いて、かべの あつさ(mm)だけ のこす。0 = つまっている");
@@ -585,6 +590,7 @@ impl App {
         style::labeled_slider(ui, "にじいろ", &mut m.iridescence, 0.0..=1.0, "見る角度で虹色に変わる (シャボン玉・タマムシ)");
         style::labeled_slider(ui, "コート", &mut m.coat, 0.0..=1.0, "ピカピカのクリア層 (車のペンキ・キャンディ)");
         style::labeled_slider(ui, "すけ感", &mut m.translucency, 0.0..=1.0, "光がしみこむ (ワックス・ゼリー・こおり)");
+        gradient_controls(ui, &mut m);
 
         if m != first {
             m.sanitize();
@@ -927,3 +933,33 @@ fn melt_preview(ui: &mut Ui, m: &Melt) {
     }
     p.text(rect.left_bottom() + vec2(8.0, -6.0), Align2::LEFT_BOTTOM, "プレビュー", FontId::proportional(10.0), Color32::from_white_alpha(70));
 }
+
+/// The gradient part of the material tab: a switch, the second colour, the direction and the blend.
+fn gradient_controls(ui: &mut Ui, m: &mut Material) {
+    style::title(ui, "グラデーション");
+    let mut on = m.has_gradient();
+    if style::switch(ui, &mut on, "グラデーション").on_hover_text("2つの色が、なめらかにかわる").changed() {
+        m.gradient = if on { 1.0 } else { 0.0 };
+    }
+    if !on {
+        return;
+    }
+    ui.horizontal(|ui| {
+        style::row_label(ui, "2つ目の色");
+        style::color_edit(ui, &mut m.color2);
+    });
+    let dirs = [("左右", "X: ひだり → みぎ"), ("前後", "Y: まえ → うしろ"), ("上下", "Z: した → うえ")];
+    if let Some(i) = style::segmented(ui, "grad_axis", &dirs, Some(usize::from(m.grad_axis.min(2))), true) {
+        m.grad_axis = i as u8;
+    }
+    ui.horizontal(|ui| {
+        style::switch(ui, &mut m.grad_flip, "反転").on_hover_text("色の向きをぎゃくにする");
+        style::switch(ui, &mut m.grad_local, "形にそう").on_hover_text("入れると、形を回したり のばしたりしても、色が形についてくる");
+    });
+    style::labeled_slider(ui, "とけぐあい", &mut m.grad_soft, 0.0..=1.0, "0 = くっきり2色 ⇄ 1 = ゆっくり とける");
+    style::labeled_slider(ui, "つよさ", &mut m.gradient, 0.05..=1.0, "おわりの色が どのくらい出るか");
+    style::labeled_slider(ui, "ここから", &mut m.grad_from, 0.0..=1.0, "形のどこから色がかわりはじめるか (0 = はし)");
+    style::labeled_slider(ui, "ここまで", &mut m.grad_to, 0.0..=1.0, "形のどこで色がかわりおわるか (1 = はんたいのはし)");
+}
+
+
