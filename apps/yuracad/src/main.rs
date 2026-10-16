@@ -27,6 +27,8 @@ mod prims;
 mod panels;
 mod png;
 mod sdf;
+mod sketch;
+mod sketch_ui;
 mod stroke;
 mod style;
 mod svg;

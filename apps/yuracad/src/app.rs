@@ -76,6 +76,8 @@ pub struct App {
     pub ct: crate::curve_tool::State,
     /// The pipe (trace) tool.
     pub pt: crate::pipe_tool::State,
+    /// The sketch tool (plane, pen, finished profile) and the outline editing.
+    pub sk: crate::sketch_ui::State,
     /// Frame cache, fast mode, quality and other speed-ups (see `perf.rs`).
     pub perf: crate::perf::Perf,
     /// The last copy (text), so the Edit menu can paste without asking the system.
@@ -138,6 +140,7 @@ impl App {
             mat_group: false,
             ct: Default::default(),
             pt: Default::default(),
+            sk: Default::default(),
             perf: crate::perf::Perf::default(),
             clipboard: None,
             lib_open: false,
@@ -161,7 +164,7 @@ impl App {
     // ----- editing -----
 
     /// Undo steps are made here: a change counts as finished once the mouse is up.
-    fn settle(&mut self, ctx: &egui::Context) {
+    pub(crate) fn settle(&mut self, ctx: &egui::Context) {
         if self.scene != self.committed && !ctx.input(|i| i.pointer.any_down()) {
             self.undo.push(std::mem::replace(&mut self.committed, self.scene.clone()));
             if self.undo.len() > UNDO_LIMIT {
@@ -478,6 +481,7 @@ impl App {
             return;
         }
         use egui::{Key, Modifiers};
+        self.sketch_keys(ctx);
         self.curve_keys(ctx);
         self.clipboard_events(ctx);
         let cmd = Modifiers::COMMAND;
@@ -723,6 +727,7 @@ impl App {
                     }
                     self.curve_button(ui);
                     self.pipe_button(ui);
+                    self.sketch_button(ui);
                     style::menu_button(ui, "…", false, |ui| {
                         ui.set_min_width(190.0);
                         ui.label(egui::RichText::new("ほかの形").size(12.0).color(style::DIM));
@@ -1064,6 +1069,7 @@ impl eframe::App for App {
             self.tool_pill(ui);
             self.draw_card(&ctx);
             self.pipe_card(&ctx);
+            self.sketch_card(&ctx);
             self.keys_card(ui);
             crate::svg_dialog::update(self, &ctx);
             crate::array::update(self, &ctx);
