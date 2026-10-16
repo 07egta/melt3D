@@ -16,6 +16,9 @@ use crate::{export, glyphs, style};
 #[path = "app_preview.rs"]
 mod preview;
 
+#[path = "palette.rs"]
+mod palette;
+
 const UNDO_LIMIT: usize = 200;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -63,7 +66,6 @@ pub struct App {
     /// A left-drag that began on empty space is turning the view.
     pub orbiting: bool,
     pub show_keys: bool,
-    pub scene_open: bool,
     /// Which tab of the right panel is showing.
     pub tab: Tab,
     /// The material list's chosen category (None = the person's saved ones).
@@ -129,7 +131,6 @@ impl App {
             fly: None,
             orbiting: false,
             show_keys: false,
-            scene_open: true,
             tab: Tab::Shape,
             mat_cat: Some(crate::materials::Category::Basic),
             mat_group: false,
@@ -526,6 +527,9 @@ impl App {
             self.flip_op();
         }
         if hit(plain, Key::F) {
+            palette::open(ctx);
+        }
+        if hit(Modifiers::SHIFT, Key::F) {
             self.frame_view(true);
         }
         if hit(plain, Key::Home) {
@@ -561,24 +565,18 @@ impl App {
 
     fn top_bar(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
-        egui::Panel::top("top").exact_size(56.0).frame(egui::Frame::new().fill(style::PANEL_DARK).inner_margin(egui::Margin::symmetric(14, 6))).show(
+        egui::Panel::top("top").exact_size(46.0).frame(egui::Frame::new().fill(style::PANEL_DARK).inner_margin(egui::Margin::symmetric(12, 6))).show(
             ui,
             |ui| {
                 let bar = ui.max_rect();
-                style::panel_sheen(ui, bar.expand2(egui::vec2(14.0, 6.0)), style::PANEL_DARK, style::Edge::Bottom);
-                let mut left_end = bar.left();
-                // left: logo, file, undo / redo.  right: export.
+                style::panel_sheen(ui, bar.expand2(egui::vec2(12.0, 6.0)), style::PANEL_DARK, style::Edge::Bottom);
+                // left: logo, file, edit, undo / redo, search.  right: export.  middle: the file name.
                 ui.horizontal_centered(|ui| {
-                    ui.spacing_mut().item_spacing.x = 8.0;
-                    let (mark, _) = ui.allocate_exact_size(egui::vec2(22.0, 22.0), egui::Sense::hover());
-                    style::gfx::ball(
-                        ui.painter(),
-                        mark.center(),
-                        10.0,
-                        egui::vec2(-0.4, -0.45),
-                        &[(0.0, Color32::from_rgb(226, 218, 255)), (0.45, style::ACCENT), (1.0, Color32::from_rgb(70, 52, 170))],
-                    );
-                    ui.label(RichText::new("YURACAD").size(17.0).strong().color(style::ACCENT));
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    let (mark, _) = ui.allocate_exact_size(egui::vec2(18.0, 18.0), egui::Sense::hover());
+                    ui.painter().circle_filled(mark.center(), 8.0, style::ACCENT);
+                    ui.painter().circle_filled(mark.center() + egui::vec2(-2.5, -2.5), 2.6, Color32::from_white_alpha(120));
+                    ui.label(RichText::new("YURACAD").size(14.0).strong().color(style::TEXT));
                     style::vsep(ui);
                     style::menu_button(ui, "ファイル", false, |ui| {
                         if ui.button("新しく作る").clicked() {
@@ -652,13 +650,18 @@ impl App {
                         }
                     });
                     style::vsep(ui);
-                    if style::icon_button(ui, 36.0, "元に戻す (Ctrl+Z)", false, glyphs::undo).clicked() {
+                    if style::icon_button(ui, 32.0, "元に戻す (Ctrl+Z)", false, glyphs::undo).clicked() {
                         self.undo();
                     }
-                    if style::icon_button(ui, 36.0, "やり直し (Ctrl+Shift+Z)", false, glyphs::redo).clicked() {
+                    if style::icon_button(ui, 32.0, "やり直し (Ctrl+Shift+Z)", false, glyphs::redo).clicked() {
                         self.redo();
                     }
-                    left_end = ui.cursor().left();
+                    style::vsep(ui);
+                    if style::pill(ui, "さがす  F", false).on_hover_text("形・ライブラリ・コマンドをさがす (F)").clicked() {
+                        palette::open(&ctx);
+                    }
+                    let left_end = ui.cursor().left();
+                    let right_start = ui.max_rect().right();
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         style::menu_button(ui, "書き出し", true, |ui| {
                             if ui.button("3Dプリント用 STL").on_hover_text("Ctrl+E").clicked() {
@@ -673,13 +676,13 @@ impl App {
                                 self.export_as(&ctx, ExportFormat::Obj);
                                 ui.close();
                             }
+                            if ui.button("画像 PNG").on_hover_text("見えているとおりに保存").clicked() {
+                                self.start_png(&ctx);
+                                ui.close();
+                            }
                             ui.separator();
                             if ui.button("プリントチェック").on_hover_text("大きさ・体積・穴がないか").clicked() {
                                 self.print_check(&ctx);
-                                ui.close();
-                            }
-                            if ui.button("画像 PNG").on_hover_text("見えているとおりに保存").clicked() {
-                                self.start_png(&ctx);
                                 ui.close();
                             }
                             ui.separator();
@@ -691,120 +694,109 @@ impl App {
                         });
                         crate::perf::quality_menu(ui, &mut self.perf.quality);
                     });
+                    // the file name in the middle of the bar
+                    let name = self.path.as_ref().and_then(|p| p.file_stem()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "名前なし".into());
+                    let label = format!("{}{}", name, if self.dirty { " ●" } else { "" });
+                    let cx = bar.center().x.clamp(left_end + 60.0, (right_start - 220.0).max(left_end + 60.0));
+                    ui.painter().text(egui::pos2(cx, bar.center().y), egui::Align2::CENTER_CENTER, label, egui::FontId::proportional(13.0), style::DIM);
                 });
-                // the shapes to add, in the middle of the bar like Womp's; its width is remembered from the last frame so it stays centred
-                let width_id = egui::Id::new("top_centre_width");
-                let w = ctx.data(|d| d.get_temp::<f32>(width_id)).filter(|w| w.is_finite() && *w > 100.0).unwrap_or(540.0);
-                let cx = bar.center().x.min(bar.right() - 130.0 - w * 0.5).max(left_end + 14.0 + w * 0.5);
-                let rect = egui::Rect::from_center_size(egui::pos2(cx, bar.center().y), egui::vec2(w, 44.0));
-                let used = ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
-                    ui.horizontal_centered(|ui| {
-                        ui.spacing_mut().item_spacing.x = 8.0;
-                        style::tray(ui, |ui| {
-                            ui.horizontal(|ui| {
-                                ui.spacing_mut().item_spacing.x = 4.0;
-                                for k in Kind::MAIN {
-                                    let r = style::icon_button(ui, 38.0, k.label(), false, |p, r, ink| glyphs::kind(p, r, k, ink, Color32::from_white_alpha(18)));
-                                    if r.clicked() {
-                                        self.add_shape(&ctx, k);
-                                    }
-                                }
-                                self.curve_button(ui);
-                                style::menu_button(ui, "もっと ▾", false, |ui| {
-                                    ui.set_min_width(190.0);
-                                    ui.label(egui::RichText::new("ほかの形").size(12.0).color(style::DIM));
-                                    for k in Kind::MORE {
-                                        let r = ui.horizontal(|ui| {
-                                            let (rc, _) = ui.allocate_exact_size(egui::vec2(24.0, 24.0), egui::Sense::hover());
-                                            glyphs::kind(ui.painter(), rc, k, ui.visuals().text_color(), Color32::from_white_alpha(18));
-                                            ui.selectable_label(false, k.label())
-                                        });
-                                        if r.inner.clicked() {
-                                            self.add_shape(&ctx, k);
-                                            ui.close();
-                                        }
-                                    }
-                                    ui.separator();
-                                    ui.label(egui::RichText::new("CADの機能").size(12.0).color(style::DIM));
-                                    for k in Kind::CAD {
-                                        let r = ui.horizontal(|ui| {
-                                            let (rc, _) = ui.allocate_exact_size(egui::vec2(24.0, 24.0), egui::Sense::hover());
-                                            glyphs::kind(ui.painter(), rc, k, ui.visuals().text_color(), Color32::from_white_alpha(18));
-                                            ui.selectable_label(false, k.label())
-                                        });
-                                        if r.inner.clicked() {
-                                            self.add_shape(&ctx, k);
-                                            ui.close();
-                                        }
-                                    }
-                                });
-                            });
-                        });
-                        style::tray(ui, |ui| {
-                            ui.horizontal(|ui| {
-                                ui.spacing_mut().item_spacing.x = 4.0;
-                                for op in [Op::Add, Op::Subtract, Op::Paint, Op::Intersect] {
-                                    let on = self.new_op == op;
-                                    let col = if on { Color32::WHITE } else { style::op_color(op) };
-                                    let tip = match op {
-                                        Op::Add => "つぎは「足す」(くっつく)",
-                                        Op::Subtract => "つぎは「削る」(くり抜く)",
-                                        Op::Paint => "つぎは「ぬる」(形は変えずに色だけ)",
-                                        Op::Intersect => "つぎは「重ねる」(前の形とかさなる所だけのこす)",
-                                    };
-                                    if style::icon_button(ui, 38.0, tip, on, |p, r, _| glyphs::op(p, r, op, col)).clicked() {
-                                        self.new_op = op;
-                                    }
-                                }
-                            });
-                        });
-                        style::tray(ui, |ui| {
-                            if style::icon_button(ui, 38.0, "グループを作る", false, glyphs::group).clicked() {
-                                self.add_group();
-                            }
-                        });
-                        style::tray(ui, |ui| {
-                            if style::pill(ui, "ライブラリ", self.lib_open).on_hover_text("ひと・どうぶつ・どうぐなど、できあいの形").clicked() {
-                                self.lib_open = !self.lib_open;
-                            }
-                        });
-                    })
-                    .response
-                    .rect
-                    .width()
-                });
-                ctx.data_mut(|d| d.insert_temp(width_id, used.inner));
             },
         );
     }
 
-    /// The scene list floating at the top left, like Womp's.
-    fn scene_card(&mut self, ui: &mut Ui) {
+    /// The tools down the left side of the viewport: the shapes to add, the curve, the operation, groups.
+    fn tool_strip(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
         let rect = self.view_rect;
-        let max_h = (rect.height() - 90.0).clamp(120.0, 520.0);
-        egui::Area::new(egui::Id::new("scene_card")).order(egui::Order::Middle).fixed_pos(rect.left_top() + egui::vec2(16.0, 16.0)).show(
-            &ctx,
-            |ui| {
-                style::card().show(ui, |ui| {
-                    ui.set_width(236.0);
-                    ui.horizontal(|ui| {
-                        if style::chevron(ui, self.scene_open).clicked() {
-                            self.scene_open = !self.scene_open;
-                        }
-                        ui.label(RichText::new("シーン").strong().size(14.0));
-                        ui.label(RichText::new(format!("{}こ", self.scene.shape_count())).size(12.0).color(style::DIM));
-                    });
-                    if self.scene_open {
-                        ui.separator();
-                        let out = egui::ScrollArea::vertical().max_height(max_h).auto_shrink([true, true]).show(ui, |ui| {
-                            self.layers(ui);
-                        });
-                        if self.shot.is_some() {
-                            eprintln!("scene list: max_h {max_h} content {:?} inner {:?} rows {}", out.content_size, out.inner_rect, self.row_rects.len());
+        egui::Area::new(egui::Id::new("tool_strip")).order(egui::Order::Middle).fixed_pos(rect.left_top() + egui::vec2(12.0, 12.0)).show(&ctx, |ui| {
+            style::strip().show(ui, |ui| {
+                ui.spacing_mut().item_spacing = egui::vec2(0.0, 4.0);
+                ui.vertical_centered(|ui| {
+                    for k in Kind::MAIN {
+                        let r = style::icon_button(ui, 38.0, k.label(), false, |p, r, ink| glyphs::kind(p, r, k, ink, Color32::from_white_alpha(18)));
+                        if r.clicked() {
+                            self.add_shape(&ctx, k);
                         }
                     }
+                    self.curve_button(ui);
+                    style::menu_button(ui, "…", false, |ui| {
+                        ui.set_min_width(190.0);
+                        ui.label(egui::RichText::new("ほかの形").size(12.0).color(style::DIM));
+                        for k in Kind::MORE {
+                            let r = ui.horizontal(|ui| {
+                                let (rc, _) = ui.allocate_exact_size(egui::vec2(24.0, 24.0), egui::Sense::hover());
+                                glyphs::kind(ui.painter(), rc, k, ui.visuals().text_color(), Color32::from_white_alpha(18));
+                                ui.selectable_label(false, k.label())
+                            });
+                            if r.inner.clicked() {
+                                self.add_shape(&ctx, k);
+                                ui.close();
+                            }
+                        }
+                        ui.separator();
+                        ui.label(egui::RichText::new("CADの機能").size(12.0).color(style::DIM));
+                        for k in Kind::CAD {
+                            let r = ui.horizontal(|ui| {
+                                let (rc, _) = ui.allocate_exact_size(egui::vec2(24.0, 24.0), egui::Sense::hover());
+                                glyphs::kind(ui.painter(), rc, k, ui.visuals().text_color(), Color32::from_white_alpha(18));
+                                ui.selectable_label(false, k.label())
+                            });
+                            if r.inner.clicked() {
+                                self.add_shape(&ctx, k);
+                                ui.close();
+                            }
+                        }
+                    });
+                    style::hsep(ui);
+                    for op in [Op::Add, Op::Subtract, Op::Paint, Op::Intersect] {
+                        let on = self.new_op == op;
+                        let col = if on { Color32::WHITE } else { style::op_color(op) };
+                        let tip = match op {
+                            Op::Add => "つぎは「足す」(くっつく)",
+                            Op::Subtract => "つぎは「削る」(くり抜く)",
+                            Op::Paint => "つぎは「ぬる」(形は変えずに色だけ)",
+                            Op::Intersect => "つぎは「重ねる」(前の形とかさなる所だけのこす)",
+                        };
+                        if style::icon_button(ui, 38.0, tip, on, |p, r, _| glyphs::op(p, r, op, col)).clicked() {
+                            self.new_op = op;
+                        }
+                    }
+                    style::hsep(ui);
+                    if style::icon_button(ui, 38.0, "グループを作る", false, glyphs::group).clicked() {
+                        self.add_group();
+                    }
                 });
+            });
+        });
+    }
+
+    /// The docked panel on the left: the scene list (outliner) and the ready-made models (assets).
+    fn left_dock(&mut self, ui: &mut Ui) {
+        egui::Panel::left("dock").exact_size(272.0).resizable(false).frame(egui::Frame::new().fill(style::PANEL_DARK).inner_margin(egui::Margin::symmetric(10, 10))).show(
+            ui,
+            |ui| {
+                style::panel_sheen(ui, ui.max_rect().expand2(egui::vec2(10.0, 10.0)), style::PANEL_DARK, style::Edge::Left);
+                let tabs = [("シーン", ""), ("ライブラリ", "")];
+                if let Some(i) = style::segmented(ui, "dock_tabs", &tabs, Some(usize::from(self.lib_open)), true) {
+                    self.lib_open = i == 1;
+                }
+                ui.add_space(6.0);
+                if self.lib_open {
+                    crate::library_ui::panel(self, ui);
+                } else {
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(format!("{}こ", self.scene.shape_count())).size(12.0).color(style::DIM));
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if style::icon_button(ui, 26.0, "グループを作る", false, glyphs::group).clicked() {
+                                self.add_group();
+                            }
+                        });
+                    });
+                    ui.separator();
+                    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                        self.layers(ui);
+                    });
+                }
             },
         );
     }
@@ -873,7 +865,8 @@ impl App {
                         ("左ドラッグ (何もない所)", "回す"),
                         ("クリック", "選ぶ　Shiftでグループ"),
                         ("ダブルクリック", "その形を見る"),
-                        ("F / Home", "選んだもの / 全体を見る"),
+                        ("F", "さがす（形・ライブラリ・コマンド）"),
+                        ("Shift+F / Home", "選んだもの / 全体を見る"),
                         ("1 3 7 (Ctrlで反対)", "正面 / 右 / 上から"),
                         ("5", "遠近 ⇄ 平行"),
                         ("Q A W E R", "選ぶ / ぜんぶ / 動かす / 回す / 大きさ"),
@@ -1056,19 +1049,20 @@ impl eframe::App for App {
         }
         self.top_bar(ui);
         self.status_bar(ui);
+        self.left_dock(ui);
         self.side(ui);
         egui::CentralPanel::default().frame(egui::Frame::new().fill(Color32::from_rgb(52, 52, 56))).show(ui, |ui| {
             self.last_view_height = ui.available_height();
             self.viewport(ui);
         });
         if self.capture.is_none() {
-            self.scene_card(ui);
+            self.tool_strip(ui);
             self.tool_pill(ui);
             self.draw_card(&ctx);
             self.keys_card(ui);
             crate::svg_dialog::update(self, &ctx);
-            crate::library_ui::update(self, &ctx);
             crate::array::update(self, &ctx);
+            self.palette_ui(&ctx);
         }
         self.capture_step(&ctx);
         self.settle(&ctx);
