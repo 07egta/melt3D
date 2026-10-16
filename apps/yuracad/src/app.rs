@@ -52,8 +52,6 @@ pub struct App {
     /// A row of the scene list being dragged, and where every row is on screen this frame.
     pub layer_drag: Option<Pick>,
     pub row_rects: Vec<(Pick, egui::Rect)>,
-    pub export_quality: usize,
-    pub export_smooth: usize,
     shot: Option<PathBuf>,
     /// The viewport's place on screen (for a picture of it).
     pub view_rect: egui::Rect,
@@ -122,8 +120,6 @@ impl App {
             folded: HashSet::new(),
             layer_drag: None,
             row_rects: Vec::new(),
-            export_quality: 110,
-            export_smooth: 2,
             shot: std::env::var_os("YURACAD_TEST_DIR").map(PathBuf::from),
             view_rect: egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0)),
             capture: None,

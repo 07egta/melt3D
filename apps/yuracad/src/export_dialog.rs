@@ -60,9 +60,6 @@ impl<T: Clone + Send + 'static> Task<T> {
     fn running(&self) -> bool {
         self.slot.lock().is_ok_and(|s| matches!(*s, Slot::Running))
     }
-    fn idle_now(&self) -> bool {
-        self.slot.lock().is_ok_and(|s| matches!(*s, Slot::Idle))
-    }
     fn result(&self) -> Option<Result<T, String>> {
         match &*self.slot.lock().ok()? {
             Slot::Done(r) => Some(r.clone()),
@@ -219,7 +216,13 @@ fn bytes_per_tri(f: Format) -> f64 {
 }
 
 fn default_name(app: &App, f: Format) -> String {
-    let stem = app.path.as_ref().and_then(|p| p.file_stem()).map(|s| s.to_string_lossy().into_owned()).filter(|s| !s.is_empty()).unwrap_or_else(|| "作品".into());
+    let stem = app
+        .path
+        .as_ref()
+        .and_then(|p| p.file_stem())
+        .map(|s| s.to_string_lossy().into_owned())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "作品".into());
     format!("{stem}.{}", f.ext())
 }
 
@@ -232,7 +235,11 @@ fn start_with(app: &mut App, ctx: &egui::Context, o: Options) -> bool {
         app.say(ctx, "形をえらんでから書き出してください");
         return false;
     }
-    let Some(mut path) = rfd::FileDialog::new().add_filter(o.format.label(), &[o.format.ext()]).set_file_name(default_name(app, o.format)).save_file() else { return false };
+    let Some(mut path) =
+        rfd::FileDialog::new().add_filter(o.format.label(), &[o.format.ext()]).set_file_name(default_name(app, o.format)).save_file()
+    else {
+        return false;
+    };
     if !path.extension().is_some_and(|e| e.eq_ignore_ascii_case(o.format.ext())) {
         path.set_extension(o.format.ext());
     }
@@ -267,7 +274,13 @@ fn running_card(app: &mut App, ctx: &egui::Context) {
                 let closed = if r.closed { "" } else { "　⚠ 穴があります" };
                 app.say(
                     ctx,
-                    format!("書き出しました: {}（三角形 {}・{}・{:.1}秒）{closed}", job.label, count_text(r.tris as f64), bytes_text(r.bytes as f64), r.secs),
+                    format!(
+                        "書き出しました: {}（三角形 {}・{}・{:.1}秒）{closed}",
+                        job.label,
+                        count_text(r.tris as f64),
+                        bytes_text(r.bytes as f64),
+                        r.secs
+                    ),
                 );
             }
             Err(e) => app.say(ctx, jp_error(&e)),
@@ -275,27 +288,30 @@ fn running_card(app: &mut App, ctx: &egui::Context) {
         return;
     }
     ctx.request_repaint_after(std::time::Duration::from_millis(60));
-    egui::Area::new(egui::Id::new("export_progress_area")).order(egui::Order::Foreground).anchor(Align2::CENTER_BOTTOM, [0.0, -48.0]).show(ctx, |ui| {
-        style::card().show(ui, |ui| {
-            ui.set_width(340.0);
-            ui.label(RichText::new(format!("書き出し中… {}", job.label)).strong().size(13.5));
-            ui.label(RichText::new(job.phase_name()).size(11.5).color(style::DIM));
-            let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 10.0), egui::Sense::hover());
-            ui.painter().rect_filled(rect, 5.0, style::PANEL_DARK);
-            let w = rect.width() * job.fraction().clamp(0.0, 1.0);
-            if w > 1.0 {
-                ui.painter().rect_filled(egui::Rect::from_min_size(rect.min, egui::vec2(w, rect.height())), 5.0, style::ACCENT);
-            }
-            ui.horizontal(|ui| {
-                ui.label(RichText::new(format!("{:.0}%　{:.0}秒", job.fraction() * 100.0, job.elapsed())).size(11.5).color(style::DIM));
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if style::pill(ui, "やめる", false).clicked() {
-                        job.cancel();
-                    }
+    egui::Area::new(egui::Id::new("export_progress_area")).order(egui::Order::Foreground).anchor(Align2::CENTER_BOTTOM, [0.0, -48.0]).show(
+        ctx,
+        |ui| {
+            style::card().show(ui, |ui| {
+                ui.set_width(340.0);
+                ui.label(RichText::new(format!("書き出し中… {}", job.label)).strong().size(13.5));
+                ui.label(RichText::new(job.phase_name()).size(11.5).color(style::DIM));
+                let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 10.0), egui::Sense::hover());
+                ui.painter().rect_filled(rect, 5.0, style::PANEL_DARK);
+                let w = rect.width() * job.fraction().clamp(0.0, 1.0);
+                if w > 1.0 {
+                    ui.painter().rect_filled(egui::Rect::from_min_size(rect.min, egui::vec2(w, rect.height())), 5.0, style::ACCENT);
+                }
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(format!("{:.0}%　{:.0}秒", job.fraction() * 100.0, job.elapsed())).size(11.5).color(style::DIM));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if style::pill(ui, "やめる", false).clicked() {
+                            job.cancel();
+                        }
+                    });
                 });
             });
-        });
-    });
+        },
+    );
 }
 
 // ---------------------------------------------------------------- the card
@@ -372,18 +388,29 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
             row(ui, "細かさ", |ui| {
                 for t in [0.05f32, 0.1, 0.2, 0.5] {
                     let on = (o.tolerance - t).abs() < 1e-4;
-                    if style::pill(ui, &format!("{t}"), on).on_hover_text("1マスの大きさ（mm）。小さいほどきれいで重くなります").clicked() {
+                    if style::pill(ui, &format!("{t}"), on).on_hover_text("1マスの大きさ（mm）。小さいほどきれいで重くなります").clicked()
+                    {
                         o.tolerance = t;
                     }
                 }
-                style::field_sized(ui, [74.0, 22.0], egui::DragValue::new(&mut o.tolerance).speed(0.005).range(MIN_TOLERANCE..=MAX_TOLERANCE).suffix(" mm").max_decimals(3));
+                style::field_sized(
+                    ui,
+                    [74.0, 22.0],
+                    egui::DragValue::new(&mut o.tolerance).speed(0.005).range(MIN_TOLERANCE..=MAX_TOLERANCE).suffix(" mm").max_decimals(3),
+                );
             });
             if let Some(Ok(e)) = d.est.result() {
                 let tol = f64::from(o.tolerance.clamp(MIN_TOLERANCE, MAX_TOLERANCE));
                 let raw = e.raw_tris(tol);
-                let secs = e.secs(tol);
+                let secs = e.secs(tol, o.lighten != Lighten::Off);
                 let too_big = raw > (MAX_VERTS as f64) * 1.8;
-                let col = if too_big { style::CUT } else if raw > 4.0e6 || secs > 60.0 { style::KEEP } else { style::DIM };
+                let col = if too_big {
+                    style::CUT
+                } else if raw > 4.0e6 || secs > 60.0 {
+                    style::KEEP
+                } else {
+                    style::DIM
+                };
                 let after = match o.lighten {
                     Lighten::Off => String::new(),
                     Lighten::Flat => "（平らな面をまとめると もっとへります）".to_string(),
@@ -393,7 +420,8 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
                 if too_big {
                     ui.label(RichText::new("この細かさは 細かすぎます。少しあらくしてください").size(11.5).color(col));
                 } else {
-                    ui.label(RichText::new(format!("三角形 約{}{}　時間 {}　ファイル 最大 約{}", count_text(raw), after, time_text(secs), file)).size(11.5).color(col));
+                    ui.label(RichText::new(format!("三角形 約{}{}", count_text(raw), after)).size(11.5).color(col));
+                    ui.label(RichText::new(format!("時間 {}　ファイル 最大 約{}", time_text(secs), file)).size(11.5).color(col));
                 }
                 ui.label(RichText::new(format!("大きさ {}", size_text(e.size))).size(11.5).color(style::DIM));
             } else if d.est.running() {
@@ -402,7 +430,8 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
 
             ui.add_space(2.0);
             row(ui, "単位", |ui| {
-                let items: Vec<(&str, &str)> = Units::ALL.iter().map(|u| (u.label(), if o.format == Format::Glb { "GLBは いつも m です" } else { "" })).collect();
+                let items: Vec<(&str, &str)> =
+                    Units::ALL.iter().map(|u| (u.label(), if o.format == Format::Glb { "GLBは いつも m です" } else { "" })).collect();
                 let cur = Units::ALL.iter().position(|u| *u == o.units);
                 if let Some(i) = style::segmented(ui, "ex_units", &items, cur, false)
                     && let Some(u) = Units::ALL.get(i)
@@ -410,10 +439,18 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
                     o.units = *u;
                 }
                 ui.label(RichText::new("大きさ").color(style::DIM).size(12.0));
-                style::field_sized(ui, [68.0, 22.0], egui::DragValue::new(&mut o.scale_pct).speed(1.0).range(1.0..=10000.0).suffix(" %").max_decimals(1));
+                style::field_sized(
+                    ui,
+                    [68.0, 22.0],
+                    egui::DragValue::new(&mut o.scale_pct).speed(1.0).range(1.0..=10000.0).suffix(" %").max_decimals(1),
+                );
             });
             row(ui, "書き出す所", |ui| {
-                let items = [("見えているもの", "目のマークがついている形"), ("ぜんぶ", "かくれている形も"), ("えらんだもの", "いまえらんでいる形・グループだけ")];
+                let items = [
+                    ("見えているもの", "目のマークがついている形"),
+                    ("ぜんぶ", "かくれている形も"),
+                    ("えらんだもの", "いまえらんでいる形・グループだけ"),
+                ];
                 let cur = match o.scope {
                     Scope::Visible => 0,
                     Scope::All => 1,
@@ -440,7 +477,11 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
                 ui.label(RichText::new("かどは そのまま").size(11.0).color(style::DIM));
             });
             row(ui, "三角形", |ui| {
-                let items = [("そのまま", "ぜんぶのマスを三角形に"), ("平らをまとめる", "平らな面を大きな三角形に（形は変わりません）"), ("数をへらす", "三角形の数をきめて軽くします")];
+                let items = [
+                    ("そのまま", "ぜんぶのマスを三角形に"),
+                    ("平らをまとめる", "平らな面を大きな三角形に（形は変わりません）"),
+                    ("数をへらす", "三角形の数をきめて軽くします"),
+                ];
                 let cur = match o.lighten {
                     Lighten::Off => 0,
                     Lighten::Flat => 1,
@@ -475,7 +516,10 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
             // the print check
             ui.add_space(4.0);
             ui.horizontal(|ui| {
-                if style::pill_enabled(ui, "プリントチェック", false, !d.check.running()).on_hover_text("大きさ・体積・穴・うすい所・はり出し").clicked() {
+                if style::pill_enabled(ui, "プリントチェック", false, !d.check.running())
+                    .on_hover_text("大きさ・体積・穴・うすい所・はり出し")
+                    .clicked()
+                {
                     check = true;
                 }
                 if d.check.running() {
@@ -496,7 +540,9 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
             ui.add_space(4.0);
             ui.horizontal(|ui| {
                 ui.add_enabled_ui(!busy, |ui| {
-                    let b = egui::Button::new(RichText::new("書き出す…").strong().color(Color32::WHITE)).fill(style::ACCENT_SOFT).stroke(Stroke::new(1.0, style::ACCENT));
+                    let b = egui::Button::new(RichText::new("書き出す…").strong().color(Color32::WHITE))
+                        .fill(style::ACCENT_SOFT)
+                        .stroke(Stroke::new(1.0, style::ACCENT));
                     if ui.add(b).clicked() {
                         go = true;
                     }
@@ -535,12 +581,22 @@ fn print_check_lines(ui: &mut egui::Ui, c: &PrintCheck) {
     }
     if c.thin_pct >= 0.5 {
         let t = c.thinnest.map(|t| format!("、いちばん薄い所 約{t:.1}mm")).unwrap_or_default();
-        ui.label(small(format!("うすい所: 約{:.0}%が {}mmより薄いです{t}（折れたり、印刷できないかも）", c.thin_pct, export_job::THIN_MM), style::KEEP));
+        ui.label(small(
+            format!("うすい所: 約{:.0}%が {}mmより薄いです{t}（折れたり、印刷できないかも）", c.thin_pct, export_job::THIN_MM),
+            style::KEEP,
+        ));
     } else {
         ui.label(small(format!("うすい所: ありません（{}mm以上）", export_job::THIN_MM), style::ADD));
     }
     let col = if c.overhang_pct > 20.0 { style::KEEP } else { style::DIM };
-    ui.label(small(format!("はり出し: 45°より傾いた面が 約{:.0}%（{}）", c.overhang_pct, if c.overhang_pct > 5.0 { "サポートが いるかも" } else { "ほぼ いりません" }), col));
+    ui.label(small(
+        format!(
+            "はり出し: 45°より傾いた面が 約{:.0}%（{}）",
+            c.overhang_pct,
+            if c.overhang_pct > 5.0 { "サポートが いるかも" } else { "ほぼ いりません" }
+        ),
+        col,
+    ));
 }
 
 impl Options {

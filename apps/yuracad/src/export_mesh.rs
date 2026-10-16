@@ -22,7 +22,7 @@ const B: usize = 8;
 /// Most blocks near the surface (a finer model is refused rather than eating the memory).
 pub const MAX_BLOCKS: usize = 1_400_000;
 /// Most vertices of one mesh.
-pub const MAX_VERTS: usize = 24_000_000;
+pub const MAX_VERTS: usize = 16_000_000;
 /// Most cells along one axis.
 const MAX_AXIS_CELLS: f64 = 1_000_000.0;
 
@@ -570,7 +570,10 @@ pub fn mesh_sparse(sdf: &dyn Sdf, lo: V, hi: V, cell: f64, threads: usize, prog:
                 for o in 0..8u32 {
                     let c = [s[0] * 2 + (o & 1), s[1] * 2 + ((o >> 1) & 1), s[2] * 2 + ((o >> 2) & 1)];
                     // a child wholly outside the grid has nothing to show
-                    if (c[0] as usize) * (side_blocks / 2) < nb[0] && (c[1] as usize) * (side_blocks / 2) < nb[1] && (c[2] as usize) * (side_blocks / 2) < nb[2] {
+                    if (c[0] as usize) * (side_blocks / 2) < nb[0]
+                        && (c[1] as usize) * (side_blocks / 2) < nb[1]
+                        && (c[2] as usize) * (side_blocks / 2) < nb[2]
+                    {
                         next.push(c);
                     }
                 }
@@ -587,7 +590,8 @@ pub fn mesh_sparse(sdf: &dyn Sdf, lo: V, hi: V, cell: f64, threads: usize, prog:
     if blocks.is_empty() {
         return Err("there is nothing to export: the shapes are empty".into());
     }
-    if blocks.len() > MAX_BLOCKS {
+    // blocks near a surface hold at least about 20 surface cells each: refuse before sampling them all
+    if blocks.len() > MAX_BLOCKS || blocks.len().saturating_mul(20) > MAX_VERTS {
         return Err("too fine for this model: choose a coarser precision".into());
     }
 
@@ -595,12 +599,19 @@ pub fn mesh_sparse(sdf: &dyn Sdf, lo: V, hi: V, cell: f64, threads: usize, prog:
     prog.phase(1);
     let t1 = std::time::Instant::now();
     let part = prog.sub(0.0, 1.0);
-    let results = par_for(threads, blocks.len(), 4, &part, || (Scratch::new(), Vec::<(usize, BlockOut)>::new()), |st, i| {
-        let Some(b) = blocks.get(i) else { return Ok(()) };
-        let out = process_block(sdf, &grid, *b, &mut st.0);
-        st.1.push((i, out));
-        Ok(())
-    })?;
+    let results = par_for(
+        threads,
+        blocks.len(),
+        4,
+        &part,
+        || (Scratch::new(), Vec::<(usize, BlockOut)>::new()),
+        |st, i| {
+            let Some(b) = blocks.get(i) else { return Ok(()) };
+            let out = process_block(sdf, &grid, *b, &mut st.0);
+            st.1.push((i, out));
+            Ok(())
+        },
+    )?;
     let mut slots: Vec<Option<BlockOut>> = Vec::with_capacity(blocks.len());
     slots.resize_with(blocks.len(), || None);
     for (scratch, outs) in results {
@@ -641,50 +652,57 @@ pub fn mesh_sparse(sdf: &dyn Sdf, lo: V, hi: V, cell: f64, threads: usize, prog:
     let positions_ref = &positions;
     let outs_ref = &outs;
     let map_ref = &map;
-    let results = par_for(threads, outs.len(), 8, &part, || (Vec::<(usize, Vec<[u32; 3]>)>::new(), 0usize), |st, i| {
-        let Some(o) = outs_ref.get(i) else { return Ok(()) };
-        let mut tris: Vec<[u32; 3]> = Vec::with_capacity(o.edges.len() * 2);
-        let bx = (o.key & 0x1F_FFFF) as i64;
-        let by = ((o.key >> 21) & 0x1F_FFFF) as i64;
-        let bz = ((o.key >> 42) & 0x1F_FFFF) as i64;
-        for code in &o.edges {
-            let lc = (*code & 511) as usize;
-            let axis = ((*code >> 9) & 3) as usize;
-            let below_inside = (*code >> 11) & 1 == 1;
-            let p = [bx * B as i64 + (lc % 8) as i64, by * B as i64 + ((lc / 8) % 8) as i64, bz * B as i64 + (lc / 64) as i64];
-            let (ab, ac) = ((axis + 1) % 3, (axis + 2) % 3);
-            let mut q = [0u32; 4];
-            let mut ok = true;
-            for (k, (db, dc)) in [(0i64, 0i64), (1, 0), (1, 1), (0, 1)].into_iter().enumerate() {
-                let mut cell = p;
-                cell[ab] -= db;
-                cell[ac] -= dc;
-                match vertex_of(outs_ref, map_ref, tab, cell, axis * 4 + db as usize + 2 * dc as usize) {
-                    Some(v) => q[k] = v,
-                    None => ok = false,
+    let results = par_for(
+        threads,
+        outs.len(),
+        8,
+        &part,
+        || (Vec::<(usize, Vec<[u32; 3]>)>::new(), 0usize),
+        |st, i| {
+            let Some(o) = outs_ref.get(i) else { return Ok(()) };
+            let mut tris: Vec<[u32; 3]> = Vec::with_capacity(o.edges.len() * 2);
+            let bx = (o.key & 0x1F_FFFF) as i64;
+            let by = ((o.key >> 21) & 0x1F_FFFF) as i64;
+            let bz = ((o.key >> 42) & 0x1F_FFFF) as i64;
+            for code in &o.edges {
+                let lc = (*code & 511) as usize;
+                let axis = ((*code >> 9) & 3) as usize;
+                let below_inside = (*code >> 11) & 1 == 1;
+                let p = [bx * B as i64 + (lc % 8) as i64, by * B as i64 + ((lc / 8) % 8) as i64, bz * B as i64 + (lc / 64) as i64];
+                let (ab, ac) = ((axis + 1) % 3, (axis + 2) % 3);
+                let mut q = [0u32; 4];
+                let mut ok = true;
+                for (k, (db, dc)) in [(0i64, 0i64), (1, 0), (1, 1), (0, 1)].into_iter().enumerate() {
+                    let mut cell = p;
+                    cell[ab] -= db;
+                    cell[ac] -= dc;
+                    match vertex_of(outs_ref, map_ref, tab, cell, axis * 4 + db as usize + 2 * dc as usize) {
+                        Some(v) => q[k] = v,
+                        None => ok = false,
+                    }
+                }
+                if !ok {
+                    st.1 += 1;
+                    continue;
+                }
+                if !below_inside {
+                    q.swap(1, 3);
+                }
+                let at = |v: u32| positions_ref.get(v as usize).copied().unwrap_or([0.0; 3]);
+                let d02 = dist2(at(q[0]), at(q[2]));
+                let d13 = dist2(at(q[1]), at(q[3]));
+                if d02 <= d13 {
+                    tris.push([q[0], q[1], q[2]]);
+                    tris.push([q[0], q[2], q[3]]);
+                } else {
+                    tris.push([q[0], q[1], q[3]]);
+                    tris.push([q[1], q[2], q[3]]);
                 }
             }
-            if !ok {
-                st.1 += 1;
-                continue;
-            }
-            if !below_inside {
-                q.swap(1, 3);
-            }
-            let at = |v: u32| positions_ref.get(v as usize).copied().unwrap_or([0.0; 3]);
-            let d02 = dist2(at(q[0]), at(q[2]));
-            let d13 = dist2(at(q[1]), at(q[3]));
-            if d02 <= d13 {
-                tris.push([q[0], q[1], q[2]]);
-                tris.push([q[0], q[2], q[3]]);
-            } else {
-                tris.push([q[0], q[1], q[3]]);
-                tris.push([q[1], q[2], q[3]]);
-            }
-        }
-        st.0.push((i, tris));
-        Ok(())
-    })?;
+            st.0.push((i, tris));
+            Ok(())
+        },
+    )?;
     let mut by_block: Vec<Vec<[u32; 3]>> = Vec::with_capacity(outs.len());
     by_block.resize_with(outs.len(), Vec::new);
     let mut skipped = 0usize;
@@ -707,7 +725,10 @@ pub fn mesh_sparse(sdf: &dyn Sdf, lo: V, hi: V, cell: f64, threads: usize, prog:
         return Err("there is nothing to export: the shapes are empty".into());
     }
     let mesh = TriMesh { positions: positions.iter().map(|p| [f64::from(p[0]), f64::from(p[1]), f64::from(p[2])]).collect(), triangles };
-    Ok(Meshed { mesh, sharp, stats: Stats {
+    Ok(Meshed {
+        mesh,
+        sharp,
+        stats: Stats {
             blocks: blocks.len(),
             cells,
             evals,
@@ -783,10 +804,10 @@ fn process_block(sdf: &dyn Sdf, grid: &Grid, b: [u32; 3], sc: &mut Scratch) -> B
             let (px, py, pz) = (o2 & 1, (o2 >> 1) & 1, (o2 >> 2) & 1);
             let (ni, nj, nk) = (ox * 2 + px, oy * 2 + py, oz * 2 + pz);
             let d = corner!(ni * 2 + 1, nj * 2 + 1, nk * 2 + 1);
-            if near(d, 2.0, h) {
-                if let Some(f) = near2.get_mut((nk * 4 + nj) * 4 + ni) {
-                    *f = true;
-                }
+            if near(d, 2.0, h)
+                && let Some(f) = near2.get_mut((nk * 4 + nj) * 4 + ni)
+            {
+                *f = true;
             }
         }
     }
@@ -816,7 +837,8 @@ fn process_block(sdf: &dyn Sdf, grid: &Grid, b: [u32; 3], sc: &mut Scratch) -> B
                     mask |= 1 << c;
                 }
             }
-            if mask != 0 && mask != 255
+            if mask != 0
+                && mask != 255
                 && let Some(m) = masks.get_mut((ck * 8 + cj) * 8 + ci)
             {
                 *m = mask;
@@ -825,7 +847,8 @@ fn process_block(sdf: &dyn Sdf, grid: &Grid, b: [u32; 3], sc: &mut Scratch) -> B
     }
 
     let tab = table();
-    let mut out = BlockOut { key, occ: [0; 8], mask: Vec::new(), first: Vec::new(), verts: Vec::new(), sharp: Vec::new(), edges: Vec::new(), vbase: 0 };
+    let mut out =
+        BlockOut { key, occ: [0; 8], mask: Vec::new(), first: Vec::new(), verts: Vec::new(), sharp: Vec::new(), edges: Vec::new(), vbase: 0 };
     let e = (0.03 * h).max(1e-4);
     for lc in 0..512usize {
         let mask = masks.get(lc).copied().unwrap_or(0);
