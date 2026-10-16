@@ -610,18 +610,14 @@ impl App {
                             }
                         });
                         ui.add_space(6.0);
-                        for op in [Op::Add, Op::Subtract, Op::Paint] {
+                        for op in [Op::Add, Op::Subtract, Op::Paint, Op::Intersect] {
                             let on = self.new_op == op;
-                            let col = match (on, op) {
-                                (true, _) => Color32::WHITE,
-                                (_, Op::Add) => style::ADD,
-                                (_, Op::Subtract) => style::CUT,
-                                (_, Op::Paint) => style::PAINT,
-                            };
+                            let col = if on { Color32::WHITE } else { style::op_color(op) };
                             let tip = match op {
                                 Op::Add => "つぎは「足す」(くっつく)",
                                 Op::Subtract => "つぎは「削る」(くり抜く)",
                                 Op::Paint => "つぎは「ぬる」(形は変えずに色だけ)",
+                                Op::Intersect => "つぎは「重ねる」(前の形とかさなる所だけのこす)",
                             };
                             if style::icon_button(ui, 30.0, tip, on, |p, r, _| glyphs::op(p, r, op, col)).clicked() {
                                 self.new_op = op;

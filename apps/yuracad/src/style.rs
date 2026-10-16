@@ -14,6 +14,18 @@ pub const ACCENT_SOFT: Color32 = Color32::from_rgb(70, 62, 120);
 pub const ADD: Color32 = Color32::from_rgb(120, 214, 150);
 pub const CUT: Color32 = Color32::from_rgb(244, 124, 132);
 pub const PAINT: Color32 = Color32::from_rgb(120, 190, 255);
+pub const KEEP: Color32 = Color32::from_rgb(250, 200, 110);
+
+/// The colour of an operation's mark.
+pub fn op_color(op: crate::model::Op) -> Color32 {
+    use crate::model::Op;
+    match op {
+        Op::Add => ADD,
+        Op::Subtract => CUT,
+        Op::Paint => PAINT,
+        Op::Intersect => KEEP,
+    }
+}
 pub const AXIS: [Color32; 3] = [Color32::from_rgb(232, 84, 84), Color32::from_rgb(110, 200, 100), Color32::from_rgb(80, 140, 240)];
 
 pub fn apply(ctx: &egui::Context) {

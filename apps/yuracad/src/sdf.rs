@@ -54,6 +54,8 @@ pub struct Prepared {
     pub params: [f32; 4],
     pub path: Vec<[f32; 4]>,
     pub outline2: Vec<[f32; 2]>,
+    /// Wall thickness of the hollowed-out shape (0 = solid).
+    pub shell: f32,
 }
 
 #[derive(Clone, Debug)]
@@ -88,10 +90,12 @@ impl Prepared {
             op: s.op,
             blend: s.blend,
             material: s.material,
-            outline: s.outline.clone(),
+            // a revolve profile lives on the +x side of the axis
+            outline: if s.kind == Kind::Revolve { s.outline.iter().map(|p| [p[0].max(0.0), p[1]]).collect() } else { s.outline.clone() },
             params: s.params,
             path: s.path.clone(),
             outline2: s.outline2.clone(),
+            shell: if s.shell.is_finite() { s.shell.max(0.0) } else { 0.0 },
         }
     }
     /// The point in the shape's own space.
@@ -105,7 +109,9 @@ impl Prepared {
     }
     /// The distance to this one shape (negative inside).
     pub fn distance(&self, p: V3) -> f32 {
-        self.local_distance(self.local(p)) * self.min_scale()
+        let d = self.local_distance(self.local(p)) * self.min_scale();
+        // hollow walls: the solid's skin of thickness `shell` (negative inside the wall)
+        if self.shell > 0.0 { (d + self.shell * 0.5).abs() - self.shell * 0.5 } else { d }
     }
     fn local_distance(&self, q: V3) -> f32 {
         let s = self.size;
@@ -348,6 +354,17 @@ fn combine(a: Sample, b: Sample, op: Op, k: f32, mode: BlendMode) -> Sample {
         }
         // A stain never changes the shape, so the nearest thing stays what it was.
         Op::Paint => a,
+        Op::Intersect => {
+            // smax(a, b) = -smin(-a, -b); the surface belongs to whichever is farther out
+            let (d, h) = smin(-a.dist, -b.dist, k, mode);
+            Sample {
+                dist: -d,
+                color: mix3(b.color, a.color, h),
+                roughness: b.roughness + (a.roughness - b.roughness) * h,
+                metallic: b.metallic + (a.metallic - b.metallic) * h,
+                nearest: if h >= 0.5 { a.nearest } else { b.nearest },
+            }
+        }
         Op::Subtract => {
             // smax(a, -b) = -smin(-a, b)
             let (d, h) = smin(-a.dist, b.dist, k, mode);
@@ -390,6 +407,43 @@ mod tests {
         assert!(f(Kind::Cone, [0.0, 0.0, -30.0]) > 9.9 && f(Kind::Cone, [0.0, 0.0, 0.0]) < 0.0);
         assert!((f(Kind::Extrude, [25.0, 0.0, 0.0]) - 10.0).abs() < 1e-3, "{}", f(Kind::Extrude, [25.0, 0.0, 0.0]));
         assert!(f(Kind::Extrude, [0.0, 0.0, 0.0]) < 0.0);
+    }
+
+    #[test]
+    fn a_shell_hollows_any_shape_into_a_wall() {
+        let m = Material::default();
+        let mut s = Shape::new(Kind::Sphere, [0.0; 3], m);
+        s.size[0] = 20.0;
+        s.shell = 4.0;
+        let f = |p: V3| Prepared::new(&s).distance(p);
+        assert!((f([0.0, 0.0, 0.0]) - 16.0).abs() < 1e-4, "the middle is empty");
+        assert!((f([18.0, 0.0, 0.0]) + 2.0).abs() < 1e-4, "the middle of the wall");
+        assert!(f([20.0, 0.0, 0.0]).abs() < 1e-4 && f([16.0, 0.0, 0.0]).abs() < 1e-4, "both skins");
+        assert!((f([25.0, 0.0, 0.0]) - 5.0).abs() < 1e-4);
+        s.shell = f32::NAN;
+        assert!((Prepared::new(&s).distance([0.0, 0.0, 0.0]) + 20.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn intersect_keeps_only_the_overlap() {
+        let m = Material::default();
+        let mut a = Shape::new(Kind::Sphere, [-8.0, 0.0, 0.0], m);
+        let mut b = Shape::new(Kind::Sphere, [8.0, 0.0, 0.0], m);
+        a.blend = 0.0;
+        b.blend = 0.0;
+        b.op = Op::Intersect;
+        let f = Field::new(&scene_of(vec![a, b]));
+        assert!(f.distance([0.0, 0.0, 0.0]) < 0.0, "inside both");
+        assert!(f.distance([-20.0, 0.0, 0.0]) > 0.0, "inside only the first");
+        assert!(f.distance([20.0, 0.0, 0.0]) > 0.0, "inside only the second");
+        assert!((f.distance([0.0, 0.0, 14.0]) - (14.0_f32.hypot(8.0) - 20.0)).abs() < 1e-3);
+        // rounded overlap stays finite and between the sharp answers
+        for mode in BlendMode::ALL {
+            let mut sc = scene_of(vec![Shape::new(Kind::Sphere, [-8.0, 0.0, 0.0], m), Shape::new(Kind::Sphere, [8.0, 0.0, 0.0], m)]);
+            sc.groups[0].shapes[1].op = Op::Intersect;
+            sc.melt.mode = mode;
+            assert!(Field::new(&sc).distance([0.0, 0.0, 15.0]).is_finite());
+        }
     }
 
     #[test]
