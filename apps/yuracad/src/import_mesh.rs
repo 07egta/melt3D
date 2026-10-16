@@ -440,10 +440,10 @@ impl Values<'_> {
         if let Some(dst) = a.get_mut(..n) {
             dst.copy_from_slice(raw);
         }
-        if self.enc == Enc::Big {
-            if let Some(dst) = a.get_mut(..n) {
-                dst.reverse();
-            }
+        if self.enc == Enc::Big
+            && let Some(dst) = a.get_mut(..n)
+        {
+            dst.reverse();
         }
         Ok(match ty {
             Ty::I8 => f64::from(a[0] as i8),

@@ -156,7 +156,10 @@ fn node_matrix(n: &Value) -> Result<Affine, String> {
 }
 
 /// The triangles of one primitive and its points.
-fn read_primitive(json: &Value, bin: &[u8], prim: &Value) -> Result<Option<(Vec<[f32; 3]>, Vec<[u32; 3]>)>, String> {
+/// The points and the triangles of one primitive.
+type Part = (Vec<[f32; 3]>, Vec<[u32; 3]>);
+
+fn read_primitive(json: &Value, bin: &[u8], prim: &Value) -> Result<Option<Part>, String> {
     let mode = prim.get("mode").and_then(Value::as_u64).unwrap_or(4);
     if !(4..=6).contains(&mode) {
         return Ok(None); // points and lines
@@ -303,15 +306,15 @@ pub fn read_glb(b: &[u8]) -> Result<ImportedMesh, String> {
         o += 8 + len.div_ceil(4) * 4;
     }
     let json: Value = serde_json::from_slice(json_chunk.ok_or(BAD_GLB)?).map_err(|_| BAD_GLB.to_string())?;
-    if let Some(req) = json.get("extensionsRequired").and_then(Value::as_array) {
-        if req.iter().filter_map(Value::as_str).any(|e| matches!(e, "KHR_draco_mesh_compression" | "EXT_meshopt_compression" | "KHR_mesh_quantization_disabled")) {
-            return Err("圧縮された GLB（Draco など）には対応していません".into());
-        }
+    if let Some(req) = json.get("extensionsRequired").and_then(Value::as_array)
+        && req.iter().filter_map(Value::as_str).any(|e| matches!(e, "KHR_draco_mesh_compression" | "EXT_meshopt_compression"))
+    {
+        return Err("圧縮された GLB（Draco など）には対応していません".into());
     }
-    if let Some(buffers) = json.get("buffers").and_then(Value::as_array) {
-        if buffers.iter().skip(1).count() > 0 || buffers.first().is_some_and(|b0| b0.get("uri").is_some()) {
-            return Err("GLB の外にあるデータには対応していません".into());
-        }
+    if let Some(buffers) = json.get("buffers").and_then(Value::as_array)
+        && (buffers.len() > 1 || buffers.first().is_some_and(|b0| b0.get("uri").is_some()))
+    {
+        return Err("GLB の外にあるデータには対応していません".into());
     }
     let mut w = Walk { json: &json, bin, visits: 0, out: ImportedMesh::default() };
     let scene_nodes: Option<Vec<usize>> = {
@@ -365,11 +368,11 @@ mod tests {
     /// A GLB from a JSON document and a binary chunk.
     fn glb(doc: &Value, bin: &[u8]) -> Vec<u8> {
         let mut text = serde_json::to_vec(doc).unwrap();
-        while text.len() % 4 != 0 {
+        while !text.len().is_multiple_of(4) {
             text.push(b' ');
         }
         let mut b = bin.to_vec();
-        while b.len() % 4 != 0 {
+        while !b.len().is_multiple_of(4) {
             b.push(0);
         }
         let total = 12 + 8 + text.len() + 8 + b.len();
