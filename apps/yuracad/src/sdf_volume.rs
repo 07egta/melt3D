@@ -75,11 +75,15 @@ pub struct BakeOptions {
     pub max_cells: usize,
     /// Worker threads (0 = all the machine has, up to 16).
     pub threads: usize,
+    /// Blocks of nodes that are all at least this many cells away from the surface are
+    /// interpolated from exact values at their corners instead of measured (much faster; the value
+    /// there may be a little too small near the middle of thick parts). 0 measures every node.
+    pub far_band: f32,
 }
 
 impl Default for BakeOptions {
     fn default() -> BakeOptions {
-        BakeOptions { res: DEFAULT_RES, pad: 4, max_cells: DEFAULT_MAX_CELLS, threads: 0 }
+        BakeOptions { res: DEFAULT_RES, pad: 4, max_cells: DEFAULT_MAX_CELLS, threads: 0, far_band: 10.0 }
     }
 }
 
@@ -114,6 +118,8 @@ pub struct BakeStats {
     pub used_winding: bool,
     /// Nodes where the three axes did not agree.
     pub split_votes: usize,
+    /// Tree nodes and triangles looked at while measuring distances (a count of the work done).
+    pub tree_steps: u64,
 }
 
 // ---------------------------------------------------------------- small vector helpers
@@ -288,16 +294,34 @@ impl Bvh {
     }
 
     /// The squared distance to the closest triangle and that triangle's slot. `hint` is a slot to
-    /// try first (the closest triangle of a neighbouring query).
-    fn nearest(&self, p: [f32; 3], hint: usize) -> (f64, usize) {
+    /// try first (the closest triangle of a neighbouring query). The answer may be too big by up to
+    /// `slack` (a distance): boxes that cannot help by more than that are not visited, and the
+    /// search stops as soon as the best triangle is within `slack` of `lower`, a distance the
+    /// point is known to be at least away from the surface (a neighbour's distance minus the step).
+    fn nearest(&self, p: [f32; 3], hint: usize, lower: f64, slack: f64, work: &mut u64) -> (f64, usize) {
+        *work += 1;
         let pd = v64(p);
+        let stop = {
+            let s = lower + slack;
+            if s > 0.0 { s * s } else { 0.0 }
+        };
+        let shrink = |best: f64| {
+            let s = best.sqrt() - slack;
+            if s > 0.0 { s * s } else { 0.0 }
+        };
         let mut best = f64::INFINITY;
         let mut best_i = 0usize;
+        let mut limit = f64::INFINITY;
         if let Some(t) = self.tris.get(hint) {
+            *work += 1;
             let d = tri_d2(pd, t);
             if d.is_finite() {
                 best = d;
                 best_i = hint;
+                limit = shrink(best);
+                if best <= stop {
+                    return (best, best_i);
+                }
             }
         }
         let mut stack = [(0u32, 0f32); 64];
@@ -305,33 +329,39 @@ impl Bvh {
         while sp > 0 {
             sp -= 1;
             let (ni, bd) = stack.get(sp).copied().unwrap_or((0, f32::INFINITY));
-            if f64::from(bd) >= best {
+            if f64::from(bd) >= limit {
                 continue;
             }
             let Some(n) = self.nodes.get(ni as usize) else { continue };
+            *work += 1;
             if n.count > 0 {
                 let first = n.a as usize;
                 for slot in first..first + n.count as usize {
                     if let Some(t) = self.tris.get(slot) {
+                        *work += 1;
                         let d = tri_d2(pd, t);
                         if d < best {
                             best = d;
                             best_i = slot;
+                            limit = shrink(best);
                         }
                     }
+                }
+                if best <= stop {
+                    break;
                 }
             } else {
                 let (Some(l), Some(r)) = (self.nodes.get(n.a as usize), self.nodes.get(n.b as usize)) else { continue };
                 let (dl, dr) = (Self::box_d2(l, p), Self::box_d2(r, p));
                 let (near, far) = if dl <= dr { ((n.a, dl), (n.b, dr)) } else { ((n.b, dr), (n.a, dl)) };
                 if sp + 2 <= stack.len() {
-                    if f64::from(far.1) < best {
+                    if f64::from(far.1) < limit {
                         if let Some(s) = stack.get_mut(sp) {
                             *s = far;
                         }
                         sp += 1;
                     }
-                    if f64::from(near.1) < best {
+                    if f64::from(near.1) < limit {
                         if let Some(s) = stack.get_mut(sp) {
                             *s = near;
                         }
@@ -601,20 +631,102 @@ pub fn bake_with(mesh: &ImportedMesh, opts: &BakeOptions, ctl: &BakeControl) -> 
         return Err(ERR_CANCEL.into());
     }
 
-    // distances, one z-slice at a time, taken by whichever thread is free
+    // distances. Far from the surface (opts.far_band cells and more) the field is smooth and the
+    // exact answer expensive, so blocks of nodes whose corners are all far are interpolated from
+    // exact values at the corners; everything else is measured node by node.
     let t2 = Instant::now();
-    let mut data = vec![0f32; total];
-    let slice = n[0] * n[1];
-    {
-        let work = Mutex::new(data.chunks_mut(slice).enumerate());
-        let done = AtomicUsize::new(0);
-        let votes = &votes;
-        let bvh = &bvh;
+    let slack = g.cell * 0.004; // answers may be too big by this much (0.4% of a cell)
+    let step = 4usize;
+    let lattice = |len: usize| -> Vec<usize> {
+        let mut v: Vec<usize> = (0..len.saturating_sub(1)).step_by(step).collect();
+        v.push(len.saturating_sub(1));
+        v
+    };
+    let cp = [lattice(n[0]), lattice(n[1]), lattice(n[2])];
+    let use_far = opts.far_band > 0.0 && n.iter().all(|c| *c >= 2 * step);
+    let total_work = std::sync::atomic::AtomicU64::new(0);
+    let sign_at = |i: usize, j: usize, k: usize| votes.get(g.idx(i, j, k)).is_some_and(|v| v.count_ones() >= 2);
+    let measure = |i: usize, j: usize, k: usize, hint: &mut usize, work: &mut u64| -> f32 {
+        let p = [(g.origin[0] + i as f64 * g.cell) as f32, (g.origin[1] + j as f64 * g.cell) as f32, (g.origin[2] + k as f64 * g.cell) as f32];
+        let (d2, slot) = bvh.nearest(p, *hint, 0.0, slack, work);
+        *hint = slot;
+        let d = d2.sqrt() as f32;
+        if sign_at(i, j, k) { -d } else { d }
+    };
+    // 1. the exact values at the lattice
+    let cn = [cp[0].len(), cp[1].len(), cp[2].len()];
+    let mut coarse = vec![0f32; cn[0] * cn[1] * cn[2]];
+    if use_far {
+        let jobs = Mutex::new(coarse.chunks_mut(cn[0] * cn[1]).enumerate());
         std::thread::scope(|s| {
             for _ in 0..threads {
                 s.spawn(|| {
+                    let mut work = 0u64;
                     loop {
-                        let next = match work.lock() {
+                        let next = match jobs.lock() {
+                            Ok(mut w) => w.next(),
+                            Err(_) => None,
+                        };
+                        let Some((ck, out)) = next else { break };
+                        if ctl.cancelled() {
+                            break;
+                        }
+                        let mut hint = 0usize;
+                        for cj in 0..cn[1] {
+                            for ci in 0..cn[0] {
+                                let (i, j, k) = (cp[0][ci], cp[1][cj], cp[2][ck]);
+                                if let Some(o) = out.get_mut(ci + cn[0] * cj) {
+                                    *o = measure(i, j, k, &mut hint, &mut work);
+                                }
+                            }
+                        }
+                    }
+                    total_work.fetch_add(work, Ordering::Relaxed);
+                });
+            }
+        });
+        if ctl.cancelled() {
+            return Err(ERR_CANCEL.into());
+        }
+    }
+    ctl.set(400);
+    // which lattice cell each node belongs to, and where in it
+    let locate = |a: usize| -> Vec<(usize, f32)> {
+        let c = &cp[a];
+        let mut out = Vec::with_capacity(n[a]);
+        let mut ci = 0usize;
+        for i in 0..n[a] {
+            while ci + 2 < c.len() && c.get(ci + 1).is_some_and(|nx| *nx <= i) {
+                ci += 1;
+            }
+            let (lo, hi) = (c.get(ci).copied().unwrap_or(0), c.get(ci + 1).copied().unwrap_or(0));
+            let t = if hi > lo { (i - lo) as f32 / (hi - lo) as f32 } else { 0.0 };
+            out.push((ci, t));
+        }
+        out
+    };
+    let at = [locate(0), locate(1), locate(2)];
+    let far_limit = (opts.far_band * g.cell as f32).max(0.0);
+    let cval = |ci: usize, cj: usize, ck: usize| coarse.get(ci.min(cn[0] - 1) + cn[0] * (cj.min(cn[1] - 1) + cn[1] * ck.min(cn[2] - 1))).copied().unwrap_or(0.0);
+    let is_far = |ci: usize, cj: usize, ck: usize| -> bool {
+        let mut m = f32::INFINITY;
+        for (a, b, c) in [(0, 0, 0), (1, 0, 0), (0, 1, 0), (1, 1, 0), (0, 0, 1), (1, 0, 1), (0, 1, 1), (1, 1, 1)] {
+            m = m.min(cval(ci + a, cj + b, ck + c).abs());
+        }
+        m >= far_limit
+    };
+    // 2. every node: interpolated in far blocks, measured elsewhere
+    let mut data = vec![0f32; total];
+    let slice = n[0] * n[1];
+    {
+        let jobs = Mutex::new(data.chunks_mut(slice).enumerate());
+        let done = AtomicUsize::new(0);
+        std::thread::scope(|s| {
+            for _ in 0..threads {
+                s.spawn(|| {
+                    let mut work = 0u64;
+                    loop {
+                        let next = match jobs.lock() {
                             Ok(mut w) => w.next(),
                             Err(_) => None,
                         };
@@ -622,24 +734,31 @@ pub fn bake_with(mesh: &ImportedMesh, opts: &BakeOptions, ctl: &BakeControl) -> 
                         if ctl.cancelled() {
                             break;
                         }
-                        let z = (g.origin[2] + k as f64 * g.cell) as f32;
+                        let (ck, tz) = at[2].get(k).copied().unwrap_or((0, 0.0));
                         let mut hint = 0usize;
                         for j in 0..n[1] {
-                            let y = (g.origin[1] + j as f64 * g.cell) as f32;
+                            let (cj, ty) = at[1].get(j).copied().unwrap_or((0, 0.0));
                             for i in 0..n[0] {
-                                let x = (g.origin[0] + i as f64 * g.cell) as f32;
-                                let (d2, slot) = bvh.nearest([x, y, z], hint);
-                                hint = slot;
-                                let d = d2.sqrt() as f32;
-                                let inside = votes.get(g.idx(i, j, k)).is_some_and(|v| v.count_ones() >= 2);
+                                let (ci, tx) = at[0].get(i).copied().unwrap_or((0, 0.0));
+                                let v = if use_far && is_far(ci, cj, ck) {
+                                    let l = |a: f32, b: f32, t: f32| a + (b - a) * t;
+                                    let c00 = l(cval(ci, cj, ck), cval(ci + 1, cj, ck), tx);
+                                    let c10 = l(cval(ci, cj + 1, ck), cval(ci + 1, cj + 1, ck), tx);
+                                    let c01 = l(cval(ci, cj, ck + 1), cval(ci + 1, cj, ck + 1), tx);
+                                    let c11 = l(cval(ci, cj + 1, ck + 1), cval(ci + 1, cj + 1, ck + 1), tx);
+                                    l(l(c00, c10, ty), l(c01, c11, ty), tz)
+                                } else {
+                                    measure(i, j, k, &mut hint, &mut work)
+                                };
                                 if let Some(o) = out.get_mut(i + n[0] * j) {
-                                    *o = if inside { -d } else { d };
+                                    *o = v;
                                 }
                             }
                         }
                         let d = done.fetch_add(1, Ordering::Relaxed) + 1;
-                        ctl.set(350 + (650 * d / n[2].max(1)) as u32);
+                        ctl.set(400 + (600 * d / n[2].max(1)) as u32);
                     }
+                    total_work.fetch_add(work, Ordering::Relaxed);
                 });
             }
         });
@@ -648,6 +767,7 @@ pub fn bake_with(mesh: &ImportedMesh, opts: &BakeOptions, ctl: &BakeControl) -> 
         return Err(ERR_CANCEL.into());
     }
     stats.dist_secs = t2.elapsed().as_secs_f64();
+    stats.tree_steps = total_work.load(Ordering::Relaxed);
     ctl.set(1000);
     if !data.iter().all(|d| d.is_finite()) {
         return Err(ERR_BAD_MESH.into());
@@ -964,12 +1084,12 @@ mod tests {
         let mut hint = 0;
         for _ in 0..2000 {
             let p = [r() * 40.0 - 20.0, r() * 40.0 - 20.0, r() * 40.0 - 20.0];
-            let (d2, slot) = bvh.nearest(p, hint);
+            let (d2, slot) = bvh.nearest(p, hint, 0.0, 0.0, &mut 0);
             hint = slot;
             assert!((d2.sqrt() - brute(&m, p)).abs() < 1e-9, "{p:?}");
         }
         // a bad hint does no harm
-        assert!((bvh.nearest([0.0; 3], 99_999_999).0.sqrt() - brute(&m, [0.0; 3])).abs() < 1e-9);
+        assert!((bvh.nearest([0.0; 3], 99_999_999, 0.0, 0.0, &mut 0).0.sqrt() - brute(&m, [0.0; 3])).abs() < 1e-9);
     }
 
     #[test]
@@ -1006,11 +1126,28 @@ mod tests {
                     if truth.abs() > 0.2 * v.cell {
                         assert_eq!(got < 0.0, truth < 0.0, "sign at {p:?}");
                     }
-                    worst = worst.max((got - truth).abs());
+                    if truth.abs() < 6.0 * v.cell {
+                        worst = worst.max((got - truth).abs());
+                    } else {
+                        // far from the surface the field is interpolated: close, but only to a cell or so
+                        assert!((got - truth).abs() < 3.0 * v.cell, "far value at {p:?}: {got} vs {truth}");
+                    }
                 }
             }
         }
         assert!(worst < tol.max(0.01), "worst {worst} vs 1% of a cell {tol}");
+        // measuring every node gives the 1% accuracy everywhere
+        let exact = bake(&m, &BakeOptions { far_band: 0.0, ..quick(48) }).unwrap();
+        let mut worst = 0f32;
+        for k in 0..d[2] {
+            for j in 0..d[1] {
+                for i in 0..d[0] {
+                    let p = node_pos(&exact, i, j, k);
+                    worst = worst.max((exact.at(i, j, k) - ((p[0] * p[0] + p[1] * p[1] + p[2] * p[2]).sqrt() - r)).abs());
+                }
+            }
+        }
+        assert!(worst < tol.max(0.01), "exact worst {worst}");
         // the padding is at least `pad` cells wide on every side
         let (lo, hi) = v.bounds();
         assert!(lo[0] <= -r - 4.0 * v.cell + 1e-3 && hi[2] >= r + 4.0 * v.cell - 1e-3);
@@ -1181,9 +1318,9 @@ mod tests {
         let point = ImportedMesh { positions: vec![[1.0; 3]; 3], triangles: vec![[0, 1, 2]] };
         assert!(bake(&point, &quick(16)).is_err());
         // absurd options are clamped, not obeyed
-        let v = bake(&ok, &BakeOptions { res: u32::MAX, pad: u32::MAX, max_cells: usize::MAX, threads: 1000 }).unwrap();
+        let v = bake(&ok, &BakeOptions { res: u32::MAX, pad: u32::MAX, max_cells: usize::MAX, threads: 1000, far_band: f32::NAN }).unwrap();
         assert!(v.data.len() <= MAX_CELLS && v.dims.iter().all(|d| *d <= MAX_AXIS));
-        let v = bake(&ok, &BakeOptions { res: 0, pad: 0, max_cells: 0, threads: 1 }).unwrap();
+        let v = bake(&ok, &BakeOptions { res: 0, pad: 0, max_cells: 0, threads: 1, far_band: -3.0 }).unwrap();
         assert!(v.data.len() <= 100_000);
         // thousands of giant overlapping triangles: refused or finished, never a memory bomb
         let mut big = ImportedMesh { positions: vec![[-1000.0, -1000.0, 0.0], [1000.0, -1000.0, 0.0], [0.0, 1000.0, 0.0], [0.0, 0.0, 1000.0], [1.0, 1.0, 1.0]], triangles: Vec::new() };
@@ -1299,13 +1436,48 @@ mod tests {
         }
     }
 
+    /// A torus (ring of radius `big`, tube radius `small`) with `u * v * 2` triangles.
+    fn torus_mesh(big: f32, small: f32, u: usize, v: usize) -> ImportedMesh {
+        let mut positions = Vec::new();
+        for i in 0..u {
+            let a = std::f32::consts::TAU * i as f32 / u as f32;
+            for j in 0..v {
+                let b = std::f32::consts::TAU * j as f32 / v as f32;
+                let r = big + small * b.cos();
+                positions.push([r * a.cos(), r * a.sin(), small * b.sin()]);
+            }
+        }
+        let id = |i: usize, j: usize| ((i % u) * v + j % v) as u32;
+        let mut triangles = Vec::new();
+        for i in 0..u {
+            for j in 0..v {
+                triangles.push([id(i, j), id(i + 1, j), id(i, j + 1)]);
+                triangles.push([id(i + 1, j), id(i + 1, j + 1), id(i, j + 1)]);
+            }
+        }
+        ImportedMesh { positions, triangles }
+    }
+
+    /// A lumpy blob: a sphere whose radius wobbles.
+    fn blob_mesh(rings: usize, segs: usize) -> ImportedMesh {
+        let mut m = sphere_mesh(1.0, rings, segs);
+        for p in &mut m.positions {
+            let l = (p[0] * p[0] + p[1] * p[1] + p[2] * p[2]).sqrt();
+            let (th, ph) = ((p[2] / l).acos(), p[1].atan2(p[0]));
+            let r = 25.0 * (1.0 + 0.25 * (3.0 * th).sin() * (2.0 * ph).cos() + 0.1 * (7.0 * ph).sin() * (5.0 * th).cos());
+            *p = [p[0] / l * r, p[1] / l * r, p[2] / l * r];
+        }
+        m
+    }
+
     /// Run with `--ignored --nocapture` to see the timings and sizes.
     #[test]
     #[ignore = "timing report"]
     fn report_timing_and_size_for_100k_triangles() {
-        for (rings, segs) in [(224usize, 450usize), (60, 120)] {
-            let m = sphere_mesh(30.0, rings, segs);
-            println!("mesh: {} triangles", m.triangles.len());
+        let shapes: Vec<(&str, ImportedMesh)> =
+            vec![("sphere 100k", sphere_mesh(30.0, 160, 320)), ("torus 100k", torus_mesh(30.0, 10.0, 360, 140)), ("blob 100k", blob_mesh(160, 320)), ("blob 14k", blob_mesh(60, 120))];
+        for (name, m) in shapes {
+            println!("{name}: {} triangles", m.triangles.len());
             for res in [64u32, 128] {
                 let t = Instant::now();
                 let (v, st) = bake_with(&m, &BakeOptions { res, ..BakeOptions::default() }, &BakeControl::new()).unwrap();
@@ -1318,8 +1490,8 @@ mod tests {
                 let load = t.elapsed().as_secs_f64();
                 let b64 = v.to_base64().len();
                 println!(
-                    "res {res}: dims {:?} ({} cells) bake {total:.2}s [bvh {:.2}s, signs {:.2}s, distances {:.2}s] save {save:.2}s load {load:.2}s -> {} bytes, base64 {} chars, winding {}",
-                    v.dims, st.cells, st.bvh_secs, st.sign_secs, st.dist_secs, bytes.len(), b64, st.used_winding
+                    "res {res}: dims {:?} ({} cells) bake {total:.2}s ({} steps per node) [bvh {:.2}s, signs {:.2}s, distances {:.2}s] save {save:.2}s load {load:.2}s -> {} bytes, base64 {} chars, winding {}",
+                    v.dims, st.cells, st.tree_steps / st.cells as u64, st.bvh_secs, st.sign_secs, st.dist_secs, bytes.len(), b64, st.used_winding
                 );
                 assert_eq!(back.dims, v.dims);
             }
