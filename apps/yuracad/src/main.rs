@@ -20,6 +20,8 @@ mod panels;
 mod png;
 mod sdf;
 mod style;
+mod svg;
+mod svg_dialog;
 mod view;
 
 fn main() -> eframe::Result {
