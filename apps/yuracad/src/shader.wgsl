@@ -339,6 +339,15 @@ fn warp(p: vec3<f32>) -> vec3<f32> {
     return vec3<f32>(p.x, p.y, p.z + drip * w);
 }
 
+// The world point `p` carried back into the group's own space by instance record `ib` (`ni` = 0: no instance).
+fn to_group(ni: i32, ib: i32, p: vec3<f32>) -> vec3<f32> {
+    if (ni <= 0) { return p; }
+    let r0 = D(ib);
+    let r1 = D(ib + 1);
+    let r2 = D(ib + 2);
+    return vec3<f32>(dot(r0.xyz, p) + r0.w, dot(r1.xyz, p) + r1.w, dot(r2.xyz, p) + r2.w);
+}
+
 fn empty_hit() -> Hit {
     var acc: Hit;
     acc.d = 1e6;
@@ -450,20 +459,16 @@ fn map(p0: vec3<f32>) -> Hit {
         let fi = i32(gn.x + 0.5);
         // every instance of the group melts into the result in turn (none: the group once, as it is)
         for (var j = 0; j < max(ni, 1); j = j + 1) {
-            var q = p;
             var sc = 1.0;
             var sphere = gs;
+            let ib = inst_at(fi + j);
             if (ni > 0) {
-                let ib = inst_at(fi + j);
-                let r0 = D(ib);
-                let r1 = D(ib + 1);
-                let r2 = D(ib + 2);
                 let ic = D(ib + 3);
-                q = vec3<f32>(dot(r0.xyz, p) + r0.w, dot(r1.xyz, p) + r1.w, dot(r2.xyz, p) + r2.w);
                 sc = ic.w;
                 sphere = vec4<f32>(ic.xyz, gs.w * sc);
             }
             if (have && group_far(gr, sphere, p, acc.d, amount, rm, mode)) { continue; }
+            let q = to_group(ni, ib, p);
             var gx = group_hit(gr, q, amount, rm, mode);
             if (!gx.ok) { continue; }
             gx.h.d = gx.h.d * sc;
@@ -549,20 +554,16 @@ fn map_d(p0: vec3<f32>) -> f32 {
         let ni = i32(gn.y + 0.5);
         let fi = i32(gn.x + 0.5);
         for (var j = 0; j < max(ni, 1); j = j + 1) {
-            var q = p;
             var sc = 1.0;
             var sphere = gs;
+            let ib = inst_at(fi + j);
             if (ni > 0) {
-                let ib = inst_at(fi + j);
-                let r0 = D(ib);
-                let r1 = D(ib + 1);
-                let r2 = D(ib + 2);
                 let ic = D(ib + 3);
-                q = vec3<f32>(dot(r0.xyz, p) + r0.w, dot(r1.xyz, p) + r1.w, dot(r2.xyz, p) + r2.w);
                 sc = ic.w;
                 sphere = vec4<f32>(ic.xyz, gs.w * sc);
             }
             if (have && group_far(gr, sphere, p, acc, amount, rm, mode)) { continue; }
+            let q = to_group(ni, ib, p);
             let gd = group_dist(gr, q, amount, rm, mode);
             if (gd.y < 0.5) { continue; }
             let gv = gd.x * sc;
