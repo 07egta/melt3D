@@ -426,6 +426,7 @@ impl App {
             }
         }
         if outline_changed {
+            self.sketch_edit_button(ui, g, s);
             self.sketch_editor(ui, g, s);
         }
         if top_changed {
