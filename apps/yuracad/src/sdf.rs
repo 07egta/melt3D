@@ -416,8 +416,19 @@ fn combine(a: Sample, b: Sample, op: Op, k: f32, mode: BlendMode) -> Sample {
                 nearest: if h >= 0.5 { a.nearest } else { b.nearest },
             }
         }
-        // A stain never changes the shape, so the nearest thing stays what it was.
-        Op::Paint => a,
+        // A stain never changes the shape, so the nearest thing stays what it was; inside the
+        // stain (and a little way past its edge) the surface takes its material, as in the shader.
+        Op::Paint => {
+            let soft = (k * 0.35).max(0.3);
+            let w = (0.5 - b.dist / soft).clamp(0.0, 1.0);
+            Sample {
+                dist: a.dist,
+                color: mix3(a.color, b.color, w),
+                roughness: a.roughness + (b.roughness - a.roughness) * w,
+                metallic: a.metallic + (b.metallic - a.metallic) * w,
+                nearest: a.nearest,
+            }
+        }
         Op::Intersect => {
             // smax(a, b) = -smin(-a, -b); the surface belongs to whichever is farther out
             let (d, h) = smin(-a.dist, -b.dist, k, mode);
@@ -547,6 +558,112 @@ mod tests {
         let mut dripping = sc.clone();
         dripping.melt.drip = 20.0;
         assert!(Field::new(&dripping).distance([0.0, 0.0, 0.0]).is_finite());
+    }
+
+    fn graded(kind: Kind, mat: Material) -> Shape {
+        let mut s = Shape::new(kind, [0.0, 0.0, 0.0], mat);
+        s.blend = 0.0;
+        s
+    }
+
+    fn close(a: V3, b: V3) {
+        assert!((0..3).all(|i| (a[i] - b[i]).abs() < 1e-3), "{a:?} != {b:?}");
+    }
+
+    #[test]
+    fn a_gradient_runs_from_one_colour_to_the_other_across_the_shape() {
+        let (red, blue) = ([1.0, 0.0, 0.0], [0.0, 0.0, 1.0]);
+        let mat = Material { color: red, color2: blue, gradient: 1.0, grad_soft: 1.0, ..Material::default() };
+        let mut s = graded(Kind::Box, mat);
+        s.size = [20.0, 20.0, 40.0];
+        let p = Prepared::new(&s);
+        close(p.color_at([0.0, 0.0, -20.0]), red); // the bottom
+        close(p.color_at([0.0, 0.0, 20.0]), blue); // the top
+        close(p.color_at([0.0, 0.0, 0.0]), [0.5, 0.0, 0.5]); // halfway
+        close(p.color_at([0.0, 0.0, 500.0]), blue); // clamped beyond the ends
+        close(p.color_at([0.0, 0.0, -500.0]), red);
+        // no gradient: always the plain colour
+        let plain = Prepared::new(&graded(Kind::Box, Material { color: red, ..Material::default() }));
+        close(plain.color_at([0.0, 0.0, 30.0]), red);
+        // flipped
+        let mut f = s.clone();
+        f.material.grad_flip = true;
+        let p = Prepared::new(&f);
+        close(p.color_at([0.0, 0.0, -20.0]), blue);
+        close(p.color_at([0.0, 0.0, 20.0]), red);
+        // a weaker gradient reaches only part of the way
+        let mut w = s.clone();
+        w.material.gradient = 0.5;
+        close(Prepared::new(&w).color_at([0.0, 0.0, 20.0]), [0.5, 0.0, 0.5]);
+        // the X axis
+        let mut x = s.clone();
+        x.material.grad_axis = 0;
+        let p = Prepared::new(&x);
+        close(p.color_at([-10.0, 0.0, 0.0]), red);
+        close(p.color_at([10.0, 0.0, 0.0]), blue);
+        close(p.color_at([0.0, 0.0, 15.0]), [0.5, 0.0, 0.5]);
+        // a range: all red up to a quarter of the height, all blue from three quarters
+        let mut r = s.clone();
+        r.material.grad_from = 0.25;
+        r.material.grad_to = 0.75;
+        let p = Prepared::new(&r);
+        close(p.color_at([0.0, 0.0, -10.0]), red);
+        close(p.color_at([0.0, 0.0, 10.0]), blue);
+        // a hard edge
+        let mut h = s.clone();
+        h.material.grad_soft = 0.0;
+        let p = Prepared::new(&h);
+        close(p.color_at([0.0, 0.0, -1.0]), red);
+        close(p.color_at([0.0, 0.0, 1.0]), blue);
+    }
+
+    #[test]
+    fn a_gradient_follows_the_world_or_the_shape() {
+        let (red, blue) = ([1.0, 0.0, 0.0], [0.0, 0.0, 1.0]);
+        let mat = Material { color: red, color2: blue, gradient: 1.0, grad_soft: 1.0, ..Material::default() };
+        let mut s = graded(Kind::Box, mat);
+        s.size = [40.0, 10.0, 10.0];
+        s.rot = [0.0, 90.0, 0.0]; // the long side now stands up: the local X axis points down the world Z
+        let world = Prepared::new(&s);
+        close(world.color_at([0.0, 0.0, 20.0]), blue); // the world top is the end of the long box
+        close(world.color_at([0.0, 0.0, -20.0]), red);
+        // in the world the two ends of the local Z axis (world X here) are at the same height: purple
+        close(world.color_at([5.0, 0.0, 0.0]), [0.5, 0.0, 0.5]);
+        close(world.color_at([-5.0, 0.0, 0.0]), [0.5, 0.0, 0.5]);
+        // following the shape the colour runs along the local Z axis, which is only 10 long
+        s.material.grad_local = true;
+        let local = Prepared::new(&s);
+        let (a, b) = (local.color_at([5.0, 0.0, 0.0]), local.color_at([-5.0, 0.0, 0.0]));
+        let is = |c: V3, t: V3| (0..3).all(|i| (c[i] - t[i]).abs() < 1e-3);
+        assert!((is(a, red) && is(b, blue)) || (is(a, blue) && is(b, red)), "{a:?} {b:?}");
+        // and turning the shape turns the colours with it
+        let mut t = s.clone();
+        t.rot = [0.0, 0.0, 0.0];
+        let upright = Prepared::new(&t);
+        close(upright.color_at([0.0, 0.0, -5.0]), red);
+        close(upright.color_at([0.0, 0.0, 5.0]), blue);
+    }
+
+    #[test]
+    fn a_stained_gradient_keeps_the_stain_and_the_gradient_elsewhere() {
+        let (red, blue, green) = ([1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, 1.0, 0.0]);
+        let mat = Material { color: red, color2: blue, gradient: 1.0, grad_soft: 1.0, ..Material::default() };
+        let mut base = graded(Kind::Box, mat);
+        base.size = [40.0, 40.0, 40.0];
+        let mut stain = graded(Kind::Sphere, Material { color: green, ..Material::default() });
+        stain.size = [6.0, 1.0, 1.0];
+        stain.pos = [0.0, -20.0, 10.0];
+        stain.op = Op::Paint;
+        let f = Field::new(&scene_of(vec![base, stain]));
+        // on the front face: inside the stain it is green, far from it the gradient shows
+        let inside = f.sample([0.0, -20.0, 10.0]);
+        close(inside.color, green);
+        let top = f.sample([0.0, -20.0, 20.0]);
+        close(top.color, blue);
+        let bottom = f.sample([0.0, -20.0, -20.0]);
+        close(bottom.color, red);
+        // a stain never changes the shape
+        assert!((f.sample([0.0, -30.0, 10.0]).dist - 10.0).abs() < 1e-3);
     }
 }
 
