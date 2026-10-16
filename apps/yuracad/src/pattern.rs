@@ -142,6 +142,11 @@ pub fn euler_of(m: &[V3; 3]) -> V3 {
     [x.to_degrees(), y.to_degrees(), z.to_degrees()]
 }
 
+/// The Euler angles of a turn `rot` followed by a further turn of `deg` degrees about the world axis `axis`.
+pub fn turn_euler(rot: V3, axis: u8, deg: f32) -> V3 {
+    euler_of(&mat_mul(&axis_turn(axis, deg), &rotation(rot)))
+}
+
 /// A turn that takes the X axis to the direction `t` (the Z axis stays upright when it can).
 fn frame_along(t: V3) -> Mat {
     let x = norm(t);
@@ -807,6 +812,20 @@ mod tests {
                 for j in 0..3 {
                     assert!((m[i][j] - back[i][j]).abs() < 1e-3, "{rot:?}: {m:?} vs {back:?}");
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn a_further_turn_about_a_world_axis_adds_to_the_euler_angles() {
+        let r = turn_euler([0.0; 3], 2, 90.0);
+        assert!((r[2] - 90.0).abs() < 1e-3 && r[0].abs() < 1e-3 && r[1].abs() < 1e-3);
+        // turning about Z after turning about X is not the same as adding the numbers
+        let m = rotation(turn_euler([90.0, 0.0, 0.0], 2, 90.0));
+        let want = mat_mul(&axis_turn(2, 90.0), &axis_turn(0, 90.0));
+        for i in 0..3 {
+            for j in 0..3 {
+                assert!((m[i][j] - want[i][j]).abs() < 1e-3);
             }
         }
     }

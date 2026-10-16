@@ -58,3 +58,45 @@ a cutter was hovered).
 * wgpu backends: restricting to `Backends::PRIMARY` (Vulkan/DX12/Metal) skips the GL probe at start-up (tens of ms), but drops machines that only have GL.
 * If the viewport is still too slow on weak GPUs: lower the default max iterations, or render the still frame in two passes (a low-res march giving a start distance per pixel). Not needed so far.
 * Material preview swatches in the side panel are tessellated by egui every frame the panel repaints; caching them as one texture would save CPU on the Material tab.
+
+
+## Big scenes (512 shapes, 96 groups, 256 instances)
+
+The scene no longer lives in the 64 KB uniform buffer. `gpu.rs` packs it into **one long list of
+vec4 in a float texture** (`Rgba32Float`, 1024 vec4 per row, read with `textureLoad`); only the
+camera, light and the list's offsets (`Globals`, 23 vec4) are uniforms. The list is exactly as long as
+the scene needs (a default scene is 14 vec4, a full scene about 50 000), and it is uploaded only when
+the packed frame changed (the frame cache compares the whole frame). A texture was chosen over a
+storage buffer because egui-wgpu asks for `downlevel_webgl2_defaults` limits on OpenGL (no storage
+buffers, 16 KB uniforms), and the first thing a fragment shader can always read is a texture. The
+list: groups (3 vec4), blocks (2), instances (4), shapes (16), outline points, path nodes.
+`gpu::headless::open(true)` (`YURA_GL_LIMITS=1`) requests those OpenGL limits for the headless tests.
+
+To keep a frame bounded by what is near the ray (`accel.rs`, same numbers on the CPU `Field`):
+* shapes are cut into **blocks of 8** with a bounding sphere; a block that is farther than
+  `rm * kmax + |g| + 0.02` from the point is skipped whole;
+* every **group** has a sphere (its adds and overlaps plus the most their blends can pull the
+  distance down: `pull(mode, k)`); a group (or one instance of it) farther than `far_enough(...)` is skipped;
+* overlap shapes (`Op::Intersect`) are never skipped, and `map_d()` now treats them as overlaps (it used
+  to measure them as unions, so marching and the picture disagreed).
+`sdf::tests::skipping_far_shapes_blocks_and_groups_never_changes_the_answer` proves the skips are exact
+(error 7e-5 at most, all three blend modes). The CPU `Field` uses the same skips (picking and the mesher got faster too).
+
+Measured with the software Vulkan driver (llvmpipe, 4 cores) through `gpu_headless_bench`
+(`cargo test -p yuracad --release gpu_headless_bench -- --ignored --nocapture`), 480 x 300 pixels, a
+scene of library models on a grid, one still frame after the shader was compiled:
+
+| shapes | groups | full quality | fast mode |
+|---|---|---|---|
+| 17 | 1 | 105 ms | 55 ms |
+| 106 | 8 | 534 ms | 195 ms |
+| 305 | 26 | 1159 ms | 502 ms |
+| 502 | 44 | 1536 ms | 715 ms |
+
+(a real GPU is far faster; the point is the growth: 18 times the shapes cost 11 times the time, and
+the bigger scenes also fill more of the picture). Compiling the shader on llvmpipe takes minutes
+(the driver inlines every call site); `GALLIVM_PERF=no_opt` makes it about 3 times faster for tests.
+
+Instances (patterns and linked copies) are evaluated by carrying the point back into the group's own
+space: three rows of a matrix per instance in the list, the group's sphere moved with it for the skip.
+256 instances in the scene at most; each melts into the result in turn with the group's op and blend.

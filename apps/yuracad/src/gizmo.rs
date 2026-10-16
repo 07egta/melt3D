@@ -84,6 +84,8 @@ pub struct Drag {
     ext: V3,
     /// (group, shape, position, rotation, scale) when the drag began.
     from: Vec<(usize, usize, V3, V3, V3)>,
+    /// A linked copy being moved: its group and where it stood when the drag began.
+    link: Option<(usize, crate::pattern::Xform)>,
 }
 
 impl Drag {
@@ -461,6 +463,10 @@ impl App {
             .into_iter()
             .filter_map(|(gi, si)| self.scene.shape(gi, si).map(|s| (gi, si, s.pos, s.rot, s.scale)))
             .collect();
+        let link = match self.sel {
+            Some(Pick::Group(gi)) => self.scene.groups.get(gi).filter(|gr| gr.is_linked()).map(|gr| (gi, gr.xform)),
+            _ => None,
+        };
         Drag {
             handle,
             act,
@@ -481,6 +487,7 @@ impl App {
             local: g.local,
             ext: g.ext,
             from,
+            link,
         }
     }
 
@@ -510,6 +517,36 @@ impl App {
                 None => delta.dot(d.screen_dir) / d.ring_px * 57.2958,
             };
             turn_deg = round(turn_deg, 15.0);
+        }
+        // a linked copy moves, turns or grows as a whole (about the middle of its source)
+        if let Some((gi, x0)) = d.link
+            && let Some(gr) = self.scene.groups.get_mut(gi)
+        {
+            let mut x = x0;
+            match d.act {
+                Act::MoveAxis(_) => {
+                    let amt = match closest_on_axis(o, rd, d.centre, d.axis) {
+                        Some(t) => t - d.t0,
+                        None => delta.dot(d.screen_dir) * d.mm_px * (ARROW_PX / d.len_px),
+                    };
+                    x.pos = add(x0.pos, mul(d.axis, round(amt, 1.0)));
+                }
+                Act::MovePlane(i) => {
+                    if let Some(p) = ray_plane(o, rd, d.centre, WORLD[i]) {
+                        x.pos = add(x0.pos, sub(p, d.p0));
+                    }
+                }
+                Act::MoveView => x.pos = add(x0.pos, add(mul(right, delta.x * d.mm_px), mul(up, -delta.y * d.mm_px))),
+                Act::Rotate(i) => x.rot = crate::pattern::turn_euler(x0.rot, i as u8, turn_deg),
+                Act::ScaleAxis(_) | Act::ScaleAll | Act::StretchFace(_) => {
+                    let f = ((delta.x - delta.y) / 160.0).exp();
+                    x.scale = round(x0.scale * f, 0.05).clamp(0.01, 100.0);
+                }
+            }
+            if snap && matches!(d.act, Act::MoveAxis(_) | Act::MovePlane(_) | Act::MoveView) {
+                x.pos = [round(x.pos[0], 1.0), round(x.pos[1], 1.0), round(x.pos[2], 1.0)];
+            }
+            gr.xform = x;
         }
         for &(gi, si, pos, rot, scale) in &d.from {
             let Some(s) = self.scene.shape_mut(gi, si) else { continue };
@@ -650,6 +687,38 @@ mod tests {
         assert_eq!(g.faces.map(|f| f.len()), Some(6));
         assert_eq!(hit(&g, Tool::All, g.centre), Some(Handle::Centre));
         assert_eq!(app.action_for(Handle::Centre, Tool::All, false), Act::ScaleAll);
+    }
+
+    #[test]
+    fn a_linked_copy_is_moved_turned_and_scaled_by_its_handles() {
+        let mut app = App::new(true, None);
+        app.make_instance(&egui::Context::default());
+        let Some(Pick::Group(c)) = app.sel else { panic!("the copy is selected") };
+        let x0 = app.scene.groups[c].xform;
+        let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0));
+        let Some(g) = build(&app.cam, rect, &app.scene, app.sel, Tool::All) else { panic!("a linked copy has handles") };
+        // the handles sit on the middle of the source, moved with the copy
+        assert!((g.centre_w[0] - (0.0 + x0.pos[0])).abs() < 1e-3 && (g.centre_w[2] - 20.0).abs() < 1e-3, "{:?}", g.centre_w);
+        // an arrow moves it
+        let tip = g.ends[0].unwrap_or(g.centre);
+        let mut d = app.begin_drag(Handle::Axis(0), &g, rect, g.centre + (tip - g.centre) * 0.5, Tool::All, false);
+        app.apply_drag(&mut d, g.centre + (tip - g.centre) * 0.5 + (tip - g.centre).normalized() * 30.0, false);
+        let moved = app.scene.groups[c].xform;
+        assert!(moved.pos[0] != x0.pos[0] && moved.pos[1] == x0.pos[1] && moved.rot == x0.rot);
+        // the centre grows it
+        let mut d = app.begin_drag(Handle::Centre, &g, rect, g.centre, Tool::All, false);
+        app.apply_drag(&mut d, g.centre + vec2(40.0, -40.0), false);
+        assert!(app.scene.groups[c].xform.scale > 1.2, "{}", app.scene.groups[c].xform.scale);
+        // a ring turns it about the Z axis
+        app.scene.groups[c].xform.scale = 1.0;
+        let Some(g) = build(&app.cam, rect, &app.scene, app.sel, Tool::Rotate) else { panic!("gizmo") };
+        let on_ring = g.arcs[2].get(g.arcs[2].len() / 4).copied().unwrap_or(g.centre);
+        let mut d = app.begin_drag(Handle::Axis(2), &g, rect, on_ring, Tool::Rotate, false);
+        let next = g.arcs[2].get(g.arcs[2].len() / 4 + 6).copied().unwrap_or(g.centre);
+        app.apply_drag(&mut d, next, false);
+        assert!(app.scene.groups[c].xform.rot[2].abs() > 1.0, "{:?}", app.scene.groups[c].xform.rot);
+        // the source group did not move at all
+        assert_eq!(app.scene.groups[0].shapes[0].pos, [0.0, 0.0, 20.0]);
     }
 
     #[test]
