@@ -900,4 +900,85 @@ mod tests {
             assert_eq!(c, e);
         }
     }
+
+    #[test]
+    fn gradient_fields_are_sanitised() {
+        let mut m = Material { gradient: f32::NAN, grad_soft: 9.0, grad_from: -3.0, grad_to: f32::INFINITY, grad_axis: 77, color2: [f32::NAN, 5.0, -1.0], ..Material::default() };
+        m.sanitize();
+        assert_eq!(m.gradient, 0.0);
+        assert_eq!(m.grad_soft, 1.0);
+        assert_eq!(m.grad_from, 0.0);
+        assert_eq!(m.grad_to, 1.0);
+        assert_eq!(m.grad_axis, 2);
+        assert!(m.color2.iter().all(|c| (0.0..=1.0).contains(c)));
+        assert!(!m.has_gradient());
+        let mut big = Material { gradient: 40.0, ..Material::default() };
+        big.sanitize();
+        assert_eq!(big.gradient, 1.0);
+        assert!(big.has_gradient());
+    }
+
+    #[test]
+    fn the_gradient_weight_follows_range_softness_and_strength() {
+        let mut m = Material { gradient: 1.0, grad_soft: 0.0, ..Material::default() };
+        // a hard edge in the middle
+        assert_eq!(m.gradient_weight(0.2), 0.0);
+        assert_eq!(m.gradient_weight(0.8), 1.0);
+        // smooth: halfway is halfway, and it only rises
+        m.grad_soft = 1.0;
+        assert!((m.gradient_weight(0.5) - 0.5).abs() < 1e-5);
+        let mut last = -1.0;
+        for i in 0..=20 {
+            let w = m.gradient_weight(i as f32 / 20.0);
+            assert!(w >= last - 1e-6 && (0.0..=1.0).contains(&w));
+            last = w;
+        }
+        assert!(m.gradient_weight(0.0) < 1e-6 && m.gradient_weight(1.0) > 1.0 - 1e-6);
+        // strength scales it
+        m.gradient = 0.5;
+        assert!((m.gradient_weight(1.0) - 0.5).abs() < 1e-5);
+        // the range: nothing before `from`, everything after `to`
+        m.gradient = 1.0;
+        m.grad_from = 0.25;
+        m.grad_to = 0.75;
+        assert!(m.gradient_weight(0.2) < 1e-6);
+        assert!(m.gradient_weight(0.8) > 1.0 - 1e-6);
+        assert!((m.gradient_weight(0.5) - 0.5).abs() < 1e-5);
+        // a reversed or empty range does not divide by zero
+        m.grad_from = 0.9;
+        m.grad_to = 0.1;
+        assert!(m.gradient_weight(0.5).is_finite());
+    }
+
+    #[test]
+    fn old_materials_load_without_a_gradient_and_new_ones_round_trip() {
+        let old = r#"{"color":[1,0,0],"roughness":0.5,"metallic":0}"#;
+        let m: Material = serde_json::from_str(old).unwrap_or_default();
+        assert_eq!(m.color, [1.0, 0.0, 0.0]);
+        assert!(!m.has_gradient());
+        assert_eq!(m.grad_axis, 2);
+        let g = Material { gradient: 0.7, grad_axis: 0, grad_flip: true, grad_local: true, color2: [0.1, 0.2, 0.3], grad_soft: 0.3, grad_from: 0.1, grad_to: 0.9, ..Material::default() };
+        let back: Material = serde_json::from_str(&serde_json::to_string(&g).unwrap_or_default()).unwrap_or_default();
+        assert_eq!(back, g);
+        // a whole old scene still opens
+        let sc = Scene::default().to_json();
+        assert!(Scene::from_json(&sc).is_ok());
+    }
+
+    #[test]
+    fn rounding_is_held_inside_the_file_limits() {
+        let mut sc = Scene::default();
+        if let Some(s) = sc.groups[0].shapes.first_mut() {
+            s.round = f32::NAN;
+        }
+        sc.sanitize();
+        assert_eq!(sc.groups[0].shapes[0].round, 0.0);
+        if let Some(s) = sc.groups[0].shapes.first_mut() {
+            s.round = 1e9;
+        }
+        sc.sanitize();
+        assert_eq!(sc.groups[0].shapes[0].round, MAX_ROUND);
+        assert!(Kind::Box.can_round() && Kind::Cone.can_round() && Kind::Sweep.can_round());
+        assert!(!Kind::Sphere.can_round() && !Kind::Curve.can_round());
+    }
 }

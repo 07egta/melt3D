@@ -140,6 +140,32 @@ fn lighten(c: [f32; 3], t: f32) -> Color32 {
     color32([c[0] + (1.0 - c[0]) * t, c[1] + (1.0 - c[1]) * t, c[2] + (1.0 - c[2]) * t])
 }
 
+/// The gradient over a swatch: the second colour fades in from the bottom to the top of the ball
+/// (the swatch always shows the vertical direction, whichever axis the material uses).
+fn gradient_tint(painter: &Painter, centre: Pos2, r: f32, m: &Material, body_alpha: f32) {
+    use egui::epaint::Mesh;
+    const STEPS: usize = 40;
+    let tint = |y: f32| {
+        // y from the centre, down is positive: t = 0 at the bottom of the ball, 1 at the top
+        let t = (0.5 - y / (2.0 * r)).clamp(0.0, 1.0);
+        let t = if m.grad_flip { 1.0 - t } else { t };
+        let a = (m.gradient_weight(t) * 0.8 * body_alpha).clamp(0.0, 1.0);
+        let c = color32(m.color2);
+        Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), (a * 255.0) as u8)
+    };
+    let mut mesh = Mesh::default();
+    mesh.colored_vertex(centre, tint(0.0));
+    for i in 0..=STEPS {
+        let a = i as f32 / STEPS as f32 * std::f32::consts::TAU;
+        let (sn, cs) = a.sin_cos();
+        mesh.colored_vertex(centre + vec2(cs * r, sn * r), tint(sn * r));
+    }
+    for i in 1..=STEPS as u32 {
+        mesh.add_triangle(0, i, i + 1);
+    }
+    painter.add(egui::Shape::mesh(mesh));
+}
+
 /// A small shaded ball showing roughly what the material looks like.
 pub fn swatch(painter: &Painter, centre: Pos2, radius: f32, m: &Material) {
     let r = radius.max(2.0);
@@ -174,6 +200,9 @@ pub fn swatch(painter: &Painter, centre: Pos2, radius: f32, m: &Material) {
         vec2(-0.34, -0.38),
         &[(0.0, lighten(c, 0.22).gamma_multiply(body_alpha)), (0.45, shade(c, 0.92).gamma_multiply(body_alpha)), (1.0, base.gamma_multiply(body_alpha))],
     );
+    if m.has_gradient() {
+        gradient_tint(painter, centre, r, m, body_alpha);
+    }
     if metal > 0.3 {
         // a bright horizon band
         let y = centre.y + r * 0.1;
