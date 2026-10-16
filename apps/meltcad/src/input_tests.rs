@@ -110,3 +110,32 @@ fn a_node_of_a_freshly_traced_pipe_can_be_dragged_too() {
     let after = r.app.scene.shape(g, s).and_then(|s| s.path.get(mid).copied());
     assert_ne!(before, after, "the traced pipe's node must move (before {before:?}, after {after:?})");
 }
+
+#[test]
+fn with_the_pipe_tool_still_on_a_press_on_a_node_moves_the_node_instead_of_tracing() {
+    let mut r = Rig::new();
+    r.app.pt.on = true;
+    let rect = r.app.view_rect;
+    let c = rect.center();
+    r.mv(c + vec2(-150.0, 40.0));
+    r.button(c + vec2(-150.0, 40.0), true);
+    for k in 1..=24 {
+        let t = k as f32 / 24.0;
+        r.mv(c + vec2(-150.0 + 300.0 * t, 40.0 - 90.0 * (t * std::f32::consts::PI).sin()));
+    }
+    r.button(c + vec2(150.0, 40.0), false);
+    r.frame(vec![]);
+    r.frame(vec![]);
+    let Some(Pick::Shape(g, s)) = r.app.sel else { panic!("selected {:?}", r.app.sel) };
+    let count = r.app.scene.shape_count();
+    let Some(shape) = r.app.scene.shape(g, s) else { panic!("pipe") };
+    let lay = layout(&r.app.cam, r.app.view_rect, shape);
+    let mid = shape.path.len() / 2;
+    let Some(Some(node)) = lay.nodes.get(mid).copied() else { panic!("node on screen") };
+    let before = shape.path.get(mid).copied();
+    assert!(r.app.pt.on, "the tool is still on, as after a stroke");
+    r.drag(node.c, node.c + vec2(0.0, -50.0));
+    let after = r.app.scene.shape(g, s).and_then(|s| s.path.get(mid).copied());
+    assert_eq!(r.app.scene.shape_count(), count, "no second pipe was traced");
+    assert_ne!(before, after, "the node must move even though the pipe tool is on (before {before:?}, after {after:?})");
+}
