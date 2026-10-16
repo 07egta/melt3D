@@ -115,23 +115,33 @@ pub fn prepare(scene: &Scene, sel: Option<Pick>, scope: Scope, ignore_paint: boo
             }
         }
         Scope::Selected => {
+            // everything else is hidden rather than removed: patterns and linked copies find their
+            // sources by number, wherever they are in the list
             let Some(pick) = sel else { return Err("nothing is selected".into()) };
-            match pick {
-                Pick::Group(gi) => {
-                    let mut g = scene.groups.get(gi).cloned().ok_or("the selection is gone")?;
-                    g.visible = true;
+            let (gi, only) = match pick {
+                Pick::Group(gi) => (gi, None),
+                Pick::Shape(gi, si) => (gi, Some(si)),
+            };
+            if scene.groups.get(gi).is_none() {
+                return Err("the selection is gone".into());
+            }
+            if let Some(si) = only
+                && scene.shape(gi, si).is_none()
+            {
+                return Err("the selection is gone".into());
+            }
+            for (i, g) in s.groups.iter_mut().enumerate() {
+                g.visible = i == gi;
+                if i == gi {
                     g.op = Op::Add;
-                    s.groups = vec![g];
-                }
-                Pick::Shape(gi, si) => {
-                    let mut g = scene.groups.get(gi).cloned().ok_or("the selection is gone")?;
-                    let mut sh = g.shapes.get(si).cloned().ok_or("the selection is gone")?;
-                    sh.visible = true;
-                    sh.op = Op::Add;
-                    g.visible = true;
-                    g.op = Op::Add;
-                    g.shapes = vec![sh];
-                    s.groups = vec![g];
+                    if let Some(si) = only {
+                        for (k, sh) in g.shapes.iter_mut().enumerate() {
+                            sh.visible = k == si;
+                            if k == si {
+                                sh.op = Op::Add;
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -140,7 +150,7 @@ pub fn prepare(scene: &Scene, sel: Option<Pick>, scope: Scope, ignore_paint: boo
         for g in &mut s.groups {
             g.shapes.retain(|sh| sh.op != Op::Paint);
         }
-        s.groups.retain(|g| g.op != Op::Paint && !g.shapes.is_empty());
+        s.groups.retain(|g| g.op != Op::Paint && (!g.shapes.is_empty() || g.is_linked()));
     }
     Ok(s)
 }
@@ -176,13 +186,23 @@ pub fn bounds(scene: &Scene) -> Result<([f64; 3], [f64; 3]), String> {
     let amount = if m.amount.is_finite() { f64::from(m.amount.max(0.0)) } else { 1.0 };
     let drip = if m.drip.is_finite() { f64::from(m.drip.max(0.0)) } else { 0.0 };
     let (mut lo, mut hi) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
-    for g in scene.groups.iter().filter(|g| g.visible && g.op == Op::Add) {
-        for s in g.shapes.iter().filter(|s| s.visible && s.op == Op::Add) {
+    for rg in crate::pattern::resolve(scene) {
+        let (Some(g), Some(src)) = (scene.groups.get(rg.gi), scene.groups.get(rg.src)) else { continue };
+        if g.op != Op::Add {
+            continue;
+        }
+        let one = [crate::pattern::Inst::IDENTITY];
+        let insts: &[crate::pattern::Inst] = if rg.insts.is_empty() { &one } else { &rg.insts };
+        for s in src.shapes.iter().filter(|s| s.visible && s.op == Op::Add) {
             let r = reach_of(s) * 1.05 + (f64::from(s.blend.max(0.0)) + f64::from(g.blend.max(0.0))) * amount * factor;
-            for a in 0..3 {
-                let c = f64::from(s.pos[a]);
-                lo[a] = lo[a].min(c - r);
-                hi[a] = hi[a].max(c + r);
+            for inst in insts {
+                let at = inst.apply(s.pos);
+                let r = r * f64::from(inst.s);
+                for a in 0..3 {
+                    let c = f64::from(at[a]);
+                    lo[a] = lo[a].min(c - r);
+                    hi[a] = hi[a].max(c + r);
+                }
             }
         }
     }
@@ -196,8 +216,9 @@ pub fn bounds(scene: &Scene) -> Result<([f64; 3], [f64; 3]), String> {
 /// Do all the visible shapes look the same? Then the model has one look.
 fn single_look(scene: &Scene) -> Option<Mat8> {
     let mut first: Option<Mat8> = None;
-    for g in scene.groups.iter().filter(|g| g.visible) {
-        for s in g.shapes.iter().filter(|s| s.visible) {
+    for rg in crate::pattern::resolve(scene) {
+        let Some(src) = scene.groups.get(rg.src) else { continue };
+        for s in src.shapes.iter().filter(|s| s.visible) {
             let m = look_of(s.material.color, s.material.roughness, s.material.metallic);
             match first {
                 None => first = Some(m),
@@ -262,13 +283,24 @@ struct Painter {
 impl Painter {
     fn new(scene: &Scene) -> Painter {
         let amount = if scene.melt.amount.is_finite() { scene.melt.amount.max(0.0) } else { 1.0 };
-        let alone = |g: crate::model::Group| Field::new(&Scene { groups: vec![g], melt: scene.melt, env: scene.env.clone(), saved: Vec::new() });
+        // a stain alone: the whole scene with everything hidden but that group (so that patterns and
+        // linked copies still find what they follow)
+        let alone = |gi: usize, g: crate::model::Group| {
+            let mut sc = Scene { groups: scene.groups.clone(), melt: scene.melt, env: scene.env.clone(), saved: Vec::new() };
+            for other in &mut sc.groups {
+                other.visible = false;
+            }
+            if let Some(slot) = sc.groups.get_mut(gi) {
+                *slot = g;
+            }
+            Field::new(&sc)
+        };
         let mut stains = Vec::new();
-        for g in scene.groups.iter().filter(|g| g.visible) {
+        for (gi, g) in scene.groups.iter().enumerate().filter(|(_, g)| g.visible) {
             if g.op == Op::Paint {
                 let mut u = g.clone();
                 u.op = Op::Add;
-                stains.push((alone(u), g.blend * amount));
+                stains.push((alone(gi, u), g.blend * amount));
             } else {
                 for sh in g.shapes.iter().filter(|s| s.visible && s.op == Op::Paint) {
                     let mut one = sh.clone();
@@ -277,7 +309,7 @@ impl Painter {
                     u.op = Op::Add;
                     u.visible = true;
                     u.shapes = vec![one];
-                    stains.push((alone(u), sh.blend * amount));
+                    stains.push((alone(gi, u), sh.blend * amount));
                 }
             }
         }
@@ -915,6 +947,40 @@ mod tests {
         assert!(with.surface.look.palette.len() >= 2, "{:?}", with.surface.look.palette);
         let without = build(&sc, None, &Options { ignore_paint: true, ..o }, &Progress::new()).unwrap();
         assert_eq!(without.surface.look.palette.len(), 1);
+    }
+
+    #[test]
+    fn patterns_and_linked_copies_are_exported_whole() {
+        use crate::pattern::{Pattern, Xform};
+        let mut sc = scene_of(vec![sphere_at(-60.0, 10.0, red())]);
+        sc.groups[0].pattern = Some(Pattern::Rect { counts: [3, 1, 1], spacing: [60.0, 0.0, 0.0] });
+        let vol = |sc: &Scene, scope: Scope, sel: Option<Pick>| {
+            let o = Options { scope, ..opts(Format::Stl, 0.4) };
+            build(sc, sel, &o, &Progress::new()).map(|b| melt::volume(&b.surface.mesh))
+        };
+        let one = ball(10.0);
+        // the row of three balls is in the mesh, and in the box around it
+        let (lo, hi) = bounds(&sc).unwrap();
+        assert!(lo[0] < -69.0 && hi[0] > 59.0, "{lo:?} {hi:?}");
+        assert!((vol(&sc, Scope::Visible, None).unwrap() / (3.0 * one) - 1.0).abs() < 0.03);
+        assert!((vol(&sc, Scope::Selected, Some(Pick::Group(0))).unwrap() / (3.0 * one) - 1.0).abs() < 0.03);
+        // a linked copy is one more ball (and exports by itself when it is the selection)
+        let uid = sc.ensure_group_uid(0).unwrap_or(0);
+        let mut copy = Group::new("copy");
+        copy.instance_of = Some(uid);
+        copy.xform = Xform { pos: [0.0, 80.0, 0.0], ..Xform::default() };
+        sc.groups.push(copy);
+        assert!((vol(&sc, Scope::Visible, None).unwrap() / (4.0 * one) - 1.0).abs() < 0.03);
+        assert!((vol(&sc, Scope::Selected, Some(Pick::Group(1))).unwrap() / one - 1.0).abs() < 0.03);
+        // a hidden source still shows in its copy; ignoring stains does not drop the copy
+        sc.groups[0].visible = false;
+        assert!((vol(&sc, Scope::Visible, None).unwrap() / one - 1.0).abs() < 0.03);
+        let o = Options { ignore_paint: true, ..opts(Format::Stl, 0.4) };
+        assert!((build(&sc, None, &o, &Progress::new()).map(|b| melt::volume(&b.surface.mesh)).unwrap() / one - 1.0).abs() < 0.03);
+        // the colours of the copies are found too
+        let o = Options { format: Format::ThreeMf, ..opts(Format::ThreeMf, 0.4) };
+        let b = build(&sc, None, &o, &Progress::new()).unwrap();
+        assert_eq!(b.surface.look.palette.len(), 1);
     }
 
     #[test]

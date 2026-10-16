@@ -1,6 +1,6 @@
-// Curve (kind 18): a tube through the points G.path[ext.x .. ext.x + ext.y] (xyz + radius), already
-// smoothed by the CPU (curve.rs). Two header entries sit just before the points: G.path[ext.x - 2]
-// and G.path[ext.x - 1] are the low and high corners of a box around the whole tube.
+// Curve (kind 18): a tube through the points path_pt(ext.x .. ext.x + ext.y) (xyz + radius), already
+// smoothed by the CPU (curve.rs). Two header entries sit just before the points: path_pt(ext.x - 2)
+// and path_pt(ext.x - 1) are the low and high corners of a box around the whole tube.
 // params.y is unused here; params.z = 1 cuts the two ends flat; params.x = 1 is a closed loop.
 // extra.x (shell) hollows the tube here; a flat-ended hollow tube is open at both ends.
 
@@ -39,16 +39,16 @@ fn curve_dist(s: Shape, q: vec3<f32>) -> f32 {
     let n = min(i32(s.ext.y + 0.5), 96);
     if (n < 2 || st < 2) { return 1.0e4; }
     // far away: the distance to the box around the tube is a safe, cheap answer
-    let lo = G.path[st - 2].xyz;
-    let hi = G.path[st - 1].xyz;
+    let lo = path_pt(st - 2).xyz;
+    let hi = path_pt(st - 1).xyz;
     let ob = max(max(lo - q, q - hi), vec3<f32>(0.0));
     let db = length(ob);
     let reach = 2.0 + s.misc.y * G.melt.y * 6.0;
     if (db > reach) { return db; }
     var d = 1.0e6;
-    var a = G.path[st];
+    var a = path_pt(st);
     for (var i = 1; i < n; i = i + 1) {
-        let b = G.path[st + i];
+        let b = path_pt(st + i);
         d = min(d, round_cone(q, a.xyz, a.w, b.xyz, b.w));
         a = b;
     }
@@ -56,10 +56,10 @@ fn curve_dist(s: Shape, q: vec3<f32>) -> f32 {
     let wall = s.extra.x / max(s.pos.w, 1.0e-6);
     if (wall > 0.0) { d = abs(d + wall * 0.5) - wall * 0.5; }
     if (s.params.z > 0.5 && s.params.x < 0.5) {
-        let p0 = G.path[st];
-        let p1 = G.path[st + 1];
-        let pn = G.path[st + n - 1];
-        let pm = G.path[st + n - 2];
+        let p0 = path_pt(st);
+        let p1 = path_pt(st + 1);
+        let pn = path_pt(st + n - 1);
+        let pm = path_pt(st + n - 2);
         let t0 = normalize(p1.xyz - p0.xyz + vec3<f32>(1.0e-6, 0.0, 0.0));
         let t1 = normalize(pn.xyz - pm.xyz + vec3<f32>(1.0e-6, 0.0, 0.0));
         d = max(d, max(dot(q - p0.xyz, -t0), dot(q - pn.xyz, t1)));

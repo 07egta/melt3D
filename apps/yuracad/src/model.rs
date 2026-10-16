@@ -3,6 +3,12 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::pattern::{Pattern, Xform};
+
+fn is_zero(v: &u32) -> bool {
+    *v == 0
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Kind {
     Sphere,
@@ -378,6 +384,9 @@ pub struct Shape {
     /// How `round` treats the edges: a round fillet (default) or a flat 45-degree bevel.
     #[serde(default)]
     pub corner: Corner,
+    /// A number patterns and linked copies find this shape by (0 = none; see `Scene::ensure_shape_uid`).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub uid: u32,
 }
 
 /// The style of a shape's cut edges: what `Shape::round` makes of them.
@@ -423,6 +432,7 @@ impl Shape {
             outline2: kind.default_outline2(),
             shell: 0.0,
             corner: Corner::Round,
+            uid: 0,
         }
     }
 
@@ -502,11 +512,23 @@ pub struct Group {
     pub blend: f32,
     pub visible: bool,
     pub shapes: Vec<Shape>,
+    /// A number linked copies and patterns find this group by (0 = none; see `Scene::ensure_group_uid`).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub uid: u32,
+    /// Live copies of the whole group (mirror, grid, circle, along a path, on points): no shape slots used.
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "crate::pattern::lenient_pattern")]
+    pub pattern: Option<Pattern>,
+    /// A linked copy of the group with this `uid`: it shows that group's shapes through `xform`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instance_of: Option<u32>,
+    /// Where a linked copy stands (move, turn, scale about the source's middle).
+    #[serde(default, skip_serializing_if = "Xform::is_identity")]
+    pub xform: Xform,
 }
 
 impl Group {
     pub fn new(name: impl Into<String>) -> Group {
-        Group { name: name.into(), op: Op::Add, blend: 0.0, visible: true, shapes: Vec::new() }
+        Group { name: name.into(), op: Op::Add, blend: 0.0, visible: true, shapes: Vec::new(), uid: 0, pattern: None, instance_of: None, xform: Xform::default() }
     }
 }
 
@@ -772,9 +794,18 @@ impl Scene {
             m.sanitize();
         }
         self.groups.truncate(MAX_GROUPS);
+        self.dedupe_uids();
         let mut left = MAX_SHAPES;
         for g in &mut self.groups {
             fix(&mut g.blend, 0.0, 200.0, 0.0);
+            if let Some(p) = &mut g.pattern {
+                p.sanitize();
+            }
+            g.xform.sanitize();
+            if g.instance_of.is_some() {
+                // a linked copy shows its source's shapes, not its own
+                g.shapes.clear();
+            }
             g.shapes.truncate(left);
             left -= g.shapes.len();
             for s in &mut g.shapes {
@@ -828,8 +859,8 @@ impl Scene {
     }
 }
 
-pub const MAX_GROUPS: usize = 24;
-pub const MAX_SHAPES: usize = 64;
+pub const MAX_GROUPS: usize = 96;
+pub const MAX_SHAPES: usize = 512;
 
 #[cfg(test)]
 mod tests {
@@ -950,6 +981,37 @@ mod tests {
         // a whole old scene still opens
         let sc = Scene::default().to_json();
         assert!(Scene::from_json(&sc).is_ok());
+    }
+
+    #[test]
+    fn a_file_with_too_much_is_cut_to_the_new_limits() {
+        assert!(MAX_SHAPES >= 512 && MAX_GROUPS >= 96);
+        let mut sc = Scene::default();
+        let one = sc.groups[0].shapes[0].clone();
+        sc.groups.clear();
+        for g in 0..MAX_GROUPS + 20 {
+            let mut gr = Group::new(format!("g{g}"));
+            gr.shapes = vec![one.clone(); 8];
+            sc.groups.push(gr);
+        }
+        let back = Scene::from_json(&sc.to_json()).unwrap_or_default();
+        assert_eq!(back.groups.len(), MAX_GROUPS);
+        assert_eq!(back.shape_count(), MAX_SHAPES, "{} groups of 8 shapes are cut at {MAX_SHAPES}", MAX_GROUPS);
+        // a file with a hostile pattern keeps only safe numbers
+        let hostile = r#"{"groups":[{"name":"g","op":"Add","blend":0,"visible":true,"shapes":[],"pattern":{"Rect":{"counts":[4000000000,0,9],"spacing":[1e30,-1e30,0]}},"xform":{"pos":[1e30,0,0],"rot":[0,0,0],"scale":-4}}]}"#;
+        let h = Scene::from_json(hostile).unwrap_or_default();
+        match &h.groups[0].pattern {
+            Some(crate::pattern::Pattern::Rect { counts, spacing }) => {
+                assert!(counts.iter().all(|c| (1..=crate::pattern::MAX_SIDE).contains(c)));
+                assert!(spacing.iter().all(|s| s.abs() <= 5000.0));
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(h.groups[0].xform.scale >= 0.01 && h.groups[0].xform.pos[0] <= 5000.0);
+        // a linked copy keeps no shapes of its own
+        let linked = r#"{"groups":[{"name":"g","op":"Add","blend":0,"visible":true,"uid":3,"shapes":[]},{"name":"c","op":"Add","blend":0,"visible":true,"instance_of":3,"shapes":[{"name":"s","kind":"Sphere","size":[20,1,1],"round":0,"pos":[0,0,20],"rot":[0,0,0],"scale":[1,1,1],"op":"Add","blend":6,"material":{"color":[1,0,0],"roughness":0.3,"metallic":1},"visible":true,"outline":[]}]}]}"#;
+        let l = Scene::from_json(linked).unwrap_or_default();
+        assert!(l.groups[1].shapes.is_empty() && l.groups[1].instance_of == Some(3));
     }
 
     #[test]

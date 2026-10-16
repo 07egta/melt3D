@@ -23,6 +23,25 @@ fn app_preview() {
             sh.material.gradient = 1.0;
         }
     }
+    // `YURA_PATTERN=mirror|rect|circular|path|geometry|link` previews the group inspector's pattern section
+    if let Ok(which) = std::env::var("YURA_PATTERN") {
+        use crate::pattern::PatternKind;
+        let mut line = crate::model::Shape::new(Kind::Sweep, [0.0; 3], crate::model::Material::default());
+        line.path = vec![[-60.0, 0.0, 0.0, 1.0], [0.0, 40.0, 0.0, 1.0], [60.0, 0.0, 0.0, 1.0]];
+        let mut g = crate::model::Group::new("線");
+        g.shapes.push(line);
+        app.scene.groups.push(g);
+        app.sel = Some(crate::model::Pick::Group(0));
+        match which.as_str() {
+            "mirror" => app.toggle_mirror(&ctx, 0),
+            "rect" => app.set_pattern_kind(&ctx, PatternKind::Rect),
+            "circular" => app.set_pattern_kind(&ctx, PatternKind::Circular),
+            "path" => app.set_pattern_kind(&ctx, PatternKind::Path),
+            "geometry" => app.set_pattern_kind(&ctx, PatternKind::Geometry),
+            "link" => app.make_instance(&ctx),
+            _ => {}
+        }
+    }
     app.show_keys = std::env::var("YURA_KEYS").is_ok();
     app.lib_open = std::env::var("YURA_LIB").is_ok();
     app.tab = match std::env::var("YURA_TAB").ok().as_deref() {

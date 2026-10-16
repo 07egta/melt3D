@@ -21,8 +21,22 @@ pub fn targets(scene: &Scene, pick: Option<Pick>) -> Vec<(usize, usize)> {
     }
 }
 
+/// What a hit of the CPU field stands for: a shape, or (when `s` is `sdf::LINKED`) a whole linked copy.
+pub fn as_pick(g: usize, s: usize) -> Pick {
+    if s == crate::sdf::LINKED { Pick::Group(g) } else { Pick::Shape(g, s) }
+}
+
 /// Where the handles sit: the shape, or the middle of a group.
 pub fn centre_of(scene: &Scene, pick: Option<Pick>) -> Option<V3> {
+    // a linked copy has no shapes: its handles sit on the middle of the source, moved with the copy
+    if let Some(Pick::Group(g)) = pick
+        && let Some(gr) = scene.groups.get(g)
+        && gr.is_linked()
+    {
+        let src = crate::pattern::link_source(scene, g)?;
+        let c = crate::pattern::centre_of_shapes(&scene.groups.get(src)?.shapes);
+        return Some(add(c, gr.xform.pos));
+    }
     let t = targets(scene, pick);
     let mut sum = [0.0; 3];
     let mut n = 0.0;
@@ -98,7 +112,7 @@ impl App {
             (true, Some(p)) => {
                 let dirty = scene_changed || crate::perf::cam_key(&self.cam) != self.perf.last_cam;
                 match self.perf.hover_gate.check([p.x, p.y], now, dirty) {
-                    Gate::Pick => self.hover = self.shape_at(rect, p).map(|(g, s)| Pick::Shape(g, s)),
+                    Gate::Pick => self.hover = self.shape_at(rect, p).map(|(g, s)| as_pick(g, s)),
                     Gate::Wait(w) => ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(w)),
                     Gate::Same => {}
                 }
@@ -344,7 +358,7 @@ impl App {
     fn pick_at(&mut self, rect: Rect, p: Pos2, keep: bool) {
         match self.shape_at(rect, p) {
             Some((g, s)) => {
-                let want = Pick::Shape(g, s);
+                let want = as_pick(g, s);
                 self.sel = if keep && self.sel == Some(want) { Some(Pick::Group(g)) } else { Some(want) };
             }
             None => self.sel = None,
@@ -352,22 +366,22 @@ impl App {
     }
 
     pub fn frame_view(&mut self, only_selected: bool) {
-        let t: Vec<(usize, usize)> = if only_selected && self.sel.is_some() {
-            targets(&self.scene, self.sel)
+        let spheres: Vec<crate::accel::Bound> = if only_selected && self.sel.is_some() {
+            let t = targets(&self.scene, self.sel);
+            t.iter().filter_map(|(g, s)| self.scene.shape(*g, *s)).filter(|s| s.visible).map(|s| crate::accel::Bound { c: s.pos, r: radius_of(s) }).collect()
         } else {
-            self.scene.groups.iter().enumerate().flat_map(|(g, gr)| (0..gr.shapes.len()).map(move |s| (g, s))).collect()
+            crate::pattern::world_spheres(&self.scene)
         };
-        let shapes: Vec<_> = t.iter().filter_map(|(g, s)| self.scene.shape(*g, *s)).filter(|s| s.visible).collect();
-        if shapes.is_empty() {
+        if spheres.is_empty() {
             self.fly = Some(Camera { ortho: self.cam.ortho, ..Camera::default() });
             return;
         }
         let mut c = [0.0; 3];
-        for s in &shapes {
-            c = add(c, s.pos);
+        for b in &spheres {
+            c = add(c, b.c);
         }
-        let c = mul(c, 1.0 / shapes.len() as f32);
-        let r = shapes.iter().map(|s| len(sub(s.pos, c)) + radius_of(s)).fold(1.0_f32, f32::max);
+        let c = mul(c, 1.0 / spheres.len() as f32);
+        let r = spheres.iter().map(|b| len(sub(b.c, c)) + b.r).fold(1.0_f32, f32::max);
         let mut goal = self.cam;
         goal.frame(c, r);
         self.fly = Some(goal);

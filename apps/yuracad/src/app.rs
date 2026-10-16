@@ -161,6 +161,8 @@ impl App {
 
     /// Undo steps are made here: a change counts as finished once the mouse is up.
     pub(crate) fn settle(&mut self, ctx: &egui::Context) {
+        // a copied shape or group carries its original's number: only the first keeps it
+        self.scene.dedupe_uids();
         if self.scene != self.committed && !ctx.input(|i| i.pointer.any_down()) {
             self.undo.push(std::mem::replace(&mut self.committed, self.scene.clone()));
             if self.undo.len() > UNDO_LIMIT {
@@ -618,6 +620,23 @@ impl App {
                         }
                         if ui.button("ならべてコピー…").clicked() {
                             crate::array::open(&ctx);
+                            ui.close();
+                        }
+                        ui.menu_button("パターン", |ui| {
+                            for k in crate::pattern::PatternKind::ALL {
+                                if ui.button(k.label()).on_hover_text(k.hint()).clicked() {
+                                    self.set_pattern_kind(&ctx, k);
+                                    ui.close();
+                                }
+                            }
+                            ui.separator();
+                            if ui.button("パターンをやめる").clicked() {
+                                self.clear_pattern();
+                                ui.close();
+                            }
+                        });
+                        if ui.button("インスタンスを作る").on_hover_text("リンクコピー：元を直すと、コピーも変わります").clicked() {
+                            self.make_instance(&ctx);
                             ui.close();
                         }
                         if ui.button("左右コピー").clicked() {

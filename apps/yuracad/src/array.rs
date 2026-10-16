@@ -198,7 +198,13 @@ mod tests {
         app.sel = Some(Pick::Group(0));
         assert_eq!(app.make_array(&Dlg { count: 3, ..Dlg::default() }), Ok(2));
         assert_eq!(app.scene.groups.len(), 3);
-        assert!(app.make_array(&Dlg { count: 64, ..Dlg::default() }).is_err());
+        // one array makes at most 63 copies; keep going and the group limit stops it
+        let mut more = 0;
+        while app.make_array(&Dlg { count: 64, ..Dlg::default() }).is_ok() {
+            more += 1;
+            assert!(more < 20, "the limit must stop the arrays");
+        }
+        assert!(app.scene.groups.len() > MAX_GROUPS - 63 && app.scene.groups.len() <= MAX_GROUPS);
         app.sel = None;
         assert!(app.make_array(&Dlg::default()).is_err());
         assert!(app.scene.groups.len() <= MAX_GROUPS && app.scene.shape_count() <= MAX_SHAPES);
