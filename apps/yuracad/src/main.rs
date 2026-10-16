@@ -1,4 +1,4 @@
-//! YURACAD: a light, easy blob modeller. Melt shapes together, carve with minus shapes, print.
+//! MELTCAD: a light, easy blob modeller. Melt shapes together, carve with minus shapes, print.
 #![cfg_attr(all(target_os = "windows", not(debug_assertions)), windows_subsystem = "windows")]
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable))]
 
@@ -46,12 +46,12 @@ fn main() -> eframe::Result {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1380.0, 860.0])
             .with_min_inner_size([960.0, 600.0])
-            .with_title("YURACAD")
+            .with_title("MELTCAD")
             .with_icon(icon::data()),
         ..Default::default()
     };
     eframe::run_native(
-        "YURACAD",
+        "MELTCAD",
         options,
         Box::new(move |cc| {
             perf::mark("window and graphics ready");

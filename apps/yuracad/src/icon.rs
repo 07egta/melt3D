@@ -1,4 +1,4 @@
-//! Procedurally generated window icon for YURACAD.
+//! Procedurally generated window icon for MELTCAD.
 //!
 //! Drawn entirely in code (no image assets): a dark rounded square holding two
 //! blobs, a coral one and a violet one, melted together by a smooth-min join

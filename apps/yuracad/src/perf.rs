@@ -1,4 +1,4 @@
-//! Keeping YURACAD light. Pure helpers (so they can be tested without a GPU) for:
+//! Keeping MELTCAD light. Pure helpers (so they can be tested without a GPU) for:
 //! - the frame cache: the picture is drawn again only when something it shows has changed;
 //! - the fast mode: while the view or a handle is moving, a cheaper picture is drawn, and a full
 //!   one follows when things have been still for a moment;

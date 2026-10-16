@@ -1,4 +1,4 @@
-# YURACAD model library
+# MELTCAD model library
 
 Each `*.json` here is one category of ready-made models, compiled into the app (`src/library.rs`).
 The files are **generated** by Python scripts in `gen/` (one script per file) so a model is a few
@@ -8,7 +8,7 @@ lines of readable code.
 
 ```json
 { "category": "どうぶつ",
-  "items": [ { "name": "ねこ", "tags": ["cat", "ネコ", "pet"], "group": { ...a YURACAD Group... } } ] }
+  "items": [ { "name": "ねこ", "tags": ["cat", "ネコ", "pet"], "group": { ...a MELTCAD Group... } } ] }
 ```
 
 A `group` is exactly what a `.yura` scene holds in `groups[]` (see `src/model.rs`: `Group`, `Shape`,

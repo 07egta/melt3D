@@ -1,4 +1,4 @@
-// YURACAD viewport: sphere-traces the blob scene. The formulas match sdf.rs.
+// MELTCAD viewport: sphere-traces the blob scene. The formulas match sdf.rs.
 
 struct Shape {
     r0: vec4<f32>,      // inverse rotation row 0

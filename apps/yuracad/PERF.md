@@ -1,4 +1,4 @@
-# YURACAD performance notes
+# MELTCAD performance notes
 
 Goal: light on the machine. Dropping effects while moving is fine. Nothing here could be run on a GPU
 by the author of the change (no display in the build box), so the effects below are reasoned

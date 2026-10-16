@@ -131,7 +131,7 @@ pub fn stl_binary(mesh: &TriMesh, name: &str) -> Vec<u8> {
         .collect();
     let mut out = Vec::with_capacity(84 + 50 * corners.len());
     // The header must not start with "solid", or readers take the file for ASCII STL.
-    let mut header = format!("YURACAD {name}").into_bytes();
+    let mut header = format!("MELTCAD {name}").into_bytes();
     header.retain(|b| (0x20..0x7f).contains(b));
     header.resize(80, 0);
     out.extend_from_slice(&header);
@@ -154,7 +154,7 @@ pub fn stl_binary(mesh: &TriMesh, name: &str) -> Vec<u8> {
 /// A Wavefront OBJ (mm, Z up): `v` lines then `f` lines (1-based indices).
 pub fn obj_text(mesh: &TriMesh, name: &str) -> String {
     use std::fmt::Write;
-    let mut out = format!("# YURACAD {}\no {}\n", name.replace(['\n', '\r'], " "), name.replace(char::is_whitespace, "_"));
+    let mut out = format!("# MELTCAD {}\no {}\n", name.replace(['\n', '\r'], " "), name.replace(char::is_whitespace, "_"));
     for p in &mesh.positions {
         let f = |x: f64| if x.is_finite() { x } else { 0.0 };
         let _ = writeln!(out, "v {:.5} {:.5} {:.5}", f(p[0]), f(p[1]), f(p[2]));
@@ -183,7 +183,7 @@ pub fn threemf(mesh: &TriMesh, name: &str) -> Result<Vec<u8>, String> {
     use std::fmt::Write;
     let n = mesh.positions.len() as u32;
     let mut model = String::from(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<model unit=\"millimeter\" xml:lang=\"en-US\" xmlns=\"http://schemas.microsoft.com/3dmanufacturing/core/2015/02\">\n<metadata name=\"Application\">YURACAD</metadata>\n<resources>\n<object id=\"1\" type=\"model\">\n<mesh>\n<vertices>\n",
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<model unit=\"millimeter\" xml:lang=\"en-US\" xmlns=\"http://schemas.microsoft.com/3dmanufacturing/core/2015/02\">\n<metadata name=\"Application\">MELTCAD</metadata>\n<resources>\n<object id=\"1\" type=\"model\">\n<mesh>\n<vertices>\n",
     );
     for p in &mesh.positions {
         let f = |x: f64| if x.is_finite() { x } else { 0.0 };

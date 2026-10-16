@@ -1,5 +1,5 @@
 //! Copy, cut and paste. A copied shape or group goes to the system clipboard as JSON text, so it
-//! can be pasted into another YURACAD window (or kept in a text file). A whole `.yura` scene
+//! can be pasted into another MELTCAD window (or kept in a text file). A whole `.yura` scene
 //! pasted as text is added as new groups.
 
 use serde::{Deserialize, Serialize};
@@ -32,7 +32,7 @@ pub fn copy_text(app: &App) -> Option<String> {
     serde_json::to_string(&clip).ok()
 }
 
-/// Put the text into the scene. Returns what was added ("" when the text is not something YURACAD knows).
+/// Put the text into the scene. Returns what was added ("" when the text is not something MELTCAD knows).
 pub fn paste_text(app: &mut App, text: &str) -> Result<String, String> {
     let text = text.trim();
     if let Ok(clip) = serde_json::from_str::<Clip>(text) {

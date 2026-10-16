@@ -126,6 +126,7 @@ def figure(F):
     fem = F.get("fem", False)
     wf = 0.92 if fem else 1.0
     hipf = 1.06 if fem else 1.0
+    mus = F.get("mus", 1.0)       # extra limb thickness (muscle)
     shw = 14.0 * kW * wf          # shoulder joint offset from the middle
     hw = 8.5 * kW * hipf          # hip joint offset
     C = F["c"]
@@ -172,9 +173,9 @@ def figure(F):
     # ---- torso: chest, waist and pelvis as three scaled spheres ----
     S.append(ell("むね", T(spine(0.77 * Lsp)), (14.5 * kW * wf, 10.0 * kD, 11.5 * k), C["top"], blend=6,
                  rot=orient(u)))
-    S.append(ell("こし", T(spine(0.40 * Lsp)), (10.5 * kW, 8.5 * kD, 10.5 * k), C["top"], blend=6,
+    S.append(ell("こし", T(spine(0.40 * Lsp)), (10.5 * kD * wf, 8.5 * kD, 10.5 * k), C["top"], blend=6,
                  rot=orient(u)))
-    S.append(ell("こしまわり", T(P0), (13.0 * kW * hipf, 9.0 * kD, 8.5 * k), C["bottom"], blend=6,
+    S.append(ell("こしまわり", T(P0), (13.0 * kD * hipf, 9.0 * kD, 8.5 * k), C["bottom"], blend=6,
                  rot=orient(u)))
     S.append(cap("くび", T(spine(Lsp - 2.5 * k)), T(HC), 4.8 * kW, C["skin"], blend=4))
 
@@ -215,14 +216,15 @@ def figure(F):
         SH = addv(spine(Lsp - 4.0 * k), [1, 0, 0], s * shw)
         Ua = dirv(A_["fw"], A_["ab"], s)
         E = addv(SH, Ua, 29.0 * k)
-        Fa = dirv(A_["fw"] + A_["el"], A_["ab"], s)
+        fab = A_.get("fab", A_["ab"])     # forearm side angle (flexed arms)
+        Fa = dirv(A_["fw"] + A_["el"], fab, s)
         Wr = addv(E, Fa, 25.0 * k)
-        Hd = dirv(A_["fw"] + A_["el"] + A_["wr"], A_["ab"], s)
+        Hd = dirv(A_["fw"] + A_["el"] + A_["wr"], fab, s)
         Hc = addv(Wr, Hd, 9.0 * k)
         up_c = C.get("sleeve", C["top"])
         fo_c = C.get("fore") or (C.get("sleeve") if C.get("long") else None) or C["skin"]
-        S.append(cap(f"{side}うで", T(SH), T(E), 4.3 * kW, up_c, blend=6))
-        S.append(cap(f"{side}ひじ下", T(E), T(Wr), 3.1 * kW, fo_c, blend=4))
+        S.append(cap(f"{side}うで", T(SH), T(E), 4.3 * kW * mus, up_c, blend=6))
+        S.append(cap(f"{side}ひじ下", T(E), T(Wr), 3.2 * kW * mus, fo_c, blend=4))
         S.append(ell(f"{side}て", T(Hc), (3.6 * kW, 2.2 * k, 9.0 * k), C["skin"], blend=2.5,
                      rot=orient(Hd)))
 
@@ -230,9 +232,9 @@ def figure(F):
     for s in (1, -1):
         side = "右" if s > 0 else "左"
         L_ = legs_raw[s]
-        S.append(cap(f"{side}ふともも", T(L_["HJ"]), T(L_["K"]), 6.6 * kW, C.get("thigh", C.get("bottom", C["skin"])),
+        S.append(cap(f"{side}ふともも", T(L_["HJ"]), T(L_["K"]), 6.6 * kW * mus, C.get("thigh", C.get("bottom", C["skin"])),
                      blend=6))
-        S.append(cap(f"{side}すね", T(L_["K"]), T(L_["A"]), 4.7 * kW, C.get("calf", C.get("bottom", C["skin"])), blend=5))
+        S.append(cap(f"{side}すね", T(L_["K"]), T(L_["A"]), 4.7 * kW * mus, C.get("calf", C.get("bottom", C["skin"])), blend=5))
         S.append(bx(f"{side}あし", T(L_["FC"]), (fw_, fl_, fh_), C["shoe"], rot=(L_["pt"], 0, 0),
                     rnd=1.8 * k, blend=2.0))
 
@@ -336,6 +338,28 @@ items.append(item_of("あるくひと", ["walking", "walker", "walk", "pedestria
     face=True, hair="short",
     c=dict(skin=SKIN, top=(0.58, 0.62, 0.66), sleeve=(0.58, 0.62, 0.66), bottom=BEIGE,
            shoe=SHOE_BR, hair_col=HAIR_BLACK),
+)))
+
+# 8. ボディビルダー -- a muscular bodybuilder in a red tank top and shorts, flexing both arms
+items.append(item_of("ボディビルダー", ["bodybuilder", "muscle", "muscular", "fitness", "realistic", "ボディビルダー", "きんにく"], dict(
+    H=172, hh=22.7, build=1.25, mus=1.3,
+    legs=legs_std(ab=3.0), arms={s_: dict(fw=0, ab=38, el=130, fab=10, wr=0) for s_ in (1, -1)},
+    face=True, hair="short",
+    c=dict(skin=SKIN, top=WHITE, sleeve=SKIN, bottom=RED, thigh=SKIN, calf=SKIN,
+           shoe=WHITE, hair_col=HAIR_BLACK),
+)))
+
+# 9. モデルたい -- a slim fashion model in contrapposto: weight on one leg, long brown hair, black top, white trousers
+items.append(item_of("モデルたい", ["model", "fashion", "slim", "catwalk", "contrapposto", "realistic", "モデル"], dict(
+    H=176, hh=22.4, build=0.85, fem=True,
+    lean=0, sway=-4,                                   # torso shifts over the standing leg (+X side)
+    legs={1: dict(th=0, ab=1.0, kn=0, pt=0),           # standing leg, straight
+          -1: dict(th=8, ab=1.5, kn=12, pt=10)},       # relaxed free leg, knee soft, toe down
+    arms={1: dict(fw=-4, ab=7, el=12, wr=0),
+          -1: dict(fw=6, ab=10, el=22, wr=0)},
+    face=True, hair="long",
+    c=dict(skin=SKIN, top=(0.10, 0.10, 0.12), sleeve=(0.10, 0.10, 0.12), bottom=WHITE,
+           shoe=SHOE_BK, hair_col=HAIR_BROWN),
 )))
 
 if __name__ == "__main__":
