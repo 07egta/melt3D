@@ -284,7 +284,7 @@ impl App {
         match &mut pat {
             Pattern::Mirror { centre: about, .. } => {
                 ui.horizontal(|ui| {
-                    style::row_label(ui, "ふちの面");
+                    style::row_label(ui, "写す面");
                     if style::pill(ui, "原点", !*about).on_hover_text("世界の真ん中（原点）を通る面").clicked() {
                         *about = false;
                     }

@@ -28,6 +28,15 @@ pub fn as_pick(g: usize, s: usize) -> Pick {
 
 /// Where the handles sit: the shape, or the middle of a group.
 pub fn centre_of(scene: &Scene, pick: Option<Pick>) -> Option<V3> {
+    // a linked copy has no shapes: its handles sit on the middle of the source, moved with the copy
+    if let Some(Pick::Group(g)) = pick
+        && let Some(gr) = scene.groups.get(g)
+        && gr.is_linked()
+    {
+        let src = crate::pattern::link_source(scene, g)?;
+        let c = crate::pattern::centre_of_shapes(&scene.groups.get(src)?.shapes);
+        return Some(add(c, gr.xform.pos));
+    }
     let t = targets(scene, pick);
     let mut sum = [0.0; 3];
     let mut n = 0.0;
