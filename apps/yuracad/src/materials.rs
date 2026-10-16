@@ -275,4 +275,44 @@ mod tests {
         });
         out.textures_delta.clear();
     }
+
+    /// `YT_OUT=/tmp/grad.yura cargo test -p yuracad dump_gradient_showcase -- --ignored` writes a scene with the
+    /// gradient presets and a few directions, for looking at.
+    #[test]
+    #[ignore]
+    fn dump_gradient_showcase() {
+        use crate::model::{Kind, Op, Shape};
+        let out = std::env::var("YT_OUT").unwrap_or_else(|_| "/tmp/grad.yura".into());
+        let mut sc = crate::model::Scene::default();
+        sc.groups[0].shapes.clear();
+        sc.groups[0].blend = 0.0;
+        let grads: Vec<&Preset> = presets().iter().filter(|p| p.material.has_gradient()).collect();
+        for (i, pr) in grads.iter().enumerate() {
+            let mut sh = Shape::new(Kind::Sphere, [i as f32 * 28.0, 0.0, 12.0], pr.material);
+            sh.size = [12.0, 1.0, 1.0];
+            sh.blend = 0.0;
+            sc.groups[0].shapes.push(sh);
+        }
+        // directions, flip, follow the shape, a stain over a gradient
+        let base = Material { color: [1.0, 0.2, 0.2], color2: [0.2, 0.3, 1.0], gradient: 1.0, grad_soft: 0.5, ..Material::default() };
+        for (i, (axis, flip, local, rot)) in [(0u8, false, false, 0.0), (1, false, false, 0.0), (2, true, false, 0.0), (2, false, true, 35.0), (2, false, false, 35.0)].into_iter().enumerate() {
+            let mut sh = Shape::new(Kind::Box, [i as f32 * 28.0, 40.0, 12.0], Material { grad_axis: axis, grad_flip: flip, grad_local: local, ..base });
+            sh.size = [20.0, 20.0, 24.0];
+            sh.rot = [rot, 0.0, 0.0];
+            sh.blend = 0.0;
+            sh.round = 4.0;
+            sc.groups[0].shapes.push(sh);
+        }
+        let mut stain = Shape::new(Kind::Sphere, [0.0, 82.0, 12.0], Material { color: [0.1, 0.9, 0.3], ..Material::default() });
+        stain.size = [9.0, 1.0, 1.0];
+        stain.op = Op::Paint;
+        stain.blend = 3.0;
+        let mut cyl = Shape::new(Kind::Cylinder, [0.0, 80.0, 12.0], base);
+        cyl.size = [14.0, 24.0, 1.0];
+        cyl.blend = 0.0;
+        cyl.round = 3.0;
+        sc.groups[0].shapes.push(cyl);
+        sc.groups[0].shapes.push(stain);
+        let _ = std::fs::write(out, sc.to_json());
+    }
 }

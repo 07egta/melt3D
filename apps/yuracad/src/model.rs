@@ -394,19 +394,6 @@ pub enum Corner {
 
 impl Corner {
     pub const ALL: [Corner; 2] = [Corner::Round, Corner::Chamfer];
-    pub fn label(self) -> &'static str {
-        match self {
-            Corner::Round => "丸",
-            Corner::Chamfer => "面取り",
-        }
-    }
-    /// The number the shader reads (0 = round, 1 = chamfer).
-    pub fn id(self) -> f32 {
-        match self {
-            Corner::Round => 0.0,
-            Corner::Chamfer => 1.0,
-        }
-    }
 }
 
 pub const MAX_OUTLINE: usize = 64;
