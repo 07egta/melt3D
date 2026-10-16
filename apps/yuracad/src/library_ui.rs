@@ -59,7 +59,7 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
     let mut close = false;
     let mut pick: Option<(usize, usize)> = None;
     let mut made_one = false;
-    egui::Area::new(egui::Id::new("library_card")).order(egui::Order::Foreground).fixed_pos(rect.left_top() + Vec2::new(266.0, 16.0)).show(ctx, |ui| {
+    egui::Area::new(egui::Id::new("library_card")).order(egui::Order::Foreground).fixed_pos(rect.left_top() + Vec2::new(292.0, 16.0)).show(ctx, |ui| {
         style::card().show(ui, |ui| {
             let w = (CELL * 4.0 + 28.0).min((rect.width() - 300.0).max(CELL * 2.0 + 28.0));
             ui.set_width(w);

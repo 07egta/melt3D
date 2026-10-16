@@ -1,6 +1,6 @@
-//! Look and feel: a blue-violet dark theme with one violet accent. Surfaces are soft and raised:
-//! gradients, a bright lip on top, a dark underside, layered shadows. Hover lifts, press sinks,
-//! chosen things glow. Every animation is at most 120 ms and only asks for repaints while moving.
+//! Look and feel: a flat, neutral dark-grey theme with one green accent, like a modern pro tool.
+//! Surfaces are plain fills with a hairline edge; hover lightens, chosen things turn green.
+//! Every animation is at most 120 ms and only asks for repaints while moving.
 
 use egui::epaint::Shadow;
 use egui::{
@@ -18,20 +18,20 @@ use gfx::{Buf, Sink, lerp, lit, mix};
 
 // ----- colours -----
 
-/// Bars (top, bottom) and the deepest wells.
-pub const PANEL_DARK: Color32 = Color32::from_rgb(22, 23, 31);
+/// Bars, the outliner and the deepest wells.
+pub const PANEL_DARK: Color32 = Color32::from_rgb(30, 30, 30);
 /// Side panel.
-pub const PANEL: Color32 = Color32::from_rgb(31, 32, 43);
-/// Raised plates and buttons at rest.
-pub const CARD: Color32 = Color32::from_rgb(45, 47, 63);
-pub const HOVER: Color32 = Color32::from_rgb(60, 63, 85);
+pub const PANEL: Color32 = Color32::from_rgb(38, 38, 38);
+/// Plates and buttons at rest.
+pub const CARD: Color32 = Color32::from_rgb(52, 52, 52);
+pub const HOVER: Color32 = Color32::from_rgb(68, 68, 68);
 #[allow(dead_code)]
-pub const BORDER: Color32 = Color32::from_rgb(66, 69, 92);
-pub const TEXT: Color32 = Color32::from_rgb(232, 233, 242);
+pub const BORDER: Color32 = Color32::from_rgb(72, 72, 72);
+pub const TEXT: Color32 = Color32::from_rgb(230, 230, 230);
 /// Labels (contrast 5:1 or more on the panels).
-pub const DIM: Color32 = Color32::from_rgb(152, 156, 178);
-pub const ACCENT: Color32 = Color32::from_rgb(150, 128, 255);
-pub const ACCENT_SOFT: Color32 = Color32::from_rgb(74, 64, 140);
+pub const DIM: Color32 = Color32::from_rgb(158, 158, 158);
+pub const ACCENT: Color32 = Color32::from_rgb(52, 178, 120);
+pub const ACCENT_SOFT: Color32 = Color32::from_rgb(34, 118, 82);
 pub const ADD: Color32 = Color32::from_rgb(120, 214, 150);
 pub const CUT: Color32 = Color32::from_rgb(244, 124, 132);
 pub const PAINT: Color32 = Color32::from_rgb(120, 190, 255);
@@ -50,19 +50,19 @@ pub fn op_color(op: crate::model::Op) -> Color32 {
 pub const AXIS: [Color32; 3] = [Color32::from_rgb(232, 84, 84), Color32::from_rgb(110, 200, 100), Color32::from_rgb(80, 140, 240)];
 
 /// Sunken wells (text fields, slider rails, segmented tracks).
-pub const INSET_TOP: Color32 = Color32::from_rgb(15, 16, 22);
-pub const INSET_BOTTOM: Color32 = Color32::from_rgb(25, 26, 36);
+pub const INSET_TOP: Color32 = Color32::from_rgb(26, 26, 26);
+pub const INSET_BOTTOM: Color32 = Color32::from_rgb(26, 26, 26);
 
-const BTN_TOP: Color32 = Color32::from_rgb(68, 71, 96);
-const BTN_BOTTOM: Color32 = Color32::from_rgb(43, 45, 62);
-const BTN_EDGE: Color32 = Color32::from_rgb(12, 12, 19);
-const BTN_HOT_TOP: Color32 = Color32::from_rgb(88, 92, 124);
-const BTN_HOT_BOTTOM: Color32 = Color32::from_rgb(54, 57, 80);
-const BTN_ON_TOP: Color32 = Color32::from_rgb(128, 108, 244);
-const BTN_ON_BOTTOM: Color32 = Color32::from_rgb(78, 63, 172);
-const BTN_ON_EDGE: Color32 = Color32::from_rgb(190, 176, 255);
-const BTN_DOWN_TOP: Color32 = Color32::from_rgb(27, 28, 39);
-const BTN_DOWN_BOTTOM: Color32 = Color32::from_rgb(41, 43, 60);
+const BTN_TOP: Color32 = Color32::from_rgb(56, 56, 56);
+const BTN_BOTTOM: Color32 = Color32::from_rgb(56, 56, 56);
+const BTN_EDGE: Color32 = Color32::from_rgb(74, 74, 74);
+const BTN_HOT_TOP: Color32 = Color32::from_rgb(72, 72, 72);
+const BTN_HOT_BOTTOM: Color32 = Color32::from_rgb(72, 72, 72);
+const BTN_ON_TOP: Color32 = Color32::from_rgb(36, 132, 90);
+const BTN_ON_BOTTOM: Color32 = Color32::from_rgb(36, 132, 90);
+const BTN_ON_EDGE: Color32 = Color32::from_rgb(70, 190, 134);
+const BTN_DOWN_TOP: Color32 = Color32::from_rgb(44, 44, 44);
+const BTN_DOWN_BOTTOM: Color32 = Color32::from_rgb(44, 44, 44);
 
 /// Fastest animation we use (seconds).
 const FAST: f32 = 0.10;
@@ -71,19 +71,19 @@ const MEDIUM: f32 = 0.12;
 pub fn apply(ctx: &egui::Context) {
     let mut v = egui::Visuals::dark();
     v.panel_fill = PANEL;
-    v.window_fill = Color32::from_rgb(36, 38, 52);
+    v.window_fill = Color32::from_rgb(40, 40, 40);
     v.extreme_bg_color = INSET_TOP;
     v.faint_bg_color = CARD;
     v.override_text_color = Some(TEXT);
     v.selection.bg_fill = ACCENT_SOFT;
     v.selection.stroke = Stroke::new(1.0, ACCENT);
     v.hyperlink_color = ACCENT;
-    v.window_corner_radius = CornerRadius::same(14);
-    v.menu_corner_radius = CornerRadius::same(10);
-    v.window_stroke = Stroke::new(1.0, Color32::from_white_alpha(26));
-    v.window_shadow = Shadow { offset: [0, 10], blur: 30, spread: 0, color: Color32::from_black_alpha(130) };
-    v.popup_shadow = Shadow { offset: [0, 6], blur: 20, spread: 0, color: Color32::from_black_alpha(120) };
-    let round = CornerRadius::same(8);
+    v.window_corner_radius = CornerRadius::same(10);
+    v.menu_corner_radius = CornerRadius::same(8);
+    v.window_stroke = Stroke::new(1.0, Color32::from_white_alpha(30));
+    v.window_shadow = Shadow { offset: [0, 6], blur: 18, spread: 0, color: Color32::from_black_alpha(110) };
+    v.popup_shadow = Shadow { offset: [0, 4], blur: 14, spread: 0, color: Color32::from_black_alpha(110) };
+    let round = CornerRadius::same(6);
     for w in [&mut v.widgets.noninteractive, &mut v.widgets.inactive, &mut v.widgets.hovered, &mut v.widgets.active, &mut v.widgets.open] {
         w.corner_radius = round;
         w.expansion = 0.0;
@@ -94,7 +94,7 @@ pub fn apply(ctx: &egui::Context) {
     v.widgets.inactive.bg_stroke = Stroke::new(1.0, Color32::from_white_alpha(22));
     v.widgets.hovered.bg_fill = HOVER;
     v.widgets.hovered.weak_bg_fill = HOVER;
-    v.widgets.hovered.bg_stroke = Stroke::new(1.0, mix(ACCENT_SOFT, ACCENT, 0.5));
+    v.widgets.hovered.bg_stroke = Stroke::new(1.0, Color32::from_white_alpha(50));
     v.widgets.active.bg_fill = ACCENT_SOFT;
     v.widgets.active.weak_bg_fill = ACCENT_SOFT;
     v.widgets.active.bg_stroke = Stroke::new(1.0, ACCENT);
@@ -133,24 +133,11 @@ pub fn button_look(hot: f32, on: f32, pressed: bool) -> (Color32, Color32, Color
     (top, bottom, edge)
 }
 
-/// Draws a raised, lit button surface into `out`. `hot` and `on` are 0..1 animation values.
+/// Draws a flat button surface into `out`. `hot` and `on` are 0..1 animation values.
 fn raised(out: &impl Sink, rect: Rect, radius: f32, hot: f32, on: f32, pressed: bool) {
-    if !pressed {
-        gfx::shadow(out, rect, radius, &[(1, 2, 0, 80), (3, (5.0 + 4.0 * hot) as u8, 0, (50.0 * hot) as u8)]);
-    }
-    if on > 0.01 {
-        gfx::glow(out, rect, radius, Color32::from_rgba_unmultiplied(150, 128, 255, (95.0 * on) as u8), 12);
-    }
-    let (top, bottom, edge) = button_look(hot, on, pressed);
-    gfx::vgrad(out, rect, radius, top, bottom);
+    let (top, _, edge) = button_look(hot, on, pressed);
+    out.put(Shape::rect_filled(rect, radius, top));
     out.put(Shape::rect_stroke(rect, radius, Stroke::new(1.0, edge), StrokeKind::Inside));
-    if pressed {
-        // a dark lip: the surface is pushed in
-        gfx::top_lip(out, rect, radius, Color32::from_black_alpha(90));
-    } else {
-        gfx::top_lip(out, rect, radius, Color32::from_white_alpha((48.0 + 52.0 * hot + 34.0 * on) as u8));
-        gfx::bottom_shade(out, rect, radius, Color32::from_black_alpha(50));
-    }
 }
 
 /// Paints the surface for a clickable thing and returns how far the content should move
@@ -161,7 +148,7 @@ pub fn paint_button(ui: &Ui, resp: &Response, rect: Rect, radius: f32, on: bool)
     let hot = ctx.animate_value_with_time(resp.id.with("hot"), if resp.hovered() && enabled { 1.0 } else { 0.0 }, FAST);
     let on_t = ctx.animate_value_with_time(resp.id.with("on"), if on { 1.0 } else { 0.0 }, MEDIUM);
     let pressed = enabled && resp.is_pointer_button_down_on();
-    let shift = if pressed { vec2(0.0, 1.0) } else { vec2(0.0, -hot) };
+    let shift = if pressed { vec2(0.0, 1.0) } else { Vec2::ZERO };
     raised(ui.painter(), rect.translate(shift), radius, hot, on_t, pressed);
     shift
 }
@@ -245,9 +232,8 @@ pub fn segmented(ui: &mut Ui, salt: &str, items: &[(&str, &str)], selected: Opti
     let ctx = ui.ctx().clone();
     // the sunken track
     let p = ui.painter();
-    gfx::vgrad(p, track, 12.0, INSET_TOP, INSET_BOTTOM);
-    p.rect_stroke(track, 12.0, Stroke::new(1.0, Color32::from_white_alpha(16)), StrokeKind::Inside);
-    gfx::top_lip(p, track, 12.0, Color32::from_black_alpha(110));
+    p.rect_filled(track, 9.0, INSET_BOTTOM);
+    p.rect_stroke(track, 9.0, Stroke::new(1.0, Color32::from_white_alpha(16)), StrokeKind::Inside);
     // item rectangles
     let mut x = track.left() + gap;
     let rects: Vec<Rect> = widths
@@ -264,7 +250,7 @@ pub fn segmented(ui: &mut Ui, salt: &str, items: &[(&str, &str)], selected: Opti
         let hx = ctx.animate_value_with_time(id.with("x"), target.left() - track.left(), MEDIUM);
         let hw = ctx.animate_value_with_time(id.with("w"), target.width(), MEDIUM);
         let r = Rect::from_min_size(pos2(track.left() + hx, target.top()), vec2(hw, target.height()));
-        raised(p, r, 9.0, 0.0, vis, false);
+        p.rect_filled(r, 7.0, Color32::from_rgba_unmultiplied(84, 84, 84, (255.0 * vis) as u8));
     } else {
         ctx.animate_value_with_time(id.with("vis"), 0.0, MEDIUM);
     }
@@ -287,19 +273,18 @@ pub fn segmented(ui: &mut Ui, salt: &str, items: &[(&str, &str)], selected: Opti
 
 // ----- text and small marks -----
 
-/// A section heading: an accent tick, small caps text and a hairline running to the edge.
+/// A section heading: small bold text and a hairline running to the edge.
 pub fn title(ui: &mut Ui, text: &str) {
     ui.add_space(8.0);
     let galley = ui.painter().layout_no_wrap(text.to_uppercase(), FontId::proportional(12.0), Color32::PLACEHOLDER);
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 20.0), Sense::hover());
     let p = ui.painter();
     let c = rect.center().y;
-    p.rect_filled(Rect::from_min_max(pos2(rect.left(), c - 6.0), pos2(rect.left() + 3.0, c + 6.0)), 1.5, ACCENT);
-    let tx = rect.left() + 11.0;
-    p.galley(pos2(tx, c - galley.size().y * 0.5), galley.clone(), mix(DIM, TEXT, 0.4));
+    let tx = rect.left() + 2.0;
+    p.galley(pos2(tx, c - galley.size().y * 0.5), galley.clone(), mix(DIM, TEXT, 0.5));
     let lx = tx + galley.size().x + 8.0;
     if lx < rect.right() {
-        p.line_segment([pos2(lx, c), pos2(rect.right(), c)], Stroke::new(1.0, Color32::from_white_alpha(18)));
+        p.line_segment([pos2(lx, c), pos2(rect.right(), c)], Stroke::new(1.0, Color32::from_white_alpha(20)));
     }
     ui.add_space(2.0);
 }
@@ -352,9 +337,7 @@ pub fn chevron(ui: &mut Ui, open: bool) -> Response {
 pub fn vsep(ui: &mut Ui) {
     let (rect, _) = ui.allocate_exact_size(vec2(9.0, 24.0), Sense::hover());
     let x = rect.center().x;
-    let p = ui.painter();
-    p.line_segment([pos2(x - 0.5, rect.top() + 2.0), pos2(x - 0.5, rect.bottom() - 2.0)], Stroke::new(1.0, Color32::from_black_alpha(110)));
-    p.line_segment([pos2(x + 0.5, rect.top() + 2.0), pos2(x + 0.5, rect.bottom() - 2.0)], Stroke::new(1.0, Color32::from_white_alpha(22)));
+    ui.painter().line_segment([pos2(x, rect.top() + 2.0), pos2(x, rect.bottom() - 2.0)], Stroke::new(1.0, Color32::from_white_alpha(34)));
 }
 
 // ----- plates: cards, trays, panel backgrounds -----
@@ -384,13 +367,10 @@ impl Card {
 }
 
 fn paint_card(out: &Buf, rect: Rect) {
-    let r = 14.0;
-    gfx::shadow(out, rect, r, &[(2, 4, 0, 90), (8, 18, 0, 90), (18, 36, 0, 60)]);
-    gfx::vgrad(out, rect, r, Color32::from_rgba_unmultiplied(48, 50, 69, 246), Color32::from_rgba_unmultiplied(30, 31, 43, 248));
-    out.put(Shape::rect_stroke(rect, r, Stroke::new(1.0, Color32::from_black_alpha(150)), StrokeKind::Inside));
-    // the inner highlight border
-    out.put(Shape::rect_stroke(rect.shrink(1.0), r - 1.0, Stroke::new(1.0, Color32::from_white_alpha(22)), StrokeKind::Inside));
-    gfx::top_lip(out, rect.shrink(1.0), r, Color32::from_white_alpha(46));
+    let r = 10.0;
+    gfx::shadow(out, rect, r, &[(2, 6, 0, 70), (6, 16, 0, 50)]);
+    out.put(Shape::rect_filled(rect, r, Color32::from_rgb(40, 40, 40)));
+    out.put(Shape::rect_stroke(rect, r, Stroke::new(1.0, Color32::from_white_alpha(34)), StrokeKind::Inside));
 }
 
 /// A recessed tray for a group of buttons.
@@ -399,9 +379,8 @@ pub fn tray<R>(ui: &mut Ui, add_contents: impl FnOnce(&mut Ui) -> R) -> egui::In
 }
 
 fn paint_tray(out: &Buf, rect: Rect) {
-    gfx::vgrad(out, rect, 13.0, INSET_TOP, INSET_BOTTOM);
-    out.put(Shape::rect_stroke(rect, 13.0, Stroke::new(1.0, Color32::from_white_alpha(15)), StrokeKind::Inside));
-    gfx::top_lip(out, rect, 13.0, Color32::from_black_alpha(120));
+    out.put(Shape::rect_filled(rect, 9.0, Color32::from_rgb(32, 32, 32)));
+    out.put(Shape::rect_stroke(rect, 9.0, Stroke::new(1.0, Color32::from_white_alpha(18)), StrokeKind::Inside));
 }
 
 /// Which edge of a bar or panel faces the picture.
@@ -412,58 +391,44 @@ pub enum Edge {
     Left,
 }
 
-/// Gives a bar or panel a soft vertical sheen and a hairline on the edge that faces the picture.
+/// Fills a bar or panel flat and draws a hairline on the edge that faces the picture.
 /// `rect` is the whole panel (the content rectangle plus its margins).
 pub fn panel_sheen(ui: &Ui, rect: Rect, base: Color32, edge: Edge) {
     let p = ui.painter();
-    gfx::vgrad(p, rect, 0.0, lit(base, 1.12), lit(base, 0.9));
-    let (a, b, d) = match edge {
-        Edge::Top => (rect.left_top(), rect.right_top(), vec2(0.0, 1.0)),
-        Edge::Bottom => (rect.left_bottom() - vec2(0.0, 1.0), rect.right_bottom() - vec2(0.0, 1.0), vec2(0.0, -1.0)),
-        Edge::Left => (rect.left_top(), rect.left_bottom(), vec2(1.0, 0.0)),
+    p.rect_filled(rect, 0.0, base);
+    let (a, b) = match edge {
+        Edge::Top => (rect.left_top(), rect.right_top()),
+        Edge::Bottom => (rect.left_bottom() - vec2(0.0, 1.0), rect.right_bottom() - vec2(0.0, 1.0)),
+        Edge::Left => (rect.left_top(), rect.left_bottom()),
     };
-    p.line_segment([a, b], Stroke::new(1.0, Color32::from_black_alpha(140)));
-    p.line_segment([a + d, b + d], Stroke::new(1.0, Color32::from_white_alpha(14)));
+    p.line_segment([a, b], Stroke::new(1.0, Color32::from_white_alpha(22)));
 }
 
-/// The tile behind a thumbnail (material balls): sunken at rest, lifted when hovered, ringed when chosen.
+/// The tile behind a thumbnail (material balls): flat, lighter when hovered, ringed green when chosen.
 pub fn tile(ui: &Ui, resp: &Response, rect: Rect, on: bool) {
     let ctx = ui.ctx();
     let hot = ctx.animate_value_with_time(resp.id.with("hot"), if resp.hovered() { 1.0 } else { 0.0 }, FAST);
     let on_t = ctx.animate_value_with_time(resp.id.with("on"), if on { 1.0 } else { 0.0 }, MEDIUM);
     let p = ui.painter();
-    let r = rect.translate(vec2(0.0, -hot));
+    p.rect_filled(rect, 8.0, mix(INSET_BOTTOM, CARD, hot));
+    p.rect_stroke(rect, 8.0, Stroke::new(1.0, mix(Color32::from_white_alpha(22), Color32::TRANSPARENT, on_t)), StrokeKind::Inside);
     if on_t > 0.01 {
-        gfx::glow(p, r, 10.0, Color32::from_rgba_unmultiplied(150, 128, 255, (90.0 * on_t) as u8), 10);
+        p.rect_stroke(rect, 8.0, Stroke::new(2.0, mix(Color32::TRANSPARENT, ACCENT, on_t)), StrokeKind::Inside);
     }
-    gfx::vgrad(p, r, 10.0, mix(INSET_TOP, lit(CARD, 1.1), hot), mix(INSET_BOTTOM, CARD, hot));
-    p.rect_stroke(r, 10.0, Stroke::new(1.0, mix(Color32::from_white_alpha(16), Color32::TRANSPARENT, on_t)), StrokeKind::Inside);
-    if on_t > 0.01 {
-        p.rect_stroke(r, 10.0, Stroke::new(2.0, mix(Color32::TRANSPARENT, ACCENT, on_t)), StrokeKind::Inside);
-    }
-    gfx::top_lip(p, r, 10.0, Color32::from_black_alpha(80));
 }
 
-/// A list row background: a soft wash when hovered, an accent plate with a left bar when chosen.
+/// A list row background: a faint wash when hovered, a green wash with a left bar when chosen.
 pub fn row_bg(ui: &Ui, resp: &Response, rect: Rect, selected: bool) {
     let ctx = ui.ctx();
     let hot = ctx.animate_value_with_time(resp.id.with("hot"), if resp.hovered() { 1.0 } else { 0.0 }, FAST);
     let sel = ctx.animate_value_with_time(resp.id.with("sel"), if selected { 1.0 } else { 0.0 }, MEDIUM);
     let p = ui.painter();
     if hot > 0.01 {
-        p.rect_filled(rect, 9.0, Color32::from_white_alpha((14.0 * hot) as u8));
+        p.rect_filled(rect, 6.0, Color32::from_white_alpha((16.0 * hot) as u8));
     }
     if sel > 0.01 {
-        gfx::vgrad(
-            p,
-            rect,
-            9.0,
-            Color32::from_rgba_unmultiplied(112, 94, 220, (150.0 * sel) as u8),
-            Color32::from_rgba_unmultiplied(70, 58, 150, (170.0 * sel) as u8),
-        );
-        p.rect_stroke(rect, 9.0, Stroke::new(1.0, mix(Color32::TRANSPARENT, ACCENT, sel)), StrokeKind::Inside);
-        gfx::top_lip(p, rect, 9.0, Color32::from_white_alpha((50.0 * sel) as u8));
-        p.rect_filled(Rect::from_min_max(pos2(rect.left() + 3.0, rect.top() + 6.0), pos2(rect.left() + 5.0, rect.bottom() - 6.0)), 1.0, ACCENT);
+        p.rect_filled(rect, 6.0, Color32::from_rgba_unmultiplied(52, 178, 120, (78.0 * sel) as u8));
+        p.rect_filled(Rect::from_min_max(pos2(rect.left(), rect.top() + 4.0), pos2(rect.left() + 3.0, rect.bottom() - 4.0)), 1.5, Color32::from_rgba_unmultiplied(52, 178, 120, (255.0 * sel) as u8));
     }
 }
 
@@ -474,15 +439,15 @@ fn inset_visuals(v: &mut egui::Visuals) {
     for (w, fill) in [
         (&mut v.widgets.inactive, INSET_BOTTOM),
         (&mut v.widgets.hovered, mix(INSET_BOTTOM, HOVER, 0.35)),
-        (&mut v.widgets.active, mix(INSET_BOTTOM, ACCENT_SOFT, 0.4)),
+        (&mut v.widgets.active, mix(INSET_BOTTOM, ACCENT_SOFT, 0.5)),
         (&mut v.widgets.open, INSET_BOTTOM),
     ] {
         w.bg_fill = fill;
         w.weak_bg_fill = fill;
         w.bg_stroke = stroke;
-        w.corner_radius = CornerRadius::same(8);
+        w.corner_radius = CornerRadius::same(6);
     }
-    v.widgets.hovered.bg_stroke = Stroke::new(1.0, mix(ACCENT_SOFT, ACCENT, 0.6));
+    v.widgets.hovered.bg_stroke = Stroke::new(1.0, Color32::from_white_alpha(60));
     v.widgets.active.bg_stroke = Stroke::new(1.0, ACCENT);
 }
 
@@ -524,12 +489,9 @@ pub fn checkbox(ui: &mut Ui, checked: &mut bool, text: impl Into<egui::WidgetTex
     let hot = ctx.animate_value_with_time(resp.id.with("hot"), if resp.hovered() { 1.0 } else { 0.0 }, FAST);
     let b = Rect::from_min_size(pos2(rect.left(), rect.center().y - 9.0), Vec2::splat(18.0));
     let p = ui.painter();
-    if on > 0.01 {
-        gfx::glow(p, b, 6.0, Color32::from_rgba_unmultiplied(150, 128, 255, (70.0 * on) as u8), 8);
-    }
-    gfx::vgrad(p, b, 6.0, mix(INSET_TOP, BTN_ON_TOP, on), mix(INSET_BOTTOM, BTN_ON_BOTTOM, on));
+    p.rect_filled(b, 5.0, mix(INSET_BOTTOM, BTN_ON_TOP, on));
     let edge = mix(mix(Color32::from_white_alpha(70), Color32::from_white_alpha(130), hot), BTN_ON_EDGE, on);
-    p.rect_stroke(b, 6.0, Stroke::new(1.0, edge), StrokeKind::Inside);
+    p.rect_stroke(b, 5.0, Stroke::new(1.0, edge), StrokeKind::Inside);
     if on > 0.01 {
         let c = b.min;
         let pts = vec![c + vec2(4.5, 9.5), c + vec2(7.8, 12.8), c + vec2(13.5, 5.8)];
@@ -553,12 +515,9 @@ pub fn switch(ui: &mut Ui, on: &mut bool, text: impl Into<egui::WidgetText>) -> 
     let hot = ctx.animate_value_with_time(resp.id.with("hot"), if resp.hovered() { 1.0 } else { 0.0 }, FAST);
     let track = Rect::from_min_size(pos2(rect.left(), rect.center().y - 10.0), vec2(38.0, 20.0));
     let p = ui.painter();
-    gfx::vgrad(p, track, 10.0, mix(INSET_TOP, lit(BTN_ON_BOTTOM, 0.9), t), mix(INSET_BOTTOM, BTN_ON_TOP, t));
-    p.rect_stroke(track, 10.0, Stroke::new(1.0, mix(Color32::from_white_alpha(30 + (40.0 * hot) as u8), BTN_ON_EDGE, t)), StrokeKind::Inside);
+    p.rect_filled(track, 10.0, mix(mix(Color32::from_rgb(78, 78, 78), Color32::from_rgb(98, 98, 98), hot), ACCENT, t));
     let kx = lerp(track.left() + 10.0, track.right() - 10.0, gfx::smooth(t));
-    let k = pos2(kx, track.center().y);
-    p.circle_filled(k + vec2(0.0, 1.5), 8.5, Color32::from_black_alpha(80));
-    gfx::ball(p, k, 7.5, vec2(-0.3, -0.4), &[(0.0, Color32::WHITE), (0.6, Color32::from_rgb(228, 226, 248)), (1.0, Color32::from_rgb(160, 156, 205))]);
+    p.circle_filled(pos2(kx, track.center().y), 7.5, Color32::WHITE);
     p.galley(pos2(rect.left() + 48.0, rect.center().y - galley.size().y * 0.5), galley, TEXT);
     resp
 }
@@ -578,7 +537,7 @@ pub fn slider(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32>
     if !value.is_finite() {
         *value = lo;
     }
-    let rail = Rect::from_center_size(rect.center(), vec2(rect.width() - 20.0, 8.0));
+    let rail = Rect::from_center_size(rect.center(), vec2(rect.width() - 20.0, 6.0));
     if (resp.dragged() || resp.is_pointer_button_down_on() || resp.clicked())
         && let Some(pos) = resp.interact_pointer_pos()
     {
@@ -592,24 +551,19 @@ pub fn slider(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32>
     let grab = resp.dragged() || resp.is_pointer_button_down_on();
     let hot = ui.ctx().animate_value_with_time(resp.id.with("hot"), if resp.hovered() || grab { 1.0 } else { 0.0 }, FAST);
     let p = ui.painter();
-    gfx::vgrad(p, rail, 4.0, INSET_TOP, INSET_BOTTOM);
-    p.rect_stroke(rail, 4.0, Stroke::new(1.0, Color32::from_white_alpha(18)), StrokeKind::Inside);
+    p.rect_filled(rail, 3.0, Color32::from_rgb(70, 70, 70));
     let cx = rail.left() + rail.width() * t;
     if cx - rail.left() > 1.0 {
         let fill = Rect::from_min_max(rail.min, pos2(cx, rail.max.y));
-        gfx::glow(p, fill, 4.0, Color32::from_rgba_unmultiplied(150, 128, 255, (40.0 + 30.0 * hot) as u8), 8);
-        gfx::vgrad(p, fill, 4.0, lit(ACCENT, 1.25), mix(ACCENT_SOFT, ACCENT, 0.55));
-        gfx::top_lip(p, fill, 3.0, Color32::from_white_alpha(80));
+        p.rect_filled(fill, 3.0, mix(ACCENT_SOFT, ACCENT, 0.5 + 0.5 * hot));
     }
     let c = pos2(cx, rail.center().y);
-    let r = 8.0 + 1.5 * hot;
-    p.circle_filled(c + vec2(0.0, 2.0), r + 1.5, Color32::from_black_alpha(60));
-    p.circle_filled(c + vec2(0.0, 1.0), r + 0.5, Color32::from_black_alpha(90));
-    gfx::ball(p, c, r, vec2(-0.32, -0.42), &[(0.0, Color32::WHITE), (0.55, Color32::from_rgb(232, 230, 250)), (1.0, Color32::from_rgb(150, 146, 202))]);
+    let r = 7.0 + 1.0 * hot;
+    p.circle_filled(c + vec2(0.0, 1.0), r + 0.5, Color32::from_black_alpha(70));
+    p.circle_filled(c, r, Color32::WHITE);
     if hot > 0.01 {
-        p.circle_stroke(c, r + 0.5, Stroke::new(1.5, Color32::from_rgba_unmultiplied(150, 128, 255, (255.0 * hot) as u8)));
+        p.circle_stroke(c, r + 1.0, Stroke::new(1.5, Color32::from_rgba_unmultiplied(52, 178, 120, (255.0 * hot) as u8)));
     }
-    p.circle_filled(c + vec2(-r * 0.32, -r * 0.4), r * 0.2, Color32::from_white_alpha(230));
     resp
 }
 
@@ -643,9 +597,7 @@ pub fn color_edit(ui: &mut Ui, rgb: &mut [f32; 3]) -> bool {
     let resp = ui.color_edit_button_rgb(&mut c);
     let p = ui.painter();
     let hot = ui.ctx().animate_value_with_time(resp.id.with("hot"), if resp.hovered() { 1.0 } else { 0.0 }, FAST);
-    p.rect_stroke(resp.rect.expand(1.0), 8.0, Stroke::new(1.5, mix(Color32::from_white_alpha(70), ACCENT, hot)), StrokeKind::Outside);
-    p.rect_stroke(resp.rect, 7.0, Stroke::new(1.0, Color32::from_black_alpha(120)), StrokeKind::Inside);
-    gfx::top_lip(p, resp.rect, 7.0, Color32::from_white_alpha(70));
+    p.rect_stroke(resp.rect.expand(1.0), 7.0, Stroke::new(1.5, mix(Color32::from_white_alpha(60), ACCENT, hot)), StrokeKind::Outside);
     if resp.changed() {
         *rgb = c;
         true
@@ -682,16 +634,14 @@ mod tests {
 
     #[test]
     fn button_looks_get_lighter_when_hot_and_darker_when_pressed() {
-        let (rest_top, rest_bottom, _) = button_look(0.0, 0.0, false);
-        let (hot_top, hot_bottom, _) = button_look(1.0, 0.0, false);
-        let (down_top, _, _) = button_look(0.0, 0.0, true);
-        assert!(luma(hot_top) > luma(rest_top) && luma(hot_bottom) > luma(rest_bottom));
-        assert!(luma(rest_top) > luma(rest_bottom), "lit from above");
-        assert!(luma(down_top) < luma(rest_top), "pressed is pushed in");
+        let (rest, _, _) = button_look(0.0, 0.0, false);
+        let (hot, _, _) = button_look(1.0, 0.0, false);
+        let (down, _, _) = button_look(0.0, 0.0, true);
+        assert!(luma(hot) > luma(rest));
+        assert!(luma(down) < luma(rest), "pressed is darker");
         let (on_top, on_bottom, on_edge) = button_look(0.0, 1.0, false);
         assert_eq!((on_top, on_bottom), (BTN_ON_TOP, BTN_ON_BOTTOM));
         assert_eq!(on_edge, BTN_ON_EDGE);
-        // ends of the animation are the plain states
         assert_eq!(button_look(0.0, 0.0, false).0, BTN_TOP);
     }
 
@@ -702,7 +652,7 @@ mod tests {
             assert!(contrast(TEXT, bg) >= 7.0, "text on {bg:?}");
         }
         assert!(contrast(Color32::WHITE, BTN_ON_BOTTOM) >= 4.5, "white on the chosen button");
-        assert!(contrast(Color32::WHITE, BTN_ON_TOP) >= 3.5);
+        assert!(contrast(Color32::WHITE, BTN_ON_TOP) >= 4.5);
         assert!(contrast(ACCENT, PANEL_DARK) >= 4.5, "accent text on the bar");
     }
 

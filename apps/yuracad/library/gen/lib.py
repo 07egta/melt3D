@@ -30,9 +30,12 @@ SIZE_DEFAULT = {
 def shape(kind, name, pos=(0, 0, 0), size=None, rot=(0, 0, 0), scale=(1, 1, 1), op="Add",
           blend=6.0, color=(0.9, 0.6, 0.5), roughness=0.5, metallic=0.0, glow=0.0, glass=0.0,
           coat=0.0, translucency=0.0, iridescence=0.0, round=0.0, outline=None, outline2=None,
-          path=None, params=(0, 0, 0, 0), shell=0.0):
+          path=None, params=None, shell=0.0):
     """One shape. mm, Z up, degrees. op: Add | Subtract | Paint | Intersect.
     outline: [[x,y],...] for Extrude/Revolve/Loft/Sweep; path: [[x,y,z,radius],...] for Curve/Sweep."""
+    if params is None:  # sensible defaults: a full turn for Revolve, 5 points for Star, 6 sides for PrismN, 4 for Pyramid
+        params = {"Revolve": (360, 0, 0, 0), "Star": (5, 0.45, 0, 0), "PrismN": (6, 0, 0, 0), "Pyramid": (4, 0, 0, 0),
+                  "Curve": (0, 0.7, 0, 1)}.get(kind, (0, 0, 0, 0))
     s = {
         "name": name, "kind": kind, "size": list(size if size is not None else SIZE_DEFAULT[kind]),
         "round": round, "pos": list(pos), "rot": list(rot), "scale": list(scale), "op": op,
