@@ -876,6 +876,7 @@ impl App {
                         ("Tab", "足す ⇄ 削る"),
                         ("Ctrl + ドラッグ", "1mm・15度ずつ"),
                         ("矢印キー", "1mm動かす (Shiftで10mm)"),
+                        ("Ctrl+C / X / V", "コピー / 切り取り / 貼りつけ"),
                         ("Ctrl+D / Delete", "複製 / 消す"),
                         ("Ctrl+Z / Ctrl+Shift+Z", "元に戻す / やり直し"),
                     ] {
