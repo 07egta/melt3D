@@ -59,6 +59,8 @@ pub struct App {
     pub mat_cat: Option<crate::materials::Category>,
     /// A material picked from the list goes to the whole group.
     pub mat_group: bool,
+    /// Frame cache, fast mode, quality and other speed-ups (see `perf.rs`).
+    pub perf: crate::perf::Perf,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -112,6 +114,7 @@ impl App {
             tab: Tab::Shape,
             mat_cat: Some(crate::materials::Category::Basic),
             mat_group: false,
+            perf: crate::perf::Perf::default(),
         };
         if let Some(p) = open {
             app.open_path(p);
@@ -566,6 +569,7 @@ impl App {
                             ui.selectable_value(&mut self.export_quality, 110, "きれい");
                             ui.selectable_value(&mut self.export_quality, 170, "とてもきれい (重い)");
                         });
+                        crate::perf::quality_menu(ui, &mut self.perf.quality);
                     });
                 });
                 // the shapes to add, in the middle of the bar like Womp's
@@ -753,6 +757,10 @@ impl App {
             .show(ui, |ui| {
                 ui.horizontal_centered(|ui| {
                     let note = if now - self.status.1 < 5.0 { self.status.0.clone() } else { String::new() };
+                    if !note.is_empty() {
+                        // the message goes away by itself: wake up when it is due
+                        ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64((5.0 - (now - self.status.1)).max(0.0) + 0.05));
+                    }
                     let hint = crate::gizmo::hint(self.tool);
                     ui.label(RichText::new(if note.is_empty() { hint.to_string() } else { note }).size(11.5).color(style::DIM));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -857,6 +865,8 @@ impl App {
 
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
+        static FIRST: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        crate::perf::mark_once(&FIRST, "first ui frame");
         let ctx = ui.ctx().clone();
         self.fix_selection();
         self.keys(&ctx);
@@ -884,7 +894,17 @@ impl eframe::App for App {
             self.path.as_ref().and_then(|p| p.file_stem()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "名前なし".into()),
             if self.dirty { " *" } else { "" }
         );
-        ctx.send_viewport_cmd(egui::ViewportCommand::Title(title));
+        // Only when it changed: every viewport command wakes the event loop for another frame,
+        // which used to keep the window drawing all the time.
+        if title != self.perf.last_title {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
+            self.perf.last_title = title;
+        }
+        // something edited the scene after the viewport picture was made: draw once more
+        let clean = self.capture.is_some();
+        if self.perf.drawn.wants_another_frame(&self.scene, self.sel, self.hover, &self.cam, clean) {
+            ctx.request_repaint();
+        }
     }
 }
 

@@ -20,7 +20,7 @@ struct Globals {
     cam_right: vec4<f32>,
     cam_up: vec4<f32>,
     cam_fwd: vec4<f32>,   // w = tan(fov / 2); 0 = orthographic
-    view: vec4<f32>,      // width px, height px, ortho half height, srgb target (1 / 0)
+    view: vec4<f32>,      // width px, height px, ortho half height, flags: 1 = srgb target, 2 = fast mode, 4 = a lamp glows
     melt: vec4<f32>,      // mode, amount, drip, ripple
     counts: vec4<f32>,    // groups, shapes, selected first shape (-1 none), selected count
     groups: array<vec4<f32>, 24>,   // first shape, count, op sign, blend
@@ -30,9 +30,36 @@ struct Globals {
     bound: vec4<f32>,               // centre, radius of a sphere around everything (0 = nothing)
     hover: vec4<f32>,               // first hovered shape (-1 none), count
     env: array<vec4<f32>, 11>,      // exposure/ambient/shadow/flags, backdrop+lights, 3 sky colours, 3 x (light dir+power, light colour)
+    brad: array<vec4<f32>, 16>,     // bounding radius of every shape (4 per vec4)
+    selsph: vec4<f32>,              // bounding sphere of the selected shapes (centre, radius)
 };
 
 @group(0) @binding(0) var<uniform> G: Globals;
+
+fn flag(bit: i32) -> bool { return (i32(G.view.w + 0.5) & bit) != 0; }
+fn is_fast() -> bool { return flag(2); }
+
+// a sphere around shape i: far from it, the shape cannot change the result
+fn bound_r(i: i32) -> f32 {
+    let v = G.brad[u32(i) >> 2u];
+    return v[u32(i) & 3u];
+}
+
+// How far away a shape must be (at least) for a blend with value `a` to ignore it: beyond that
+// the soft minimum returns `a` exactly. Round blends also feel any shape closer than their radius.
+fn far_enough(a: f32, k: f32, rm: f32, mode: i32) -> f32 {
+    var need = rm * k + a + 0.02;
+    if (mode == 1) { need = max(need, rm * k + 0.02); }
+    return need;
+}
+
+// how far a blend reaches, in units of the blend size k (the soft minimum is exact beyond it)
+fn reach_mult() -> f32 {
+    let mode = i32(G.melt.x + 0.5);
+    if (mode == 0) { return 1.0; }
+    if (mode == 1) { return 1.3; }
+    return 6.0;
+}
 
 struct Hit {
     d: f32,
@@ -189,7 +216,7 @@ fn combine(a: Hit, b: Hit, op: f32, k: f32, mode: i32) -> Hit {
         o.coat = a.coat;
         o.trans = a.trans;
         o.d = -r.x;
-        o.id = select(a.id, b.id, h > 0.5);
+        o.id = select(b.id, a.id, h > 0.5);
         return o;
     }
     // a stain: the shape of `a` stays; inside `b` the surface takes b's material
@@ -213,6 +240,7 @@ fn map(p0: vec3<f32>) -> Hit {
     let p = warp(p0);
     let mode = i32(G.melt.x + 0.5);
     let amount = G.melt.y;
+    let rm = reach_mult();
     var acc: Hit;
     acc.d = 1e6;
     acc.col = vec3<f32>(0.8);
@@ -234,6 +262,19 @@ fn map(p0: vec3<f32>) -> Hit {
         var gh = false;
         for (var si = 0; si < cnt; si = si + 1) {
             let s = G.shapes[first + si];
+            if (gh) {
+                // far from this shape the blend leaves the result as it is: skip its distance
+                let op = s.misc.x;
+                let k = s.misc.y * amount;
+                let lb = length(p - s.pos.xyz) - bound_r(first + si);
+                if (op > 0.5) {
+                    if (lb >= far_enough(g.d, k, rm, mode)) { continue; }
+                } else if (op < -0.5) {
+                    if (lb >= far_enough(-g.d, k, rm, mode)) { continue; }
+                } else if (lb >= 0.5 * max(k * 0.35, 0.3) + 0.02) {
+                    continue;
+                }
+            }
             var h: Hit;
             h.d = shape_dist(s, p);
             h.col = s.color.rgb;
@@ -269,7 +310,62 @@ fn map(p0: vec3<f32>) -> Hit {
     return acc;
 }
 
-fn dist_only(p: vec3<f32>) -> f32 { return map(p).d; }
+// The distance alone (no materials): what marching, shadows and normals need. It follows map()
+// step for step, but skips the shapes that cannot matter and never mixes materials.
+fn map_d(p0: vec3<f32>) -> f32 {
+    let p = warp(p0);
+    let mode = i32(G.melt.x + 0.5);
+    let amount = G.melt.y;
+    let rm = reach_mult();
+    var acc = 1e6;
+    var have = false;
+    let ng = i32(G.counts.x + 0.5);
+    for (var gi = 0; gi < ng; gi = gi + 1) {
+        let gr = G.groups[gi];
+        if (gr.z > -0.5 && gr.z < 0.5) { continue; }   // a stain group changes no distance
+        let first = i32(gr.x + 0.5);
+        let cnt = i32(gr.y + 0.5);
+        var g = 0.0;
+        var gh = false;
+        for (var si = 0; si < cnt; si = si + 1) {
+            let s = G.shapes[first + si];
+            let op = s.misc.x;
+            if (!gh) {
+                if (op < 0.5) { continue; }
+                g = shape_dist(s, p);
+                gh = true;
+                continue;
+            }
+            if (op > -0.5 && op < 0.5) { continue; }
+            let k = s.misc.y * amount;
+            let lb = length(p - s.pos.xyz) - bound_r(first + si);
+            if (lb >= far_enough(select(-g, g, op > 0.0), k, rm, mode)) { continue; }
+            let b = shape_dist(s, p);
+            if (op > 0.0) {
+                g = smin_h(g, b, k, mode).x;
+            } else {
+                g = -smin_h(-g, b, k, mode).x;
+            }
+        }
+        if (!gh) { continue; }
+        if (!have) {
+            if (gr.z < 0.5) { continue; }
+            acc = g;
+            have = true;
+        } else if (gr.z > 0.0) {
+            acc = smin_h(acc, g, gr.w * amount, mode).x;
+        } else {
+            acc = -smin_h(-acc, g, gr.w * amount, mode).x;
+        }
+    }
+    if (G.melt.z > 0.0) {
+        let slope = G.melt.z * 1.32 * 0.12 * G.melt.w;
+        acc = acc / sqrt(1.0 + slope * slope);
+    }
+    return acc;
+}
+
+fn dist_only(p: vec3<f32>) -> f32 { return map_d(p); }
 
 fn normal_at(p: vec3<f32>, e: f32) -> vec3<f32> {
     let k = vec2<f32>(1.0, -1.0);
@@ -290,19 +386,39 @@ fn sel_dist(p0: vec3<f32>) -> f32 {
     return d;
 }
 
-fn soft_shadow(ro: vec3<f32>, rd: vec3<f32>, maxt: f32) -> f32 {
+// a lower bound of the distance to the selected shapes (a sphere around them)
+fn sel_lb(p0: vec3<f32>) -> f32 {
+    return length(warp(p0) - G.selsph.xyz) - G.selsph.w;
+}
+
+fn soft_shadow(ro: vec3<f32>, rd: vec3<f32>, maxt: f32, nsteps: i32) -> f32 {
     var res = 1.0;
     var t = 0.6;
-    for (var i = 0; i < 40; i = i + 1) {
-        let h = dist_only(ro + rd * t);
+    var tend = maxt;
+    // a ray that passes far from the scene throws no shadow: only march inside the bounding sphere
+    if (G.bound.w <= 0.0) { return 1.0; }
+    let oc = ro - G.bound.xyz;
+    let big = G.bound.w + 0.1 * (length(oc) + G.bound.w) + 1.0;
+    let b = dot(oc, rd);
+    let disc = b * b - (dot(oc, oc) - big * big);
+    if (disc <= 0.0) { return 1.0; }
+    let sq = sqrt(disc);
+    if (-b + sq < t) { return 1.0; }
+    t = max(t, -b - sq);
+    tend = min(maxt, -b + sq);
+    let max_step = select(6.0, 14.0, nsteps < 20);
+    for (var i = 0; i < nsteps; i = i + 1) {
+        let h = map_d(ro + rd * t);
         res = min(res, 10.0 * h / t);
-        t = t + clamp(h, 0.4, 6.0);
-        if (res < 0.001 || t > maxt) { break; }
+        t = t + clamp(h, 0.4, max_step);
+        if (res < 0.001 || t > tend) { break; }
     }
     return clamp(res, 0.0, 1.0);
 }
 
 fn ambient_occ(p: vec3<f32>, n: vec3<f32>) -> f32 {
+    // far from the scene nothing is close enough to darken the point
+    if (G.bound.w <= 0.0 || length(p - G.bound.xyz) > G.bound.w + 28.0) { return 1.0; }
     var occ = 0.0;
     var sca = 1.0;
     for (var i = 0; i < 5; i = i + 1) {
@@ -370,7 +486,7 @@ fn encode(c0: vec3<f32>) -> vec3<f32> {
     let c = c0 * 0.78 * G.env[0].x;
     let m = (c * (2.51 * c + vec3<f32>(0.03))) / (c * (2.43 * c + vec3<f32>(0.59)) + vec3<f32>(0.14));
     let x = clamp(m, vec3<f32>(0.0), vec3<f32>(1.0));
-    if (G.view.w > 0.5) { return x; }
+    if (flag(1)) { return x; }
     return pow(x, vec3<f32>(1.0 / 2.2));
 }
 
@@ -441,6 +557,8 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
     var sel_hit = false;
     let foot = px;
     var halo = vec3<f32>(0.0);
+    let fast = is_fast();
+    let glow_scene = flag(4) && !fast;
     // rays that miss the scene's bounding sphere skip the marching
     var run = false;
     var t_max = 2000.0;
@@ -457,30 +575,60 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
     }
     // a little per-pixel jitter turns banding in the lamp glow into fine noise
     t = t + fract(sin(dot(in.pos.xy, vec2<f32>(12.9898, 78.233))) * 43758.5453) * 1.5;
-    for (var i = 0; i < 200; i = i + 1) {
+    // Over-relaxed sphere tracing: steps a little longer than the distance, taken back when two
+    // steps would have jumped over a surface. Lamps and a selected carver need small steps.
+    var relax = select(1.1, 1.5, fast);
+    if (glow_scene || (has_sel && sel_carving)) { relax = 0.9; }
+    var max_it = select(128, 48, fast);
+    if (glow_scene) { max_it = 200; }
+    var prev_r = 0.0;
+    var stp = 0.0;
+    for (var i = 0; i < max_it; i = i + 1) {
         if (!run) { break; }
         let p = ro + rd * t;
-        h = map(p);
-        if (has_sel) {
-            let sd = sel_dist(p);
-            let pix = select(t * foot, foot, tanh <= 0.0);
-            sel_abs = min(sel_abs, abs(sd) / max(pix, 0.02));
-            if (sd < 0.02) { sel_hit = true; }
+        var d = 0.0;
+        if (glow_scene) {
+            h = map(p);
+            d = h.d;
+            if (h.glow > 0.0) {
+                // a soft glow in the air around lamps
+                halo = halo + lin(h.col) * h.glow * exp(-max(h.d, 0.0) * 0.15) * max(h.d, 0.05) * 0.9 * 0.009;
+            }
+        } else {
+            d = map_d(p);
         }
-        if (h.glow > 0.0) {
-            // a soft glow in the air around lamps
-            halo = halo + lin(h.col) * h.glow * exp(-max(h.d, 0.0) * 0.15) * max(h.d, 0.05) * 0.9 * 0.009;
-        }
-        if (h.d < 0.004 * (1.0 + t * 0.002)) { hit = true; break; }
-        var step = h.d * 0.9;
-        if (h.glow > 0.0) {
+        let pix = select(t * foot, foot, tanh <= 0.0);
+        var step = d * relax;
+        if (glow_scene && h.glow > 0.0) {
             // small steps near lamps keep their glow smooth (no rings)
-            step = min(step, max(3.0, h.d * 0.25));
+            step = min(step, max(3.0, d * 0.25));
         }
-        if (has_sel && sel_carving) { step = min(step, max(abs(sel_dist(p)) * 0.8, 0.15)); }
+        if (has_sel) {
+            // the outline only needs the selected shapes where the ray passes close to them
+            let lbs = sel_lb(p);
+            if (lbs < 2.5 * max(pix, 0.02) || (sel_carving && lbs < step / 0.8)) {
+                let sd = sel_dist(p);
+                sel_abs = min(sel_abs, abs(sd) / max(pix, 0.02));
+                if (sd < 0.02) { sel_hit = true; }
+                if (sel_carving) { step = min(step, max(abs(sd) * 0.8, 0.15)); }
+            }
+        }
+        if (relax > 1.0 && (d < 0.0 || stp > prev_r + d)) {
+            // the last long step may have jumped over a surface: go back and walk carefully
+            t = t - stp + prev_r;
+            stp = 0.0;
+            prev_r = 0.0;
+            relax = 0.9;
+            continue;
+        }
+        // hit when closer than a fraction of a pixel (never finer than the old fixed limit)
+        if (d < max(0.004 * (1.0 + t * 0.002), pix * select(0.2, 0.5, fast))) { hit = true; break; }
+        stp = step;
+        prev_r = d;
         t = t + step;
         if (t > t_max) { break; }
     }
+    if (hit && !glow_scene) { h = map(ro + rd * t); }
 
     // ground
     let above = ro.z >= 0.0;
@@ -502,23 +650,37 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
         }
         if (floor_on) {
             // contact shadow of the blob on the ground
-            let sh = soft_shadow(gp + vec3<f32>(0.0, 0.0, 0.05), key, 300.0);
-            col = col * mix(1.0, mix(0.55, 1.0, sh), shadow_k);
-            let ao = ambient_occ(gp, vec3<f32>(0.0, 0.0, 1.0));
-            col = col * mix(1.0, mix(0.6, 1.0, ao), shadow_k);
+            if (fast) {
+                // while moving: one tap for a soft dark patch under the blob
+                let ao = clamp(map_d(gp + vec3<f32>(0.0, 0.0, 6.0)) / 6.0, 0.0, 1.0);
+                col = col * mix(1.0, mix(0.6, 1.0, ao), shadow_k);
+            } else {
+                let sh = soft_shadow(gp + vec3<f32>(0.0, 0.0, 0.05), key, 300.0, 32);
+                col = col * mix(1.0, mix(0.55, 1.0, sh), shadow_k);
+                let ao = ambient_occ(gp, vec3<f32>(0.0, 0.0, 1.0));
+                col = col * mix(1.0, mix(0.6, 1.0, ao), shadow_k);
+            }
         }
     }
 
     if (hit && (t_ground > t || !(grid_on || floor_on))) {
         let p = ro + rd * t;
-        let n = normal_at(p, 0.02 + t * 0.0008);
+        var n = vec3<f32>(0.0, 0.0, 1.0);
+        if (fast) {
+            // three taps are enough while moving
+            let e = 0.03 + t * 0.0015;
+            n = normalize(vec3<f32>(map_d(p + vec3<f32>(e, 0.0, 0.0)) - h.d, map_d(p + vec3<f32>(0.0, e, 0.0)) - h.d, map_d(p + vec3<f32>(0.0, 0.0, e)) - h.d) + vec3<f32>(0.0, 0.0, 1e-7));
+        } else {
+            n = normal_at(p, 0.02 + t * 0.0008);
+        }
         let v = -rd;
         let rough = clamp(h.rough, 0.04, 1.0);
         let metal = h.metal;
         let alb = lin(h.col);
         let ndv = max(dot(n, v), 0.0);
         let fres = pow(1.0 - ndv, 5.0);
-        let ao = ambient_occ(p, n);
+        var ao = 1.0;
+        if (!fast) { ao = ambient_occ(p, n); }
         let f0 = mix(vec3<f32>(0.04), alb, metal);
         var F = f0 + (vec3<f32>(1.0) - f0) * fres;
         // the rainbow sheen of soap and beetle shells
@@ -532,7 +694,8 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
         var thin = 0.0;
         if (h.trans > 0.01) {
             // thin parts glow more than thick ones
-            thin = 1.0 - clamp(-dist_only(p - n * 5.0) / 5.0, 0.0, 1.0) * 0.8;
+            thin = 0.6;
+            if (!fast) { thin = 1.0 - clamp(-dist_only(p - n * 5.0) / 5.0, 0.0, 1.0) * 0.8; }
         }
         var lit = vec3<f32>(0.0);
         var spec = vec3<f32>(0.0);
@@ -541,7 +704,7 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
             let lc = light_col(i);
             var sh = 1.0;
             if (i == 0) {
-                sh = mix(1.0, soft_shadow(p + n * 0.1, L, 300.0), shadow_k);
+                sh = mix(1.0, soft_shadow(p + n * 0.1, L, 300.0, select(32, 10, fast)), shadow_k);
                 sh = mix(sh, 1.0, h.glass * 0.6);
             }
             let ndl = max(dot(n, L), 0.0);
@@ -551,7 +714,8 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
             let hv = normalize(L + v);
             let nh = max(dot(n, hv), 0.0);
             let lobe = pow(nh, spec_pow) * (spec_pow + 8.0) / 60.0;
-            let coat_lobe = pow(nh, 420.0) * (420.0 + 8.0) / 60.0;
+            var coat_lobe = 0.0;
+            if (h.coat > 0.001) { coat_lobe = pow(nh, 420.0) * (420.0 + 8.0) / 60.0; }
             lit = lit + lc * ndl_w * sh;
             if (h.trans > 0.01) {
                 // light shining through thin parts, seen from the other side
@@ -567,12 +731,20 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
         let refl = env_reflect(rr, rough) * mix(0.5, 1.0, ao);
         c = c + refl * F * refl_tint * mix(0.15, 1.0, metal) * (1.0 - rough * 0.65);
         // clear coat: a second, glossy reflection on top
-        c = c + env_reflect(rr, 0.05) * (0.04 + 0.96 * fres) * h.coat * 0.55 * mix(0.5, 1.0, ao);
+        if (h.coat > 0.001) {
+            c = c + env_reflect(rr, 0.05) * (0.04 + 0.96 * fres) * h.coat * 0.55 * mix(0.5, 1.0, ao);
+        }
         // a thin clean rim
         c = c + vec3<f32>(0.05) * fres * ao;
 
         // glass: bend the view ray through the body, and see what is behind it
-        if (h.glass > 0.01) {
+        if (h.glass > 0.01 && fast) {
+            // while moving: no bending, just the tinted view past it and the reflection
+            let Fg = 0.04 + 0.96 * fres;
+            let tint = pow(max(alb, vec3<f32>(0.001)), vec3<f32>(0.45));
+            let gcol = far_view(rd) * tint * (1.0 - Fg) + env_reflect(rr, rough) * Fg * refl_tint;
+            c = mix(c, gcol, h.glass);
+        } else if (h.glass > 0.01) {
             let eta = 1.0 / 1.45;
             var rdi = refract(rd, n, eta);
             if (dot(rdi, rdi) < 1e-6) { rdi = reflect(rd, n); }
