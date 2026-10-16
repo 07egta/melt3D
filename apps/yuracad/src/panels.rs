@@ -390,33 +390,38 @@ impl App {
             let Some(sh) = self.scene.shape_mut(g, s) else { return };
             ui.text_edit_singleline(&mut sh.name);
             Self::op_pills(ui, &mut sh.op);
-            // change what kind of shape this is, keeping where it sits
-            ui.horizontal_wrapped(|ui| {
-                ui.label(RichText::new("入れかえ").color(style::DIM).size(12.0));
-                ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
-                for k in Kind::ALL {
-                    let on = sh.kind == k;
-                    if style::icon_button(ui, 32.0, k.label(), on, |p, r, ink| glyphs::kind(p, r, k, ink, Color32::from_white_alpha(18))).clicked()
-                        && !on
-                    {
-                        if sh.name == sh.kind.label() {
-                            sh.name = k.label().to_string();
-                        }
-                        sh.kind = k;
-                        sh.size = k.default_size();
-                        sh.params = k.default_params();
-                        if k.uses_path() && sh.path.len() < 2 {
-                            sh.path = k.default_path();
-                        }
-                        if k.uses_outline2() && sh.outline2.len() < 3 {
-                            sh.outline2 = k.default_outline2();
-                        }
-                        if matches!(k, Kind::Revolve | Kind::Sweep) {
-                            sh.outline = k.default_outline();
+            if sh.kind == Kind::Mesh {
+                // an imported mesh cannot become a primitive by a click: it shows where it came from instead
+                crate::mesh_dialog::inspector(ui, sh);
+            } else {
+                // change what kind of shape this is, keeping where it sits
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(RichText::new("入れかえ").color(style::DIM).size(12.0));
+                    ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
+                    for k in Kind::ALL {
+                        let on = sh.kind == k;
+                        if style::icon_button(ui, 32.0, k.label(), on, |p, r, ink| glyphs::kind(p, r, k, ink, Color32::from_white_alpha(18))).clicked()
+                            && !on
+                        {
+                            if sh.name == sh.kind.label() {
+                                sh.name = k.label().to_string();
+                            }
+                            sh.kind = k;
+                            sh.size = k.default_size();
+                            sh.params = k.default_params();
+                            if k.uses_path() && sh.path.len() < 2 {
+                                sh.path = k.default_path();
+                            }
+                            if k.uses_outline2() && sh.outline2.len() < 3 {
+                                sh.outline2 = k.default_outline2();
+                            }
+                            if matches!(k, Kind::Revolve | Kind::Sweep) {
+                                sh.outline = k.default_outline();
+                            }
                         }
                     }
-                }
-            });
+                });
+            }
             style::xyz(ui, "位置", &mut sh.pos, 0.5, -5000.0..=5000.0, "");
             style::xyz(ui, "回転", &mut sh.rot, 1.0, -3600.0..=3600.0, "°");
             style::xyz(ui, "大きさ", &mut sh.scale, 0.01, 0.01..=100.0, "×");

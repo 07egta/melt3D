@@ -84,6 +84,8 @@ pub struct App {
     pub lib_open: bool,
     pub lib_cat: usize,
     pub lib_query: String,
+    /// A message from code that has no window context (shown in the status bar next frame).
+    pub notice: Option<String>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -142,6 +144,7 @@ impl App {
             lib_open: false,
             lib_cat: 0,
             lib_query: String::new(),
+            notice: None,
         };
         if let Some(p) = open {
             app.open_path(p);
@@ -277,6 +280,10 @@ impl App {
         match self.sel {
             Some(Pick::Shape(g, s)) if self.scene.shape_count() < MAX_SHAPES => {
                 if let Some(mut c) = self.scene.shape(g, s).cloned() {
+                    if let Err(why) = crate::mesh::can_add(&self.scene, std::iter::once(&c)) {
+                        self.notice = Some(why.into());
+                        return;
+                    }
                     c.pos = [c.pos[0] + 8.0, c.pos[1] + 8.0, c.pos[2]];
                     c.name = format!("{} コピー", c.name);
                     self.scene.groups[g].shapes.insert(s + 1, c);
@@ -287,6 +294,10 @@ impl App {
                 if self.scene.groups.len() < MAX_GROUPS && self.scene.shape_count() + self.scene.groups[g].shapes.len() <= MAX_SHAPES =>
             {
                 let mut c = self.scene.groups[g].clone();
+                if let Err(why) = crate::mesh::can_add(&self.scene, c.shapes.iter()) {
+                    self.notice = Some(why.into());
+                    return;
+                }
                 c.name = format!("{} コピー", c.name);
                 for s in &mut c.shapes {
                     s.pos = [s.pos[0] + 8.0, s.pos[1] + 8.0, s.pos[2]];
@@ -306,6 +317,10 @@ impl App {
             return;
         }
         if let Some(mut c) = self.scene.shape(g, s).cloned() {
+            if let Err(why) = crate::mesh::can_add(&self.scene, std::iter::once(&c)) {
+                self.notice = Some(why.into());
+                return;
+            }
             c.pos[0] = -c.pos[0];
             c.rot = [c.rot[0], -c.rot[1], -c.rot[2]];
             for p in &mut c.outline {
@@ -406,10 +421,13 @@ impl App {
     // ----- files -----
 
     pub fn open_path(&mut self, path: PathBuf) {
-        match std::fs::read_to_string(&path).map_err(|e| e.to_string()).and_then(|t| Scene::from_json(&t)) {
-            Ok(s) => {
+        match std::fs::read_to_string(&path).map_err(|e| e.to_string()).and_then(|t| Scene::from_json_notes(&t)) {
+            Ok((s, notes)) => {
                 self.new_scene(s);
                 self.path = Some(path);
+                if !notes.is_empty() {
+                    self.notice = Some(notes.join("　"));
+                }
             }
             Err(e) => self.status = (format!("開けませんでした: {e}"), 0.0),
         }
@@ -576,6 +594,10 @@ impl App {
                         }
                         if ui.button("SVGを読み込む…").clicked() {
                             crate::svg_dialog::open(&ctx);
+                            ui.close();
+                        }
+                        if ui.button("メッシュを読み込む…").on_hover_text("STL・OBJ・3MF・PLY・GLB").clicked() {
+                            crate::mesh_dialog::open(&ctx);
                             ui.close();
                         }
                         if ui.button("保存　Ctrl+S").clicked() {
@@ -1036,6 +1058,9 @@ impl eframe::App for App {
         crate::perf::mark_once(&FIRST, "first ui frame");
         let ctx = ui.ctx().clone();
         self.fix_selection();
+        if let Some(n) = self.notice.take() {
+            self.say(&ctx, n);
+        }
         self.keys(&ctx);
         let dt = ctx.input(|i| i.stable_dt);
         if self.step_fly(dt) {
@@ -1057,6 +1082,7 @@ impl eframe::App for App {
             self.sketch_card(&ctx);
             self.keys_card(ui);
             crate::svg_dialog::update(self, &ctx);
+            crate::mesh_dialog::update(self, &ctx);
             crate::array::update(self, &ctx);
             crate::export_dialog::update(self, &ctx);
             self.palette_ui(&ctx);

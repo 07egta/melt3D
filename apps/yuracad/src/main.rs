@@ -29,6 +29,8 @@ mod library;
 mod library_ui;
 mod materials;
 mod mesh;
+mod mesh_dialog;
+mod mesh_import;
 mod cad;
 mod cpu_render;
 mod curve;

@@ -40,6 +40,7 @@ pub enum Action {
     ExportPng,
     PrintCheck,
     ImportSvg,
+    ImportMesh,
     FrameAll,
     FrameSelection,
     TogglePerspective,
@@ -141,6 +142,7 @@ pub fn entries() -> Vec<Entry> {
         cmd("画像(PNG)で書き出す", "export png image screenshot がぞう", Action::ExportPng),
         cmd("プリントチェック", "print check volume size 体積 おおきさ", Action::PrintCheck),
         cmd("SVGを読み込む", "svg import いんぽーと", Action::ImportSvg),
+        cmd("メッシュを読み込む", "mesh stl obj 3mf ply glb import めっしゅ よみこむ とりこむ 取り込み", Action::ImportMesh),
         cmd("全体を見る", "frame all home ぜんたい", Action::FrameAll),
         cmd("えらんだものを見る", "frame focus selection みる", Action::FrameSelection),
         cmd("遠近 / 平行を切りかえ", "perspective orthographic ortho えんきん へいこう", Action::TogglePerspective),
@@ -261,6 +263,7 @@ impl App {
             Action::ExportPng => self.start_png(ctx),
             Action::PrintCheck => self.print_check(ctx),
             Action::ImportSvg => crate::svg_dialog::open(ctx),
+            Action::ImportMesh => crate::mesh_dialog::open(ctx),
             Action::FrameAll => self.frame_view(false),
             Action::FrameSelection => self.frame_view(true),
             Action::TogglePerspective => self.cam.ortho = !self.cam.ortho,
@@ -413,7 +416,7 @@ mod tests {
         assert!(app.lib_open);
         // every action can run on a fresh app without panicking (dialogs excluded: they need a window)
         for e in entries() {
-            if matches!(e.action, Action::Open | Action::Save | Action::SaveAs | Action::Export(_) | Action::ExportPng | Action::ImportSvg) {
+            if matches!(e.action, Action::Open | Action::Save | Action::SaveAs | Action::Export(_) | Action::ExportPng | Action::ImportSvg | Action::ImportMesh) {
                 continue;
             }
             let mut a = App::new(true, None);

@@ -205,6 +205,10 @@ impl App {
         let Some(x) = self.scene.groups.get(g).map(|gr| gr.xform) else { return };
         let Some(source) = self.scene.groups.get(src) else { return };
         let inst = x.inst(pattern::centre_of_shapes(&source.shapes));
+        if let Err(why) = crate::mesh::can_add(&self.scene, source.shapes.iter()) {
+            self.notice = Some(why.into());
+            return;
+        }
         let mut shapes = source.shapes.clone();
         for s in &mut shapes {
             let r = crate::sdf::rotation(s.rot);
