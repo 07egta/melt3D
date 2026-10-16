@@ -43,7 +43,17 @@ fn app_preview() {
     let size = egui::vec2(1380.0, 860.0);
     let mut tex = Textures::new();
     let mut last = None;
-    for _ in 0..4 {
+    // YURA_EXPORT=1 shows the export card, YURA_EXPORT=check also runs the print check
+    let export = std::env::var("YURA_EXPORT").ok();
+    match export.as_deref() {
+        Some("check") => crate::export_dialog::open_check(&ctx),
+        Some(_) => crate::export_dialog::open(&ctx, None),
+        None => {}
+    }
+    for _ in 0..if export.is_some() { 60 } else { 4 } {
+        if export.is_some() {
+            std::thread::sleep(std::time::Duration::from_millis(60));
+        }
         let input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)), ..Default::default() };
         let mut out = ctx.run_ui(input, |ui| {
             app.top_bar(ui);
@@ -58,6 +68,7 @@ fn app_preview() {
             app.pipe_card(ui.ctx());
             app.sketch_card(ui.ctx());
             app.keys_card(ui);
+            crate::export_dialog::update(&mut app, ui.ctx());
         });
         apply_deltas(&mut tex, &out.textures_delta);
         out.textures_delta.clear();

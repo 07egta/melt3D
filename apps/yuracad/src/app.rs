@@ -10,7 +10,7 @@ use crate::gizmo::{Drag, Tool};
 use crate::model::{Group, Kind, MAX_GROUPS, MAX_SHAPES, Material, Op, Pick, Scene, Shape};
 use crate::sdf::Field;
 use crate::view::centre_of;
-use crate::{export, glyphs, style};
+use crate::{glyphs, style};
 
 #[cfg(test)]
 #[path = "app_preview.rs"]
@@ -52,8 +52,6 @@ pub struct App {
     /// A row of the scene list being dragged, and where every row is on screen this frame.
     pub layer_drag: Option<Pick>,
     pub row_rects: Vec<(Pick, egui::Rect)>,
-    pub export_quality: usize,
-    pub export_smooth: usize,
     shot: Option<PathBuf>,
     /// The viewport's place on screen (for a picture of it).
     pub view_rect: egui::Rect,
@@ -126,8 +124,6 @@ impl App {
             folded: HashSet::new(),
             layer_drag: None,
             row_rects: Vec::new(),
-            export_quality: 110,
-            export_smooth: 2,
             shot: std::env::var_os("YURACAD_TEST_DIR").map(PathBuf::from),
             view_rect: egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0)),
             capture: None,
@@ -440,38 +436,19 @@ impl App {
         }
     }
 
+    /// Ctrl+E: export again with the last settings (the export card opens the first time).
     fn export_stl(&mut self, ctx: &egui::Context) {
-        self.export_as(ctx, ExportFormat::Stl);
+        crate::export_dialog::quick(self, ctx);
     }
 
-    /// Ask for a file name, mesh the scene and write it as `format`.
+    /// Open the export card with this file type chosen.
     pub fn export_as(&mut self, ctx: &egui::Context, format: ExportFormat) {
-        let (label, ext) = match format {
-            ExportFormat::Stl => ("STL", "stl"),
-            ExportFormat::ThreeMf => ("3MF", "3mf"),
-            ExportFormat::Obj => ("OBJ", "obj"),
-        };
-        let Some(path) = rfd::FileDialog::new().add_filter(label, &[ext]).set_file_name(format!("作品.{ext}")).save_file() else { return };
-        let res = export::mesh(&self.scene, self.export_quality, self.export_smooth).and_then(|m| match format {
-            ExportFormat::Stl => export::write_stl(&path, &export::stl_binary(&m, "MELTCAD")),
-            ExportFormat::ThreeMf => export::threemf(&m, "MELTCAD").and_then(|b| export::write_stl(&path, &b)),
-            ExportFormat::Obj => export::write_stl(&path, export::obj_text(&m, "MELTCAD").as_bytes()),
-        });
-        match res {
-            Ok(()) => self.say(ctx, format!("{label}を書き出しました")),
-            Err(e) => self.say(ctx, format!("書き出せませんでした: {e}")),
-        }
+        crate::export_dialog::open(ctx, Some(format));
     }
 
-    /// Size, volume and whether the surface is closed, said in the status bar.
+    /// Open the export card and measure the model for printing (size, volume, holes, thin walls, overhangs).
     pub fn print_check(&mut self, ctx: &egui::Context) {
-        match export::print_check(&self.scene) {
-            Ok(c) => {
-                let closed = if c.closed { "閉じています（印刷OK）" } else { "穴があります（形をかさねるか、とけあいを強くしてください）" };
-                self.say(ctx, format!("大きさ {:.1}×{:.1}×{:.1} mm・体積 {:.1} cm³・表面は{closed}", c.size[0], c.size[1], c.size[2], c.volume_cm3));
-            }
-            Err(e) => self.say(ctx, format!("チェックできませんでした: {e}")),
-        }
+        crate::export_dialog::open_check(ctx);
     }
 
     // ----- shortcuts -----
@@ -608,16 +585,12 @@ impl App {
                             ui.close();
                         }
                         ui.separator();
-                        if ui.button("STLで書き出す　Ctrl+E").clicked() {
+                        if ui.button("書き出し…").on_hover_text("STL・3MF・OBJ・PLY・GLB").clicked() {
+                            crate::export_dialog::open(&ctx, None);
+                            ui.close();
+                        }
+                        if ui.button("前の設定でもう一度書き出す　Ctrl+E").clicked() {
                             self.export_stl(&ctx);
-                            ui.close();
-                        }
-                        if ui.button("3MFで書き出す").clicked() {
-                            self.export_as(&ctx, ExportFormat::ThreeMf);
-                            ui.close();
-                        }
-                        if ui.button("OBJで書き出す").clicked() {
-                            self.export_as(&ctx, ExportFormat::Obj);
                             ui.close();
                         }
                         if ui.button("画像(PNG)で書き出す").clicked() {
@@ -671,16 +644,12 @@ impl App {
                     let right_start = ui.max_rect().right();
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         style::menu_button(ui, "書き出し", true, |ui| {
-                            if ui.button("3Dプリント用 STL").on_hover_text("Ctrl+E").clicked() {
+                            if ui.button("書き出し…").on_hover_text("STL・3MF・OBJ・PLY・GLB。細かさ・単位・色など").clicked() {
+                                crate::export_dialog::open(&ctx, None);
+                                ui.close();
+                            }
+                            if ui.button("前の設定でもう一度").on_hover_text("Ctrl+E").clicked() {
                                 self.export_stl(&ctx);
-                                ui.close();
-                            }
-                            if ui.button("3MF（スライサー向け）").clicked() {
-                                self.export_as(&ctx, ExportFormat::ThreeMf);
-                                ui.close();
-                            }
-                            if ui.button("OBJ").clicked() {
-                                self.export_as(&ctx, ExportFormat::Obj);
                                 ui.close();
                             }
                             if ui.button("画像 PNG").on_hover_text("見えているとおりに保存").clicked() {
@@ -692,12 +661,6 @@ impl App {
                                 self.print_check(&ctx);
                                 ui.close();
                             }
-                            ui.separator();
-                            ui.label(RichText::new("STLのきれいさ").size(12.0).color(style::DIM));
-                            ui.selectable_value(&mut self.export_quality, 64, "ふつう (軽い)");
-                            ui.selectable_value(&mut self.export_quality, 110, "きれい");
-                            ui.selectable_value(&mut self.export_quality, 170, "とてもきれい (重い)");
-                            ui.selectable_value(&mut self.export_quality, 320, "さいこう (すき間のあるもの用・とても重い)");
                         });
                         crate::perf::quality_menu(ui, &mut self.perf.quality);
                     });
@@ -1076,6 +1039,7 @@ impl eframe::App for App {
             self.keys_card(ui);
             crate::svg_dialog::update(self, &ctx);
             crate::array::update(self, &ctx);
+            crate::export_dialog::update(self, &ctx);
             self.palette_ui(&ctx);
         }
         self.capture_step(&ctx);
