@@ -631,16 +631,17 @@ pub fn revolve(frame: &Frame, profile: &[[f32; 2]]) -> Result<Built, SketchError
     if !frame.is_vertical() {
         return Err(SketchError::NeedsVerticalPlane);
     }
-    let mut p = validate_profile(profile)?;
-    if p.iter().any(|q| q[0] < -0.01) {
+    let p = validate_profile(profile)?;
+    // the part left of the axis is cut off (as the renderer does); a smooth curve may overshoot a little
+    // there, but a profile that mostly lies on the wrong side is a mistake
+    if let Some((lo, hi)) = bbox(&p)
+        && lo[0] < -0.01
+        && -lo[0] > 0.25 * (hi[0] - lo[0])
+    {
         return Err(SketchError::LeftOfAxis);
     }
-    for q in &mut p {
-        q[0] = q[0].max(0.0);
-    }
-    if !is_simple(&p) {
-        return Err(SketchError::SelfIntersect);
-    }
+    let clamped: Vec<[f32; 2]> = p.iter().map(|q| [q[0].max(0.0), q[1]]).collect();
+    let p = validate_profile(&clamped)?;
     let zc = centre(&p)[1];
     let outline = p.iter().map(|q| [q[0], q[1] - zc]).collect();
     Ok(Built {
@@ -1101,6 +1102,11 @@ mod tests {
         let s = shape_from(&solid);
         assert!(inside(&s, [0.5, 0.0, 15.0]) && inside(&s, [0.0, 7.0, 3.0]));
         assert!(solid.outline.iter().all(|p| p[0] >= 0.0));
+        // a smooth curve that overshoots the axis a little is trimmed to it
+        let vase = closed_profile(&[[0.0, 0.0], [18.0, 0.0], [22.0, 20.0], [12.0, 40.0], [14.0, 55.0], [0.0, 55.0]], true).expect("a smooth outline");
+        assert!(vase.iter().any(|q| q[0] < -0.01), "the curve does swing out to the left");
+        let b = revolve(&Frame::front(), &vase).expect("trimmed");
+        assert!(b.outline.iter().all(|q| q[0] >= 0.0) && is_simple(&b.outline));
     }
 
     #[test]

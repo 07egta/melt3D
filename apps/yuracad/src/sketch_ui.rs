@@ -2163,4 +2163,62 @@ mod tests {
         app.sk.stage = Stage::Ready;
         assert!(!app.sketch_make(&ctx));
     }
+
+    /// `YT_OUT=/tmp/sk.yura cargo test -p yuracad dump_sketch_scene -- --ignored` writes a scene made
+    /// only with the sketch calls (one of every kind), to look at with `yuracad --render`.
+    #[test]
+    #[ignore]
+    fn dump_sketch_scene() {
+        let Ok(out) = std::env::var("YT_OUT") else { return };
+        let ctx = egui::Context::default();
+        let mut app = app();
+        app.scene.groups[0].shapes.clear();
+        app.add_group();
+        app.sel = Some(Pick::Group(0));
+        app.set_sketch_tool(true);
+        let draw = |app: &mut App, plane: PlaneSel, pen: Pen, smooth: bool, pts: &[[f32; 2]]| {
+            app.sketch_set_plane(plane);
+            app.sk.pen = pen;
+            app.sk.smooth = smooth;
+            for p in pts {
+                app.sk.click(*p, false);
+            }
+            let done = if matches!(pen, Pen::Rect | Pen::Circle) { None } else { app.sk.enter() };
+            if let Some(d) = done {
+                app.sketch_done(d);
+            }
+        };
+        // a floor spline blob pushed up
+        draw(&mut app, PlaneSel::Floor, Pen::Spline, true, &[[-60.0, -10.0], [-40.0, -30.0], [-15.0, -20.0], [-20.0, 10.0], [-50.0, 20.0]]);
+        app.sk.make = Make::Extrude;
+        app.sk.height = 25.0;
+        assert!(app.sketch_make(&ctx));
+        // a vase on the front plane
+        draw(&mut app, PlaneSel::Front, Pen::Spline, true, &[[0.0, 0.0], [18.0, 0.0], [22.0, 20.0], [12.0, 40.0], [14.0, 55.0], [0.0, 55.0]]);
+        app.sk.make = Make::Revolve;
+        assert!(app.sketch_make(&ctx));
+        // a loft from a hexagon-ish polygon to a small circle
+        draw(&mut app, PlaneSel::Floor, Pen::Polygon, false, &[[30.0, -20.0], [50.0, -20.0], [60.0, 0.0], [50.0, 20.0], [30.0, 20.0], [20.0, 0.0]]);
+        app.sk.make = Make::Loft;
+        app.sk.loft_top = LoftTop::Scaled;
+        app.sk.loft_scale = 0.4;
+        app.sk.height = 40.0;
+        assert!(app.sketch_make(&ctx));
+        // a swept square along a curve in the air
+        draw(&mut app, PlaneSel::Front, Pen::Line, true, &[[-60.0, 70.0], [-30.0, 90.0], [0.0, 70.0], [30.0, 90.0], [60.0, 70.0]]);
+        draw(&mut app, PlaneSel::Floor, Pen::Rect, false, &[]);
+        app.sk.click([-3.0, -3.0], false);
+        let p = app.sk.click([3.0, 3.0], false).expect("rect");
+        app.sketch_done(p);
+        app.sk.make = Make::Sweep;
+        app.sk.sweep_scale = 1.5;
+        assert!(app.sketch_make(&ctx));
+        // a block on a side plane
+        draw(&mut app, PlaneSel::Side, Pen::Polygon, false, &[[-40.0, 0.0], [-10.0, 0.0], [-25.0, 25.0]]);
+        app.sk.make = Make::Extrude;
+        app.sk.height = 18.0;
+        app.sk.flip = true;
+        assert!(app.sketch_make(&ctx));
+        let _ = std::fs::write(out, app.scene.to_json());
+    }
 }
