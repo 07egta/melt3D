@@ -1105,6 +1105,80 @@ mod headless_tests {
         assert!(sc.shape_count() >= 300 && sc.shape_count() <= 340 && sc.groups.len() < MAX_GROUPS, "{} shapes in {} groups", sc.shape_count(), sc.groups.len());
     }
 
+    /// The picture the shader makes and the CPU field agree about what is there: the silhouette of
+    /// a scene with a mirror, a ring, a grid and a linked copy, as drawn by the (software) GPU, is
+    /// the same as the silhouette found by the CPU's ray marching.
+    /// `cargo test -p yuracad --release gpu_headless_matches_cpu -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn gpu_headless_matches_cpu() {
+        use crate::model::{Kind, Material, Shape};
+        use crate::pattern::{Pattern, Xform};
+        let Some(mut gpu) = headless::open(std::env::var_os("YURA_GL_LIMITS").is_some()) else {
+            eprintln!("no graphics adapter here");
+            return;
+        };
+        let mut sc = Scene::default();
+        sc.env.grid = false;
+        sc.env.floor = false;
+        sc.groups.clear();
+        let mut g0 = Group::new("boxes");
+        let mut b = Shape::new(Kind::Box, [30.0, 60.0, 15.0], Material::default());
+        b.size = [25.0, 25.0, 25.0];
+        g0.shapes.push(b);
+        g0.pattern = Some(Pattern::Mirror { axes: [true, true, false], centre: false });
+        sc.groups.push(g0);
+        let mut g1 = Group::new("ring");
+        let mut c = Shape::new(Kind::Cylinder, [50.0, -20.0, 0.0], Material::default());
+        c.size = [8.0, 30.0, 1.0];
+        g1.shapes.push(c);
+        g1.pattern = Some(Pattern::Circular { count: 5, angle: 360.0, axis: 2, centre: [0.0; 3], rotate: true });
+        sc.groups.push(g1);
+        let mut g2 = Group::new("balls");
+        g2.shapes.push(Shape::new(Kind::Sphere, [-20.0, -20.0, 12.0], Material::default()));
+        g2.pattern = Some(Pattern::Rect { counts: [2, 1, 2], spacing: [25.0, 0.0, 30.0] });
+        let uid = sc.ensure_group_uid(0).unwrap_or(0);
+        sc.groups.push(g2);
+        let mut copy = Group::new("copy");
+        copy.instance_of = Some(uid);
+        copy.xform = Xform { pos: [0.0, 0.0, 70.0], rot: [0.0, 0.0, 45.0], scale: 1.5 };
+        sc.groups.push(copy);
+        let size = [360u32, 234u32];
+        let mut cam = Camera::default();
+        let (cc, r) = bounds(&sc, None);
+        cam.frame(cc, r);
+        let draw = |scene: &Scene, gpu: &mut headless::Gpu| {
+            let mut data = pack(scene, &cam, [size[0] as f32, size[1] as f32], None, None, false);
+            set_view_flags(&mut data, crate::perf::view_flags(false, false, false));
+            gpu.render(&data, size)
+        };
+        let (shown, secs) = draw(&sc, &mut gpu);
+        let (empty, _) = draw(&Scene { groups: Vec::new(), ..sc.clone() }, &mut gpu);
+        let field = crate::sdf::Field::new(&sc);
+        let (mut gpu_only, mut cpu_only, mut both) = (0, 0, 0);
+        for y in 0..size[1] {
+            for x in 0..size[0] {
+                let i = ((y * size[0] + x) * 4) as usize;
+                let g = shown[i..i + 3] != empty[i..i + 3];
+                let nx = (x as f32 + 0.5) / size[0] as f32 * 2.0 - 1.0;
+                let ny = 1.0 - (y as f32 + 0.5) / size[1] as f32 * 2.0;
+                let (o, d) = cam.ray([nx, ny], size[0] as f32 / size[1] as f32);
+                let c = field.ray(o, d, 4000.0).is_some();
+                match (g, c) {
+                    (true, true) => both += 1,
+                    (true, false) => gpu_only += 1,
+                    (false, true) => cpu_only += 1,
+                    _ => {}
+                }
+            }
+        }
+        eprintln!("{secs:.2} s, silhouette: {both} in both, {gpu_only} only the GPU, {cpu_only} only the CPU");
+        let _ = std::fs::write("/tmp/yt_scale/gpu_patterns.ppm", [format!("P6\n{} {}\n255\n", size[0], size[1]).into_bytes(), shown.chunks(4).flat_map(|p| [p[0], p[1], p[2]]).collect()].concat());
+        assert!(both > 1500, "the scene covers a good part of the picture ({both})");
+        // (the two march with different steps and hit limits, so a thin rim of edge pixels differs)
+        assert!((gpu_only + cpu_only) * 100 < both * 6, "the silhouettes differ by more than 6%");
+    }
+
     /// `cargo test -p yuracad --release gpu_headless_bench -- --ignored --nocapture`
     #[test]
     #[ignore]
