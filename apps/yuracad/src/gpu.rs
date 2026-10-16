@@ -111,7 +111,7 @@ pub fn pack(scene: &Scene, cam: &Camera, size: [f32; 2], selected: Option<Pick>,
             };
             put(&mut u, base + 6, [s.op.sign(), s.blend, start as f32, count as f32]);
             put(&mut u, base + 10, s.params);
-            put(&mut u, base + 12, [p.shell, p.poly_limit, p.poly_orient, 0.0]);
+            put(&mut u, base + 12, [p.shell, p.poly_limit, p.poly_orient, if p.chamfer && p.round > 0.0 { 1.0 } else { 0.0 }]);
             put(&mut u, base + 11, [pstart as f32, pcount as f32, start2 as f32, count2 as f32]);
             put(&mut u, base + 7, [s.material.color[0], s.material.color[1], s.material.color[2], s.material.roughness]);
             let m = &s.material;
@@ -253,7 +253,7 @@ struct Target {
 
 /// The shader is one program in several files: the core, the extra solids, the CAD features.
 pub fn shader_source() -> String {
-    [include_str!("shader.wgsl"), include_str!("shader_prims.wgsl"), include_str!("shader_cad.wgsl"), include_str!("shader_curve.wgsl")].join("\n")
+    [include_str!("shader.wgsl"), include_str!("shader_prims.wgsl"), include_str!("shader_cad.wgsl"), include_str!("shader_curve.wgsl"), include_str!("shader_corner.wgsl")].join("\n")
 }
 
 const BLIT_SOURCE: &str = include_str!("blit.wgsl");
