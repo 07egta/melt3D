@@ -10,10 +10,12 @@ struct Shape {
     misc: vec4<f32>,    // x = op sign, y = blend, z = outline start (point index), w = outline count
     color: vec4<f32>,   // rgb, roughness
     mat: vec4<f32>,     // metallic, glow, glass, iridescence
-    mat2: vec4<f32>,    // x = clear coat
+    mat2: vec4<f32>,    // x = clear coat, y = translucency, z = signed 1 / gradient length
     params: vec4<f32>,  // kind-specific extra numbers
     ext: vec4<f32>,     // x = path start, y = path count, z = outline2 start, w = outline2 count
-    extra: vec4<f32>,   // x = shell wall thickness (0 = solid)
+    extra: vec4<f32>,   // x = shell wall thickness (0 = solid), y z = profile rounding limit, winding
+    gcol: vec4<f32>,    // gradient: second colour rgb, strength (0 = no gradient)
+    gpar: vec4<f32>,    // gradient: direction (0 x, 1 y, 2 z; +3 = along the shape's own box), softness, from, to
 };
 
 struct Globals {
@@ -149,6 +151,15 @@ fn shape_dist(s: Shape, p: vec3<f32>) -> f32 {
     } else if (kind == 3) {
         let a = length(q.xy) - sz.x;
         r = length(vec2<f32>(a, q.z)) - sz.y;
+    } else if (kind == 4 && rd > 0.0) {
+        // a rounded cone: its profile triangle shrunk about the incentre, then grown again
+        let hh = sz.y * 0.5;
+        let slant = length(vec2<f32>(sz.x, sz.y));
+        let rin = max(sz.x * sz.y / max(sz.x + slant, 1e-6), 1e-6);
+        let rr = min(rd, rin * 0.98);
+        let k = (rin - rr) / rin;
+        let c = vec2<f32>(0.0, -hh + rin);
+        r = pm_sd_triangle(vec2<f32>(length(q.xy), q.z), c + (vec2<f32>(-sz.x, -hh) - c) * k, c + (vec2<f32>(sz.x, -hh) - c) * k, c + (vec2<f32>(0.0, hh) - c) * k) - rr;
     } else if (kind == 4) {
         let h = sz.y * 0.5;
         let r1 = sz.x;
@@ -182,6 +193,24 @@ fn shape_dist(s: Shape, p: vec3<f32>) -> f32 {
     let sh = s.extra.x;
     if (sh > 0.0) { r = abs(r + sh * 0.5) - sh * 0.5; }
     return r;
+}
+
+// The surface colour of a shape at p: its colour, or the gradient (Material::gradient_weight).
+fn shape_color(s: Shape, p: vec3<f32>) -> vec3<f32> {
+    if (s.gcol.w <= 0.001) { return s.color.rgb; }
+    let code = i32(s.gpar.x + 0.5);
+    let ax = code % 3;
+    let d = p - s.pos.xyz;
+    var c = d[ax];
+    if (code >= 3) {
+        let q = vec3<f32>(dot(s.r0.xyz, d), dot(s.r1.xyz, d), dot(s.r2.xyz, d)) / s.scale.xyz;
+        c = q[ax];
+    }
+    let t = clamp(c * s.mat2.z + 0.5, 0.0, 1.0);
+    let u = clamp((t - s.gpar.z) / max(s.gpar.w - s.gpar.z, 0.02), 0.0, 1.0);
+    let w = max(s.gpar.y * 0.5, 0.001);
+    let k = smoothstep(0.5 - w, 0.5 + w, u);
+    return mix(s.color.rgb, s.gcol.rgb, k * s.gcol.w);
 }
 
 fn mix_hit(a: Hit, b: Hit, t: f32) -> Hit {
@@ -289,7 +318,7 @@ fn map(p0: vec3<f32>) -> Hit {
             }
             var h: Hit;
             h.d = shape_dist(s, p);
-            h.col = s.color.rgb;
+            h.col = shape_color(s, p);
             h.rough = s.color.w;
             h.metal = s.mat.x;
             h.glow = s.mat.y;

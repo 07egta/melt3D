@@ -47,7 +47,7 @@ fn ud_triangle(p: V3, a: V3, b: V3, c: V3) -> f32 {
 }
 
 /// Signed distance of a point to a 2D triangle.
-fn sd_triangle(p: [f32; 2], p0: [f32; 2], p1: [f32; 2], p2: [f32; 2]) -> f32 {
+pub(crate) fn sd_triangle(p: [f32; 2], p0: [f32; 2], p1: [f32; 2], p2: [f32; 2]) -> f32 {
     let e0 = [p1[0] - p0[0], p1[1] - p0[1]];
     let e1 = [p2[0] - p1[0], p2[1] - p1[1]];
     let e2 = [p0[0] - p2[0], p0[1] - p2[1]];
@@ -159,6 +159,31 @@ fn star2(x: f32, y: f32, r: f32, n: f32, ratio: f32) -> f32 {
     if e[0] * py - e[1] * (px - r) > 0.0 { -d } else { d }
 }
 
+/// Signed distance (in the half plane rho, zp) to the half disc of radius `r` above zp = 0.
+fn half_disc(rho: f32, zp: f32, r: f32) -> f32 {
+    if zp >= 0.0 {
+        (rho.hypot(zp) - r).max(-zp)
+    } else if rho <= r {
+        -zp
+    } else {
+        (rho - r).hypot(zp)
+    }
+}
+
+/// A cone (base radius `s[0]`, height `s[1]`, point on top) with its edges rounded by `round`:
+/// the triangle of its profile, shrunk about its incentre so every side moves in by `rr`, then
+/// grown by `rr`. `rr` never exceeds what the cone can take (its incircle radius).
+pub fn rounded_cone(q: V3, s: V3, round: f32) -> f32 {
+    let (rad, hh) = (s[0], s[1] * 0.5);
+    let slant = rad.hypot(s[1]);
+    let rin = (rad * s[1] / (rad + slant).max(1e-6)).max(1e-6);
+    let rr = round.max(0.0).min(rin * 0.98);
+    let k = (rin - rr) / rin;
+    let c = [0.0, -hh + rin];
+    let g = |x: f32, z: f32| [c[0] + (x - c[0]) * k, c[1] + (z - c[1]) * k];
+    sd_triangle([q[0].hypot(q[1]), q[2]], g(-rad, -hh), g(rad, -hh), g(0.0, hh)) - rr
+}
+
 /// Distance from `q` (local, unscaled) to the shape. Negative inside.
 pub fn distance(p: &Prepared, q: V3) -> f32 {
     let s = p.size;
@@ -192,16 +217,11 @@ pub fn distance(p: &Prepared, q: V3) -> f32 {
             len([q[0], q[1], q[2] - q[2].max(-hl).min(hl)]) - s[0]
         }
         Kind::Hemi => {
+            // a half disc of radius r on the floor zp = 0; rounding lifts the floor by rr, shrinks
+            // the disc by rr and grows everything again (so the rim becomes a quarter circle)
             let r = s[0];
-            let zp = q[2] + r * 0.5;
-            let rho = q[0].hypot(q[1]);
-            if zp >= 0.0 {
-                (rho.hypot(zp) - r).max(-zp)
-            } else if rho <= r {
-                -zp
-            } else {
-                (rho - r).hypot(zp)
-            }
+            let rr = round.min(r * 0.5);
+            half_disc(q[0].hypot(q[1]), q[2] + r * 0.5 - rr, r - rr) - rr
         }
         Kind::Tube => {
             let t = s[1].max(0.0).min(s[0]);

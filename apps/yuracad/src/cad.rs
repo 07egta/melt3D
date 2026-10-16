@@ -66,8 +66,125 @@ pub fn wedge(x: f32, y: f32, deg: f32) -> f32 {
     if inside { -d } else { d }
 }
 
+// ---- rounding a profile ----
+//
+// A profile (revolve, sweep) is rounded the way every solid is: shrunk by `rr` (each corner moves
+// along its bisector so that every side moves in by `rr`), measured, and grown by `rr` again. The
+// shrunk corners are worked out per sample from the neighbours, so the shader does the same.
+
+/// The unit vector of `v` (zero when it has no length).
+fn unit2(v: [f32; 2]) -> [f32; 2] {
+    let l = v[0].hypot(v[1]);
+    if l < 1e-9 { [0.0, 0.0] } else { [v[0] / l, v[1] / l] }
+}
+
+/// The corner `cur` between `prev` and `next`, moved inwards by `rr`. `orient` is +1 for a
+/// counter-clockwise outline and -1 for a clockwise one. With `axis`, a side lying on the Z axis
+/// (x = 0) is no surface: it is treated as the mirror image of the other side, so the corner slides
+/// along the axis instead of away from it.
+pub fn inset_corner(prev: [f32; 2], cur: [f32; 2], next: [f32; 2], orient: f32, rr: f32, axis: bool) -> [f32; 2] {
+    let (n1, n2, den) = corner_normals(prev, cur, next, orient, axis);
+    let k = rr / den;
+    [cur[0] + (n1[0] + n2[0]) * k, cur[1] + (n1[1] + n2[1]) * k]
+}
+
+/// The inward normals of the two sides at a corner, and `1 + n1 . n2` (kept away from zero).
+fn corner_normals(prev: [f32; 2], cur: [f32; 2], next: [f32; 2], orient: f32, axis: bool) -> ([f32; 2], [f32; 2], f32) {
+    let t1 = unit2([cur[0] - prev[0], cur[1] - prev[1]]);
+    let t2 = unit2([next[0] - cur[0], next[1] - cur[1]]);
+    let mut n1 = [-t1[1] * orient, t1[0] * orient];
+    let mut n2 = [-t2[1] * orient, t2[0] * orient];
+    if axis {
+        let on = |a: [f32; 2], b: [f32; 2]| a[0] <= 1e-4 && b[0] <= 1e-4;
+        match (on(prev, cur), on(cur, next)) {
+            (true, false) => n1 = [-n2[0], n2[1]],
+            (false, true) => n2 = [-n1[0], n1[1]],
+            (true, true) => {
+                n1 = [0.0, 0.0];
+                n2 = [0.0, 0.0];
+            }
+            _ => {}
+        }
+    }
+    (n1, n2, (1.0 + n1[0] * n2[0] + n1[1] * n2[1]).max(0.1))
+}
+
+/// (orientation, largest safe `rr`) of a profile: how it winds, and how far its corners can move
+/// in before a side would turn around (shorter than nothing). The limit is in the profile's units.
+pub fn inset_params(v: &[[f32; 2]], axis: bool) -> (f32, f32) {
+    let n = v.len();
+    if n < 3 {
+        return (1.0, 0.0);
+    }
+    let mut area = 0.0_f32;
+    for i in 0..n {
+        let (a, b) = (v[i], v[(i + 1) % n]);
+        area += a[0] * b[1] - b[0] * a[1];
+    }
+    let orient = if area < 0.0 { -1.0 } else { 1.0 };
+    let mut limit = 1e4_f32;
+    for i in 0..n {
+        // the side a -> b, with the corners before a and after b
+        let (z, a, b, c) = (v[(i + n - 1) % n], v[i], v[(i + 1) % n], v[(i + 2) % n]);
+        let t = unit2([b[0] - a[0], b[1] - a[1]]);
+        let len = (b[0] - a[0]).hypot(b[1] - a[1]);
+        let (_, nb, db) = corner_normals(a, b, c, orient, axis);
+        let (na, _, da) = corner_normals(z, a, b, orient, axis);
+        // how fast the side changes length per unit of rr
+        let shrink = (nb[0] * t[0] + nb[1] * t[1]) / db - (na[0] * t[0] + na[1] * t[1]) / da;
+        if shrink < -1e-6 {
+            limit = limit.min(len / -shrink);
+        }
+    }
+    (orient, limit * 0.98)
+}
+
+/// Distance from `pt` to the profile `v` shrunk by `rr` (see `inset_corner`), ignoring sides on the
+/// Z axis when `axis`. Same counting of sides as `polygon_off_axis`.
+pub fn polygon_inset(v: &[[f32; 2]], pt: [f32; 2], rr: f32, orient: f32, axis: bool) -> f32 {
+    let n = v.len();
+    if n < 3 {
+        return 1e9;
+    }
+    let at = |i: usize| v[i % n];
+    let shrunk = |i: usize| inset_corner(at(i + n - 1), at(i), at(i + 1), orient, rr, axis);
+    let mut d = 1e18_f32;
+    let mut sgn = 1.0_f32;
+    let mut j = n - 1;
+    let mut vj = shrunk(j);
+    for i in 0..n {
+        let vi = shrunk(i);
+        let e = [vj[0] - vi[0], vj[1] - vi[1]];
+        let w = [pt[0] - vi[0], pt[1] - vi[1]];
+        if !(axis && v[i][0] <= 1e-4 && v[j][0] <= 1e-4) {
+            let t = ((w[0] * e[0] + w[1] * e[1]) / (e[0] * e[0] + e[1] * e[1]).max(1e-12)).clamp(0.0, 1.0);
+            let b = [w[0] - e[0] * t, w[1] - e[1] * t];
+            d = d.min(b[0] * b[0] + b[1] * b[1]);
+        }
+        let c1 = pt[1] >= vi[1];
+        let c2 = pt[1] < vj[1];
+        let c3 = e[0] * w[1] > e[1] * w[0];
+        if (c1 && c2 && c3) || (!c1 && !c2 && !c3) {
+            sgn = -sgn;
+        }
+        j = i;
+        vj = vi;
+    }
+    sgn * d.sqrt()
+}
+
+/// The rounding that really applies: `round`, kept inside what the profile can take.
+fn profile_round(p: &Prepared, scale: f32) -> f32 {
+    (p.round / scale.max(1e-3)).max(0.0).min(p.poly_limit)
+}
+
 fn revolve(p: &Prepared, q: V3) -> f32 {
-    let d = polygon_off_axis(&p.outline, [q[0].hypot(q[1]), q[2]]);
+    let rr = profile_round(p, 1.0);
+    let d = if rr > 0.0 {
+        polygon_inset(&p.outline, [q[0].hypot(q[1]), q[2]], rr, p.poly_orient, true) - rr
+    } else {
+        polygon_off_axis(&p.outline, [q[0].hypot(q[1]), q[2]])
+    };
     let a = if p.params[0].is_finite() { p.params[0].clamp(1.0, 360.0) } else { 360.0 };
     if a < 359.99 { d.max(wedge(q[0], q[1], a)) } else { d }
 }
@@ -78,8 +195,10 @@ fn loft(p: &Prepared, q: V3) -> f32 {
     let (d1, d2) = (polygon(&p.outline, xy), polygon(&p.outline2, xy));
     let t = (q[2] / h + 0.5).clamp(0.0, 1.0);
     let dm = d1 + (d2 - d1) * t;
-    let w = [dm, q[2].abs() - h * 0.5];
-    let d = w[0].max(w[1]).min(0.0) + w[0].max(0.0).hypot(w[1].max(0.0));
+    // rounding softens the top and bottom edges (like an extrusion), never more than half the height
+    let rr = p.round.max(0.0).min(h * 0.5);
+    let w = [dm + rr, q[2].abs() - h * 0.5 + rr];
+    let d = w[0].max(w[1]).min(0.0) + w[0].max(0.0).hypot(w[1].max(0.0)) - rr;
     d * loft_safety(d1, d2, h)
 }
 
@@ -110,7 +229,10 @@ fn sweep(p: &Prepared, q: V3) -> f32 {
     let c = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
     let r = (a[3] + (b[3] - a[3]) * t).abs().max(1e-3);
     let d = sub(q, c);
-    let d2 = polygon(&p.outline, [dot(d, nrm) / r, dot(d, bin) / r]) * r;
+    let uv = [dot(d, nrm) / r, dot(d, bin) / r];
+    // rounding is in mm: the profile is shrunk by round / r profile units (r = the node radius here)
+    let rr = profile_round(p, r);
+    let d2 = if rr > 0.0 { (polygon_inset(&p.outline, uv, rr, p.poly_orient, false) - rr) * r } else { polygon(&p.outline, uv) * r };
     // flat end caps: how far past the first / last node along the path
     let mut axial = -1e5_f32;
     if i == 0 && t <= 0.0 {
