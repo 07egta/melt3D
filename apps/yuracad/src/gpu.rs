@@ -1221,7 +1221,12 @@ pub(crate) mod headless {
 
     /// `downlevel`: ask for the limits egui-wgpu asks for on OpenGL (no storage buffers, 16 KB uniforms).
     pub fn open(downlevel: bool) -> Option<Gpu> {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
+        // (`WGPU_BACKEND=gl` runs the tests on OpenGL, the way the window does on machines without Vulkan)
+        if let Some(b) = wgpu::Backends::from_env() {
+            desc.backends = b;
+        }
+        let instance = wgpu::Instance::new(desc);
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions { power_preference: wgpu::PowerPreference::HighPerformance, force_fallback_adapter: false, compatible_surface: None, ..Default::default() })).ok()?;
         let base = if downlevel { wgpu::Limits::downlevel_webgl2_defaults() } else { wgpu::Limits::default() };
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
@@ -1483,8 +1488,9 @@ mod headless_tests {
         assert!(both > 1500, "the mesh covers a good part of the picture ({both})");
         assert!((gpu_only + cpu_only) * 100 < both * 6, "the silhouettes differ by more than 6%");
         // moving a mesh uploads nothing new, and replacing the volume draws it again
-        let again = VolumeSet::of(&sc);
-        assert!(gpu.res.vol.resident.same_as(&again));
+        let (shown2, _) = draw(&sc, &mut gpu);
+        assert!(gpu.res.vol.resident.same_as(&VolumeSet::of(&sc)));
+        assert!(shown2 == shown, "drawing the scene again after the volume was dropped and uploaded again gives the same picture");
     }
 
     /// Writes scenes for the real window: `/tmp/yt_scale/patterns.meltcad` (every kind of pattern and a

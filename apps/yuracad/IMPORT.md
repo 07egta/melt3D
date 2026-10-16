@@ -1,11 +1,10 @@
 # MELTCAD mesh import: design note
 
-Status: the core is written and tested; nothing in the app calls it yet. The wiring (a `Kind::Mesh`,
-the shader and the UI) is for whoever owns `model.rs`, `gpu.rs`, `sdf.rs` and the panels.
+Status: **wired** (branch `yura-mesh`). The core below is used by `Kind::Mesh`, the CPU field
+(`sdf.rs`), the GPU (`gpu.rs`, `shader_mesh.wgsl`), the import card (`mesh_dialog.rs`) and the scene
+file (`mesh.rs`). See "How it is wired" at the end of this note.
 
-Everything here is our own code (no new dependencies; `serde_json` is used for GLB). All of the
-modules are self-contained and carry `#![allow(dead_code)]` until they are wired in: remove that
-line from each when the integration lands.
+Everything here is our own code (no new dependencies; `serde_json` is used for GLB).
 
 ## Files
 
@@ -161,3 +160,56 @@ Readers, 500k triangles (`report_read_times_for_a_big_mesh`): binary STL 0.12 s 
 * The 3MF test build caps the unpacked XML at 8 MB (400 MB in the app) so that the zip-bomb test is light.
 * `weld(tol)` with a tolerance is quantised to a grid (two points on opposite sides of a grid
   line can stay apart); STL corners are welded exactly while reading.
+
+## How it is wired
+
+| file | what |
+|---|---|
+| `src/mesh.rs` | `SharedVolume` (an `Arc<Volume>` that compares by pointer), the scene file form, the limits (`MAX_VOLUME_SHAPES` = 8 shapes, `MAX_TOTAL_NODES` = 16 M grid nodes in a scene), `can_add` |
+| `src/mesh_import.rs` | read, turn upright (向き), centre, scale to the target size, bake, `place` (floor / view middle / file place), `estimate` (time, size), `shape_of` |
+| `src/mesh_dialog.rs` | the import card (worker threads for reading and baking, progress, 中止), the dropped files, the inspector part of a mesh shape |
+| `src/model.rs` | `Kind::Mesh` (id 20, not in `Kind::ALL` or the add menus), `Shape::volume`, `Shape::source`, `Shape::mesh`, `Scene::from_json_notes`, `sanitize_notes` |
+| `src/sdf.rs` | `Prepared::volume`; `local_distance` samples `Volume::distance`, then the usual `* min_scale` and shell |
+| `src/gpu.rs`, `src/shader_mesh.wgsl` | `VolumeSet` (the volumes' places), the volume texture, `mesh_dist` |
+
+* **The shape.** The volume is baked around the model's middle (the box of the nodes is the model's box plus
+  4 cells), so the shape's position is the middle of the model and the gizmo turns it about that point.
+  `Shape::size` holds the model's size in mm (read only; the inspector shows it times the scale),
+  `Shape::source` the file name. `local_half` is the box of the nodes seen from the origin, so the
+  bounding spheres of `accel.rs` and the gizmo work unchanged. Outside the box the value is the
+  distance to the box plus the value at the nearest edge point (continuous, never smaller than the true distance by
+  more than the error inside; an upper bound of it, not a lower one).
+* **Rounding** (`丸み`) is off for meshes (`can_round` is false): there is no corner information in a distance grid. Shell, blend, carving,
+  overlap, paint, patterns, linked copies and export work.
+* **Scene file.** `"volume": "<base64>"` in the shape (the first shape that uses a volume), later shapes with the same volume write its
+  number (order of first appearance). Loading finds a volume that is alive in the program by the hash of its text and shares it (copy and paste
+  within the program does not decode or duplicate). At most 8 new volumes are decoded per file, texts are capped at 32 MB, damaged
+  data becomes "no volume" and `sanitize_notes` removes that shape and the shapes past the limits, with a note shown in the status bar.
+  A 128-cell ball is a 1.25 MB scene file (save 0.2 s, load 0.06 s); a flat plate is tiny.
+* **Undo and equality.** `SharedVolume` equality is pointer equality, so cloning and comparing scenes (every frame in `settle`) never touches
+  the distances. Duplicate, mirror copy, array, paste, patterns and linked copies share the one `Arc`; `mesh::can_add` refuses the ninth mesh shape
+  and a scene past the data limit (with a message through `App::notice`).
+* **GPU.** Option (a) of the plan with a twist: the volumes do not go into the scene list texture (that is re-uploaded whenever the frame
+  changes) but into their own texture, `Rgba16Float`, 2048 texels wide, four grid nodes per texel (r g b a), up to 2048 rows (= 16 M nodes,
+  32 MB), bound as binding 2 and read with `textureLoad` (no filtering needed, so it works wherever the scene list does, OpenGL included;
+  a 3-D texture would be capped at 256 per side on the OpenGL limits and there is one binding per volume). `mesh_dist` does the trilinear blend
+  with eight loads. Volumes sit one after another (each starts on a multiple of 4 nodes, `VolumeSet::of`); per shape the record carries
+  size = node counts, params = origin and cell, ext.x = first node. `ensure_volumes` uploads only volumes that are new or moved, then invalidates the
+  frame cache; moving or rotating a mesh uploads nothing. Half floats have 11 bits of precision: 0.05% of the distance (0.1 mm at 200 mm), invisible next to the cell size.
+* **Export.** Nothing special: the mesher samples the `Field`. A scene file saved with meshes exports like any other.
+
+### Measured (this machine, release, software Vulkan llvmpipe)
+
+* Ball, 128 cells: 2.57 M nodes, bake 0.7 s (4 cores), file 1.25 MB, save 0.2 s, load 0.06 s.
+* `cargo test -p yuracad --release gpu_headless_mesh_matches_cpu -- --ignored --nocapture` (our own STL of a small model read back, baked,
+  melted with a sphere, carved by a cylinder, a second copy at scale 0.7 sharing the volume): GPU and CPU silhouettes differ by about 2% of the covered pixels.
+* End to end (`export_our_own_stl_import_it_and_measure_it_again`): the imported field is within about one cell of the original near the surface
+  (worst 0.57 mm at a 0.49 mm cell; the export tolerance of 0.3 mm is part of it).
+
+### Rough edges
+
+* Colours are not imported; every mesh gets a clay grey and is painted like other shapes.
+* The bake keeps the precision of IMPORT.md "Accuracy"; thin walls under one cell can leak and open meshes get a guessed inside.
+* There is no re-bake of a placed mesh at another size or fineness (import again; the scale in the inspector only stretches the grid).
+* A scale much above 1 makes the cells coarse (the cell grows with it); the inspector shows the base cell.
+* Scenes with eight volume shapes cost eight times the per-step volume sampling in the shader (the bounding spheres skip far ones).
