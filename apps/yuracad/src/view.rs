@@ -241,9 +241,10 @@ impl App {
         let size = crate::perf::render_size(crate::perf::viewport_px(rect, ppp), scale, 16384);
         let shown_sel = if clean { None } else { self.sel };
         let shown_hover = if clean { None } else { self.hover };
-        let mut data = crate::gpu::pack(&self.scene, &self.cam, [size[0] as f32, size[1] as f32], shown_sel, shown_hover, self.srgb);
+        let volumes = crate::gpu::VolumeSet::of(&self.scene);
+        let mut data = crate::gpu::pack_with(&self.scene, &self.cam, [size[0] as f32, size[1] as f32], shown_sel, shown_hover, self.srgb, &volumes);
         crate::gpu::set_view_flags(&mut data, crate::perf::view_flags(self.srgb, fast, crate::perf::scene_has_glow(&self.scene)));
-        ui.painter().add(egui_wgpu::Callback::new_paint_callback(rect, crate::gpu::Callback { data: Arc::new(data), size }));
+        ui.painter().add(egui_wgpu::Callback::new_paint_callback(rect, crate::gpu::Callback { data: Arc::new(data), volumes: Arc::new(volumes), size }));
         self.perf.drawn.note(&self.scene, shown_sel, shown_hover, &self.cam, clean);
         let painter = ui.painter_at(rect);
 

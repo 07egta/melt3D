@@ -42,6 +42,55 @@ pub const PATH_V4: usize = 32768;
 pub const MAX_POOL_V4: usize = MAX_GROUPS * G_STRIDE + MAX_SHAPES * (S_STRIDE + B_STRIDE) + (crate::pattern::MAX_INSTANCES + MAX_GROUPS) * I_STRIDE + POLY_PTS / 2 + PATH_V4 + 4096;
 const _: () = assert!(MAX_POOL_V4 <= 2048 * ROW, "the scene list must fit a 2048 x 1024 texture");
 
+/// The volume texture: every imported mesh's distances, half floats, four grid nodes to a texel
+/// (`VOL_W` texels to a row, at most `VOL_H` rows), read with `textureLoad` in `shader_mesh.wgsl`.
+pub const VOL_W: usize = 2048;
+pub const VOL_H: usize = 2048;
+
+/// The imported meshes of a scene as they sit in the volume texture: one after another, each one's
+/// first node a multiple of 4. Shapes that share a volume share its place.
+#[derive(Clone, Default, Debug)]
+pub struct VolumeSet {
+    /// (the volume, the number of its first node in the texture)
+    pub items: Vec<(crate::mesh::SharedVolume, usize)>,
+    /// Nodes in use, including the padding between volumes.
+    pub total: usize,
+}
+
+impl VolumeSet {
+    /// The volumes of all the mesh shapes of the scene (hidden ones too, so that hiding a shape
+    /// does not move anything). A volume that no longer fits the texture is left out: its shapes
+    /// draw nothing.
+    pub fn of(scene: &Scene) -> VolumeSet {
+        let mut set = VolumeSet::default();
+        for sh in scene.groups.iter().flat_map(|g| g.shapes.iter()) {
+            let (crate::model::Kind::Mesh, Some(v)) = (sh.kind, &sh.volume) else { continue };
+            if set.items.iter().any(|(w, _)| w.key() == v.key()) {
+                continue;
+            }
+            let base = set.total.next_multiple_of(4);
+            if v.nodes() == 0 || base + v.nodes() > VOL_W * VOL_H * 4 {
+                continue;
+            }
+            set.items.push((v.clone(), base));
+            set.total = base + v.nodes();
+        }
+        set
+    }
+    /// Where a volume starts in the texture (None = not in the texture).
+    pub fn base_of(&self, v: &crate::mesh::SharedVolume) -> Option<usize> {
+        self.items.iter().find(|(w, _)| w.key() == v.key()).map(|(_, b)| *b)
+    }
+    /// Texture rows this set needs.
+    pub fn rows(&self) -> u32 {
+        (self.total.div_ceil(4).div_ceil(VOL_W)).max(1) as u32
+    }
+    /// Is it the same layout of the same volumes?
+    pub fn same_as(&self, other: &VolumeSet) -> bool {
+        self.items.len() == other.items.len() && self.items.iter().zip(&other.items).all(|(a, b)| a.0 == b.0 && a.1 == b.1)
+    }
+}
+
 fn put(u: &mut [f32], slot: usize, v: [f32; 4]) {
     if let Some(dst) = u.get_mut(slot * 4..slot * 4 + 4) {
         dst.copy_from_slice(&v);
@@ -54,6 +103,11 @@ fn push(list: &mut Vec<f32>, v: [f32; 4]) {
 
 /// Everything the shader needs for one frame: `GLOBAL_V4` vec4 of globals, then the scene list.
 pub fn pack(scene: &Scene, cam: &Camera, size: [f32; 2], selected: Option<Pick>, hover: Option<Pick>, srgb: bool) -> Vec<f32> {
+    pack_with(scene, cam, size, selected, hover, srgb, &VolumeSet::of(scene))
+}
+
+/// `pack`, with the volumes' places in the volume texture given (`VolumeSet::of(scene)`).
+pub fn pack_with(scene: &Scene, cam: &Camera, size: [f32; 2], selected: Option<Pick>, hover: Option<Pick>, srgb: bool, vols: &VolumeSet) -> Vec<f32> {
     let mut u = vec![0.0_f32; GLOBAL_V4 * 4];
     let (right, up, fwd) = cam.basis();
     let eye = cam.eye();
@@ -99,7 +153,7 @@ pub fn pack(scene: &Scene, cam: &Camera, size: [f32; 2], selected: Option<Pick>,
             if !s.visible || shape_n >= MAX_SHAPES {
                 continue;
             }
-            pack_shape(s, &mut shapes, &mut poly, &mut path);
+            pack_shape(s, &mut shapes, &mut poly, &mut path, vols);
             members.push(s);
             if hover == Some(Pick::Shape(gi, si)) {
                 hover_first = shape_n as f32;
@@ -192,7 +246,7 @@ pub fn pack(scene: &Scene, cam: &Camera, size: [f32; 2], selected: Option<Pick>,
 
 /// One shape's 16 vec4 (a bounding sphere, then `struct Shape`); its outline points and path nodes
 /// go into the shared pools.
-fn pack_shape(s: &crate::model::Shape, out: &mut Vec<f32>, poly: &mut Vec<f32>, path: &mut Vec<f32>) {
+fn pack_shape(s: &crate::model::Shape, out: &mut Vec<f32>, poly: &mut Vec<f32>, path: &mut Vec<f32>, vols: &VolumeSet) {
     let p = Prepared::new(s);
     // outline points, two per vec4: returns (first point, count)
     let pack_outline = |pts: &[[f32; 2]], poly: &mut Vec<f32>| -> (usize, usize) {
@@ -220,13 +274,22 @@ fn pack_shape(s: &crate::model::Shape, out: &mut Vec<f32>, poly: &mut Vec<f32>, 
         (0, 0)
     };
     let radius = crate::perf::shape_radius(s);
+    // a mesh: size = nodes along x, y, z (0 = nothing to draw), params = place of node 0 and the cell, ext.x = first node
+    let (mut size4, mut params4, mut ext4) = ([s.size[0], s.size[1], s.size[2], p.round], s.params, [pstart as f32, pcount as f32, start2 as f32, count2 as f32]);
+    if s.kind == crate::model::Kind::Mesh {
+        let found = s.volume.as_ref().and_then(|v| vols.base_of(v).map(|b| (v, b)));
+        (size4, params4, ext4) = match found {
+            Some((v, base)) => ([v.dims[0] as f32, v.dims[1] as f32, v.dims[2] as f32, 0.0], [v.origin[0], v.origin[1], v.origin[2], v.cell], [base as f32, 0.0, 0.0, 0.0]),
+            None => ([0.0; 4], [0.0; 4], [0.0; 4]),
+        };
+    }
     push(out, [s.pos[0], s.pos[1], s.pos[2], radius]);
     push(out, [p.inv[0][0], p.inv[0][1], p.inv[0][2], 0.0]);
     push(out, [p.inv[1][0], p.inv[1][1], p.inv[1][2], 0.0]);
     push(out, [p.inv[2][0], p.inv[2][1], p.inv[2][2], 0.0]);
     push(out, [s.pos[0], s.pos[1], s.pos[2], p.min_scale()]);
     push(out, [s.scale[0], s.scale[1], s.scale[2], s.kind.id()]);
-    push(out, [s.size[0], s.size[1], s.size[2], p.round]);
+    push(out, size4);
     push(out, [s.op.sign(), s.blend, start as f32, count as f32]);
     let m = &s.material;
     push(out, [m.color[0], m.color[1], m.color[2], m.roughness]);
@@ -235,8 +298,8 @@ fn pack_shape(s: &crate::model::Shape, out: &mut Vec<f32>, poly: &mut Vec<f32>, 
     // the shape's own box), softness, from, to; mat2.z = signed 1 / the gradient's length
     let inv_len = if m.has_gradient() { (if m.grad_flip { -0.5 } else { 0.5 }) / p.grad_half.max(1e-3) } else { 0.0 };
     push(out, [m.coat, m.translucency, inv_len, 0.0]);
-    push(out, s.params);
-    push(out, [pstart as f32, pcount as f32, start2 as f32, count2 as f32]);
+    push(out, params4);
+    push(out, ext4);
     push(out, [p.shell, p.poly_limit, p.poly_orient, if p.chamfer && p.round > 0.0 { 1.0 } else { 0.0 }]);
     push(out, [m.color2[0], m.color2[1], m.color2[2], if m.has_gradient() { m.gradient } else { 0.0 }]);
     push(out, [f32::from(m.grad_axis.min(2)) + if m.grad_local { 3.0 } else { 0.0 }, m.grad_soft, m.grad_from, m.grad_to]);
@@ -320,8 +383,18 @@ pub fn set_view_flags(data: &mut [f32], flags: f32) {
 /// The scene list as a float texture: `ROW` vec4 per row.
 struct Pool {
     texture: wgpu::Texture,
+    view: wgpu::TextureView,
     rows: u32,
     bind: wgpu::BindGroup,
+}
+
+/// The volume texture and what is in it.
+struct VolTex {
+    texture: wgpu::Texture,
+    view: wgpu::TextureView,
+    rows: u32,
+    /// What was uploaded (and so is in the texture now).
+    resident: VolumeSet,
 }
 
 pub(crate) struct Resources {
@@ -331,6 +404,8 @@ pub(crate) struct Resources {
     scene_layout: wgpu::BindGroupLayout,
     /// The scene list; made (and made taller) when a scene needs it.
     pool: Option<Pool>,
+    /// The imported meshes' distances (a 1-row dummy when there are none).
+    vol: VolTex,
     /// Copies `target` into egui's picture.
     blit: wgpu::RenderPipeline,
     blit_layout: wgpu::BindGroupLayout,
@@ -353,7 +428,14 @@ struct Target {
 
 /// The shader is one program in several files: the core, the extra solids, the CAD features.
 pub fn shader_source() -> String {
-    [include_str!("shader.wgsl"), include_str!("shader_prims.wgsl"), include_str!("shader_cad.wgsl"), include_str!("shader_curve.wgsl"), include_str!("shader_corner.wgsl")].join("\n")
+    [
+        include_str!("shader.wgsl"),
+        include_str!("shader_prims.wgsl"),
+        include_str!("shader_cad.wgsl"),
+        include_str!("shader_curve.wgsl"),
+        include_str!("shader_corner.wgsl"),
+        include_str!("shader_mesh.wgsl"),
+    ].join("\n")
 }
 
 const BLIT_SOURCE: &str = include_str!("blit.wgsl");
@@ -376,6 +458,17 @@ fn build(device: &wgpu::Device, format: wgpu::TextureFormat) -> Resources {
             },
             wgpu::BindGroupLayoutEntry {
                 binding: 1,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            // the imported meshes' distances (half floats, read with textureLoad)
+            wgpu::BindGroupLayoutEntry {
+                binding: 2,
                 visibility: wgpu::ShaderStages::FRAGMENT,
                 ty: wgpu::BindingType::Texture {
                     sample_type: wgpu::TextureSampleType::Float { filterable: false },
@@ -466,6 +559,7 @@ fn build(device: &wgpu::Device, format: wgpu::TextureFormat) -> Resources {
         buffer,
         scene_layout: bgl,
         pool: None,
+        vol: VolTex::new(device, 1),
         blit,
         blit_layout,
         linear: sampler(wgpu::FilterMode::Linear),
@@ -500,7 +594,7 @@ pub fn install(rs: &egui_wgpu::RenderState, ctx: &egui::Context) {
 
 impl Pool {
     /// A scene-list texture at least `rows` tall (rounded up to a power of two so it is rarely remade).
-    fn new(device: &wgpu::Device, res_buffer: &wgpu::Buffer, layout: &wgpu::BindGroupLayout, rows: u32) -> Pool {
+    fn new(device: &wgpu::Device, res_buffer: &wgpu::Buffer, layout: &wgpu::BindGroupLayout, vol: &wgpu::TextureView, rows: u32) -> Pool {
         let rows = rows.max(16).next_power_of_two().min(device.limits().max_texture_dimension_2d.max(16));
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("yuracad scene list"),
@@ -513,16 +607,95 @@ impl Pool {
             view_formats: &[],
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        let bind = Pool::bind(device, res_buffer, layout, &view, vol);
+        Pool { texture, view, rows, bind }
+    }
+
+    fn bind(device: &wgpu::Device, res_buffer: &wgpu::Buffer, layout: &wgpu::BindGroupLayout, list: &wgpu::TextureView, vol: &wgpu::TextureView) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("yuracad"),
             layout,
             entries: &[
                 wgpu::BindGroupEntry { binding: 0, resource: res_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&view) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(list) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(vol) },
             ],
-        });
-        Pool { texture, rows, bind }
+        })
     }
+}
+
+impl VolTex {
+    /// A volume texture `rows` rows tall (empty).
+    fn new(device: &wgpu::Device, rows: u32) -> VolTex {
+        let rows = rows.clamp(1, VOL_H as u32);
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("yuracad volumes"),
+            size: wgpu::Extent3d { width: VOL_W as u32, height: rows, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba16Float,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        VolTex { texture, view, rows, resident: VolumeSet::default() }
+    }
+
+    /// Write `bytes` (little-endian half floats, 8 bytes to a texel) starting at texel `first`.
+    fn write_texels(&self, queue: &wgpu::Queue, first: usize, bytes: &[u8]) {
+        let total = bytes.len() / 8;
+        let mut done = 0usize;
+        while done < total {
+            let t = first + done;
+            let (x, y) = (t % VOL_W, t / VOL_W);
+            let n = (VOL_W - x).min(total - done);
+            // (a run to the end of the row, then whole rows, in one write when it can be)
+            let rows_whole = if x == 0 { (total - done) / VOL_W } else { 0 };
+            let (w, h) = if rows_whole > 0 { (VOL_W, rows_whole) } else { (n, 1) };
+            if y as u32 + h as u32 > self.rows {
+                return;
+            }
+            let part = bytes.get(done * 8..(done + w * h) * 8).unwrap_or(&[]);
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo { texture: &self.texture, mip_level: 0, origin: wgpu::Origin3d { x: x as u32, y: y as u32, z: 0 }, aspect: wgpu::TextureAspect::All },
+                part,
+                wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(w as u32 * 8), rows_per_image: Some(h as u32) },
+                wgpu::Extent3d { width: w as u32, height: h as u32, depth_or_array_layers: 1 },
+            );
+            done += w * h;
+        }
+    }
+}
+
+/// Make the volume texture hold exactly `set`: only volumes that are new or moved are uploaded
+/// (a frame that only moves a mesh uploads nothing). The picture must be drawn again afterwards.
+fn ensure_volumes(res: &mut Resources, device: &wgpu::Device, queue: &wgpu::Queue, set: &VolumeSet) {
+    if res.vol.resident.same_as(set) {
+        return;
+    }
+    let rows = set.rows().next_power_of_two().min(VOL_H as u32);
+    let fresh = rows != res.vol.rows;
+    if fresh {
+        res.vol = VolTex::new(device, rows);
+        if let Some(p) = res.pool.as_mut() {
+            p.bind = Pool::bind(device, &res.buffer, &res.scene_layout, &p.view, &res.vol.view);
+        }
+    }
+    for (v, base) in &set.items {
+        let there = !fresh && res.vol.resident.items.iter().any(|(w, b)| w == v && b == base);
+        if there {
+            continue;
+        }
+        let mut bytes: Vec<u8> = Vec::with_capacity(v.nodes().next_multiple_of(4) * 2);
+        for h in v.to_f16_bits() {
+            bytes.extend_from_slice(&h.to_le_bytes());
+        }
+        bytes.resize(v.nodes().next_multiple_of(4) * 2, 0);
+        res.vol.write_texels(queue, base / 4, &bytes);
+    }
+    res.vol.resident = set.clone();
+    res.cache.invalidate();
 }
 
 impl Target {
@@ -555,6 +728,8 @@ impl Target {
 /// One frame of the viewport, as an egui paint callback.
 pub struct Callback {
     pub data: Arc<Vec<f32>>,
+    /// The imported meshes the frame refers to (`VolumeSet::of`, as given to `pack_with`).
+    pub volumes: Arc<VolumeSet>,
     /// The size of the picture to draw, in pixels (the viewport's size times the quality scale).
     pub size: [u32; 2],
 }
@@ -564,7 +739,7 @@ fn ensure_pool(res: &mut Resources, device: &wgpu::Device, data: &[f32]) {
     let list_len = data.len().saturating_sub(GLOBAL_V4 * 4);
     let used_rows = (list_len / 4).div_ceil(ROW).max(1) as u32;
     if res.pool.as_ref().is_none_or(|p| p.rows < used_rows) {
-        res.pool = Some(Pool::new(device, &res.buffer, &res.scene_layout, used_rows));
+        res.pool = Some(Pool::new(device, &res.buffer, &res.scene_layout, &res.vol.view, used_rows));
         res.cache.invalidate();
     }
 }
@@ -626,6 +801,7 @@ impl egui_wgpu::CallbackTrait for Callback {
             res.target = Some(Target::new(device, res, size));
             res.cache.invalidate();
         }
+        ensure_volumes(res, device, queue, &self.volumes);
         ensure_pool(res, device, &self.data);
         // nothing changed since the picture was drawn: keep it
         if !res.cache.needs_render(&self.data, size) {
@@ -1061,6 +1237,11 @@ pub(crate) mod headless {
     impl Gpu {
         /// Render `data` (from `pack`) at `size`; returns RGBA8 pixels and the seconds the draw took.
         pub fn render(&mut self, data: &[f32], size: [u32; 2]) -> (Vec<u8>, f64) {
+            self.render_with(data, &VolumeSet::default(), size)
+        }
+
+        /// `render`, with the imported meshes of the frame (`VolumeSet::of`, as given to `pack_with`).
+        pub fn render_with(&mut self, data: &[f32], vols: &VolumeSet, size: [u32; 2]) -> (Vec<u8>, f64) {
             let tex = self.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("headless target"),
                 size: wgpu::Extent3d { width: size[0], height: size[1], depth_or_array_layers: 1 },
@@ -1072,6 +1253,7 @@ pub(crate) mod headless {
                 view_formats: &[],
             });
             let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+            ensure_volumes(&mut self.res, &self.device, &self.queue, vols);
             ensure_pool(&mut self.res, &self.device, data);
             let bpr = (size[0] * 4).next_multiple_of(256);
             let out = self.device.create_buffer(&wgpu::BufferDescriptor { label: Some("readback"), size: (bpr * size[1]) as u64, usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false });
