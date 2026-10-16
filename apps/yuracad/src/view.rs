@@ -70,7 +70,7 @@ impl App {
 
         // The handles
         let tool = self.tool;
-        let geom = if clean || self.ct.drawing { None } else { gizmo::build(&self.cam, rect, &self.scene, self.sel, tool) };
+        let geom = if clean || self.ct.drawing || self.pt.on { None } else { gizmo::build(&self.cam, rect, &self.scene, self.sel, tool) };
         let over_gnomon = !clean && pos.is_some_and(|p| self.gnomon_hit(rect, p).is_some());
         let hover_handle = match (&geom, pos, &self.drag) {
             (Some(g), Some(p), None) if resp.hovered() && !over_gnomon && !ct.over => gizmo::hit(g, tool, p),
@@ -236,6 +236,7 @@ impl App {
             gizmo::draw(&painter, g, tool, active);
         }
         self.curve_paint(&painter, rect);
+        self.pipe_paint(&painter, rect);
         self.draw_gnomon(&painter, rect, pos);
     }
 

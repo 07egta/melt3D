@@ -317,7 +317,8 @@ pub struct Shape {
 }
 
 pub const MAX_OUTLINE: usize = 64;
-pub const MAX_PATH: usize = 32;
+/// Most nodes of a curve or sweep path (a traced pipe uses up to `stroke::PIPE_NODES` of them).
+pub const MAX_PATH: usize = 48;
 
 impl Shape {
     pub fn new(kind: Kind, pos: [f32; 3], material: Material) -> Shape {

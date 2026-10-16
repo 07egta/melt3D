@@ -74,6 +74,8 @@ pub struct App {
     pub mat_group: bool,
     /// The curve tool (nodes, drawing).
     pub ct: crate::curve_tool::State,
+    /// The pipe (trace) tool.
+    pub pt: crate::pipe_tool::State,
     /// Frame cache, fast mode, quality and other speed-ups (see `perf.rs`).
     pub perf: crate::perf::Perf,
     /// The last copy (text), so the Edit menu can paste without asking the system.
@@ -135,6 +137,7 @@ impl App {
             mat_cat: Some(crate::materials::Category::Basic),
             mat_group: false,
             ct: Default::default(),
+            pt: Default::default(),
             perf: crate::perf::Perf::default(),
             clipboard: None,
             lib_open: false,
@@ -211,7 +214,7 @@ impl App {
     }
 
     /// The group a new shape goes into (made when there is none).
-    fn target_group(&mut self) -> Option<usize> {
+    pub(crate) fn target_group(&mut self) -> Option<usize> {
         let g = match self.sel {
             Some(Pick::Shape(g, _)) | Some(Pick::Group(g)) => Some(g),
             None => self.scene.groups.len().checked_sub(1),
@@ -719,6 +722,7 @@ impl App {
                         }
                     }
                     self.curve_button(ui);
+                    self.pipe_button(ui);
                     style::menu_button(ui, "…", false, |ui| {
                         ui.set_min_width(190.0);
                         ui.label(egui::RichText::new("ほかの形").size(12.0).color(style::DIM));
@@ -1059,6 +1063,7 @@ impl eframe::App for App {
             self.tool_strip(ui);
             self.tool_pill(ui);
             self.draw_card(&ctx);
+            self.pipe_card(&ctx);
             self.keys_card(ui);
             crate::svg_dialog::update(self, &ctx);
             crate::array::update(self, &ctx);
