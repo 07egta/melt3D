@@ -13,7 +13,7 @@ use crate::sdf::Prepared;
 const V4_GLOBALS: usize = 7;
 const V4_GROUPS: usize = V4_GLOBALS;
 const V4_SHAPES: usize = V4_GROUPS + MAX_GROUPS;
-const V4_PER_SHAPE: usize = 12;
+const V4_PER_SHAPE: usize = 13;
 const V4_POLY: usize = V4_SHAPES + MAX_SHAPES * V4_PER_SHAPE;
 const POLY_V4: usize = 512;
 const V4_PATH: usize = V4_POLY + POLY_V4;
@@ -86,8 +86,9 @@ pub fn pack(scene: &Scene, cam: &Camera, size: [f32; 2], selected: Option<Pick>,
                 *poly_pts += pts.len();
                 (start, pts.len())
             };
-            let (start, count) = if s.kind.uses_outline() { pack_outline(&s.outline, &mut poly_pts, &mut u) } else { (0, 0) };
-            let (start2, count2) = if s.kind.uses_outline2() { pack_outline(&s.outline2, &mut poly_pts, &mut u) } else { (0, 0) };
+            // (the prepared copy: a revolve profile is already kept on the +x side)
+            let (start, count) = if s.kind.uses_outline() { pack_outline(&p.outline, &mut poly_pts, &mut u) } else { (0, 0) };
+            let (start2, count2) = if s.kind.uses_outline2() { pack_outline(&p.outline2, &mut poly_pts, &mut u) } else { (0, 0) };
             let (pstart, pcount) = if s.kind.uses_path() && path_n + s.path.len() <= PATH_V4 {
                 let st = path_n;
                 for (k, pt) in s.path.iter().enumerate() {
@@ -100,6 +101,7 @@ pub fn pack(scene: &Scene, cam: &Camera, size: [f32; 2], selected: Option<Pick>,
             };
             put(&mut u, base + 6, [s.op.sign(), s.blend, start as f32, count as f32]);
             put(&mut u, base + 10, s.params);
+            put(&mut u, base + 12, [p.shell, 0.0, 0.0, 0.0]);
             put(&mut u, base + 11, [pstart as f32, pcount as f32, start2 as f32, count2 as f32]);
             put(&mut u, base + 7, [s.material.color[0], s.material.color[1], s.material.color[2], s.material.roughness]);
             let m = &s.material;

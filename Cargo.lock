@@ -5144,6 +5144,7 @@ dependencies = [
  "egui",
  "egui-wgpu",
  "log",
+ "naga",
  "pollster 0.4.0",
  "rfd",
  "serde",

@@ -203,30 +203,34 @@ pub enum Op {
     Add,
     Subtract,
     Paint,
+    /// Keep only what overlaps the shapes before it.
+    Intersect,
 }
 
 impl Op {
-    /// What the shader reads: +1 add, -1 carve, 0 paint.
+    /// What the shader reads: +1 add, -1 carve, 0 paint, 2 intersect.
     pub fn sign(self) -> f32 {
         match self {
             Op::Add => 1.0,
             Op::Subtract => -1.0,
             Op::Paint => 0.0,
+            Op::Intersect => 2.0,
         }
     }
-    /// Plus becomes minus, minus becomes plus (a stain becomes plus).
+    /// Plus becomes minus, minus becomes plus (a stain or an overlap becomes plus).
     pub fn flip(self) -> Op {
         match self {
             Op::Add => Op::Subtract,
-            Op::Subtract | Op::Paint => Op::Add,
+            Op::Subtract | Op::Paint | Op::Intersect => Op::Add,
         }
     }
-    /// Add, then carve, then paint, then add again (the list's +/- button).
+    /// Add, then carve, then paint, then overlap, then add again (the list's +/- button).
     pub fn next(self) -> Op {
         match self {
             Op::Add => Op::Subtract,
             Op::Subtract => Op::Paint,
-            Op::Paint => Op::Add,
+            Op::Paint => Op::Intersect,
+            Op::Intersect => Op::Add,
         }
     }
 }
@@ -306,6 +310,9 @@ pub struct Shape {
     /// The top profile of a `Loft`.
     #[serde(default)]
     pub outline2: Vec<[f32; 2]>,
+    /// Wall thickness in mm that hollows out any kind (0 = solid).
+    #[serde(default)]
+    pub shell: f32,
 }
 
 pub const MAX_OUTLINE: usize = 64;
@@ -329,6 +336,7 @@ impl Shape {
             params: kind.default_params(),
             path: kind.default_path(),
             outline2: kind.default_outline2(),
+            shell: 0.0,
         }
     }
 
@@ -357,10 +365,10 @@ impl Shape {
                 [x, y, s[0] * 0.5]
             }
             Kind::Curve | Kind::Sweep => {
-                let prof = if self.kind == Kind::Sweep { mx(&self.outline, 0).max(mx(&self.outline, 1)) } else { 0.0 };
+                let prof = if self.kind == Kind::Sweep { mx(&self.outline, 0).max(mx(&self.outline, 1)) * 1.5 } else { 0.0 };
                 let mut h = [1.0_f32; 3];
                 for p in &self.path {
-                    let r = if self.kind == Kind::Curve { p[3].abs() } else { prof };
+                    let r = if self.kind == Kind::Curve { p[3].abs() } else { prof * p[3].abs().max(1.0) };
                     for i in 0..3 {
                         h[i] = h[i].max(p[i].abs() + r);
                     }
@@ -707,6 +715,7 @@ impl Scene {
                 for v in &mut s.params {
                     fix(v, -5000.0, 5000.0, 0.0);
                 }
+                fix(&mut s.shell, 0.0, 500.0, 0.0);
                 s.outline2.truncate(MAX_OUTLINE);
                 for p in &mut s.outline2 {
                     fix(&mut p[0], -2000.0, 2000.0, 0.0);
@@ -759,6 +768,26 @@ mod tests {
         let hostile = r#"{"groups":[],"env":{"exposure":1e30,"lights":[{"yaw":1,"pitch":99999,"power":-4,"color":[9,9,9]},{"yaw":0,"pitch":0,"power":1,"color":[1,1,1]},{"yaw":0,"pitch":0,"power":1,"color":[1,1,1]},{"yaw":0,"pitch":0,"power":1,"color":[1,1,1]}]}}"#;
         let h = Scene::from_json(hostile).unwrap();
         assert!(h.env.exposure <= 4.0 && h.env.lights.len() == MAX_LIGHTS && h.env.lights[0].pitch <= 89.0);
+    }
+
+    #[test]
+    fn ops_cycle_and_the_new_fields_round_trip() {
+        assert_eq!(Op::Intersect.sign(), 2.0);
+        let mut o = Op::Add;
+        for _ in 0..4 {
+            o = o.next();
+        }
+        assert_eq!(o, Op::Add);
+        assert_eq!(Op::Intersect.flip(), Op::Add);
+        let mut sc = Scene::default();
+        sc.groups[0].shapes[0].op = Op::Intersect;
+        sc.groups[0].shapes[0].shell = 3.0;
+        assert_eq!(Scene::from_json(&sc.to_json()).unwrap(), sc);
+        sc.groups[0].shapes[0].shell = f32::INFINITY;
+        sc.sanitize();
+        assert_eq!(sc.groups[0].shapes[0].shell, 0.0);
+        let old = r#"{"groups":[{"name":"g","op":"Add","blend":0,"visible":true,"shapes":[{"name":"s","kind":"Sphere","size":[20,1,1],"round":0,"pos":[0,0,20],"rot":[0,0,0],"scale":[1,1,1],"op":"Add","blend":6,"material":{"color":[1,0,0],"roughness":0.3,"metallic":1},"visible":true,"outline":[]}]}]}"#;
+        assert_eq!(Scene::from_json(old).unwrap().groups[0].shapes[0].shell, 0.0);
     }
 
     #[test]
