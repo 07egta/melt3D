@@ -30,15 +30,16 @@ pub const GLOBAL_V4: usize = V4_ENV + ENV_V4;
 pub const GLOBAL_BYTES: usize = GLOBAL_V4 * 16;
 /// vec4 per texture row of the scene list.
 pub const ROW: usize = 1024;
-/// vec4 per group, per block of shapes, per shape (a bounding sphere and the 15 of `struct Shape`).
+/// vec4 per group, per block of shapes, per instance, per shape (a bounding sphere and the 15 of `struct Shape`).
 const G_STRIDE: usize = 3;
 const B_STRIDE: usize = 2;
+const I_STRIDE: usize = 4;
 const S_STRIDE: usize = 16;
 /// Outline points the lists hold (two points per vec4) and path nodes (one per vec4).
 pub const POLY_PTS: usize = 65536;
 pub const PATH_V4: usize = 32768;
 /// The longest the scene list can ever be (vec4), well inside a 2048-row texture.
-pub const MAX_POOL_V4: usize = MAX_GROUPS * G_STRIDE + MAX_SHAPES * (S_STRIDE + B_STRIDE) + POLY_PTS / 2 + PATH_V4 + 4096;
+pub const MAX_POOL_V4: usize = MAX_GROUPS * G_STRIDE + MAX_SHAPES * (S_STRIDE + B_STRIDE) + (crate::pattern::MAX_INSTANCES + MAX_GROUPS) * I_STRIDE + POLY_PTS / 2 + PATH_V4 + 4096;
 const _: () = assert!(MAX_POOL_V4 <= 2048 * ROW, "the scene list must fit a 2048 x 1024 texture");
 
 fn put(u: &mut [f32], slot: usize, v: [f32; 4]) {
@@ -65,22 +66,33 @@ pub fn pack(scene: &Scene, cam: &Camera, size: [f32; 2], selected: Option<Pick>,
     put(&mut u, 5, [m.mode.id(), m.amount, m.drip, m.ripple]);
 
     // the lists
+    let resolved = crate::pattern::resolve(scene);
     let mut groups: Vec<f32> = Vec::new();
     let mut blocks: Vec<f32> = Vec::new();
+    let mut insts: Vec<f32> = Vec::new();
     let mut shapes: Vec<f32> = Vec::new();
     let mut poly: Vec<f32> = Vec::new();
     let mut path: Vec<f32> = Vec::new();
     let mut shape_n = 0usize;
-    let mut group_n = 0usize;
     let mut block_n = 0usize;
+    let mut inst_n = 0usize;
     let mut sel_first = -1.0_f32;
     let mut sel_count = 0.0_f32;
     let mut hover_first = -1.0_f32;
     let mut hover_count = 0.0_f32;
-    for (gi, g) in scene.groups.iter().enumerate() {
-        if !g.visible {
-            continue;
-        }
+    // every group whose shapes are drawn (itself, or as the source of a linked copy) is packed once
+    let mut srcs: Vec<usize> = resolved.iter().map(|r| r.src).collect();
+    srcs.sort_unstable();
+    srcs.dedup();
+    /// Where a source group's blocks went: its first block, the number of blocks, its sphere.
+    struct Packed {
+        first_block: usize,
+        n_blocks: usize,
+        sphere: crate::accel::Bound,
+    }
+    let mut packed: std::collections::HashMap<usize, Packed> = std::collections::HashMap::new();
+    for gi in srcs {
+        let Some(g) = scene.groups.get(gi) else { continue };
         let first = shape_n;
         let mut members: Vec<&crate::model::Shape> = Vec::new();
         for (si, s) in g.shapes.iter().enumerate() {
@@ -104,24 +116,46 @@ pub fn pack(scene: &Scene, cam: &Camera, size: [f32; 2], selected: Option<Pick>,
             sel_first = first as f32;
             sel_count = count as f32;
         }
-        if count > 0 && group_n < MAX_GROUPS {
-            let info = crate::accel::group_info(&members, &scene.melt);
-            push(&mut groups, [block_n as f32, info.blocks.len() as f32, g.op.sign(), g.blend]);
-            push(&mut groups, [0.0; 4]);
-            push(&mut groups, [info.bound.c[0], info.bound.c[1], info.bound.c[2], info.bound.r]);
-            for b in &info.blocks {
-                push(&mut blocks, [b.bound.c[0], b.bound.c[1], b.bound.c[2], b.bound.r]);
-                push(&mut blocks, [b.kmax, if b.skippable { 0.0 } else { 1.0 }, (first + b.first) as f32, b.count as f32]);
-            }
-            block_n += info.blocks.len();
-            group_n += 1;
+        if count == 0 {
+            continue;
         }
+        let info = crate::accel::group_info(&members, &scene.melt);
+        for b in &info.blocks {
+            push(&mut blocks, [b.bound.c[0], b.bound.c[1], b.bound.c[2], b.bound.r]);
+            push(&mut blocks, [b.kmax, if b.skippable { 0.0 } else { 1.0 }, (first + b.first) as f32, b.count as f32]);
+        }
+        packed.insert(gi, Packed { first_block: block_n, n_blocks: info.blocks.len(), sphere: info.bound });
+        block_n += info.blocks.len();
     }
-    // the sections follow each other: groups, blocks, (instances), shapes, outline points, path nodes
+    let mut group_n = 0usize;
+    for rg in &resolved {
+        let (Some(g), Some(p)) = (scene.groups.get(rg.gi), packed.get(&rg.src)) else { continue };
+        if group_n >= MAX_GROUPS {
+            break;
+        }
+        let first_inst = inst_n;
+        for i in &rg.insts {
+            if inst_n >= crate::pattern::MAX_INSTANCES + MAX_GROUPS {
+                break;
+            }
+            let rows = i.back_rows();
+            for r in rows {
+                push(&mut insts, r);
+            }
+            let c = i.bound(p.sphere).c;
+            push(&mut insts, [c[0], c[1], c[2], i.s]);
+            inst_n += 1;
+        }
+        push(&mut groups, [p.first_block as f32, p.n_blocks as f32, g.op.sign(), g.blend]);
+        push(&mut groups, [first_inst as f32, (inst_n - first_inst) as f32, 0.0, 0.0]);
+        push(&mut groups, [p.sphere.c[0], p.sphere.c[1], p.sphere.c[2], p.sphere.r]);
+        group_n += 1;
+    }
+    // the sections follow each other: groups, blocks, instances, shapes, outline points, path nodes
     let v4 = |l: &Vec<f32>| l.len() / 4;
     let block_base = v4(&groups);
     let inst_base = block_base + v4(&blocks);
-    let shape_base = inst_base;
+    let shape_base = inst_base + v4(&insts);
     while poly.len() % 4 != 0 {
         poly.push(0.0);
     }
@@ -146,9 +180,10 @@ pub fn pack(scene: &Scene, cam: &Camera, size: [f32; 2], selected: Option<Pick>,
         put(&mut u, V4_ENV + 5 + i * 2, [d[0], d[1], d[2], l.power]);
         put(&mut u, V4_ENV + 6 + i * 2, [l.color[0], l.color[1], l.color[2], 0.0]);
     }
-    u.reserve(groups.len() + blocks.len() + shapes.len() + poly.len() + path.len());
+    u.reserve(groups.len() + blocks.len() + insts.len() + shapes.len() + poly.len() + path.len());
     u.extend_from_slice(&groups);
     u.extend_from_slice(&blocks);
+    u.extend_from_slice(&insts);
     u.extend_from_slice(&shapes);
     u.extend_from_slice(&poly);
     u.extend_from_slice(&path);
@@ -232,15 +267,15 @@ fn pack_curve(s: &crate::model::Shape, path: &mut Vec<f32>) -> (usize, usize) {
 /// A sphere around everything the shader can draw (centre, radius; radius 0 when there is nothing):
 /// rays that miss it skip the marching. It includes the melt's reach, the drips and the selection.
 pub fn bounds(scene: &Scene, selected: Option<Pick>) -> ([f32; 3], f32) {
-    let mut items: Vec<([f32; 3], f32)> = Vec::new();
-    for (gi, g) in scene.groups.iter().enumerate() {
-        if !g.visible {
-            continue;
-        }
-        for (si, s) in g.shapes.iter().enumerate() {
+    use crate::accel::{Bound, enclose};
+    let mut items: Vec<Bound> = Vec::new();
+    for rg in crate::pattern::resolve(scene) {
+        let (Some(g), Some(src)) = (scene.groups.get(rg.gi), scene.groups.get(rg.src)) else { continue };
+        let mut parts: Vec<Bound> = Vec::new();
+        for (si, s) in src.shapes.iter().enumerate() {
             let is_sel = match selected {
-                Some(Pick::Shape(a, b)) => a == gi && b == si,
-                Some(Pick::Group(a)) => a == gi,
+                Some(Pick::Shape(a, b)) => !rg.linked && a == rg.gi && b == si,
+                Some(Pick::Group(a)) => a == rg.gi,
                 None => false,
             };
             if !s.visible || (!is_sel && (s.op != crate::model::Op::Add || g.op != crate::model::Op::Add)) {
@@ -249,15 +284,24 @@ pub fn bounds(scene: &Scene, selected: Option<Pick>) -> ([f32; 3], f32) {
             // a lamp's glow reaches a good way out
             let halo = if s.material.glow > 0.0 { 30.0 } else { 0.0 };
             let reach = (s.blend + g.blend) * scene.melt.amount * 1.5 + scene.melt.drip + 2.0 + halo;
-            items.push((s.pos, crate::view::radius_of(s) + reach));
+            parts.push(Bound { c: s.pos, r: crate::view::radius_of(s) + reach });
+        }
+        if parts.is_empty() {
+            continue;
+        }
+        let base = enclose(&parts);
+        if rg.insts.is_empty() {
+            items.push(base);
+        } else {
+            items.extend(rg.insts.iter().map(|i| i.bound(base)));
         }
     }
     if items.is_empty() {
         return ([0.0; 3], 0.0);
     }
     let n = items.len() as f32;
-    let c = items.iter().fold([0.0; 3], |a, (p, _)| [a[0] + p[0] / n, a[1] + p[1] / n, a[2] + p[2] / n]);
-    let r = items.iter().map(|(p, r)| crate::sdf::len(crate::sdf::sub(*p, c)) + r).fold(0.0_f32, f32::max);
+    let c = items.iter().fold([0.0; 3], |a, b| [a[0] + b.c[0] / n, a[1] + b.c[1] / n, a[2] + b.c[2] / n]);
+    let r = items.iter().map(|b| crate::sdf::len(crate::sdf::sub(b.c, c)) + b.r).fold(0.0_f32, f32::max);
     (c, r)
 }
 
@@ -628,6 +672,10 @@ mod tests {
         pub fn groups_base(&self) -> usize {
             self.g(V4_OFFS)[0] as usize
         }
+        /// The k-th start in the globals' offsets: 0 groups, 1 blocks, 2 instances, 3 shapes.
+        pub fn g_offs(&self, k: usize) -> usize {
+            self.g(V4_OFFS)[k] as usize
+        }
         pub fn blocks_base(&self) -> usize {
             self.g(V4_OFFS)[1] as usize
         }
@@ -715,6 +763,89 @@ mod tests {
         let f = Frame::new(&u);
         assert_eq!(&f.counts()[2..], &[1.0, 2.0], "the second group is packed shapes 1 and 2");
         assert_eq!(&u[V4_HOVER * 4..V4_HOVER * 4 + 2], &[2.0, 1.0]);
+    }
+}
+
+#[cfg(test)]
+mod instance_tests {
+    use super::tests::Frame;
+    use super::*;
+    use crate::model::{Group, Kind, Material, Shape};
+    use crate::pattern::{Pattern, Xform};
+
+    fn ball(x: f32) -> Shape {
+        Shape::new(Kind::Sphere, [x, 0.0, 0.0], Material::default())
+    }
+
+    fn instances_of(f: &Frame, group: usize) -> Vec<[[f32; 4]; 4]> {
+        let g1 = f.d(f.groups_base() + group * G_STRIDE + 1);
+        let inst_base = f.g_offs(2);
+        (0..g1[1] as usize).map(|j| [0, 1, 2, 3].map(|k| f.d(inst_base + (g1[0] as usize + j) * I_STRIDE + k))).collect()
+    }
+
+    #[test]
+    fn a_pattern_group_packs_its_instances_not_more_shapes() {
+        let mut sc = Scene::default();
+        sc.groups[0].shapes[0].pos = [10.0, 0.0, 0.0];
+        sc.groups[0].pattern = Some(Pattern::Rect { counts: [5, 4, 3], spacing: [30.0, 30.0, 30.0] });
+        let u = pack(&sc, &Camera::default(), [800.0, 600.0], None, None, true);
+        let f = Frame::new(&u);
+        assert_eq!(f.counts()[1], 1.0, "still one shape in the list");
+        let inst = instances_of(&f, 0);
+        assert_eq!(inst.len(), 60);
+        // the rows carry a world point back into the group: instance 7 is moved by (60, 30, 0)
+        let (i, w) = (&inst[7], [70.0, 30.0, 0.0]);
+        let q = [0, 1, 2].map(|k| i[k][0] * w[0] + i[k][1] * w[1] + i[k][2] * w[2] + i[k][3]);
+        assert!((q[0] - 10.0).abs() < 1e-4 && q[1].abs() < 1e-4 && q[2].abs() < 1e-4, "{q:?}");
+        assert_eq!(i[3][3], 1.0, "scale 1");
+        // the sphere around the group, moved by the instance, is in the record's last vec4
+        assert!((i[3][0] - 70.0).abs() < 20.0 && (i[3][1] - 30.0).abs() < 20.0);
+        // a plain group has none
+        let plain = pack(&Scene::default(), &Camera::default(), [8.0, 6.0], None, None, true);
+        assert!(instances_of(&Frame::new(&plain), 0).is_empty());
+        assert!(f.list_len() < ROW * 3);
+    }
+
+    #[test]
+    fn a_linked_copy_points_at_the_sources_blocks() {
+        let mut sc = Scene::default();
+        let uid = sc.ensure_group_uid(0).unwrap_or(0);
+        let mut copy = Group::new("copy");
+        copy.instance_of = Some(uid);
+        copy.xform = Xform { pos: [0.0, 50.0, 0.0], rot: [0.0; 3], scale: 2.0 };
+        sc.groups.push(copy);
+        let u = pack(&sc, &Camera::default(), [800.0, 600.0], Some(Pick::Group(1)), None, true);
+        let f = Frame::new(&u);
+        assert_eq!(f.counts()[0], 2.0, "two groups to draw");
+        assert_eq!(f.counts()[1], 1.0, "one shape in the list");
+        let (a, b) = (f.d(f.groups_base()), f.d(f.groups_base() + G_STRIDE));
+        assert_eq!((a[0], a[1]), (b[0], b[1]), "both use the same blocks");
+        assert_eq!(instances_of(&f, 1).len(), 1);
+        assert_eq!(instances_of(&f, 1)[0][3][3], 2.0);
+        assert_eq!(f.counts()[3], 0.0, "a linked copy has no shapes to outline");
+        // a hidden source still draws its copies
+        sc.groups[0].visible = false;
+        let u = pack(&sc, &Camera::default(), [800.0, 600.0], None, None, true);
+        let f = Frame::new(&u);
+        assert_eq!((f.counts()[0], f.counts()[1]), (1.0, 1.0));
+        // a copy of a group that is gone draws nothing
+        sc.groups.remove(0);
+        let u = pack(&sc, &Camera::default(), [800.0, 600.0], None, None, true);
+        assert_eq!(Frame::new(&u).counts()[0], 0.0);
+    }
+
+    #[test]
+    fn the_bounding_sphere_holds_every_instance() {
+        let mut sc = Scene::default();
+        sc.groups[0].pattern = Some(Pattern::Rect { counts: [3, 1, 1], spacing: [500.0, 0.0, 0.0] });
+        let (c, r) = bounds(&sc, None);
+        for k in 0..3 {
+            let p = [500.0 * k as f32, 0.0, 20.0];
+            assert!(crate::sdf::len(crate::sdf::sub(p, c)) + 20.0 <= r + 1e-2, "instance {k} is outside the sphere");
+        }
+        let mut one = sc.clone();
+        one.groups[0].pattern = None;
+        assert!(r > bounds(&one, None).1 + 400.0);
     }
 }
 
