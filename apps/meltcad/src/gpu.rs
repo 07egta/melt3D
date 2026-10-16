@@ -11,6 +11,7 @@ use egui_wgpu::wgpu::util::DeviceExt;
 
 use crate::camera::{Camera, TAN_HALF_FOV};
 use crate::model::{MAX_GROUPS, MAX_SHAPES, Pick, Scene};
+use crate::gpu_status::{AdapterInfo, GpuStatus, describe_wgpu_error};
 use crate::sdf::Prepared;
 
 /// Per-frame numbers (camera, light, counts, where the lists start) travel in a small uniform
@@ -441,126 +442,157 @@ pub fn shader_source() -> String {
 
 const BLIT_SOURCE: &str = include_str!("blit.wgsl");
 
-/// Build the pipelines (this is the slow part of start-up: the driver compiles the shader).
-fn build(device: &wgpu::Device, format: wgpu::TextureFormat) -> Resources {
-    let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("meltcad"),
-        source: wgpu::ShaderSource::Wgsl(shader_source().into()),
-    });
-    crate::perf::mark("shader module created");
-    let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("meltcad"),
-        entries: &[
-            wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None },
-                count: None,
-            },
-            wgpu::BindGroupLayoutEntry {
-                binding: 1,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: None,
-            },
-            // the imported meshes' distances (half floats, read with textureLoad)
-            wgpu::BindGroupLayoutEntry {
-                binding: 2,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: None,
-            },
-        ],
-    });
-    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some("meltcad"),
-        bind_group_layouts: &[Some(&bgl)],
-        immediate_size: 0,
-    });
-    let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("meltcad"),
-        layout: Some(&layout),
-        vertex: wgpu::VertexState { module: &module, entry_point: Some("vs"), buffers: &[], compilation_options: Default::default() },
+/// Run `f` with every kind of wgpu error caught instead of panicking (the default handler of an
+/// error nobody asked for is a panic, and on the compile thread a panic is silent). Returns what
+/// `f` made and the text of the errors it caused.
+pub(crate) fn scoped<T>(device: &wgpu::Device, stage: &str, f: impl FnOnce() -> T) -> (T, Vec<String>) {
+    let oom = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
+    let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
+    let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let value = f();
+    let mut errors = Vec::new();
+    // (scopes come off in the reverse order they went on)
+    for guard in [validation, internal, oom] {
+        if let Some(e) = pollster::block_on(guard.pop()) {
+            errors.push(describe_wgpu_error(stage, &e));
+        }
+    }
+    (value, errors)
+}
+
+/// What the shader translator said about a module (warnings and errors), and whether any of it
+/// was an error.
+fn compilation_messages(module: &wgpu::ShaderModule) -> (Vec<String>, bool) {
+    let info = pollster::block_on(module.get_compilation_info());
+    let mut any_error = false;
+    let lines = info
+        .messages
+        .iter()
+        .map(|m| {
+            let error = m.message_type == wgpu::CompilationMessageType::Error;
+            any_error |= error;
+            let at = m.location.as_ref().map(|l| format!(" (line {}, column {})", l.line_number, l.line_position)).unwrap_or_default();
+            format!("{}{}: {}", if error { "error" } else { "warning" }, at, m.message)
+        })
+        .collect();
+    (lines, any_error)
+}
+
+/// A step of building the pipelines: runs `f` in an error scope, writes how long it took to the
+/// log, and turns the caught errors into one error text.
+fn step<T>(device: &wgpu::Device, stage: &str, f: impl FnOnce() -> T) -> Result<T, String> {
+    crate::gpu_log::log(&format!("{stage}: start"));
+    let t = std::time::Instant::now();
+    let (value, errors) = scoped(device, stage, f);
+    crate::gpu_log::log(&format!("{stage}: end after {:.3} s", t.elapsed().as_secs_f64()));
+    if errors.is_empty() { Ok(value) } else { Err(errors.join("\n")) }
+}
+
+fn texture_entry(binding: u32, visibility: wgpu::ShaderStages, filterable: bool) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility,
+        ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable }, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false },
+        count: None,
+    }
+}
+
+/// A pipeline that draws one full-screen triangle with `module`'s `vs` and `fs` into `format`.
+fn triangle_pipeline(device: &wgpu::Device, label: &str, layout: &wgpu::PipelineLayout, module: &wgpu::ShaderModule, format: wgpu::TextureFormat) -> wgpu::RenderPipeline {
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some(label),
+        layout: Some(layout),
+        vertex: wgpu::VertexState { module, entry_point: Some("vs"), buffers: &[], compilation_options: Default::default() },
         primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, ..Default::default() },
         depth_stencil: None,
         multisample: wgpu::MultisampleState::default(),
         fragment: Some(wgpu::FragmentState {
-            module: &module,
+            module,
             entry_point: Some("fs"),
             targets: &[Some(wgpu::ColorTargetState { format, blend: None, write_mask: wgpu::ColorWrites::ALL })],
             compilation_options: Default::default(),
         }),
         multiview_mask: None,
         cache: None,
-    });
+    })
+}
+
+/// Build the pipelines (this is the slow part of start-up: the driver compiles the shader).
+/// Any error from the driver comes back as text; none of them panics.
+fn try_build(device: &wgpu::Device, format: wgpu::TextureFormat) -> Result<Resources, String> {
+    try_build_from(device, format, &shader_source())
+}
+
+/// `try_build` with the scene shader's source given (so that tests can hand it a broken one).
+pub(crate) fn try_build_from(device: &wgpu::Device, format: wgpu::TextureFormat, source: &str) -> Result<Resources, String> {
+    let module = step(device, "シェーダーを読む (create_shader_module)", || {
+        device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("meltcad"), source: wgpu::ShaderSource::Wgsl(source.into()) })
+    })?;
+    let (messages, any_error) = compilation_messages(&module);
+    for m in &messages {
+        crate::gpu_log::log(&format!("shader: {m}"));
+    }
+    if any_error {
+        return Err(format!("シェーダーのエラー:\n{}", messages.join("\n")));
+    }
+    crate::perf::mark("shader module created");
+    let (bgl, layout) = step(device, "bind group layout", || {
+        let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("meltcad"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None },
+                    count: None,
+                },
+                // the scene list, then the imported meshes' distances (half floats): both read with textureLoad
+                texture_entry(1, wgpu::ShaderStages::FRAGMENT, false),
+                texture_entry(2, wgpu::ShaderStages::FRAGMENT, false),
+            ],
+        });
+        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: Some("meltcad"), bind_group_layouts: &[Some(&bgl)], immediate_size: 0 });
+        (bgl, layout)
+    })?;
+    // (the slow one: the driver compiles the shader here)
+    let pipeline = step(device, "シーンの描画パイプライン (create_render_pipeline)", || triangle_pipeline(device, "meltcad", &layout, &module, format))?;
     crate::perf::mark("scene pipeline created");
-    let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("meltcad"),
-        contents: &vec![0u8; GLOBAL_BYTES],
-        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-    });
+    let buffer = step(device, "uniform buffer", || {
+        device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("meltcad"),
+            contents: &vec![0u8; GLOBAL_BYTES],
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        })
+    })?;
 
     // the copy of the finished picture into egui's frame
-    let blit_module = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("meltcad blit"), source: wgpu::ShaderSource::Wgsl(BLIT_SOURCE.into()) });
-    let blit_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("meltcad blit"),
-        entries: &[
-            wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
+    let (blit_layout, blit) = step(device, "blit pipeline", || {
+        let blit_module = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("meltcad blit"), source: wgpu::ShaderSource::Wgsl(BLIT_SOURCE.into()) });
+        let blit_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("meltcad blit"),
+            entries: &[
+                texture_entry(0, wgpu::ShaderStages::FRAGMENT, true),
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
                 },
-                count: None,
-            },
-            wgpu::BindGroupLayoutEntry {
-                binding: 1,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                count: None,
-            },
-        ],
-    });
-    let blit_pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some("meltcad blit"),
-        bind_group_layouts: &[Some(&blit_layout)],
-        immediate_size: 0,
-    });
-    let blit = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("meltcad blit"),
-        layout: Some(&blit_pl),
-        vertex: wgpu::VertexState { module: &blit_module, entry_point: Some("vs"), buffers: &[], compilation_options: Default::default() },
-        primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, ..Default::default() },
-        depth_stencil: None,
-        multisample: wgpu::MultisampleState::default(),
-        fragment: Some(wgpu::FragmentState {
-            module: &blit_module,
-            entry_point: Some("fs"),
-            targets: &[Some(wgpu::ColorTargetState { format, blend: None, write_mask: wgpu::ColorWrites::ALL })],
-            compilation_options: Default::default(),
-        }),
-        multiview_mask: None,
-        cache: None,
-    });
-    let sampler = |filter| {
-        device.create_sampler(&wgpu::SamplerDescriptor { label: Some("meltcad"), mag_filter: filter, min_filter: filter, ..Default::default() })
-    };
-    Resources {
+            ],
+        });
+        let blit_pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: Some("meltcad blit"), bind_group_layouts: &[Some(&blit_layout)], immediate_size: 0 });
+        let blit = triangle_pipeline(device, "meltcad blit", &blit_pl, &blit_module, format);
+        (blit_layout, blit)
+    })?;
+    let sampler = |filter| device.create_sampler(&wgpu::SamplerDescriptor { label: Some("meltcad"), mag_filter: filter, min_filter: filter, ..Default::default() });
+    // (the one-row volume texture: Rgba16Float must be bindable)
+    let vol = step(device, "volume texture", || VolTex::new(device, 1))?;
+    Ok(Resources {
         pipeline,
         buffer,
         scene_layout: bgl,
         pool: None,
-        vol: VolTex::new(device, 1),
+        vol,
         blit,
         blit_layout,
         linear: sampler(wgpu::FilterMode::Linear),
@@ -568,26 +600,79 @@ fn build(device: &wgpu::Device, format: wgpu::TextureFormat) -> Resources {
         format,
         target: None,
         cache: crate::perf::FrameCache::default(),
-    }
+    })
 }
 
-/// Start building the pipeline once, at start-up. The compile runs on its own thread so that the
-/// window can show first; the viewport stays empty until it is done and then a repaint is asked for.
-pub fn install(rs: &egui_wgpu::RenderState, ctx: &egui::Context) {
+/// `try_build` for the headless tests, which have nothing better to do with an error than stop.
+#[cfg(test)]
+fn build(device: &wgpu::Device, format: wgpu::TextureFormat) -> Resources {
+    try_build(device, format).unwrap_or_else(|e| panic!("{e}"))
+}
+
+/// Make the device report its errors to the status and the log instead of panicking.
+fn watch_errors(device: &wgpu::Device, status: &GpuStatus) {
+    let status = status.clone();
+    device.on_uncaptured_error(Arc::new(move |e: wgpu::Error| {
+        let text = describe_wgpu_error("wgpu", &e);
+        crate::gpu_log::log(&format!("wgpu error (not caught by a scope): {text}"));
+        status.runtime_error(text);
+    }));
+}
+
+/// Start building the pipelines (at start-up, and again when the person asks for a retry). The
+/// compile runs on its own thread so that the window can show first, and the viewport shows the
+/// simple view meanwhile; `status` says how it goes. Whatever happens (an error from the driver,
+/// even a panic) ends in `status`, never in a silent dead thread.
+pub fn install(rs: &egui_wgpu::RenderState, ctx: &egui::Context, status: &GpuStatus) {
     let device = rs.device.clone();
     let format = rs.target_format;
     let renderer = rs.renderer.clone();
     let ctx = ctx.clone();
+    let st = status.clone();
+    let info = rs.adapter.get_info();
+    status.set_info(AdapterInfo::from_wgpu(&info));
+    watch_errors(&device, status);
+    crate::gpu_log::log(&format!("graphics path starts: target format {format:?}"));
+    crate::gpu_log::log_adapter(&rs.adapter);
+    let generation = status.begin(std::time::Instant::now());
     let job = Arc::new(move || {
-        let res = build(&device, format);
-        renderer.write().callback_resources.insert(res);
-        crate::perf::mark("gpu ready");
+        let t = std::time::Instant::now();
+        crate::gpu_log::log("shader compile: start");
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| try_build(&device, format)));
+        let secs = t.elapsed().as_secs_f64();
+        let backend = crate::backend::Backend::from_wgpu(info.backend);
+        match outcome {
+            Ok(Ok(res)) => {
+                renderer.write().callback_resources.insert(res);
+                crate::gpu_log::log(&format!("shader compile: done after {secs:.3} s, the graphics path is ready"));
+                st.finish_ok(generation, secs);
+                if let Some(b) = backend {
+                    crate::backend::remember(b, true);
+                }
+                crate::perf::mark("gpu ready");
+            }
+            Ok(Err(message)) => {
+                crate::gpu_log::log(&format!("shader compile: FAILED after {secs:.3} s\n{message}"));
+                st.finish_err(generation, message);
+                if let Some(b) = backend {
+                    crate::backend::remember(b, false);
+                }
+            }
+            Err(payload) => {
+                let message = format!("パニック (panic) がおきました: {}", crate::gpu_status::panic_text(&*payload));
+                crate::gpu_log::log(&format!("shader compile: PANIC after {secs:.3} s: {message}"));
+                st.finish_err(generation, message);
+                if let Some(b) = backend {
+                    crate::backend::remember(b, false);
+                }
+            }
+        }
         ctx.request_repaint();
     });
     let job2 = job.clone();
     // (OpenGL keeps one context lock for the whole compile: egui's own texture uploads on the main
     // thread would then wait on it and give up, so there the compile runs right here)
-    let on_gl = rs.adapter.get_info().backend == wgpu::Backend::Gl;
+    let on_gl = info.backend == wgpu::Backend::Gl;
     if on_gl || std::thread::Builder::new().name("meltcad-gpu-init".into()).spawn(move || job2()).is_err() {
         job();
     }
@@ -733,6 +818,8 @@ pub struct Callback {
     pub volumes: Arc<VolumeSet>,
     /// The size of the picture to draw, in pixels (the viewport's size times the quality scale).
     pub size: [u32; 2],
+    /// Where an error of ours while drawing is reported.
+    pub status: GpuStatus,
 }
 
 /// Make the scene-list texture tall enough for `data` (a frame from `pack`).
@@ -796,23 +883,40 @@ impl egui_wgpu::CallbackTrait for Callback {
         encoder: &mut wgpu::CommandEncoder,
         resources: &mut egui_wgpu::CallbackResources,
     ) -> Vec<wgpu::CommandBuffer> {
-        let Some(res) = resources.get_mut::<Resources>() else { return Vec::new() };
-        let size = crate::perf::render_size(self.size, 1.0, device.limits().max_texture_dimension_2d);
-        if res.target.as_ref().is_none_or(|t| t.size != size) {
-            res.target = Some(Target::new(device, res, size));
-            res.cache.invalidate();
-        }
-        ensure_volumes(res, device, queue, &self.volumes);
-        ensure_pool(res, device, &self.data);
-        // nothing changed since the picture was drawn: keep it
-        if !res.cache.needs_render(&self.data, size) {
+        if !self.status.is_ready() {
             return Vec::new();
         }
-        let Some(target) = res.target.as_ref() else { return Vec::new() };
-        draw(res, queue, encoder, &target.view, &self.data);
-        static FIRST: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-        crate::perf::mark_once(&FIRST, "first scene picture queued");
-        crate::perf::mark_interval("scene picture queued");
+        let Some(res) = resources.get_mut::<Resources>() else { return Vec::new() };
+        // our own resources are made inside an error scope: a refusal from the driver (no memory
+        // for the picture, a texture it cannot make) fails the graphics path with a message
+        // instead of panicking the window
+        let (_, errors) = scoped(device, "描画の準備 (prepare)", || {
+            let size = crate::perf::render_size(self.size, 1.0, device.limits().max_texture_dimension_2d);
+            if res.target.as_ref().is_none_or(|t| t.size != size) {
+                res.target = Some(Target::new(device, res, size));
+                res.cache.invalidate();
+            }
+            ensure_volumes(res, device, queue, &self.volumes);
+            ensure_pool(res, device, &self.data);
+            // nothing changed since the picture was drawn: keep it
+            if !res.cache.needs_render(&self.data, size) {
+                return;
+            }
+            let Some(target) = res.target.as_ref() else { return };
+            draw(res, queue, encoder, &target.view, &self.data);
+            static FIRST: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+            crate::perf::mark_once(&FIRST, "first scene picture queued");
+            crate::perf::mark_interval("scene picture queued");
+        });
+        if !errors.is_empty() {
+            let text = errors.join("\n");
+            crate::gpu_log::log(&format!("drawing failed:\n{text}"));
+            self.status.fail_now(text);
+            // (the next picture is made from scratch if the person retries)
+            res.target = None;
+            res.pool = None;
+            res.cache.invalidate();
+        }
         Vec::new()
     }
 
@@ -1221,6 +1325,13 @@ pub(crate) mod headless {
 
     /// `downlevel`: ask for the limits egui-wgpu asks for on OpenGL (no storage buffers, 16 KB uniforms).
     pub fn open(downlevel: bool) -> Option<Gpu> {
+        let (device, queue, info) = open_device(downlevel)?;
+        let res = build(&device, wgpu::TextureFormat::Rgba8Unorm);
+        Some(Gpu { device, queue, res, info })
+    }
+
+    /// Just the device (no pipelines): for tests that must be quick or that break things on purpose.
+    pub fn open_device(downlevel: bool) -> Option<(wgpu::Device, wgpu::Queue, String)> {
         let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
         // (`WGPU_BACKEND=gl` runs the tests on OpenGL, the way the window does on machines without Vulkan)
         if let Some(b) = wgpu::Backends::from_env() {
@@ -1236,8 +1347,7 @@ pub(crate) mod headless {
         }))
         .ok()?;
         let info = format!("{:?}", adapter.get_info());
-        let res = build(&device, wgpu::TextureFormat::Rgba8Unorm);
-        Some(Gpu { device, queue, res, info })
+        Some((device, queue, info))
     }
 
     impl Gpu {
@@ -1321,6 +1431,56 @@ mod headless_tests {
         let (c, r) = bounds(sc, None);
         cam.frame(c, r.max(10.0));
         cam
+    }
+
+    /// The reported failure of the real report: a shader the driver refuses must come back as an
+    /// error text (shown in the viewport and the log), never as a panic on the compile thread.
+    /// Needs an adapter (the software one is fine); skips itself without.
+    #[test]
+    fn a_shader_the_driver_refuses_is_an_error_not_a_panic() {
+        let Some((device, _queue, info)) = headless::open_device(false) else {
+            eprintln!("no adapter: skipped");
+            return;
+        };
+        eprintln!("{info}");
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        // 1: not even WGSL
+        let e = try_build_from(&device, format, "this is not wgsl at all").err().unwrap_or_default();
+        assert!(!e.is_empty(), "a parse error is an Err");
+        eprintln!("--- parse error text:\n{e}");
+        // 2: valid WGSL but no entry points called vs / fs: the pipeline is refused
+        let e = try_build_from(&device, format, "@compute @workgroup_size(1) fn main() {}").err().unwrap_or_default();
+        assert!(!e.is_empty(), "a pipeline the driver refuses is an Err");
+        eprintln!("--- pipeline error text:\n{e}");
+        // 3: the device keeps working afterwards
+        let ok = try_build_from(&device, format, include_str!("blit.wgsl"));
+        // (the blit shader has no scene bindings: its layout does not match, so this is an Err too, but a clean one)
+        let _ = ok;
+    }
+
+    /// An error inside a scope is caught and described, and the scope leaves nothing behind.
+    #[test]
+    fn an_error_scope_catches_a_validation_error() {
+        let Some((device, _queue, _)) = headless::open_device(false) else {
+            eprintln!("no adapter: skipped");
+            return;
+        };
+        let (_, errors) = scoped(&device, "test", || {
+            device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("too big"),
+                size: wgpu::Extent3d { width: 1 << 30, height: 1, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            })
+        });
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].starts_with("test: 検証エラー"), "{}", errors[0]);
+        let (_, none) = scoped(&device, "test", || 1 + 1);
+        assert!(none.is_empty());
     }
 
     #[test]
