@@ -119,6 +119,11 @@ impl Kind {
             Kind::Sweep => 19.0,
         }
     }
+    /// Does `Shape::round` change this kind? A sphere, a capsule, a torus and a curve are round
+    /// all over already, so they ignore it.
+    pub fn can_round(self) -> bool {
+        !matches!(self, Kind::Sphere | Kind::Capsule | Kind::Torus | Kind::Curve)
+    }
     /// Does the shape read `Shape::outline` (a 2D profile)?
     pub fn uses_outline(self) -> bool {
         matches!(self, Kind::Extrude | Kind::Revolve | Kind::Loft | Kind::Sweep)
@@ -254,6 +259,21 @@ pub struct Material {
     pub coat: f32,
     /// Light seeping through (wax, jelly, ice): soft edges and a glow from behind.
     pub translucency: f32,
+    /// Gradient: the second colour the surface blends into (`color` is the start).
+    pub color2: [f32; 3],
+    /// How much of the gradient shows: 0 = off (one plain colour), 1 = all the way to `color2`.
+    pub gradient: f32,
+    /// The direction of the gradient: 0 = left to right (X), 1 = front to back (Y), 2 = bottom to top (Z).
+    pub grad_axis: u8,
+    /// Run the gradient the other way (`color2` at the start).
+    pub grad_flip: bool,
+    /// Follow the shape's own box (turns and stretches with it) instead of the world's axes.
+    pub grad_local: bool,
+    /// 0 = a hard edge between the two colours, 1 = a long smooth blend.
+    pub grad_soft: f32,
+    /// Where the blend starts and ends, as fractions (0..1) of the shape's size along the direction.
+    pub grad_from: f32,
+    pub grad_to: f32,
 }
 
 impl Default for Material {
@@ -264,7 +284,39 @@ impl Default for Material {
 
 impl Material {
     pub const fn plain(color: [f32; 3], roughness: f32, metallic: f32) -> Material {
-        Material { color, roughness, metallic, glow: 0.0, glass: 0.0, iridescence: 0.0, coat: 0.0, translucency: 0.0 }
+        Material {
+            color,
+            roughness,
+            metallic,
+            glow: 0.0,
+            glass: 0.0,
+            iridescence: 0.0,
+            coat: 0.0,
+            translucency: 0.0,
+            color2: [0.36, 0.52, 0.98],
+            gradient: 0.0,
+            grad_axis: 2,
+            grad_flip: false,
+            grad_local: false,
+            grad_soft: 0.7,
+            grad_from: 0.0,
+            grad_to: 1.0,
+        }
+    }
+    /// Is a gradient switched on?
+    pub fn has_gradient(&self) -> bool {
+        self.gradient > 0.001
+    }
+    /// How much of `color2` shows at `t`, the place along the gradient (0 = start .. 1 = end of the
+    /// shape's size; the flip is already in `t`). The range `grad_from..grad_to` is stretched over
+    /// 0..1 and `grad_soft` decides how wide the blend is around its middle. The GPU copy is
+    /// `shape_color` in `shader.wgsl`.
+    pub fn gradient_weight(&self, t: f32) -> f32 {
+        let span = (self.grad_to - self.grad_from).max(0.02);
+        let u = ((t - self.grad_from) / span).max(0.0).min(1.0);
+        let w = (self.grad_soft * 0.5).max(0.001);
+        let k = ((u - (0.5 - w)) / (2.0 * w)).max(0.0).min(1.0);
+        k * k * (3.0 - 2.0 * k) * self.gradient
     }
     /// Keep every number in the range the renderer expects.
     pub fn sanitize(&mut self) {
@@ -281,6 +333,14 @@ impl Material {
         fix(&mut self.iridescence, 0.0, 1.0, 0.0);
         fix(&mut self.coat, 0.0, 1.0, 0.0);
         fix(&mut self.translucency, 0.0, 1.0, 0.0);
+        for c in &mut self.color2 {
+            fix(c, 0.0, 1.0, 0.8);
+        }
+        fix(&mut self.gradient, 0.0, 1.0, 0.0);
+        self.grad_axis = self.grad_axis.min(2);
+        fix(&mut self.grad_soft, 0.0, 1.0, 0.7);
+        fix(&mut self.grad_from, 0.0, 1.0, 0.0);
+        fix(&mut self.grad_to, 0.0, 1.0, 1.0);
     }
 }
 
@@ -289,7 +349,8 @@ pub struct Shape {
     pub name: String,
     pub kind: Kind,
     pub size: [f32; 3],
-    /// Corner rounding of boxes and extrusions, in mm.
+    /// Rounding of the corners and edges of every kind that has them (`Kind::can_round`), in mm.
+    /// It never makes a shape bigger, and is held to what the shape can take.
     pub round: f32,
     pub pos: [f32; 3],
     /// Euler angles about X, Y, Z (degrees).
@@ -314,9 +375,31 @@ pub struct Shape {
     /// Wall thickness in mm that hollows out any kind (0 = solid).
     #[serde(default)]
     pub shell: f32,
+    /// How `round` treats the edges: a round fillet (default) or a flat 45-degree bevel.
+    #[serde(default)]
+    pub corner: Corner,
+}
+
+/// The style of a shape's cut edges: what `Shape::round` makes of them.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Corner {
+    /// A flat bevel (chamfer): the corner is cut off straight, `round` mm along each side.
+    Chamfer,
+    /// A rounded edge (fillet): the shape shrunk by `round` and grown again with a ball. (Also what
+    /// an unknown name in a file becomes.)
+    #[default]
+    #[serde(other)]
+    Round,
+}
+
+impl Corner {
+    pub const ALL: [Corner; 2] = [Corner::Round, Corner::Chamfer];
 }
 
 pub const MAX_OUTLINE: usize = 64;
+/// The largest rounding the inspector offers (mm); files may hold up to `MAX_ROUND`.
+pub const ROUND_MAX: f32 = 40.0;
+pub const MAX_ROUND: f32 = 500.0;
 /// Most nodes of a curve or sweep path (a traced pipe uses up to `stroke::PIPE_NODES` of them).
 pub const MAX_PATH: usize = 48;
 
@@ -339,6 +422,7 @@ impl Shape {
             path: kind.default_path(),
             outline2: kind.default_outline2(),
             shell: 0.0,
+            corner: Corner::Round,
         }
     }
 
@@ -697,7 +781,7 @@ impl Scene {
                 for v in &mut s.size {
                     fix(v, 0.01, 2000.0, 10.0);
                 }
-                fix(&mut s.round, 0.0, 500.0, 0.0);
+                fix(&mut s.round, 0.0, MAX_ROUND, 0.0);
                 fix(&mut s.blend, 0.0, 200.0, 0.0);
                 for v in &mut s.pos {
                     fix(v, -5000.0, 5000.0, 0.0);
@@ -802,5 +886,86 @@ mod tests {
             c.sanitize();
             assert_eq!(c, e);
         }
+    }
+
+    #[test]
+    fn gradient_fields_are_sanitised() {
+        let mut m = Material { gradient: f32::NAN, grad_soft: 9.0, grad_from: -3.0, grad_to: f32::INFINITY, grad_axis: 77, color2: [f32::NAN, 5.0, -1.0], ..Material::default() };
+        m.sanitize();
+        assert_eq!(m.gradient, 0.0);
+        assert_eq!(m.grad_soft, 1.0);
+        assert_eq!(m.grad_from, 0.0);
+        assert_eq!(m.grad_to, 1.0);
+        assert_eq!(m.grad_axis, 2);
+        assert!(m.color2.iter().all(|c| (0.0..=1.0).contains(c)));
+        assert!(!m.has_gradient());
+        let mut big = Material { gradient: 40.0, ..Material::default() };
+        big.sanitize();
+        assert_eq!(big.gradient, 1.0);
+        assert!(big.has_gradient());
+    }
+
+    #[test]
+    fn the_gradient_weight_follows_range_softness_and_strength() {
+        let mut m = Material { gradient: 1.0, grad_soft: 0.0, ..Material::default() };
+        // a hard edge in the middle
+        assert_eq!(m.gradient_weight(0.2), 0.0);
+        assert_eq!(m.gradient_weight(0.8), 1.0);
+        // smooth: halfway is halfway, and it only rises
+        m.grad_soft = 1.0;
+        assert!((m.gradient_weight(0.5) - 0.5).abs() < 1e-5);
+        let mut last = -1.0;
+        for i in 0..=20 {
+            let w = m.gradient_weight(i as f32 / 20.0);
+            assert!(w >= last - 1e-6 && (0.0..=1.0).contains(&w));
+            last = w;
+        }
+        assert!(m.gradient_weight(0.0) < 1e-6 && m.gradient_weight(1.0) > 1.0 - 1e-6);
+        // strength scales it
+        m.gradient = 0.5;
+        assert!((m.gradient_weight(1.0) - 0.5).abs() < 1e-5);
+        // the range: nothing before `from`, everything after `to`
+        m.gradient = 1.0;
+        m.grad_from = 0.25;
+        m.grad_to = 0.75;
+        assert!(m.gradient_weight(0.2) < 1e-6);
+        assert!(m.gradient_weight(0.8) > 1.0 - 1e-6);
+        assert!((m.gradient_weight(0.5) - 0.5).abs() < 1e-5);
+        // a reversed or empty range does not divide by zero
+        m.grad_from = 0.9;
+        m.grad_to = 0.1;
+        assert!(m.gradient_weight(0.5).is_finite());
+    }
+
+    #[test]
+    fn old_materials_load_without_a_gradient_and_new_ones_round_trip() {
+        let old = r#"{"color":[1,0,0],"roughness":0.5,"metallic":0}"#;
+        let m: Material = serde_json::from_str(old).unwrap_or_default();
+        assert_eq!(m.color, [1.0, 0.0, 0.0]);
+        assert!(!m.has_gradient());
+        assert_eq!(m.grad_axis, 2);
+        let g = Material { gradient: 0.7, grad_axis: 0, grad_flip: true, grad_local: true, color2: [0.1, 0.2, 0.3], grad_soft: 0.3, grad_from: 0.1, grad_to: 0.9, ..Material::default() };
+        let back: Material = serde_json::from_str(&serde_json::to_string(&g).unwrap_or_default()).unwrap_or_default();
+        assert_eq!(back, g);
+        // a whole old scene still opens
+        let sc = Scene::default().to_json();
+        assert!(Scene::from_json(&sc).is_ok());
+    }
+
+    #[test]
+    fn rounding_is_held_inside_the_file_limits() {
+        let mut sc = Scene::default();
+        if let Some(s) = sc.groups[0].shapes.first_mut() {
+            s.round = f32::NAN;
+        }
+        sc.sanitize();
+        assert_eq!(sc.groups[0].shapes[0].round, 0.0);
+        if let Some(s) = sc.groups[0].shapes.first_mut() {
+            s.round = 1e9;
+        }
+        sc.sanitize();
+        assert_eq!(sc.groups[0].shapes[0].round, MAX_ROUND);
+        assert!(Kind::Box.can_round() && Kind::Cone.can_round() && Kind::Sweep.can_round());
+        assert!(!Kind::Sphere.can_round() && !Kind::Curve.can_round());
     }
 }

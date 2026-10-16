@@ -8,6 +8,7 @@
 // `x.max(lo).min(hi)` is used on purpose: `clamp` panics when a bound is NaN or out of order, and sizes come from files.
 #![allow(clippy::manual_clamp)]
 
+use crate::corner;
 use crate::model::Kind;
 use crate::sdf::{Prepared, V3, cross, dot, len, mul, sub};
 use std::f32::consts::PI;
@@ -15,6 +16,8 @@ use std::f32::consts::PI;
 const SQRT3_2: f32 = 0.866_025_4;
 /// 2 * sqrt(2) / 3: the sideways part of a tetrahedron face normal.
 const TET_S: f32 = 0.942_809_04;
+/// sqrt(1/2) as the bevel of the octahedron's edges needs it.
+const S2: f32 = std::f32::consts::FRAC_1_SQRT_2;
 
 /// `a` modulo `m`, always in `0..m` (the same formula as the shader).
 fn modp(a: f32, m: f32) -> f32 {
@@ -47,7 +50,7 @@ fn ud_triangle(p: V3, a: V3, b: V3, c: V3) -> f32 {
 }
 
 /// Signed distance of a point to a 2D triangle.
-fn sd_triangle(p: [f32; 2], p0: [f32; 2], p1: [f32; 2], p2: [f32; 2]) -> f32 {
+pub(crate) fn sd_triangle(p: [f32; 2], p0: [f32; 2], p1: [f32; 2], p2: [f32; 2]) -> f32 {
     let e0 = [p1[0] - p0[0], p1[1] - p0[1]];
     let e1 = [p2[0] - p1[0], p2[1] - p1[1]];
     let e2 = [p0[0] - p2[0], p0[1] - p2[1]];
@@ -159,21 +162,129 @@ fn star2(x: f32, y: f32, r: f32, n: f32, ratio: f32) -> f32 {
     if e[0] * py - e[1] * (px - r) > 0.0 { -d } else { d }
 }
 
+/// A cone (base radius `s[0]`, height `s[1]`, point on top) with its edges rounded by `round`:
+/// the triangle of its profile, shrunk about its incentre so every side moves in by `rr`, then
+/// grown by `rr`. `rr` never exceeds what the cone can take (its incircle radius).
+pub fn rounded_cone(q: V3, s: V3, round: f32) -> f32 {
+    let (rad, hh) = (s[0], s[1] * 0.5);
+    let slant = rad.hypot(s[1]);
+    let rin = (rad * s[1] / (rad + slant).max(1e-6)).max(1e-6);
+    let rr = round.max(0.0).min(rin * 0.98);
+    let k = (rin - rr) / rin;
+    let c = [0.0, -hh + rin];
+    let g = |x: f32, z: f32| [c[0] + (x - c[0]) * k, c[1] + (z - c[1]) * k];
+    sd_triangle([q[0].hypot(q[1]), q[2]], g(-rad, -hh), g(rad, -hh), g(0.0, hh)) - rr
+}
+
+/// A cone (base radius `s[0]`, height `s[1]`, point on top) with its two corners (the base rim and
+/// the tip) cut off `c` along the sides.
+pub fn chamfered_cone(q: V3, s: V3, c: f32) -> f32 {
+    let (rad, hh) = (s[0], s[1] * 0.5);
+    let p = [q[0].hypot(q[1]), q[2]];
+    let (a, b, t) = ([-rad, -hh], [rad, -hh], [0.0, hh]);
+    let d = sd_triangle(p, a, b, t);
+    let d = corner::cut_vertex(d, p, a, b, t, 1.0, c);
+    corner::cut_vertex(d, p, b, t, a, 1.0, c)
+}
+
+/// Cuts the symmetric corner at `(r, 0)` (turned so that it is on +X) off a flat shape with distance
+/// `d`: the cut runs from `v + leg * (da, db)` to `v + leg * (da, -db)`, a line across X.
+fn cut_symmetric_tip(d: f32, px: f32, py: f32, r: f32, leg: f32, da: f32) -> f32 {
+    let g = px - (r + leg * da);
+    d.max(g.min(leg - (px - r).hypot(py)))
+}
+
+/// `(x, y)` turned into the sector of the nearest of `n` corners (corner on +X).
+fn fold_to_corner(x: f32, y: f32, n: f32) -> (f32, f32) {
+    let an = PI / n;
+    let bn = modp(y.atan2(x) + an, 2.0 * an) - an;
+    let rho = x.hypot(y);
+    (rho * bn.cos(), rho * bn.sin())
+}
+
+/// The tip of a regular `n`-gon (circumradius `r`, a vertex on +X) cut off `c` along the sides.
+fn cut_poly_tip(d: f32, x: f32, y: f32, r: f32, n: f32, c: f32) -> f32 {
+    let an = PI / n;
+    let (px, py) = fold_to_corner(x, y, n);
+    cut_symmetric_tip(d, px, py, r, c.min(r * an.sin()), -an.sin())
+}
+
+/// The outer points of a star (outer radius `r`, inner radius `ratio * r`) cut off `c` along the sides.
+fn cut_star_tips(d: f32, x: f32, y: f32, r: f32, n: f32, ratio: f32, c: f32) -> f32 {
+    let an = PI / n;
+    let e = [ratio * r * an.cos() - r, ratio * r * an.sin()];
+    let el = e[0].hypot(e[1]).max(1e-6);
+    let (px, py) = fold_to_corner(x, y, n);
+    cut_symmetric_tip(d, px, py, r, c.min(el * 0.5), e[0] / el)
+}
+
+/// Signed distance to the cap of the ball of radius `rad` (centre at the origin) that lies above the
+/// plane `zc = h0`, `h0 >= 0`, seen in the half plane (`rho`, `zc`).
+fn ball_cap(rho: f32, zc: f32, rad: f32, h0: f32) -> f32 {
+    let dome = rho.hypot(zc) - rad;
+    let floor = h0 - zc;
+    if dome <= 0.0 && floor <= 0.0 {
+        return dome.max(floor);
+    }
+    let rim = (rad * rad - h0 * h0).max(0.0).sqrt();
+    let near_rim = || (rho - rim).hypot(zc - h0);
+    if zc >= h0 {
+        // the sphere is nearest where the ray from the centre through the point meets the cap
+        if zc * rad >= h0 * rho.hypot(zc) { dome } else { near_rim() }
+    } else if rho <= rim {
+        floor
+    } else {
+        near_rim()
+    }
+}
+
 /// Distance from `q` (local, unscaled) to the shape. Negative inside.
 pub fn distance(p: &Prepared, q: V3) -> f32 {
     let s = p.size;
     let round = if p.round.is_finite() { p.round.max(0.0) } else { 0.0 };
+    let ch = p.chamfer && round > 0.0;
     match p.kind {
         Kind::Prism3 | Kind::PrismN => {
             let n = if p.kind == Kind::Prism3 { 3.0 } else { count(p.params[0], 3.0, 32.0, 6.0) };
             let hh = s[1] * 0.5;
             let an = PI / n;
+            if ch {
+                let d2 = cut_poly_tip(poly_n(q[0], q[1], s[0], n), q[0], q[1], s[0], n, round);
+                return corner::pair(d2, q[2].abs() - hh, round.min(hh));
+            }
             let rr = round.min(hh).min(s[0] * an.cos() * 0.98);
             extrude(poly_n(q[0], q[1], s[0] - rr / an.cos(), n), q[2], hh, rr)
+        }
+        Kind::Octa if ch => {
+            // the faces stay; the twelve edges get a flat bevel each
+            let c = round.min(s[0] * 0.3);
+            let (x, y, z) = (q[0].abs(), q[1].abs(), q[2].abs());
+            let f = (x + y + z - s[0]) * 0.577_350_26;
+            let e = |a: f32, b: f32| (a + b - s[0]) * S2 + c * corner::S;
+            f.max(e(x, y)).max(e(x, z)).max(e(y, z))
         }
         Kind::Octa => {
             let rr = round.min(s[0] * 0.3);
             octa(q, s[0] - rr * 1.732_050_8) - rr
+        }
+        Kind::Tetra if ch => {
+            let c = round.min(s[0] * 0.3);
+            let off = s[0] / 3.0;
+            let dn = [TET_S * 0.5, TET_S * SQRT3_2];
+            let f = [
+                -q[2] - off,
+                dn[0] * q[0] + dn[1] * q[1] + q[2] / 3.0 - off,
+                -TET_S * q[0] + q[2] / 3.0 - off,
+                dn[0] * q[0] - dn[1] * q[1] + q[2] / 3.0 - off,
+            ];
+            // every two faces meet at an edge, and all the angles between the normals are the same
+            let mut d = f[0].max(f[1]).max(f[2]).max(f[3]);
+            for i in 0..4 {
+                for j in (i + 1)..4 {
+                    d = d.max(corner::bevel(f[i], f[j], -1.0 / 3.0, c));
+                }
+            }
+            d
         }
         Kind::Tetra => {
             let rr = round.min(s[0] * 0.3);
@@ -183,6 +294,19 @@ pub fn distance(p: &Prepared, q: V3) -> f32 {
             let n = count(p.params[0], 3.0, 16.0, 4.0);
             let (a, h) = (s[0] * (PI / n).cos(), s[1]);
             let l = h.hypot(a).max(1e-6);
+            if ch {
+                // the faces stay; the base edges and the slanted edges get a flat bevel each
+                let c = round.min(a * h / (l + a) * 0.98);
+                let an = PI / n;
+                let (fx, fy) = fold_poly(q[0], q[1], n);
+                let (zb, zt) = (-h * 0.5, h * 0.5);
+                let (kx, kz) = (h / l, a / l);
+                let din = (h * fx + a * q[2] - a * zt) / l;
+                let dnext = (h * (fx * (2.0 * an).cos() + fy * (2.0 * an).sin()) + a * q[2] - a * zt) / l;
+                let db = zb - q[2];
+                let d = din.max(db).max(corner::bevel(din, db, -kz, c));
+                return d.max(corner::bevel(din, dnext, kx * kx * (2.0 * an).cos() + kz * kz, c));
+            }
             let rr = round.min(a * h / (l + a) * 0.98);
             let hh = h * 0.5;
             pyramid(q, n, a - rr * (l + a) / h.max(1e-6), -hh + rr, hh - rr * l / a.max(1e-6)) - rr
@@ -192,22 +316,27 @@ pub fn distance(p: &Prepared, q: V3) -> f32 {
             len([q[0], q[1], q[2] - q[2].max(-hl).min(hl)]) - s[0]
         }
         Kind::Hemi => {
+            // a ball of radius r cut at its centre; rounding shrinks the ball by rr, lifts the floor by rr
+            // and grows everything again (so the rim becomes a quarter circle)
             let r = s[0];
-            let zp = q[2] + r * 0.5;
-            let rho = q[0].hypot(q[1]);
-            if zp >= 0.0 {
-                (rho.hypot(zp) - r).max(-zp)
-            } else if rho <= r {
-                -zp
-            } else {
-                (rho - r).hypot(zp)
+            if ch {
+                // the dome meets the floor at a right angle; the cut is a cone through the rim
+                let (rho, zp) = (q[0].hypot(q[1]), q[2] + r * 0.5);
+                let c = round.min(r * 0.5);
+                return (rho.hypot(zp) - r).max(-zp).max((rho - zp - (r - c)) * corner::S);
             }
+            let rr = round.min(r * 0.5);
+            ball_cap(q[0].hypot(q[1]), q[2] + r * 0.5, r - rr, rr) - rr
         }
         Kind::Tube => {
             let t = s[1].max(0.0).min(s[0]);
             let (hw, hh) = (t * 0.5, s[2] * 0.5);
             let rr = round.min(hw).min(hh);
             let rho = q[0].hypot(q[1]);
+            if ch {
+                let dx = if t >= s[0] { rho - s[0] } else { (rho - (s[0] - hw)).abs() - hw };
+                return corner::pair(dx, q[2].abs() - hh, rr);
+            }
             // a wall as thick as the radius is a solid rod: no inner wall to measure to
             let dx = if t >= s[0] { rho - s[0] + rr } else { (rho - (s[0] - hw)).abs() - hw + rr };
             let d = [dx, q[2].abs() - hh + rr];
@@ -216,6 +345,15 @@ pub fn distance(p: &Prepared, q: V3) -> f32 {
         Kind::Wedge => {
             let (w, d, h) = (s[0] * 0.5, s[1] * 0.5, s[2] * 0.5);
             let rin = ((s[0] + s[2] - s[0].hypot(s[2])) * 0.5).max(1e-6);
+            if ch {
+                let (a, b, c) = ([-w, -h], [w, -h], [-w, h]);
+                let pt = [q[0], q[2]];
+                let mut d2 = sd_triangle(pt, a, b, c);
+                d2 = corner::cut_vertex(d2, pt, c, a, b, 1.0, round);
+                d2 = corner::cut_vertex(d2, pt, a, b, c, 1.0, round);
+                d2 = corner::cut_vertex(d2, pt, b, c, a, 1.0, round);
+                return corner::pair(d2, q[1].abs() - d, round.min(d));
+            }
             let rr = round.min(d).min(rin * 0.98);
             // the triangle shrunk about its incentre so that every side moves in by `rr`
             let (cx, cz, k) = (-w + rin, -h + rin, (rin - rr) / rin);
@@ -229,6 +367,10 @@ pub fn distance(p: &Prepared, q: V3) -> f32 {
             let n = count(p.params[0], 3.0, 16.0, 5.0);
             let ratio = if p.params[1].is_finite() { p.params[1].max(0.1).min(0.9) } else { 0.45 };
             let hh = s[1] * 0.5;
+            if ch {
+                let d2 = cut_star_tips(star2(q[0], q[1], s[0], n, ratio), q[0], q[1], s[0], n, ratio, round);
+                return corner::pair(d2, q[2].abs() - hh, round.min(hh));
+            }
             let rr = round.min(hh);
             // shrink the star so that every side moves in by `rr` (tips come in along the X axis)
             let an = PI / n;

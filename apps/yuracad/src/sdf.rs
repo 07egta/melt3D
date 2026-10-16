@@ -2,6 +2,7 @@
 //! shader (`shader.wgsl`) implements the same formulas; this copy picks shapes with the mouse and
 //! builds the mesh for export.
 
+use crate::corner;
 use crate::model::{BlendMode, Kind, Material, Op, Scene, Shape};
 
 pub type V3 = [f32; 3];
@@ -56,6 +57,13 @@ pub struct Prepared {
     pub outline2: Vec<[f32; 2]>,
     /// Wall thickness of the hollowed-out shape (0 = solid).
     pub shell: f32,
+    /// The corners are cut flat (a chamfer) instead of rounded.
+    pub chamfer: bool,
+    /// Winding (+1 / -1) and the largest safe rounding of the profile (revolve, sweep, extrude).
+    pub poly_orient: f32,
+    pub poly_limit: f32,
+    /// Half the shape's size along the gradient direction (0 when there is no gradient).
+    pub grad_half: f32,
 }
 
 #[derive(Clone, Debug)]
@@ -80,22 +88,34 @@ impl Prepared {
     pub fn new(s: &Shape) -> Prepared {
         let r = rotation(s.rot);
         let inv = [[r[0][0], r[1][0], r[2][0]], [r[0][1], r[1][1], r[2][1]], [r[0][2], r[1][2], r[2][2]]];
+        let round = if s.round.is_finite() { s.round.max(0.0) } else { 0.0 };
+        // a revolve profile lives on the +x side of the axis
+        let outline: Vec<[f32; 2]> =
+            if s.kind == Kind::Revolve { s.outline.iter().map(|p| [p[0].max(0.0), p[1]]).collect() } else { s.outline.clone() };
+        let (poly_orient, poly_limit) = match s.kind {
+            Kind::Revolve | Kind::Sweep | Kind::Extrude if round > 0.0 => crate::cad::inset_params(&outline, s.kind == Kind::Revolve),
+            _ => (1.0, 0.0),
+        };
+        let grad_half = if s.material.has_gradient() { gradient_half(s, &r) } else { 0.0 };
         Prepared {
             kind: s.kind,
             size: s.size,
-            round: s.round,
+            round,
+            chamfer: s.corner == crate::model::Corner::Chamfer,
             pos: s.pos,
             inv,
             scale: s.scale,
             op: s.op,
             blend: s.blend,
             material: s.material,
-            // a revolve profile lives on the +x side of the axis
-            outline: if s.kind == Kind::Revolve { s.outline.iter().map(|p| [p[0].max(0.0), p[1]]).collect() } else { s.outline.clone() },
+            outline,
             params: s.params,
             path: if s.kind == Kind::Curve { crate::curve::build(&s.path, &s.params) } else { s.path.clone() },
             outline2: s.outline2.clone(),
             shell: if s.shell.is_finite() { s.shell.max(0.0) } else { 0.0 },
+            poly_orient,
+            poly_limit,
+            grad_half,
         }
     }
     /// The point in the shape's own space.
@@ -103,6 +123,17 @@ impl Prepared {
         let d = sub(p, self.pos);
         let q = [dot(self.inv[0], d), dot(self.inv[1], d), dot(self.inv[2], d)];
         [q[0] / self.scale[0], q[1] / self.scale[1], q[2] / self.scale[2]]
+    }
+    /// The surface colour at `p`: the material's colour, or its gradient (see `Material::gradient_weight`).
+    pub fn color_at(&self, p: V3) -> V3 {
+        let m = &self.material;
+        if !m.has_gradient() {
+            return m.color;
+        }
+        let ax = usize::from(m.grad_axis).min(2);
+        let c = if m.grad_local { self.local(p)[ax] } else { p[ax] - self.pos[ax] };
+        let t = c * (if m.grad_flip { -0.5 } else { 0.5 }) / self.grad_half.max(1e-3) + 0.5;
+        mix3(m.color, m.color2, m.gradient_weight(t.max(0.0).min(1.0)))
     }
     pub fn min_scale(&self) -> f32 {
         self.scale[0].min(self.scale[1]).min(self.scale[2])
@@ -114,6 +145,10 @@ impl Prepared {
         // (a curve hollows itself: its flat ends are cut after the hollowing, see curve::distance)
         if self.shell > 0.0 && self.kind != Kind::Curve { (d + self.shell * 0.5).abs() - self.shell * 0.5 } else { d }
     }
+    #[cfg(test)]
+    pub fn local_distance_for_test(&self, q: V3) -> f32 {
+        self.local_distance(q)
+    }
     fn local_distance(&self, q: V3) -> f32 {
         let s = self.size;
         match self.kind {
@@ -121,11 +156,17 @@ impl Prepared {
             Kind::Box => {
                 let b = [s[0] * 0.5, s[1] * 0.5, s[2] * 0.5];
                 let r = self.round.min(b[0]).min(b[1]).min(b[2]);
+                if self.chamfer {
+                    return corner::cut_box(q, b, r);
+                }
                 let d = [q[0].abs() - b[0] + r, q[1].abs() - b[1] + r, q[2].abs() - b[2] + r];
                 len([d[0].max(0.0), d[1].max(0.0), d[2].max(0.0)]) + d[0].max(d[1]).max(d[2]).min(0.0) - r
             }
             Kind::Cylinder => {
                 let r = self.round.min(s[0]).min(s[1] * 0.5);
+                if self.chamfer {
+                    return corner::pair(q[0].hypot(q[1]) - s[0], q[2].abs() - s[1] * 0.5, r);
+                }
                 let d = [(q[0].hypot(q[1])) - s[0] + r, q[2].abs() - s[1] * 0.5 + r];
                 d[0].max(d[1]).min(0.0) + d[0].max(0.0).hypot(d[1].max(0.0)) - r
             }
@@ -133,6 +174,8 @@ impl Prepared {
                 let a = q[0].hypot(q[1]) - s[0];
                 a.hypot(q[2]) - s[1]
             }
+            Kind::Cone if self.round > 0.0 && self.chamfer => crate::prims::chamfered_cone(q, s, self.round),
+            Kind::Cone if self.round > 0.0 => crate::prims::rounded_cone(q, s, self.round),
             Kind::Cone => {
                 // Capped cone, base radius s0 at the bottom, a point at the top, height s1.
                 let h = s[1] * 0.5;
@@ -148,9 +191,16 @@ impl Prepared {
                 sg * (ca[0] * ca[0] + ca[1] * ca[1]).min(cb[0] * cb[0] + cb[1] * cb[1]).sqrt()
             }
             Kind::Extrude => {
-                let d2 = polygon(&self.outline, [q[0], q[1]]);
-                let r = self.round.min(s[0] * 0.5);
-                let w = [d2 + r, q[2].abs() - s[0] * 0.5 + r];
+                let xy = [q[0], q[1]];
+                let hh = s[0] * 0.5;
+                if self.chamfer && self.round > 0.0 {
+                    let d2 = corner::cut_polygon(polygon(&self.outline, xy), xy, &self.outline, self.poly_orient, self.round, false);
+                    return corner::pair(d2, q[2].abs() - hh, self.round.min(hh));
+                }
+                // every convex corner of the outline and the top and bottom edges are rounded
+                let r = if self.round > 0.0 { self.round.min(hh).min(self.poly_limit) } else { 0.0 };
+                let d2 = if r > 0.0 { crate::cad::polygon_inset(&self.outline, xy, r, self.poly_orient, false) } else { polygon(&self.outline, xy) };
+                let w = [d2, q[2].abs() - hh + r];
                 w[0].max(w[1]).min(0.0) + w[0].max(0.0).hypot(w[1].max(0.0)) - r
             }
             Kind::Curve => crate::curve::distance(self, q),
@@ -158,6 +208,19 @@ impl Prepared {
             _ => crate::cad::distance(self, q),
         }
     }
+}
+
+/// Half the shape's size along its gradient direction: in the world (the box of the turned,
+/// stretched shape) or in the shape's own box.
+fn gradient_half(s: &Shape, rot: &[V3; 3]) -> f32 {
+    let ax = usize::from(s.material.grad_axis).min(2);
+    let half = s.local_half();
+    let h = if s.material.grad_local {
+        half[ax]
+    } else {
+        (0..3).map(|j| rot[ax][j].abs() * s.scale[j].abs() * half[j]).sum()
+    };
+    if h.is_finite() { h.max(1e-3) } else { 1.0 }
 }
 
 pub fn polygon(v: &[[f32; 2]], p: [f32; 2]) -> f32 {
@@ -278,7 +341,7 @@ impl Field {
             let d = s.distance(p);
             let me = Sample {
                 dist: d,
-                color: s.material.color,
+                color: s.color_at(p),
                 roughness: s.material.roughness,
                 metallic: s.material.metallic,
                 nearest: Some(g.origin[i]),
@@ -353,8 +416,19 @@ fn combine(a: Sample, b: Sample, op: Op, k: f32, mode: BlendMode) -> Sample {
                 nearest: if h >= 0.5 { a.nearest } else { b.nearest },
             }
         }
-        // A stain never changes the shape, so the nearest thing stays what it was.
-        Op::Paint => a,
+        // A stain never changes the shape, so the nearest thing stays what it was; inside the
+        // stain (and a little way past its edge) the surface takes its material, as in the shader.
+        Op::Paint => {
+            let soft = (k * 0.35).max(0.3);
+            let w = (0.5 - b.dist / soft).clamp(0.0, 1.0);
+            Sample {
+                dist: a.dist,
+                color: mix3(a.color, b.color, w),
+                roughness: a.roughness + (b.roughness - a.roughness) * w,
+                metallic: a.metallic + (b.metallic - a.metallic) * w,
+                nearest: a.nearest,
+            }
+        }
         Op::Intersect => {
             // smax(a, b) = -smin(-a, -b); the surface belongs to whichever is farther out
             let (d, h) = smin(-a.dist, -b.dist, k, mode);
@@ -484,6 +558,112 @@ mod tests {
         let mut dripping = sc.clone();
         dripping.melt.drip = 20.0;
         assert!(Field::new(&dripping).distance([0.0, 0.0, 0.0]).is_finite());
+    }
+
+    fn graded(kind: Kind, mat: Material) -> Shape {
+        let mut s = Shape::new(kind, [0.0, 0.0, 0.0], mat);
+        s.blend = 0.0;
+        s
+    }
+
+    fn close(a: V3, b: V3) {
+        assert!((0..3).all(|i| (a[i] - b[i]).abs() < 1e-3), "{a:?} != {b:?}");
+    }
+
+    #[test]
+    fn a_gradient_runs_from_one_colour_to_the_other_across_the_shape() {
+        let (red, blue) = ([1.0, 0.0, 0.0], [0.0, 0.0, 1.0]);
+        let mat = Material { color: red, color2: blue, gradient: 1.0, grad_soft: 1.0, ..Material::default() };
+        let mut s = graded(Kind::Box, mat);
+        s.size = [20.0, 20.0, 40.0];
+        let p = Prepared::new(&s);
+        close(p.color_at([0.0, 0.0, -20.0]), red); // the bottom
+        close(p.color_at([0.0, 0.0, 20.0]), blue); // the top
+        close(p.color_at([0.0, 0.0, 0.0]), [0.5, 0.0, 0.5]); // halfway
+        close(p.color_at([0.0, 0.0, 500.0]), blue); // clamped beyond the ends
+        close(p.color_at([0.0, 0.0, -500.0]), red);
+        // no gradient: always the plain colour
+        let plain = Prepared::new(&graded(Kind::Box, Material { color: red, ..Material::default() }));
+        close(plain.color_at([0.0, 0.0, 30.0]), red);
+        // flipped
+        let mut f = s.clone();
+        f.material.grad_flip = true;
+        let p = Prepared::new(&f);
+        close(p.color_at([0.0, 0.0, -20.0]), blue);
+        close(p.color_at([0.0, 0.0, 20.0]), red);
+        // a weaker gradient reaches only part of the way
+        let mut w = s.clone();
+        w.material.gradient = 0.5;
+        close(Prepared::new(&w).color_at([0.0, 0.0, 20.0]), [0.5, 0.0, 0.5]);
+        // the X axis
+        let mut x = s.clone();
+        x.material.grad_axis = 0;
+        let p = Prepared::new(&x);
+        close(p.color_at([-10.0, 0.0, 0.0]), red);
+        close(p.color_at([10.0, 0.0, 0.0]), blue);
+        close(p.color_at([0.0, 0.0, 15.0]), [0.5, 0.0, 0.5]);
+        // a range: all red up to a quarter of the height, all blue from three quarters
+        let mut r = s.clone();
+        r.material.grad_from = 0.25;
+        r.material.grad_to = 0.75;
+        let p = Prepared::new(&r);
+        close(p.color_at([0.0, 0.0, -10.0]), red);
+        close(p.color_at([0.0, 0.0, 10.0]), blue);
+        // a hard edge
+        let mut h = s.clone();
+        h.material.grad_soft = 0.0;
+        let p = Prepared::new(&h);
+        close(p.color_at([0.0, 0.0, -1.0]), red);
+        close(p.color_at([0.0, 0.0, 1.0]), blue);
+    }
+
+    #[test]
+    fn a_gradient_follows_the_world_or_the_shape() {
+        let (red, blue) = ([1.0, 0.0, 0.0], [0.0, 0.0, 1.0]);
+        let mat = Material { color: red, color2: blue, gradient: 1.0, grad_soft: 1.0, ..Material::default() };
+        let mut s = graded(Kind::Box, mat);
+        s.size = [40.0, 10.0, 10.0];
+        s.rot = [0.0, 90.0, 0.0]; // the long side now stands up: the local X axis points down the world Z
+        let world = Prepared::new(&s);
+        close(world.color_at([0.0, 0.0, 20.0]), blue); // the world top is the end of the long box
+        close(world.color_at([0.0, 0.0, -20.0]), red);
+        // in the world the two ends of the local Z axis (world X here) are at the same height: purple
+        close(world.color_at([5.0, 0.0, 0.0]), [0.5, 0.0, 0.5]);
+        close(world.color_at([-5.0, 0.0, 0.0]), [0.5, 0.0, 0.5]);
+        // following the shape the colour runs along the local Z axis, which is only 10 long
+        s.material.grad_local = true;
+        let local = Prepared::new(&s);
+        let (a, b) = (local.color_at([5.0, 0.0, 0.0]), local.color_at([-5.0, 0.0, 0.0]));
+        let is = |c: V3, t: V3| (0..3).all(|i| (c[i] - t[i]).abs() < 1e-3);
+        assert!((is(a, red) && is(b, blue)) || (is(a, blue) && is(b, red)), "{a:?} {b:?}");
+        // and turning the shape turns the colours with it
+        let mut t = s.clone();
+        t.rot = [0.0, 0.0, 0.0];
+        let upright = Prepared::new(&t);
+        close(upright.color_at([0.0, 0.0, -5.0]), red);
+        close(upright.color_at([0.0, 0.0, 5.0]), blue);
+    }
+
+    #[test]
+    fn a_stained_gradient_keeps_the_stain_and_the_gradient_elsewhere() {
+        let (red, blue, green) = ([1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, 1.0, 0.0]);
+        let mat = Material { color: red, color2: blue, gradient: 1.0, grad_soft: 1.0, ..Material::default() };
+        let mut base = graded(Kind::Box, mat);
+        base.size = [40.0, 40.0, 40.0];
+        let mut stain = graded(Kind::Sphere, Material { color: green, ..Material::default() });
+        stain.size = [6.0, 1.0, 1.0];
+        stain.pos = [0.0, -20.0, 10.0];
+        stain.op = Op::Paint;
+        let f = Field::new(&scene_of(vec![base, stain]));
+        // on the front face: inside the stain it is green, far from it the gradient shows
+        let inside = f.sample([0.0, -20.0, 10.0]);
+        close(inside.color, green);
+        let top = f.sample([0.0, -20.0, 20.0]);
+        close(top.color, blue);
+        let bottom = f.sample([0.0, -20.0, -20.0]);
+        close(bottom.color, red);
+        // a stain never changes the shape
+        assert!((f.sample([0.0, -30.0, 10.0]).dist - 10.0).abs() < 1e-3);
     }
 }
 

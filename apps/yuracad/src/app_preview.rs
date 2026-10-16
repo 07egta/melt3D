@@ -13,6 +13,16 @@ fn app_preview() {
     style::apply(&ctx);
     ctx.set_pixels_per_point(ppp);
     let mut app = App::new(false, None);
+    // `YURA_BOX=1` previews a box with a chamfer and a gradient (the inspector's rounding and the gradient controls)
+    if std::env::var("YURA_BOX").is_ok() {
+        if let Some(sh) = app.scene.groups.first_mut().and_then(|g| g.shapes.first_mut()) {
+            sh.kind = Kind::Box;
+            sh.size = Kind::Box.default_size();
+            sh.round = 6.0;
+            sh.corner = crate::model::Corner::Chamfer;
+            sh.material.gradient = 1.0;
+        }
+    }
     app.show_keys = std::env::var("YURA_KEYS").is_ok();
     app.lib_open = std::env::var("YURA_LIB").is_ok();
     app.tab = match std::env::var("YURA_TAB").ok().as_deref() {
