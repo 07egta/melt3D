@@ -151,7 +151,8 @@ def figure(F):
         HJ = [s * hw, 0.0, P0z - 3.0 * k]
         T1 = dirv(L_["th"], L_["ab"], s)
         K = addv(HJ, T1, 40.5 * k)
-        T2 = dirv(L_["th"] - L_["kn"], L_.get("sab", L_["ab"]), s)
+        sf = L_["sf"] if "sf" in L_ else L_["th"] - L_["kn"]   # shin forward angle (sf overrides kn)
+        T2 = dirv(sf, L_.get("sab", L_["ab"]), s)
         A = addv(K, T2, 40.5 * k)
         M = Mab(L_["pt"], 0.0)
         FC = addv(A, mv(M, [0.0, -4.5 * k, -3.4 * k]))
@@ -360,6 +361,25 @@ items.append(item_of("モデルたい", ["model", "fashion", "slim", "catwalk", 
     face=True, hair="long",
     c=dict(skin=SKIN, top=(0.10, 0.10, 0.12), sleeve=(0.10, 0.10, 0.12), bottom=WHITE,
            shoe=SHOE_BK, hair_col=HAIR_BROWN),
+)))
+
+# 10. ヨガのポーズ -- tree pose: standing on the left leg, the right foot on the inner thigh, palms together overhead
+items.append(item_of("ヨガのポーズ", ["yoga", "tree pose", "vrksasana", "balance", "realistic", "ヨガ", "ポーズ"], dict(
+    H=170, hh=22.7, build=0.92, fem=True,
+    legs={1: dict(th=0, ab=1.0, kn=0, pt=0),           # standing leg
+          -1: dict(th=0, ab=45, sf=114, sab=-80, pt=0)},  # bent leg: knee out, foot on the inner thigh
+    arms={1: dict(fw=166, ab=-12, el=4, wr=0),         # arms up, hands together overhead
+          -1: dict(fw=166, ab=-12, el=4, wr=0)},
+    face=True, hair="long",
+    c=dict(skin=SKIN, top=TEAL, sleeve=TEAL, bottom=PURPLE, shoe=SKIN, hair_col=HAIR_BROWN),
+)))
+
+# 11. マネキン -- a plain grey display mannequin: no face, no hair, no clothes, a neutral stance
+items.append(item_of("マネキン", ["mannequin", "dummy", "display", "figure", "realistic", "マネキン", "ボディ"], dict(
+    H=172, hh=22.7, build=0.96, fem=True,
+    legs=legs_std(ab=2.0), arms=arms_std(ab=12, el=8),
+    face=False, hair=None,
+    c=dict(skin=MANNEQUIN, top=MANNEQUIN, sleeve=MANNEQUIN, bottom=MANNEQUIN, shoe=MANNEQUIN),
 )))
 
 if __name__ == "__main__":
