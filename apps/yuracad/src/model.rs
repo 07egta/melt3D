@@ -375,6 +375,38 @@ pub struct Shape {
     /// Wall thickness in mm that hollows out any kind (0 = solid).
     #[serde(default)]
     pub shell: f32,
+    /// How `round` treats the edges: a round fillet (default) or a flat 45-degree bevel.
+    #[serde(default)]
+    pub corner: Corner,
+}
+
+/// The style of a shape's cut edges: what `Shape::round` makes of them.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Corner {
+    /// A flat bevel (chamfer): the corner is cut off straight, `round` mm along each side.
+    Chamfer,
+    /// A rounded edge (fillet): the shape shrunk by `round` and grown again with a ball. (Also what
+    /// an unknown name in a file becomes.)
+    #[default]
+    #[serde(other)]
+    Round,
+}
+
+impl Corner {
+    pub const ALL: [Corner; 2] = [Corner::Round, Corner::Chamfer];
+    pub fn label(self) -> &'static str {
+        match self {
+            Corner::Round => "丸",
+            Corner::Chamfer => "面取り",
+        }
+    }
+    /// The number the shader reads (0 = round, 1 = chamfer).
+    pub fn id(self) -> f32 {
+        match self {
+            Corner::Round => 0.0,
+            Corner::Chamfer => 1.0,
+        }
+    }
 }
 
 pub const MAX_OUTLINE: usize = 64;
@@ -403,6 +435,7 @@ impl Shape {
             path: kind.default_path(),
             outline2: kind.default_outline2(),
             shell: 0.0,
+            corner: Corner::Round,
         }
     }
 

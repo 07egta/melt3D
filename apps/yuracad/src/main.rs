@@ -6,6 +6,7 @@ mod app;
 mod array;
 mod camera;
 mod clip;
+mod corner;
 mod export;
 mod fonts;
 mod gizmo;

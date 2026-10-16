@@ -1,6 +1,7 @@
 //! Distance functions of the CAD features (Revolve, Loft, Sweep), in the shape's own space.
 //! The shader copy is `shader_cad.wgsl`; keep the two in step. (The Curve tube is in `curve.rs`.)
 
+use crate::corner;
 use crate::model::Kind;
 use crate::sdf::{Prepared, V3, cross, dot, len, norm, polygon, sub};
 
@@ -180,7 +181,10 @@ fn profile_round(p: &Prepared, scale: f32) -> f32 {
 
 fn revolve(p: &Prepared, q: V3) -> f32 {
     let rr = profile_round(p, 1.0);
-    let d = if rr > 0.0 {
+    let pt = [q[0].hypot(q[1]), q[2]];
+    let d = if p.chamfer && p.round > 0.0 {
+        corner::cut_polygon(polygon_off_axis(&p.outline, pt), pt, &p.outline, p.poly_orient, p.round, true)
+    } else if rr > 0.0 {
         polygon_inset(&p.outline, [q[0].hypot(q[1]), q[2]], rr, p.poly_orient, true) - rr
     } else {
         polygon_off_axis(&p.outline, [q[0].hypot(q[1]), q[2]])
@@ -197,8 +201,12 @@ fn loft(p: &Prepared, q: V3) -> f32 {
     let dm = d1 + (d2 - d1) * t;
     // rounding softens the top and bottom edges (like an extrusion), never more than half the height
     let rr = p.round.max(0.0).min(h * 0.5);
-    let w = [dm + rr, q[2].abs() - h * 0.5 + rr];
-    let d = w[0].max(w[1]).min(0.0) + w[0].max(0.0).hypot(w[1].max(0.0)) - rr;
+    let d = if p.chamfer && rr > 0.0 {
+        corner::pair(dm, q[2].abs() - h * 0.5, rr)
+    } else {
+        let w = [dm + rr, q[2].abs() - h * 0.5 + rr];
+        w[0].max(w[1]).min(0.0) + w[0].max(0.0).hypot(w[1].max(0.0)) - rr
+    };
     d * loft_safety(d1, d2, h)
 }
 
@@ -232,7 +240,9 @@ fn sweep(p: &Prepared, q: V3) -> f32 {
     let uv = [dot(d, nrm) / r, dot(d, bin) / r];
     // rounding is in mm: the profile is shrunk by round / r profile units (r = the node radius here)
     let rr = profile_round(p, r);
-    let d2 = if rr > 0.0 { (polygon_inset(&p.outline, uv, rr, p.poly_orient, false) - rr) * r } else { polygon(&p.outline, uv) * r };
+    let d2 = if p.chamfer && p.round > 0.0 {
+        corner::cut_polygon(polygon(&p.outline, uv), uv, &p.outline, p.poly_orient, p.round / r.max(1e-3), false) * r
+    } else if rr > 0.0 { (polygon_inset(&p.outline, uv, rr, p.poly_orient, false) - rr) * r } else { polygon(&p.outline, uv) * r };
     // flat end caps: how far past the first / last node along the path
     let mut axial = -1e5_f32;
     if i == 0 && t <= 0.0 {
