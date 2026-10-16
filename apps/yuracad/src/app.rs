@@ -526,6 +526,10 @@ impl App {
                             self.open_dialog(&ctx);
                             ui.close();
                         }
+                        if ui.button("SVGを読み込む…").clicked() {
+                            crate::svg_dialog::open(&ctx);
+                            ui.close();
+                        }
                         if ui.button("保存　Ctrl+S").clicked() {
                             self.save(&ctx, false);
                             ui.close();
@@ -875,6 +879,7 @@ impl eframe::App for App {
             self.scene_card(ui);
             self.tool_pill(ui);
             self.keys_card(ui);
+            crate::svg_dialog::update(self, &ctx);
         }
         self.capture_step(&ctx);
         self.settle(&ctx);
