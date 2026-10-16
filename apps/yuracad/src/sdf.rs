@@ -894,6 +894,103 @@ mod tests {
         assert_eq!(hit, Some((0, 0)));
     }
 
+    /// Near the surfaces of real library models (every kind of shape the models use), skipping gives
+    /// the same distance and the same shape as measuring everything.
+    #[test]
+    fn skipping_is_exact_near_the_surface_of_every_library_model() {
+        let mut state = 17u32;
+        let mut rnd = move || {
+            state = state.wrapping_mul(1664525).wrapping_add(1013904223);
+            (state >> 8) as f32 / (1u32 << 24) as f32
+        };
+        let mut worst = 0.0_f32;
+        let mut bad: std::collections::BTreeMap<String, f32> = std::collections::BTreeMap::new();
+        for cat in crate::library::all() {
+            for item in &cat.items {
+                let sc = item.scene();
+                let fast = Field::new(&sc);
+                let slow = Field::new(&sc).without_culling();
+                let n = item.group.shapes.len().max(1);
+                for _ in 0..60 {
+                    let c = item.group.shapes[(rnd() * n as f32) as usize % n].pos;
+                    let p = [c[0] + (rnd() - 0.5) * 50.0, c[1] + (rnd() - 0.5) * 50.0, c[2] + (rnd() - 0.5) * 50.0];
+                    let (a, b) = (fast.distance(p), slow.distance(p));
+                    // (some shapes measure a little less than the true distance, e.g. an ellipsoid:
+                    // skipping a far one then gives a larger, truer number, so only the sign and
+                    // the numbers close to the surface have to agree)
+                    let differs = ((a < 0.0) != (b < 0.0) && (a - b).abs() > 0.02) || (a.abs().min(b.abs()) < 0.5 && (a - b).abs() > 0.02);
+                    if differs {
+                        worst = worst.max((a - b).abs());
+                        bad.insert(format!("{} / {}", cat.name, item.name), (a - b).abs());
+                    }
+                }
+            }
+        }
+        eprintln!("worst difference at a surface {worst}; models with a difference: {bad:?}");
+        assert!(bad.is_empty(), "{bad:?}");
+    }
+
+    #[test]
+    #[ignore]
+    fn which_bounds_are_wrong() {
+        let mut state = 3u32;
+        let mut rnd = move || {
+            state = state.wrapping_mul(1664525).wrapping_add(1013904223);
+            (state >> 8) as f32 / (1u32 << 24) as f32
+        };
+        let mut kinds: std::collections::BTreeMap<String, (usize, f32)> = std::collections::BTreeMap::new();
+        for cat in crate::library::all() {
+            for item in &cat.items {
+                for s in &item.group.shapes {
+                    let b = crate::accel::shape_bound(s);
+                    let p = Prepared::new(s);
+                    for _ in 0..200 {
+                        let q = [s.pos[0] + (rnd() - 0.5) * 2.0 * b.r * 1.5, s.pos[1] + (rnd() - 0.5) * 2.0 * b.r * 1.5, s.pos[2] + (rnd() - 0.5) * 2.0 * b.r * 1.5];
+                        let d = p.distance(q);
+                        let lb = b.lower(q);
+                        if d < lb - 1e-3 {
+                            let e = kinds.entry(format!("{:?} round {} shell {} chamfer {:?} scale {:?}", s.kind, s.round > 0.0, s.shell > 0.0, s.corner, s.scale)).or_insert((0, 0.0));
+                            e.0 += 1;
+                            e.1 = e.1.max(lb - d);
+                        }
+                    }
+                }
+            }
+        }
+        for (k, v) in &kinds {
+            eprintln!("{k}: {} violations, worst {:.2}", v.0, v.1);
+        }
+    }
+
+    /// `cargo test -p yuracad --release cpu_culling_speed -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn cpu_culling_speed() {
+        let sc = crate::gpu::library_scene_for_tests(300);
+        let t = std::time::Instant::now();
+        let fast = Field::new(&sc);
+        let prep = t.elapsed();
+        let slow = Field::new(&sc).without_culling();
+        let (c, r) = crate::gpu::bounds(&sc, None);
+        let mut state = 5u32;
+        let mut rnd = move || {
+            state = state.wrapping_mul(1664525).wrapping_add(1013904223);
+            (state >> 8) as f32 / (1u32 << 24) as f32
+        };
+        let pts: Vec<V3> = (0..20000).map(|_| [c[0] + (rnd() - 0.5) * 2.0 * r, c[1] + (rnd() - 0.5) * 2.0 * r, c[2] + (rnd() - 0.5) * 2.0 * r * 0.4]).collect();
+        let time = |f: &Field| {
+            let t = std::time::Instant::now();
+            let mut acc = 0.0;
+            for p in &pts {
+                acc += f.distance(*p);
+            }
+            (t.elapsed().as_secs_f64() * 1000.0, acc)
+        };
+        let (a, sa) = time(&fast);
+        let (b, sb) = time(&slow);
+        eprintln!("{} shapes: Field::new {:.1} ms; 20000 distances: {a:.0} ms with skips, {b:.0} ms without ({:.1}x); sums {sa:.1} {sb:.1}", sc.shape_count(), prep.as_secs_f64() * 1000.0, b / a);
+    }
+
     fn graded(kind: Kind, mat: Material) -> Shape {
         let mut s = Shape::new(kind, [0.0, 0.0, 0.0], mat);
         s.blend = 0.0;
