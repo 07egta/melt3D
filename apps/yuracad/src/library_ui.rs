@@ -8,8 +8,8 @@ use crate::library::{self, Item};
 use crate::model::{MAX_GROUPS, MAX_SHAPES, Pick};
 use crate::style;
 
-const THUMB: usize = 72;
-const CELL: f32 = 92.0;
+const THUMB: usize = 62;
+const CELL: f32 = 78.0;
 
 fn tex_id(cat: usize, item: usize) -> egui::Id {
     egui::Id::new(("library_thumb", cat, item))
@@ -46,97 +46,77 @@ pub fn insert(app: &mut App, ctx: &egui::Context, item: &Item) -> bool {
     true
 }
 
-pub fn update(app: &mut App, ctx: &egui::Context) {
-    if !app.lib_open {
-        return;
-    }
+/// The assets tab of the left dock: search box, category chips, and the grid of models.
+pub fn panel(app: &mut App, ui: &mut egui::Ui) {
     let cats = library::all();
     if cats.is_empty() {
+        ui.label(RichText::new("ライブラリは空です").color(style::DIM));
         return;
     }
     app.lib_cat = app.lib_cat.min(cats.len() - 1);
-    let rect = app.view_rect;
-    let mut close = false;
-    let mut pick: Option<(usize, usize)> = None;
+    let ctx = ui.ctx().clone();
     let mut made_one = false;
-    egui::Area::new(egui::Id::new("library_card")).order(egui::Order::Foreground).fixed_pos(rect.left_top() + Vec2::new(292.0, 16.0)).show(ctx, |ui| {
-        style::card().show(ui, |ui| {
-            let w = (CELL * 4.0 + 28.0).min((rect.width() - 300.0).max(CELL * 2.0 + 28.0));
-            ui.set_width(w);
-            ui.horizontal(|ui| {
-                ui.label(RichText::new("ライブラリ").strong().size(15.0));
-                ui.label(RichText::new(format!("{}こ", cats.iter().map(|c| c.items.len()).sum::<usize>())).size(12.0).color(style::DIM));
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if style::pill(ui, "とじる", false).clicked() {
-                        close = true;
-                    }
-                });
-            });
-            ui.add(egui::TextEdit::singleline(&mut app.lib_query).hint_text("さがす（なまえ・English）").desired_width(f32::INFINITY));
-            ui.add_space(2.0);
-            ui.horizontal_wrapped(|ui| {
-                ui.spacing_mut().item_spacing = Vec2::new(4.0, 4.0);
-                for (i, c) in cats.iter().enumerate() {
-                    if style::pill(ui, &c.name, app.lib_cat == i && app.lib_query.trim().is_empty()).clicked() {
-                        app.lib_cat = i;
-                        app.lib_query.clear();
-                    }
+    let mut pick: Option<(usize, usize)> = None;
+    ui.add(egui::TextEdit::singleline(&mut app.lib_query).hint_text("さがす（なまえ・English）").desired_width(f32::INFINITY));
+    ui.add_space(2.0);
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = Vec2::new(4.0, 4.0);
+        for (i, c) in cats.iter().enumerate() {
+            if style::pill(ui, &c.name, app.lib_cat == i && app.lib_query.trim().is_empty()).clicked() {
+                app.lib_cat = i;
+                app.lib_query.clear();
+            }
+        }
+    });
+    ui.separator();
+    let searching = !app.lib_query.trim().is_empty();
+    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+        let per_row = ((ui.available_width() / CELL).floor() as usize).max(1);
+        let mut n = 0;
+        egui::Grid::new("library_grid").spacing(Vec2::splat(4.0)).show(ui, |ui| {
+            for (ci, c) in cats.iter().enumerate() {
+                if !searching && ci != app.lib_cat {
+                    continue;
                 }
-            });
-            ui.separator();
-            let searching = !app.lib_query.trim().is_empty();
-            egui::ScrollArea::vertical().max_height((rect.height() - 190.0).clamp(160.0, 520.0)).auto_shrink([false, true]).show(ui, |ui| {
-                let per_row = ((ui.available_width() / CELL).floor() as usize).max(1);
-                let mut n = 0;
-                ui.horizontal_wrapped(|ui| {
-                    ui.spacing_mut().item_spacing = Vec2::splat(4.0);
-                    for (ci, c) in cats.iter().enumerate() {
-                        if !searching && ci != app.lib_cat {
-                            continue;
-                        }
-                        for (ii, it) in c.items.iter().enumerate() {
-                            if searching && !it.matches(&app.lib_query) {
-                                continue;
+                for (ii, it) in c.items.iter().enumerate() {
+                    if searching && !it.matches(&app.lib_query) {
+                        continue;
+                    }
+                    n += 1;
+                    ui.vertical_centered(|ui| {
+                        ui.set_width(CELL - 8.0);
+                        let (r, resp) = ui.allocate_exact_size(Vec2::splat(THUMB as f32 + 8.0), egui::Sense::click());
+                        ui.painter().rect_filled(r, 8.0, if resp.hovered() { style::HOVER } else { style::INSET_BOTTOM });
+                        // one new picture per frame so opening the tab never stalls
+                        let tex = cached(ui.ctx(), ci, ii).or_else(|| {
+                            if made_one {
+                                return None;
                             }
-                            n += 1;
-                            ui.allocate_ui(Vec2::new(CELL, CELL + 22.0), |ui| {
-                                ui.vertical_centered(|ui| {
-                                    let (r, resp) = ui.allocate_exact_size(Vec2::splat(THUMB as f32 + 8.0), egui::Sense::click());
-                                    let hot = resp.hovered();
-                                    ui.painter().rect_filled(r, 10.0, if hot { style::HOVER } else { style::PANEL_DARK });
-                                    // one new picture per frame so opening the card never stalls
-                                    let tex = cached(ui.ctx(), ci, ii).or_else(|| {
-                                        if made_one {
-                                            return None;
-                                        }
-                                        made_one = true;
-                                        Some(make(ui.ctx(), ci, ii, it))
-                                    });
-                                    match tex {
-                                        Some(t) => {
-                                            ui.painter().image(t.id(), r.shrink(4.0), egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
-                                        }
-                                        None => {
-                                            ui.painter().text(r.center(), Align2::CENTER_CENTER, "…", egui::FontId::proportional(14.0), style::DIM);
-                                        }
-                                    }
-                                    if resp.on_hover_text(format!("{} をシーンに入れる", it.name)).clicked() {
-                                        pick = Some((ci, ii));
-                                    }
-                                    ui.label(RichText::new(&it.name).size(11.5));
-                                });
-                            });
-                            if n % per_row == 0 {
-                                ui.end_row();
+                            made_one = true;
+                            Some(make(ui.ctx(), ci, ii, it))
+                        });
+                        match tex {
+                            Some(t) => {
+                                ui.painter().image(t.id(), r.shrink(4.0), egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
+                            }
+                            None => {
+                                ui.painter().text(r.center(), Align2::CENTER_CENTER, "…", egui::FontId::proportional(14.0), style::DIM);
                             }
                         }
+                        if resp.on_hover_text(format!("{} をシーンに入れる", it.name)).clicked() {
+                            pick = Some((ci, ii));
+                        }
+                        ui.label(RichText::new(&it.name).size(11.5));
+                    });
+                    if n % per_row == 0 {
+                        ui.end_row();
                     }
-                });
-                if n == 0 {
-                    ui.label(RichText::new("見つかりませんでした").color(style::DIM));
                 }
-            });
+            }
         });
+        if n == 0 {
+            ui.label(RichText::new("見つかりませんでした").color(style::DIM));
+        }
     });
     if made_one {
         ctx.request_repaint();
@@ -144,10 +124,7 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
     if let Some((c, i)) = pick
         && let Some(item) = cats.get(c).and_then(|c| c.items.get(i))
     {
-        insert(app, ctx, item);
-    }
-    if close {
-        app.lib_open = false;
+        insert(app, &ctx, item);
     }
 }
 
@@ -179,11 +156,14 @@ mod tests {
     }
 
     #[test]
-    fn the_card_draws_when_open() {
+    fn the_panel_draws() {
         let ctx = egui::Context::default();
         let mut app = App::new(true, None);
-        app.lib_open = true;
-        ctx.run_ui(egui::RawInput::default(), |ui| update(&mut app, ui.ctx())).textures_delta.clear();
+        for _ in 0..3 {
+            ctx.run_ui(egui::RawInput::default(), |ui| panel(&mut app, ui)).textures_delta.clear();
+        }
+        app.lib_query = "zzzz".into();
+        ctx.run_ui(egui::RawInput::default(), |ui| panel(&mut app, ui)).textures_delta.clear();
     }
 
     #[test]

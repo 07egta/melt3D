@@ -317,6 +317,8 @@ pub fn xyz(ui: &mut Ui, label: &str, v: &mut [f32; 3], speed: f64, range: std::o
 }
 
 /// A triangle that turns from pointing right to pointing down when `open`.
+#[allow(dead_code)]
+#[allow(dead_code)]
 pub fn chevron(ui: &mut Ui, open: bool) -> Response {
     let (rect, resp) = ui.allocate_exact_size(Vec2::splat(22.0), Sense::click());
     let ctx = ui.ctx();
@@ -341,6 +343,23 @@ pub fn vsep(ui: &mut Ui) {
 }
 
 // ----- plates: cards, trays, panel backgrounds -----
+
+/// A slim vertical plate for a column of tool buttons.
+pub fn strip() -> egui::Frame {
+    egui::Frame::new()
+        .fill(Color32::from_rgb(38, 38, 38))
+        .stroke(Stroke::new(1.0, Color32::from_white_alpha(30)))
+        .corner_radius(CornerRadius::same(10))
+        .inner_margin(Margin::same(5))
+        .shadow(Shadow { offset: [0, 3], blur: 10, spread: 0, color: Color32::from_black_alpha(80) })
+}
+
+/// A thin horizontal divider between groups of buttons in a column.
+pub fn hsep(ui: &mut Ui) {
+    let (rect, _) = ui.allocate_exact_size(vec2(26.0, 9.0), Sense::hover());
+    let y = rect.center().y;
+    ui.painter().line_segment([pos2(rect.left(), y), pos2(rect.right(), y)], Stroke::new(1.0, Color32::from_white_alpha(34)));
+}
 
 /// Reserves a paint slot behind the content, lays the content out, then fills the slot.
 fn plated<R>(ui: &mut Ui, margin: Margin, paint: impl FnOnce(&Buf, Rect), add_contents: impl FnOnce(&mut Ui) -> R) -> egui::InnerResponse<R> {
@@ -374,10 +393,14 @@ fn paint_card(out: &Buf, rect: Rect) {
 }
 
 /// A recessed tray for a group of buttons.
+#[allow(dead_code)]
+#[allow(dead_code)]
 pub fn tray<R>(ui: &mut Ui, add_contents: impl FnOnce(&mut Ui) -> R) -> egui::InnerResponse<R> {
     plated(ui, Margin::same(3), paint_tray, add_contents)
 }
 
+#[allow(dead_code)]
+#[allow(dead_code)]
 fn paint_tray(out: &Buf, rect: Rect) {
     out.put(Shape::rect_filled(rect, 9.0, Color32::from_rgb(32, 32, 32)));
     out.put(Shape::rect_stroke(rect, 9.0, Stroke::new(1.0, Color32::from_white_alpha(18)), StrokeKind::Inside));

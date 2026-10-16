@@ -147,6 +147,8 @@ pub fn fan(out: &impl Sink, pts: &[Pos2], f: impl Fn(Pos2) -> Color32) {
 }
 
 /// A convex polygon with one colour per corner.
+#[allow(dead_code)]
+#[allow(dead_code)]
 pub fn shaded_poly(out: &impl Sink, pts: &[Pos2], cols: &[Color32]) {
     if pts.len() < 3 || cols.len() != pts.len() {
         return;
@@ -236,6 +238,8 @@ pub fn shadow(out: &impl Sink, rect: Rect, radius: f32, layers: &[(i8, u8, u8, u
 }
 
 /// A coloured glow around `rect`.
+#[allow(dead_code)]
+#[allow(dead_code)]
 pub fn glow(out: &impl Sink, rect: Rect, radius: f32, color: Color32, blur: u8) {
     if color.a() == 0 {
         return;
@@ -245,6 +249,8 @@ pub fn glow(out: &impl Sink, rect: Rect, radius: f32, color: Color32, blur: u8) 
 }
 
 /// A 1px bright line just inside the top edge (the "lip" of a raised surface).
+#[allow(dead_code)]
+#[allow(dead_code)]
 pub fn top_lip(out: &impl Sink, rect: Rect, radius: f32, color: Color32) {
     let inset = radius.min(rect.width() * 0.5) * 0.85 + 1.0;
     if rect.width() <= inset * 2.0 {
@@ -255,6 +261,8 @@ pub fn top_lip(out: &impl Sink, rect: Rect, radius: f32, color: Color32) {
 }
 
 /// A 1px dark line just inside the bottom edge (the shaded underside).
+#[allow(dead_code)]
+#[allow(dead_code)]
 pub fn bottom_shade(out: &impl Sink, rect: Rect, radius: f32, color: Color32) {
     let inset = radius.min(rect.width() * 0.5) * 0.85 + 1.0;
     if rect.width() <= inset * 2.0 {

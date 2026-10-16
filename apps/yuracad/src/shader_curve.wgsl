@@ -2,6 +2,7 @@
 // smoothed by the CPU (curve.rs). Two header entries sit just before the points: G.path[ext.x - 2]
 // and G.path[ext.x - 1] are the low and high corners of a box around the whole tube.
 // params.y is unused here; params.z = 1 cuts the two ends flat; params.x = 1 is a closed loop.
+// extra.x (shell) hollows the tube here; a flat-ended hollow tube is open at both ends.
 
 // Distance to the round cone from a (radius ra) to b (radius rb).
 fn round_cone(p: vec3<f32>, a: vec3<f32>, ra: f32, b: vec3<f32>, rb: f32) -> f32 {
@@ -35,7 +36,7 @@ fn round_cone(p: vec3<f32>, a: vec3<f32>, ra: f32, b: vec3<f32>, rb: f32) -> f32
 
 fn curve_dist(s: Shape, q: vec3<f32>) -> f32 {
     let st = i32(s.ext.x + 0.5);
-    let n = min(i32(s.ext.y + 0.5), 64);
+    let n = min(i32(s.ext.y + 0.5), 96);
     if (n < 2 || st < 2) { return 1.0e4; }
     // far away: the distance to the box around the tube is a safe, cheap answer
     let lo = G.path[st - 2].xyz;
@@ -51,6 +52,9 @@ fn curve_dist(s: Shape, q: vec3<f32>) -> f32 {
         d = min(d, round_cone(q, a.xyz, a.w, b.xyz, b.w));
         a = b;
     }
+    // a shell hollows the tube first (shape_dist leaves curves alone), then flat ends cut it open
+    let wall = s.extra.x / max(s.pos.w, 1.0e-6);
+    if (wall > 0.0) { d = abs(d + wall * 0.5) - wall * 0.5; }
     if (s.params.z > 0.5 && s.params.x < 0.5) {
         let p0 = G.path[st];
         let p1 = G.path[st + 1];
