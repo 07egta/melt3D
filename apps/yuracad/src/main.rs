@@ -7,6 +7,7 @@ mod array;
 mod camera;
 mod clip;
 mod export;
+mod export_decimate;
 mod export_mesh;
 mod fonts;
 mod gizmo;

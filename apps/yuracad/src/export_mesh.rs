@@ -481,6 +481,17 @@ fn par_for<T: Send>(
     })
 }
 
+/// Run `f` for every index in `0..count` on `threads` workers; the results come back in index order.
+pub fn par_run<T: Send>(threads: usize, count: usize, prog: &Slice, f: impl Fn(usize) -> Result<T, String> + Sync) -> Result<Vec<T>, String> {
+    let parts = par_for(threads, count, 1, prog, Vec::<(usize, T)>::new, |st, i| {
+        st.push((i, f(i)?));
+        Ok(())
+    })?;
+    let mut all: Vec<(usize, T)> = parts.into_iter().flatten().collect();
+    all.sort_unstable_by_key(|x| x.0);
+    Ok(all.into_iter().map(|x| x.1).collect())
+}
+
 /// Mesh the zero level of `sdf` inside the box `lo..hi` with cells of size `cell`.
 pub fn mesh_sparse(sdf: &dyn Sdf, lo: V, hi: V, cell: f64, threads: usize, prog: &Slice) -> Result<Meshed, String> {
     if !lo.iter().chain(hi.iter()).all(|v| v.is_finite()) || !cell.is_finite() || cell <= 0.0 {
