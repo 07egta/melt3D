@@ -36,6 +36,16 @@ pub fn mark(label: &str) {
     }
 }
 
+/// `mark`, with the time since the last `mark_interval` (for per-frame places), when `YURACAD_TIMING=1`.
+pub fn mark_interval(label: &str) {
+    if timing_on() {
+        static LAST_US: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let now = START.get().map_or(0, |s| s.elapsed().as_micros() as u64);
+        let before = LAST_US.swap(now, Ordering::Relaxed);
+        mark(&format!("{label} (+{:.1} ms)", now.saturating_sub(before) as f64 / 1000.0));
+    }
+}
+
 /// `mark`, but only the first time `flag` is seen (for per-frame places).
 pub fn mark_once(flag: &AtomicBool, label: &str) {
     if timing_on() && !flag.swap(true, Ordering::Relaxed) {

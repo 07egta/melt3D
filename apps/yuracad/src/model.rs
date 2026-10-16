@@ -3,6 +3,12 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::pattern::{Pattern, Xform};
+
+fn is_zero(v: &u32) -> bool {
+    *v == 0
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Kind {
     Sphere,
@@ -378,6 +384,9 @@ pub struct Shape {
     /// How `round` treats the edges: a round fillet (default) or a flat 45-degree bevel.
     #[serde(default)]
     pub corner: Corner,
+    /// A number patterns and linked copies find this shape by (0 = none; see `Scene::ensure_shape_uid`).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub uid: u32,
 }
 
 /// The style of a shape's cut edges: what `Shape::round` makes of them.
@@ -423,6 +432,7 @@ impl Shape {
             outline2: kind.default_outline2(),
             shell: 0.0,
             corner: Corner::Round,
+            uid: 0,
         }
     }
 
@@ -502,11 +512,23 @@ pub struct Group {
     pub blend: f32,
     pub visible: bool,
     pub shapes: Vec<Shape>,
+    /// A number linked copies and patterns find this group by (0 = none; see `Scene::ensure_group_uid`).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub uid: u32,
+    /// Live copies of the whole group (mirror, grid, circle, along a path, on points): no shape slots used.
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "crate::pattern::lenient_pattern")]
+    pub pattern: Option<Pattern>,
+    /// A linked copy of the group with this `uid`: it shows that group's shapes through `xform`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instance_of: Option<u32>,
+    /// Where a linked copy stands (move, turn, scale about the source's middle).
+    #[serde(default, skip_serializing_if = "Xform::is_identity")]
+    pub xform: Xform,
 }
 
 impl Group {
     pub fn new(name: impl Into<String>) -> Group {
-        Group { name: name.into(), op: Op::Add, blend: 0.0, visible: true, shapes: Vec::new() }
+        Group { name: name.into(), op: Op::Add, blend: 0.0, visible: true, shapes: Vec::new(), uid: 0, pattern: None, instance_of: None, xform: Xform::default() }
     }
 }
 
@@ -772,9 +794,18 @@ impl Scene {
             m.sanitize();
         }
         self.groups.truncate(MAX_GROUPS);
+        self.dedupe_uids();
         let mut left = MAX_SHAPES;
         for g in &mut self.groups {
             fix(&mut g.blend, 0.0, 200.0, 0.0);
+            if let Some(p) = &mut g.pattern {
+                p.sanitize();
+            }
+            g.xform.sanitize();
+            if g.instance_of.is_some() {
+                // a linked copy shows its source's shapes, not its own
+                g.shapes.clear();
+            }
             g.shapes.truncate(left);
             left -= g.shapes.len();
             for s in &mut g.shapes {

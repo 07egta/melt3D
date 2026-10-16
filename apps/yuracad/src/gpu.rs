@@ -507,6 +507,58 @@ pub struct Callback {
     pub size: [u32; 2],
 }
 
+/// Make the scene-list texture tall enough for `data` (a frame from `pack`).
+fn ensure_pool(res: &mut Resources, device: &wgpu::Device, data: &[f32]) {
+    let list_len = data.len().saturating_sub(GLOBAL_V4 * 4);
+    let used_rows = (list_len / 4).div_ceil(ROW).max(1) as u32;
+    if res.pool.as_ref().is_none_or(|p| p.rows < used_rows) {
+        res.pool = Some(Pool::new(device, &res.buffer, &res.scene_layout, used_rows));
+        res.cache.invalidate();
+    }
+}
+
+/// Upload a frame (globals into the uniform buffer, the scene list into the texture) and draw it
+/// into `view`. `ensure_pool` must have been called for `data`.
+fn draw(res: &Resources, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView, data: &[f32]) {
+    let Some(pool) = res.pool.as_ref() else { return };
+    let mut bytes = Vec::with_capacity(GLOBAL_BYTES);
+    for v in data.iter().take(GLOBAL_V4 * 4) {
+        bytes.extend_from_slice(&v.to_le_bytes());
+    }
+    bytes.resize(GLOBAL_BYTES, 0);
+    queue.write_buffer(&res.buffer, 0, &bytes);
+    // whole rows of the list (the last one padded with zeros)
+    let list = data.get(GLOBAL_V4 * 4..).unwrap_or(&[]);
+    let rows = ((list.len() / 4).div_ceil(ROW).max(1) as u32).min(pool.rows);
+    let mut texels: Vec<u8> = Vec::with_capacity(rows as usize * ROW * 16);
+    for v in list.iter().take(rows as usize * ROW * 4) {
+        texels.extend_from_slice(&v.to_le_bytes());
+    }
+    texels.resize(rows as usize * ROW * 16, 0);
+    queue.write_texture(
+        wgpu::TexelCopyTextureInfo { texture: &pool.texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+        &texels,
+        wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(ROW as u32 * 16), rows_per_image: Some(rows) },
+        wgpu::Extent3d { width: ROW as u32, height: rows, depth_or_array_layers: 1 },
+    );
+    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: Some("yuracad scene"),
+        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+            view,
+            depth_slice: None,
+            resolve_target: None,
+            ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store },
+        })],
+        depth_stencil_attachment: None,
+        timestamp_writes: None,
+        occlusion_query_set: None,
+        multiview_mask: None,
+    });
+    pass.set_pipeline(&res.pipeline);
+    pass.set_bind_group(0, &pool.bind, &[]);
+    pass.draw(0..3, 0..1);
+}
+
 impl egui_wgpu::CallbackTrait for Callback {
     fn prepare(
         &self,
@@ -522,56 +574,16 @@ impl egui_wgpu::CallbackTrait for Callback {
             res.target = Some(Target::new(device, res, size));
             res.cache.invalidate();
         }
-        // the scene list needs a texture tall enough
-        let list = self.data.get(GLOBAL_V4 * 4..).unwrap_or(&[]);
-        let used_rows = (list.len() / 4).div_ceil(ROW).max(1) as u32;
-        if res.pool.as_ref().is_none_or(|p| p.rows < used_rows) {
-            res.pool = Some(Pool::new(device, &res.buffer, &res.scene_layout, used_rows));
-            res.cache.invalidate();
-        }
+        ensure_pool(res, device, &self.data);
         // nothing changed since the picture was drawn: keep it
         if !res.cache.needs_render(&self.data, size) {
             return Vec::new();
         }
-        let (Some(target), Some(pool)) = (res.target.as_ref(), res.pool.as_ref()) else { return Vec::new() };
-        let mut bytes = Vec::with_capacity(GLOBAL_BYTES);
-        for v in self.data.iter().take(GLOBAL_V4 * 4) {
-            bytes.extend_from_slice(&v.to_le_bytes());
-        }
-        bytes.resize(GLOBAL_BYTES, 0);
-        queue.write_buffer(&res.buffer, 0, &bytes);
-        // whole rows of the list (the last one padded with zeros)
-        let rows = used_rows.min(pool.rows);
-        let mut texels: Vec<u8> = Vec::with_capacity(rows as usize * ROW * 16);
-        for v in list.iter().take(rows as usize * ROW * 4) {
-            texels.extend_from_slice(&v.to_le_bytes());
-        }
-        texels.resize(rows as usize * ROW * 16, 0);
-        queue.write_texture(
-            wgpu::TexelCopyTextureInfo { texture: &pool.texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
-            &texels,
-            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(ROW as u32 * 16), rows_per_image: Some(rows) },
-            wgpu::Extent3d { width: ROW as u32, height: rows, depth_or_array_layers: 1 },
-        );
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("yuracad scene"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &target.view,
-                depth_slice: None,
-                resolve_target: None,
-                ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store },
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
-        pass.set_pipeline(&res.pipeline);
-        pass.set_bind_group(0, &pool.bind, &[]);
-        pass.draw(0..3, 0..1);
-        drop(pass);
+        let Some(target) = res.target.as_ref() else { return Vec::new() };
+        draw(res, queue, encoder, &target.view, &self.data);
         static FIRST: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
         crate::perf::mark_once(&FIRST, "first scene picture queued");
+        crate::perf::mark_interval("scene picture queued");
         Vec::new()
     }
 
@@ -847,5 +859,154 @@ mod shader_tests {
         assert!(crate::model::MAX_SHAPES >= 512 && crate::model::MAX_GROUPS >= 96);
         assert!(MAX_POOL_V4 <= 2048 * ROW);
         assert!(POLY_PTS >= 16 * 1024 && PATH_V4 >= 16 * 1024, "much bigger outline and path pools");
+    }
+}
+
+/// A real GPU (or the software one) without a window: renders scenes into a texture and reads
+/// them back. Ignored by default (it needs an adapter): `cargo test -p yuracad --release gpu_headless -- --ignored --nocapture`.
+#[cfg(test)]
+pub(crate) mod headless {
+    use super::*;
+
+    pub struct Gpu {
+        pub device: wgpu::Device,
+        pub queue: wgpu::Queue,
+        pub res: Resources,
+        pub info: String,
+    }
+
+    /// `downlevel`: ask for the limits egui-wgpu asks for on OpenGL (no storage buffers, 16 KB uniforms).
+    pub fn open(downlevel: bool) -> Option<Gpu> {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions { power_preference: wgpu::PowerPreference::HighPerformance, force_fallback_adapter: false, compatible_surface: None, ..Default::default() })).ok()?;
+        let base = if downlevel { wgpu::Limits::downlevel_webgl2_defaults() } else { wgpu::Limits::default() };
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("headless"),
+            required_limits: wgpu::Limits { max_texture_dimension_2d: adapter.limits().max_texture_dimension_2d.min(8192), ..base },
+            ..Default::default()
+        }))
+        .ok()?;
+        let info = format!("{:?}", adapter.get_info());
+        let res = build(&device, wgpu::TextureFormat::Rgba8Unorm);
+        Some(Gpu { device, queue, res, info })
+    }
+
+    impl Gpu {
+        /// Render `data` (from `pack`) at `size`; returns RGBA8 pixels and the seconds the draw took.
+        pub fn render(&mut self, data: &[f32], size: [u32; 2]) -> (Vec<u8>, f64) {
+            let tex = self.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("headless target"),
+                size: wgpu::Extent3d { width: size[0], height: size[1], depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            });
+            let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+            ensure_pool(&mut self.res, &self.device, data);
+            let bpr = (size[0] * 4).next_multiple_of(256);
+            let out = self.device.create_buffer(&wgpu::BufferDescriptor { label: Some("readback"), size: (bpr * size[1]) as u64, usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false });
+            let mut enc = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+            draw(&self.res, &self.queue, &mut enc, &view, data);
+            enc.copy_texture_to_buffer(
+                wgpu::TexelCopyTextureInfo { texture: &tex, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+                wgpu::TexelCopyBufferInfo { buffer: &out, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(bpr), rows_per_image: Some(size[1]) } },
+                wgpu::Extent3d { width: size[0], height: size[1], depth_or_array_layers: 1 },
+            );
+            let t0 = std::time::Instant::now();
+            self.queue.submit([enc.finish()]);
+            let slice = out.slice(..);
+            slice.map_async(wgpu::MapMode::Read, |_| {});
+            let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
+            let secs = t0.elapsed().as_secs_f64();
+            let Ok(mapped) = slice.get_mapped_range() else { return (Vec::new(), secs) };
+            let mut px = Vec::with_capacity((size[0] * size[1] * 4) as usize);
+            for y in 0..size[1] {
+                let row = (y * bpr) as usize;
+                px.extend_from_slice(&mapped[row..row + (size[0] * 4) as usize]);
+            }
+            drop(mapped);
+            out.unmap();
+            (px, secs)
+        }
+    }
+}
+
+#[cfg(test)]
+mod headless_tests {
+    use super::headless;
+    use super::*;
+    use crate::model::Group;
+
+    /// About `shapes` shapes: library models (cycling through every category) on a grid.
+    pub(crate) fn library_scene(shapes: usize) -> Scene {
+        let items: Vec<&crate::library::Item> = crate::library::all().iter().flat_map(|c| c.items.iter()).collect();
+        let mut sc = Scene::default();
+        sc.groups.clear();
+        let mut i = 0usize;
+        while sc.shape_count() < shapes && sc.groups.len() < MAX_GROUPS {
+            let it = items[(i * 7) % items.len()];
+            if !it.fits(sc.groups.len(), sc.shape_count()) {
+                break;
+            }
+            let side = ((shapes as f32 / 12.0).sqrt().ceil() as usize).max(1);
+            let at = [((i % side) as f32 - side as f32 / 2.0) * 90.0, ((i / side) as f32 - side as f32 / 2.0) * 90.0];
+            let mut g: Group = it.placed(at);
+            g.name = format!("{} {i}", it.name);
+            sc.groups.push(g);
+            i += 1;
+        }
+        sc
+    }
+
+    fn view_of(sc: &Scene) -> Camera {
+        let mut cam = Camera::default();
+        let (c, r) = bounds(sc, None);
+        cam.frame(c, r.max(10.0));
+        cam
+    }
+
+    #[test]
+    fn the_library_scene_has_the_asked_size() {
+        let sc = library_scene(300);
+        assert!(sc.shape_count() >= 300 && sc.shape_count() <= 340 && sc.groups.len() < MAX_GROUPS, "{} shapes in {} groups", sc.shape_count(), sc.groups.len());
+    }
+
+    /// `cargo test -p yuracad --release gpu_headless_bench -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn gpu_headless_bench() {
+        let downlevel = std::env::var_os("YURA_GL_LIMITS").is_some();
+        let Some(mut gpu) = headless::open(downlevel) else {
+            eprintln!("no graphics adapter here");
+            return;
+        };
+        eprintln!("adapter: {} (downlevel limits: {downlevel})", gpu.info);
+        let size = [480u32, 300u32];
+        for n in [12usize, 100, 300, 500] {
+            let sc = library_scene(n);
+            let cam = view_of(&sc);
+            for fast in [false, true] {
+                let mut data = pack(&sc, &cam, [size[0] as f32, size[1] as f32], None, None, false);
+                set_view_flags(&mut data, crate::perf::view_flags(false, fast, false));
+                let (_, first) = gpu.render(&data, size);
+                let (px, secs) = gpu.render(&data, size);
+                let lit = px.chunks(4).filter(|p| p[0] != px[0] || p[1] != px[1]).count();
+                eprintln!(
+                    "{:4} shapes in {:3} groups, {} : {:7.1} ms per {}x{} frame (first {:.0} ms), list {} vec4, {} pixels differ from the corner",
+                    sc.shape_count(),
+                    sc.groups.len(),
+                    if fast { "fast" } else { "full" },
+                    secs * 1000.0,
+                    size[0],
+                    size[1],
+                    first * 1000.0,
+                    data.len() / 4 - GLOBAL_V4,
+                    lit
+                );
+            }
+        }
     }
 }
