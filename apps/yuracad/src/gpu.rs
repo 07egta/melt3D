@@ -164,7 +164,7 @@ pub fn pack(scene: &Scene, cam: &Camera, size: [f32; 2], selected: Option<Pick>,
     put(&mut u, 6, [group_n as f32, shape_n as f32, sel_first, sel_count]);
     put(&mut u, V4_OFFS, [0.0, block_base as f32, inst_base as f32, shape_base as f32]);
     put(&mut u, V4_OFFS2, [poly_base as f32, path_base as f32, 0.0, 0.0]);
-    let (bc, br) = bounds(scene, selected);
+    let (bc, br) = bounds_of(scene, selected, &resolved);
     put(&mut u, V4_BOUND, [bc[0], bc[1], bc[2], br]);
     put(&mut u, V4_HOVER, [hover_first, hover_count, 0.0, 0.0]);
     put(&mut u, V4_SELSPH, crate::perf::sphere_of(scene, &crate::view::targets(scene, selected)));
@@ -267,9 +267,14 @@ fn pack_curve(s: &crate::model::Shape, path: &mut Vec<f32>) -> (usize, usize) {
 /// A sphere around everything the shader can draw (centre, radius; radius 0 when there is nothing):
 /// rays that miss it skip the marching. It includes the melt's reach, the drips and the selection.
 pub fn bounds(scene: &Scene, selected: Option<Pick>) -> ([f32; 3], f32) {
+    bounds_of(scene, selected, &crate::pattern::resolve(scene))
+}
+
+/// `bounds` for groups that are already resolved (`pattern::resolve`).
+fn bounds_of(scene: &Scene, selected: Option<Pick>, resolved: &[crate::pattern::RGroup]) -> ([f32; 3], f32) {
     use crate::accel::{Bound, enclose};
     let mut items: Vec<Bound> = Vec::new();
-    for rg in crate::pattern::resolve(scene) {
+    for rg in resolved {
         let (Some(g), Some(src)) = (scene.groups.get(rg.gi), scene.groups.get(rg.src)) else { continue };
         let mut parts: Vec<Bound> = Vec::new();
         for (si, s) in src.shapes.iter().enumerate() {
@@ -835,6 +840,28 @@ mod instance_tests {
     }
 
     #[test]
+    fn a_scene_full_of_patterns_stays_inside_the_list_and_the_limits() {
+        let mut sc = Scene::default();
+        sc.groups.clear();
+        for g in 0..crate::model::MAX_GROUPS {
+            let mut gr = Group::new(format!("g{g}"));
+            for k in 0..5 {
+                gr.shapes.push(ball(k as f32 * 7.0));
+            }
+            gr.pattern = Some(Pattern::Rect { counts: [20, 20, 20], spacing: [30.0, 30.0, 30.0] });
+            sc.groups.push(gr);
+        }
+        let u = pack(&sc, &Camera::default(), [800.0, 600.0], None, None, true);
+        let f = Frame::new(&u);
+        let total: usize = (0..crate::model::MAX_GROUPS).map(|g| instances_of(&f, g).len()).sum();
+        assert!(total >= crate::pattern::MAX_INSTANCES && total <= crate::pattern::MAX_INSTANCES + crate::model::MAX_GROUPS, "{total} instances");
+        assert!(f.list_len() <= MAX_POOL_V4, "{} <= {MAX_POOL_V4}", f.list_len());
+        // and the CPU field copes with the same scene
+        let field = crate::sdf::Field::new(&sc);
+        assert!(field.distance([0.0, 0.0, 0.0]).is_finite());
+    }
+
+    #[test]
     fn the_bounding_sphere_holds_every_instance() {
         let mut sc = Scene::default();
         sc.groups[0].pattern = Some(Pattern::Rect { counts: [3, 1, 1], spacing: [500.0, 0.0, 0.0] });
@@ -1212,6 +1239,27 @@ mod headless_tests {
                     lit
                 );
             }
+        }
+        // one model, 250 live instances (a grid): no shape slots, 250 instances in the list
+        let mut sc = library_scene(12);
+        sc.groups.truncate(1);
+        sc.groups[0].pattern = Some(crate::pattern::Pattern::Rect { counts: [25, 10, 1], spacing: [60.0, 60.0, 0.0] });
+        let cam = view_of(&sc);
+        for fast in [false, true] {
+            let mut data = pack(&sc, &cam, [size[0] as f32, size[1] as f32], None, None, false);
+            set_view_flags(&mut data, crate::perf::view_flags(false, fast, false));
+            let (_, first) = gpu.render(&data, size);
+            let (_, secs) = gpu.render(&data, size);
+            eprintln!(
+                "{:4} shapes x 250 instances, {} : {:7.1} ms per {}x{} frame (first {:.0} ms), list {} vec4",
+                sc.shape_count(),
+                if fast { "fast" } else { "full" },
+                secs * 1000.0,
+                size[0],
+                size[1],
+                first * 1000.0,
+                data.len() / 4 - GLOBAL_V4
+            );
         }
     }
 }

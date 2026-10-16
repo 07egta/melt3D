@@ -984,6 +984,37 @@ mod tests {
     }
 
     #[test]
+    fn a_file_with_too_much_is_cut_to_the_new_limits() {
+        assert!(MAX_SHAPES >= 512 && MAX_GROUPS >= 96);
+        let mut sc = Scene::default();
+        let one = sc.groups[0].shapes[0].clone();
+        sc.groups.clear();
+        for g in 0..MAX_GROUPS + 20 {
+            let mut gr = Group::new(format!("g{g}"));
+            gr.shapes = vec![one.clone(); 8];
+            sc.groups.push(gr);
+        }
+        let back = Scene::from_json(&sc.to_json()).unwrap_or_default();
+        assert_eq!(back.groups.len(), MAX_GROUPS);
+        assert_eq!(back.shape_count(), MAX_SHAPES, "{} groups of 8 shapes are cut at {MAX_SHAPES}", MAX_GROUPS);
+        // a file with a hostile pattern keeps only safe numbers
+        let hostile = r#"{"groups":[{"name":"g","op":"Add","blend":0,"visible":true,"shapes":[],"pattern":{"Rect":{"counts":[4000000000,0,9],"spacing":[1e30,-1e30,0]}},"xform":{"pos":[1e30,0,0],"rot":[0,0,0],"scale":-4}}]}"#;
+        let h = Scene::from_json(hostile).unwrap_or_default();
+        match &h.groups[0].pattern {
+            Some(crate::pattern::Pattern::Rect { counts, spacing }) => {
+                assert!(counts.iter().all(|c| (1..=crate::pattern::MAX_SIDE).contains(c)));
+                assert!(spacing.iter().all(|s| s.abs() <= 5000.0));
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(h.groups[0].xform.scale >= 0.01 && h.groups[0].xform.pos[0] <= 5000.0);
+        // a linked copy keeps no shapes of its own
+        let linked = r#"{"groups":[{"name":"g","op":"Add","blend":0,"visible":true,"uid":3,"shapes":[]},{"name":"c","op":"Add","blend":0,"visible":true,"instance_of":3,"shapes":[{"name":"s","kind":"Sphere","size":[20,1,1],"round":0,"pos":[0,0,20],"rot":[0,0,0],"scale":[1,1,1],"op":"Add","blend":6,"material":{"color":[1,0,0],"roughness":0.3,"metallic":1},"visible":true,"outline":[]}]}]}"#;
+        let l = Scene::from_json(linked).unwrap_or_default();
+        assert!(l.groups[1].shapes.is_empty() && l.groups[1].instance_of == Some(3));
+    }
+
+    #[test]
     fn rounding_is_held_inside_the_file_limits() {
         let mut sc = Scene::default();
         if let Some(s) = sc.groups[0].shapes.first_mut() {
