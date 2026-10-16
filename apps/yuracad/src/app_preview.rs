@@ -69,6 +69,24 @@ fn app_preview() {
         }
         _ => {}
     }
+    // `YURA_MESH=card` shows the mesh import card with a file read; `YURA_MESH=shape` selects an imported mesh (its inspector)
+    let mesh = std::env::var("YURA_MESH").ok();
+    if let Some(which) = mesh.as_deref() {
+        let stl = std::env::temp_dir().join("meltcad_preview_model.stl");
+        let _ = std::fs::write(&stl, crate::mesh_import::tests::sample_stl());
+        if which == "card" {
+            crate::mesh_dialog::open_path(&ctx, stl);
+        } else if let Ok(l) = crate::mesh_import::load(&stl) {
+            let st = crate::mesh_import::Settings { res: 48, ..crate::mesh_import::Settings::new(l.size) };
+            if let Ok(b) = crate::mesh_import::bake(&l.imported.mesh, l.imported.format, &st, &crate::sdf_volume::BakeControl::new()) {
+                let sh = crate::mesh_import::shape_of(&b, &l.stem, &l.file_name, [0.0, 0.0, b.size[2] * 0.5], Material::default());
+                let mut g = crate::model::Group::new(l.stem.clone());
+                g.shapes.push(sh);
+                app.scene.groups.push(g);
+                app.sel = Some(crate::model::Pick::Shape(1, 0));
+            }
+        }
+    }
     let size = egui::vec2(1380.0, 860.0);
     let mut tex = Textures::new();
     let mut last = None;
@@ -79,8 +97,8 @@ fn app_preview() {
         Some(_) => crate::export_dialog::open(&ctx, None),
         None => {}
     }
-    for _ in 0..if export.is_some() { 60 } else { 4 } {
-        if export.is_some() {
+    for _ in 0..if export.is_some() || mesh.is_some() { 60 } else { 4 } {
+        if export.is_some() || mesh.is_some() {
             std::thread::sleep(std::time::Duration::from_millis(60));
         }
         let input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)), ..Default::default() };
@@ -98,6 +116,7 @@ fn app_preview() {
             app.sketch_card(ui.ctx());
             app.keys_card(ui);
             crate::export_dialog::update(&mut app, ui.ctx());
+            crate::mesh_dialog::update(&mut app, ui.ctx());
         });
         apply_deltas(&mut tex, &out.textures_delta);
         out.textures_delta.clear();
