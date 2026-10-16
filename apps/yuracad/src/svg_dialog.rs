@@ -75,7 +75,7 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
     let mut close = false;
     let mut go = false;
     egui::Area::new(egui::Id::new("svg_import_area")).order(egui::Order::Foreground).anchor(Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
-        style::card().inner_margin(egui::Margin::symmetric(16, 14)).show(ui, |ui| {
+        style::card().show(ui, |ui| {
             ui.set_width(330.0);
             ui.label(RichText::new("SVGを読み込む").strong().size(15.0));
             ui.label(RichText::new("絵（SVG）をぐーっと押し出して、立体にします。あなは自動でくり抜きます").size(11.5).color(style::DIM));
