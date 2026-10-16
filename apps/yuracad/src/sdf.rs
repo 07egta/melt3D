@@ -73,6 +73,10 @@ pub struct PreparedGroup {
     pub shapes: Vec<Prepared>,
     /// The scene (group, shape) of each prepared shape.
     pub origin: Vec<(usize, usize)>,
+    /// A bounding sphere of each shape, and the blocks and sphere of the whole group (accel.rs):
+    /// far from them, a shape, a block or the group cannot change the answer, so it is not measured.
+    pub bounds: Vec<crate::accel::Bound>,
+    pub info: crate::accel::GroupInfo,
 }
 
 #[derive(Clone, Debug)]
@@ -323,47 +327,98 @@ impl Field {
             }
             let mut shapes = Vec::new();
             let mut origin = Vec::new();
+            let mut members: Vec<&Shape> = Vec::new();
             for (si, s) in g.shapes.iter().enumerate() {
                 if s.visible {
                     shapes.push(Prepared::new(s));
                     origin.push((gi, si));
+                    members.push(s);
                 }
             }
-            groups.push(PreparedGroup { op: g.op, blend: g.blend, shapes, origin });
+            let info = crate::accel::group_info(&members, &scene.melt);
+            let bounds = members.iter().map(|s| crate::accel::shape_bound(s)).collect();
+            groups.push(PreparedGroup { op: g.op, blend: g.blend, shapes, origin, bounds, info });
         }
         let m = scene.melt;
         Field { groups, mode: m.mode, amount: m.amount, drip: m.drip, ripple: m.ripple }
     }
 
+    /// The same field with every skip switched off (for the tests that prove the skips are exact).
+    #[cfg(test)]
+    pub fn without_culling(mut self) -> Field {
+        for g in &mut self.groups {
+            g.bounds = vec![crate::accel::Bound { c: [0.0; 3], r: 1.0e9 }; g.shapes.len()];
+            g.info.bound = crate::accel::Bound { c: [0.0; 3], r: 1.0e9 };
+            g.info.blocks = vec![crate::accel::Block { bound: g.info.bound, kmax: 0.0, skippable: false, first: 0, count: g.shapes.len() }];
+        }
+        self
+    }
+
+    /// The shapes of one group melted together at `p`. A shape or a whole block that is far from
+    /// `p` (see accel.rs) is left out: that changes nothing, it only saves the measuring.
     fn group(&self, g: &PreparedGroup, p: V3) -> Option<Sample> {
+        use crate::accel::{block_far, far_enough, paint_far};
         let mut acc: Option<Sample> = None;
-        for (i, s) in g.shapes.iter().enumerate() {
-            let d = s.distance(p);
-            let me = Sample {
-                dist: d,
-                color: s.color_at(p),
-                roughness: s.material.roughness,
-                metallic: s.material.metallic,
-                nearest: Some(g.origin[i]),
-            };
-            acc = Some(match acc {
-                None => {
-                    if s.op != Op::Add {
+        let multi = g.info.blocks.len() > 1;
+        for blk in &g.info.blocks {
+            if multi && blk.skippable && let Some(a) = &acc && blk.bound.lower(p) >= block_far(a.dist, blk.kmax * self.amount, self.mode) {
+                continue;
+            }
+            for i in blk.first..blk.first + blk.count {
+                let Some(s) = g.shapes.get(i) else { continue };
+                let k = s.blend * self.amount;
+                if let Some(a) = &acc {
+                    let lb = g.bounds.get(i).map_or(f32::NEG_INFINITY, |b| b.lower(p));
+                    let far = match s.op {
+                        Op::Intersect => false,
+                        Op::Add => lb >= far_enough(a.dist, k, self.mode),
+                        Op::Subtract => lb >= far_enough(-a.dist, k, self.mode),
+                        Op::Paint => lb >= paint_far(k),
+                    };
+                    if far {
                         continue;
                     }
-                    me
                 }
-                Some(a) => combine(a, me, s.op, s.blend * self.amount, self.mode),
-            });
+                let me = Sample {
+                    dist: s.distance(p),
+                    color: s.color_at(p),
+                    roughness: s.material.roughness,
+                    metallic: s.material.metallic,
+                    nearest: g.origin.get(i).copied(),
+                };
+                acc = Some(match acc {
+                    None => {
+                        if s.op != Op::Add {
+                            continue;
+                        }
+                        me
+                    }
+                    Some(a) => combine(a, me, s.op, k, self.mode),
+                });
+            }
         }
         acc
     }
 
     /// Measure the scene at `p`.
     pub fn sample(&self, p: V3) -> Sample {
+        use crate::accel::{far_enough, paint_far};
         let p = warp(p, self.drip, self.ripple);
         let mut acc: Option<Sample> = None;
         for g in &self.groups {
+            if let Some(a) = &acc {
+                let lb = g.info.bound.lower(p);
+                let k = g.blend * self.amount;
+                let far = match g.op {
+                    Op::Intersect => false,
+                    Op::Add => lb >= far_enough(a.dist, k, self.mode),
+                    Op::Subtract => lb >= far_enough(-a.dist, k, self.mode),
+                    Op::Paint => lb >= paint_far(k),
+                };
+                if far {
+                    continue;
+                }
+            }
             let Some(gs) = self.group(g, p) else { continue };
             acc = Some(match acc {
                 None => {
@@ -449,7 +504,7 @@ fn combine(a: Sample, b: Sample, op: Op, k: f32, mode: BlendMode) -> Sample {
                 color: mix3(b.color, a.color, 1.0 - (1.0 - h).clamp(0.0, 1.0) * (1.0 - h)),
                 roughness: a.roughness,
                 metallic: a.metallic,
-                nearest: if h > 0.5 { b.nearest } else { a.nearest },
+                nearest: if h > 0.5 { a.nearest } else { b.nearest },
             }
         }
     }
@@ -558,6 +613,64 @@ mod tests {
         let mut dripping = sc.clone();
         dripping.melt.drip = 20.0;
         assert!(Field::new(&dripping).distance([0.0, 0.0, 0.0]).is_finite());
+    }
+
+    /// A busy scene: `groups` groups of mixed shapes, ops and blends spread over a plane.
+    pub(crate) fn busy_scene(groups: usize, per_group: usize, seed: u32) -> Scene {
+        let mut state = seed.wrapping_mul(2654435761).wrapping_add(12345);
+        let mut rnd = move || {
+            state = state.wrapping_mul(1664525).wrapping_add(1013904223);
+            (state >> 8) as f32 / (1u32 << 24) as f32
+        };
+        let kinds = [Kind::Sphere, Kind::Box, Kind::Cylinder, Kind::Torus, Kind::Cone, Kind::Capsule, Kind::Octa];
+        let mut sc = Scene::default();
+        sc.groups.clear();
+        for gi in 0..groups {
+            let mut g = Group::new(format!("g{gi}"));
+            g.blend = rnd() * 10.0;
+            g.op = if gi > 0 && rnd() < 0.15 { Op::Subtract } else { Op::Add };
+            for si in 0..per_group {
+                let kind = kinds[(rnd() * kinds.len() as f32) as usize % kinds.len()];
+                let c = [((gi % 8) as f32 - 4.0) * 60.0 + (rnd() - 0.5) * 50.0, ((gi / 8) as f32 - 2.0) * 60.0 + (rnd() - 0.5) * 50.0, rnd() * 50.0];
+                let mut s = Shape::new(kind, c, Material { color: [rnd(), rnd(), rnd()], ..Material::default() });
+                s.size = [4.0 + rnd() * 12.0, 4.0 + rnd() * 12.0, 4.0 + rnd() * 12.0];
+                s.rot = [rnd() * 90.0, rnd() * 90.0, rnd() * 90.0];
+                s.blend = rnd() * 12.0;
+                s.op = if si > 0 && rnd() < 0.2 { Op::Subtract } else if si > 0 && rnd() < 0.08 { Op::Intersect } else if si > 0 && rnd() < 0.08 { Op::Paint } else { Op::Add };
+                g.shapes.push(s);
+            }
+            sc.groups.push(g);
+        }
+        sc
+    }
+
+    #[test]
+    fn skipping_far_shapes_blocks_and_groups_never_changes_the_answer() {
+        let mut worst = 0.0_f32;
+        for (seed, mode) in [(1, BlendMode::Smooth), (2, BlendMode::Round), (3, BlendMode::Gooey)] {
+            let mut sc = busy_scene(18, 20, seed);
+            sc.melt.mode = mode;
+            let fast = Field::new(&sc);
+            let slow = Field::new(&sc).without_culling();
+            assert!(fast.groups.iter().any(|g| g.info.blocks.len() > 1), "the groups are cut into blocks");
+            let mut state = seed * 77 + 1;
+            let mut rnd = move || {
+                state = state.wrapping_mul(1664525).wrapping_add(1013904223);
+                (state >> 8) as f32 / (1u32 << 24) as f32
+            };
+            for _ in 0..1500 {
+                let p = [(rnd() - 0.5) * 600.0, (rnd() - 0.5) * 400.0, rnd() * 120.0 - 20.0];
+                let (a, b) = (fast.sample(p), slow.sample(p));
+                let dd = (a.dist - b.dist).abs();
+                worst = worst.max(dd);
+                assert!(dd < 1e-3, "{mode:?} at {p:?}: {} against {}", a.dist, b.dist);
+                if a.dist.abs() < 2.0 {
+                    assert_eq!(a.nearest, b.nearest, "{mode:?} at {p:?}");
+                    assert!((0..3).all(|i| (a.color[i] - b.color[i]).abs() < 2e-3), "{mode:?} colour at {p:?}");
+                }
+            }
+        }
+        eprintln!("worst skip error {worst}");
     }
 
     fn graded(kind: Kind, mat: Material) -> Shape {
