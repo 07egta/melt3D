@@ -66,11 +66,17 @@ impl App {
         let pos = resp.hover_pos().or_else(|| ui.input(|i| i.pointer.interact_pos()));
 
         // The curve's nodes come first: they win over the gizmo only where the mouse is on one
-        let ct = if clean { crate::curve_tool::Input::default() } else { self.curve_input(ui, &resp, rect, pos, mods) };
+        let ct = if clean {
+            crate::curve_tool::Input::default()
+        } else if let Some(used) = self.sketch_input(ui, &resp, rect, pos, mods) {
+            used
+        } else {
+            self.curve_input(ui, &resp, rect, pos, mods)
+        };
 
         // The handles
         let tool = self.tool;
-        let geom = if clean || self.ct.drawing || self.pt.on { None } else { gizmo::build(&self.cam, rect, &self.scene, self.sel, tool) };
+        let geom = if clean || self.ct.drawing || self.pt.on || self.sketch_active() { None } else { gizmo::build(&self.cam, rect, &self.scene, self.sel, tool) };
         let over_gnomon = !clean && pos.is_some_and(|p| self.gnomon_hit(rect, p).is_some());
         let hover_handle = match (&geom, pos, &self.drag) {
             (Some(g), Some(p), None) if resp.hovered() && !over_gnomon && !ct.over => gizmo::hit(g, tool, p),
@@ -237,6 +243,7 @@ impl App {
         }
         self.curve_paint(&painter, rect);
         self.pipe_paint(&painter, rect);
+        self.sketch_paint(&painter, rect);
         self.draw_gnomon(&painter, rect, pos);
     }
 

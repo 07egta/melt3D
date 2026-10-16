@@ -103,6 +103,7 @@ impl App {
         if on {
             self.finish_drawing();
             self.ct.drawing = false;
+            self.sketch_off();
         }
         self.pt.on = on;
         self.pt.stroke.clear();
