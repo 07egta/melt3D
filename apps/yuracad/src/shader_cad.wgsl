@@ -138,8 +138,8 @@ fn sweep_dist(s: Shape, q: vec3<f32>) -> f32 {
     var bi = 0;
     var bt = 0.0;
     for (var i = 0; i < n - 1; i = i + 1) {
-        let a = G.path[base + i].xyz;
-        let b = G.path[base + i + 1].xyz;
+        let a = path_pt(base + i).xyz;
+        let b = path_pt(base + i + 1).xyz;
         let ab = b - a;
         let ap = q - a;
         let t = clamp(dot(ap, ab) / max(dot(ab, ab), 1e-12), 0.0, 1.0);
@@ -147,8 +147,8 @@ fn sweep_dist(s: Shape, q: vec3<f32>) -> f32 {
         let d2 = dot(c, c);
         if (d2 < best) { best = d2; bi = i; bt = t; }
     }
-    let pa = G.path[base + bi];
-    let pb = G.path[base + bi + 1];
+    let pa = path_pt(base + bi);
+    let pb = path_pt(base + bi + 1);
     let ab = pb.xyz - pa.xyz;
     var tn = vec3<f32>(0.0, 0.0, 1.0);
     if (length(ab) > 1e-12) { tn = ab / length(ab); }

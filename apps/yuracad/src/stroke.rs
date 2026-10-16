@@ -11,7 +11,7 @@
 //! Node budget: a curve keeps at most `model::MAX_PATH` (48) nodes; a traced pipe uses at most
 //! `PIPE_NODES` (24) of them, which leaves room to add nodes by hand. The renderer measures at most
 //! `curve::MAX_POINTS` (96) resampled points per curve (CPU, GPU and mesher alike), so 24 nodes still
-//! get about four pieces per span. The GPU path buffer (`gpu::PATH_V4`) holds those for 10 curves.
+//! get about four pieces per span. The GPU path list (`gpu::PATH_V4`) holds those for hundreds of curves.
 
 use crate::model::MAX_PATH;
 use crate::sdf::{Field, V3, add, dot, len, mul, sub};

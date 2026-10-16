@@ -36,6 +36,16 @@ pub fn mark(label: &str) {
     }
 }
 
+/// `mark`, with the time since the last `mark_interval` (for per-frame places), when `YURACAD_TIMING=1`.
+pub fn mark_interval(label: &str) {
+    if timing_on() {
+        static LAST_US: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let now = START.get().map_or(0, |s| s.elapsed().as_micros() as u64);
+        let before = LAST_US.swap(now, Ordering::Relaxed);
+        mark(&format!("{label} (+{:.1} ms)", now.saturating_sub(before) as f64 / 1000.0));
+    }
+}
+
 /// `mark`, but only the first time `flag` is seen (for per-frame places).
 pub fn mark_once(flag: &AtomicBool, label: &str) {
     if timing_on() && !flag.swap(true, Ordering::Relaxed) {
@@ -261,7 +271,9 @@ pub fn view_flags(srgb: bool, fast: bool, glow: bool) -> f32 {
 
 /// Does any visible shape glow (so the shader must march with materials and draw halos)?
 pub fn scene_has_glow(scene: &Scene) -> bool {
-    scene.groups.iter().filter(|g| g.visible).any(|g| g.shapes.iter().any(|s| s.visible && s.material.glow > 0.0))
+    // a linked copy shows its source's shapes (even a hidden source's)
+    let linked = scene.groups.iter().any(|g| g.visible && g.is_linked());
+    scene.groups.iter().filter(|g| g.visible || linked).any(|g| g.shapes.iter().any(|s| s.visible && s.material.glow > 0.0))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -568,6 +580,17 @@ mod tests {
             sh.visible = false;
         }
         assert!(!scene_has_glow(&s), "a hidden lamp does not count");
+        // a copy of a lamp is a lamp, even when the lamp group itself is hidden
+        if let Some(sh) = s.shape_mut(0, 0) {
+            sh.visible = true;
+            sh.material.glow = 0.5;
+        }
+        let uid = s.ensure_group_uid(0).unwrap_or(0);
+        let mut copy = crate::model::Group::new("copy");
+        copy.instance_of = Some(uid);
+        s.groups.push(copy);
+        s.groups[0].visible = false;
+        assert!(scene_has_glow(&s));
     }
 
     /// Outside the bounding sphere, a basic solid is never reached (so the shader may skip it).

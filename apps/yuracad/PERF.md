@@ -58,3 +58,56 @@ a cutter was hovered).
 * wgpu backends: restricting to `Backends::PRIMARY` (Vulkan/DX12/Metal) skips the GL probe at start-up (tens of ms), but drops machines that only have GL.
 * If the viewport is still too slow on weak GPUs: lower the default max iterations, or render the still frame in two passes (a low-res march giving a start distance per pixel). Not needed so far.
 * Material preview swatches in the side panel are tessellated by egui every frame the panel repaints; caching them as one texture would save CPU on the Material tab.
+
+
+## Big scenes (512 shapes, 96 groups, 256 instances)
+
+The scene no longer lives in the 64 KB uniform buffer. `gpu.rs` packs it into **one long list of
+vec4 in a float texture** (`Rgba32Float`, 1024 vec4 per row, read with `textureLoad`); only the
+camera, light and the list's offsets (`Globals`, 23 vec4) are uniforms. The list is exactly as long as
+the scene needs (a default scene is 14 vec4, a full scene about 50 000), and it is uploaded only when
+the packed frame changed (the frame cache compares the whole frame). A texture was chosen over a
+storage buffer because egui-wgpu asks for `downlevel_webgl2_defaults` limits on OpenGL (no storage
+buffers, 16 KB uniforms), and the first thing a fragment shader can always read is a texture. The
+list: groups (3 vec4), blocks (2), instances (4), shapes (16), outline points, path nodes.
+`gpu::headless::open(true)` (`YURA_GL_LIMITS=1`) requests those OpenGL limits for the headless tests.
+
+To keep a frame bounded by what is near the ray (`accel.rs`, same numbers on the CPU `Field`):
+* shapes are cut into **blocks of 8** with a bounding sphere; a block that is farther than
+  `rm * kmax + |g| + 0.02` from the point is skipped whole;
+* every **group** has a sphere (its adds and overlaps plus the most their blends can pull the
+  distance down: `pull(mode, k)`); a group (or one instance of it) farther than `far_enough(...)` is skipped;
+* overlap shapes (`Op::Intersect`) are never skipped, and `map_d()` now treats them as overlaps (it used
+  to measure them as unions, so marching and the picture disagreed).
+`sdf::tests::skipping_far_shapes_blocks_and_groups_never_changes_the_answer` proves the skips are exact
+(error 7e-5 at most, all three blend modes). The CPU `Field` uses the same skips (picking and the mesher got faster too).
+
+Measured with the software Vulkan driver (llvmpipe, 4 cores) through `gpu_headless_bench`
+(`cargo test -p yuracad --release gpu_headless_bench -- --ignored --nocapture`), 480 x 300 pixels, a
+scene of library models on a grid, one still frame after the shader was compiled:
+
+| shapes | groups | full quality | fast mode |
+|---|---|---|---|
+| 17 | 1 | 102 ms | 70 ms |
+| 106 | 8 | 664 ms | 232 ms |
+| 305 | 26 | 1556 ms | 673 ms |
+| 502 | 44 | 1962 ms | 1012 ms |
+| 17, as a grid of 250 live instances (a 4250-shape scene's worth) | 1 | 2979 ms | 1096 ms |
+
+(a real GPU is far faster; the point is the growth: 18 times the shapes cost 15 times the time, and
+the bigger scenes also fill more of the picture; the instanced scene costs about 1.5 times the 502-shape scene). Compiling the shader on llvmpipe takes minutes
+(the driver inlines every call site); `GALLIVM_PERF=no_opt` makes it about 3 times faster for tests.
+
+Instances (patterns and linked copies) are evaluated by carrying the point back into the group's own
+space: three rows of a matrix per instance in the list, the group's sphere moved with it for the skip.
+256 instances in the scene at most; each melts into the result in turn with the group's op and blend.
+
+The CPU `Field` (picking, mesher, `--render`) uses the same skips: 20 000 distances in a 305-shape scene
+take 37 ms instead of 245 ms (6.6 times faster); `yuracad --render big300.meltcad out.png 200` (four
+views of 200 x 200 pixels, flat shaded, 4 threads) takes 0.7 s.
+
+The real window was also run under xvfb on the OpenGL backend (`WGPU_BACKEND=gl`, llvmpipe through EGL,
+with the `downlevel_webgl2_defaults` limits egui-wgpu asks for there): the old 40 KB uniform could not
+have been bound under those limits, the scene texture can. On OpenGL the shader is now compiled on the
+main thread (a compile on a second thread holds the GL context lock, and egui's texture upload on the
+main thread then aborts with "Could not lock adapter context").
