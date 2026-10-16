@@ -38,6 +38,7 @@ mod prims;
 mod panels;
 mod png;
 mod sdf;
+mod sdf_volume;
 mod sketch;
 mod sketch_ui;
 mod stroke;
