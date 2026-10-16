@@ -3,6 +3,9 @@
 //! written for hostile input: every read is bounds checked, the output size is capped (so a "zip
 //! bomb" fails instead of eating the memory) and nothing panics.
 
+// Not wired into the app yet (see IMPORT.md): the whole public API is unused until it is.
+#![allow(dead_code)]
+
 use crate::export_formats::crc32;
 
 /// Why a stream could not be decoded.

@@ -9,6 +9,9 @@
 //! The entry points are `import_file` / `import_bytes`; the helpers on `ImportedMesh` weld the
 //! vertices, find the bounds, move the model to the middle of the floor and scale it.
 
+// Not wired into the app yet (see IMPORT.md): the whole public API is unused until it is.
+#![allow(dead_code)]
+
 use crate::export_mesh::FastMap;
 
 /// A bigger file is refused.
@@ -1294,6 +1297,29 @@ pub mod tests {
         assert_eq!(r.format, MeshFormat::Stl);
         assert_eq!(r.mesh.triangles.len(), 4);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Run with `--ignored --nocapture`: how long every reader takes for a big mesh.
+    #[test]
+    #[ignore = "timing report"]
+    fn report_read_times_for_a_big_mesh() {
+        use std::time::Instant;
+        let m = sphere_mesh(100.0, 500, 500); // about 500k triangles
+        let s = surface(&m);
+        let files: Vec<(&str, Vec<u8>)> = vec![
+            ("big.stl", export_formats::stl_binary(&s.mesh, "s")),
+            ("big.stl", export_formats::stl_ascii(&s.mesh, "s").into_bytes()),
+            ("big.obj", export_formats::obj_files(&s, "s", "s.mtl").unwrap().0.into_bytes()),
+            ("big.ply", export_formats::ply(&s, "s").unwrap()),
+            // (the test build caps the unpacked XML at 8 MB, so this one is a smaller mesh)
+            ("big.3mf", export_formats::threemf(&surface(&sphere_mesh(100.0, 120, 120)), "s", Units::Mm).unwrap()),
+            ("big.glb", export_formats::glb(&s, "s").unwrap()),
+        ];
+        for (name, bytes) in files {
+            let t = Instant::now();
+            let r = import_bytes(&bytes, name, &opts()).unwrap();
+            println!("{name}: {} triangles, {:.1} MB read in {:.2}s", r.mesh.triangles.len(), bytes.len() as f64 / 1e6, t.elapsed().as_secs_f64());
+        }
     }
 
     #[test]

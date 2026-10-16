@@ -5,15 +5,24 @@
 //! extension's `p:path`) are followed. The XML reader is our own and small: it needs no entity
 //! expansion, so a hostile file cannot blow up through entities.
 
+// Not wired into the app yet (see IMPORT.md): the whole public API is unused until it is.
+#![allow(dead_code)]
+
 use std::collections::HashMap;
 
 use crate::import_inflate::Zip;
 use crate::import_mesh::{Affine, BAD_INDEX, BAD_NUMBER, CUT_OFF, ImportedMesh, MAX_TRIANGLES, MAX_VERTICES, NO_SHAPE, TOO_MANY_TRIS, TOO_MANY_VERTS, append_transformed, parse_f32};
 
-/// The biggest model XML we unpack (bytes).
+/// The biggest model XML we unpack (bytes). The tests use a small cap so that the "bomb" test is light.
+#[cfg(not(test))]
 const MAX_MODEL_BYTES: usize = 400 * 1024 * 1024;
+#[cfg(test)]
+const MAX_MODEL_BYTES: usize = 8 * 1024 * 1024;
 /// All model files of a package together.
+#[cfg(not(test))]
 const MAX_TOTAL_XML: usize = 600 * 1024 * 1024;
+#[cfg(test)]
+const MAX_TOTAL_XML: usize = 12 * 1024 * 1024;
 /// Component nesting.
 const MAX_DEPTH: usize = 16;
 /// Objects visited while building (components can multiply).
@@ -568,8 +577,8 @@ mod tests {
 
     #[test]
     fn a_zip_bomb_model_is_refused_without_eating_the_memory() {
-        // 500 MB of spaces deflate to about 0.5 MB; the declared size is above the cap
-        let big = vec![b' '; 450 * 1024 * 1024];
+        // 10 MB of spaces deflate to a few KB; the declared size is above the (test) cap
+        let big = vec![b' '; 10 * 1024 * 1024];
         let z = zip(&[("3D/3dmodel.model", &big)], true);
         let t = std::time::Instant::now();
         assert!(read_3mf(&z).is_err());
