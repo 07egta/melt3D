@@ -80,6 +80,32 @@ pub fn sheet(scene: &Scene, size: usize) -> (usize, Vec<u8>) {
     (w, img)
 }
 
+/// One small 3/4 picture of a scene (RGBA, `size` x `size`), for the library's thumbnails.
+pub fn thumb(scene: &Scene, size: usize) -> Vec<u8> {
+    let size = size.clamp(16, 256);
+    let f = Field::new(scene);
+    let (c, r) = crate::gpu::bounds(scene, None);
+    let (c, r) = if r > 0.0 { (c, r) } else { ([0.0, 0.0, 20.0], 40.0) };
+    let mut cam = Camera::default();
+    cam.look(0.6, 0.42);
+    cam.frame(c, r);
+    let mut img = vec![0u8; size * size * 4];
+    for y in 0..size {
+        for x in 0..size {
+            let nx = (x as f32 + 0.5) / size as f32 * 2.0 - 1.0;
+            let ny = 1.0 - (y as f32 + 0.5) / size as f32 * 2.0;
+            let (o, d) = cam.ray([nx, ny], 1.0);
+            let col = shade(&f, o, d);
+            let i = (y * size + x) * 4;
+            for k in 0..3 {
+                img[i + k] = (col[k].clamp(0.0, 1.0).powf(1.0 / 2.2) * 255.0) as u8;
+            }
+            img[i + 3] = 255;
+        }
+    }
+    img
+}
+
 /// Handles `--render in.yura out.png [size]`; true when it did (the caller then exits).
 pub fn cli(args: &[std::ffi::OsString]) -> bool {
     if args.get(1).and_then(|a| a.to_str()) != Some("--render") {

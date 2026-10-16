@@ -3,7 +3,9 @@
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable))]
 
 mod app;
+mod array;
 mod camera;
+mod clip;
 mod export;
 mod fonts;
 mod gizmo;
@@ -11,6 +13,8 @@ mod glyphs;
 mod glyphs_more;
 mod gpu;
 mod icon;
+mod library;
+mod library_ui;
 mod materials;
 mod cad;
 mod cpu_render;

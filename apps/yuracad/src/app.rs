@@ -18,6 +18,13 @@ mod preview;
 
 const UNDO_LIMIT: usize = 200;
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ExportFormat {
+    Stl,
+    ThreeMf,
+    Obj,
+}
+
 pub struct App {
     pub scene: Scene,
     /// The scene as of the last finished edit (what undo returns to).
@@ -67,6 +74,12 @@ pub struct App {
     pub ct: crate::curve_tool::State,
     /// Frame cache, fast mode, quality and other speed-ups (see `perf.rs`).
     pub perf: crate::perf::Perf,
+    /// The last copy (text), so the Edit menu can paste without asking the system.
+    pub clipboard: Option<String>,
+    /// The library card (ready-made models): open or not, which category, the search text.
+    pub lib_open: bool,
+    pub lib_cat: usize,
+    pub lib_query: String,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -122,6 +135,10 @@ impl App {
             mat_group: false,
             ct: Default::default(),
             perf: crate::perf::Perf::default(),
+            clipboard: None,
+            lib_open: false,
+            lib_cat: 0,
+            lib_query: String::new(),
         };
         if let Some(p) = open {
             app.open_path(p);
@@ -417,13 +434,36 @@ impl App {
     }
 
     fn export_stl(&mut self, ctx: &egui::Context) {
-        let Some(path) = rfd::FileDialog::new().add_filter("STL", &["stl"]).set_file_name("作品.stl").save_file() else { return };
-        let res = export::mesh(&self.scene, self.export_quality, self.export_smooth)
-            .map(|m| export::stl_binary(&m, "YURACAD"))
-            .and_then(|b| export::write_stl(&path, &b));
+        self.export_as(ctx, ExportFormat::Stl);
+    }
+
+    /// Ask for a file name, mesh the scene and write it as `format`.
+    pub fn export_as(&mut self, ctx: &egui::Context, format: ExportFormat) {
+        let (label, ext) = match format {
+            ExportFormat::Stl => ("STL", "stl"),
+            ExportFormat::ThreeMf => ("3MF", "3mf"),
+            ExportFormat::Obj => ("OBJ", "obj"),
+        };
+        let Some(path) = rfd::FileDialog::new().add_filter(label, &[ext]).set_file_name(format!("作品.{ext}")).save_file() else { return };
+        let res = export::mesh(&self.scene, self.export_quality, self.export_smooth).and_then(|m| match format {
+            ExportFormat::Stl => export::write_stl(&path, &export::stl_binary(&m, "YURACAD")),
+            ExportFormat::ThreeMf => export::threemf(&m, "YURACAD").and_then(|b| export::write_stl(&path, &b)),
+            ExportFormat::Obj => export::write_stl(&path, export::obj_text(&m, "YURACAD").as_bytes()),
+        });
         match res {
-            Ok(()) => self.say(ctx, "STLを書き出しました"),
+            Ok(()) => self.say(ctx, format!("{label}を書き出しました")),
             Err(e) => self.say(ctx, format!("書き出せませんでした: {e}")),
+        }
+    }
+
+    /// Size, volume and whether the surface is closed, said in the status bar.
+    pub fn print_check(&mut self, ctx: &egui::Context) {
+        match export::print_check(&self.scene) {
+            Ok(c) => {
+                let closed = if c.closed { "閉じています（印刷OK）" } else { "穴があります（形をかさねるか、とけあいを強くしてください）" };
+                self.say(ctx, format!("大きさ {:.1}×{:.1}×{:.1} mm・体積 {:.1} cm³・表面は{closed}", c.size[0], c.size[1], c.size[2], c.volume_cm3));
+            }
+            Err(e) => self.say(ctx, format!("チェックできませんでした: {e}")),
         }
     }
 
@@ -435,6 +475,7 @@ impl App {
         }
         use egui::{Key, Modifiers};
         self.curve_keys(ctx);
+        self.clipboard_events(ctx);
         let cmd = Modifiers::COMMAND;
         let cmd_shift = Modifiers::COMMAND | Modifiers::SHIFT;
         let hit = |m: Modifiers, k: Key| ctx.input_mut(|i| i.consume_key(m, k));
@@ -566,8 +607,47 @@ impl App {
                             self.export_stl(&ctx);
                             ui.close();
                         }
+                        if ui.button("3MFで書き出す").clicked() {
+                            self.export_as(&ctx, ExportFormat::ThreeMf);
+                            ui.close();
+                        }
+                        if ui.button("OBJで書き出す").clicked() {
+                            self.export_as(&ctx, ExportFormat::Obj);
+                            ui.close();
+                        }
                         if ui.button("画像(PNG)で書き出す").clicked() {
                             self.start_png(&ctx);
+                            ui.close();
+                        }
+                    });
+                    style::menu_button(ui, "編集", false, |ui| {
+                        if ui.button("コピー　Ctrl+C").clicked() {
+                            self.copy(&ctx);
+                            ui.close();
+                        }
+                        if ui.button("切り取り　Ctrl+X").clicked() {
+                            self.cut(&ctx);
+                            ui.close();
+                        }
+                        if ui.button("貼りつけ　Ctrl+V").clicked() {
+                            self.paste(&ctx, None);
+                            ui.close();
+                        }
+                        ui.separator();
+                        if ui.button("複製　Ctrl+D").clicked() {
+                            self.duplicate();
+                            ui.close();
+                        }
+                        if ui.button("ならべてコピー…").clicked() {
+                            crate::array::open(&ctx);
+                            ui.close();
+                        }
+                        if ui.button("左右コピー").clicked() {
+                            self.mirror_copy();
+                            ui.close();
+                        }
+                        if ui.button("削除　Delete").clicked() {
+                            self.delete_selected();
                             ui.close();
                         }
                     });
@@ -583,6 +663,19 @@ impl App {
                         style::menu_button(ui, "書き出し", true, |ui| {
                             if ui.button("3Dプリント用 STL").on_hover_text("Ctrl+E").clicked() {
                                 self.export_stl(&ctx);
+                                ui.close();
+                            }
+                            if ui.button("3MF（スライサー向け）").clicked() {
+                                self.export_as(&ctx, ExportFormat::ThreeMf);
+                                ui.close();
+                            }
+                            if ui.button("OBJ").clicked() {
+                                self.export_as(&ctx, ExportFormat::Obj);
+                                ui.close();
+                            }
+                            ui.separator();
+                            if ui.button("プリントチェック").on_hover_text("大きさ・体積・穴がないか").clicked() {
+                                self.print_check(&ctx);
                                 ui.close();
                             }
                             if ui.button("画像 PNG").on_hover_text("見えているとおりに保存").clicked() {
@@ -667,6 +760,11 @@ impl App {
                         style::tray(ui, |ui| {
                             if style::icon_button(ui, 38.0, "グループを作る", false, glyphs::group).clicked() {
                                 self.add_group();
+                            }
+                        });
+                        style::tray(ui, |ui| {
+                            if style::pill(ui, "ライブラリ", self.lib_open).on_hover_text("ひと・どうぶつ・どうぐなど、できあいの形").clicked() {
+                                self.lib_open = !self.lib_open;
                             }
                         });
                     })
@@ -812,14 +910,37 @@ impl App {
                             .and_then(|p| p.file_name())
                             .map(|n| n.to_string_lossy().into_owned())
                             .unwrap_or_else(|| "名前なし".into());
+                        let dims = self.selection_size().map(|d| format!("　{d}")).unwrap_or_default();
                         ui.label(
-                            RichText::new(format!("{}{}　形 {}", name, if self.dirty { " *" } else { "" }, self.scene.shape_count()))
+                            RichText::new(format!("{}{}　形 {}{}", name, if self.dirty { " *" } else { "" }, self.scene.shape_count(), dims))
                                 .size(12.0)
                                 .color(style::DIM),
                         );
                     });
                 });
             });
+    }
+
+    /// The size of the selected shape for the status bar ("幅 30 × 奥行 30 × 高さ 30 mm", or a rough
+    /// diameter when it is turned or is a group).
+    fn selection_size(&self) -> Option<String> {
+        match self.sel? {
+            Pick::Shape(g, s) => {
+                let sh = self.scene.shape(g, s)?;
+                let h = sh.local_half();
+                let turned = sh.rot.iter().any(|r| (r % 90.0).abs() > 0.01);
+                if turned {
+                    return Some(format!("おおよそ {:.0} mm", crate::view::radius_of(sh) * 2.0));
+                }
+                // a quarter turn about one axis swaps two sizes: keep it simple and exact only when not turned
+                let dim = |i: usize| h[i] * sh.scale[i] * 2.0;
+                Some(format!("幅 {:.1} × 奥行 {:.1} × 高さ {:.1} mm", dim(0), dim(1), dim(2)))
+            }
+            Pick::Group(g) => {
+                let (_, r) = crate::gpu::bounds(&self.scene, Some(Pick::Group(g)));
+                (r > 0.0).then(|| format!("グループ おおよそ {:.0} mm", r * 2.0))
+            }
+        }
     }
 
     // ----- picture export -----
@@ -929,6 +1050,8 @@ impl eframe::App for App {
             self.draw_card(&ctx);
             self.keys_card(ui);
             crate::svg_dialog::update(self, &ctx);
+            crate::library_ui::update(self, &ctx);
+            crate::array::update(self, &ctx);
         }
         self.capture_step(&ctx);
         self.settle(&ctx);

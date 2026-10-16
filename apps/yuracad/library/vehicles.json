@@ -1,0 +1,13150 @@
+{
+ "category": "のりもの",
+ "items": [
+  {
+   "name": "くるま",
+   "tags": [
+    "car",
+    "自動車",
+    "クルマ",
+    "vehicle"
+   ],
+   "group": {
+    "name": "くるま",
+    "op": "Add",
+    "blend": 0.0,
+    "visible": true,
+    "shapes": [
+     {
+      "name": "車体",
+      "kind": "Box",
+      "size": [
+       36,
+       84,
+       12
+      ],
+      "round": 5,
+      "pos": [
+       0,
+       0,
+       12
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 3,
+      "material": {
+       "color": [
+        0.15,
+        0.45,
+        0.9
+       ],
+       "roughness": 0.25,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 1.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "キャビン",
+      "kind": "Box",
+      "size": [
+       28,
+       40,
+       12
+      ],
+      "round": 6,
+      "pos": [
+       0,
+       2,
+       24
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 4,
+      "material": {
+       "color": [
+        0.15,
+        0.45,
+        0.9
+       ],
+       "roughness": 0.25,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 1.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "フロントガラス",
+      "kind": "Box",
+      "size": [
+       25,
+       1.5,
+       9
+      ],
+      "round": 1,
+      "pos": [
+       0,
+       -19.2,
+       25.5
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.55,
+        0.8,
+        0.95
+       ],
+       "roughness": 0.05,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 1.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "左窓",
+      "kind": "Box",
+      "size": [
+       1.5,
+       22,
+       8
+      ],
+      "round": 1,
+      "pos": [
+       -14.6,
+       2,
+       25
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.55,
+        0.8,
+        0.95
+       ],
+       "roughness": 0.05,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 1.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "右窓",
+      "kind": "Box",
+      "size": [
+       1.5,
+       22,
+       8
+      ],
+      "round": 1,
+      "pos": [
+       14.6,
+       2,
+       25
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.55,
+        0.8,
+        0.95
+       ],
+       "roughness": 0.05,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 1.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "リアガラス",
+      "kind": "Box",
+      "size": [
+       24,
+       1.5,
+       8
+      ],
+      "round": 1,
+      "pos": [
+       0,
+       21.2,
+       25.5
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.55,
+        0.8,
+        0.95
+       ],
+       "roughness": 0.05,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 1.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "左ヘッドライト",
+      "kind": "Sphere",
+      "size": [
+       2.5,
+       1,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       -11,
+       -41.5,
+       16
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        1.0,
+        0.94,
+        0.62
+       ],
+       "roughness": 0.2,
+       "metallic": 0.0,
+       "glow": 1.5,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "右ヘッドライト",
+      "kind": "Sphere",
+      "size": [
+       2.5,
+       1,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       11,
+       -41.5,
+       16
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        1.0,
+        0.94,
+        0.62
+       ],
+       "roughness": 0.2,
+       "metallic": 0.0,
+       "glow": 1.5,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "左テールランプ",
+      "kind": "Box",
+      "size": [
+       6,
+       1.5,
+       3
+      ],
+      "round": 0.0,
+      "pos": [
+       -11,
+       42.5,
+       16
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.95,
+        0.15,
+        0.1
+       ],
+       "roughness": 0.2,
+       "metallic": 0.0,
+       "glow": 0.8,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "右テールランプ",
+      "kind": "Box",
+      "size": [
+       6,
+       1.5,
+       3
+      ],
+      "round": 0.0,
+      "pos": [
+       11,
+       42.5,
+       16
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.95,
+        0.15,
+        0.1
+       ],
+       "roughness": 0.2,
+       "metallic": 0.0,
+       "glow": 0.8,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "左前タイヤ",
+      "kind": "Torus",
+      "size": [
+       6.5,
+       3.0,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       -17,
+       -25,
+       9.5
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.08,
+        0.08,
+        0.09
+       ],
+       "roughness": 0.9,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "左前ホイール",
+      "kind": "Cylinder",
+      "size": [
+       3.9,
+       5.4,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       -17,
+       -25,
+       9.5
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.8,
+        0.82,
+        0.86
+       ],
+       "roughness": 0.25,
+       "metallic": 0.9,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "左後タイヤ",
+      "kind": "Torus",
+      "size": [
+       6.5,
+       3.0,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       -17,
+       25,
+       9.5
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.08,
+        0.08,
+        0.09
+       ],
+       "roughness": 0.9,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "左後ホイール",
+      "kind": "Cylinder",
+      "size": [
+       3.9,
+       5.4,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       -17,
+       25,
+       9.5
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.8,
+        0.82,
+        0.86
+       ],
+       "roughness": 0.25,
+       "metallic": 0.9,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "右前タイヤ",
+      "kind": "Torus",
+      "size": [
+       6.5,
+       3.0,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       17,
+       -25,
+       9.5
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.08,
+        0.08,
+        0.09
+       ],
+       "roughness": 0.9,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "右前ホイール",
+      "kind": "Cylinder",
+      "size": [
+       3.9,
+       5.4,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       17,
+       -25,
+       9.5
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.8,
+        0.82,
+        0.86
+       ],
+       "roughness": 0.25,
+       "metallic": 0.9,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "右後タイヤ",
+      "kind": "Torus",
+      "size": [
+       6.5,
+       3.0,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       17,
+       25,
+       9.5
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.08,
+        0.08,
+        0.09
+       ],
+       "roughness": 0.9,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "右後ホイール",
+      "kind": "Cylinder",
+      "size": [
+       3.9,
+       5.4,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       17,
+       25,
+       9.5
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.8,
+        0.82,
+        0.86
+       ],
+       "roughness": 0.25,
+       "metallic": 0.9,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     }
+    ]
+   }
+  },
+  {
+   "name": "スポーツカー",
+   "tags": [
+    "sports car",
+    "race car",
+    "スポーツ"
+   ],
+   "group": {
+    "name": "スポーツカー",
+    "op": "Add",
+    "blend": 0.0,
+    "visible": true,
+    "shapes": [
+     {
+      "name": "車体",
+      "kind": "Box",
+      "size": [
+       38,
+       96,
+       10
+      ],
+      "round": 4,
+      "pos": [
+       0,
+       0,
+       9
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 3,
+      "material": {
+       "color": [
+        0.9,
+        0.08,
+        0.08
+       ],
+       "roughness": 0.25,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 1.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "キャビン",
+      "kind": "Box",
+      "size": [
+       26,
+       30,
+       9
+      ],
+      "round": 5,
+      "pos": [
+       0,
+       5,
+       19
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 4,
+      "material": {
+       "color": [
+        0.9,
+        0.08,
+        0.08
+       ],
+       "roughness": 0.25,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 1.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "左窓",
+      "kind": "Box",
+      "size": [
+       1.5,
+       22,
+       6
+      ],
+      "round": 1,
+      "pos": [
+       -13.4,
+       5,
+       19
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.55,
+        0.8,
+        0.95
+       ],
+       "roughness": 0.05,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 1.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "右窓",
+      "kind": "Box",
+      "size": [
+       1.5,
+       22,
+       6
+      ],
+      "round": 1,
+      "pos": [
+       13.4,
+       5,
+       19
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.55,
+        0.8,
+        0.95
+       ],
+       "roughness": 0.05,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 1.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "フロントガラス",
+      "kind": "Box",
+      "size": [
+       24,
+       1.5,
+       7
+      ],
+      "round": 1,
+      "pos": [
+       0,
+       -10.5,
+       19.5
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.55,
+        0.8,
+        0.95
+       ],
+       "roughness": 0.05,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 1.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "白いストライプ",
+      "kind": "Box",
+      "size": [
+       5,
+       90,
+       1.2
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       0,
+       14.2
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Paint",
+      "blend": 6.0,
+      "material": {
+       "color": [
+        0.95,
+        0.95,
+        0.93
+       ],
+       "roughness": 0.5,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "リアスポイラー",
+      "kind": "Box",
+      "size": [
+       30,
+       5,
+       1.8
+      ],
+      "round": 0.5,
+      "pos": [
+       0,
+       41,
+       20
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.9,
+        0.08,
+        0.08
+       ],
+       "roughness": 0.25,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 1.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "スポイラー支柱左",
+      "kind": "Box",
+      "size": [
+       2,
+       4,
+       6
+      ],
+      "round": 0.0,
+      "pos": [
+       -9,
+       40,
+       16
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.15,
+        0.16,
+        0.18
+       ],
+       "roughness": 0.7,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "スポイラー支柱右",
+      "kind": "Box",
+      "size": [
+       2,
+       4,
+       6
+      ],
+      "round": 0.0,
+      "pos": [
+       9,
+       40,
+       16
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.15,
+        0.16,
+        0.18
+       ],
+       "roughness": 0.7,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "左ヘッドライト",
+      "kind": "Box",
+      "size": [
+       8,
+       2,
+       2.5
+      ],
+      "round": 0.0,
+      "pos": [
+       -10,
+       -45,
+       11
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        1.0,
+        0.94,
+        0.62
+       ],
+       "roughness": 0.2,
+       "metallic": 0.0,
+       "glow": 1.5,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "右ヘッドライト",
+      "kind": "Box",
+      "size": [
+       8,
+       2,
+       2.5
+      ],
+      "round": 0.0,
+      "pos": [
+       10,
+       -45,
+       11
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        1.0,
+        0.94,
+        0.62
+       ],
+       "roughness": 0.2,
+       "metallic": 0.0,
+       "glow": 1.5,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "左前タイヤ",
+      "kind": "Torus",
+      "size": [
+       6.0,
+       2.8,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       -17.5,
+       -29,
+       8.8
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.08,
+        0.08,
+        0.09
+       ],
+       "roughness": 0.9,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "左前ホイール",
+      "kind": "Cylinder",
+      "size": [
+       3.6,
+       5.04,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       -17.5,
+       -29,
+       8.8
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.8,
+        0.82,
+        0.86
+       ],
+       "roughness": 0.25,
+       "metallic": 0.9,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "左後タイヤ",
+      "kind": "Torus",
+      "size": [
+       6.0,
+       2.8,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       -17.5,
+       27,
+       8.8
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.08,
+        0.08,
+        0.09
+       ],
+       "roughness": 0.9,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "左後ホイール",
+      "kind": "Cylinder",
+      "size": [
+       3.6,
+       5.04,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       -17.5,
+       27,
+       8.8
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.8,
+        0.82,
+        0.86
+       ],
+       "roughness": 0.25,
+       "metallic": 0.9,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "右前タイヤ",
+      "kind": "Torus",
+      "size": [
+       6.0,
+       2.8,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       17.5,
+       -29,
+       8.8
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.08,
+        0.08,
+        0.09
+       ],
+       "roughness": 0.9,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "右前ホイール",
+      "kind": "Cylinder",
+      "size": [
+       3.6,
+       5.04,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       17.5,
+       -29,
+       8.8
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.8,
+        0.82,
+        0.86
+       ],
+       "roughness": 0.25,
+       "metallic": 0.9,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "右後タイヤ",
+      "kind": "Torus",
+      "size": [
+       6.0,
+       2.8,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       17.5,
+       27,
+       8.8
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.08,
+        0.08,
+        0.09
+       ],
+       "roughness": 0.9,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "右後ホイール",
+      "kind": "Cylinder",
+      "size": [
+       3.6,
+       5.04,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       17.5,
+       27,
+       8.8
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.8,
+        0.82,
+        0.86
+       ],
+       "roughness": 0.25,
+       "metallic": 0.9,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     }
+    ]
+   }
+  },
+  {
+   "name": "バス",
+   "tags": [
+    "bus",
+    "バス",
+    "vehicle"
+   ],
+   "group": {
+    "name": "バス",
+    "op": "Add",
+    "blend": 0.0,
+    "visible": true,
+    "shapes": [
+     {
+      "name": "車体",
+      "kind": "Box",
+      "size": [
+       36,
+       104,
+       38
+      ],
+      "round": 4,
+      "pos": [
+       0,
+       0,
+       31
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 2,
+      "material": {
+       "color": [
+        0.98,
+        0.76,
+        0.12
+       ],
+       "roughness": 0.25,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 1.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "左窓",
+      "kind": "Box",
+      "size": [
+       1.5,
+       84,
+       12
+      ],
+      "round": 1,
+      "pos": [
+       -18.4,
+       0,
+       38
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.55,
+        0.8,
+        0.95
+       ],
+       "roughness": 0.05,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 1.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "右窓",
+      "kind": "Box",
+      "size": [
+       1.5,
+       84,
+       12
+      ],
+      "round": 1,
+      "pos": [
+       18.4,
+       0,
+       38
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.55,
+        0.8,
+        0.95
+       ],
+       "roughness": 0.05,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 1.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "フロントガラス",
+      "kind": "Box",
+      "size": [
+       30,
+       1.5,
+       22
+      ],
+      "round": 2,
+      "pos": [
+       0,
+       -52.2,
+       37
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.55,
+        0.8,
+        0.95
+       ],
+       "roughness": 0.05,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 1.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "行先表示",
+      "kind": "Box",
+      "size": [
+       26,
+       1,
+       4
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       -52.4,
+       49
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.15,
+        0.16,
+        0.18
+       ],
+       "roughness": 0.7,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "左ヘッドライト",
+      "kind": "Sphere",
+      "size": [
+       2.5,
+       1,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       -12,
+       -52.6,
+       16
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        1.0,
+        0.94,
+        0.62
+       ],
+       "roughness": 0.2,
+       "metallic": 0.0,
+       "glow": 1.5,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "右ヘッドライト",
+      "kind": "Sphere",
+      "size": [
+       2.5,
+       1,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       12,
+       -52.6,
+       16
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        1.0,
+        0.94,
+        0.62
+       ],
+       "roughness": 0.2,
+       "metallic": 0.0,
+       "glow": 1.5,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "バンパー",
+      "kind": "Box",
+      "size": [
+       30,
+       3,
+       5
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       -53,
+       6
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.15,
+        0.16,
+        0.18
+       ],
+       "roughness": 0.7,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "左前タイヤ",
+      "kind": "Torus",
+      "size": [
+       6.0,
+       3.0,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       -18,
+       -34,
+       9.0
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.08,
+        0.08,
+        0.09
+       ],
+       "roughness": 0.9,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "左前ホイール",
+      "kind": "Cylinder",
+      "size": [
+       3.4,
+       5.4,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       -18,
+       -34,
+       9.0
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.8,
+        0.82,
+        0.86
+       ],
+       "roughness": 0.25,
+       "metallic": 0.9,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "左後タイヤ",
+      "kind": "Torus",
+      "size": [
+       6.0,
+       3.0,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       -18,
+       34,
+       9.0
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.08,
+        0.08,
+        0.09
+       ],
+       "roughness": 0.9,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "左後ホイール",
+      "kind": "Cylinder",
+      "size": [
+       3.4,
+       5.4,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       -18,
+       34,
+       9.0
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.8,
+        0.82,
+        0.86
+       ],
+       "roughness": 0.25,
+       "metallic": 0.9,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "右前タイヤ",
+      "kind": "Torus",
+      "size": [
+       6.0,
+       3.0,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       18,
+       -34,
+       9.0
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.08,
+        0.08,
+        0.09
+       ],
+       "roughness": 0.9,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "右前ホイール",
+      "kind": "Cylinder",
+      "size": [
+       3.4,
+       5.4,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       18,
+       -34,
+       9.0
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.8,
+        0.82,
+        0.86
+       ],
+       "roughness": 0.25,
+       "metallic": 0.9,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "右後タイヤ",
+      "kind": "Torus",
+      "size": [
+       6.0,
+       3.0,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       18,
+       34,
+       9.0
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.08,
+        0.08,
+        0.09
+       ],
+       "roughness": 0.9,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "右後ホイール",
+      "kind": "Cylinder",
+      "size": [
+       3.4,
+       5.4,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       18,
+       34,
+       9.0
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.8,
+        0.82,
+        0.86
+       ],
+       "roughness": 0.25,
+       "metallic": 0.9,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     }
+    ]
+   }
+  },
+  {
+   "name": "トラック",
+   "tags": [
+    "truck",
+    "lorry",
+    "トラック"
+   ],
+   "group": {
+    "name": "トラック",
+    "op": "Add",
+    "blend": 0.0,
+    "visible": true,
+    "shapes": [
+     {
+      "name": "シャシー",
+      "kind": "Box",
+      "size": [
+       30,
+       92,
+       6
+      ],
+      "round": 1,
+      "pos": [
+       0,
+       0,
+       10
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 1,
+      "material": {
+       "color": [
+        0.15,
+        0.16,
+        0.18
+       ],
+       "roughness": 0.7,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "運転席",
+      "kind": "Box",
+      "size": [
+       34,
+       28,
+       28
+      ],
+      "round": 5,
+      "pos": [
+       0,
+       -28,
+       27
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 3,
+      "material": {
+       "color": [
+        0.14,
+        0.34,
+        0.82
+       ],
+       "roughness": 0.25,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 1.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "フロントガラス",
+      "kind": "Box",
+      "size": [
+       28,
+       1.5,
+       12
+      ],
+      "round": 1,
+      "pos": [
+       0,
+       -42.6,
+       33
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.55,
+        0.8,
+        0.95
+       ],
+       "roughness": 0.05,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 1.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "左窓",
+      "kind": "Box",
+      "size": [
+       1.5,
+       14,
+       11
+      ],
+      "round": 1,
+      "pos": [
+       -17.4,
+       -28,
+       33
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.55,
+        0.8,
+        0.95
+       ],
+       "roughness": 0.05,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 1.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "右窓",
+      "kind": "Box",
+      "size": [
+       1.5,
+       14,
+       11
+      ],
+      "round": 1,
+      "pos": [
+       17.4,
+       -28,
+       33
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.55,
+        0.8,
+        0.95
+       ],
+       "roughness": 0.05,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 1.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "グリル",
+      "kind": "Box",
+      "size": [
+       20,
+       2,
+       6
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       -43.2,
+       16
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.8,
+        0.82,
+        0.86
+       ],
+       "roughness": 0.3,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "左ヘッドライト",
+      "kind": "Sphere",
+      "size": [
+       2.8,
+       1,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       -12,
+       -43.5,
+       24
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        1.0,
+        0.94,
+        0.62
+       ],
+       "roughness": 0.2,
+       "metallic": 0.0,
+       "glow": 1.5,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "右ヘッドライト",
+      "kind": "Sphere",
+      "size": [
+       2.8,
+       1,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       12,
+       -43.5,
+       24
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        1.0,
+        0.94,
+        0.62
+       ],
+       "roughness": 0.2,
+       "metallic": 0.0,
+       "glow": 1.5,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "荷台",
+      "kind": "Box",
+      "size": [
+       34,
+       56,
+       38
+      ],
+      "round": 1.5,
+      "pos": [
+       0,
+       16,
+       32
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 1,
+      "material": {
+       "color": [
+        0.95,
+        0.95,
+        0.93
+       ],
+       "roughness": 0.25,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 1.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "左前タイヤ",
+      "kind": "Torus",
+      "size": [
+       7.0,
+       3.0,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       -18,
+       -30,
+       10.0
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.08,
+        0.08,
+        0.09
+       ],
+       "roughness": 0.9,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "左前ホイール",
+      "kind": "Cylinder",
+      "size": [
+       4.4,
+       5.4,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       -18,
+       -30,
+       10.0
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.8,
+        0.82,
+        0.86
+       ],
+       "roughness": 0.25,
+       "metallic": 0.9,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "左後タイヤ",
+      "kind": "Torus",
+      "size": [
+       7.0,
+       3.0,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       -18,
+       26,
+       10.0
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.08,
+        0.08,
+        0.09
+       ],
+       "roughness": 0.9,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "左後ホイール",
+      "kind": "Cylinder",
+      "size": [
+       4.4,
+       5.4,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       -18,
+       26,
+       10.0
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.8,
+        0.82,
+        0.86
+       ],
+       "roughness": 0.25,
+       "metallic": 0.9,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "右前タイヤ",
+      "kind": "Torus",
+      "size": [
+       7.0,
+       3.0,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       18,
+       -30,
+       10.0
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.08,
+        0.08,
+        0.09
+       ],
+       "roughness": 0.9,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "右前ホイール",
+      "kind": "Cylinder",
+      "size": [
+       4.4,
+       5.4,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       18,
+       -30,
+       10.0
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.8,
+        0.82,
+        0.86
+       ],
+       "roughness": 0.25,
+       "metallic": 0.9,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "右後タイヤ",
+      "kind": "Torus",
+      "size": [
+       7.0,
+       3.0,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       18,
+       26,
+       10.0
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.08,
+        0.08,
+        0.09
+       ],
+       "roughness": 0.9,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "右後ホイール",
+      "kind": "Cylinder",
+      "size": [
+       4.4,
+       5.4,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       18,
+       26,
+       10.0
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.8,
+        0.82,
+        0.86
+       ],
+       "roughness": 0.25,
+       "metallic": 0.9,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     }
+    ]
+   }
+  },
+  {
+   "name": "パトカー",
+   "tags": [
+    "police car",
+    "patrol",
+    "パトロール"
+   ],
+   "group": {
+    "name": "パトカー",
+    "op": "Add",
+    "blend": 0.0,
+    "visible": true,
+    "shapes": [
+     {
+      "name": "車体",
+      "kind": "Box",
+      "size": [
+       36,
+       84,
+       12
+      ],
+      "round": 5,
+      "pos": [
+       0,
+       0,
+       12
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 3,
+      "material": {
+       "color": [
+        0.96,
+        0.96,
+        0.94
+       ],
+       "roughness": 0.25,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 1.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "キャビン",
+      "kind": "Box",
+      "size": [
+       28,
+       40,
+       12
+      ],
+      "round": 6,
+      "pos": [
+       0,
+       2,
+       24
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 4,
+      "material": {
+       "color": [
+        0.96,
+        0.96,
+        0.94
+       ],
+       "roughness": 0.25,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 1.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "フロントガラス",
+      "kind": "Box",
+      "size": [
+       25,
+       1.5,
+       9
+      ],
+      "round": 1,
+      "pos": [
+       0,
+       -19.2,
+       25.5
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.55,
+        0.8,
+        0.95
+       ],
+       "roughness": 0.05,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 1.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "左窓",
+      "kind": "Box",
+      "size": [
+       1.5,
+       22,
+       8
+      ],
+      "round": 1,
+      "pos": [
+       -14.6,
+       2,
+       25
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.55,
+        0.8,
+        0.95
+       ],
+       "roughness": 0.05,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 1.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "右窓",
+      "kind": "Box",
+      "size": [
+       1.5,
+       22,
+       8
+      ],
+      "round": 1,
+      "pos": [
+       14.6,
+       2,
+       25
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.55,
+        0.8,
+        0.95
+       ],
+       "roughness": 0.05,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 1.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "リアガラス",
+      "kind": "Box",
+      "size": [
+       24,
+       1.5,
+       8
+      ],
+      "round": 1,
+      "pos": [
+       0,
+       21.2,
+       25.5
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.55,
+        0.8,
+        0.95
+       ],
+       "roughness": 0.05,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 1.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "左ヘッドライト",
+      "kind": "Sphere",
+      "size": [
+       2.5,
+       1,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       -11,
+       -41.5,
+       16
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        1.0,
+        0.94,
+        0.62
+       ],
+       "roughness": 0.2,
+       "metallic": 0.0,
+       "glow": 1.5,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "右ヘッドライト",
+      "kind": "Sphere",
+      "size": [
+       2.5,
+       1,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       11,
+       -41.5,
+       16
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        1.0,
+        0.94,
+        0.62
+       ],
+       "roughness": 0.2,
+       "metallic": 0.0,
+       "glow": 1.5,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "左テールランプ",
+      "kind": "Box",
+      "size": [
+       6,
+       1.5,
+       3
+      ],
+      "round": 0.0,
+      "pos": [
+       -11,
+       42.5,
+       16
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.95,
+        0.15,
+        0.1
+       ],
+       "roughness": 0.2,
+       "metallic": 0.0,
+       "glow": 0.8,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "右テールランプ",
+      "kind": "Box",
+      "size": [
+       6,
+       1.5,
+       3
+      ],
+      "round": 0.0,
+      "pos": [
+       11,
+       42.5,
+       16
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.95,
+        0.15,
+        0.1
+       ],
+       "roughness": 0.2,
+       "metallic": 0.0,
+       "glow": 0.8,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "赤色灯",
+      "kind": "Box",
+      "size": [
+       6,
+       4,
+       3
+      ],
+      "round": 0.0,
+      "pos": [
+       -3.5,
+       0,
+       31.5
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.3,
+      "material": {
+       "color": [
+        1.0,
+        0.1,
+        0.05
+       ],
+       "roughness": 0.2,
+       "metallic": 0.0,
+       "glow": 2.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "青色灯",
+      "kind": "Box",
+      "size": [
+       6,
+       4,
+       3
+      ],
+      "round": 0.0,
+      "pos": [
+       3.5,
+       0,
+       31.5
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.3,
+      "material": {
+       "color": [
+        0.1,
+        0.35,
+        1.0
+       ],
+       "roughness": 0.2,
+       "metallic": 0.0,
+       "glow": 2.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "左ドアの帯",
+      "kind": "Box",
+      "size": [
+       2,
+       70,
+       4
+      ],
+      "round": 0.0,
+      "pos": [
+       -18.2,
+       0,
+       13
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Paint",
+      "blend": 6.0,
+      "material": {
+       "color": [
+        0.04,
+        0.04,
+        0.05
+       ],
+       "roughness": 0.5,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "右ドアの帯",
+      "kind": "Box",
+      "size": [
+       2,
+       70,
+       4
+      ],
+      "round": 0.0,
+      "pos": [
+       18.2,
+       0,
+       13
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Paint",
+      "blend": 6.0,
+      "material": {
+       "color": [
+        0.04,
+        0.04,
+        0.05
+       ],
+       "roughness": 0.5,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "左前タイヤ",
+      "kind": "Torus",
+      "size": [
+       6.5,
+       3.0,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       -17,
+       -25,
+       9.5
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.08,
+        0.08,
+        0.09
+       ],
+       "roughness": 0.9,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "左前ホイール",
+      "kind": "Cylinder",
+      "size": [
+       3.9,
+       5.4,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       -17,
+       -25,
+       9.5
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.8,
+        0.82,
+        0.86
+       ],
+       "roughness": 0.25,
+       "metallic": 0.9,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "左後タイヤ",
+      "kind": "Torus",
+      "size": [
+       6.5,
+       3.0,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       -17,
+       25,
+       9.5
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.08,
+        0.08,
+        0.09
+       ],
+       "roughness": 0.9,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "左後ホイール",
+      "kind": "Cylinder",
+      "size": [
+       3.9,
+       5.4,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       -17,
+       25,
+       9.5
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.8,
+        0.82,
+        0.86
+       ],
+       "roughness": 0.25,
+       "metallic": 0.9,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "右前タイヤ",
+      "kind": "Torus",
+      "size": [
+       6.5,
+       3.0,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       17,
+       -25,
+       9.5
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.08,
+        0.08,
+        0.09
+       ],
+       "roughness": 0.9,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "右前ホイール",
+      "kind": "Cylinder",
+      "size": [
+       3.9,
+       5.4,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       17,
+       -25,
+       9.5
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.8,
+        0.82,
+        0.86
+       ],
+       "roughness": 0.25,
+       "metallic": 0.9,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "右後タイヤ",
+      "kind": "Torus",
+      "size": [
+       6.5,
+       3.0,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       17,
+       25,
+       9.5
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.08,
+        0.08,
+        0.09
+       ],
+       "roughness": 0.9,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "右後ホイール",
+      "kind": "Cylinder",
+      "size": [
+       3.9,
+       5.4,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       17,
+       25,
+       9.5
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.8,
+        0.82,
+        0.86
+       ],
+       "roughness": 0.25,
+       "metallic": 0.9,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     }
+    ]
+   }
+  },
+  {
+   "name": "ひこうき",
+   "tags": [
+    "airplane",
+    "plane",
+    "飛行機",
+    "aircraft"
+   ],
+   "group": {
+    "name": "ひこうき",
+    "op": "Add",
+    "blend": 0.0,
+    "visible": true,
+    "shapes": [
+     {
+      "name": "機体",
+      "kind": "Capsule",
+      "size": [
+       6,
+       72,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       0,
+       16
+      ],
+      "rot": [
+       90,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 2,
+      "material": {
+       "color": [
+        0.96,
+        0.96,
+        0.95
+       ],
+       "roughness": 0.25,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 1.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "垂直尾翼",
+      "kind": "Box",
+      "size": [
+       2.5,
+       14,
+       16
+      ],
+      "round": 1,
+      "pos": [
+       0,
+       34,
+       28
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 1.5,
+      "material": {
+       "color": [
+        0.12,
+        0.38,
+        0.85
+       ],
+       "roughness": 0.25,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 1.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "水平尾翼",
+      "kind": "Box",
+      "size": [
+       30,
+       10,
+       2
+      ],
+      "round": 1,
+      "pos": [
+       0,
+       34,
+       18
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 1.5,
+      "material": {
+       "color": [
+        0.96,
+        0.96,
+        0.95
+       ],
+       "roughness": 0.25,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 1.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "主翼",
+      "kind": "Box",
+      "size": [
+       84,
+       14,
+       2.5
+      ],
+      "round": 1.5,
+      "pos": [
+       0,
+       -2,
+       15
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 1.5,
+      "material": {
+       "color": [
+        0.96,
+        0.96,
+        0.95
+       ],
+       "roughness": 0.25,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 1.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "コックピット",
+      "kind": "Box",
+      "size": [
+       7,
+       10,
+       4
+      ],
+      "round": 2,
+      "pos": [
+       0,
+       -22,
+       21
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.55,
+        0.8,
+        0.95
+       ],
+       "roughness": 0.05,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 1.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "左窓",
+      "kind": "Box",
+      "size": [
+       1,
+       40,
+       2.5
+      ],
+      "round": 1,
+      "pos": [
+       -6.2,
+       0,
+       18
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.55,
+        0.8,
+        0.95
+       ],
+       "roughness": 0.05,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 1.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "右窓",
+      "kind": "Box",
+      "size": [
+       1,
+       40,
+       2.5
+      ],
+      "round": 1,
+      "pos": [
+       6.2,
+       0,
+       18
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.55,
+        0.8,
+        0.95
+       ],
+       "roughness": 0.05,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 1.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "左エンジン",
+      "kind": "Cylinder",
+      "size": [
+       3,
+       12,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       -20,
+       -4,
+       10.5
+      ],
+      "rot": [
+       90,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 1,
+      "material": {
+       "color": [
+        0.8,
+        0.82,
+        0.86
+       ],
+       "roughness": 0.3,
+       "metallic": 0.8,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "右エンジン",
+      "kind": "Cylinder",
+      "size": [
+       3,
+       12,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       20,
+       -4,
+       10.5
+      ],
+      "rot": [
+       90,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 1,
+      "material": {
+       "color": [
+        0.8,
+        0.82,
+        0.86
+       ],
+       "roughness": 0.3,
+       "metallic": 0.8,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "左脚",
+      "kind": "Cylinder",
+      "size": [
+       1,
+       6,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       -12,
+       -2,
+       11
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.8,
+        0.82,
+        0.86
+       ],
+       "roughness": 0.3,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "右脚",
+      "kind": "Cylinder",
+      "size": [
+       1,
+       6,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       12,
+       -2,
+       11
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.8,
+        0.82,
+        0.86
+       ],
+       "roughness": 0.3,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "前脚",
+      "kind": "Cylinder",
+      "size": [
+       0.9,
+       4,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       -30,
+       8
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.8,
+        0.82,
+        0.86
+       ],
+       "roughness": 0.3,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "左タイヤ",
+      "kind": "Torus",
+      "size": [
+       3.0,
+       1.5,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       -12,
+       -2,
+       4.5
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.08,
+        0.08,
+        0.09
+       ],
+       "roughness": 0.9,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "左ホイール",
+      "kind": "Cylinder",
+      "size": [
+       1.2,
+       2.6,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       -12,
+       -2,
+       4.5
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.8,
+        0.82,
+        0.86
+       ],
+       "roughness": 0.25,
+       "metallic": 0.9,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "右タイヤ",
+      "kind": "Torus",
+      "size": [
+       3.0,
+       1.5,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       12,
+       -2,
+       4.5
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.08,
+        0.08,
+        0.09
+       ],
+       "roughness": 0.9,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "右ホイール",
+      "kind": "Cylinder",
+      "size": [
+       1.2,
+       2.6,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       12,
+       -2,
+       4.5
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.8,
+        0.82,
+        0.86
+       ],
+       "roughness": 0.25,
+       "metallic": 0.9,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "前タイヤ",
+      "kind": "Torus",
+      "size": [
+       3.0,
+       1.5,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       -30,
+       4.5
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.08,
+        0.08,
+        0.09
+       ],
+       "roughness": 0.9,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "前ホイール",
+      "kind": "Cylinder",
+      "size": [
+       1.2,
+       2.6,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       -30,
+       4.5
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.8,
+        0.82,
+        0.86
+       ],
+       "roughness": 0.25,
+       "metallic": 0.9,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     }
+    ]
+   }
+  },
+  {
+   "name": "ヘリコプター",
+   "tags": [
+    "helicopter",
+    "heli",
+    "ヘリ"
+   ],
+   "group": {
+    "name": "ヘリコプター",
+    "op": "Add",
+    "blend": 0.0,
+    "visible": true,
+    "shapes": [
+     {
+      "name": "機体",
+      "kind": "Sphere",
+      "size": [
+       13,
+       1,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       -2,
+       20
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1.25,
+       1
+      ],
+      "op": "Add",
+      "blend": 3,
+      "material": {
+       "color": [
+        0.85,
+        0.14,
+        0.1
+       ],
+       "roughness": 0.25,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 1.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "キャノピー",
+      "kind": "Box",
+      "size": [
+       10,
+       1,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       -12,
+       21
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       0.9,
+       0.95
+      ],
+      "op": "Add",
+      "blend": 1.0,
+      "material": {
+       "color": [
+        0.55,
+        0.8,
+        0.95
+       ],
+       "roughness": 0.05,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 1.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "尾部",
+      "kind": "Capsule",
+      "size": [
+       3,
+       28,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       28,
+       20
+      ],
+      "rot": [
+       90,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 3,
+      "material": {
+       "color": [
+        0.85,
+        0.14,
+        0.1
+       ],
+       "roughness": 0.25,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 1.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "尾翼",
+      "kind": "Box",
+      "size": [
+       1.5,
+       10,
+       12
+      ],
+      "round": 0.5,
+      "pos": [
+       0,
+       42,
+       28
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 1,
+      "material": {
+       "color": [
+        0.85,
+        0.14,
+        0.1
+       ],
+       "roughness": 0.25,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 1.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "尾ローター",
+      "kind": "Cylinder",
+      "size": [
+       6,
+       1,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       2.5,
+       44,
+       22
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.15,
+        0.16,
+        0.18
+       ],
+       "roughness": 0.7,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "マスト",
+      "kind": "Cylinder",
+      "size": [
+       1.5,
+       8,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       -1,
+       37
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 1,
+      "material": {
+       "color": [
+        0.15,
+        0.16,
+        0.18
+       ],
+       "roughness": 0.7,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "ローターハブ",
+      "kind": "Cylinder",
+      "size": [
+       2.5,
+       3,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       -1,
+       42
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.15,
+        0.16,
+        0.18
+       ],
+       "roughness": 0.7,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "メインローター1",
+      "kind": "Box",
+      "size": [
+       72,
+       3,
+       1.2
+      ],
+      "round": 0.5,
+      "pos": [
+       0,
+       -1,
+       43.5
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.15,
+        0.16,
+        0.18
+       ],
+       "roughness": 0.7,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "メインローター2",
+      "kind": "Box",
+      "size": [
+       3,
+       40,
+       1.2
+      ],
+      "round": 0.5,
+      "pos": [
+       0,
+       -1,
+       43.5
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.15,
+        0.16,
+        0.18
+       ],
+       "roughness": 0.7,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "左スキッド",
+      "kind": "Capsule",
+      "size": [
+       1.5,
+       44,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       -9,
+       -2,
+       1.5
+      ],
+      "rot": [
+       90,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.15,
+        0.16,
+        0.18
+       ],
+       "roughness": 0.7,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "右スキッド",
+      "kind": "Capsule",
+      "size": [
+       1.5,
+       44,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       9,
+       -2,
+       1.5
+      ],
+      "rot": [
+       90,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.15,
+        0.16,
+        0.18
+       ],
+       "roughness": 0.7,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "左前の支柱",
+      "kind": "Cylinder",
+      "size": [
+       1,
+       9,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       -9,
+       -8,
+       7.5
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 1.0,
+      "material": {
+       "color": [
+        0.15,
+        0.16,
+        0.18
+       ],
+       "roughness": 0.7,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "左後の支柱",
+      "kind": "Cylinder",
+      "size": [
+       1,
+       9,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       -9,
+       6,
+       7.5
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 1.0,
+      "material": {
+       "color": [
+        0.15,
+        0.16,
+        0.18
+       ],
+       "roughness": 0.7,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "右前の支柱",
+      "kind": "Cylinder",
+      "size": [
+       1,
+       9,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       9,
+       -8,
+       7.5
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 1.0,
+      "material": {
+       "color": [
+        0.15,
+        0.16,
+        0.18
+       ],
+       "roughness": 0.7,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "右後の支柱",
+      "kind": "Cylinder",
+      "size": [
+       1,
+       9,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       9,
+       6,
+       7.5
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 1.0,
+      "material": {
+       "color": [
+        0.15,
+        0.16,
+        0.18
+       ],
+       "roughness": 0.7,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     }
+    ]
+   }
+  },
+  {
+   "name": "ふね",
+   "tags": [
+    "boat",
+    "ship",
+    "船"
+   ],
+   "group": {
+    "name": "ふね",
+    "op": "Add",
+    "blend": 0.0,
+    "visible": true,
+    "shapes": [
+     {
+      "name": "船体",
+      "kind": "Loft",
+      "size": [
+       14,
+       1,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       0,
+       7
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0,
+      "material": {
+       "color": [
+        0.86,
+        0.18,
+        0.14
+       ],
+       "roughness": 0.25,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 1.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        0,
+        -42
+       ],
+       [
+        8,
+        -16
+       ],
+       [
+        9,
+        34
+       ],
+       [
+        -9,
+        34
+       ],
+       [
+        -8,
+        -16
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [
+       [
+        0,
+        -46
+       ],
+       [
+        17,
+        -16
+       ],
+       [
+        18,
+        36
+       ],
+       [
+        -18,
+        36
+       ],
+       [
+        -17,
+        -16
+       ]
+      ],
+      "shell": 0.0
+     },
+     {
+      "name": "操縦室",
+      "kind": "Box",
+      "size": [
+       16,
+       20,
+       12
+      ],
+      "round": 2,
+      "pos": [
+       0,
+       6,
+       21
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 2,
+      "material": {
+       "color": [
+        0.95,
+        0.95,
+        0.93
+       ],
+       "roughness": 0.25,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 1.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "風防",
+      "kind": "Box",
+      "size": [
+       14,
+       1.5,
+       7
+      ],
+      "round": 1,
+      "pos": [
+       0,
+       -4.6,
+       22
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.55,
+        0.8,
+        0.95
+       ],
+       "roughness": 0.05,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 1.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "左窓",
+      "kind": "Box",
+      "size": [
+       1.5,
+       14,
+       6
+      ],
+      "round": 1,
+      "pos": [
+       -8.6,
+       6,
+       22
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.55,
+        0.8,
+        0.95
+       ],
+       "roughness": 0.05,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 1.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "右窓",
+      "kind": "Box",
+      "size": [
+       1.5,
+       14,
+       6
+      ],
+      "round": 1,
+      "pos": [
+       8.6,
+       6,
+       22
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.55,
+        0.8,
+        0.95
+       ],
+       "roughness": 0.05,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 1.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "マスト",
+      "kind": "Cylinder",
+      "size": [
+       0.9,
+       26,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       8,
+       40
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.8,
+        0.82,
+        0.86
+       ],
+       "roughness": 0.3,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "旗",
+      "kind": "Box",
+      "size": [
+       10,
+       0.5,
+       5
+      ],
+      "round": 0.0,
+      "pos": [
+       5,
+       8,
+       49
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.3,
+      "material": {
+       "color": [
+        1.0,
+        0.8,
+        0.1
+       ],
+       "roughness": 0.6,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     }
+    ]
+   }
+  },
+  {
+   "name": "ヨット",
+   "tags": [
+    "yacht",
+    "sailboat",
+    "sail",
+    "帆船"
+   ],
+   "group": {
+    "name": "ヨット",
+    "op": "Add",
+    "blend": 0.0,
+    "visible": true,
+    "shapes": [
+     {
+      "name": "船体",
+      "kind": "Loft",
+      "size": [
+       8,
+       1,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       0,
+       4
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0,
+      "material": {
+       "color": [
+        0.96,
+        0.96,
+        0.94
+       ],
+       "roughness": 0.25,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 1.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        0,
+        -36
+       ],
+       [
+        6,
+        -14
+       ],
+       [
+        7,
+        28
+       ],
+       [
+        -7,
+        28
+       ],
+       [
+        -6,
+        -14
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [
+       [
+        0,
+        -40
+       ],
+       [
+        13,
+        -14
+       ],
+       [
+        14,
+        30
+       ],
+       [
+        -14,
+        30
+       ],
+       [
+        -13,
+        -14
+       ]
+      ],
+      "shell": 0.0
+     },
+     {
+      "name": "キャビン",
+      "kind": "Box",
+      "size": [
+       12,
+       14,
+       6
+      ],
+      "round": 1.5,
+      "pos": [
+       0,
+       -4,
+       11
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 1.5,
+      "material": {
+       "color": [
+        0.95,
+        0.95,
+        0.93
+       ],
+       "roughness": 0.25,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 1.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "左窓",
+      "kind": "Box",
+      "size": [
+       1,
+       6,
+       3
+      ],
+      "round": 0.5,
+      "pos": [
+       -6.2,
+       -4,
+       11
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.55,
+        0.8,
+        0.95
+       ],
+       "roughness": 0.05,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 1.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "右窓",
+      "kind": "Box",
+      "size": [
+       1,
+       6,
+       3
+      ],
+      "round": 0.5,
+      "pos": [
+       6.2,
+       -4,
+       11
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.55,
+        0.8,
+        0.95
+       ],
+       "roughness": 0.05,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 1.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "マスト",
+      "kind": "Cylinder",
+      "size": [
+       0.9,
+       48,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       4,
+       32
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.8,
+        0.82,
+        0.86
+       ],
+       "roughness": 0.3,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "ブーム",
+      "kind": "Cylinder",
+      "size": [
+       0.7,
+       22,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       15,
+       11
+      ],
+      "rot": [
+       90,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.8,
+        0.82,
+        0.86
+       ],
+       "roughness": 0.3,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "メインセール",
+      "kind": "Box",
+      "size": [
+       1.2,
+       22,
+       38
+      ],
+      "round": 2,
+      "pos": [
+       0,
+       15,
+       30
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.98,
+        0.98,
+        0.95
+       ],
+       "roughness": 0.9,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "ジブセール",
+      "kind": "Box",
+      "size": [
+       1.0,
+       24,
+       30
+      ],
+      "round": 2,
+      "pos": [
+       0,
+       -14,
+       24
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.98,
+        0.98,
+        0.95
+       ],
+       "roughness": 0.9,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "青いライン",
+      "kind": "Box",
+      "size": [
+       30,
+       60,
+       1.6
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       0,
+       9
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Paint",
+      "blend": 6.0,
+      "material": {
+       "color": [
+        0.1,
+        0.35,
+        0.85
+       ],
+       "roughness": 0.5,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     }
+    ]
+   }
+  },
+  {
+   "name": "ロケット",
+   "tags": [
+    "rocket",
+    "spaceship",
+    "ロケット"
+   ],
+   "group": {
+    "name": "ロケット",
+    "op": "Add",
+    "blend": 0.0,
+    "visible": true,
+    "shapes": [
+     {
+      "name": "機体",
+      "kind": "Revolve",
+      "size": [
+       1,
+       1,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       0,
+       44
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0,
+      "material": {
+       "color": [
+        0.95,
+        0.95,
+        0.93
+       ],
+       "roughness": 0.25,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 1.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        0,
+        -44
+       ],
+       [
+        8,
+        -44
+       ],
+       [
+        10,
+        -38
+       ],
+       [
+        10,
+        18
+       ],
+       [
+        9,
+        22
+       ],
+       [
+        0,
+        22
+       ]
+      ],
+      "params": [
+       360,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "先端",
+      "kind": "Revolve",
+      "size": [
+       1,
+       1,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       0,
+       44
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 1.0,
+      "material": {
+       "color": [
+        0.9,
+        0.12,
+        0.1
+       ],
+       "roughness": 0.25,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 1.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        0,
+        20
+       ],
+       [
+        9,
+        20
+       ],
+       [
+        7,
+        32
+       ],
+       [
+        3,
+        40
+       ],
+       [
+        0,
+        44
+       ]
+      ],
+      "params": [
+       360,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "ノズル",
+      "kind": "Cylinder",
+      "size": [
+       5,
+       6,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       0,
+       3
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 1.0,
+      "material": {
+       "color": [
+        0.15,
+        0.16,
+        0.18
+       ],
+       "roughness": 0.7,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "窓1",
+      "kind": "Box",
+      "size": [
+       3.2,
+       1,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       -9.6,
+       46
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.55,
+        0.8,
+        0.95
+       ],
+       "roughness": 0.05,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 1.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "窓2",
+      "kind": "Box",
+      "size": [
+       2.4,
+       1,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       -9.6,
+       34
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.55,
+        0.8,
+        0.95
+       ],
+       "roughness": 0.05,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 1.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "フィン1",
+      "kind": "Box",
+      "size": [
+       5,
+       1.5,
+       22
+      ],
+      "round": 0.5,
+      "pos": [
+       11.5,
+       0.0,
+       11
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 1.0,
+      "material": {
+       "color": [
+        0.9,
+        0.12,
+        0.1
+       ],
+       "roughness": 0.25,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 1.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "フィン2",
+      "kind": "Box",
+      "size": [
+       5,
+       1.5,
+       22
+      ],
+      "round": 0.5,
+      "pos": [
+       -5.749999999999997,
+       9.959292143521045,
+       11
+      ],
+      "rot": [
+       0,
+       0,
+       120
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 1.0,
+      "material": {
+       "color": [
+        0.9,
+        0.12,
+        0.1
+       ],
+       "roughness": 0.25,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 1.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "フィン3",
+      "kind": "Box",
+      "size": [
+       5,
+       1.5,
+       22
+      ],
+      "round": 0.5,
+      "pos": [
+       -5.750000000000005,
+       -9.959292143521042,
+       11
+      ],
+      "rot": [
+       0,
+       0,
+       240
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 1.0,
+      "material": {
+       "color": [
+        0.9,
+        0.12,
+        0.1
+       ],
+       "roughness": 0.25,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 1.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     }
+    ]
+   }
+  },
+  {
+   "name": "でんしゃ",
+   "tags": [
+    "train",
+    "electric train",
+    "電車"
+   ],
+   "group": {
+    "name": "でんしゃ",
+    "op": "Add",
+    "blend": 0.0,
+    "visible": true,
+    "shapes": [
+     {
+      "name": "車体",
+      "kind": "Box",
+      "size": [
+       30,
+       96,
+       26
+      ],
+      "round": 6,
+      "pos": [
+       0,
+       0,
+       25
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 3,
+      "material": {
+       "color": [
+        0.14,
+        0.52,
+        0.34
+       ],
+       "roughness": 0.25,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 1.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "先頭の下の板",
+      "kind": "Box",
+      "size": [
+       26,
+       4,
+       6
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       -48,
+       15
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 1,
+      "material": {
+       "color": [
+        0.15,
+        0.16,
+        0.18
+       ],
+       "roughness": 0.7,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "フロント窓",
+      "kind": "Box",
+      "size": [
+       24,
+       1,
+       16
+      ],
+      "round": 2,
+      "pos": [
+       0,
+       -48.4,
+       31
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.55,
+        0.8,
+        0.95
+       ],
+       "roughness": 0.05,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 1.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "左側窓",
+      "kind": "Box",
+      "size": [
+       1,
+       62,
+       10
+      ],
+      "round": 1,
+      "pos": [
+       -15.4,
+       -4,
+       31
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.55,
+        0.8,
+        0.95
+       ],
+       "roughness": 0.05,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 1.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "右側窓",
+      "kind": "Box",
+      "size": [
+       1,
+       62,
+       10
+      ],
+      "round": 1,
+      "pos": [
+       15.4,
+       -4,
+       31
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.55,
+        0.8,
+        0.95
+       ],
+       "roughness": 0.05,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 1.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "左前灯",
+      "kind": "Sphere",
+      "size": [
+       2.5,
+       1,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       -9,
+       -48.5,
+       19
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        1.0,
+        0.94,
+        0.62
+       ],
+       "roughness": 0.2,
+       "metallic": 0.0,
+       "glow": 1.5,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "右前灯",
+      "kind": "Sphere",
+      "size": [
+       2.5,
+       1,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       9,
+       -48.5,
+       19
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        1.0,
+        0.94,
+        0.62
+       ],
+       "roughness": 0.2,
+       "metallic": 0.0,
+       "glow": 1.5,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "台車前",
+      "kind": "Box",
+      "size": [
+       24,
+       16,
+       5
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       -26,
+       11
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 1,
+      "material": {
+       "color": [
+        0.15,
+        0.16,
+        0.18
+       ],
+       "roughness": 0.7,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "台車後",
+      "kind": "Box",
+      "size": [
+       24,
+       16,
+       5
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       26,
+       11
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 1,
+      "material": {
+       "color": [
+        0.15,
+        0.16,
+        0.18
+       ],
+       "roughness": 0.7,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "パンタグラフ台",
+      "kind": "Box",
+      "size": [
+       10,
+       8,
+       4
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       10,
+       40
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 1,
+      "material": {
+       "color": [
+        0.15,
+        0.16,
+        0.18
+       ],
+       "roughness": 0.7,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "パンタグラフ",
+      "kind": "Box",
+      "size": [
+       16,
+       1.5,
+       1.5
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       10,
+       44.5
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.15,
+        0.16,
+        0.18
+       ],
+       "roughness": 0.7,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "白い帯左",
+      "kind": "Box",
+      "size": [
+       1,
+       92,
+       2.5
+      ],
+      "round": 0.0,
+      "pos": [
+       -15.1,
+       0,
+       17
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Paint",
+      "blend": 6.0,
+      "material": {
+       "color": [
+        0.95,
+        0.95,
+        0.93
+       ],
+       "roughness": 0.5,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "白い帯右",
+      "kind": "Box",
+      "size": [
+       1,
+       92,
+       2.5
+      ],
+      "round": 0.0,
+      "pos": [
+       15.1,
+       0,
+       17
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Paint",
+      "blend": 6.0,
+      "material": {
+       "color": [
+        0.95,
+        0.95,
+        0.93
+       ],
+       "roughness": 0.5,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "左車輪1",
+      "kind": "Cylinder",
+      "size": [
+       7,
+       4,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       -12,
+       -32,
+       7
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.8,
+        0.82,
+        0.86
+       ],
+       "roughness": 0.3,
+       "metallic": 0.8,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "右車輪1",
+      "kind": "Cylinder",
+      "size": [
+       7,
+       4,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       12,
+       -32,
+       7
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.8,
+        0.82,
+        0.86
+       ],
+       "roughness": 0.3,
+       "metallic": 0.8,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "左車輪2",
+      "kind": "Cylinder",
+      "size": [
+       7,
+       4,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       -12,
+       -20,
+       7
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.8,
+        0.82,
+        0.86
+       ],
+       "roughness": 0.3,
+       "metallic": 0.8,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "右車輪2",
+      "kind": "Cylinder",
+      "size": [
+       7,
+       4,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       12,
+       -20,
+       7
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.8,
+        0.82,
+        0.86
+       ],
+       "roughness": 0.3,
+       "metallic": 0.8,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "左車輪3",
+      "kind": "Cylinder",
+      "size": [
+       7,
+       4,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       -12,
+       20,
+       7
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.8,
+        0.82,
+        0.86
+       ],
+       "roughness": 0.3,
+       "metallic": 0.8,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "右車輪3",
+      "kind": "Cylinder",
+      "size": [
+       7,
+       4,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       12,
+       20,
+       7
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.8,
+        0.82,
+        0.86
+       ],
+       "roughness": 0.3,
+       "metallic": 0.8,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "左車輪4",
+      "kind": "Cylinder",
+      "size": [
+       7,
+       4,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       -12,
+       32,
+       7
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.8,
+        0.82,
+        0.86
+       ],
+       "roughness": 0.3,
+       "metallic": 0.8,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "右車輪4",
+      "kind": "Cylinder",
+      "size": [
+       7,
+       4,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       12,
+       32,
+       7
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.8,
+        0.82,
+        0.86
+       ],
+       "roughness": 0.3,
+       "metallic": 0.8,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     }
+    ]
+   }
+  },
+  {
+   "name": "じてんしゃ",
+   "tags": [
+    "bicycle",
+    "bike",
+    "自転車"
+   ],
+   "group": {
+    "name": "じてんしゃ",
+    "op": "Add",
+    "blend": 0.0,
+    "visible": true,
+    "shapes": [
+     {
+      "name": "前タイヤ",
+      "kind": "Torus",
+      "size": [
+       12.0,
+       2.2,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       -30.0,
+       14.2
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.08,
+        0.08,
+        0.09
+       ],
+       "roughness": 0.9,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "前ホイール",
+      "kind": "Cylinder",
+      "size": [
+       1.8,
+       4.0,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       -30.0,
+       14.2
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.8,
+        0.82,
+        0.86
+       ],
+       "roughness": 0.25,
+       "metallic": 0.9,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "後タイヤ",
+      "kind": "Torus",
+      "size": [
+       12.0,
+       2.2,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       28.0,
+       14.2
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.08,
+        0.08,
+        0.09
+       ],
+       "roughness": 0.9,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "後ホイール",
+      "kind": "Cylinder",
+      "size": [
+       1.8,
+       4.0,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       28.0,
+       14.2
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.8,
+        0.82,
+        0.86
+       ],
+       "roughness": 0.25,
+       "metallic": 0.9,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "ダウンチューブ",
+      "kind": "Curve",
+      "size": [
+       1,
+       1,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       0,
+       0
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.3,
+      "material": {
+       "color": [
+        0.85,
+        0.14,
+        0.12
+       ],
+       "roughness": 0.3,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 1.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0.7,
+       0,
+       1
+      ],
+      "path": [
+       [
+        0,
+        -22,
+        30,
+        1.2
+       ],
+       [
+        0,
+        0,
+        15,
+        1.2
+       ]
+      ],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "トップチューブ",
+      "kind": "Curve",
+      "size": [
+       1,
+       1,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       0,
+       0
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.3,
+      "material": {
+       "color": [
+        0.85,
+        0.14,
+        0.12
+       ],
+       "roughness": 0.3,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 1.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0.7,
+       0,
+       1
+      ],
+      "path": [
+       [
+        0,
+        -22,
+        30,
+        1.2
+       ],
+       [
+        0,
+        10,
+        32,
+        1.2
+       ]
+      ],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "シートチューブ",
+      "kind": "Curve",
+      "size": [
+       1,
+       1,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       0,
+       0
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.3,
+      "material": {
+       "color": [
+        0.85,
+        0.14,
+        0.12
+       ],
+       "roughness": 0.3,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 1.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0.7,
+       0,
+       1
+      ],
+      "path": [
+       [
+        0,
+        10,
+        32,
+        1.2
+       ],
+       [
+        0,
+        0,
+        15,
+        1.2
+       ]
+      ],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "チェーンステー",
+      "kind": "Curve",
+      "size": [
+       1,
+       1,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       0,
+       0
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.3,
+      "material": {
+       "color": [
+        0.85,
+        0.14,
+        0.12
+       ],
+       "roughness": 0.3,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 1.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0.7,
+       0,
+       1
+      ],
+      "path": [
+       [
+        0,
+        0,
+        15,
+        1.0
+       ],
+       [
+        0,
+        28.0,
+        14.2,
+        1.0
+       ]
+      ],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "シートステー",
+      "kind": "Curve",
+      "size": [
+       1,
+       1,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       0,
+       0
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.3,
+      "material": {
+       "color": [
+        0.85,
+        0.14,
+        0.12
+       ],
+       "roughness": 0.3,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 1.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0.7,
+       0,
+       1
+      ],
+      "path": [
+       [
+        0,
+        10,
+        32,
+        1.0
+       ],
+       [
+        0,
+        28.0,
+        14.2,
+        1.0
+       ]
+      ],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "フォーク",
+      "kind": "Curve",
+      "size": [
+       1,
+       1,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       0,
+       0
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.3,
+      "material": {
+       "color": [
+        0.85,
+        0.14,
+        0.12
+       ],
+       "roughness": 0.3,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 1.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0.7,
+       0,
+       1
+      ],
+      "path": [
+       [
+        0,
+        -22,
+        30,
+        1.2
+       ],
+       [
+        0,
+        -30.0,
+        14.2,
+        1.2
+       ]
+      ],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "ハンドルの軸",
+      "kind": "Curve",
+      "size": [
+       1,
+       1,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       0,
+       0
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.3,
+      "material": {
+       "color": [
+        0.85,
+        0.14,
+        0.12
+       ],
+       "roughness": 0.3,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 1.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0.7,
+       0,
+       1
+      ],
+      "path": [
+       [
+        0,
+        -22,
+        30,
+        1.2
+       ],
+       [
+        0,
+        -20,
+        36,
+        1.2
+       ]
+      ],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "サドルの軸",
+      "kind": "Curve",
+      "size": [
+       1,
+       1,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       0,
+       0
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.3,
+      "material": {
+       "color": [
+        0.85,
+        0.14,
+        0.12
+       ],
+       "roughness": 0.3,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 1.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0.7,
+       0,
+       1
+      ],
+      "path": [
+       [
+        0,
+        10,
+        32,
+        1.0
+       ],
+       [
+        0,
+        9,
+        36,
+        1.0
+       ]
+      ],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "ハンドル",
+      "kind": "Curve",
+      "size": [
+       1,
+       1,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       0,
+       0
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.3,
+      "material": {
+       "color": [
+        0.15,
+        0.16,
+        0.18
+       ],
+       "roughness": 0.4,
+       "metallic": 0.6,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0.7,
+       0,
+       1
+      ],
+      "path": [
+       [
+        -7,
+        -20,
+        38.5,
+        0.9
+       ],
+       [
+        0,
+        -21,
+        39.5,
+        0.9
+       ],
+       [
+        7,
+        -20,
+        38.5,
+        0.9
+       ]
+      ],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "サドル",
+      "kind": "Box",
+      "size": [
+       4,
+       12,
+       2.5
+      ],
+      "round": 1.2,
+      "pos": [
+       0,
+       8,
+       39
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.15,
+        0.16,
+        0.18
+       ],
+       "roughness": 0.8,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "クランク",
+      "kind": "Cylinder",
+      "size": [
+       4,
+       1.5,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       0,
+       15
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.5,
+      "material": {
+       "color": [
+        0.8,
+        0.82,
+        0.86
+       ],
+       "roughness": 0.3,
+       "metallic": 0.8,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     }
+    ]
+   }
+  }
+ ]
+}

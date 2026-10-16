@@ -144,6 +144,128 @@ pub fn stl_binary(mesh: &TriMesh, name: &str) -> Vec<u8> {
     out
 }
 
+/// A Wavefront OBJ (mm, Z up): `v` lines then `f` lines (1-based indices).
+pub fn obj_text(mesh: &TriMesh, name: &str) -> String {
+    use std::fmt::Write;
+    let mut out = format!("# YURACAD {}\no {}\n", name.replace(['\n', '\r'], " "), name.replace(char::is_whitespace, "_"));
+    for p in &mesh.positions {
+        let f = |x: f64| if x.is_finite() { x } else { 0.0 };
+        let _ = writeln!(out, "v {:.5} {:.5} {:.5}", f(p[0]), f(p[1]), f(p[2]));
+    }
+    let n = mesh.positions.len() as u32;
+    for t in mesh.triangles.iter().filter(|t| t.iter().all(|i| *i < n)) {
+        let _ = writeln!(out, "f {} {} {}", t[0] + 1, t[1] + 1, t[2] + 1);
+    }
+    out
+}
+
+fn crc32(data: &[u8]) -> u32 {
+    let mut crc = 0xFFFF_FFFFu32;
+    for b in data {
+        crc ^= u32::from(*b);
+        for _ in 0..8 {
+            crc = if crc & 1 != 0 { (crc >> 1) ^ 0xEDB8_8320 } else { crc >> 1 };
+        }
+    }
+    !crc
+}
+
+/// A 3MF file (what slicers like best): a ZIP with the model as XML, millimetres. The ZIP is written
+/// "stored" (no compression), which every reader accepts.
+pub fn threemf(mesh: &TriMesh, name: &str) -> Result<Vec<u8>, String> {
+    use std::fmt::Write;
+    let n = mesh.positions.len() as u32;
+    let mut model = String::from(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<model unit=\"millimeter\" xml:lang=\"en-US\" xmlns=\"http://schemas.microsoft.com/3dmanufacturing/core/2015/02\">\n<metadata name=\"Application\">YURACAD</metadata>\n<resources>\n<object id=\"1\" type=\"model\">\n<mesh>\n<vertices>\n",
+    );
+    for p in &mesh.positions {
+        let f = |x: f64| if x.is_finite() { x } else { 0.0 };
+        let _ = writeln!(model, "<vertex x=\"{:.5}\" y=\"{:.5}\" z=\"{:.5}\"/>", f(p[0]), f(p[1]), f(p[2]));
+    }
+    model.push_str("</vertices>\n<triangles>\n");
+    for t in mesh.triangles.iter().filter(|t| t.iter().all(|i| *i < n)) {
+        let _ = writeln!(model, "<triangle v1=\"{}\" v2=\"{}\" v3=\"{}\"/>", t[0], t[1], t[2]);
+    }
+    let _ = name;
+    model.push_str("</triangles>\n</mesh>\n</object>\n</resources>\n<build>\n<item objectid=\"1\"/>\n</build>\n</model>\n");
+    let types = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"><Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/><Default Extension=\"model\" ContentType=\"application/vnd.ms-package.3dmanufacturing-3dmodel+xml\"/></Types>";
+    let rels = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Target=\"/3D/3dmodel.model\" Id=\"rel0\" Type=\"http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel\"/></Relationships>";
+    zip_stored(&[("[Content_Types].xml", types.as_bytes()), ("_rels/.rels", rels.as_bytes()), ("3D/3dmodel.model", model.as_bytes())])
+}
+
+/// A ZIP archive holding the files uncompressed.
+fn zip_stored(files: &[(&str, &[u8])]) -> Result<Vec<u8>, String> {
+    let too_big = || "the model is too big for a 3MF file".to_string();
+    let mut out: Vec<u8> = Vec::new();
+    let mut central: Vec<u8> = Vec::new();
+    for (name, data) in files {
+        let offset = u32::try_from(out.len()).map_err(|_| too_big())?;
+        let size = u32::try_from(data.len()).map_err(|_| too_big())?;
+        let nlen = u16::try_from(name.len()).map_err(|_| too_big())?;
+        let crc = crc32(data);
+        let mut head = Vec::new();
+        head.extend_from_slice(&[20, 0, 0, 0, 0, 0, 0, 0, 0x21, 0]); // version, flags, stored, time, date (1980-01-01)
+        head.extend_from_slice(&crc.to_le_bytes());
+        head.extend_from_slice(&size.to_le_bytes());
+        head.extend_from_slice(&size.to_le_bytes());
+        head.extend_from_slice(&nlen.to_le_bytes());
+        head.extend_from_slice(&[0, 0]);
+        out.extend_from_slice(&0x0403_4b50u32.to_le_bytes());
+        out.extend_from_slice(&head);
+        out.extend_from_slice(name.as_bytes());
+        out.extend_from_slice(data);
+        central.extend_from_slice(&0x0201_4b50u32.to_le_bytes());
+        central.extend_from_slice(&[20, 0]);
+        central.extend_from_slice(&head);
+        central.extend_from_slice(&[0, 0, 0, 0, 0, 0, 0, 0, 0, 0]); // comment length, disk, internal and external attributes
+        central.extend_from_slice(&offset.to_le_bytes());
+        central.extend_from_slice(name.as_bytes());
+    }
+    let cd_offset = u32::try_from(out.len()).map_err(|_| too_big())?;
+    let cd_size = u32::try_from(central.len()).map_err(|_| too_big())?;
+    out.extend_from_slice(&central);
+    out.extend_from_slice(&0x0605_4b50u32.to_le_bytes());
+    out.extend_from_slice(&[0, 0, 0, 0]);
+    let count = u16::try_from(files.len()).map_err(|_| too_big())?;
+    out.extend_from_slice(&count.to_le_bytes());
+    out.extend_from_slice(&count.to_le_bytes());
+    out.extend_from_slice(&cd_size.to_le_bytes());
+    out.extend_from_slice(&cd_offset.to_le_bytes());
+    out.extend_from_slice(&[0, 0]);
+    Ok(out)
+}
+
+/// What a person wants to know before printing.
+pub struct PrintCheck {
+    /// Width, depth and height of the model in mm.
+    pub size: [f64; 3],
+    /// Volume in cubic centimetres.
+    pub volume_cm3: f64,
+    /// Is the surface closed (no holes in the mesh)?
+    pub closed: bool,
+    pub triangles: usize,
+}
+
+pub fn print_check(scene: &Scene) -> Result<PrintCheck, String> {
+    let m = mesh(scene, 90, 2)?;
+    let (mut lo, mut hi) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
+    for p in &m.positions {
+        for a in 0..3 {
+            lo[a] = lo[a].min(p[a]);
+            hi[a] = hi[a].max(p[a]);
+        }
+    }
+    if m.positions.is_empty() || lo.iter().chain(hi.iter()).any(|v| !v.is_finite()) {
+        return Err("there is nothing to check".into());
+    }
+    Ok(PrintCheck {
+        size: [hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]],
+        volume_cm3: melt::volume(&m).abs() / 1000.0,
+        closed: melt::is_watertight(&m),
+        triangles: m.triangles.len(),
+    })
+}
+
 pub fn write_stl(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
     std::fs::write(path, bytes).map_err(|e| format!("could not save {}: {e}", path.display()))
 }
@@ -192,6 +314,38 @@ mod tests {
         cut.size[0] = 10.0;
         let m = mesh(&scene_of(vec![sphere_at(0.0), cut]), 80, 2).unwrap();
         assert!(melt::volume(&m) < one - 300.0, "{} vs {one}", melt::volume(&m));
+    }
+
+    #[test]
+    fn obj_and_3mf_hold_the_same_mesh() {
+        let m = mesh(&Scene::default(), 24, 0).unwrap();
+        let obj = obj_text(&m, "a b");
+        assert_eq!(obj.lines().filter(|l| l.starts_with("v ")).count(), m.positions.len());
+        assert_eq!(obj.lines().filter(|l| l.starts_with("f ")).count(), m.triangles.len());
+        assert!(obj.lines().filter(|l| l.starts_with("f ")).all(|l| l.split(' ').skip(1).all(|i| i.parse::<usize>().is_ok_and(|i| i >= 1 && i <= m.positions.len()))));
+        let z = threemf(&m, "a").unwrap();
+        assert!(z.starts_with(b"PK\x03\x04") && z.windows(4).any(|w| w == b"PK\x05\x06"));
+        assert!(z.windows(16).any(|w| w == b"3D/3dmodel.model"));
+        // the standard CRC-32 check value
+        assert_eq!(crc32(b"123456789"), 0xCBF4_3926);
+    }
+
+    /// Writes a 3MF for checking with an outside unzip tool: `YURA_DUMP_3MF=/tmp/x.3mf cargo test dump -- --ignored`.
+    #[test]
+    #[ignore]
+    fn dump_a_3mf_for_an_outside_check() {
+        if let Some(p) = std::env::var_os("YURA_DUMP_3MF") {
+            let m = mesh(&Scene::default(), 24, 0).unwrap();
+            std::fs::write(p, threemf(&m, "a").unwrap()).unwrap();
+        }
+    }
+
+    #[test]
+    fn the_print_check_measures_the_default_sphere() {
+        let c = print_check(&Scene::default()).unwrap();
+        assert!(c.closed);
+        assert!(c.size.iter().all(|s| (s - 40.0).abs() < 2.0), "{:?}", c.size);
+        assert!((c.volume_cm3 - 33.5).abs() < 1.5, "{}", c.volume_cm3);
     }
 
     #[test]
