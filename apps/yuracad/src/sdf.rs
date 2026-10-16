@@ -138,7 +138,8 @@ impl Prepared {
     pub fn distance(&self, p: V3) -> f32 {
         let d = self.local_distance(self.local(p)) * self.min_scale();
         // hollow walls: the solid's skin of thickness `shell` (negative inside the wall)
-        if self.shell > 0.0 { (d + self.shell * 0.5).abs() - self.shell * 0.5 } else { d }
+        // (a curve hollows itself: its flat ends are cut after the hollowing, see curve::distance)
+        if self.shell > 0.0 && self.kind != Kind::Curve { (d + self.shell * 0.5).abs() - self.shell * 0.5 } else { d }
     }
     fn local_distance(&self, q: V3) -> f32 {
         let s = self.size;

@@ -381,7 +381,8 @@ pub const MAX_OUTLINE: usize = 64;
 /// The largest rounding the inspector offers (mm); files may hold up to `MAX_ROUND`.
 pub const ROUND_MAX: f32 = 40.0;
 pub const MAX_ROUND: f32 = 500.0;
-pub const MAX_PATH: usize = 32;
+/// Most nodes of a curve or sweep path (a traced pipe uses up to `stroke::PIPE_NODES` of them).
+pub const MAX_PATH: usize = 48;
 
 impl Shape {
     pub fn new(kind: Kind, pos: [f32; 3], material: Material) -> Shape {

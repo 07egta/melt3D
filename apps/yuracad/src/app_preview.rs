@@ -14,12 +14,16 @@ fn app_preview() {
     ctx.set_pixels_per_point(ppp);
     let mut app = App::new(false, None);
     app.show_keys = std::env::var("YURA_KEYS").is_ok();
+    app.lib_open = std::env::var("YURA_LIB").is_ok();
     app.tab = match std::env::var("YURA_TAB").ok().as_deref() {
         Some("1") => Tab::Material,
         Some("2") => Tab::Melt,
         Some("3") => Tab::Room,
         _ => Tab::Shape,
     };
+    if std::env::var("YURA_PIPE").is_ok() {
+        app.set_pipe_tool(true);
+    }
     let size = egui::vec2(1380.0, 860.0);
     let mut tex = Textures::new();
     let mut last = None;
@@ -28,12 +32,14 @@ fn app_preview() {
         let mut out = ctx.run_ui(input, |ui| {
             app.top_bar(ui);
             app.status_bar(ui);
+            app.left_dock(ui);
             app.side(ui);
             egui::CentralPanel::default().frame(egui::Frame::new().fill(Color32::from_rgb(52, 52, 56))).show(ui, |ui| {
                 app.view_rect = ui.max_rect();
             });
-            app.scene_card(ui);
+            app.tool_strip(ui);
             app.tool_pill(ui);
+            app.pipe_card(ui.ctx());
             app.keys_card(ui);
         });
         apply_deltas(&mut tex, &out.textures_delta);
