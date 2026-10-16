@@ -1996,6 +1996,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "meltcad"
+version = "0.11.0"
+dependencies = [
+ "eframe",
+ "egui",
+ "egui-wgpu",
+ "log",
+ "naga",
+ "pollster 0.4.0",
+ "rfd",
+ "serde",
+ "serde_json",
+ "solidcraft-geom",
+ "ttf-parser",
+ "wgpu",
+]
+
+[[package]]
 name = "memchr"
 version = "2.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5134,24 +5152,6 @@ dependencies = [
  "quote",
  "syn 2.0.119",
  "synstructure",
-]
-
-[[package]]
-name = "yuracad"
-version = "0.11.0"
-dependencies = [
- "eframe",
- "egui",
- "egui-wgpu",
- "log",
- "naga",
- "pollster 0.4.0",
- "rfd",
- "serde",
- "serde_json",
- "solidcraft-geom",
- "ttf-parser",
- "wgpu",
 ]
 
 [[package]]

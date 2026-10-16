@@ -54,7 +54,7 @@ fn gcode_nodes(s: &mut Session, p: &Value) -> Result<Value> {
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let dir = std::env::temp_dir().join("yuracad");
+        let dir = std::env::temp_dir().join("meltcad");
         std::fs::create_dir_all(&dir).map_err(|e| EngineError::Other(format!("{}: {e}", dir.display())))?;
         let path = dir.join("yura-gcode.html");
         std::fs::write(&path, page_with_model(s)).map_err(|e| EngineError::Other(format!("{}: {e}", path.display())))?;
