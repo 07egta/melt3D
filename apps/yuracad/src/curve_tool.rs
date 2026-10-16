@@ -272,7 +272,7 @@ pub struct Input {
 impl App {
     /// The selected curve or sweep whose nodes can be edited now.
     pub(crate) fn node_shape(&self) -> Option<(usize, usize)> {
-        if !self.ct.edit_nodes {
+        if !self.ct.edit_nodes || self.sk.edit.is_some() {
             return None;
         }
         match self.sel {
@@ -605,6 +605,7 @@ impl App {
             self.ct.draw_shape = None;
             if self.ct.drawing {
                 self.set_pipe_tool(false);
+                self.sketch_off();
             }
         }
     }
