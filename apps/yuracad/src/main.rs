@@ -13,6 +13,7 @@ mod gpu;
 mod icon;
 mod materials;
 mod cad;
+mod cpu_render;
 mod curve;
 mod curve_tool;
 mod model;
@@ -27,6 +28,10 @@ mod svg_dialog;
 mod view;
 
 fn main() -> eframe::Result {
+    let args: Vec<std::ffi::OsString> = std::env::args_os().collect();
+    if cpu_render::cli(&args) {
+        return Ok(());
+    }
     perf::init();
     // find and read the Japanese font while the window and the graphics card are being set up
     let font_job = fonts::FontJob::start();
