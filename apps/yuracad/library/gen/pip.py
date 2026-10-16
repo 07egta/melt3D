@@ -326,7 +326,8 @@ def model_snake():
         w = widths[k - 1]
         x = x - (x_prev_half + GAP + w / 2)
         x_prev_half = w / 2
-        sh.append(P("Box", f"体{k}", (x, 0, zs), (w, 15 - 0.6 * k, 12 - 0.4 * k), mat=GREEN, round=2.5))
+        sh.append(P("Box", f"体{k}", (x, 0, zs), (w, 15 - 0.6 * k, 12 - 0.4 * k),
+                    mat=GREEN if k % 2 else BLUE, round=2.5))
         sh.append(Sub("Cylinder", f"体{k}のあな", (x, 0, zs), (2.1, w + 0.2, 1), rot=(0, 90, 0)))
     sh.append(P("Curve", "せぼね", (0, 0, 0), (1, 1, 1), mat=BLACK,
                 path=[[xx, 0, zs, 1.5] for xx in [x + (0 - x) * i / 15 for i in range(16)]],
@@ -338,4 +339,117 @@ def model_snake():
 
 
 items.append(model_snake())
+save()
+
+
+# 10. フレキシさかな: a fish with a head, three body segments on a spine and a tail fin on the spine's end.
+#     Each body segment has a spine hole with 0.6 mm clearance and a 0.6 mm gap to its neighbour.
+def model_fish():
+    zc = 12.0                                         # spine and body centre height
+    sh = [P("Box", "あたま", (0, 0, zc), (16, 18, 16), mat=ORANGE, round=6.0)]
+    xs, x, half = [], 0.0, 8.0
+    for k, (wy, wz) in enumerate(((16, 14), (15, 13), (13, 11))):
+        x = x - (half + GAP + 4.5)
+        xs.append(x)
+        half = 4.5
+        sh.append(P("Box", f"体{k + 1}", (x, 0, zc), (9, wy, wz), mat=GREEN, round=3.0))
+        sh.append(Sub("Cylinder", f"体{k + 1}のあな", (x, 0, zc), (2.1, 9.2, 1), rot=(0, 90, 0)))
+    x_root = x - 4.5 - GAP - 1.0                      # tail fin root, 0.6 mm clear of the last segment
+    sh.append(P("Extrude", "しっぽ", (x_root, 0, zc), (3, 1, 1), mat=BLUE, rot=(90, 0, 0),
+                outline=[[1, 0], [-12, -9], [-9, 0], [-12, 9]]))
+    sh.append(P("Extrude", "せびれ", (xs[0], 0, 18), (2, 1, 1), mat=BLUE, rot=(90, 0, 0),
+                outline=[[-5, 0], [0, 9], [5, 0]]))
+    x_end = x_root - 2.0
+    sh.append(P("Curve", "せぼね", (0, 0, 0), (1, 1, 1), mat=BLACK,
+                path=[[x_end + (0 - x_end) * i / 15, 0, zc, 1.5] for i in range(16)],
+                params=(0, 0.7, 0, 1)))
+    for sgn in (-1, 1):
+        sh.append(P("Sphere", "め", (4.0, sgn * 9.0, zc + 2), (2.2, 1, 1), mat=BLACK))
+    return item("フレキシさかな", ["fish", "flexi fish", "articulated", "print in place", "さかな", "魚", "おさかな"],
+                group("フレキシさかな", sh))
+
+
+items.append(model_fish())
+save()
+
+
+# 11. ドアのちょうつがい: a door hinge with its axis upright. The leaves stand on the bed in one line,
+#     the knuckles stack on the pin, and every knuckle keeps 0.6 mm from the next.
+def model_door_hinge():
+    return item("ドアのちょうつがい", ["door hinge", "hinge", "butt hinge", "print in place", "ドア", "ちょうつがい", "とびら"],
+                group("ドアのちょうつがい", hinge_shapes("door", 0, 36, 26, STEEL, BRASS)))
+
+
+items.append(model_door_hinge())
+save()
+
+
+# 12. ボルトとナットのくみあわせ: a threaded bolt stands on the bed and a hex nut sits loose on the
+#     thread. The nut's bore (r 5.5) is 0.6 mm wider than the thread's outer edge (r 4.9).
+def model_bolt_nut():
+    sh = [
+        P("PrismN", "ナット", (0, 0, 24), (10, 8, 1), mat=CHROME, params=(6, 0, 0, 0)),
+        Sub("Cylinder", "ナットの穴", (0, 0, 24), (5.5, 10, 1)),          # bore 4.9 + 0.6
+        P("PrismN", "ボルトの頭", (0, 0, 4), (11, 8, 1), mat=STEEL, params=(6, 0, 0, 0)),
+        P("Cylinder", "軸", (0, 0, 24), (4, 32, 1), mat=STEEL),
+        P("Curve", "ねじ山", (0, 0, 0), (1, 1, 1), mat=STEEL, path=helix(4.0, 9, 39, 6, 0.9),
+          params=(0, 0.7, 0, 1)),
+    ]
+    return item("ボルトとナットのくみあわせ", ["bolt", "nut", "thread", "loose nut", "print in place", "ボルト", "ナット"],
+                group("ボルトとナットのくみあわせ", sh))
+
+
+items.append(model_bolt_nut())
+save()
+
+
+# 13. ユニバーサルジョイント: two yokes and a cross. Yoke A (arms in YZ) holds the cross's X pin, yoke B
+#     (arms in XZ, on the bed) holds its Y pin. Each pin runs in a 2.6 mm hole (r 2 pin, 0.6 mm clearance).
+def model_universal():
+    zc = 11.0                                         # cross centre height
+    sh = [
+        P("Box", "Aのうで1", (-13, 0, 12.5), (3, 10, 19), mat=BLUE),
+        P("Box", "Aのうで2", (13, 0, 12.5), (3, 10, 19), mat=BLUE),
+        P("Box", "Aのわ", (0, 0, 20.8), (29, 10, 2.4), mat=BLUE),
+        Sub("Cylinder", "Aのあな", (0, 0, zc), (2.6, 60, 1), rot=(0, 90, 0)),
+        P("Box", "Bのうで1", (0, -13, 12.5), (10, 3, 19), mat=ORANGE),
+        P("Box", "Bのうで2", (0, 13, 12.5), (10, 3, 19), mat=ORANGE),
+        P("Box", "Bのわ", (0, 0, 1.5), (10, 29, 3), mat=ORANGE),
+        Sub("Cylinder", "Bのあな", (0, 0, zc), (2.6, 60, 1), rot=(90, 0, 0)),
+        P("Box", "十字の芯", (0, 0, zc), (8, 8, 8), mat=GREY, round=1.0),
+        P("Cylinder", "十字のピンX", (0, 0, zc), (2.0, 26, 1), mat=CHROME, rot=(0, 90, 0)),
+        P("Cylinder", "十字のピンY", (0, 0, zc), (2.0, 26, 1), mat=CHROME, rot=(90, 0, 0)),
+        P("Cylinder", "軸", (0, 0, 30.5), (4, 19, 1), mat=BLUE),
+    ]
+    return item("ユニバーサルジョイント", ["universal joint", "cardan joint", "cross", "yoke", "print in place", "ユニバーサル", "十字"],
+                group("ユニバーサルジョイント", sh))
+
+
+items.append(model_universal())
+save()
+
+
+# 14. ふたつきカプセル: a hollow ball capsule (two hemispheres). The lid (dome up) turns 40 degrees on a
+#     pin held by two ears at the back; the sleeve turns on the pin with 0.6 mm clearance.
+def model_capsule():
+    R = 20.0
+    a = -40.0                                         # lid angle (front edge lifts)
+    pv = (25.0, 20.6)                                 # hinge axis (y, z) outside the back of the capsule
+    f_lid = turn_about(pv, (0, 0, 20.6), a)           # the lid's flat face centre, after turning
+    sh = [
+        dome("ふた", f_lid, R, a=a, mat=BLUE),
+        Sub("Sphere", "ふたのくぼみ", f_lid, (17, 1, 1)),              # hollow lid, wall 3
+        dome("入れもの", (0, 0, 20), R, down=True, mat=ORANGE),
+        Sub("Sphere", "中のくぼみ", (0, 0, 20), (17, 1, 1)),          # hollow bowl, opening on top
+        P("Box", "耳L", (-10.3, 20.5, 17), (7.4, 9, 6), mat=ORANGE),
+        P("Box", "耳R", (10.3, 20.5, 17), (7.4, 9, 6), mat=ORANGE),
+        P("Cylinder", "ピン", (0, pv[0], pv[1]), (2.0, 28, 1), mat=CHROME, rot=(0, 90, 0)),
+        P("Tube", "ふたのそで", (0, pv[0], pv[1]), (3.5, 0.9, 12), mat=BLUE, rot=(0, 90, 0)),
+        P("Box", "ふたのうで", turn_about(pv, (0, 21.5, 21.6), a), (12, 7, 2), mat=BLUE, rot=(a, 0, 0)),
+    ]
+    return item("ふたつきカプセル", ["capsule", "gachapon", "capsule toy", "hinged lid", "print in place", "カプセル", "ふた"],
+                group("ふたつきカプセル", sh))
+
+
+items.append(model_capsule())
 save()

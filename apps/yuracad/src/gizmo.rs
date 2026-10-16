@@ -1,7 +1,8 @@
 //! The handles on the selected thing. The default gizmo is one tool that does it all, like Womp3D:
 //! arrows to move along an axis, small squares to move in a plane, curved arrows to rotate, the
-//! middle dot (or the box corners) to resize. The single tools (move / rotate / scale) are the same
-//! handles, one kind at a time.
+//! middle dot to resize everything at once, and six small cubes on the faces of the box that stretch
+//! the thing along that one direction only (the opposite face stays put). The single tools
+//! (move / rotate / scale) are the same handles, one kind at a time.
 
 use egui::{Color32, Painter, Pos2, Rect, Shape, Stroke, Vec2, vec2};
 
@@ -40,8 +41,8 @@ pub enum Handle {
     Plane(usize),
     /// A curved arrow that turns about axis `i`.
     Arc(usize),
-    /// A corner of the box (index bits: x, y, z are `+` when set).
-    Corner(usize),
+    /// The cube on a face of the box: `k / 2` is the shape's own axis, odd `k` is the + side.
+    Face(usize),
     Centre,
 }
 
@@ -52,7 +53,7 @@ enum Act {
     MoveView,
     ScaleAxis(usize),
     ScaleAll,
-    ScaleCorner(usize),
+    StretchFace(usize),
     Rotate(usize),
 }
 
@@ -75,9 +76,12 @@ pub struct Drag {
     /// The last angle about the axis seen, and the total turned so far.
     ang_last: f32,
     turned: f32,
-    /// Screen directions of the shape's own axes, and the corner's distance from the middle (px).
+    /// Screen directions of the shape's own axes, and the face cube's distance from the middle (px).
     dirs: [Vec2; 3],
     corner_px: f32,
+    /// The shape's own axes in the world and its half sizes along them (mm), for stretching a face.
+    local: [V3; 3],
+    ext: V3,
     /// (group, shape, position, rotation, scale) when the drag began.
     from: Vec<(usize, usize, V3, V3, V3)>,
 }
@@ -100,6 +104,8 @@ pub struct Geom {
     /// Full rings (rotate tool) or short curved arrows (the all-in-one gizmo).
     arcs: [Vec<Pos2>; 3],
     corners: Option<[Option<Pos2>; 8]>,
+    /// The cubes on the six faces of the box (the stretch handles).
+    faces: Option<[Option<Pos2>; 6]>,
     local: [V3; 3],
     ext: V3,
     len_w: f32,
@@ -169,7 +175,7 @@ pub fn build(cam: &Camera, rect: Rect, scene: &Scene, sel: Option<Pick>, tool: T
         if tool == Tool::Rotate {
             arc_points(cam, rect, centre_w, i, len_w * 0.9, (0.0, std::f32::consts::TAU, RING_SEGS))
         } else if tool == Tool::All {
-            arc_points(cam, rect, centre_w, i, len_w * 1.18, (0.38, 1.18, 14))
+            arc_points(cam, rect, centre_w, i, len_w * 1.16, (0.22, 1.36, 20))
         } else {
             Vec::new()
         }
@@ -183,7 +189,16 @@ pub fn build(cam: &Camera, rect: Rect, scene: &Scene, sel: Option<Pick>, tool: T
     } else {
         None
     };
-    Some(Geom { centre: c, centre_w, axes, ends, planes, arcs, corners, local, ext, len_w })
+    let faces = if tool.scales() && shape.is_some() {
+        Some(std::array::from_fn(|k| {
+            let sign = if k % 2 == 1 { 1.0 } else { -1.0 };
+            let i = k / 2;
+            cam.project(rect, add(centre_w, mul(local[i], sign * ext[i])))
+        }))
+    } else {
+        None
+    };
+    Some(Geom { centre: c, centre_w, axes, ends, planes, arcs, corners, faces, local, ext, len_w })
 }
 
 fn seg_dist(p: Pos2, a: Pos2, b: Pos2) -> f32 {
@@ -219,12 +234,12 @@ pub fn hit(g: &Geom, tool: Tool, p: Pos2) -> Option<Handle> {
     if tool != Tool::Rotate && near((p - g.centre).length(), 9.0) {
         return Some(Handle::Centre);
     }
-    if let Some(corners) = &g.corners {
-        for (k, c) in corners.iter().enumerate() {
+    if let Some(faces) = &g.faces {
+        for (k, c) in faces.iter().enumerate() {
             if let Some(c) = c
                 && near((p - *c).length(), 9.0)
             {
-                return Some(Handle::Corner(k));
+                return Some(Handle::Face(k));
             }
         }
     }
@@ -296,7 +311,7 @@ pub fn draw(p: &Painter, g: &Geom, tool: Tool, active: Option<Handle>) {
             continue;
         }
         let col = col_of(i, on);
-        p.add(Shape::line(pts.clone(), Stroke::new(if on { 4.0 } else { 3.0 }, col)));
+        p.add(Shape::line(pts.clone(), Stroke::new(if on { 5.0 } else { 3.5 }, col)));
         if tool == Tool::All {
             let (Some(last), Some(prev)) = (pts.last(), pts.get(pts.len() - 2)) else { continue };
             let d = (*last - *prev).normalized();
@@ -325,19 +340,16 @@ pub fn draw(p: &Painter, g: &Geom, tool: Tool, active: Option<Handle>) {
             }
         }
     }
-    // the corners
-    if let Some(corners) = &g.corners {
-        for (k, pt) in corners.iter().enumerate() {
+    // the cubes on the faces: each stretches the thing along its own direction only
+    if let Some(faces) = &g.faces {
+        for (k, pt) in faces.iter().enumerate() {
             let Some(pt) = pt else { continue };
-            let on = active == Some(Handle::Corner(k));
-            let r = if on { 6.0 } else { 4.5 };
-            p.rect_filled(Rect::from_center_size(*pt, Vec2::splat(r * 2.0)), 2.0, if on { style::ACCENT } else { Color32::WHITE });
-            p.rect_stroke(
-                Rect::from_center_size(*pt, Vec2::splat(r * 2.0)),
-                2.0,
-                Stroke::new(1.2, Color32::from_black_alpha(140)),
-                egui::StrokeKind::Outside,
-            );
+            let on = active == Some(Handle::Face(k));
+            let r = if on { 6.5 } else { 5.0 };
+            let col = if on { Color32::WHITE } else { style::AXIS[k / 2] };
+            let rect = Rect::from_center_size(*pt, Vec2::splat(r * 2.0));
+            p.rect_filled(rect, 2.0, col);
+            p.rect_stroke(rect, 2.0, Stroke::new(1.2, Color32::from_black_alpha(150)), egui::StrokeKind::Outside);
         }
     }
     if tool != Tool::Rotate {
@@ -386,7 +398,7 @@ impl App {
         match (tool, handle) {
             (_, Handle::Plane(i)) => Act::MovePlane(i),
             (_, Handle::Arc(i)) | (Tool::Rotate, Handle::Axis(i)) => Act::Rotate(i),
-            (_, Handle::Corner(k)) => Act::ScaleCorner(k),
+            (_, Handle::Face(k)) => Act::StretchFace(k),
             (Tool::Scale, Handle::Axis(i)) if !group => Act::ScaleAxis(i),
             (Tool::Scale, _) => Act::ScaleAll,
             (Tool::All, Handle::Centre) if !shift => Act::ScaleAll,
@@ -441,8 +453,8 @@ impl App {
                 *d = (e - g.centre) / ARROW_PX;
             }
         }
-        let corner_px = match (act, g.corners) {
-            (Act::ScaleCorner(k), Some(cs)) => cs.get(k).copied().flatten().map(|p| (p - g.centre).length()).unwrap_or(60.0),
+        let corner_px = match (act, g.faces) {
+            (Act::StretchFace(k), Some(fs)) => fs.get(k).copied().flatten().map(|p| (p - g.centre).length()).unwrap_or(60.0),
             _ => 60.0,
         };
         let from = targets(&self.scene, self.sel)
@@ -466,6 +478,8 @@ impl App {
             turned: 0.0,
             dirs,
             corner_px: corner_px.max(14.0),
+            local: g.local,
+            ext: g.ext,
             from,
         }
     }
@@ -543,12 +557,16 @@ impl App {
                         s.pos = add(d.centre, mul(sub(pos, d.centre), f));
                     }
                 }
-                Act::ScaleCorner(k) => {
-                    for (i, dst) in s.scale.iter_mut().enumerate() {
-                        let sign = if (k >> i) & 1 == 1 { 1.0 } else { -1.0 };
-                        let f = (1.0 + sign * delta.dot(d.dirs[i]) / d.corner_px).max(0.05);
-                        *dst = round(scale[i] * f, 0.05).clamp(0.01, 100.0);
-                    }
+                Act::StretchFace(k) => {
+                    // one direction only; the opposite face stays where it is
+                    let i = k / 2;
+                    let sign = if k % 2 == 1 { 1.0 } else { -1.0 };
+                    let f = (1.0 + sign * delta.dot(d.dirs[i]) / d.corner_px).max(0.05);
+                    let new = round(scale[i] * f, 0.05).clamp(0.01, 100.0);
+                    let real = new / scale[i].max(1e-6);
+                    s.scale[i] = new;
+                    let shift = sign * d.ext[i] * (real - 1.0);
+                    s.pos = add(pos, mul(d.local[i], shift));
                 }
             }
         }
@@ -559,10 +577,10 @@ impl App {
 pub fn hint(tool: Tool) -> &'static str {
     match tool {
         Tool::Select => "クリックで選ぶ",
-        Tool::All => "矢印=動かす　四角=平面で動かす　曲がった矢印=回す　真ん中・角=大きさ",
+        Tool::All => "矢印=動かす　四角=平面で動かす　曲がった矢印=回す　真ん中=ぜんぶ拡大　面の四角=その向きにのばす",
         Tool::Move => "矢印で動かす (Ctrlで1mmずつ)",
         Tool::Rotate => "輪っかで回す (Ctrlで15度ずつ)",
-        Tool::Scale => "四角・角・真ん中で大きさを変える",
+        Tool::Scale => "真ん中=ぜんぶ拡大　面の四角=その向きだけのばす　軸の四角=その軸の大きさ",
     }
 }
 
@@ -597,6 +615,41 @@ mod tests {
     fn a_point_inside_a_square_is_found() {
         let q = [pos2(0.0, 0.0), pos2(10.0, 0.0), pos2(10.0, 10.0), pos2(0.0, 10.0)];
         assert!(in_quad(pos2(5.0, 5.0), &q) && !in_quad(pos2(15.0, 5.0), &q));
+    }
+
+    #[test]
+    fn stretching_a_face_changes_one_axis_and_keeps_the_opposite_face_in_place() {
+        let mut app = App::new(true, None);
+        if let Some(s) = app.scene.shape_mut(0, 0) {
+            s.kind = Kind::Box;
+            s.size = [30.0, 30.0, 30.0];
+            s.pos = [0.0, 0.0, 15.0];
+            s.rot = [0.0; 3];
+            s.scale = [1.0; 3];
+        }
+        app.sel = Some(Pick::Shape(0, 0));
+        let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0));
+        let Some(g) = build(&app.cam, rect, &app.scene, app.sel, Tool::All) else { panic!("gizmo") };
+        let Some(face) = g.faces.and_then(|f| f[1]) else { panic!("the + x face cube is on screen") };
+        assert_eq!(hit(&g, Tool::All, face), Some(Handle::Face(1)));
+        let mut d = app.begin_drag(Handle::Face(1), &g, rect, face, Tool::All, false);
+        let out = d.dirs[0].normalized() * d.corner_px * 0.5;
+        app.apply_drag(&mut d, face + out, false);
+        let Some(s) = app.scene.shape(0, 0) else { panic!("shape") };
+        assert!(s.scale[0] > 1.1 && s.scale[1] == 1.0 && s.scale[2] == 1.0, "{:?}", s.scale);
+        let min_x = s.pos[0] - 15.0 * s.scale[0];
+        assert!((min_x + 15.0).abs() < 0.2, "the - x face stayed at -15, now {min_x}");
+        assert!(s.pos[1] == 0.0 && s.pos[2] == 15.0);
+    }
+
+    #[test]
+    fn the_centre_scales_everything_and_the_face_cubes_are_six() {
+        let app = App::new(true, None);
+        let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0));
+        let Some(g) = build(&app.cam, rect, &app.scene, Some(Pick::Shape(0, 0)), Tool::All) else { panic!("gizmo") };
+        assert_eq!(g.faces.map(|f| f.len()), Some(6));
+        assert_eq!(hit(&g, Tool::All, g.centre), Some(Handle::Centre));
+        assert_eq!(app.action_for(Handle::Centre, Tool::All, false), Act::ScaleAll);
     }
 
     #[test]
