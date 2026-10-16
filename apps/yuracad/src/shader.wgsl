@@ -13,6 +13,7 @@ struct Shape {
     mat2: vec4<f32>,    // x = clear coat
     params: vec4<f32>,  // kind-specific extra numbers
     ext: vec4<f32>,     // x = path start, y = path count, z = outline2 start, w = outline2 count
+    extra: vec4<f32>,   // x = shell wall thickness (0 = solid)
 };
 
 struct Globals {
@@ -149,7 +150,11 @@ fn shape_dist(s: Shape, p: vec3<f32>) -> f32 {
         let w = vec2<f32>(d2 + rr, abs(q.z) - sz.x * 0.5 + rr);
         r = min(max(w.x, w.y), 0.0) + length(max(w, vec2<f32>(0.0))) - rr;
     }
-    return r * s.pos.w;
+    r = r * s.pos.w;
+    // hollow walls of thickness `shell`
+    let sh = s.extra.x;
+    if (sh > 0.0) { r = abs(r + sh * 0.5) - sh * 0.5; }
+    return r;
 }
 
 fn mix_hit(a: Hit, b: Hit, t: f32) -> Hit {
@@ -168,8 +173,15 @@ fn mix_hit(a: Hit, b: Hit, t: f32) -> Hit {
     return o;
 }
 
-// op: +1 add, -1 carve, 0 paint (colour only)
+// op: +1 add, -1 carve, 0 paint (colour only), 2 keep only the overlap
 fn combine(a: Hit, b: Hit, op: f32, k: f32, mode: i32) -> Hit {
+    if (op > 1.5) {
+        // smax(a, b) = -smin(-a, -b); the surface belongs to whichever is farther out
+        let r = smin_h(-a.d, -b.d, k, mode);
+        var o = mix_hit(a, b, r.y);
+        o.d = -r.x;
+        return o;
+    }
     if (op > 0.5) {
         let r = smin_h(a.d, b.d, k, mode);
         var o = mix_hit(a, b, r.y);

@@ -263,7 +263,7 @@ impl App {
         let er = ui.interact(eye, id.with("e"), Sense::click());
         let orr = ui.interact(opr, id.with("o"), Sense::click());
         glyphs::eye(ui.painter(), eye, visible, if er.hovered() { Color32::WHITE } else { style::DIM });
-        let opcol = if op == Op::Add { style::ADD } else { style::CUT };
+        let opcol = style::op_color(op);
         glyphs::op(ui.painter(), opr, op, opcol.gamma_multiply(if orr.hovered() { 1.0 } else { 0.8 }));
         out.eye = er.clicked();
         out.op = orr.clicked();
@@ -310,6 +310,7 @@ impl App {
                 (Op::Add, "＋ 足す", "形をくっつける"),
                 (Op::Subtract, "− 削る", "くり抜く"),
                 (Op::Paint, "● ぬる", "形は変えずに、色・ざいしつだけぬる"),
+                (Op::Intersect, "◐ 重ねる", "前の形と かさなる ところだけ のこす"),
             ] {
                 if style::pill(ui, label, *op == o).on_hover_text(tip).clicked() {
                     *op = o;
@@ -357,6 +358,7 @@ impl App {
         let mut move_to: Option<usize> = None;
         let mut reorder: Option<usize> = None;
         let mut outline_changed = false;
+        let mut top_changed = false;
         {
             let Some(sh) = self.scene.shape_mut(g, s) else { return };
             ui.text_edit_singleline(&mut sh.name);
@@ -412,12 +414,17 @@ impl App {
                 style::labeled_slider(ui, "かどの丸み", &mut sh.round, 0.0..=40.0, "角の丸さ (mm)");
             }
             style::labeled_slider(ui, "とけあい", &mut sh.blend, 0.0..=80.0, "この形が、まわりとどのくらい溶けてくっつくか (グープ)");
+            style::labeled_slider(ui, "ちゅうぐう\nシェル", &mut sh.shell, 0.0..=40.0, "中をくり抜いて、かべの あつさ(mm)だけ のこす。0 = つまっている");
             if sh.kind.uses_outline() {
                 outline_changed = true;
+                top_changed = sh.kind.uses_outline2();
             }
         }
         if outline_changed {
             self.sketch_editor(ui, g, s);
+        }
+        if top_changed {
+            self.sketch_editor_top(ui, g, s);
         }
         ui.add_space(4.0);
         ui.horizontal(|ui| {
@@ -658,11 +665,36 @@ impl App {
     // ----- sketch to extrude -----
 
     fn sketch_editor(&mut self, ui: &mut Ui, g: usize, s: usize) {
-        style::title(ui, "スケッチ（輪かく）");
+        self.sketch_editor_of(ui, g, s, false);
+    }
+
+    /// The loft's top profile.
+    fn sketch_editor_top(&mut self, ui: &mut Ui, g: usize, s: usize) {
+        self.sketch_editor_of(ui, g, s, true);
+    }
+
+    /// The outline editor, for the main profile (`top` = false) or a loft's top profile (`outline2`).
+    fn sketch_editor_of(&mut self, ui: &mut Ui, g: usize, s: usize, top: bool) {
+        let kind = self.scene.shape(g, s).map(|x| x.kind);
+        let revolve = kind == Some(Kind::Revolve);
+        let loft = kind == Some(Kind::Loft);
+        style::title(
+            ui,
+            match (revolve, loft, top) {
+                (true, _, _) => "断面（はんぶん）",
+                (_, true, false) => "下の輪かく",
+                (_, true, true) => "上の輪かく",
+                _ => "スケッチ（輪かく）",
+            },
+        );
+        if revolve {
+            ui.label(RichText::new("よこ = ま中のじくからの きょり、たて = 高さ。じくで ぐるっと回します").size(11.0).color(style::DIM));
+        }
         let side = ui.available_width().min(240.0);
         let (rect, _) = ui.allocate_exact_size(vec2(side, side), Sense::hover());
         let Some(sh) = self.scene.shape_mut(g, s) else { return };
-        let extent = sh.outline.iter().map(|p| p[0].abs().max(p[1].abs())).fold(20.0_f32, f32::max) * 1.25;
+        let ol = if top { &mut sh.outline2 } else { &mut sh.outline };
+        let extent = ol.iter().map(|p| p[0].abs().max(p[1].abs())).fold(20.0_f32, f32::max) * 1.25;
         let k = side * 0.5 / extent;
         let to_px = |p: [f32; 2]| Pos2::new(rect.center().x + p[0] * k, rect.center().y - p[1] * k);
         let to_mm =
@@ -681,7 +713,7 @@ impl App {
             p.line_segment([c, d], Stroke::new(w, Color32::from_white_alpha(if v == 0.0 { 40 } else { 14 })));
             v += 10.0;
         }
-        let pts: Vec<Pos2> = sh.outline.iter().map(|q| to_px(*q)).collect();
+        let pts: Vec<Pos2> = ol.iter().map(|q| to_px(*q)).collect();
         p.add(egui::Shape::convex_polygon(Vec::new(), Color32::TRANSPARENT, Stroke::NONE));
         let mut path = pts.clone();
         if let Some(f) = pts.first() {
@@ -693,7 +725,7 @@ impl App {
         let mut insert = None;
         for (i, pt) in pts.iter().enumerate() {
             let hr = Rect::from_center_size(*pt, vec2(16.0, 16.0));
-            let r = ui.interact(hr, ui.id().with(("pt", g, s, i)), Sense::click_and_drag());
+            let r = ui.interact(hr, ui.id().with(("pt", g, s, i, top)), Sense::click_and_drag());
             let on = r.hovered() || r.dragged();
             ui.painter().circle_filled(*pt, if on { 6.5 } else { 5.0 }, if on { Color32::WHITE } else { style::ACCENT });
             if r.dragged()
@@ -707,7 +739,7 @@ impl App {
             r.on_hover_text("ドラッグで動かす / ダブルクリックで消す");
         }
         // a click on an edge adds a corner
-        let bg = ui.interact(rect, ui.id().with(("sk", g, s)), Sense::click());
+        let bg = ui.interact(rect, ui.id().with(("sk", g, s, top)), Sense::click());
         if bg.clicked()
             && let Some(m) = bg.interact_pointer_pos()
         {
@@ -722,24 +754,25 @@ impl App {
                     best = (d, i + 1);
                 }
             }
-            insert = Some((best.1, to_mm(m)));
+            let m = to_mm(m);
+            insert = Some((best.1, if revolve { [m[0].max(0.0), m[1]] } else { m }));
         }
         if let Some((i, m)) = moved
-            && let Some(p) = sh.outline.get_mut(i)
+            && let Some(p) = ol.get_mut(i)
         {
-            *p = m;
+            *p = if revolve { [m[0].max(0.0), m[1]] } else { m };
         }
         if let Some((i, m)) = insert
-            && sh.outline.len() < MAX_OUTLINE
+            && ol.len() < MAX_OUTLINE
         {
-            sh.outline.insert(i, m);
+            ol.insert(i, m);
         }
         if let Some(i) = remove
-            && sh.outline.len() > 3
+            && ol.len() > 3
         {
-            sh.outline.remove(i);
+            ol.remove(i);
         }
-        ui.label(RichText::new(format!("線をクリックで角を足す　{}/{}個", sh.outline.len(), MAX_OUTLINE)).size(11.0).color(style::DIM));
+        ui.label(RichText::new(format!("線をクリックで角を足す　{}/{}個", ol.len(), MAX_OUTLINE)).size(11.0).color(style::DIM));
         ui.horizontal_wrapped(|ui| {
             let shapes: [(&str, Vec<[f32; 2]>); 5] = [
                 ("四角", vec![[-15.0, -15.0], [15.0, -15.0], [15.0, 15.0], [-15.0, 15.0]]),
@@ -781,9 +814,19 @@ impl App {
                     ],
                 ),
             ];
+            let shapes: Vec<(&str, Vec<[f32; 2]>)> = if revolve {
+                vec![
+                    ("つぼ", Kind::Revolve.default_outline()),
+                    ("コップ", vec![[0.0, -20.0], [14.0, -20.0], [18.0, 20.0], [16.0, 20.0], [12.0, -17.0], [0.0, -17.0]]),
+                    ("こま", vec![[0.0, -22.0], [4.0, -16.0], [20.0, 0.0], [20.0, 6.0], [6.0, 8.0], [5.0, 22.0], [0.0, 22.0]]),
+                    ("四角(円柱)", vec![[0.0, -20.0], [15.0, -20.0], [15.0, 20.0], [0.0, 20.0]]),
+                ]
+            } else {
+                shapes.into_iter().collect()
+            };
             for (name, pts) in shapes {
                 if style::pill(ui, name, false).clicked() {
-                    sh.outline = pts.into_iter().map(|p| [p[0].round(), p[1].round()]).collect();
+                    *ol = pts.into_iter().map(|p| [p[0].round(), p[1].round()]).collect();
                 }
             }
         });
