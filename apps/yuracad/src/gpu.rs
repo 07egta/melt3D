@@ -1020,6 +1020,12 @@ mod shader_tests {
     }
 }
 
+/// About `shapes` shapes of library models on a grid (for timing tests elsewhere).
+#[cfg(test)]
+pub(crate) fn library_scene_for_tests(shapes: usize) -> Scene {
+    headless_tests::library_scene(shapes)
+}
+
 /// A real GPU (or the software one) without a window: renders scenes into a texture and reads
 /// them back. Ignored by default (it needs an adapter): `cargo test -p yuracad --release gpu_headless -- --ignored --nocapture`.
 #[cfg(test)]
@@ -1204,6 +1210,63 @@ mod headless_tests {
         assert!(both > 1500, "the scene covers a good part of the picture ({both})");
         // (the two march with different steps and hit limits, so a thin rim of edge pixels differs)
         assert!((gpu_only + cpu_only) * 100 < both * 6, "the silhouettes differ by more than 6%");
+    }
+
+    /// Writes scenes for the real window: `/tmp/yt_scale/patterns.meltcad` (every kind of pattern and a
+    /// linked copy) and `big300.meltcad` (about 300 library shapes).
+    /// `cargo test -p yuracad --release dump_pattern_scenes -- --ignored`
+    #[test]
+    #[ignore]
+    fn dump_pattern_scenes() {
+        use crate::model::{Kind, Material, Shape};
+        use crate::pattern::{PathMode, Pattern, Source, Xform};
+        let mut sc = Scene::default();
+        sc.groups.clear();
+        let mut boxes = Group::new("ミラーの箱");
+        let mut b = Shape::new(Kind::Box, [30.0, 60.0, 15.0], Material::plain([0.9, 0.5, 0.4], 0.4, 0.0));
+        b.size = [25.0, 25.0, 25.0];
+        boxes.shapes.push(b);
+        boxes.pattern = Some(Pattern::Mirror { axes: [true, true, false], centre: false });
+        sc.groups.push(boxes);
+        let mut ring = Group::new("まわりの柱");
+        let mut c = Shape::new(Kind::Cylinder, [60.0, -20.0, 0.0], Material::plain([0.4, 0.6, 0.9], 0.4, 0.0));
+        c.size = [7.0, 30.0, 1.0];
+        ring.shapes.push(c);
+        ring.pattern = Some(Pattern::Circular { count: 7, angle: 360.0, axis: 2, centre: [0.0; 3], rotate: true });
+        sc.groups.push(ring);
+        let mut grid = Group::new("ならぶ玉");
+        grid.shapes.push(Shape::new(Kind::Sphere, [-100.0, -100.0, 10.0], Material::plain([0.5, 0.85, 0.5], 0.3, 0.0)));
+        grid.shapes[0].size[0] = 8.0;
+        grid.pattern = Some(Pattern::Rect { counts: [4, 3, 1], spacing: [24.0, 24.0, 0.0] });
+        sc.groups.push(grid);
+        let mut line = Group::new("線");
+        let mut sw = Shape::new(Kind::Sweep, [0.0; 3], Material::default());
+        sw.path = vec![[-120.0, 90.0, 0.0, 1.0], [-40.0, 130.0, 20.0, 1.0], [60.0, 90.0, 0.0, 1.0], [140.0, 130.0, 20.0, 1.0]];
+        sw.visible = false;
+        line.shapes.push(sw);
+        sc.groups.push(line);
+        let uid = sc.ensure_shape_uid(3, 0).unwrap_or(0);
+        let mut cones = Group::new("線の上の円すい");
+        let mut cone = Shape::new(Kind::Cone, [0.0, 0.0, 0.0], Material::plain([0.95, 0.8, 0.3], 0.4, 0.0));
+        cone.size = [6.0, 18.0, 1.0];
+        cones.shapes.push(cone);
+        cones.pattern = Some(Pattern::Path { source: uid, count: 9, mode: PathMode::Even, step: 20.0, align: true });
+        sc.groups.push(cones);
+        let mut pts = Group::new("点ごとの星");
+        let mut star = Shape::new(Kind::Star, [0.0, 0.0, 0.0], Material::plain([0.9, 0.4, 0.7], 0.4, 0.0));
+        star.size = [7.0, 6.0, 1.0];
+        pts.shapes.push(star);
+        pts.pattern = Some(Pattern::Geometry { source: Source::Shape(uid), orient: true });
+        sc.groups.push(pts);
+        let gid = sc.ensure_group_uid(0).unwrap_or(0);
+        let mut copy = Group::new("リンクコピー");
+        copy.instance_of = Some(gid);
+        copy.xform = Xform { pos: [0.0, 0.0, 70.0], rot: [0.0, 0.0, 45.0], scale: 1.5 };
+        sc.groups.push(copy);
+        let _ = std::fs::create_dir_all("/tmp/yt_scale");
+        let _ = std::fs::write("/tmp/yt_scale/patterns.meltcad", sc.to_json());
+        let big = library_scene(300);
+        let _ = std::fs::write("/tmp/yt_scale/big300.meltcad", big.to_json());
     }
 
     /// `cargo test -p yuracad --release gpu_headless_bench -- --ignored --nocapture`
