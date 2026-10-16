@@ -125,20 +125,87 @@ fn pm_star2(x: f32, y: f32, r: f32, n: f32, ratio: f32) -> f32 {
     return d;
 }
 
+// A symmetric corner at (r, 0) (the frame turned so that it is on +X) cut off a flat shape with distance
+// d: the cut runs across X, `leg * da` from the corner (da < 0 goes inwards).
+fn pm_cut_symmetric_tip(d: f32, px: f32, py: f32, r: f32, leg: f32, da: f32) -> f32 {
+    let g = px - (r + leg * da);
+    return max(d, min(g, leg - length(vec2<f32>(px - r, py))));
+}
+
+// (x, y) turned into the sector of the nearest of n corners (a corner on +X)
+fn pm_fold_to_corner(x: f32, y: f32, n: f32) -> vec2<f32> {
+    let an = PM_PI / n;
+    let bn = pm_mod(atan2(y, x) + an, 2.0 * an) - an;
+    let rho = length(vec2<f32>(x, y));
+    return vec2<f32>(rho * cos(bn), rho * sin(bn));
+}
+
+fn pm_cut_poly_tip(d: f32, x: f32, y: f32, r: f32, n: f32, c: f32) -> f32 {
+    let an = PM_PI / n;
+    let f = pm_fold_to_corner(x, y, n);
+    return pm_cut_symmetric_tip(d, f.x, f.y, r, min(c, r * sin(an)), -sin(an));
+}
+
+fn pm_cut_star_tips(d: f32, x: f32, y: f32, r: f32, n: f32, ratio: f32, c: f32) -> f32 {
+    let an = PM_PI / n;
+    let e = vec2<f32>(ratio * r * cos(an) - r, ratio * r * sin(an));
+    let el = max(length(e), 1e-6);
+    let f = pm_fold_to_corner(x, y, n);
+    return pm_cut_symmetric_tip(d, f.x, f.y, r, min(c, el * 0.5), e.x / el);
+}
+
+// signed distance to the cap of the ball of radius rad (centre at the origin) above the plane zc = h0
+fn pm_ball_cap(rho: f32, zc: f32, rad: f32, h0: f32) -> f32 {
+    let dome = length(vec2<f32>(rho, zc)) - rad;
+    let floor_d = h0 - zc;
+    if (dome <= 0.0 && floor_d <= 0.0) { return max(dome, floor_d); }
+    let rim = sqrt(max(rad * rad - h0 * h0, 0.0));
+    let near_rim = length(vec2<f32>(rho - rim, zc - h0));
+    if (zc >= h0) {
+        if (zc * rad >= h0 * length(vec2<f32>(rho, zc))) { return dome; }
+        return near_rim;
+    }
+    if (rho <= rim) { return floor_d; }
+    return near_rim;
+}
+
 fn prim_dist(s: Shape, q: vec3<f32>, kind: i32) -> f32 {
     let sz = s.size.xyz;
     let rnd = max(s.size.w, 0.0);
+    let ch = s.extra.w > 0.5 && rnd > 0.0;
     if (kind == 6 || kind == 7) {
         var n = 3.0;
         if (kind == 7) { n = pm_count(s.params.x, 3.0, 32.0); }
         let hh = sz.y * 0.5;
         let ca = cos(PM_PI / n);
+        if (ch) {
+            let d2 = pm_cut_poly_tip(pm_poly_n(q.x, q.y, sz.x, n), q.x, q.y, sz.x, n, rnd);
+            return cn_pair(d2, abs(q.z) - hh, min(rnd, hh));
+        }
         let rr = min(min(rnd, hh), sz.x * ca * 0.98);
         return pm_extrude(pm_poly_n(q.x, q.y, sz.x - rr / ca, n), q.z, hh, rr);
     } else if (kind == 8) {
+        if (ch) {
+            let c = min(rnd, sz.x * 0.3);
+            let a = abs(q);
+            let f = (a.x + a.y + a.z - sz.x) * 0.57735026;
+            let k = c * CN_S;
+            return max(max(f, (a.x + a.y - sz.x) * CN_S + k), max((a.x + a.z - sz.x) * CN_S + k, (a.y + a.z - sz.x) * CN_S + k));
+        }
         let rr = min(rnd, sz.x * 0.3);
         return pm_octa(q, sz.x - rr * 1.7320508) - rr;
     } else if (kind == 9) {
+        if (ch) {
+            let c = min(rnd, sz.x * 0.3);
+            let off = sz.x / 3.0;
+            let f0 = -q.z - off;
+            let f1 = PM_TET_S * 0.5 * q.x + PM_TET_S * PM_SQRT3_2 * q.y + q.z / 3.0 - off;
+            let f2 = -PM_TET_S * q.x + q.z / 3.0 - off;
+            let f3 = PM_TET_S * 0.5 * q.x - PM_TET_S * PM_SQRT3_2 * q.y + q.z / 3.0 - off;
+            var d = max(max(f0, f1), max(f2, f3));
+            d = max(d, max(max(cn_bevel(f0, f1, -1.0 / 3.0, c), cn_bevel(f0, f2, -1.0 / 3.0, c)), max(cn_bevel(f0, f3, -1.0 / 3.0, c), cn_bevel(f1, f2, -1.0 / 3.0, c))));
+            return max(d, max(cn_bevel(f1, f3, -1.0 / 3.0, c), cn_bevel(f2, f3, -1.0 / 3.0, c)));
+        }
         let rr = min(rnd, sz.x * 0.3);
         return pm_tetra(q, sz.x - 3.0 * rr) - rr;
     } else if (kind == 10) {
@@ -146,6 +213,20 @@ fn prim_dist(s: Shape, q: vec3<f32>, kind: i32) -> f32 {
         let a = sz.x * cos(PM_PI / n);
         let h = sz.y;
         let l = max(length(vec2<f32>(h, a)), 1e-6);
+        if (ch) {
+            // the faces stay; the base edges and the slanted edges get a flat bevel each
+            let c = min(rnd, a * h / (l + a) * 0.98);
+            let an = PM_PI / n;
+            let f = pm_fold_poly(q.x, q.y, n);
+            let zt = h * 0.5;
+            let kx = h / l;
+            let kz = a / l;
+            let din = (h * f.x + a * q.z - a * zt) / l;
+            let dnext = (h * (f.x * cos(2.0 * an) + f.y * sin(2.0 * an)) + a * q.z - a * zt) / l;
+            let db = -zt - q.z;
+            let d = max(max(din, db), cn_bevel(din, db, -kz, c));
+            return max(d, cn_bevel(din, dnext, kx * kx * cos(2.0 * an) + kz * kz, c));
+        }
         let rr = min(rnd, a * h / (l + a) * 0.98);
         let hh = h * 0.5;
         return pm_pyramid(q, n, a - rr * (l + a) / max(h, 1e-6), -hh + rr, hh - rr * l / max(a, 1e-6)) - rr;
@@ -154,13 +235,15 @@ fn prim_dist(s: Shape, q: vec3<f32>, kind: i32) -> f32 {
         return length(vec3<f32>(q.x, q.y, q.z - max(-hl, min(hl, q.z)))) - sz.x;
     } else if (kind == 12) {
         let r = sz.x;
-        let rr = min(rnd, r * 0.5);
-        let rad = r - rr;
-        let zp = q.z + r * 0.5 - rr;
         let rho = length(q.xy);
-        if (zp >= 0.0) { return max(length(vec2<f32>(rho, zp)) - rad, -zp) - rr; }
-        if (rho <= rad) { return -zp - rr; }
-        return length(vec2<f32>(rho - rad, zp)) - rr;
+        let zp = q.z + r * 0.5;
+        if (ch) {
+            // the dome meets the floor at a right angle; the cut is a cone through the rim
+            let c = min(rnd, r * 0.5);
+            return max(max(length(vec2<f32>(rho, zp)) - r, -zp), (rho - zp - (r - c)) * CN_S);
+        }
+        let rr = min(rnd, r * 0.5);
+        return pm_ball_cap(rho, zp, r - rr, rr) - rr;
     } else if (kind == 13) {
         let t = min(max(sz.y, 0.0), sz.x);
         let hw = t * 0.5;
@@ -169,6 +252,7 @@ fn prim_dist(s: Shape, q: vec3<f32>, kind: i32) -> f32 {
         let rho = length(q.xy);
         var dx = abs(rho - (sz.x - hw)) - hw + rr;
         if (t >= sz.x) { dx = rho - sz.x + rr; }
+        if (ch) { return cn_pair(dx - rr, abs(q.z) - hh, rr); }
         let d = vec2<f32>(dx, abs(q.z) - hh + rr);
         return min(max(d.x, d.y), 0.0) + length(max(d, vec2<f32>(0.0))) - rr;
     } else if (kind == 14) {
@@ -176,6 +260,17 @@ fn prim_dist(s: Shape, q: vec3<f32>, kind: i32) -> f32 {
         let dd = sz.y * 0.5;
         let h = sz.z * 0.5;
         let rin = max((sz.x + sz.z - length(vec2<f32>(sz.x, sz.z))) * 0.5, 1e-6);
+        if (ch) {
+            let pt = vec2<f32>(q.x, q.z);
+            let wa = vec2<f32>(-w, -h);
+            let wb = vec2<f32>(w, -h);
+            let wc = vec2<f32>(-w, h);
+            var d2 = pm_sd_triangle(pt, wa, wb, wc);
+            d2 = cn_cut_vertex(d2, pt, wc, wa, wb, 1.0, rnd);
+            d2 = cn_cut_vertex(d2, pt, wa, wb, wc, 1.0, rnd);
+            d2 = cn_cut_vertex(d2, pt, wb, wc, wa, 1.0, rnd);
+            return cn_pair(d2, abs(q.y) - dd, min(rnd, dd));
+        }
         let rr = min(min(rnd, dd), rin * 0.98);
         let c = vec2<f32>(-w + rin, -h + rin);
         let k = (rin - rr) / rin;
@@ -188,6 +283,10 @@ fn prim_dist(s: Shape, q: vec3<f32>, kind: i32) -> f32 {
         let ratio = max(0.1, min(0.9, s.params.y));
         let hh = sz.y * 0.5;
         let an = PM_PI / n;
+        if (ch) {
+            let d2 = pm_cut_star_tips(pm_star2(q.x, q.y, sz.x, n, ratio), q.x, q.y, sz.x, n, ratio, rnd);
+            return cn_pair(d2, abs(q.z) - hh, min(rnd, hh));
+        }
         let e = vec2<f32>(ratio * sz.x * cos(an) - sz.x, ratio * sz.x * sin(an));
         let el = max(length(e), 1e-6);
         let rr = min(min(rnd, hh), e.y * sz.x / el * 0.5);

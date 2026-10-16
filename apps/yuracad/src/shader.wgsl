@@ -13,7 +13,7 @@ struct Shape {
     mat2: vec4<f32>,    // x = clear coat, y = translucency, z = signed 1 / gradient length
     params: vec4<f32>,  // kind-specific extra numbers
     ext: vec4<f32>,     // x = path start, y = path count, z = outline2 start, w = outline2 count
-    extra: vec4<f32>,   // x = shell wall thickness (0 = solid), y z = profile rounding limit, winding
+    extra: vec4<f32>,   // x = shell wall thickness (0 = solid), y z = profile rounding limit, winding, w = 1: chamfer instead of round
     gcol: vec4<f32>,    // gradient: second colour rgb, strength (0 = no gradient)
     gpar: vec4<f32>,    // gradient: direction (0 x, 1 y, 2 z; +3 = along the shape's own box), softness, from, to
 };
@@ -136,6 +136,7 @@ fn shape_dist(s: Shape, p: vec3<f32>) -> f32 {
     let kind = i32(s.scale.w + 0.5);
     let sz = s.size.xyz;
     let rd = s.size.w;
+    let chamfer = s.extra.w > 0.5 && rd > 0.0;
     var r = 0.0;
     if (kind == 0) {
         r = length(q) - sz.x;
@@ -144,13 +145,25 @@ fn shape_dist(s: Shape, p: vec3<f32>) -> f32 {
         let rr = min(rd, min(b.x, min(b.y, b.z)));
         let dd = abs(q) - b + vec3<f32>(rr);
         r = length(max(dd, vec3<f32>(0.0))) + min(max(dd.x, max(dd.y, dd.z)), 0.0) - rr;
+        if (chamfer) { r = cn_cut_box(q, b, rr); }
     } else if (kind == 2) {
         let rr = min(rd, min(sz.x, sz.y * 0.5));
         let dd = vec2<f32>(length(q.xy) - sz.x + rr, abs(q.z) - sz.y * 0.5 + rr);
         r = min(max(dd.x, dd.y), 0.0) + length(max(dd, vec2<f32>(0.0))) - rr;
+        if (chamfer) { r = cn_pair(length(q.xy) - sz.x, abs(q.z) - sz.y * 0.5, rr); }
     } else if (kind == 3) {
         let a = length(q.xy) - sz.x;
         r = length(vec2<f32>(a, q.z)) - sz.y;
+    } else if (kind == 4 && chamfer) {
+        // a cone with its base rim and its tip cut off
+        let hh = sz.y * 0.5;
+        let pc = vec2<f32>(length(q.xy), q.z);
+        let ca = vec2<f32>(-sz.x, -hh);
+        let cb = vec2<f32>(sz.x, -hh);
+        let ct = vec2<f32>(0.0, hh);
+        var dc = pm_sd_triangle(pc, ca, cb, ct);
+        dc = cn_cut_vertex(dc, pc, ca, cb, ct, 1.0, rd);
+        r = cn_cut_vertex(dc, pc, cb, ct, ca, 1.0, rd);
     } else if (kind == 4 && rd > 0.0) {
         // a rounded cone: its profile triangle shrunk about the incentre, then grown again
         let hh = sz.y * 0.5;
@@ -183,10 +196,21 @@ fn shape_dist(s: Shape, p: vec3<f32>) -> f32 {
     } else if (kind >= 6) {
         r = prim_dist(s, q, kind);
     } else {
-        let d2 = polygon_d(i32(s.misc.z + 0.5), i32(s.misc.w + 0.5), q.xy);
-        let rr = min(rd, sz.x * 0.5);
-        let w = vec2<f32>(d2 + rr, abs(q.z) - sz.x * 0.5 + rr);
-        r = min(max(w.x, w.y), 0.0) + length(max(w, vec2<f32>(0.0))) - rr;
+        let st = i32(s.misc.z + 0.5);
+        let cnt = i32(s.misc.w + 0.5);
+        let hh = sz.x * 0.5;
+        var d2 = polygon_d(st, cnt, q.xy);
+        if (chamfer) {
+            d2 = cn_cut_polygon(d2, q.xy, st, cnt, s.extra.z, rd, false);
+            r = cn_pair(d2, abs(q.z) - hh, min(rd, hh));
+        } else {
+            // every convex corner of the outline and the top and bottom edges are rounded
+            var rr = 0.0;
+            if (rd > 0.0) { rr = min(min(rd, hh), s.extra.y); }
+            if (rr > 0.0) { d2 = polygon_inset_d(st, cnt, q.xy, rr, s.extra.z, false); }
+            let w = vec2<f32>(d2, abs(q.z) - hh + rr);
+            r = min(max(w.x, w.y), 0.0) + length(max(w, vec2<f32>(0.0))) - rr;
+        }
     }
     r = r * s.pos.w;
     // hollow walls of thickness `shell`

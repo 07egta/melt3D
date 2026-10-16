@@ -106,7 +106,9 @@ fn profile_round(s: Shape, scale: f32) -> f32 {
 fn revolve_dist(s: Shape, q: vec3<f32>) -> f32 {
     var d = 0.0;
     let rr = profile_round(s, 1.0);
-    if (rr > 0.0) {
+    if (s.extra.w > 0.5 && s.size.w > 0.0) {
+        d = cn_cut_polygon(polygon_off_axis_d(i32(s.misc.z + 0.5), i32(s.misc.w + 0.5), vec2<f32>(length(q.xy), q.z)), vec2<f32>(length(q.xy), q.z), i32(s.misc.z + 0.5), i32(s.misc.w + 0.5), s.extra.z, s.size.w, true);
+    } else if (rr > 0.0) {
         d = polygon_inset_d(i32(s.misc.z + 0.5), i32(s.misc.w + 0.5), vec2<f32>(length(q.xy), q.z), rr, s.extra.z, true) - rr;
     } else {
         d = polygon_off_axis_d(i32(s.misc.z + 0.5), i32(s.misc.w + 0.5), vec2<f32>(length(q.xy), q.z));
@@ -123,7 +125,8 @@ fn loft_dist(s: Shape, q: vec3<f32>) -> f32 {
     let t = clamp(q.z / h + 0.5, 0.0, 1.0);
     let rr = min(max(s.size.w, 0.0), h * 0.5);
     let w = vec2<f32>(d1 + (d2 - d1) * t + rr, abs(q.z) - h * 0.5 + rr);
-    let d = min(max(w.x, w.y), 0.0) + length(max(w, vec2<f32>(0.0))) - rr;
+    var d = min(max(w.x, w.y), 0.0) + length(max(w, vec2<f32>(0.0))) - rr;
+    if (s.extra.w > 0.5 && rr > 0.0) { d = cn_pair(d1 + (d2 - d1) * t, abs(q.z) - h * 0.5, rr); }
     return d / (1.0 + abs(d2 - d1) / h);
 }
 
@@ -159,7 +162,9 @@ fn sweep_dist(s: Shape, q: vec3<f32>) -> f32 {
     let uv = vec2<f32>(dot(dd, nrm), dot(dd, bin)) / r;
     var d2 = polygon_d(i32(s.misc.z + 0.5), i32(s.misc.w + 0.5), uv) * r;
     let rr = profile_round(s, r);
-    if (rr > 0.0) {
+    if (s.extra.w > 0.5 && s.size.w > 0.0) {
+        d2 = cn_cut_polygon(d2 / r, uv, i32(s.misc.z + 0.5), i32(s.misc.w + 0.5), s.extra.z, s.size.w / max(r, 1e-3), false) * r;
+    } else if (rr > 0.0) {
         d2 = (polygon_inset_d(i32(s.misc.z + 0.5), i32(s.misc.w + 0.5), uv, rr, s.extra.z, false) - rr) * r;
     }
     var axial = -1e5;
