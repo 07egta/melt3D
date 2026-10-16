@@ -131,6 +131,17 @@ fn axis_turn(axis: u8, deg: f32) -> Mat {
     rotation(r)
 }
 
+/// Euler angles (degrees, `sdf::rotation`'s order) of a turn matrix: `rotation(euler_of(m)) == m`.
+pub fn euler_of(m: &[V3; 3]) -> V3 {
+    let cy = m[0][0].hypot(m[1][0]);
+    let (x, y, z) = if cy > 1e-6 {
+        (m[2][1].atan2(m[2][2]), (-m[2][0]).atan2(cy), m[1][0].atan2(m[0][0]))
+    } else {
+        ((-m[1][2]).atan2(m[1][1]), (-m[2][0]).atan2(cy), 0.0)
+    };
+    [x.to_degrees(), y.to_degrees(), z.to_degrees()]
+}
+
 /// A turn that takes the X axis to the direction `t` (the Z axis stays upright when it can).
 fn frame_along(t: V3) -> Mat {
     let x = norm(t);
@@ -651,6 +662,27 @@ pub fn describe(scene: &Scene, gi: usize) -> (usize, bool) {
     }
 }
 
+/// A sphere around every drawn instance of every visible group, for framing the view ("all").
+/// A visible shape of a visible group is held by its sphere (`view::radius_of`), moved by the
+/// group's instances. Groups without instances give one sphere per shape.
+pub fn world_spheres(scene: &Scene) -> Vec<Bound> {
+    let mut out = Vec::new();
+    for rg in resolve(scene) {
+        let Some(src) = scene.groups.get(rg.src) else { continue };
+        let parts: Vec<Bound> = src.shapes.iter().filter(|s| s.visible).map(|s| Bound { c: s.pos, r: crate::view::radius_of(s) }).collect();
+        if parts.is_empty() {
+            continue;
+        }
+        if rg.insts.is_empty() {
+            out.extend(parts);
+        } else {
+            let base = crate::accel::enclose(&parts);
+            out.extend(rg.insts.iter().map(|i| i.bound(base)));
+        }
+    }
+    out
+}
+
 /// A sphere around the whole of a visible group's `Add` parts, in the group's own space.
 pub fn group_sphere(shapes: &[Shape]) -> Bound {
     let spheres: Vec<Bound> = shapes.iter().filter(|s| s.visible).map(crate::accel::shape_bound).collect();
@@ -764,6 +796,19 @@ mod tests {
         let b = Inst { m: axis_turn(2, 90.0), t: [0.0; 3], s: 1.0 };
         close(a.then(&b).apply([0.0; 3]), b.apply(a.apply([0.0; 3])));
         assert!(!a.flips());
+    }
+
+    #[test]
+    fn euler_angles_come_back_from_a_turn() {
+        for rot in [[0.0, 0.0, 0.0], [30.0, 40.0, 50.0], [-120.0, 10.0, 170.0], [90.0, 0.0, 0.0], [10.0, 89.9, -20.0], [0.0, -90.0, 33.0]] {
+            let m = rotation(rot);
+            let back = rotation(euler_of(&m));
+            for i in 0..3 {
+                for j in 0..3 {
+                    assert!((m[i][j] - back[i][j]).abs() < 1e-3, "{rot:?}: {m:?} vs {back:?}");
+                }
+            }
+        }
     }
 
     #[test]

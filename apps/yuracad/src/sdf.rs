@@ -7,6 +7,9 @@ use crate::model::{BlendMode, Kind, Material, Op, Scene, Shape};
 
 pub type V3 = [f32; 3];
 
+/// The shape number in `Sample::nearest` when what was hit is a whole linked copy of a group.
+pub const LINKED: usize = usize::MAX;
+
 pub fn add(a: V3, b: V3) -> V3 {
     [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
 }
@@ -66,10 +69,10 @@ pub struct Prepared {
     pub grad_half: f32,
 }
 
+/// The shapes of one group, ready to measure (a group shown through several instances, or by
+/// linked copies, is prepared once).
 #[derive(Clone, Debug)]
 pub struct PreparedGroup {
-    pub op: Op,
-    pub blend: f32,
     pub shapes: Vec<Prepared>,
     /// The scene (group, shape) of each prepared shape.
     pub origin: Vec<(usize, usize)>,
@@ -79,9 +82,24 @@ pub struct PreparedGroup {
     pub info: crate::accel::GroupInfo,
 }
 
+/// One group as it is drawn: whose shapes (`src`, an index into `Field::sources`), how it melts
+/// into the groups before it, and through which instances (none = once, as it is).
+#[derive(Clone, Debug)]
+pub struct FieldGroup {
+    /// The scene group this stands for.
+    pub gi: usize,
+    pub op: Op,
+    pub blend: f32,
+    pub src: usize,
+    pub insts: Vec<crate::pattern::Inst>,
+    /// A linked copy: what is hit counts as the copy (its group), not as the source's shapes.
+    pub linked: bool,
+}
+
 #[derive(Clone, Debug)]
 pub struct Field {
-    pub groups: Vec<PreparedGroup>,
+    pub groups: Vec<FieldGroup>,
+    pub sources: Vec<PreparedGroup>,
     pub mode: BlendMode,
     pub amount: f32,
     pub drip: f32,
@@ -321,32 +339,36 @@ pub struct Sample {
 impl Field {
     pub fn new(scene: &Scene) -> Field {
         let mut groups = Vec::new();
-        for (gi, g) in scene.groups.iter().enumerate() {
-            if !g.visible {
-                continue;
-            }
-            let mut shapes = Vec::new();
-            let mut origin = Vec::new();
-            let mut members: Vec<&Shape> = Vec::new();
-            for (si, s) in g.shapes.iter().enumerate() {
-                if s.visible {
-                    shapes.push(Prepared::new(s));
-                    origin.push((gi, si));
-                    members.push(s);
+        let mut sources: Vec<PreparedGroup> = Vec::new();
+        let mut made: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+        for rg in crate::pattern::resolve(scene) {
+            let (Some(g), Some(srcg)) = (scene.groups.get(rg.gi), scene.groups.get(rg.src)) else { continue };
+            let src = *made.entry(rg.src).or_insert_with(|| {
+                let mut shapes = Vec::new();
+                let mut origin = Vec::new();
+                let mut members: Vec<&Shape> = Vec::new();
+                for (si, s) in srcg.shapes.iter().enumerate() {
+                    if s.visible {
+                        shapes.push(Prepared::new(s));
+                        origin.push((rg.src, si));
+                        members.push(s);
+                    }
                 }
-            }
-            let info = crate::accel::group_info(&members, &scene.melt);
-            let bounds = members.iter().map(|s| crate::accel::shape_bound(s)).collect();
-            groups.push(PreparedGroup { op: g.op, blend: g.blend, shapes, origin, bounds, info });
+                let info = crate::accel::group_info(&members, &scene.melt);
+                let bounds = members.iter().map(|s| crate::accel::shape_bound(s)).collect();
+                sources.push(PreparedGroup { shapes, origin, bounds, info });
+                sources.len() - 1
+            });
+            groups.push(FieldGroup { gi: rg.gi, op: g.op, blend: g.blend, src, insts: rg.insts, linked: rg.linked });
         }
         let m = scene.melt;
-        Field { groups, mode: m.mode, amount: m.amount, drip: m.drip, ripple: m.ripple }
+        Field { groups, sources, mode: m.mode, amount: m.amount, drip: m.drip, ripple: m.ripple }
     }
 
     /// The same field with every skip switched off (for the tests that prove the skips are exact).
     #[cfg(test)]
     pub fn without_culling(mut self) -> Field {
-        for g in &mut self.groups {
+        for g in &mut self.sources {
             g.bounds = vec![crate::accel::Bound { c: [0.0; 3], r: 1.0e9 }; g.shapes.len()];
             g.info.bound = crate::accel::Bound { c: [0.0; 3], r: 1.0e9 };
             g.info.blocks = vec![crate::accel::Block { bound: g.info.bound, kmax: 0.0, skippable: false, first: 0, count: g.shapes.len() }];
@@ -400,35 +422,51 @@ impl Field {
         acc
     }
 
-    /// Measure the scene at `p`.
+    /// Measure the scene at `p`. Every instance of a group melts into the groups before it, one
+    /// after the other, as if it were a group of its own.
     pub fn sample(&self, p: V3) -> Sample {
         use crate::accel::{far_enough, paint_far};
         let p = warp(p, self.drip, self.ripple);
         let mut acc: Option<Sample> = None;
-        for g in &self.groups {
-            if let Some(a) = &acc {
-                let lb = g.info.bound.lower(p);
-                let k = g.blend * self.amount;
-                let far = match g.op {
-                    Op::Intersect => false,
-                    Op::Add => lb >= far_enough(a.dist, k, self.mode),
-                    Op::Subtract => lb >= far_enough(-a.dist, k, self.mode),
-                    Op::Paint => lb >= paint_far(k),
-                };
-                if far {
-                    continue;
-                }
-            }
-            let Some(gs) = self.group(g, p) else { continue };
-            acc = Some(match acc {
-                None => {
-                    if g.op != Op::Add {
+        for fg in &self.groups {
+            let Some(src) = self.sources.get(fg.src) else { continue };
+            let k = fg.blend * self.amount;
+            for j in 0..fg.insts.len().max(1) {
+                let inst = fg.insts.get(j);
+                if let Some(a) = &acc {
+                    let lb = match inst {
+                        Some(i) => i.bound(src.info.bound).lower(p),
+                        None => src.info.bound.lower(p),
+                    };
+                    let far = match fg.op {
+                        Op::Intersect => false,
+                        Op::Add => lb >= far_enough(a.dist, k, self.mode),
+                        Op::Subtract => lb >= far_enough(-a.dist, k, self.mode),
+                        Op::Paint => lb >= paint_far(k),
+                    };
+                    if far {
                         continue;
                     }
-                    gs
                 }
-                Some(a) => combine(a, gs, g.op, g.blend * self.amount, self.mode),
-            });
+                let (q, scale) = match inst {
+                    Some(i) => (i.back(p), i.s),
+                    None => (p, 1.0),
+                };
+                let Some(mut gs) = self.group(src, q) else { continue };
+                gs.dist *= scale;
+                if fg.linked && gs.nearest.is_some() {
+                    gs.nearest = Some((fg.gi, LINKED));
+                }
+                acc = Some(match acc {
+                    None => {
+                        if fg.op != Op::Add {
+                            continue;
+                        }
+                        gs
+                    }
+                    Some(a) => combine(a, gs, fg.op, k, self.mode),
+                });
+            }
         }
         let mut out = acc.unwrap_or(Sample { dist: 1e6, color: [0.8; 3], roughness: 0.5, metallic: 0.0, nearest: None });
         if self.drip > 0.0 {
@@ -652,7 +690,7 @@ mod tests {
             sc.melt.mode = mode;
             let fast = Field::new(&sc);
             let slow = Field::new(&sc).without_culling();
-            assert!(fast.groups.iter().any(|g| g.info.blocks.len() > 1), "the groups are cut into blocks");
+            assert!(fast.sources.iter().any(|g| g.info.blocks.len() > 1), "the groups are cut into blocks");
             let mut state = seed * 77 + 1;
             let mut rnd = move || {
                 state = state.wrapping_mul(1664525).wrapping_add(1013904223);
@@ -671,6 +709,189 @@ mod tests {
             }
         }
         eprintln!("worst skip error {worst}");
+    }
+
+    /// The scene with every instance written out as a group of its own (same op and blend), for
+    /// shapes that look the same flipped (spheres, boxes, cylinders, ...): what a pattern means.
+    fn written_out(sc: &Scene) -> Scene {
+        use crate::pattern::{Inst, euler_of};
+        let mut out = sc.clone();
+        out.groups.clear();
+        for rg in crate::pattern::resolve(sc) {
+            let (Some(g), Some(src)) = (sc.groups.get(rg.gi), sc.groups.get(rg.src)) else { continue };
+            let mut plain = Group::new(g.name.clone());
+            plain.op = g.op;
+            plain.blend = g.blend;
+            let insts: Vec<Inst> = if rg.insts.is_empty() { vec![Inst::IDENTITY] } else { rg.insts.clone() };
+            for (n, i) in insts.iter().enumerate() {
+                let mut c = plain.clone();
+                c.name = format!("{} {n}", g.name);
+                for s in src.shapes.iter().filter(|s| s.visible) {
+                    let mut t = s.clone();
+                    t.uid = 0;
+                    t.pos = i.apply(s.pos);
+                    let r = rotation(s.rot);
+                    // a turn: R' = M R. A flip: R' = M R M (the shape is the same flipped)
+                    let m = i.m;
+                    let mr = (0..3).map(|a| (0..3).map(|b| (0..3).map(|k| m[a][k] * r[k][b]).sum::<f32>()).collect::<Vec<f32>>()).collect::<Vec<_>>();
+                    let rm: [V3; 3] = if i.flips() {
+                        let mut o = [[0.0; 3]; 3];
+                        for a in 0..3 {
+                            for b in 0..3 {
+                                o[a][b] = (0..3).map(|k| mr[a][k] * m[k][b]).sum();
+                            }
+                        }
+                        o
+                    } else {
+                        [[mr[0][0], mr[0][1], mr[0][2]], [mr[1][0], mr[1][1], mr[1][2]], [mr[2][0], mr[2][1], mr[2][2]]]
+                    };
+                    t.rot = euler_of(&rm);
+                    c.shapes.push(t);
+                }
+                out.groups.push(c);
+            }
+        }
+        out
+    }
+
+    fn centres(sc: &Scene) -> Vec<V3> {
+        sc.groups.iter().flat_map(|g| g.shapes.iter().map(|s| s.pos)).collect()
+    }
+
+    /// Sample points: half anywhere, half close to one of the shapes (so most are near a surface).
+    fn compare(a: &Field, b: &Field, near_to: &[V3], label: &str, points: usize) {
+        let mut state = 99u32;
+        let mut rnd = move || {
+            state = state.wrapping_mul(1664525).wrapping_add(1013904223);
+            (state >> 8) as f32 / (1u32 << 24) as f32
+        };
+        let mut near = 0;
+        for _ in 0..points {
+            let mut p = [(rnd() - 0.5) * 360.0, (rnd() - 0.5) * 360.0, rnd() * 100.0 - 20.0];
+            if !near_to.is_empty() && rnd() < 0.7 {
+                let c = near_to[(rnd() * near_to.len() as f32) as usize % near_to.len()];
+                p = [c[0] + (rnd() - 0.5) * 40.0, c[1] + (rnd() - 0.5) * 40.0, c[2] + (rnd() - 0.5) * 40.0];
+            }
+            let (x, y) = (a.sample(p), b.sample(p));
+            assert!((x.dist - y.dist).abs() < 1e-3, "{label} at {p:?}: {} against {}", x.dist, y.dist);
+            if x.dist.abs() < 3.0 {
+                near += 1;
+                assert!((0..3).all(|i| (x.color[i] - y.color[i]).abs() < 2e-3), "{label} colour at {p:?}");
+            }
+        }
+        assert!(near > 20, "{label}: only {near} sample points are near a surface");
+    }
+
+    fn symmetric_scene() -> Scene {
+        let mut sc = busy_scene(5, 6, 4);
+        for g in &mut sc.groups {
+            for s in &mut g.shapes {
+                s.kind = [Kind::Sphere, Kind::Box, Kind::Cylinder, Kind::Torus][(s.size[0] as usize) % 4];
+                s.pos = [s.pos[0] * 0.3, s.pos[1] * 0.3, s.pos[2]];
+            }
+        }
+        sc
+    }
+
+    #[test]
+    fn a_pattern_measures_like_the_same_scene_written_out() {
+        use crate::pattern::{PathMode, Pattern, Source};
+        let ring = |n| Pattern::Circular { count: n, angle: 300.0, axis: 2, centre: [10.0, -20.0, 0.0], rotate: true };
+        let cases: Vec<(&str, Pattern)> = vec![
+            ("mirror x", Pattern::Mirror { axes: [true, false, false], centre: false }),
+            ("mirror xyz about the middle", Pattern::Mirror { axes: [true, true, true], centre: true }),
+            ("rect", Pattern::Rect { counts: [3, 2, 2], spacing: [70.0, -60.0, 30.0] }),
+            ("circular", ring(5)),
+            ("circular keeping direction", Pattern::Circular { count: 4, angle: 360.0, axis: 0, centre: [0.0; 3], rotate: false }),
+        ];
+        for mode in BlendMode::ALL {
+            for (name, p) in &cases {
+                let mut sc = symmetric_scene();
+                sc.melt.mode = mode;
+                sc.groups[1].pattern = Some(p.clone());
+                sc.groups[3].pattern = Some(Pattern::Rect { counts: [2, 2, 1], spacing: [90.0, 90.0, 0.0] });
+                let field = Field::new(&sc);
+                let written = Field::new(&written_out(&sc));
+                assert!(field.groups.iter().any(|g| g.insts.len() > 1));
+                let wr = written_out(&sc);
+                compare(&field, &written, &centres(&wr), &format!("{name} {mode:?}"), 1500);
+            }
+        }
+        // path and geometry: the sources are shapes of the scene
+        let mut sc = symmetric_scene();
+        let mut sweep = Shape::new(Kind::Sweep, [0.0, 0.0, 0.0], Material::default());
+        sweep.path = vec![[-80.0, -60.0, 0.0, 1.0], [0.0, 60.0, 30.0, 1.0], [90.0, -40.0, 10.0, 1.0]];
+        sweep.visible = false;
+        sc.groups[2].shapes.push(sweep);
+        let last = sc.groups[2].shapes.len() - 1;
+        let uid = sc.ensure_shape_uid(2, last).unwrap_or(0);
+        for (name, p) in [
+            ("path", Pattern::Path { source: uid, count: 6, mode: PathMode::Even, step: 10.0, align: true }),
+            ("path by step", Pattern::Path { source: uid, count: 30, mode: PathMode::Step, step: 45.0, align: false }),
+            ("on points", Pattern::Geometry { source: Source::Shape(uid), orient: true }),
+        ] {
+            let mut s = sc.clone();
+            s.groups[1].pattern = Some(p);
+            let field = Field::new(&s);
+            assert!(field.groups.iter().any(|g| g.insts.len() > 1), "{name}");
+            let wr = written_out(&s);
+            compare(&field, &Field::new(&wr), &centres(&wr), name, 1500);
+        }
+    }
+
+    #[test]
+    fn a_linked_copy_measures_like_a_moved_copy_of_the_source() {
+        use crate::pattern::Xform;
+        let mut sc = symmetric_scene();
+        let uid = sc.ensure_group_uid(1).unwrap_or(0);
+        let mut copy = Group::new("copy");
+        copy.instance_of = Some(uid);
+        copy.xform = Xform { pos: [40.0, 30.0, 5.0], rot: [10.0, 20.0, 70.0], scale: 1.0 };
+        copy.blend = 4.0;
+        sc.groups.push(copy);
+        let field = Field::new(&sc);
+        assert!(field.groups.iter().any(|g| g.linked));
+        assert_eq!(field.sources.len(), 5, "the source is prepared once for both");
+        let wr = written_out(&sc);
+        compare(&field, &Field::new(&wr), &centres(&wr), "linked", 1500);
+        // editing the source shows in the copy
+        let probe = [40.0, 30.0, 25.0];
+        let before = field.distance(probe);
+        sc.groups[1].shapes[0].size = [60.0, 60.0, 60.0];
+        sc.groups[1].shapes[0].kind = Kind::Sphere;
+        assert!((Field::new(&sc).distance(probe) - before).abs() > 0.01);
+        let wr = written_out(&sc);
+        compare(&Field::new(&sc), &Field::new(&wr), &centres(&wr), "linked after an edit", 600);
+    }
+
+    #[test]
+    fn a_scaled_copy_is_a_scaled_shape_and_picking_names_the_source() {
+        use crate::pattern::Xform;
+        let mut sc = Scene::default();
+        sc.groups[0].shapes[0].pos = [0.0, 0.0, 0.0];
+        sc.groups[0].shapes[0].size[0] = 10.0;
+        sc.groups[0].shapes[0].blend = 0.0;
+        let uid = sc.ensure_group_uid(0).unwrap_or(0);
+        let mut copy = Group::new("big");
+        copy.instance_of = Some(uid);
+        copy.xform = Xform { pos: [100.0, 0.0, 0.0], rot: [0.0; 3], scale: 3.0 };
+        sc.groups.push(copy);
+        let f = Field::new(&sc);
+        // the copy is a sphere of radius 30 around (100, 0, 0)
+        assert!((f.distance([140.0, 0.0, 0.0]) - 10.0).abs() < 1e-3, "{}", f.distance([140.0, 0.0, 0.0]));
+        assert!((f.distance([100.0, 0.0, 0.0]) + 30.0).abs() < 1e-3);
+        // picking: the source's own shape, or the whole linked copy
+        let hit = f.ray([0.0, -100.0, 0.0], [0.0, 1.0, 0.0], 500.0).and_then(|(_, s)| s.nearest);
+        assert_eq!(hit, Some((0, 0)));
+        let hit = f.ray([100.0, -100.0, 0.0], [0.0, 1.0, 0.0], 500.0).and_then(|(_, s)| s.nearest);
+        assert_eq!(hit, Some((1, LINKED)));
+        // a pattern's copies name the source shape
+        let mut sc = Scene::default();
+        sc.groups[0].shapes[0].pos = [0.0; 3];
+        sc.groups[0].pattern = Some(crate::pattern::Pattern::Rect { counts: [1, 1, 3], spacing: [0.0, 0.0, 200.0] });
+        let f = Field::new(&sc);
+        let hit = f.ray([0.0, -100.0, 400.0], [0.0, 1.0, 0.0], 500.0).and_then(|(_, s)| s.nearest);
+        assert_eq!(hit, Some((0, 0)));
     }
 
     fn graded(kind: Kind, mat: Material) -> Shape {

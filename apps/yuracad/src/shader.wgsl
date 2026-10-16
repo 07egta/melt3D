@@ -46,9 +46,11 @@ fn D(i: i32) -> vec4<f32> { return textureLoad(DT, vec2<i32>(i & 1023, i >> 10),
 // Layout (keep in step with gpu.rs):
 //   group  (3 vec4): [first block, block count, op sign, blend] [first instance, instance count, 0, 0] [bounding sphere]
 //   block  (2 vec4): [bounding sphere] [largest blend, 1 = never skip, first shape, shape count]
+//   instance (4 vec4): three rows (x y z, offset) taking a world point back into the group's own space, then [world centre of the group's sphere, scale]
 //   shape (16 vec4): [bounding sphere = position, radius] then the 15 vec4 of struct Shape
 fn group_at(gi: i32) -> i32 { return i32(G.offs.x + 0.5) + gi * 3; }
 fn block_at(bi: i32) -> i32 { return i32(G.offs.y + 0.5) + bi * 2; }
+fn inst_at(i: i32) -> i32 { return i32(G.offs.z + 0.5) + i * 4; }
 fn shape_rec(i: i32) -> i32 { return i32(G.offs.w + 0.5) + i * 16; }
 fn path_pt(i: i32) -> vec4<f32> { return D(i32(G.offs2.y + 0.5) + i); }
 
@@ -442,15 +444,36 @@ fn map(p0: vec3<f32>) -> Hit {
     for (var gi = 0; gi < ng; gi = gi + 1) {
         let gb = group_at(gi);
         let gr = D(gb);
-        if (have && group_far(gr, D(gb + 2), p, acc.d, amount, rm, mode)) { continue; }
-        let gx = group_hit(gr, p, amount, rm, mode);
-        if (!gx.ok) { continue; }
-        if (!have) {
-            if (gr.z < 0.5) { continue; }
-            acc = gx.h;
-            have = true;
-        } else {
-            acc = combine(acc, gx.h, gr.z, gr.w * amount, mode);
+        let gn = D(gb + 1);
+        let gs = D(gb + 2);
+        let ni = i32(gn.y + 0.5);
+        let fi = i32(gn.x + 0.5);
+        // every instance of the group melts into the result in turn (none: the group once, as it is)
+        for (var j = 0; j < max(ni, 1); j = j + 1) {
+            var q = p;
+            var sc = 1.0;
+            var sphere = gs;
+            if (ni > 0) {
+                let ib = inst_at(fi + j);
+                let r0 = D(ib);
+                let r1 = D(ib + 1);
+                let r2 = D(ib + 2);
+                let ic = D(ib + 3);
+                q = vec3<f32>(dot(r0.xyz, p) + r0.w, dot(r1.xyz, p) + r1.w, dot(r2.xyz, p) + r2.w);
+                sc = ic.w;
+                sphere = vec4<f32>(ic.xyz, gs.w * sc);
+            }
+            if (have && group_far(gr, sphere, p, acc.d, amount, rm, mode)) { continue; }
+            var gx = group_hit(gr, q, amount, rm, mode);
+            if (!gx.ok) { continue; }
+            gx.h.d = gx.h.d * sc;
+            if (!have) {
+                if (gr.z < 0.5) { continue; }
+                acc = gx.h;
+                have = true;
+            } else {
+                acc = combine(acc, gx.h, gr.z, gr.w * amount, mode);
+            }
         }
     }
     if (G.melt.z > 0.0) {
@@ -521,19 +544,39 @@ fn map_d(p0: vec3<f32>) -> f32 {
         let gb = group_at(gi);
         let gr = D(gb);
         if (gr.z > -0.5 && gr.z < 0.5) { continue; }   // a stain group changes no distance
-        if (have && group_far(gr, D(gb + 2), p, acc, amount, rm, mode)) { continue; }
-        let gd = group_dist(gr, p, amount, rm, mode);
-        if (gd.y < 0.5) { continue; }
-        if (!have) {
-            if (gr.z < 0.5) { continue; }
-            acc = gd.x;
-            have = true;
-        } else if (gr.z > 1.5) {
-            acc = -smin_h(-acc, -gd.x, gr.w * amount, mode).x;
-        } else if (gr.z > 0.0) {
-            acc = smin_h(acc, gd.x, gr.w * amount, mode).x;
-        } else {
-            acc = -smin_h(-acc, gd.x, gr.w * amount, mode).x;
+        let gn = D(gb + 1);
+        let gs = D(gb + 2);
+        let ni = i32(gn.y + 0.5);
+        let fi = i32(gn.x + 0.5);
+        for (var j = 0; j < max(ni, 1); j = j + 1) {
+            var q = p;
+            var sc = 1.0;
+            var sphere = gs;
+            if (ni > 0) {
+                let ib = inst_at(fi + j);
+                let r0 = D(ib);
+                let r1 = D(ib + 1);
+                let r2 = D(ib + 2);
+                let ic = D(ib + 3);
+                q = vec3<f32>(dot(r0.xyz, p) + r0.w, dot(r1.xyz, p) + r1.w, dot(r2.xyz, p) + r2.w);
+                sc = ic.w;
+                sphere = vec4<f32>(ic.xyz, gs.w * sc);
+            }
+            if (have && group_far(gr, sphere, p, acc, amount, rm, mode)) { continue; }
+            let gd = group_dist(gr, q, amount, rm, mode);
+            if (gd.y < 0.5) { continue; }
+            let gv = gd.x * sc;
+            if (!have) {
+                if (gr.z < 0.5) { continue; }
+                acc = gv;
+                have = true;
+            } else if (gr.z > 1.5) {
+                acc = -smin_h(-acc, -gv, gr.w * amount, mode).x;
+            } else if (gr.z > 0.0) {
+                acc = smin_h(acc, gv, gr.w * amount, mode).x;
+            } else {
+                acc = -smin_h(-acc, gv, gr.w * amount, mode).x;
+            }
         }
     }
     if (G.melt.z > 0.0) {
