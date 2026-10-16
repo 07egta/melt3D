@@ -113,8 +113,8 @@ codegen-units = 16
 debug = "line-tables-only"
 
 # YURACAD only: its picking and mesh export are tight CPU loops, so build that one crate in a single
-# codegen unit (other crates are not touched). See apps/yuracad/PERF.md.
-[profile.release.package.yuracad]
+# codegen unit (other crates are not touched). See apps/meltcad/PERF.md.
+[profile.release.package.meltcad]
 codegen-units = 1
 
 # truck-shapeops with SolidCraft fixes (Apache-2.0, see vendor/truck-shapeops and ATTRIBUTION.md).
