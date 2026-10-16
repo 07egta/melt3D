@@ -183,3 +183,132 @@ def model_chain():
 
 items.append(model_chain())
 save()
+
+
+# 4. ボールジョイント: a ball on a stem sits in a socket hollowed with a 0.6 mm gap. The socket's top
+#    opening (r 5) is smaller than the ball (r 8), so the ball is kept in; the stem (r 3.5) passes out.
+def model_ball_joint():
+    cz = 15.0
+    sh = [
+        P("Box", "うけざら", (0, 0, 15), (30, 30, 30), mat=ORANGE, round=1.0),
+        Sub("Sphere", "玉のくぼみ", (0, 0, cz), (8.6, 1, 1)),      # radius 8 + 0.6
+        Sub("Cylinder", "玉の口", (0, 0, 26), (5.0, 22, 1)),       # opening through the top
+        Sub("Cylinder", "前の窓", (0, -15, cz), (6.0, 20, 1), rot=(90, 0, 0)),  # window smaller than the ball
+        P("Sphere", "玉", (0, 0, cz), (8.0, 1, 1), mat=CHROME),
+        P("Cylinder", "棒", (0, 0, 26), (3.5, 22, 1), mat=CHROME),
+        P("Box", "うで", (0, 0, 39.5), (30, 6, 6), mat=BLUE, round=1.0),
+        P("Sphere", "うでの先L", (-15, 0, 39.5), (4.0, 1, 1), mat=BLUE),
+        P("Sphere", "うでの先R", (15, 0, 39.5), (4.0, 1, 1), mat=BLUE),
+    ]
+    return item("ボールジョイント", ["ball joint", "socket", "ball and socket", "print in place", "ボール", "ジョイント", "玉"],
+                group("ボールジョイント", sh))
+
+
+items.append(model_ball_joint())
+save()
+
+
+# 5. ギアのくみあわせ: two 12-tooth gears (module 2) with 24.6 mm between centres, each on a shaft
+#    through its bore (0.6 mm clearance) and held by a cap; both sit 0.6 mm above the base plate.
+def gear_outline(n, r_out, r_root, offset_deg):
+    step = 2 * math.pi / n
+    tip, root = step * 0.16, step * 0.25
+    pts = []
+    for i in range(n):
+        a = math.radians(offset_deg) + i * step
+        pts += [[r_root * math.cos(a - root), r_root * math.sin(a - root)],
+                [r_out * math.cos(a - tip), r_out * math.sin(a - tip)],
+                [r_out * math.cos(a + tip), r_out * math.sin(a + tip)],
+                [r_root * math.cos(a + root), r_root * math.sin(a + root)]]
+    return pts
+
+
+def model_gears():
+    xa, xb, zg = -12.3, 12.3, 6.6                       # gear centres and mid-height (3.6 .. 9.6)
+    sh = [
+        P("Extrude", "歯車A", (xa, 0, zg), (6, 1, 1), mat=RED, outline=gear_outline(12, 13.0, 10.5, 0)),
+        Sub("Cylinder", "軸あなA", (xa, 0, zg), (3.1, 10, 1)),
+        P("Extrude", "歯車B", (xb, 0, zg), (6, 1, 1), mat=BLUE, outline=gear_outline(12, 13.0, 10.5, 15)),
+        Sub("Cylinder", "軸あなB", (xb, 0, zg), (3.1, 10, 1)),
+        P("Box", "だい", (0, 0, 1.5), (80, 40, 3), mat=GREY, round=1.0),
+    ]
+    for x, nm in ((xa, "A"), (xb, "B")):
+        sh.append(P("Cylinder", f"軸{nm}", (x, 0, 6.1), (2.5, 12.2, 1), mat=CHROME))
+        sh.append(P("Cylinder", f"ふた{nm}", (x, 0, 11.2), (4.5, 2.0, 1), mat=CHROME))
+    return item("ギアのくみあわせ", ["gears", "gear pair", "meshing gears", "print in place", "ギア", "歯車", "くみあわせ"],
+                group("ギアのくみあわせ", sh))
+
+
+items.append(model_gears())
+save()
+
+
+# 6. ベアリング: outer race (r 16 inside), inner race (r 10 outside) and eight 2.5 mm balls on r 13.
+#    The balls run in pockets of a cage ring, 0.5 mm clear of the balls, so nothing touches.
+def model_bearing():
+    zc, rb = 3.5, 13.0
+    sh = [P("Tube", "保持器", (0, 0, zc), (14.5, 3, 5), mat=ORANGE)]
+    balls = []
+    for k in range(8):
+        a = math.radians(45 * k)
+        c = (rb * math.cos(a), rb * math.sin(a), zc)
+        sh.append(Sub("Sphere", f"ボールのあな{k + 1}", c, (3.0, 1, 1)))   # cut into the cage only
+        balls.append(P("Sphere", f"ボール{k + 1}", c, (2.5, 1, 1), mat=CHROME))
+    sh += balls
+    sh.append(P("Tube", "外のわ", (0, 0, zc), (20, 4, 7), mat=STEEL))
+    sh.append(Sub("Box", "のぞき窓", (0, -20.7, zc), (10, 10, 5)))   # slot in the front of the outer race
+    sh.append(P("Tube", "内のわ", (0, 0, zc), (10, 3, 7), mat=BRASS))
+    return item("ベアリング", ["bearing", "ball bearing", "race", "print in place", "ベアリング", "玉軸受", "ボール"],
+                group("ベアリング", sh))
+
+
+items.append(model_bearing())
+save()
+
+
+# 7. スライダー: a block with a 0.6 mm bore slides along a rail held by two posts on a base.
+def model_slider():
+    sh = [
+        P("Box", "スライダー", (0, 0, 16), (24, 16, 16), mat=ORANGE, round=1.0),
+        Sub("Cylinder", "レールのあな", (0, 0, 16), (4.6, 40, 1), rot=(0, 90, 0)),   # bore radius 4 + 0.6
+        P("Box", "つまみ", (0, 0, 27), (10, 10, 6), mat=BLUE, round=1.0),
+        P("Box", "だい", (0, 0, 1.5), (90, 30, 3), mat=GREY, round=0.5),
+        P("Box", "はしらL", (-30, 0, 9.5), (6, 12, 13), mat=GREY),
+        P("Box", "はしらR", (30, 0, 9.5), (6, 12, 13), mat=GREY),
+        P("Cylinder", "レール", (0, 0, 16), (4.0, 62, 1), mat=CHROME, rot=(0, 90, 0)),
+    ]
+    return item("スライダー", ["slider", "rail", "sliding block", "print in place", "スライダー", "レール", "すべり"],
+                group("スライダー", sh))
+
+
+items.append(model_slider())
+save()
+
+
+# 8. スピナー (fidget spinner): three weighted lobes on a hub that turns around a post. The hub
+#    sits 0.6 mm above the base and under a cap on the post; its bore is 0.6 mm wider than the post.
+def model_spinner():
+    zb = 7.4                                          # hub mid-height (hub 3.6 .. 11.2)
+    sh = [P("Tube", "ハブ", (0, 0, zb), (7, 2.4, 7.6), mat=RED)]
+    for i, ang in enumerate((0, 120, 240)):
+        a = math.radians(ang)
+        sh.append(P("Box", f"うで{i + 1}", (12 * math.cos(a), 12 * math.sin(a), zb), (14, 6, 7.6),
+                    mat=RED, round=1.0, rot=(0, 0, ang)))
+    for i, ang in enumerate((0, 120, 240)):
+        a = math.radians(ang)
+        c = (18 * math.cos(a), 18 * math.sin(a), zb)
+        sh.append(P("Cylinder", f"おもり{i + 1}", c, (8, 7.6, 1), mat=RED))
+    for i, ang in enumerate((0, 120, 240)):          # weight holes: carve the lobe and arm only
+        a = math.radians(ang)
+        sh.append(Sub("Cylinder", f"おもりのあな{i + 1}", (18 * math.cos(a), 18 * math.sin(a), zb), (3, 10, 1)))
+    sh += [
+        P("Cylinder", "台", (0, 0, 1.5), (34, 3, 1), mat=GREY),
+        P("Cylinder", "くい", (0, 0, 7), (4, 14, 1), mat=GREY),
+        P("Cylinder", "ぼうし", (0, 0, 12.9), (6, 2.2, 1), mat=GREY),
+    ]
+    return item("スピナー", ["spinner", "fidget spinner", "fidget", "print in place", "スピナー", "ファイドゲット", "こま"],
+                group("スピナー", sh))
+
+
+items.append(model_spinner())
+save()
