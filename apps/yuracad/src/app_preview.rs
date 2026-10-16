@@ -1,0 +1,48 @@
+//! Renders the whole UI (without the 3D view) with the software rasteriser in `style_preview.rs`:
+//! `YURA_PREVIEW=/path/app.ppm YURA_TAB=0..3 cargo test -p yuracad app_preview -- --ignored`
+
+use super::*;
+use crate::style::preview::{Textures, apply_deltas, raster, write_ppm};
+
+#[test]
+#[ignore]
+fn app_preview() {
+    let ppp = 1.5;
+    let ctx = egui::Context::default();
+    crate::fonts::setup(&ctx);
+    style::apply(&ctx);
+    ctx.set_pixels_per_point(ppp);
+    let mut app = App::new(false, None);
+    app.show_keys = std::env::var("YURA_KEYS").is_ok();
+    app.tab = match std::env::var("YURA_TAB").ok().as_deref() {
+        Some("1") => Tab::Material,
+        Some("2") => Tab::Melt,
+        Some("3") => Tab::Room,
+        _ => Tab::Shape,
+    };
+    let size = egui::vec2(1380.0, 860.0);
+    let mut tex = Textures::new();
+    let mut last = None;
+    for _ in 0..4 {
+        let input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)), ..Default::default() };
+        let mut out = ctx.run_ui(input, |ui| {
+            app.top_bar(ui);
+            app.status_bar(ui);
+            app.side(ui);
+            egui::CentralPanel::default().frame(egui::Frame::new().fill(Color32::from_rgb(52, 52, 56))).show(ui, |ui| {
+                app.view_rect = ui.max_rect();
+            });
+            app.scene_card(ui);
+            app.tool_pill(ui);
+            app.keys_card(ui);
+        });
+        apply_deltas(&mut tex, &out.textures_delta);
+        out.textures_delta.clear();
+        last = Some(out);
+    }
+    let Some(out) = last else { return };
+    let prims = ctx.tessellate(out.shapes, ppp);
+    let (w, h) = ((size.x * ppp) as usize, (size.y * ppp) as usize);
+    let img = raster(&prims, &tex, w, h, ppp, [0.2, 0.2, 0.22]);
+    write_ppm(img, w, h, &std::env::var("YURA_PREVIEW").unwrap_or_else(|_| "app_preview.ppm".into()));
+}

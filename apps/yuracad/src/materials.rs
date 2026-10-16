@@ -3,6 +3,7 @@
 use egui::{Color32, Painter, Pos2, Stroke, vec2};
 
 use crate::model::Material;
+use crate::style::gfx;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Category {
@@ -153,9 +154,14 @@ pub fn swatch(painter: &Painter, centre: Pos2, radius: f32, m: &Material) {
     // the body: dark at the edge, lighter toward the lit side
     let body_alpha = 1.0 - glass * 0.72;
     let base = if metal > 0.5 { shade(c, 0.55) } else { shade(c, 0.62) };
-    painter.circle_filled(centre, r, base.gamma_multiply(body_alpha));
-    painter.circle_filled(centre + vec2(-r * 0.10, -r * 0.12), r * 0.86, shade(c, 0.86).gamma_multiply(body_alpha));
-    painter.circle_filled(centre + vec2(-r * 0.22, -r * 0.26), r * 0.58, lighten(c, 0.12).gamma_multiply(body_alpha));
+    // smooth rings from the light spot (top left) out to the dark rim
+    gfx::ball(
+        painter,
+        centre,
+        r,
+        vec2(-0.34, -0.38),
+        &[(0.0, lighten(c, 0.22).gamma_multiply(body_alpha)), (0.45, shade(c, 0.92).gamma_multiply(body_alpha)), (1.0, base.gamma_multiply(body_alpha))],
+    );
     if metal > 0.3 {
         // a bright horizon band
         let y = centre.y + r * 0.1;
