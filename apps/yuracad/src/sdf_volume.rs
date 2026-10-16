@@ -289,8 +289,8 @@ impl Bvh {
 
     fn box_d2(n: &Node, p: [f32; 3]) -> f32 {
         let mut s = 0.0f32;
-        for a in 0..3 {
-            let d = (n.lo[a] - p[a]).max(0.0).max(p[a] - n.hi[a]);
+        for (a, pa) in p.iter().enumerate() {
+            let d = (n.lo[a] - pa).max(0.0).max(pa - n.hi[a]);
             s += d * d;
         }
         s

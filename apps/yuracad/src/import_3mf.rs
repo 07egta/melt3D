@@ -367,17 +367,18 @@ impl Package<'_> {
 
 /// Find the main model file: the relationship in `_rels/.rels`, else `3D/3dmodel.model`, else any `.model`.
 fn model_path(zip: &Zip) -> Result<String, String> {
-    if let Some(rels) = zip.find("_rels/.rels") {
-        if let Ok(bytes) = zip.read(rels, 1 << 20) {
-            let mut pos = 0;
-            while let Ok(Some(t)) = next_tag(&bytes, &mut pos) {
-                if t.name == b"Relationship" && !t.closing && t.attr("Type").is_some_and(|ty| ty.ends_with("/3dmodel")) {
-                    if let Some(target) = t.attr("Target") {
-                        if zip.find(target).is_some() {
-                            return Ok(target.to_string());
-                        }
-                    }
-                }
+    if let Some(rels) = zip.find("_rels/.rels")
+        && let Ok(bytes) = zip.read(rels, 1 << 20)
+    {
+        let mut pos = 0;
+        while let Ok(Some(t)) = next_tag(&bytes, &mut pos) {
+            if t.name == b"Relationship"
+                && !t.closing
+                && t.attr("Type").is_some_and(|ty| ty.ends_with("/3dmodel"))
+                && let Some(target) = t.attr("Target")
+                && zip.find(target).is_some()
+            {
+                return Ok(target.to_string());
             }
         }
     }
