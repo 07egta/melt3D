@@ -312,3 +312,30 @@ def model_spinner():
 
 items.append(model_spinner())
 save()
+
+
+# 9. フレキシへび: a head and seven body segments in a row. Each body segment has a hole the size of
+#    the spine (r 1.5 in r 2.1), and 0.6 mm gaps separate neighbours. The spine is fused only to the head.
+def model_snake():
+    zs = 10.0                                         # spine height
+    sh = [P("Box", "あたま", (0, 0, zs), (14, 16, 14), mat=ORANGE, round=4.0)]
+    x_prev_half = 7.0
+    widths = [8.0] * 7
+    x = 0.0
+    for k in range(1, 8):
+        w = widths[k - 1]
+        x = x - (x_prev_half + GAP + w / 2)
+        x_prev_half = w / 2
+        sh.append(P("Box", f"体{k}", (x, 0, zs), (w, 15 - 0.6 * k, 12 - 0.4 * k), mat=GREEN, round=2.5))
+        sh.append(Sub("Cylinder", f"体{k}のあな", (x, 0, zs), (2.1, w + 0.2, 1), rot=(0, 90, 0)))
+    sh.append(P("Curve", "せぼね", (0, 0, 0), (1, 1, 1), mat=BLACK,
+                path=[[xx, 0, zs, 1.5] for xx in [x + (0 - x) * i / 15 for i in range(16)]],
+                params=(0, 0.7, 0, 1)))
+    for sgn in (-1, 1):
+        sh.append(P("Sphere", "め", (5.0, sgn * 6.5, zs + 3), (1.8, 1, 1), mat=BLACK))
+    return item("フレキシへび", ["snake", "flexi", "articulated", "segments", "print in place", "へび", "ヘビ"],
+                group("フレキシへび", sh))
+
+
+items.append(model_snake())
+save()
