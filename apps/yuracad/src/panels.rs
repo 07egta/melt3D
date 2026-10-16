@@ -38,19 +38,18 @@ impl App {
         egui::Panel::right("side")
             .exact_size(312.0)
             .resizable(false)
-            .frame(egui::Frame::new().fill(style::PANEL).inner_margin(egui::Margin::symmetric(12, 10)))
+            .frame(egui::Frame::new().fill(style::PANEL).inner_margin(egui::Margin::symmetric(14, 12)))
             .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 4.0;
-                    for (t, label) in [(Tab::Shape, "形"), (Tab::Material, "ざいしつ"), (Tab::Melt, "メルト"), (Tab::Room, "ライト・背景")]
-                    {
-                        if style::pill(ui, label, self.tab == t).clicked() {
-                            self.tab = t;
-                        }
-                    }
-                });
-                ui.add_space(2.0);
-                ui.separator();
+                style::panel_sheen(ui, ui.max_rect().expand2(vec2(14.0, 12.0)), style::PANEL, style::Edge::Left);
+                let tabs = [(Tab::Shape, "形"), (Tab::Material, "ざいしつ"), (Tab::Melt, "メルト"), (Tab::Room, "ライト・背景")];
+                let items: Vec<(&str, &str)> = tabs.iter().map(|t| (t.1, "")).collect();
+                let sel = tabs.iter().position(|t| t.0 == self.tab);
+                if let Some(i) = style::segmented(ui, "side_tabs", &items, sel, true)
+                    && let Some(t) = tabs.get(i)
+                {
+                    self.tab = t.0;
+                }
+                ui.add_space(4.0);
                 egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| match self.tab {
                     Tab::Shape => self.inspector(ui),
                     Tab::Material => self.material_tab(ui),
@@ -93,6 +92,7 @@ impl App {
 
     pub fn layers(&mut self, ui: &mut Ui) {
         self.row_rects.clear();
+        ui.spacing_mut().item_spacing.y = 2.0;
         let ngroups = self.scene.groups.len();
         for gi in 0..ngroups {
             let folded = self.folded.contains(&gi);
@@ -175,7 +175,9 @@ impl App {
         if let Some((to, rect, p)) = target {
             let after = p.y > rect.center().y;
             let y = if after { rect.bottom() } else { rect.top() };
-            ui.painter().line_segment([egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)], Stroke::new(2.0, style::ACCENT));
+            let line = [egui::pos2(rect.left() + 4.0, y), egui::pos2(rect.right() - 4.0, y)];
+            ui.painter().line_segment(line, Stroke::new(5.0, style::ACCENT.gamma_multiply(0.25)));
+            ui.painter().line_segment(line, Stroke::new(2.0, style::ACCENT));
             if !down {
                 self.move_layer(from, to, after);
                 self.layer_drag = None;
@@ -201,17 +203,14 @@ impl App {
         chevron_open: bool,
         has_chevron: bool,
     ) -> RowResult {
-        let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 28.0), Sense::click_and_drag());
+        let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 30.0), Sense::click_and_drag());
         self.row_rects.push((pick, rect));
         let mut out = RowResult::default();
-        let p = ui.painter();
-        if selected {
-            p.rect_filled(rect, 7.0, style::ACCENT_SOFT);
-            p.rect_stroke(rect, 7.0, Stroke::new(1.0, style::ACCENT), egui::StrokeKind::Inside);
-        } else if resp.hovered() {
-            p.rect_filled(rect, 7.0, style::HOVER);
-        }
-        let mut x = rect.left() + 6.0 + indent;
+        style::row_bg(ui, &resp, rect, selected);
+        // the grip says "drag me"
+        let grip = Color32::from_white_alpha(if resp.hovered() || selected { 120 } else { 44 });
+        style::gfx::grip(ui.painter(), egui::pos2(rect.left() + 11.0, rect.center().y), grip);
+        let mut x = rect.left() + 18.0 + indent;
         if has_chevron {
             let cr = Rect::from_center_size(egui::pos2(x + 6.0, rect.center().y), vec2(16.0, 20.0));
             let r = ui.interact(cr, id.with("c"), Sense::click());
@@ -262,6 +261,11 @@ impl App {
         }
         let er = ui.interact(eye, id.with("e"), Sense::click());
         let orr = ui.interact(opr, id.with("o"), Sense::click());
+        for r in [&er, &orr] {
+            if r.hovered() {
+                ui.painter().rect_filled(r.rect, 7.0, Color32::from_white_alpha(22));
+            }
+        }
         glyphs::eye(ui.painter(), eye, visible, if er.hovered() { Color32::WHITE } else { style::DIM });
         let opcol = if op == Op::Add { style::ADD } else { style::CUT };
         glyphs::op(ui.painter(), opr, op, opcol.gamma_multiply(if orr.hovered() { 1.0 } else { 0.8 }));
@@ -290,10 +294,10 @@ impl App {
 
     fn actions(&mut self, ui: &mut Ui) {
         ui.horizontal(|ui| {
-            if style::icon_button(ui, 30.0, "複製 (Ctrl+D)", false, glyphs::dup).clicked() {
+            if style::icon_button(ui, 34.0, "複製 (Ctrl+D)", false, glyphs::dup).clicked() {
                 self.duplicate();
             }
-            if style::icon_button(ui, 30.0, "削除 (Delete)", false, glyphs::trash).clicked() {
+            if style::icon_button(ui, 34.0, "削除 (Delete)", false, glyphs::trash).clicked() {
                 self.delete_selected();
             }
             if matches!(self.sel, Some(Pick::Shape(..)))
@@ -305,17 +309,18 @@ impl App {
     }
 
     fn op_pills(ui: &mut Ui, op: &mut Op) {
-        ui.horizontal(|ui| {
-            for (o, label, tip) in [
-                (Op::Add, "＋ 足す", "形をくっつける"),
-                (Op::Subtract, "− 削る", "くり抜く"),
-                (Op::Paint, "● ぬる", "形は変えずに、色・ざいしつだけぬる"),
-            ] {
-                if style::pill(ui, label, *op == o).on_hover_text(tip).clicked() {
-                    *op = o;
-                }
-            }
-        });
+        let ops = [
+            (Op::Add, "＋ 足す", "形をくっつける"),
+            (Op::Subtract, "− 削る", "くり抜く"),
+            (Op::Paint, "● ぬる", "形は変えずに、色・ざいしつだけぬる"),
+        ];
+        let items: Vec<(&str, &str)> = ops.iter().map(|o| (o.1, o.2)).collect();
+        let sel = ops.iter().position(|o| o.0 == *op);
+        if let Some(i) = style::segmented(ui, "op_pills", &items, sel, true)
+            && let Some(o) = ops.get(i)
+        {
+            *op = o.0;
+        }
     }
 
     fn group_inspector(&mut self, ui: &mut Ui, g: usize) {
@@ -335,10 +340,10 @@ impl App {
             );
         }
         ui.horizontal(|ui| {
-            if ui.add_enabled(g > 0, egui::Button::new("↑ 前へ")).clicked() {
+            if style::pill_enabled(ui, "↑ 前へ", false, g > 0).clicked() {
                 swap = Some((g, g - 1));
             }
-            if ui.add_enabled(g + 1 < n, egui::Button::new("↓ 後ろへ")).clicked() {
+            if style::pill_enabled(ui, "↓ 後ろへ", false, g + 1 < n).clicked() {
                 swap = Some((g, g + 1));
             }
         });
@@ -347,7 +352,7 @@ impl App {
             self.sel = Some(Pick::Group(b));
         }
         self.actions(ui);
-        ui.label(RichText::new("グループごと動かす・回す・大きさを変えられます").size(11.0).color(style::DIM));
+        ui.label(RichText::new("グループごと動かす・回す・大きさを変えられます").size(12.0).color(style::DIM));
     }
 
     fn shape_inspector(&mut self, ui: &mut Ui, g: usize, s: usize) {
@@ -364,10 +369,10 @@ impl App {
             // change what kind of shape this is, keeping where it sits
             ui.horizontal_wrapped(|ui| {
                 ui.label(RichText::new("入れかえ").color(style::DIM).size(12.0));
-                ui.spacing_mut().item_spacing.x = 2.0;
+                ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
                 for k in Kind::ALL {
                     let on = sh.kind == k;
-                    if style::icon_button(ui, 26.0, k.label(), on, |p, r, ink| glyphs::kind(p, r, k, ink, Color32::from_white_alpha(18))).clicked()
+                    if style::icon_button(ui, 32.0, k.label(), on, |p, r, ink| glyphs::kind(p, r, k, ink, Color32::from_white_alpha(18))).clicked()
                         && !on
                     {
                         if sh.name == sh.kind.label() {
@@ -396,7 +401,7 @@ impl App {
                 for (i, l) in labels.iter().enumerate() {
                     if !l.is_empty() {
                         ui.label(RichText::new(*l).color(style::DIM).size(12.0));
-                        ui.add(egui::DragValue::new(&mut sh.size[i]).speed(0.3).range(0.1..=2000.0).suffix(" mm").max_decimals(1));
+                        style::field(ui, egui::DragValue::new(&mut sh.size[i]).speed(0.3).range(0.1..=2000.0).suffix(" mm").max_decimals(1));
                     }
                 }
             });
@@ -404,7 +409,7 @@ impl App {
                 for (i, l) in sh.kind.param_labels().iter().enumerate() {
                     if !l.is_empty() {
                         ui.label(RichText::new(*l).color(style::DIM).size(12.0));
-                        ui.add(egui::DragValue::new(&mut sh.params[i]).speed(0.1).max_decimals(2));
+                        style::field(ui, egui::DragValue::new(&mut sh.params[i]).speed(0.1).max_decimals(2));
                     }
                 }
             });
@@ -421,10 +426,10 @@ impl App {
         }
         ui.add_space(4.0);
         ui.horizontal(|ui| {
-            if ui.add_enabled(s > 0, egui::Button::new("↑")).on_hover_text("ひとつ前へ").clicked() {
+            if style::pill_enabled(ui, "↑", false, s > 0).on_hover_text("ひとつ前へ").clicked() {
                 reorder = Some(s - 1);
             }
-            if ui.add_enabled(s + 1 < nshapes, egui::Button::new("↓")).on_hover_text("ひとつ後ろへ").clicked() {
+            if style::pill_enabled(ui, "↓", false, s + 1 < nshapes).on_hover_text("ひとつ後ろへ").clicked() {
                 reorder = Some(s + 1);
             }
             if ngroups > 1 {
@@ -474,7 +479,9 @@ impl App {
         // the big ball, the name, and "keep"
         ui.horizontal(|ui| {
             let (rect, _) = ui.allocate_exact_size(vec2(72.0, 72.0), Sense::hover());
-            ui.painter().rect_filled(rect, 12.0, style::PANEL_DARK);
+            style::gfx::vgrad(ui.painter(), rect, 14.0, style::INSET_TOP, style::INSET_BOTTOM);
+            ui.painter().rect_stroke(rect, 14.0, Stroke::new(1.0, Color32::from_white_alpha(18)), egui::StrokeKind::Inside);
+            style::gfx::shadow(&ui.painter_at(rect), Rect::from_center_size(rect.center() + vec2(0.0, 24.0), vec2(36.0, 4.0)), 2.0, &[(0, 10, 0, 90)]);
             materials::swatch(&ui.painter_at(rect), rect.center(), 28.0, &m);
             ui.vertical(|ui| {
                 ui.label(RichText::new(current.unwrap_or("オリジナル")).strong().size(14.0));
@@ -488,7 +495,7 @@ impl App {
                     }
                 });
                 if matches!(self.sel, Some(Pick::Shape(..))) {
-                    ui.checkbox(&mut self.mat_group, RichText::new("グループ全部に").size(11.5));
+                    style::checkbox(ui, &mut self.mat_group, RichText::new("グループ全部に").size(12.5));
                 }
             });
         });
@@ -515,14 +522,8 @@ impl App {
             ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
             let cell = |ui: &mut Ui, name: &str, mat: &Material, on: bool| -> egui::Response {
                 let (rect, resp) = ui.allocate_exact_size(vec2(42.0, 42.0), Sense::click());
-                let p = ui.painter_at(rect.expand(3.0));
-                if on {
-                    p.rect_stroke(rect, 9.0, Stroke::new(2.0, Color32::WHITE), egui::StrokeKind::Inside);
-                } else if resp.hovered() {
-                    p.rect_filled(rect, 9.0, style::HOVER);
-                } else {
-                    p.rect_filled(rect, 9.0, style::PANEL_DARK);
-                }
+                let p = ui.painter_at(rect.expand(6.0));
+                style::tile(ui, &resp, rect, on);
                 materials::swatch(&p, rect.center(), 15.0, mat);
                 resp.on_hover_text(name)
             };
@@ -536,7 +537,7 @@ impl App {
                 }
                 None => {
                     if self.scene.saved.is_empty() {
-                        ui.label(RichText::new("「★ ほぞん」でここにためられます").size(11.5).color(style::DIM));
+                        ui.label(RichText::new("「★ ほぞん」でここにためられます").size(12.0).color(style::DIM));
                     }
                     for (i, sm) in self.scene.saved.iter().enumerate() {
                         let r = cell(ui, "クリックで使う / 右クリックで消す", sm, *sm == m);
@@ -560,7 +561,7 @@ impl App {
         // fine tuning
         style::title(ui, "くわしく");
         ui.horizontal(|ui| {
-            ui.add_sized([72.0, 18.0], egui::Label::new(RichText::new("いろ").color(style::DIM).size(12.0)));
+            style::row_label(ui, "いろ");
             style::color_edit(ui, &mut m.color);
         });
         let mut gloss = 1.0 - m.roughness;
@@ -603,10 +604,21 @@ impl App {
             ui.spacing_mut().item_spacing = vec2(5.0, 5.0);
             for c in BACKDROPS {
                 let (rect, resp) = ui.allocate_exact_size(vec2(24.0, 24.0), Sense::click());
-                ui.painter().circle_filled(rect.center(), 11.0, materials::color32(c));
-                ui.painter().circle_stroke(rect.center(), 11.0, Stroke::new(1.0, Color32::from_white_alpha(40)));
-                if e.backdrop == c {
-                    ui.painter().circle_stroke(rect.center(), 13.5, Stroke::new(1.5, Color32::WHITE));
+                let col = materials::color32(c);
+                let on = e.backdrop == c;
+                let hot = ui.ctx().animate_value_with_time(resp.id.with("hot"), if resp.hovered() { 1.0 } else { 0.0 }, 0.1);
+                let r = 10.5 + 0.8 * hot;
+                ui.painter().circle_filled(rect.center() + vec2(0.0, 1.5), r, Color32::from_black_alpha(80));
+                style::gfx::ball(
+                    ui.painter(),
+                    rect.center(),
+                    r,
+                    vec2(-0.3, -0.38),
+                    &[(0.0, style::gfx::lit(col, 1.25)), (0.6, col), (1.0, style::gfx::lit(col, 0.72))],
+                );
+                ui.painter().circle_stroke(rect.center(), r, Stroke::new(1.0, Color32::from_white_alpha(46)));
+                if on {
+                    ui.painter().circle_stroke(rect.center(), 13.5, Stroke::new(2.0, style::ACCENT));
                 }
                 if resp.clicked() {
                     e.backdrop = c;
@@ -615,8 +627,8 @@ impl App {
             style::color_edit(ui, &mut e.backdrop);
         });
         ui.horizontal(|ui| {
-            ui.checkbox(&mut e.grid, "グリッド");
-            ui.checkbox(&mut e.floor, "ゆか(影)");
+            style::switch(ui, &mut e.grid, "グリッド");
+            style::switch(ui, &mut e.floor, "ゆか(影)");
         });
         style::labeled_slider(ui, "明るさ", &mut e.exposure, 0.3..=3.0, "写真の明るさ (露出)");
         style::labeled_slider(ui, "影のこさ", &mut e.shadow, 0.0..=1.0, "");
@@ -624,7 +636,7 @@ impl App {
         style::title(ui, "空 (金属やガラスに映る)");
         ui.horizontal(|ui| {
             for (label, c) in [("上", &mut e.sky_top), ("地平線", &mut e.sky_horizon), ("下", &mut e.sky_bottom)] {
-                ui.label(RichText::new(label).size(11.5).color(style::DIM));
+                ui.label(RichText::new(label).size(12.0).color(style::DIM));
                 style::color_edit(ui, c);
             }
         });
@@ -643,7 +655,7 @@ impl App {
             style::labeled_slider(ui, "たかさ", &mut l.pitch, 0.0..=89.0, "ひくい ⇄ 真上 (度)");
             style::labeled_slider(ui, "つよさ", &mut l.power, 0.0..=3.0, "");
             if i == 0 {
-                ui.label(RichText::new("ライト1だけが影を落とします").size(10.5).color(style::DIM));
+                ui.label(RichText::new("ライト1だけが影を落とします").size(12.0).color(style::DIM));
             }
             ui.add_space(2.0);
         }
@@ -668,7 +680,7 @@ impl App {
         let to_mm =
             |q: Pos2| [((q.x - rect.center().x) / k).round().clamp(-2000.0, 2000.0), ((rect.center().y - q.y) / k).round().clamp(-2000.0, 2000.0)];
         let p = ui.painter();
-        p.rect_filled(rect, 8.0, style::PANEL_DARK);
+        style::gfx::vgrad(p, rect, 8.0, style::INSET_TOP, style::INSET_BOTTOM);
         // grid every 10 mm
         let mut v = -(extent / 10.0).floor() * 10.0;
         while v <= extent {
@@ -739,7 +751,7 @@ impl App {
         {
             sh.outline.remove(i);
         }
-        ui.label(RichText::new(format!("線をクリックで角を足す　{}/{}個", sh.outline.len(), MAX_OUTLINE)).size(11.0).color(style::DIM));
+        ui.label(RichText::new(format!("線をクリックで角を足す　{}/{}個", sh.outline.len(), MAX_OUTLINE)).size(12.0).color(style::DIM));
         ui.horizontal_wrapped(|ui| {
             let shapes: [(&str, Vec<[f32; 2]>); 5] = [
                 ("四角", vec![[-15.0, -15.0], [15.0, -15.0], [15.0, 15.0], [-15.0, 15.0]]),
@@ -803,24 +815,21 @@ impl App {
             }
         });
         melt_preview(ui, m);
-        ui.horizontal(|ui| {
-            for mode in BlendMode::ALL {
-                if style::pill(ui, mode.label(), m.mode == mode).clicked() {
-                    m.mode = mode;
-                }
-            }
-        });
+        let items: Vec<(&str, &str)> = BlendMode::ALL.iter().map(|b| (b.label(), "")).collect();
+        let sel = BlendMode::ALL.iter().position(|b| *b == m.mode);
+        if let Some(i) = style::segmented(ui, "melt_modes", &items, sel, true)
+            && let Some(b) = BlendMode::ALL.get(i)
+        {
+            m.mode = *b;
+        }
         for (label, value, range, tip) in [
             ("とけぐあい", &mut m.amount, 0.0..=4.0, "全部の形のとけあいを一度に強く・弱く"),
             ("たれ", &mut m.drip, 0.0..=40.0, "下にたれるように溶ける"),
             ("たれの細かさ", &mut m.ripple, 0.3..=4.0, "たれの間かく"),
         ] {
-            ui.horizontal(|ui| {
-                ui.add_sized([74.0, 18.0], egui::Label::new(RichText::new(label).color(style::DIM).size(12.0)));
-                ui.add(egui::Slider::new(value, range)).on_hover_text(tip);
-            });
+            style::labeled_slider(ui, label, value, range, tip);
         }
-        ui.label(RichText::new("形ごとの とけあい は「形」の中で決められます").size(11.0).color(style::DIM));
+        ui.label(RichText::new("形ごとの とけあい は「形」の中で決められます").size(12.0).color(style::DIM));
     }
 }
 
@@ -838,7 +847,7 @@ fn melt_preview(ui: &mut Ui, m: &Melt) {
     let w = ui.available_width().min(284.0);
     let (rect, _) = ui.allocate_exact_size(vec2(w, 96.0), Sense::hover());
     let p = ui.painter_at(rect);
-    p.rect_filled(rect, 10.0, style::PANEL_DARK);
+    style::gfx::vgrad(&p, rect, 10.0, style::INSET_TOP, style::INSET_BOTTOM);
     let cell = 2.0_f32;
     let nx = (rect.width() / cell) as i32;
     let ny = (rect.height() / cell) as i32;
