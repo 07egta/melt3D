@@ -202,9 +202,11 @@ impl App {
                 tried.push(b);
             }
         }
-        match crate::backend::plan(Choice::Auto, cfg!(target_os = "windows"), &settings, &tried) {
+        let windows = cfg!(target_os = "windows");
+        match crate::backend::plan(Choice::Auto, windows, &settings, &tried) {
             Some(crate::backend::Plan::Only(b)) => Some(b),
-            _ => None,
+            // (elsewhere the defaults have no order: offer the other backends of the platform)
+            _ => Backend::offered(windows, cfg!(target_os = "macos")).into_iter().find(|b| !tried.contains(b)),
         }
     }
 

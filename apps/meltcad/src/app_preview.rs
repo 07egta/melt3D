@@ -87,6 +87,27 @@ fn app_preview() {
             }
         }
     }
+    // `YURA_GPU=compiling|failed|failed_easy|easy|ready_easy` previews the graphics path's cards over the simple CPU view
+    let gpu_state = std::env::var("YURA_GPU").ok();
+    if let Some(which) = gpu_state.as_deref() {
+        use crate::gpu_status::AdapterInfo;
+        let info = AdapterInfo { backend: "Dx12".into(), name: "NVIDIA GeForce RTX 3060".into(), driver: "NVIDIA 551.23".into(), device_type: "DiscreteGpu".into() };
+        app.gpu.status.set_info(info);
+        let start = std::time::Instant::now().checked_sub(std::time::Duration::from_secs(std::env::var("YURA_GPU_SECS").ok().and_then(|v| v.parse().ok()).unwrap_or(12))).unwrap_or_else(std::time::Instant::now);
+        let g = app.gpu.status.begin(start);
+        match which {
+            "failed" | "failed_easy" => {
+                app.gpu.status.finish_err(g, "シーンの描画パイプライン (create_render_pipeline): 検証エラー (Validation): Validation Error\nCaused by:\n  In Device::create_render_pipeline, label = 'meltcad'\n    Internal error in ShaderStages(FRAGMENT) shader: D3DCompile error: error X3511: unable to unroll loop, loop does not appear to terminate in a timely manner (1024 iterations)\n    (shader.wgsl: fs)");
+                app.gpu.easy = which == "failed_easy";
+            }
+            "easy" => app.gpu.easy = true,
+            "ready_easy" => {
+                app.gpu.status.finish_ok(g, 3.2);
+                app.gpu.easy = true;
+            }
+            _ => {}
+        }
+    }
     let size = egui::vec2(1380.0, 860.0);
     let mut tex = Textures::new();
     let mut last = None;
@@ -97,8 +118,8 @@ fn app_preview() {
         Some(_) => crate::export_dialog::open(&ctx, None),
         None => {}
     }
-    for _ in 0..if export.is_some() || mesh.is_some() { 60 } else { 4 } {
-        if export.is_some() || mesh.is_some() {
+    for _ in 0..if export.is_some() || mesh.is_some() || gpu_state.is_some() { 60 } else { 4 } {
+        if export.is_some() || mesh.is_some() || gpu_state.is_some() {
             std::thread::sleep(std::time::Duration::from_millis(60));
         }
         let input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)), ..Default::default() };
@@ -109,6 +130,13 @@ fn app_preview() {
             app.side(ui);
             egui::CentralPanel::default().frame(egui::Frame::new().fill(Color32::from_rgb(52, 52, 56))).show(ui, |ui| {
                 app.view_rect = ui.max_rect();
+                if gpu_state.is_some() {
+                    let rect = app.view_rect;
+                    let px = crate::perf::viewport_px(rect, ppp);
+                    app.gpu.easy_view.update(ui.ctx(), &app.scene, &app.cam, px, false);
+                    app.gpu.easy_view.paint(&ui.painter_at(rect), rect, app.scene.env.backdrop);
+                    app.gpu_cards(ui.ctx(), rect);
+                }
             });
             app.tool_strip(ui);
             app.tool_pill(ui);
