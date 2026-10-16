@@ -21,6 +21,8 @@ mod glyphs;
 mod glyphs_more;
 mod gpu;
 mod icon;
+#[cfg(test)]
+mod input_tests;
 mod import_3mf;
 mod import_glb;
 mod import_inflate;
