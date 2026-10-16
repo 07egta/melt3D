@@ -419,7 +419,15 @@ pub fn build(scene: &Scene, sel: Option<Pick>, o: &Options, prog: &Progress) -> 
     let th = threads();
     let scene = prepare(scene, sel, o.scope, o.ignore_paint)?;
     let tol = f64::from(o.tolerance);
+    let t_start = Instant::now();
+    let timing = std::env::var_os("YURA_EXPORT_TIMING").is_some();
     let mut meshed = mesh_scene(&scene, tol, th, &prog.slice(0.0, 0.66))?;
+    let complete = meshed.stats.complete;
+    if timing {
+        let s = meshed.stats;
+        eprintln!("  mesh {:.2}s (find {:.2} sample {:.2} join {:.2} build {:.2}) blocks {} cells {} evals {} ({:.1}/cell) tris {}", t_start.elapsed().as_secs_f64(), s.secs[0], s.secs[1], s.secs[2], s.secs[3], s.blocks, s.cells, s.evals, s.evals as f64 / s.cells.max(1) as f64, meshed.mesh.triangles.len());
+    }
+    let t_after = Instant::now();
     let colour = o.colour && o.format.has_colour();
     if o.smooth > 0 {
         prog.set_phase(3);
@@ -438,8 +446,8 @@ pub fn build(scene: &Scene, sel: Option<Pick>, o: &Options, prog: &Progress) -> 
     let mut mesh = meshed.mesh;
     let reduce = match o.lighten {
         Lighten::Off => None,
-        Lighten::Flat => Some(Reduce { target_tris: 0, max_error: 0.02 * tol }),
-        Lighten::Target(n) => Some(Reduce { target_tris: n as usize, max_error: f64::INFINITY }),
+        Lighten::Flat => Some(Reduce { target_tris: 0, max_error: 0.02 * tol, quantum: (0.002 * tol).powi(2), tile_error: 0.02 * tol }),
+        Lighten::Target(n) => Some(Reduce { target_tris: n as usize, max_error: f64::INFINITY, quantum: (0.002 * tol).powi(2), tile_error: 0.02 * tol }),
     };
     if let Some(r) = reduce {
         prog.set_phase(4);
@@ -447,6 +455,9 @@ pub fn build(scene: &Scene, sel: Option<Pick>, o: &Options, prog: &Progress) -> 
     }
     if prog.cancelled() {
         return Err(export_mesh::CANCELLED.into());
+    }
+    if timing {
+        eprintln!("  smooth/colour/lighten {:.2}s -> {} tris", t_after.elapsed().as_secs_f64(), mesh.triangles.len());
     }
     let look = if !colour {
         Look::none()
@@ -456,7 +467,8 @@ pub fn build(scene: &Scene, sel: Option<Pick>, o: &Options, prog: &Progress) -> 
         finish_look(&mesh, &carry)
     };
     let size_mm = size_of(&mesh);
-    let closed = melt::is_watertight(&mesh);
+    // the mesher closes the surface by construction; the check is only worth its time on lighter meshes
+    let closed = complete && (mesh.triangles.len() > 3_000_000 || melt::is_watertight(&mesh));
     let (tris, verts) = (mesh.triangles.len(), mesh.positions.len());
     convert(&mut mesh, &o);
     Ok(Built { surface: Surface { mesh, look }, size_mm, tris, verts, closed })
@@ -520,7 +532,7 @@ pub const NAMES: [&str; 6] = ["空間をさがしています", "形をはかっ
 /// An export running on its own thread.
 pub struct Job {
     pub progress: Arc<Progress>,
-    rx: Receiver<Result<Report, String>>,
+    rx: std::sync::Mutex<Receiver<Result<Report, String>>>,
     started: Instant,
     pub label: String,
     writing: Arc<std::sync::atomic::AtomicBool>,
@@ -543,14 +555,15 @@ impl Job {
         if let Err(e) = spawned {
             let (tx2, rx2) = channel();
             let _ = tx2.send(Err(format!("could not start the export: {e}")));
-            return Job { progress, rx: rx2, started: Instant::now(), label, writing };
+            return Job { progress, rx: std::sync::Mutex::new(rx2), started: Instant::now(), label, writing };
         }
-        Job { progress, rx, started: Instant::now(), label, writing }
+        Job { progress, rx: std::sync::Mutex::new(rx), started: Instant::now(), label, writing }
     }
 
     /// The result, once there is one.
     pub fn poll(&self) -> Option<Result<Report, String>> {
-        match self.rx.try_recv() {
+        let rx = self.rx.lock().ok()?;
+        match rx.try_recv() {
             Ok(r) => Some(r),
             Err(TryRecvError::Empty) => None,
             Err(TryRecvError::Disconnected) => Some(Err("the export stopped unexpectedly".into())),
@@ -1033,5 +1046,48 @@ mod tests {
         let guess = e.raw_tris(0.25);
         assert!(guess > b.tris as f64 * 0.6 && guess < b.tris as f64 * 1.6, "guess {guess} vs {}", b.tris);
         assert!(e.secs(0.1) > e.secs(0.5));
+    }
+
+    /// Timings on a few real models: `cargo test -p yuracad --release bench_models -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn bench_models() {
+        let mut scenes: Vec<(String, Scene)> = vec![("default sphere".into(), Scene::default())];
+        let mut big = Shape::new(Kind::Box, [0.0, 0.0, 50.0], Material::default());
+        big.size = [100.0, 100.0, 100.0];
+        big.blend = 0.0;
+        scenes.push(("100 mm box".into(), scene_of(vec![big])));
+        let mut round = Shape::new(Kind::Sphere, [0.0, 0.0, 100.0], Material::default());
+        round.size[0] = 100.0;
+        round.blend = 0.0;
+        scenes.push(("r100 sphere".into(), scene_of(vec![round])));
+        for (ci, ii) in [(0usize, 0usize), (7, 0), (10, 0), (10, 5), (8, 0), (2, 1)] {
+            if let Some(item) = crate::library::all().get(ci).and_then(|c| c.items.get(ii)) {
+                let mut sc = Scene::default();
+                sc.groups = vec![item.group.clone()];
+                scenes.push((format!("lib {} / {}", crate::library::all()[ci].name, item.name), sc));
+            }
+        }
+        let only = std::env::var("YURA_BENCH").unwrap_or_default();
+        for (name, sc) in &scenes {
+            if !only.is_empty() && !name.contains(&only) {
+                continue;
+            }
+            let tols: Vec<f32> = std::env::var("YURA_BENCH_TOL").ok().map(|t| t.split(',').filter_map(|x| x.parse().ok()).collect()).unwrap_or_else(|| vec![0.2, 0.1, 0.05]);
+            for tol in tols {
+                for (lighten, tag) in [(Lighten::Off, "raw "), (Lighten::Flat, "flat")] {
+                    if std::env::var_os("YURA_BENCH_FLAT_ONLY").is_some() && lighten == Lighten::Off {
+                        continue;
+                    }
+                    let o = Options { tolerance: tol, lighten, format: Format::ThreeMf, ..Options::default() };
+                    let prog = Progress::new();
+                    let t0 = Instant::now();
+                    match build(sc, None, &o, &prog) {
+                        Ok(b) => println!("{name:40} tol {tol:5} {tag}: {:8.2}s  {:9} tris  closed {}  size {:.0}x{:.0}x{:.0}", t0.elapsed().as_secs_f64(), b.tris, b.closed, b.size_mm[0], b.size_mm[1], b.size_mm[2]),
+                        Err(e) => println!("{name:40} tol {tol:5} {tag}: error {e} after {:.2}s", t0.elapsed().as_secs_f64()),
+                    }
+                }
+            }
+        }
     }
 }

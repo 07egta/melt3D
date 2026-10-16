@@ -74,12 +74,16 @@ struct Work {
     quad: Vec<Q>,
     ver: Vec<u32>,
     tri_count: usize,
+    /// Costs closer than this count as equal; among those the shortest edge goes first, so flat
+    /// areas thin out evenly instead of piling every triangle onto a few hub vertices.
+    quantum: f64,
 }
 
-type Entry = (Reverse<u64>, u32, u32, u32, u32);
+/// (cost bucket, edge length) as the sort key, then the ends and their versions.
+type Entry = (Reverse<(u64, u32)>, u32, u32, u32, u32);
 
 impl Work {
-    fn new(pos: Vec<V>, tris: Vec<[u32; 3]>, pinned: Vec<bool>, frozen: Vec<bool>) -> Work {
+    fn new(pos: Vec<V>, tris: Vec<[u32; 3]>, pinned: Vec<bool>, frozen: Vec<bool>, quantum: f64) -> Work {
         let nv = pos.len();
         let mut vtris: Vec<Vec<u32>> = vec![Vec::new(); nv];
         let mut quad: Vec<Q> = vec![[0.0; 10]; nv];
@@ -89,8 +93,8 @@ impl Work {
                     l.push(i as u32);
                 }
             }
-            if let Some((n, d, area)) = plane_of(&pos, t) {
-                let q = plane_quadric(n, d, area);
+            if let Some((n, d, _area)) = plane_of(&pos, t) {
+                let q = plane_quadric(n, d, 1.0);
                 for v in t {
                     if let Some(s) = quad.get_mut(*v as usize) {
                         q_add(s, &q);
@@ -99,7 +103,7 @@ impl Work {
             }
         }
         let n = tris.len();
-        Work { pos, tris, pinned, frozen, alive_tri: vec![true; n], alive_vert: vec![true; nv], vtris, quad, ver: vec![0; nv], tri_count: n }
+        Work { pos, tris, pinned, frozen, alive_tri: vec![true; n], alive_vert: vec![true; nv], vtris, quad, ver: vec![0; nv], tri_count: n, quantum: quantum.max(1e-30) }
     }
 
     fn p(&self, v: u32) -> V {
@@ -166,7 +170,10 @@ impl Work {
     fn push_edge(&self, heap: &mut BinaryHeap<Entry>, a: u32, b: u32) {
         if let Some((_, cost)) = self.best_target(a, b) {
             let (x, y) = if a < b { (a, b) } else { (b, a) };
-            heap.push((Reverse(cost.to_bits()), x, y, self.ver.get(x as usize).copied().unwrap_or(0), self.ver.get(y as usize).copied().unwrap_or(0)));
+            let d = sub(self.p(x), self.p(y));
+            let len = dot(d, d) as f32;
+            let bucket = (cost / self.quantum).min(1.0e18) as u64;
+            heap.push((Reverse((bucket, len.to_bits())), x, y, self.ver.get(x as usize).copied().unwrap_or(0), self.ver.get(y as usize).copied().unwrap_or(0)));
         }
     }
 
@@ -293,9 +300,8 @@ impl Work {
         let start = self.tri_count.max(1);
         let mut done = 0usize;
         while self.tri_count > target {
-            let Some((Reverse(bits), a, b, va, vb)) = heap.pop() else { break };
-            let cost = f64::from_bits(bits);
-            if cost > max_cost {
+            let Some((Reverse((bucket, _)), a, b, va, vb)) = heap.pop() else { break };
+            if bucket as f64 * self.quantum > max_cost {
                 break;
             }
             let ok_a = self.alive_vert.get(a as usize).copied().unwrap_or(false) && self.ver.get(a as usize).copied() == Some(va);
@@ -303,7 +309,10 @@ impl Work {
             if !ok_a || !ok_b {
                 continue;
             }
-            let Some((target_pos, _)) = self.best_target(a, b) else { continue };
+            let Some((target_pos, cost)) = self.best_target(a, b) else { continue };
+            if cost > max_cost {
+                continue;
+            }
             // the pinned one stays, the other is merged into it
             let (keep, gone) = if self.is_pinned(b) && !self.is_pinned(a) { (b, a) } else { (a, b) };
             if !self.collapse_ok(keep, gone, target_pos) {
@@ -415,6 +424,10 @@ pub struct Reduce {
     pub target_tris: usize,
     /// A collapse may move the surface by at most this much (mm).
     pub max_error: f64,
+    /// Squared distances (mm^2) that count as the same cost; the shortest edge goes first among them.
+    pub quantum: f64,
+    /// What the tile pass of a big mesh may move the surface by (mm): flat faces only.
+    pub tile_error: f64,
 }
 
 /// Simplify `mesh` in place. Big meshes go through tiles on `threads` threads first.
@@ -423,17 +436,22 @@ pub fn reduce(mesh: &mut TriMesh, carry: &mut Carry, opts: Reduce, threads: usiz
         return Ok(());
     }
     let max_cost = opts.max_error * opts.max_error;
+    let timing = std::env::var_os("YURA_EXPORT_TIMING").is_some();
+    let t0 = std::time::Instant::now();
     let mut pinned = carry.pins(mesh);
     if mesh.triangles.len() > 300_000 {
-        let origin = tiled(mesh, &pinned, max_cost, threads, &prog.sub(0.0, 0.7))?;
+        let origin = tiled(mesh, &pinned, max_cost.min(opts.tile_error * opts.tile_error), opts.quantum, threads, &prog.sub(0.0, 0.7))?;
         carry.remap(&origin);
         pinned = origin.iter().map(|o| pinned.get(*o as usize).copied().unwrap_or(false)).collect();
+        if timing {
+            eprintln!("  tiles {:.2}s -> {} tris", t0.elapsed().as_secs_f64(), mesh.triangles.len());
+        }
     }
     let pos = std::mem::take(&mut mesh.positions);
     let tris = std::mem::take(&mut mesh.triangles);
     let nt = tris.len();
     pinned.resize(pos.len(), false);
-    let mut w = Work::new(pos, tris, pinned, vec![false; nt]);
+    let mut w = Work::new(pos, tris, pinned, vec![false; nt], opts.quantum);
     w.run(opts.target_tris, max_cost, Some(&prog.sub(0.7, 1.0)))?;
     let (pos, tris) = w.finish();
     mesh.positions = pos;
@@ -444,7 +462,7 @@ pub fn reduce(mesh: &mut TriMesh, carry: &mut Carry, opts: Reduce, threads: usiz
 }
 
 /// Simplify tile by tile in parallel; the triangles across tile borders are left for the last pass.
-fn tiled(mesh: &mut TriMesh, base_pinned: &[bool], max_cost: f64, threads: usize, prog: &Slice) -> Result<Vec<u32>, String> {
+fn tiled(mesh: &mut TriMesh, base_pinned: &[bool], max_cost: f64, quantum: f64, threads: usize, prog: &Slice) -> Result<Vec<u32>, String> {
     let (mut lo, mut hi) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
     for p in &mesh.positions {
         for a in 0..3 {
@@ -533,13 +551,13 @@ fn tiled(mesh: &mut TriMesh, base_pinned: &[bool], max_cost: f64, threads: usize
             return Ok((Vec::new(), Vec::new()));
         }
         // the local mesh: the tile's interior triangles, plus the border triangles that touch its vertices
-        let mut local_of: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
+        let mut local_of: crate::export_mesh::FastMap<u32, u32> = crate::export_mesh::FastMap::default();
         let mut gl: Vec<u32> = Vec::new();
         let mut lpos: Vec<V> = Vec::new();
         let mut lpin: Vec<bool> = Vec::new();
         let mut ltris: Vec<[u32; 3]> = Vec::new();
         let mut lfrozen: Vec<bool> = Vec::new();
-        let take = |v: u32, local_of: &mut std::collections::HashMap<u32, u32>, gl: &mut Vec<u32>, lpos: &mut Vec<V>, lpin: &mut Vec<bool>| -> u32 {
+        let take = |v: u32, local_of: &mut crate::export_mesh::FastMap<u32, u32>, gl: &mut Vec<u32>, lpos: &mut Vec<V>, lpin: &mut Vec<bool>| -> u32 {
             *local_of.entry(v).or_insert_with(|| {
                 gl.push(v);
                 lpos.push(mesh_ref.positions.get(v as usize).copied().unwrap_or([0.0; 3]));
@@ -579,7 +597,7 @@ fn tiled(mesh: &mut TriMesh, base_pinned: &[bool], max_cost: f64, threads: usize
                 }
             }
         }
-        let mut w = Work::new(lpos, ltris, lpin, lfrozen);
+        let mut w = Work::new(lpos, ltris, lpin, lfrozen, quantum);
         w.run(0, max_cost, None)?;
         // report back: the moved vertices (global id, position) and the surviving interior triangles
         let mut moved: Vec<(u32, V)> = Vec::new();
@@ -722,7 +740,7 @@ mod tests {
         let before = m.triangles.len();
         let v0 = melt::volume(&m);
         let prog = Progress::new();
-        reduce(&mut m, &mut Carry::default(), Reduce { target_tris: 0, max_error: 0.005 }, 4, &prog.slice(0.0, 1.0)).unwrap();
+        reduce(&mut m, &mut Carry::default(), Reduce { target_tris: 0, max_error: 0.005, quantum: 1e-7, tile_error: 0.002 }, 4, &prog.slice(0.0, 1.0)).unwrap();
         assert!(melt::is_watertight(&m));
         assert!(m.triangles.len() < before / 20, "{} of {before}", m.triangles.len());
         let v1 = melt::volume(&m);
@@ -745,7 +763,7 @@ mod tests {
         let v0 = melt::volume(&m);
         let before = m.triangles.len();
         let prog = Progress::new();
-        reduce(&mut m, &mut Carry::default(), Reduce { target_tris: before / 10, max_error: f64::INFINITY }, 4, &prog.slice(0.0, 1.0)).unwrap();
+        reduce(&mut m, &mut Carry::default(), Reduce { target_tris: before / 10, max_error: f64::INFINITY, quantum: 1e-7, tile_error: 0.002 }, 4, &prog.slice(0.0, 1.0)).unwrap();
         assert!(m.triangles.len() <= before / 10 + 2, "{} vs {}", m.triangles.len(), before / 10);
         assert!(melt::is_watertight(&m));
         let v1 = melt::volume(&m);
@@ -760,7 +778,7 @@ mod tests {
         let v0 = melt::volume(&m);
         let before = m.triangles.len();
         let prog = Progress::new();
-        reduce(&mut m, &mut Carry::default(), Reduce { target_tris: 0, max_error: 0.002 }, 4, &prog.slice(0.0, 1.0)).unwrap();
+        reduce(&mut m, &mut Carry::default(), Reduce { target_tris: 0, max_error: 0.002, quantum: 1e-8, tile_error: 0.002 }, 4, &prog.slice(0.0, 1.0)).unwrap();
         assert!(melt::is_watertight(&m));
         assert!(m.triangles.len() < before / 10, "{} of {before}", m.triangles.len());
         let v1 = melt::volume(&m);
