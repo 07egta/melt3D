@@ -18,6 +18,9 @@ struct Shape {
     gpar: vec4<f32>,    // gradient: direction (0 x, 1 y, 2 z; +3 = along the shape's own box), softness, from, to
 };
 
+// Everything per frame and small is in the uniform buffer; the scene itself (groups, blocks,
+// shapes, outlines, path nodes) is one long list of vec4 in a float texture read with textureLoad,
+// so the number of shapes is not limited by the 64 KB uniform size and it works on every backend.
 struct Globals {
     cam_pos: vec4<f32>,
     cam_right: vec4<f32>,
@@ -26,27 +29,52 @@ struct Globals {
     view: vec4<f32>,      // width px, height px, ortho half height, flags: 1 = srgb target, 2 = fast mode, 4 = a lamp glows
     melt: vec4<f32>,      // mode, amount, drip, ripple
     counts: vec4<f32>,    // groups, shapes, selected first shape (-1 none), selected count
-    groups: array<vec4<f32>, 24>,   // first shape, count, op sign, blend
-    shapes: array<Shape, 64>,
-    poly: array<vec4<f32>, 512>,    // outline points, two per vec4 (x y x y)
-    path: array<vec4<f32>, 1024>,   // curve / sweep nodes (x y z radius)
-    bound: vec4<f32>,               // centre, radius of a sphere around everything (0 = nothing)
-    hover: vec4<f32>,               // first hovered shape (-1 none), count
+    bound: vec4<f32>,     // centre, radius of a sphere around everything (0 = nothing)
+    hover: vec4<f32>,     // first hovered shape (-1 none), count
+    selsph: vec4<f32>,    // bounding sphere of the selected shapes (centre, radius)
+    offs: vec4<f32>,      // first vec4 of the group table, the block table, the instance table, the shapes
+    offs2: vec4<f32>,     // first vec4 of the outline points, the path nodes
     env: array<vec4<f32>, 11>,      // exposure/ambient/shadow/flags, backdrop+lights, 3 sky colours, 3 x (light dir+power, light colour)
-    brad: array<vec4<f32>, 16>,     // bounding radius of every shape (4 per vec4)
-    selsph: vec4<f32>,              // bounding sphere of the selected shapes (centre, radius)
 };
 
 @group(0) @binding(0) var<uniform> G: Globals;
+@group(0) @binding(1) var DT: texture_2d<f32>;
+
+// The scene list: 1024 vec4 per texture row.
+fn D(i: i32) -> vec4<f32> { return textureLoad(DT, vec2<i32>(i & 1023, i >> 10), 0); }
+
+// Layout (keep in step with gpu.rs):
+//   group  (3 vec4): [first block, block count, op sign, blend] [first instance, instance count, 0, 0] [bounding sphere]
+//   block  (2 vec4): [bounding sphere] [largest blend, 1 = never skip, first shape, shape count]
+//   shape (16 vec4): [bounding sphere = position, radius] then the 15 vec4 of struct Shape
+fn group_at(gi: i32) -> i32 { return i32(G.offs.x + 0.5) + gi * 3; }
+fn block_at(bi: i32) -> i32 { return i32(G.offs.y + 0.5) + bi * 2; }
+fn shape_rec(i: i32) -> i32 { return i32(G.offs.w + 0.5) + i * 16; }
+fn path_pt(i: i32) -> vec4<f32> { return D(i32(G.offs2.y + 0.5) + i); }
+
+fn shape_at(i: i32) -> Shape {
+    let b = shape_rec(i) + 1;
+    var s: Shape;
+    s.r0 = D(b);
+    s.r1 = D(b + 1);
+    s.r2 = D(b + 2);
+    s.pos = D(b + 3);
+    s.scale = D(b + 4);
+    s.size = D(b + 5);
+    s.misc = D(b + 6);
+    s.color = D(b + 7);
+    s.mat = D(b + 8);
+    s.mat2 = D(b + 9);
+    s.params = D(b + 10);
+    s.ext = D(b + 11);
+    s.extra = D(b + 12);
+    s.gcol = D(b + 13);
+    s.gpar = D(b + 14);
+    return s;
+}
 
 fn flag(bit: i32) -> bool { return (i32(G.view.w + 0.5) & bit) != 0; }
 fn is_fast() -> bool { return flag(2); }
-
-// a sphere around shape i: far from it, the shape cannot change the result
-fn bound_r(i: i32) -> f32 {
-    let v = G.brad[u32(i) >> 2u];
-    return v[u32(i) & 3u];
-}
 
 // How far away a shape must be (at least) for a blend with value `a` to ignore it: beyond that
 // the soft minimum returns `a` exactly. Round blends also feel any shape closer than their radius.
@@ -54,6 +82,14 @@ fn far_enough(a: f32, k: f32, rm: f32, mode: i32) -> f32 {
     var need = rm * k + a + 0.02;
     if (mode == 1) { need = max(need, rm * k + 0.02); }
     return need;
+}
+
+// a stain leaves the surface alone beyond this
+fn paint_far(k: f32) -> f32 { return 0.5 * max(k * 0.35, 0.3) + 0.02; }
+
+// a whole block of shapes is skipped beyond this (adds, carves and stains alike)
+fn block_far(g: f32, kmax: f32, rm: f32) -> f32 {
+    return max(rm * kmax + abs(g) + 0.02, paint_far(kmax));
 }
 
 // how far a blend reaches, in units of the blend size k (the soft minimum is exact beyond it)
@@ -125,7 +161,7 @@ fn polygon_d(start: i32, n: i32, p: vec2<f32>) -> f32 {
 }
 
 fn get_pt(i: i32) -> vec2<f32> {
-    let v = G.poly[u32(i) / 2u];
+    let v = D(i32(G.offs2.x + 0.5) + i / 2);
     if ((u32(i) & 1u) == 0u) { return v.xy; }
     return v.zw;
 }
@@ -301,11 +337,7 @@ fn warp(p: vec3<f32>) -> vec3<f32> {
     return vec3<f32>(p.x, p.y, p.z + drip * w);
 }
 
-fn map(p0: vec3<f32>) -> Hit {
-    let p = warp(p0);
-    let mode = i32(G.melt.x + 0.5);
-    let amount = G.melt.y;
-    let rm = reach_mult();
+fn empty_hit() -> Hit {
     var acc: Hit;
     acc.d = 1e6;
     acc.col = vec3<f32>(0.8);
@@ -317,29 +349,53 @@ fn map(p0: vec3<f32>) -> Hit {
     acc.coat = 0.0;
     acc.trans = 0.0;
     acc.id = -1.0;
-    var have = false;
-    let ng = i32(G.counts.x + 0.5);
-    for (var gi = 0; gi < ng; gi = gi + 1) {
-        let gr = G.groups[gi];
-        let first = i32(gr.x + 0.5);
-        let cnt = i32(gr.y + 0.5);
-        var g: Hit;
-        var gh = false;
+    return acc;
+}
+
+struct GroupHit {
+    h: Hit,
+    ok: bool,
+};
+
+// The shapes of one group, melted together in order (with materials). `ok` is false when the group
+// has no shape to start from.
+fn group_hit(gr: vec4<f32>, p: vec3<f32>, amount: f32, rm: f32, mode: i32) -> GroupHit {
+    var out: GroupHit;
+    out.ok = false;
+    let fb = i32(gr.x + 0.5);
+    let nb = i32(gr.y + 0.5);
+    var g: Hit;
+    var gh = false;
+    for (var bi = 0; bi < nb; bi = bi + 1) {
+        let bb = block_at(fb + bi);
+        let b1 = D(bb + 1);
+        if (gh && nb > 1 && b1.y < 0.5) {
+            // a block that is far away changes nothing
+            let b0 = D(bb);
+            if (length(p - b0.xyz) - b0.w >= block_far(g.d, b1.x * amount, rm)) { continue; }
+        }
+        let first = i32(b1.z + 0.5);
+        let cnt = i32(b1.w + 0.5);
         for (var si = 0; si < cnt; si = si + 1) {
-            let s = G.shapes[first + si];
+            let rec = shape_rec(first + si);
             if (gh) {
                 // far from this shape the blend leaves the result as it is: skip its distance
-                let op = s.misc.x;
-                let k = s.misc.y * amount;
-                let lb = length(p - s.pos.xyz) - bound_r(first + si);
-                if (op > 0.5) {
+                let misc = D(rec + 7);
+                let op = misc.x;
+                let k = misc.y * amount;
+                let bs = D(rec);
+                let lb = length(p - bs.xyz) - bs.w;
+                if (op > 1.5) {
+                    // an overlap shape changes the result everywhere
+                } else if (op > 0.5) {
                     if (lb >= far_enough(g.d, k, rm, mode)) { continue; }
                 } else if (op < -0.5) {
                     if (lb >= far_enough(-g.d, k, rm, mode)) { continue; }
-                } else if (lb >= 0.5 * max(k * 0.35, 0.3) + 0.02) {
+                } else if (lb >= paint_far(k)) {
                     continue;
                 }
             }
+            let s = shape_at(first + si);
             var h: Hit;
             h.d = shape_dist(s, p);
             h.col = shape_color(s, p);
@@ -359,13 +415,42 @@ fn map(p0: vec3<f32>) -> Hit {
                 g = combine(g, h, s.misc.x, s.misc.y * amount, mode);
             }
         }
-        if (!gh) { continue; }
+    }
+    out.h = g;
+    out.ok = gh;
+    return out;
+}
+
+// Can group `gr` (whose sphere is `gs`) be left out, given what the groups before it came to?
+fn group_far(gr: vec4<f32>, gs: vec4<f32>, p: vec3<f32>, acc_d: f32, amount: f32, rm: f32, mode: i32) -> bool {
+    let k = gr.w * amount;
+    let lb = length(p - gs.xyz) - gs.w;
+    if (gr.z > 1.5) { return false; }
+    if (gr.z > 0.5) { return lb >= far_enough(acc_d, k, rm, mode); }
+    if (gr.z < -0.5) { return lb >= far_enough(-acc_d, k, rm, mode); }
+    return lb >= paint_far(k);
+}
+
+fn map(p0: vec3<f32>) -> Hit {
+    let p = warp(p0);
+    let mode = i32(G.melt.x + 0.5);
+    let amount = G.melt.y;
+    let rm = reach_mult();
+    var acc = empty_hit();
+    var have = false;
+    let ng = i32(G.counts.x + 0.5);
+    for (var gi = 0; gi < ng; gi = gi + 1) {
+        let gb = group_at(gi);
+        let gr = D(gb);
+        if (have && group_far(gr, D(gb + 2), p, acc.d, amount, rm, mode)) { continue; }
+        let gx = group_hit(gr, p, amount, rm, mode);
+        if (!gx.ok) { continue; }
         if (!have) {
             if (gr.z < 0.5) { continue; }
-            acc = g;
+            acc = gx.h;
             have = true;
         } else {
-            acc = combine(acc, g, gr.z, gr.w * amount, mode);
+            acc = combine(acc, gx.h, gr.z, gr.w * amount, mode);
         }
     }
     if (G.melt.z > 0.0) {
@@ -373,6 +458,51 @@ fn map(p0: vec3<f32>) -> Hit {
         acc.d = acc.d / sqrt(1.0 + slope * slope);
     }
     return acc;
+}
+
+// The distance of one group alone: x = distance, y = 1 when the group has a shape to start from.
+fn group_dist(gr: vec4<f32>, p: vec3<f32>, amount: f32, rm: f32, mode: i32) -> vec2<f32> {
+    let fb = i32(gr.x + 0.5);
+    let nb = i32(gr.y + 0.5);
+    var g = 0.0;
+    var gh = false;
+    for (var bi = 0; bi < nb; bi = bi + 1) {
+        let bb = block_at(fb + bi);
+        let b1 = D(bb + 1);
+        if (gh && nb > 1 && b1.y < 0.5) {
+            let b0 = D(bb);
+            if (length(p - b0.xyz) - b0.w >= block_far(g, b1.x * amount, rm)) { continue; }
+        }
+        let first = i32(b1.z + 0.5);
+        let cnt = i32(b1.w + 0.5);
+        for (var si = 0; si < cnt; si = si + 1) {
+            let rec = shape_rec(first + si);
+            let misc = D(rec + 7);
+            let op = misc.x;
+            if (!gh) {
+                if (op < 0.5) { continue; }
+                g = shape_dist(shape_at(first + si), p);
+                gh = true;
+                continue;
+            }
+            if (op > -0.5 && op < 0.5) { continue; }
+            let k = misc.y * amount;
+            if (op < 1.5) {
+                let bs = D(rec);
+                let lb = length(p - bs.xyz) - bs.w;
+                if (lb >= far_enough(select(-g, g, op > 0.0), k, rm, mode)) { continue; }
+            }
+            let b = shape_dist(shape_at(first + si), p);
+            if (op > 1.5) {
+                g = -smin_h(-g, -b, k, mode).x;
+            } else if (op > 0.0) {
+                g = smin_h(g, b, k, mode).x;
+            } else {
+                g = -smin_h(-g, b, k, mode).x;
+            }
+        }
+    }
+    return vec2<f32>(g, select(0.0, 1.0, gh));
 }
 
 // The distance alone (no materials): what marching, shadows and normals need. It follows map()
@@ -386,41 +516,22 @@ fn map_d(p0: vec3<f32>) -> f32 {
     var have = false;
     let ng = i32(G.counts.x + 0.5);
     for (var gi = 0; gi < ng; gi = gi + 1) {
-        let gr = G.groups[gi];
+        let gb = group_at(gi);
+        let gr = D(gb);
         if (gr.z > -0.5 && gr.z < 0.5) { continue; }   // a stain group changes no distance
-        let first = i32(gr.x + 0.5);
-        let cnt = i32(gr.y + 0.5);
-        var g = 0.0;
-        var gh = false;
-        for (var si = 0; si < cnt; si = si + 1) {
-            let s = G.shapes[first + si];
-            let op = s.misc.x;
-            if (!gh) {
-                if (op < 0.5) { continue; }
-                g = shape_dist(s, p);
-                gh = true;
-                continue;
-            }
-            if (op > -0.5 && op < 0.5) { continue; }
-            let k = s.misc.y * amount;
-            let lb = length(p - s.pos.xyz) - bound_r(first + si);
-            if (lb >= far_enough(select(-g, g, op > 0.0), k, rm, mode)) { continue; }
-            let b = shape_dist(s, p);
-            if (op > 0.0) {
-                g = smin_h(g, b, k, mode).x;
-            } else {
-                g = -smin_h(-g, b, k, mode).x;
-            }
-        }
-        if (!gh) { continue; }
+        if (have && group_far(gr, D(gb + 2), p, acc, amount, rm, mode)) { continue; }
+        let gd = group_dist(gr, p, amount, rm, mode);
+        if (gd.y < 0.5) { continue; }
         if (!have) {
             if (gr.z < 0.5) { continue; }
-            acc = g;
+            acc = gd.x;
             have = true;
+        } else if (gr.z > 1.5) {
+            acc = -smin_h(-acc, -gd.x, gr.w * amount, mode).x;
         } else if (gr.z > 0.0) {
-            acc = smin_h(acc, g, gr.w * amount, mode).x;
+            acc = smin_h(acc, gd.x, gr.w * amount, mode).x;
         } else {
-            acc = -smin_h(-acc, g, gr.w * amount, mode).x;
+            acc = -smin_h(-acc, gd.x, gr.w * amount, mode).x;
         }
     }
     if (G.melt.z > 0.0) {
@@ -446,7 +557,7 @@ fn sel_dist(p0: vec3<f32>) -> f32 {
     let cnt = i32(G.counts.w + 0.5);
     var d = 1e6;
     for (var i = 0; i < cnt; i = i + 1) {
-        d = min(d, shape_dist(G.shapes[first + i], p));
+        d = min(d, shape_dist(shape_at(first + i), p));
     }
     return d;
 }
@@ -617,7 +728,7 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
     var hit = false;
     var h: Hit;
     let has_sel = G.counts.w > 0.5;
-    let sel_carving = has_sel && G.shapes[i32(G.counts.z + 0.5)].misc.x < 0.5;
+    let sel_carving = has_sel && D(shape_rec(i32(G.counts.z + 0.5)) + 7).x < 0.5;
     var sel_abs = 1e9;
     var sel_hit = false;
     let foot = px;

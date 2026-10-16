@@ -828,8 +828,8 @@ impl Scene {
     }
 }
 
-pub const MAX_GROUPS: usize = 24;
-pub const MAX_SHAPES: usize = 64;
+pub const MAX_GROUPS: usize = 96;
+pub const MAX_SHAPES: usize = 512;
 
 #[cfg(test)]
 mod tests {
