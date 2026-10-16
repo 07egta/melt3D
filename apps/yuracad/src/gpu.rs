@@ -490,7 +490,10 @@ pub fn install(rs: &egui_wgpu::RenderState, ctx: &egui::Context) {
         ctx.request_repaint();
     });
     let job2 = job.clone();
-    if std::thread::Builder::new().name("yuracad-gpu-init".into()).spawn(move || job2()).is_err() {
+    // (OpenGL keeps one context lock for the whole compile: egui's own texture uploads on the main
+    // thread would then wait on it and give up, so there the compile runs right here)
+    let on_gl = rs.adapter.get_info().backend == wgpu::Backend::Gl;
+    if on_gl || std::thread::Builder::new().name("yuracad-gpu-init".into()).spawn(move || job2()).is_err() {
         job();
     }
 }

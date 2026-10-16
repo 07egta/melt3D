@@ -88,15 +88,26 @@ scene of library models on a grid, one still frame after the shader was compiled
 
 | shapes | groups | full quality | fast mode |
 |---|---|---|---|
-| 17 | 1 | 105 ms | 55 ms |
-| 106 | 8 | 534 ms | 195 ms |
-| 305 | 26 | 1159 ms | 502 ms |
-| 502 | 44 | 1536 ms | 715 ms |
+| 17 | 1 | 102 ms | 70 ms |
+| 106 | 8 | 664 ms | 232 ms |
+| 305 | 26 | 1556 ms | 673 ms |
+| 502 | 44 | 1962 ms | 1012 ms |
+| 17, as a grid of 250 live instances (a 4250-shape scene's worth) | 1 | 2979 ms | 1096 ms |
 
-(a real GPU is far faster; the point is the growth: 18 times the shapes cost 11 times the time, and
-the bigger scenes also fill more of the picture). Compiling the shader on llvmpipe takes minutes
+(a real GPU is far faster; the point is the growth: 18 times the shapes cost 15 times the time, and
+the bigger scenes also fill more of the picture; the instanced scene costs about 1.5 times the 502-shape scene). Compiling the shader on llvmpipe takes minutes
 (the driver inlines every call site); `GALLIVM_PERF=no_opt` makes it about 3 times faster for tests.
 
 Instances (patterns and linked copies) are evaluated by carrying the point back into the group's own
 space: three rows of a matrix per instance in the list, the group's sphere moved with it for the skip.
 256 instances in the scene at most; each melts into the result in turn with the group's op and blend.
+
+The CPU `Field` (picking, mesher, `--render`) uses the same skips: 20 000 distances in a 305-shape scene
+take 37 ms instead of 245 ms (6.6 times faster); `yuracad --render big300.meltcad out.png 200` (four
+views of 200 x 200 pixels, flat shaded, 4 threads) takes 0.7 s.
+
+The real window was also run under xvfb on the OpenGL backend (`WGPU_BACKEND=gl`, llvmpipe through EGL,
+with the `downlevel_webgl2_defaults` limits egui-wgpu asks for there): the old 40 KB uniform could not
+have been bound under those limits, the scene texture can. On OpenGL the shader is now compiled on the
+main thread (a compile on a second thread holds the GL context lock, and egui's texture upload on the
+main thread then aborts with "Could not lock adapter context").
