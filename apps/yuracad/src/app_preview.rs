@@ -24,6 +24,22 @@ fn app_preview() {
     if std::env::var("YURA_PIPE").is_ok() {
         app.set_pipe_tool(true);
     }
+    match std::env::var("YURA_SKETCH").ok().as_deref() {
+        Some("draw") => app.set_sketch_tool(true),
+        Some("ready") => {
+            app.set_sketch_tool(true);
+            app.sk.profile = crate::sketch::rect([0.0, 0.0], [30.0, 20.0]);
+            app.sk.stage = crate::sketch_ui::Stage::Ready;
+            app.sk.make = crate::sketch_ui::Make::Loft;
+        }
+        Some("edit") => {
+            app.add_shape(&ctx, Kind::Loft);
+            if let Some(crate::model::Pick::Shape(g, s)) = app.sel {
+                app.sketch_edit_begin(g, s);
+            }
+        }
+        _ => {}
+    }
     let size = egui::vec2(1380.0, 860.0);
     let mut tex = Textures::new();
     let mut last = None;
@@ -40,6 +56,7 @@ fn app_preview() {
             app.tool_strip(ui);
             app.tool_pill(ui);
             app.pipe_card(ui.ctx());
+            app.sketch_card(ui.ctx());
             app.keys_card(ui);
         });
         apply_deltas(&mut tex, &out.textures_delta);
