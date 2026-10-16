@@ -36,7 +36,7 @@ pub struct Category {
 }
 
 /// The files, in the order of the tabs.
-const FILES: [&str; 12] = [
+const FILES: [&str; 15] = [
     include_str!("../library/people.json"),
     include_str!("../library/hands.json"),
     include_str!("../library/animals.json"),
@@ -49,6 +49,9 @@ const FILES: [&str; 12] = [
     include_str!("../library/nature.json"),
     include_str!("../library/print.json"),
     include_str!("../library/pip.json"),
+    include_str!("../library/realistic.json"),
+    include_str!("../library/toon.json"),
+    include_str!("../library/town.json"),
 ];
 
 /// All categories (parsed once). A damaged file is skipped, never a crash; a test checks they all parse.
