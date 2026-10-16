@@ -102,8 +102,13 @@ class Body:
                            scale=(1, 0.9, 1.4), blend=1.0))
         if kind == "bun":
             out.append(sph("おだんご", (0, r * 0.6, hc + r * 1.05), r * 0.36, col, blend=0.8))
-        if kind == "bald":   # a ring of hair round the sides and back
-            out.append(torus("しらが", (0, 0, hc - r * 0.15), r * 0.95, r * 0.22, col, blend=1.0))
+        if kind == "bald":   # white tufts over the ears and round the back, bald on top
+            for sx in (-1, 1):
+                side = "右" if sx > 0 else "左"
+                out.append(sph(f"{side}のしらが", (sx * r * 0.92, r * 0.08, hc - r * 0.1), r * 0.32, col,
+                               scale=(0.7, 1.0, 1.2), blend=1.0))
+            out.append(sph("うしろのしらが", (0, r * 0.84, hc - r * 0.12), r * 0.34, col,
+                           scale=(1.6, 0.9, 1.1), blend=1.0))
         return out
 
     def base(self, skin, shirt, pants, shoe, hair=None, hair_color=BROWN_HAIR, blush=True,
@@ -168,8 +173,11 @@ b = kid(limb_r=3.4, hand_r=3.3)
 S = b.base(skin=SKIN_MID, shirt=(1.0, 0.55, 0.75), pants=(0.55, 0.40, 0.62),
            shoe=(0.30, 0.20, 0.22), hair="long", hair_color=ORANGE_HAIR)
 S.append(revolve("スカート", (0, 0, 33), [[0, -9], [12, -9], [9, 8], [0, 8]], (1.0, 0.55, 0.75)))
-for sx in (-1, 1):
-    S.append(sph("リボン", (sx * 10.2, -3.2, b.hc + 8.5), 2.9, (1.0, 0.35, 0.55), scale=(1.2, 0.6, 1.0), blend=1.5))
+PINK_RIBBON = (1.0, 0.35, 0.55)
+S.append(sph("リボン(まん中)", (-10.2, -6.4, b.hc + 7.0), 1.5, PINK_RIBBON, blend=0.6))
+for sx, nm in ((-1, "左"), (1, "右")):
+    S.append(sph(f"リボン({nm}のわ)", (-10.2 + sx * 2.5, -6.4, b.hc + 7.0), 2.2, PINK_RIBBON,
+                 scale=(0.9, 0.5, 0.8), blend=0.6))
 items.append(item_of("おんなのこ", ["girl", "child", "kid", "女の子", "子ども"], S))
 
 # 3. おとこのひと -- a man: short black hair, grey-blue jacket, red tie
@@ -279,8 +287,8 @@ b = adult(head_c=66, sh_z=55, hip_z=36, torso_w=10, arm_out=18, hand_z=37, limb_
 hc = b.hc
 S = b.base(skin=WHITE, shirt=WHITE, pants=WHITE, shoe=(0.55, 0.55, 0.60), hair=None, blush=False)
 S.append(sph("ヘルメット", (0, 0, hc + 0.5), 13.5, WHITE, blend=4, roughness=0.3, coat=0.3))
-S.append(sph("バイザー", (0, -8.0, hc + 0.5), 9.3, (0.85, 0.60, 0.20), scale=(1.1, 0.7, 0.9),
-             blend=1.0, glass=0.8, metallic=0.4, roughness=0.15, coat=0.5))
+S.append(sph("バイザー", (0, -9.6, hc + 0.5), 9.3, (0.28, 0.34, 0.42), scale=(1.1, 0.7, 0.95),
+             blend=0.6, metallic=0.6, roughness=0.12, coat=0.8))
 S.append(box("バックパック", (0, 10.5, 46), (15, 6, 18), WHITE, rnd=2.5, blend=3))
 S.append(box("ぱねる", (0, -9.2, 46), (6, 1.6, 4.5), ORANGE, rnd=0.6, blend=0.5))
 items.append(item_of("うちゅうひこうし", ["astronaut", "space", "helmet", "うちゅうひこうし", "うちゅう"], S))
