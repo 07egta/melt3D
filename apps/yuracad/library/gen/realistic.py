@@ -382,8 +382,20 @@ items.append(item_of("マネキン", ["mannequin", "dummy", "display", "figure",
     c=dict(skin=MANNEQUIN, top=MANNEQUIN, sleeve=MANNEQUIN, bottom=MANNEQUIN, shoe=MANNEQUIN),
 )))
 
+# 12. ダンサー -- a ballet dancer in arabesque: red leotard, black tights, hair in a bun, one leg back
+items.append(item_of("ダンサー", ["dancer", "ballet", "arabesque", "dance", "realistic", "ダンサー", "バレエ"], dict(
+    H=170, hh=22.7, build=0.9, fem=True,
+    lean=30, nod=-12,                                   # torso reaches forward over the standing leg
+    legs={1: dict(th=0, ab=1.0, kn=0, pt=0),            # standing leg
+          -1: dict(th=-84, ab=0.0, kn=0, pt=0)},        # extended leg, straight and horizontal behind
+    arms={1: dict(fw=70, ab=18, el=12, wr=0),           # front arm forward and a little out
+          -1: dict(fw=-4, ab=70, el=8, wr=0)},          # back arm out to the side
+    face=True, hair="bun",
+    c=dict(skin=SKIN, top=(0.80, 0.20, 0.36), sleeve=SKIN, bottom=DARK_P, thigh=DARK_P, calf=DARK_P,
+           shoe=SKIN, hair_col=SHOE_BK),
+)))
+
 if __name__ == "__main__":
-    if len(items) != 12:
-        print("WARNING: only", len(items), "of 12 items so far")
+    assert len(items) == 12, len(items)
     write_category("realistic.json", "リアルなひと", items)
     preview(items, outdir="/tmp/lib_preview_real", size=400)
