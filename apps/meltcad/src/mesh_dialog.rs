@@ -161,7 +161,7 @@ fn finish(app: &mut App, ctx: &egui::Context, b: &BakeJob, baked: &Baked) -> boo
     }
     let st = b.settings;
     let pos = mesh_import::place(baked, st.floor, st.centre, [app.cam.target[0], app.cam.target[1]]);
-    let clay = Material::plain([0.80, 0.80, 0.83], 0.5, 0.0);
+    let clay = b.loaded.imported.appearance.unwrap_or_else(|| Material::plain([0.80, 0.80, 0.83], 0.5, 0.0));
     let shape = mesh_import::shape_of(baked, &b.loaded.stem, &b.loaded.file_name, pos, clay);
     let mut group = Group::new(b.loaded.stem.clone());
     group.shapes.push(shape);
