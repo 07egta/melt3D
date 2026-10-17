@@ -631,7 +631,7 @@ impl App {
 
     // ----- shortcuts -----
 
-    fn keys(&mut self, ctx: &egui::Context) {
+    pub(crate) fn keys(&mut self, ctx: &egui::Context) {
         if self.pending_file_action.is_some() || ctx.egui_wants_keyboard_input() {
             return;
         }
