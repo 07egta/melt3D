@@ -638,4 +638,37 @@ mod tests {
         let g = export_formats::glb(&surface(&b), "b").unwrap();
         assert!((read_glb(&g).unwrap().signed_volume() - 6.0).abs() < 1e-5);
     }
+    #[test]
+    fn glb_pbr_colour_and_unsupported_textures_are_explained() {
+        let mut doc = tri_doc(json!([{"mesh":0}]), json!([0]));
+        doc["materials"] = json!([{"pbrMetallicRoughness": {"baseColorFactor":[0.5,0.0,0.0,1.0],"roughnessFactor":0.25,"metallicFactor":0.75}}]);
+        doc["meshes"][0]["primitives"][0]["material"] = json!(0);
+        let g = glb(&doc, &tri_bin());
+        let a = appearance_glb(&g);
+        let m = a.material.unwrap();
+        assert!(!a.varies);
+        assert!((m.color[0] - 0.73536).abs() < 0.001);
+        assert_eq!(m.color[1], 0.0);
+        assert!((m.roughness - 0.25).abs() < 1e-6);
+        assert!((m.metallic - 0.75).abs() < 1e-6);
+        doc["materials"][0]["pbrMetallicRoughness"]["baseColorTexture"] = json!({"index":0});
+        doc["meshes"][0]["primitives"][0]["attributes"]["COLOR_0"] = json!(0);
+        let a = appearance_glb(&glb(&doc, &tri_bin()));
+        assert!(a.varies);
+        assert!(a.notes.iter().any(|n| n.contains("テクスチャ")));
+        assert!(a.notes.iter().any(|n| n.contains("頂点色")));
+    }
+
+    #[test]
+    fn exported_glb_uniform_look_recovers_colour_and_roughness() {
+        let s = surface(&box_mesh([0.0;3],[1.0;3]));
+        let g = export_formats::glb(&s, "coloured").unwrap();
+        let a = appearance_glb(&g);
+        let m = a.material.unwrap();
+        assert!(!a.varies);
+        assert!((m.color[0] - 200.0 / 255.0).abs() < 0.002);
+        assert!((m.color[1] - 100.0 / 255.0).abs() < 0.002);
+        assert!((m.roughness - 100.0 / 255.0).abs() < 0.002);
+    }
+
 }
