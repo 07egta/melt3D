@@ -102,6 +102,51 @@ impl ScaleController {
     }
 }
 
+/// Quantize the adaptive scale only for the interactive picture. GPU render targets
+/// already have fixed capacity; this reduces visible changes in pixel density and
+/// never affects the final static picture or any model/mesh resolution.
+#[derive(Clone, Copy, Debug)]
+pub struct PreviewScale {
+    shown: f32,
+    last_change: f64,
+    initialized: bool,
+}
+
+impl Default for PreviewScale {
+    fn default() -> Self {
+        Self { shown: 0.6, last_change: f64::NEG_INFINITY, initialized: false }
+    }
+}
+
+impl PreviewScale {
+    /// A stable, gently changing scale. A severe slowdown is allowed to lower
+    /// resolution immediately; increases require sustained headroom.
+    pub fn choose(&mut self, target: f32, now: f64) -> f32 {
+        if !target.is_finite() || !now.is_finite() {
+            return self.shown;
+        }
+        const QUANTUM: f32 = 0.05;
+        const GROW_WAIT: f64 = 0.12;
+        const SHRINK_WAIT: f64 = 0.06;
+        let wanted = ((target.clamp(MIN_SCALE, 1.0) / QUANTUM).round() * QUANTUM).clamp(MIN_SCALE, 1.0);
+        if !self.initialized {
+            self.initialized = true;
+            self.shown = wanted;
+            self.last_change = now;
+        } else if wanted < self.shown - 0.04
+            && (now - self.last_change >= SHRINK_WAIT || wanted < self.shown - 0.14)
+        {
+            // Preserve the existing controller's 25% maximum drop per update.
+            self.shown = wanted.max(self.shown * 0.75).clamp(MIN_SCALE, 1.0);
+            self.last_change = now;
+        } else if wanted > self.shown + 0.075 && now - self.last_change >= GROW_WAIT {
+            self.shown = (self.shown + QUANTUM).min(wanted).min(1.0);
+            self.last_change = now;
+        }
+        self.shown
+    }
+}
+
 /// How many rows of the sharp picture to draw this frame.
 #[derive(Clone, Debug)]
 pub struct BandPacer {
@@ -208,6 +253,32 @@ mod tests {
             out.push(c.scale());
         }
         out
+    }
+
+    #[test]
+    fn preview_scale_rejects_noise_and_recovers_without_flicker() {
+        let mut p = PreviewScale::default();
+        assert!((p.choose(0.60, 0.0) - 0.60).abs() < 1e-5);
+        for i in 1..200 {
+            let noisy = if i % 2 == 0 { 0.57 } else { 0.59 };
+            assert!((p.choose(noisy, i as f64 * 0.016) - 0.60).abs() < 1e-5);
+        }
+        let reduced = p.choose(0.30, 4.0);
+        assert!(reduced >= 0.45 && reduced < 0.60, "bounded first drop: {reduced}");
+        let next = p.choose(0.30, 4.016);
+        assert!(next >= 0.30 && next < reduced, "emergency reduction may proceed immediately");
+        let before = p.choose(0.90, 4.030);
+        assert!(before <= next + 1e-6, "no sudden rebound");
+        let recovered = p.choose(0.90, 4.200);
+        assert!(recovered > before && recovered - before <= 0.051);
+    }
+
+    #[test]
+    fn preview_scale_never_exceeds_its_limits() {
+        let mut p = PreviewScale::default();
+        assert_eq!(p.choose(-1.0, 0.0), MIN_SCALE);
+        assert!((MIN_SCALE..=1.0).contains(&p.choose(100.0, 1.0)));
+        assert!((MIN_SCALE..=1.0).contains(&p.choose(f32::NAN, 2.0)));
     }
 
     #[test]
