@@ -560,11 +560,14 @@ pub struct Group {
     /// Where a linked copy stands (move, turn, scale about the source's middle).
     #[serde(default, skip_serializing_if = "Xform::is_identity")]
     pub xform: Xform,
+    /// Regenerable SDF furniture controls (old scene files simply omit this field).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub organic_furniture: Option<crate::organic_furniture::Settings>,
 }
 
 impl Group {
     pub fn new(name: impl Into<String>) -> Group {
-        Group { name: name.into(), op: Op::Add, blend: 0.0, visible: true, shapes: Vec::new(), uid: 0, pattern: None, instance_of: None, xform: Xform::default() }
+        Group { name: name.into(), op: Op::Add, blend: 0.0, visible: true, shapes: Vec::new(), uid: 0, pattern: None, instance_of: None, xform: Xform::default(), organic_furniture: None }
     }
 }
 
@@ -836,6 +839,7 @@ impl Scene {
             *v = if v.is_finite() { v.clamp(lo, hi) } else { d };
         };
         let (mut lost, mut over) = (0usize, 0usize);
+        let mut broken_furniture = 0usize;
         let mut vol_shapes = 0usize;
         let mut vol_nodes = 0usize;
         let mut vol_seen: Vec<usize> = Vec::new();
@@ -856,7 +860,11 @@ impl Scene {
                 p.sanitize();
             }
             g.xform.sanitize();
+            if let Some(params) = &mut g.organic_furniture {
+                params.sanitize();
+            }
             if g.instance_of.is_some() {
+                g.organic_furniture = None;
                 // a linked copy shows its source's shapes, not its own
                 g.shapes.clear();
             }
@@ -934,6 +942,12 @@ impl Scene {
                 }
                 true
             });
+            if g.organic_furniture.as_ref().is_some_and(|p| !crate::organic_furniture::is_generated_group(g, p)) {
+                // A user may have deleted or reordered the managed shapes. Keep the geometry
+                // exactly as it is, but drop metadata that could overwrite the wrong parts.
+                g.organic_furniture = None;
+                broken_furniture += 1;
+            }
         }
         let mut notes = Vec::new();
         if lost > 0 {
@@ -941,6 +955,9 @@ impl Scene {
         }
         if over > 0 {
             notes.push(format!("メッシュが多すぎるので、{over}個を取りのぞきました（{}個・データ量に上限があります）", crate::mesh::MAX_VOLUME_SHAPES));
+        }
+        if broken_furniture > 0 {
+            notes.push(format!("家具プリセットの部品が変わった{broken_furniture}組は、形を残して通常のグループとして開きました"));
         }
         notes
     }
