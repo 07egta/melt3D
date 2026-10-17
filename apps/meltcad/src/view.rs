@@ -155,7 +155,7 @@ impl App {
         }
 
         // A drag that starts on a handle moves the thing; a drag that starts anywhere else turns the view
-        if resp.drag_started_by(PointerButton::Primary) && !mods.alt && !ct.taken {
+        if resp.drag_started_by(PointerButton::Primary) && !mods.alt && !ct.taken && !self.sketch_active() {
             // where the button went down (the pointer has moved a little by now)
             let origin = ui.input(|i| i.pointer.press_origin()).or(pos);
             let grabbed = match (&geom, origin) {
@@ -169,7 +169,12 @@ impl App {
                 self.orbiting = origin.is_some_and(|o| self.gnomon_hit(rect, o).is_none());
             }
         }
-        if self.orbiting && resp.dragged_by(PointerButton::Primary) && self.drag.is_none() && !mods.alt {
+        if self.sketch_active() {
+            // A pending orbit from before the tool was enabled must never
+            // leak into a sketch gesture, including when the modifier changes.
+            self.orbiting = false;
+        }
+        if self.orbiting && resp.dragged_by(PointerButton::Primary) && self.drag.is_none() && !mods.alt && !ct.busy {
             let d = resp.drag_delta();
             if mods.shift {
                 self.cam.pan(d.x, d.y, rect.height());
@@ -199,6 +204,7 @@ impl App {
         if resp.clicked_by(PointerButton::Primary)
             && hover_handle.is_none()
             && !ct.taken
+            && !self.sketch_active()
             && let Some(p) = pos
         {
             if let Some(axis) = self.gnomon_hit(rect, p) {
@@ -208,6 +214,7 @@ impl App {
             }
         }
         if resp.secondary_clicked()
+            && !self.sketch_active()
             && let Some(p) = pos
         {
             self.pick_at(rect, p, false);
@@ -216,6 +223,7 @@ impl App {
         if resp.double_clicked_by(PointerButton::Primary)
             && hover_handle.is_none()
             && !ct.taken
+            && !self.sketch_active()
             && let Some(p) = pos
             && self.gnomon_hit(rect, p).is_none()
         {
