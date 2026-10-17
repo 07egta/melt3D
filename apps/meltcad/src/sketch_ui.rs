@@ -16,7 +16,7 @@ use egui::{Align2, Color32, FontId, Painter, Pos2, Rect, Shape as Gfx, Stroke, U
 
 use crate::app::App;
 use crate::curve_tool::Input;
-use crate::model::{Kind, MAX_OUTLINE, MAX_PATH, MAX_SHAPES, Material, Op, Pick, Shape};
+use crate::model::{Kind, MAX_OUTLINE, MAX_PATH, MAX_SHAPES, Material, Op, Pick, Shape, Scene};
 use crate::sdf::V3;
 use crate::sketch::{self, Frame, SketchError, Which};
 use crate::sketch_edit_ops::{self, EditError};
@@ -183,6 +183,7 @@ pub struct Edit {
     pub sel: Option<usize>,
     pub drag: Option<DragPoint>,
     pub hover: Option<Hover>,
+    pub edge_sel: Option<usize>,
 }
 
 #[derive(Clone, Debug)]
@@ -675,6 +676,34 @@ impl App {
         f.hit(o, d).map(|q| sketch::snap(q, step))
     }
 
+    /// Grid remains the fallback. An endpoint or origin within 9 screen pixels wins;
+    /// the threshold stays the same when zooming or on a high-DPI display.
+    fn sketch_cursor_magnetic(&self, rect: Rect, p: Pos2, step: f32, f: &Frame, moving: Option<usize>) -> Option<[f32; 2]> {
+        let snapped = self.sketch_cursor(rect, p, step, f)?;
+        let mut nearest: Option<([f32; 2], f32)> = None;
+        let mut offer = |q: [f32; 2]| {
+            if let Some(screen) = self.sketch_px(rect, f, q) {
+                let distance = (screen - p).length();
+                if distance <= 9.0 && nearest.is_none_or(|(_, d)| distance < d) {
+                    nearest = Some((q, distance));
+                }
+            }
+        };
+        // Current drawing: available endpoints; while editing: every other vertex.
+        if let Some(edit) = &self.sk.edit {
+            if let Some(sh) = self.scene.shape(edit.g, edit.s) {
+                for (i, q) in sketch::outline_of(sh, edit.which).iter().enumerate() {
+                    if Some(i) != moving { offer(*q); }
+                }
+            }
+        } else {
+            for q in &self.sk.pts { offer(*q); }
+            if let Some(q) = self.sk.anchor { offer(q); }
+        }
+        offer([0.0, 0.0]);
+        Some(nearest.map_or(snapped, |(q, _)| q))
+    }
+
     /// Where a point of plane `f` is on the screen.
     fn sketch_px(&self, rect: Rect, f: &Frame, q: [f32; 2]) -> Option<Pos2> {
         self.cam.project(rect, f.to_world(q))
@@ -784,7 +813,7 @@ impl App {
         let step = step_for(mods);
         let mouse = pos.filter(|p| resp.hovered() && !over_gnomon(*p));
         self.sk.mouse = mouse;
-        self.sk.cursor = mouse.and_then(|p| self.sketch_cursor(rect, p, step, &frame));
+        self.sk.cursor = mouse.and_then(|p| self.sketch_cursor_magnetic(rect, p, step, &frame, None));
         out.over = self.sk.cursor.is_some();
         if self.sk.stage == Stage::Ready {
             // nothing to draw: clicks must not pick things behind the card
@@ -799,7 +828,7 @@ impl App {
         if matches!(self.sk.active_pen(), Pen::Rect | Pen::Circle) {
             if resp.drag_started_by(egui::PointerButton::Primary)
                 && let Some(o) = ui.input(|i| i.pointer.press_origin()).or(pos).filter(|o| !over_gnomon(*o))
-                && let Some(q) = self.sketch_cursor(rect, o, step, &frame)
+                && let Some(q) = self.sketch_cursor_magnetic(rect, o, step, &frame, None)
             {
                 self.sk.press(q);
             }
@@ -841,6 +870,8 @@ impl App {
             return;
         }
         use egui::{Key, Modifiers};
+        // A focused numeric field owns its Enter/Delete/Esc and text input.
+        if ctx.wants_keyboard_input() { return; }
         let hit = |k: Key| ctx.input_mut(|i| i.consume_key(Modifiers::NONE, k));
         let sketch_uses_delete = self.sk.edit.is_some() || !self.sk.pts.is_empty() || self.sk.anchor.is_some();
         let del = (sketch_uses_delete && hit(Key::Delete)) | hit(Key::Backspace);
@@ -890,7 +921,7 @@ impl App {
         self.sk.reset();
         self.sk.on = false;
         self.sel = Some(Pick::Shape(g, s));
-        self.sk.edit = Some(Edit { g, s, which: Which::Main, sel: None, drag: None, hover: None });
+        self.sk.edit = Some(Edit { g, s, which: Which::Main, sel: None, drag: None, hover: None, edge_sel: None });
         self.sk.edit_op = None;
         self.sk.edit_index = None;
         if let Some(f) = self.scene.shape(g, s).and_then(|sh| sketch::edit_frame(sh, Which::Main)) {
@@ -1020,6 +1051,7 @@ impl App {
         if let Some(e) = self.sk.edit.as_mut() {
             e.drag = Some(DragPoint { idx, candidate: before.clone(), before });
             e.sel = Some(idx);
+            e.edge_sel = None;
         }
         true
     }
@@ -1030,7 +1062,8 @@ impl App {
         // an arbitrarily distant plane intersection.
         let m = pos2(m.x.clamp(rect.left(), rect.right()), m.y.clamp(rect.top(), rect.bottom()));
         let Some((f, _)) = self.edit_target() else { return };
-        let Some(q) = self.sketch_cursor(rect, m, step, &f) else { return };
+        let Some(idx) = self.sk.edit.as_ref().and_then(|e| e.drag.as_ref()).map(|d| d.idx) else { return };
+        let Some(q) = self.sketch_cursor_magnetic(rect, m, step, &f, Some(idx)) else { return };
         let revolved = self.sk.edit.as_ref().and_then(|e| self.scene.shape(e.g, e.s)).is_some_and(|s| s.kind == Kind::Revolve);
         if let Some(d) = self.sk.edit.as_mut().and_then(|e| e.drag.as_mut())
             && let Some(p) = d.candidate.get_mut(d.idx)
@@ -1053,6 +1086,12 @@ impl App {
     /// On release, validate the draft and atomically replace the solid's outline.
     pub fn edit_release(&mut self) {
         let Some((g, s, which, d)) = self.sk.edit.as_mut().and_then(|e| e.drag.take().map(|d| (e.g, e.s, e.which, d))) else { return };
+        let revolved = self.scene.shape(g, s).is_some_and(|sh| sh.kind == Kind::Revolve);
+        // the precise-edit rules first (no vertex lost, winding kept), then the solid's own checks
+        if let Err(err) = sketch::validate_edit(&d.before, &d.candidate, revolved) {
+            self.sk.msg = err.message();
+            return;
+        }
         let result = self.scene.shape_mut(g, s).map(|sh| sh.set_sketch_outline(which == Which::Top, d.candidate));
         match result {
             Some(Ok(_)) => self.sk.msg.clear(),
@@ -1067,6 +1106,7 @@ impl App {
             Some(Hover::Point(i)) => {
                 if let Some(e) = self.sk.edit.as_mut() {
                     e.sel = Some(i);
+                    e.edge_sel = None;
                 }
             }
             Some(Hover::Edge(i, at)) => {
@@ -1077,6 +1117,7 @@ impl App {
                 });
                 if let Some(e) = self.sk.edit.as_mut() {
                     e.sel = added.then_some(i + 1);
+                    e.edge_sel = Some(i);
                 }
                 if !added {
                     self.sk.msg = format!("点は{MAX_OUTLINE}こまでです");
@@ -1085,9 +1126,44 @@ impl App {
             None => {
                 if let Some(e) = self.sk.edit.as_mut() {
                     e.sel = None;
+                    e.edge_sel = None;
                 }
             }
         }
+    }
+
+    /// Commit a precision edit atomically; rejected edits never touch the scene.
+    fn precision_edit(&mut self, f: impl FnOnce(&[[f32; 2]], bool) -> Result<Vec<[f32; 2]>, SketchError>) -> bool {
+        let Some((outline, rev)) = self.edit_outline_mut() else { return false };
+        let result = f(outline, rev);
+        match result {
+            Ok(next) => {
+                *outline = next;
+                self.sk.msg.clear();
+                true
+            }
+            Err(e) => {
+                self.sk.msg = e.message();
+                false
+            }
+        }
+    }
+
+    /// A deliberately small alternative to a general constraint solver.
+    pub fn precision_vertex(&mut self, idx: usize, point: [f32; 2]) -> bool {
+        self.precision_edit(|pts, rev| sketch::move_vertex(pts, idx, point, rev))
+    }
+
+    pub fn precision_edge_length(&mut self, idx: usize, length: f32) -> bool {
+        self.precision_edit(|pts, rev| sketch::set_edge_length(pts, idx, length, rev))
+    }
+
+    pub fn precision_rectangle(&mut self, width: f32, height: f32) -> bool {
+        self.precision_edit(|pts, rev| sketch::set_rectangle_size(pts, width, height, rev))
+    }
+
+    pub fn precision_circle(&mut self, diameter: f32) -> bool {
+        self.precision_edit(|pts, rev| sketch::set_circle_diameter(pts, diameter, rev))
     }
 
     /// Delete: remove the chosen point (three stay at least).
@@ -1171,7 +1247,18 @@ impl App {
         } else if resp.clicked_by(egui::PointerButton::Primary)
             && let Some(m) = mouse
         {
-            self.edit_click(rect, m);
+            if mods.shift {
+                if let Some(Hover::Edge(i, _)) = self.edit_hit(rect, m) {
+                    if let Some(e) = self.sk.edit.as_mut() {
+                        e.edge_sel = Some(i);
+                        e.sel = None;
+                    }
+                } else {
+                    self.edit_click(rect, m);
+                }
+            } else {
+                self.edit_click(rect, m);
+            }
             out.taken = true;
         }
         out
@@ -1495,6 +1582,7 @@ impl App {
                         // Cancel an unfinished drag rather than committing an unexpected point.
                         e.which = w;
                         e.sel = None;
+                        e.edge_sel = None;
                         e.drag = None;
                         let frame = self.scene.shape(e.g, e.s).and_then(|s| sketch::edit_frame(s, w));
                         if let Some(f) = frame {
@@ -1536,7 +1624,55 @@ impl App {
         }
         let n = self.sk.edit.as_ref().and_then(|e| self.scene.shape(e.g, e.s).map(|s| sketch::outline_of(s, e.which).len())).unwrap_or(0);
         hint(ui, &format!("点をドラッグして動かす　線をクリックで点をふやす　点をクリックして Delete で消す　{n}/{MAX_OUTLINE}こ"));
-        hint(ui, "1mmきざみ　Shift = 10mm　Ctrl = 0.1mm　Alt+ドラッグで見る向きを回す");
+        hint(ui, "1mmきざみ　Shift = 10mm　Ctrl = 0.1mm　Shift+線クリックで長さ指定　Alt+ドラッグで見る向きを回す");
+        // Values are transient UI inputs. Geometry is changed only after a validated edit.
+        let current = self.sk.edit.as_ref().and_then(|e| self.scene.shape(e.g, e.s).map(|s| (sketch::outline_of(s, e.which).clone(), e.sel, e.edge_sel)));
+        if let Some((outline, selected, edge)) = current {
+            if let Some(i) = selected.filter(|i| *i < outline.len()) {
+                let mut x = outline[i][0];
+                let mut y = outline[i][1];
+                ui.horizontal(|ui| {
+                    ui.label("点 X / Y (mm)");
+                    let changed_x = ui.add(egui::DragValue::new(&mut x).speed(0.1).max_decimals(3)).changed();
+                    let changed_y = ui.add(egui::DragValue::new(&mut y).speed(0.1).max_decimals(3)).changed();
+                    if changed_x || changed_y {
+                        self.precision_vertex(i, [x, y]);
+                    }
+                });
+            }
+            if let Some(size) = sketch::rectangle_size(&outline) {
+                let mut w = size[0];
+                let mut h = size[1];
+                ui.horizontal(|ui| {
+                    ui.label("幅 / 高さ (mm)");
+                    let cw = ui.add(egui::DragValue::new(&mut w).speed(0.1).range(0.5..=2000.0).max_decimals(3)).changed();
+                    let ch = ui.add(egui::DragValue::new(&mut h).speed(0.1).range(0.5..=2000.0).max_decimals(3)).changed();
+                    if cw || ch {
+                        self.precision_rectangle(w, h);
+                    }
+                });
+            } else if let Some(diameter) = sketch::circle_diameter(&outline) {
+                let mut d = diameter;
+                ui.horizontal(|ui| {
+                    ui.label("直径 (mm)");
+                    if ui.add(egui::DragValue::new(&mut d).speed(0.1).range(1.0..=2000.0).max_decimals(3)).changed() {
+                        self.precision_circle(d);
+                    }
+                });
+            }
+            if let Some(i) = edge.filter(|i| *i < outline.len()) {
+                let p = outline[i];
+                let q = outline[(i + 1) % outline.len()];
+                let mut length = (q[0] - p[0]).hypot(q[1] - p[1]);
+                ui.horizontal(|ui| {
+                    ui.label("線分の長さ (mm)");
+                    if ui.add(egui::DragValue::new(&mut length).speed(0.1).range(0.5..=2000.0).max_decimals(3)).changed() {
+                        self.precision_edge_length(i, length);
+                    }
+                });
+            }
+        }
+
         if !self.sk.msg.is_empty() {
             ui.label(egui::RichText::new(&self.sk.msg).size(11.5).color(style::CUT));
         }
@@ -1897,6 +2033,37 @@ mod tests {
         for p in pts {
             assert!(st.click(*p, false).is_none());
         }
+    }
+
+    #[test]
+    fn precise_edits_are_rejected_atomically_and_support_undo_redo() {
+        let ctx = egui::Context::default();
+        let mut app = app();
+        app.set_sketch_tool(true);
+        app.sk.pen = Pen::Rect;
+        app.sk.click([0.0, 0.0], false);
+        let profile = app.sk.click([20.0, 10.0], false).unwrap();
+        app.sketch_done(profile);
+        assert!(app.sketch_make(&ctx));
+        app.settle(&ctx);
+        let Some(Pick::Shape(g, s)) = app.sel else { panic!("selected") };
+        app.sketch_edit_begin(g, s);
+        let before = app.scene.shape(g, s).unwrap().outline.clone();
+        assert!(app.precision_rectangle(40.0, 15.0));
+        app.settle(&ctx);
+        assert_eq!(sketch::rectangle_size(&app.scene.shape(g, s).unwrap().outline), Some([40.0, 15.0]));
+        let good = app.scene.shape(g, s).unwrap().outline.clone();
+        assert!(!app.precision_vertex(2, good[0]));
+        assert_eq!(app.scene.shape(g, s).unwrap().outline, good);
+        app.undo();
+        assert_eq!(app.scene.shape(g, s).unwrap().outline, before);
+        app.redo();
+        assert_eq!(app.scene.shape(g, s).unwrap().outline, good);
+        assert!(app.precision_edge_length(0, 42.0));
+        assert!(sketch::validate_profile(&app.scene.shape(g, s).unwrap().outline).is_ok());
+        let saved = app.scene.to_json();
+        assert_eq!(Scene::from_json(&saved).unwrap().shape(g, s).unwrap().outline,
+                   app.scene.shape(g, s).unwrap().outline);
     }
 
     #[test]
