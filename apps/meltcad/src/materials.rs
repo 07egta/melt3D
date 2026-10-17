@@ -126,6 +126,37 @@ pub fn presets() -> &'static [Preset] {
     PRESETS
 }
 
+/// Decode a 3MF base-material or color-group display colour (#RRGGBB or #RRGGBBAA).
+/// 3MF specifies sRGB, just like the colours in YuraCAD's material editor.
+pub(crate) fn from_3mf_hex(value: &str) -> Option<Material> {
+    let hex = value.strip_prefix('#')?;
+    if hex.len() != 6 && hex.len() != 8 {
+        return None;
+    }
+    let byte = |i: usize| u8::from_str_radix(hex.get(i..i + 2)?, 16).ok();
+    let rgb = [f32::from(byte(0)?) / 255.0, f32::from(byte(2)?) / 255.0, f32::from(byte(4)?) / 255.0];
+    let alpha = if hex.len() == 8 { f32::from(byte(6)?) / 255.0 } else { 1.0 };
+    let mut m = Material::plain(rgb, 0.5, 0.0);
+    // Transparency is an approximation: YuraCAD uses refractive glass rather than alpha blending.
+    m.glass = 1.0 - alpha;
+    Some(m)
+}
+
+/// glTF 2.0 PBR factors are *linear* RGB; the YuraCAD editor stores sRGB.
+/// Convert only the limited scalar factors which its renderer can represent.
+pub(crate) fn from_gltf_pbr(rgba: [f32; 4], roughness: f32, metallic: f32) -> Option<Material> {
+    if !rgba.iter().chain([roughness, metallic].iter()).all(|v| v.is_finite()) {
+        return None;
+    }
+    let linear_to_srgb = |v: f32| {
+        let v = v.clamp(0.0, 1.0);
+        if v <= 0.0031308 { 12.92 * v } else { 1.055 * v.powf(1.0 / 2.4) - 0.055 }
+    };
+    let mut m = Material::plain(rgba[..3].try_into().ok()?.map(linear_to_srgb), roughness.clamp(0.0, 1.0), metallic.clamp(0.0, 1.0));
+    m.glass = 1.0 - rgba[3].clamp(0.0, 1.0);
+    Some(m)
+}
+
 /// sRGB 0..1 to a colour (NaN safe, clamped).
 pub fn color32(c: [f32; 3]) -> Color32 {
     let f = |v: f32| if v.is_finite() { (v.clamp(0.0, 1.0) * 255.0).round() as u8 } else { 0 };
