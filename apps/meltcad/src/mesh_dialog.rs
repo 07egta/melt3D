@@ -13,7 +13,7 @@ use egui::{Align2, Color32, RichText, Stroke};
 
 use crate::app::App;
 use crate::mesh_import::{self, Baked, Loaded, RES_CHOICES, Settings, Up};
-use crate::model::{Group, MAX_GROUPS, MAX_SHAPES, Material, Pick};
+use crate::model::{Group, MAX_GROUPS, MAX_SHAPES, Material, MeshSource, Pick, Shape};
 use crate::sdf_volume::{BakeControl, ERR_CANCEL};
 use crate::style;
 
@@ -51,6 +51,159 @@ struct BakeJob {
     /// What it is baking (the card may be changed meanwhile, the shape is made from these).
     loaded: Arc<Loaded>,
     settings: Settings,
+    path: Option<PathBuf>,
+}
+
+#[derive(Clone)]
+struct RebakeRequest {
+    group: usize,
+    shape: usize,
+    original: Shape,
+    res: u32,
+    path: Option<PathBuf>,
+    job: Option<Arc<RebakeJob>>,
+    msg: String,
+}
+
+struct RebakeJob {
+    job: Arc<Job<RebakeResult>>,
+    ctl: Arc<BakeControl>,
+    started: Instant,
+}
+
+struct RebakeResult {
+    baked: Baked,
+    before: (f32, f32, usize),
+    after: (f32, f32, usize),
+    elapsed: f64,
+    source: MeshSource,
+}
+
+fn rebake_id() -> egui::Id { egui::Id::new("mesh_rebake_card") }
+
+fn launch_rebake(req: &mut RebakeRequest) {
+    let Some(path) = req.path.clone() else { req.msg = "元メッシュファイルを選び直してください".into(); return };
+    let Some(old) = req.original.volume.clone() else { return };
+    let orig = req.original.clone();
+    let resolution = req.res;
+    let ctl = Arc::new(BakeControl::new());
+    let c = ctl.clone();
+    let job = Job::spawn("meltcad-mesh-rebake", move || {
+        let began = Instant::now();
+        let loaded = mesh_import::load(&path)?;
+        let hash = mesh_import::mesh_hash(&loaded.imported.mesh);
+        if let Some(src) = &orig.mesh_source {
+            if src.mesh_hash != 0 && src.mesh_hash != hash {
+                return Err("元ファイルが変更されています。別のモデルで上書きすることはできません".into());
+            }
+        } else if !orig.source.is_empty() && loaded.file_name != orig.source {
+            return Err("元のファイル名が違います。同名のファイルを選択してください".into());
+        }
+        if c.cancel.load(Ordering::Relaxed) { return Err(ERR_CANCEL.into()); }
+        let y_up = orig.mesh_source.as_ref().map_or(loaded.imported.format.y_up_by_default(), |src| src.y_up);
+        let size = [0, 1, 2].map(|a| orig.size[a] * orig.scale[a]);
+        let before = mesh_import::surface_residual(&loaded.imported.mesh, y_up, size, &old);
+        let baked = mesh_import::rebake(&loaded.imported.mesh, y_up, size, resolution, &c)?;
+        if c.cancel.load(Ordering::Relaxed) { return Err(ERR_CANCEL.into()); }
+        let after = mesh_import::surface_residual(&loaded.imported.mesh, y_up, size, &baked.volume);
+        Ok(RebakeResult {
+            baked, before, after, elapsed: began.elapsed().as_secs_f64(),
+            source: MeshSource { path: path.to_string_lossy().into_owned(), y_up, mesh_hash: hash },
+        })
+    });
+    req.job = Some(Arc::new(RebakeJob { job, ctl, started: Instant::now() }));
+    req.msg.clear();
+}
+
+fn begin_selected_rebake(app: &App, ctx: &egui::Context) {
+    let clicked = ctx.data_mut(|m| m.remove_temp::<bool>(egui::Id::new("rebake_inspector_clicked"))).unwrap_or(false);
+    if !clicked { return; }
+    let Some(Pick::Shape(group, shape)) = app.sel else { return };
+    let Some(original) = app.scene.shape(group, shape).cloned() else { return };
+    if original.volume.is_none() { return; }
+    let path = original.mesh_source.as_ref().map(|src| PathBuf::from(&src.path)).filter(|p| p.is_file());
+    ctx.data_mut(|m| m.insert_temp(rebake_id(), RebakeRequest {
+        group, shape, original, res: 160, path, job: None, msg: String::new(),
+    }));
+}
+
+fn rebake_panel(app: &mut App, ctx: &egui::Context) {
+    let Some(mut req) = ctx.data_mut(|m| m.remove_temp::<RebakeRequest>(rebake_id())) else { return };
+    let mut close = false;
+    if let Some(j) = req.job.clone() {
+        match j.job.take() {
+            Some(Ok(result)) => {
+                req.job = None;
+                // Reject stale results and replacements that would exceed the scene volume budget.
+                if app.scene.shape(req.group, req.shape) != Some(&req.original) {
+                    req.msg = "対象が編集中に変わりました。もう一度実行してください".into();
+                } else {
+                    let mut candidate = app.scene.clone();
+                    if let Some(sh) = candidate.shape_mut(req.group, req.shape) {
+                        sh.volume = Some(result.baked.volume.clone());
+                        sh.size = result.baked.size;
+                        sh.scale = [1.0; 3];
+                        sh.mesh_source = Some(result.source);
+                    }
+                    if let Err(e) = crate::mesh::can_add(&candidate, std::iter::empty::<&Shape>()) {
+                        req.msg = e.into();
+                    } else {
+                        app.scene = candidate;
+                        app.say(ctx, format!("再ベイク完了 {:.2}秒・表面残差 平均 {:.3}→{:.3}mm、最大 {:.3}→{:.3}mm（各{} / {}点）",
+                            result.elapsed, result.before.0, result.after.0, result.before.1, result.after.1, result.before.2, result.after.2));
+                        close = true;
+                    }
+                }
+            }
+            Some(Err(e)) => { req.job = None; req.msg = jp_error(&e); }
+            None => ctx.request_repaint_after(std::time::Duration::from_millis(70)),
+        }
+    }
+    let mut start = false;
+    let mut pick = false;
+    egui::Window::new("メッシュを再ベイク").collapsible(false).resizable(false).show(ctx, |ui| {
+        let Some(vol) = req.original.volume.as_ref() else { ui.label("距離データがありません"); return };
+        let size = [0, 1, 2].map(|a| req.original.size[a] * req.original.scale[a]);
+        let effective = [0, 1, 2].map(|a| vol.cell * req.original.scale[a]);
+        ui.label(format!("現在の実セル幅: X {:.3} / Y {:.3} / Z {:.3} mm", effective[0], effective[1], effective[2]));
+        ui.label(format!("対象: {}", req.original.name));
+        ui.horizontal(|ui| {
+            ui.label("細かさ:");
+            for r in [64, 96, 128, 160, 192, 256] {
+                ui.selectable_value(&mut req.res, r, r.to_string());
+            }
+        });
+        let e = mesh_import::estimate(size, 100_000, req.res);
+        let budget = crate::mesh::Usage::of(app.scene.groups.iter().flat_map(|g| g.shapes.iter()));
+        let remaining = crate::mesh::MAX_TOTAL_NODES.saturating_sub(budget.nodes.saturating_sub(vol.nodes()));
+        ui.label(format!("推定ノード数: {} / 許容量 {}、処理用距離配列 約 {:.1} MB", e.nodes, remaining, e.nodes as f64 * 4.0 / 1e6));
+        let projected_cell = size.into_iter().fold(0.0_f32, f32::max) / req.res as f32;
+        let min_dim = size.into_iter().fold(f32::INFINITY, f32::min);
+        if min_dim < 3.0 * projected_cell {
+            ui.colored_label(style::CUT, "注意: 薄い部分がセルの幅に近く、消える可能性があります");
+        }
+        if e.nodes > remaining {
+            ui.colored_label(style::CUT, "メモリ/シーンの上限を超えます。細かさを下げてください");
+        }
+        if let Some(p) = &req.path { ui.label(format!("元ファイル: {}", p.display())); }
+        else { ui.colored_label(style::CUT, "元ファイルの場所が不明です。再選択してください"); }
+        if let Some(j) = &req.job {
+            ui.label(format!("再計算中 {:.0}% / {:.1}秒", j.ctl.progress.load(Ordering::Relaxed) as f32 / 10.0, j.started.elapsed().as_secs_f64()));
+            if ui.button("中止").clicked() { j.ctl.cancel.store(true, Ordering::Relaxed); }
+        } else {
+            ui.horizontal(|ui| {
+                if ui.button("元ファイルを選び直す…").clicked() { pick = true; }
+                if ui.add_enabled(req.path.is_some() && e.nodes <= remaining, egui::Button::new("再ベイク開始")).clicked() { start = true; }
+                if ui.button("閉じる").clicked() { close = true; }
+            });
+        }
+        if !req.msg.is_empty() { ui.colored_label(style::CUT, &req.msg); }
+    });
+    if pick {
+        if let Some(path) = rfd::FileDialog::new().add_filter("メッシュ", &mesh_import::EXTENSIONS).pick_file() { req.path = Some(path); }
+    }
+    if start { launch_rebake(&mut req); }
+    if !close { ctx.data_mut(|m| m.insert_temp(rebake_id(), req)); }
 }
 
 #[derive(Clone)]
@@ -62,11 +215,12 @@ struct Dlg {
     bake: Option<Arc<BakeJob>>,
     msg: String,
     open: bool,
+    path: Option<PathBuf>,
 }
 
 impl Default for Dlg {
     fn default() -> Dlg {
-        Dlg { reading: None, loaded: None, st: Settings::new([60.0; 3]), bake: None, msg: String::new(), open: false }
+        Dlg { reading: None, loaded: None, st: Settings::new([60.0; 3]), bake: None, msg: String::new(), open: false, path: None }
     }
 }
 
@@ -91,6 +245,7 @@ pub fn open_path(ctx: &egui::Context, path: PathBuf) {
     d.msg.clear();
     d.open = true;
     let p = path.clone();
+    d.path = Some(path.clone());
     d.reading = Some((Job::spawn("meltcad-mesh-read", move || mesh_import::load(&p)), path));
     ctx.data_mut(|m| m.insert_temp(id(), d));
     ctx.request_repaint();
@@ -141,7 +296,7 @@ fn start_bake(d: &mut Dlg) {
     let ctl = Arc::new(BakeControl::new());
     let (l, c) = (loaded.clone(), ctl.clone());
     let job = Job::spawn("meltcad-mesh-bake", move || mesh_import::bake(&l.imported.mesh, l.imported.format, &settings, &c));
-    d.bake = Some(Arc::new(BakeJob { job, ctl, started: Instant::now(), loaded, settings }));
+    d.bake = Some(Arc::new(BakeJob { job, ctl, started: Instant::now(), loaded, settings, path: d.path.clone() }));
     d.msg.clear();
 }
 
@@ -162,7 +317,10 @@ fn finish(app: &mut App, ctx: &egui::Context, b: &BakeJob, baked: &Baked) -> boo
     let st = b.settings;
     let pos = mesh_import::place(baked, st.floor, st.centre, [app.cam.target[0], app.cam.target[1]]);
     let clay = Material::plain([0.80, 0.80, 0.83], 0.5, 0.0);
-    let shape = mesh_import::shape_of(baked, &b.loaded.stem, &b.loaded.file_name, pos, clay);
+    let mut shape = mesh_import::shape_of(baked, &b.loaded.stem, &b.loaded.file_name, pos, clay);
+    if let Some(path) = b.path.as_ref() {
+        shape.mesh_source = Some(MeshSource { path: path.to_string_lossy().into_owned(), y_up: b.settings.up.is_y(b.loaded.imported.format), mesh_hash: mesh_import::mesh_hash(&b.loaded.imported.mesh) });
+    }
     let mut group = Group::new(b.loaded.stem.clone());
     group.shapes.push(shape);
     app.scene.groups.push(group);
@@ -177,6 +335,8 @@ fn finish(app: &mut App, ctx: &egui::Context, b: &BakeJob, baked: &Baked) -> boo
 /// Call once per frame: handles dropped files, the running jobs, and shows the card when it is open.
 pub fn update(app: &mut App, ctx: &egui::Context) {
     take_drops(ctx);
+    begin_selected_rebake(app, ctx);
+    rebake_panel(app, ctx);
     let Some(mut d) = ctx.data_mut(|m| m.remove_temp::<Dlg>(id())).filter(|d| d.open) else { return };
     // the file has been read
     if let Some((job, path)) = d.reading.clone() {
@@ -372,10 +532,14 @@ pub fn inspector(ui: &mut egui::Ui, sh: &mut crate::model::Shape) {
     if let Some(v) = &sh.volume {
         ui.horizontal_wrapped(|ui| {
             ui.label(RichText::new("細かさ").color(style::DIM).size(12.0));
-            ui.label(RichText::new(format!("1マス {:.2} mm　{}×{}×{}マス", v.cell, v.dims[0], v.dims[1], v.dims[2])).size(12.0));
+            ui.label(RichText::new(format!("保存セル {:.3}mm / 実セル X {:.3} Y {:.3} Z {:.3} mm　{}×{}×{}", v.cell, v.cell * sh.scale[0], v.cell * sh.scale[1], v.cell * sh.scale[2], v.dims[0], v.dims[1], v.dims[2])).size(12.0));
         });
     } else {
         ui.label(RichText::new("データがありません").size(12.0).color(style::CUT));
+    }
+    if sh.volume.is_some() && ui.button("解像度を上げる / 再ベイク…").clicked() {
+        // The inspector is invoked from the selected shape; resolve its location in panel code.
+        ui.ctx().data_mut(|m| m.insert_temp(egui::Id::new("rebake_inspector_clicked"), true));
     }
     if sh.scale != [1.0; 3] && style::pill(ui, "もとの大きさにもどす", false).clicked() {
         sh.scale = [1.0; 3];
