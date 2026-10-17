@@ -900,6 +900,15 @@ impl App {
                     self.sketch_button(ui);
                     style::menu_button(ui, "…", false, |ui| {
                         ui.set_min_width(190.0);
+                        ui.label(egui::RichText::new("プリセット").size(12.0).color(style::DIM));
+                        if ui.button("Organic Blob · ぷっくりブロブ…")
+                            .on_hover_text("滑らかで不規則な形をシードとスライダーで生成します")
+                            .clicked()
+                        {
+                            crate::organic_blob::open(&ctx);
+                            ui.close();
+                        }
+                        ui.separator();
                         ui.label(egui::RichText::new("ほかの形").size(12.0).color(style::DIM));
                         for k in Kind::MORE {
                             let r = ui.horizontal(|ui| {
