@@ -426,7 +426,13 @@ impl App {
     fn pick_at(&mut self, rect: Rect, p: Pos2, keep: bool) {
         match self.shape_at(rect, p) {
             Some((g, s)) => {
-                let want = as_pick(g, s);
+                // Treat all glyph contours as one selectable letter. The glyph's
+                // group gizmo moves/rotates every solid and subtractive counter.
+                let want = if self.scene.groups.get(g).is_some_and(|gr| gr.puffy_text.is_some()) {
+                    Pick::Group(g)
+                } else {
+                    as_pick(g, s)
+                };
                 self.sel = if keep && self.sel == Some(want) { Some(Pick::Group(g)) } else { Some(want) };
             }
             None => self.sel = None,
