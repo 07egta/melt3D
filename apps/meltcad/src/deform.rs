@@ -52,8 +52,9 @@ impl Deformation {
         match self { Deformation::Twist(t) => t.inverse(q, half) }
     }
     /// A conservative signed-distance step for the non-isometric warp.
-    pub fn distance_safety(self, q: [f32; 3], half: [f32; 3]) -> f32 {
-        match self { Deformation::Twist(t) => t.distance_safety(q, half) }
+    /// Safety only for marching rays, never baked into the Boolean SDF.
+    pub fn ray_step_safety(self, half: [f32; 3]) -> f32 {
+        match self { Deformation::Twist(t) => t.ray_step_safety(half) }
     }
     pub fn gpu_parameters(self, half: [f32; 3]) -> ([f32; 4], [f32; 4]) {
         match self { Deformation::Twist(t) => t.gpu_parameters(half) }
@@ -160,6 +161,16 @@ impl Twist {
         1.0 / (1.0 + self.max_radians_per_mm(half) * max_original_radius.max(query_radius))
     }
 
+    /// Worst useful radius for a ray near the shape's inflated bounding
+    /// sphere. Using a factor at ~2x the original transverse extent makes
+    /// the marching step conservative near twisted solids, including blends.
+    /// It is deliberately not used by SDF Boolean or the export mesher.
+    pub fn ray_step_safety(self, half: [f32; 3]) -> f32 {
+        let (a, b) = self.axis.transverse();
+        let radius = 2.0 * half[a].hypot(half[b]) + 8.0;
+        1.0 / (1.0 + self.max_radians_per_mm(half) * radius)
+    }
+
     /// Two extra vec4 entries in the existing GPU scene-list texture.
     /// slot 0: axis ID (0 = disabled), signed degrees, begin, end
     /// slot 1: lower/upper factors, original half-height, original max radius.
@@ -223,6 +234,18 @@ mod tests {
         let half = [20.0; 3];
         approx(t.angle_at([0.0, 0.0, -20.0], half), -std::f32::consts::FRAC_PI_2);
         approx(t.angle_at([0.0, 0.0, 20.0], half), -3.0 * std::f32::consts::PI / 2.0);
+    }
+
+    #[test]
+    fn ray_safety_shortens_steps_without_changing_the_surface() {
+        let h = [15.0, 12.0, 20.0];
+        let untwisted = Twist { lower: 1.0, upper: 1.0, ..Twist::default() };
+        approx(untwisted.ray_step_safety(h), 1.0);
+        for degree in [90.0, 180.0, 360.0] {
+            let t = Twist::preset(degree);
+            let factor = t.ray_step_safety(h);
+            assert!(factor > 0.0 && factor < 1.0, "twist {degree}: {factor}");
+        }
     }
 
     #[test]
