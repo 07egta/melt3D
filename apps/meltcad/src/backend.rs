@@ -308,9 +308,7 @@ pub struct Relaunch {
 /// The command line and environment of the new run.
 pub fn relaunch_args(r: &Relaunch) -> (Vec<OsString>, Vec<(String, String)>) {
     let args: Vec<OsString> = r.file.iter().map(|f| f.clone().into_os_string()).collect();
-    let mut envs = Vec::new();
-    envs.push(("MELTCAD_BACKEND".to_string(), r.choice.clone().unwrap_or_default()));
-    envs.push(("MELTCAD_BACKEND_TRIED".to_string(), tried_text(&r.tried)));
+    let envs = vec![("MELTCAD_BACKEND".to_string(), r.choice.clone().unwrap_or_default()), ("MELTCAD_BACKEND_TRIED".to_string(), tried_text(&r.tried))];
     (args, envs)
 }
 

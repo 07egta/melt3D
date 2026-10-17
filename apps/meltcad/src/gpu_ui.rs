@@ -14,6 +14,7 @@ use crate::gpu_status::{self, GpuStatus, OFFER_WAYS_OUT_AFTER_SECS, Snapshot, St
 use crate::style;
 
 /// The graphics path as the window holds it.
+#[derive(Default)]
 pub struct GpuUi {
     pub status: GpuStatus,
     /// The device and renderer of the window (None: the window could not get a graphics device).
@@ -25,12 +26,6 @@ pub struct GpuUi {
     pub easy_view: crate::easy_view::EasyView,
     /// A line for the person after a button (a restart that could not be done, a copy).
     pub note: Option<String>,
-}
-
-impl Default for GpuUi {
-    fn default() -> Self {
-        GpuUi { status: GpuStatus::new(), rs: None, easy: false, details: false, easy_view: Default::default(), note: None }
-    }
 }
 
 /// Which picture the viewport shows.
