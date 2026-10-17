@@ -8,7 +8,10 @@
 use std::collections::HashMap;
 
 use crate::import_inflate::Zip;
-use crate::import_mesh::{Affine, BAD_INDEX, BAD_NUMBER, CUT_OFF, ImportedMesh, MAX_TRIANGLES, MAX_VERTICES, NO_SHAPE, TOO_MANY_TRIS, TOO_MANY_VERTS, append_transformed, parse_f32};
+use crate::import_mesh::{
+    Affine, BAD_INDEX, BAD_NUMBER, CUT_OFF, ImportedMesh, MAX_TRIANGLES, MAX_VERTICES, NO_SHAPE, TOO_MANY_TRIS, TOO_MANY_VERTS, append_transformed,
+    parse_f32,
+};
 
 /// The biggest model XML we unpack (bytes). The tests use a small cap so that the "bomb" test is light.
 #[cfg(not(test))]
@@ -225,7 +228,12 @@ fn parse_doc(src: &[u8], total_verts: &mut usize, total_tris: &mut usize) -> Res
             (b"object", false) => {
                 let id = id_attr(&t, "id")?;
                 let ty = t.attr("type").unwrap_or("model");
-                let obj = Obj { v: doc.verts.len()..doc.verts.len(), t: doc.tris.len()..doc.tris.len(), skip: ty == "support" || ty == "solidsupport", ..Obj::default() };
+                let obj = Obj {
+                    v: doc.verts.len()..doc.verts.len(),
+                    t: doc.tris.len()..doc.tris.len(),
+                    skip: ty == "support" || ty == "solidsupport",
+                    ..Obj::default()
+                };
                 if t.self_closing {
                     doc.objects.insert(id, obj);
                 } else {
@@ -344,7 +352,10 @@ impl Package<'_> {
             let part = if obj.t.is_empty() {
                 None
             } else {
-                Some((doc.verts.get(obj.v.clone()).map(<[_]>::to_vec).ok_or(BAD_INDEX)?, doc.tris.get(obj.t.clone()).map(<[_]>::to_vec).ok_or(BAD_INDEX)?))
+                Some((
+                    doc.verts.get(obj.v.clone()).map(<[_]>::to_vec).ok_or(BAD_INDEX)?,
+                    doc.tris.get(obj.t.clone()).map(<[_]>::to_vec).ok_or(BAD_INDEX)?,
+                ))
             };
             let comps: Vec<(u32, Option<String>, Affine)> = obj.comps.iter().map(|c| (c.id, c.path.clone(), c.m)).collect();
             (doc.unit_mm, comps, part)
@@ -407,22 +418,34 @@ pub(crate) fn appearance_3mf(bytes: &[u8]) -> crate::import_mesh::AppearanceInfo
     let mut textures = false;
     while let Ok(Some(t)) = next_tag(&xml, &mut pos) {
         if t.closing {
-            if t.name == b"basematerials" || t.name == b"colorgroup" { current_group = None; }
+            if t.name == b"basematerials" || t.name == b"colorgroup" {
+                current_group = None;
+            }
             continue;
         }
         match t.name {
             b"basematerials" | b"colorgroup" => {
                 current_group = t.attr("id").and_then(|s| s.parse::<u32>().ok());
-                if let Some(id) = current_group { groups.entry(id).or_default(); }
-                if t.self_closing { current_group = None; }
+                if let Some(id) = current_group {
+                    groups.entry(id).or_default();
+                }
+                if t.self_closing {
+                    current_group = None;
+                }
             }
             b"base" | b"color" if current_group.is_some() => {
                 let value = t.attr("displaycolor").or_else(|| t.attr("color"));
                 if let Some(m) = value.and_then(crate::materials::from_3mf_hex) {
                     if let Some(g) = current_group.and_then(|id| groups.get_mut(&id)) {
-                        if g.len() < 65536 { g.push(m); } else { unsupported = true; }
+                        if g.len() < 65536 {
+                            g.push(m);
+                        } else {
+                            unsupported = true;
+                        }
                     }
-                } else { unsupported = true; }
+                } else {
+                    unsupported = true;
+                }
             }
             b"object" => {
                 if let (Some(id), Some(pid), Some(idx)) = (
@@ -455,17 +478,29 @@ pub(crate) fn appearance_3mf(bytes: &[u8]) -> crate::import_mesh::AppearanceInfo
     let mut distinct: Vec<crate::model::Material> = Vec::new();
     for (pid, idx) in palette_refs {
         if let Some(m) = groups.get(&pid).and_then(|v| v.get(idx)).copied() {
-            if !distinct.contains(&m) { distinct.push(m); }
-        } else { unsupported = true; }
-        if distinct.len() > 1 { out.varies = true; }
+            if !distinct.contains(&m) {
+                distinct.push(m);
+            }
+        } else {
+            unsupported = true;
+        }
+        if distinct.len() > 1 {
+            out.varies = true;
+        }
     }
     // Some files define exactly one base material without attaching it to the object.
     if distinct.is_empty() && groups.len() == 1 {
-        if let Some(one) = groups.values().next().and_then(|a| (a.len() == 1).then(|| a[0])) { distinct.push(one); }
+        if let Some(one) = groups.values().next().and_then(|a| (a.len() == 1).then(|| a[0])) {
+            distinct.push(one);
+        }
     }
     out.material = distinct.first().copied();
-    if unsupported { out.notes.push("3MF に未対応または不正な色・材質指定があります。一部の外観は保持されません".into()); }
-    if textures { out.notes.push("3MF の画像テクスチャは読み込めません".into()); }
+    if unsupported {
+        out.notes.push("3MF に未対応または不正な色・材質指定があります。一部の外観は保持されません".into());
+    }
+    if textures {
+        out.notes.push("3MF の画像テクスチャは読み込めません".into());
+    }
     out
 }
 
@@ -487,7 +522,8 @@ pub fn read_3mf(bytes: &[u8]) -> Result<ImportedMesh, String> {
     let mut out = ImportedMesh::default();
     if build.is_empty() {
         // no build section: take the objects nobody else uses as a component
-        let used: std::collections::HashSet<u32> = pkg.docs.get(&main_key).map(|d| d.objects.values().flat_map(|o| o.comps.iter().map(|c| c.id)).collect()).unwrap_or_default();
+        let used: std::collections::HashSet<u32> =
+            pkg.docs.get(&main_key).map(|d| d.objects.values().flat_map(|o| o.comps.iter().map(|c| c.id)).collect()).unwrap_or_default();
         all_ids.retain(|i| !used.contains(i));
         for id in all_ids {
             pkg.emit(&main, id, &scale, 0, &mut out)?;
@@ -513,7 +549,8 @@ mod tests {
     use crate::import_mesh::tests::{box_mesh, sphere_mesh, surface};
 
     fn model(unit: &str, body: &str) -> Vec<u8> {
-        format!("<?xml version=\"1.0\"?>\n<model unit=\"{unit}\" xmlns=\"http://schemas.microsoft.com/3dmanufacturing/core/2015/02\">{body}</model>").into_bytes()
+        format!("<?xml version=\"1.0\"?>\n<model unit=\"{unit}\" xmlns=\"http://schemas.microsoft.com/3dmanufacturing/core/2015/02\">{body}</model>")
+            .into_bytes()
     }
 
     fn pkg(xml: &[u8]) -> Vec<u8> {
@@ -558,7 +595,12 @@ mod tests {
         assert_eq!((lo[0], hi[0]), (-110.0, 0.0));
         assert_eq!((lo[1], hi[1]), (5.0, 15.0));
         // a rotation by 90 degrees about z (row vectors): x -> y
-        let xml = model("millimeter", &format!("<resources><object id=\"1\">{TETRA}</object></resources><build><item objectid=\"1\" transform=\"0 1 0 -1 0 0 0 0 1 0 0 0\"/></build>"));
+        let xml = model(
+            "millimeter",
+            &format!(
+                "<resources><object id=\"1\">{TETRA}</object></resources><build><item objectid=\"1\" transform=\"0 1 0 -1 0 0 0 0 1 0 0 0\"/></build>"
+            ),
+        );
         let m = read_3mf(&pkg(&xml)).unwrap();
         assert!((vol(&m) - 1000.0 / 6.0).abs() < 1e-3);
         let (lo, hi) = m.bounds().unwrap();
@@ -567,7 +609,12 @@ mod tests {
 
     #[test]
     fn without_a_build_section_the_free_objects_are_used() {
-        let xml = model("millimeter", &format!("<resources><object id=\"1\">{TETRA}</object><object id=\"2\"><components><component objectid=\"1\"/></components></object></resources>"));
+        let xml = model(
+            "millimeter",
+            &format!(
+                "<resources><object id=\"1\">{TETRA}</object><object id=\"2\"><components><component objectid=\"1\"/></components></object></resources>"
+            ),
+        );
         assert_eq!(read_3mf(&pkg(&xml)).unwrap().triangles.len(), 4);
     }
 
@@ -608,7 +655,9 @@ mod tests {
 
     #[test]
     fn hostile_models_fail_cleanly() {
-        let obj = |inner: &str| model("millimeter", &format!("<resources><object id=\"1\">{inner}</object></resources><build><item objectid=\"1\"/></build>"));
+        let obj = |inner: &str| {
+            model("millimeter", &format!("<resources><object id=\"1\">{inner}</object></resources><build><item objectid=\"1\"/></build>"))
+        };
         for bad in [
             // index out of range
             obj(&TETRA.replace("v3=\"3\"", "v3=\"4\"")),
@@ -630,11 +679,17 @@ mod tests {
         }
         // a bad transform
         for tr in ["1 2 3", "1 0 0 0 1 0 0 0 1 0 0 nan", "a b c d e f g h i j k l", "1 0 0 0 1 0 0 0 1 0 0 1e99"] {
-            let xml = model("millimeter", &format!("<resources><object id=\"1\">{TETRA}</object></resources><build><item objectid=\"1\" transform=\"{tr}\"/></build>"));
+            let xml = model(
+                "millimeter",
+                &format!("<resources><object id=\"1\">{TETRA}</object></resources><build><item objectid=\"1\" transform=\"{tr}\"/></build>"),
+            );
             assert!(read_3mf(&pkg(&xml)).is_err(), "{tr}");
         }
         // a component cycle and a very deep chain
-        let cyc = model("millimeter", "<resources><object id=\"1\"><components><component objectid=\"2\"/></components></object><object id=\"2\"><components><component objectid=\"1\"/></components></object></resources><build><item objectid=\"1\"/></build>");
+        let cyc = model(
+            "millimeter",
+            "<resources><object id=\"1\"><components><component objectid=\"2\"/></components></object><object id=\"2\"><components><component objectid=\"1\"/></components></object></resources><build><item objectid=\"1\"/></build>",
+        );
         assert!(read_3mf(&pkg(&cyc)).is_err());
         // exponential fan-out: 10 components each referencing the next level, 10 levels
         let mut body = String::from("<resources><object id=\"0\">");
@@ -694,17 +749,25 @@ mod tests {
     fn basematerials_and_multicolour_are_reported() {
         let mesh = TETRA;
         let prefix = "<resources><basematerials id=\"9\"><base name=\"red\" displaycolor=\"#FF0000\"/><base name=\"blue\" displaycolor=\"#0000FF\"/></basematerials>";
-        let xml = model("millimeter", &format!("{prefix}<object id=\"1\" pid=\"9\" pindex=\"0\">{mesh}</object></resources><build><item objectid=\"1\"/></build>"));
+        let xml = model(
+            "millimeter",
+            &format!("{prefix}<object id=\"1\" pid=\"9\" pindex=\"0\">{mesh}</object></resources><build><item objectid=\"1\"/></build>"),
+        );
         let a = appearance_3mf(&pkg(&xml));
         assert_eq!(a.material.unwrap().color, [1.0, 0.0, 0.0]);
         assert!(!a.varies);
-        let xml = model("millimeter", &format!("{prefix}<object id=\"1\" pid=\"9\" pindex=\"0\">{}</object></resources><build><item objectid=\"1\"/></build>", mesh.replacen("<triangle v1=", "<triangle pid=\"9\" p1=\"1\" v1=", 1)));
+        let xml = model(
+            "millimeter",
+            &format!(
+                "{prefix}<object id=\"1\" pid=\"9\" pindex=\"0\">{}</object></resources><build><item objectid=\"1\"/></build>",
+                mesh.replacen("<triangle v1=", "<triangle pid=\"9\" p1=\"1\" v1=", 1)
+            ),
+        );
         let a = appearance_3mf(&pkg(&xml));
         assert!(a.varies);
-        let s = surface(&box_mesh([0.0;3],[1.0;3]));
+        let s = surface(&box_mesh([0.0; 3], [1.0; 3]));
         let z = export_formats::threemf(&s, "roundtrip", Units::Mm).unwrap();
         let m = appearance_3mf(&z).material.unwrap();
         assert!((m.color[0] - 200.0 / 255.0).abs() < 0.002);
     }
-
 }

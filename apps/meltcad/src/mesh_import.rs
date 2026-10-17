@@ -8,7 +8,7 @@
 
 use std::path::Path;
 
-use crate::import_mesh::{self, Imported, ImportOptions, ImportedMesh, MeshFormat};
+use crate::import_mesh::{self, ImportOptions, Imported, ImportedMesh, MeshFormat};
 use crate::mesh::SharedVolume;
 use crate::sdf_volume::{BakeControl, BakeOptions, BakeStats, Volume, bake_with};
 
@@ -134,7 +134,8 @@ pub fn estimate(size: [f32; 3], tris: usize, res: u32) -> Estimate {
     let opts = BakeOptions { res, ..BakeOptions::default() };
     let longest = size.into_iter().fold(0.0f32, f32::max).max(1e-6);
     let mut cells = f64::from(res.clamp(4, 512));
-    let nodes_at = |cells: f64| -> f64 { size.iter().map(|s| (f64::from(s / longest) * cells).ceil().max(1.0) + 2.0 * f64::from(opts.pad) + 1.0).product() };
+    let nodes_at =
+        |cells: f64| -> f64 { size.iter().map(|s| (f64::from(s / longest) * cells).ceil().max(1.0) + 2.0 * f64::from(opts.pad) + 1.0).product() };
     // (the bake lowers the cell count itself when the grid would be too big)
     while nodes_at(cells) > opts.max_cells as f64 && cells > 8.0 {
         cells -= 1.0;
@@ -158,12 +159,16 @@ pub fn mesh_hash(mesh: &ImportedMesh) -> u64 {
     let mut h = 0xcbf2_9ce4_8422_2325u64;
     for p in &mesh.positions {
         for v in p {
-            for b in v.to_bits().to_le_bytes() { h = (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3); }
+            for b in v.to_bits().to_le_bytes() {
+                h = (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3);
+            }
         }
     }
     for t in &mesh.triangles {
         for v in t {
-            for b in v.to_le_bytes() { h = (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3); }
+            for b in v.to_le_bytes() {
+                h = (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3);
+            }
         }
     }
     h
@@ -172,7 +177,9 @@ pub fn mesh_hash(mesh: &ImportedMesh) -> u64 {
 /// Re-bake at the exact final size, preserving anisotropic scale as geometry.
 pub fn rebake(mesh: &ImportedMesh, y_up: bool, final_size: [f32; 3], res: u32, ctl: &BakeControl) -> Result<Baked, String> {
     let mut m = mesh.clone();
-    if y_up { m.y_up_to_z_up(); }
+    if y_up {
+        m.y_up_to_z_up();
+    }
     let (lo, hi) = m.bounds().ok_or_else(|| import_mesh::NO_SHAPE.to_string())?;
     let c = [0, 1, 2].map(|a| 0.5 * (lo[a] + hi[a]));
     let orig = m.size();
@@ -181,7 +188,9 @@ pub fn rebake(mesh: &ImportedMesh, y_up: bool, final_size: [f32; 3], res: u32, c
     }
     let factors = [0, 1, 2].map(|a| final_size[a] / orig[a]);
     for p in &mut m.positions {
-        for a in 0..3 { p[a] = (p[a] - c[a]) * factors[a]; }
+        for a in 0..3 {
+            p[a] = (p[a] - c[a]) * factors[a];
+        }
     }
     let (volume, stats) = bake_with(&m, &BakeOptions { res, ..BakeOptions::default() }, ctl)?;
     Ok(Baked { volume: SharedVolume::new(volume), size: final_size, file_centre: [0.0; 3], stats })
@@ -190,20 +199,31 @@ pub fn rebake(mesh: &ImportedMesh, y_up: bool, final_size: [f32; 3], res: u32, c
 /// Surface-centroid SDF residual (mean, maximum, number sampled), not Hausdorff error.
 pub fn surface_residual(mesh: &ImportedMesh, y_up: bool, final_size: [f32; 3], volume: &Volume) -> (f32, f32, usize) {
     let mut m = mesh.clone();
-    if y_up { m.y_up_to_z_up(); }
+    if y_up {
+        m.y_up_to_z_up();
+    }
     let Some((lo, hi)) = m.bounds() else { return (0.0, 0.0, 0) };
     let sz = m.size();
-    if sz.iter().any(|x| *x <= 0.0) { return (0.0, 0.0, 0); }
+    if sz.iter().any(|x| *x <= 0.0) {
+        return (0.0, 0.0, 0);
+    }
     let c = [0, 1, 2].map(|a| (lo[a] + hi[a]) * 0.5);
     let mut total = 0.0f64;
     let mut worst = 0.0f32;
     let mut n = 0usize;
     let stride = (m.triangles.len() / 2048).max(1);
     for tri in m.triangles.iter().step_by(stride) {
-        let (Some(a), Some(b), Some(d)) = (m.positions.get(tri[0] as usize), m.positions.get(tri[1] as usize), m.positions.get(tri[2] as usize)) else { continue };
+        let (Some(a), Some(b), Some(d)) = (m.positions.get(tri[0] as usize), m.positions.get(tri[1] as usize), m.positions.get(tri[2] as usize))
+        else {
+            continue;
+        };
         let p = [0, 1, 2].map(|i| ((a[i] + b[i] + d[i]) / 3.0 - c[i]) * final_size[i] / sz[i]);
         let residual = volume.distance(p).abs();
-        if residual.is_finite() { total += f64::from(residual); worst = worst.max(residual); n += 1; }
+        if residual.is_finite() {
+            total += f64::from(residual);
+            worst = worst.max(residual);
+            n += 1;
+        }
     }
     (if n > 0 { (total / n as f64) as f32 } else { 0.0 }, worst, n)
 }
@@ -356,14 +376,17 @@ pub(crate) mod tests {
     fn the_up_axis_choice_stands_a_model_upright() {
         // a tall box in a Y-up file: 10 wide, 40 tall (y), 20 deep (z)
         let m = box_mesh([-5.0, 0.0, -10.0], [5.0, 40.0, 10.0]);
-        for (up, fmt, tall) in [(Up::Auto, MeshFormat::Obj, true), (Up::Auto, MeshFormat::Stl, false), (Up::Y, MeshFormat::Stl, true), (Up::Z, MeshFormat::Obj, false)] {
+        for (up, fmt, tall) in
+            [(Up::Auto, MeshFormat::Obj, true), (Up::Auto, MeshFormat::Stl, false), (Up::Y, MeshFormat::Stl, true), (Up::Z, MeshFormat::Obj, false)]
+        {
             let st = Settings { target_mm: 40.0, up, floor: true, centre: true, res: 32 };
             let b = bake(&m, fmt, &st, &BakeControl::new()).unwrap();
             assert_eq!(b.size[2] > 30.0, tall, "{up:?} {fmt:?} {:?}", b.size);
         }
         assert_eq!(upright_size([10.0, 40.0, 20.0], true), [10.0, 20.0, 40.0]);
         // where the file had it is kept when centring is off
-        let b = bake(&m, MeshFormat::Stl, &Settings { target_mm: 40.0, up: Up::Z, floor: false, centre: false, res: 32 }, &BakeControl::new()).unwrap();
+        let b =
+            bake(&m, MeshFormat::Stl, &Settings { target_mm: 40.0, up: Up::Z, floor: false, centre: false, res: 32 }, &BakeControl::new()).unwrap();
         let p = place(&b, false, false, [99.0, 99.0]);
         assert!((p[1] - 20.0).abs() < 1e-3 && p[0].abs() < 1e-3 && p[2].abs() < 1e-3, "{p:?}");
     }
@@ -515,7 +538,10 @@ pub(crate) mod tests {
         let e1 = surface_residual(&mesh, false, size, &high.volume);
         assert!(e0.2 > 0 && e1.2 > 0);
         assert!(e0.0.is_finite() && e1.0.is_finite());
-        eprintln!("rebake centroid residual mean/max low {:.4}/{:.4}mm {:.3}s; high {:.4}/{:.4}mm {:.3}s", e0.0, e0.1, low_secs, e1.0, e1.1, high_secs);
+        eprintln!(
+            "rebake centroid residual mean/max low {:.4}/{:.4}mm {:.3}s; high {:.4}/{:.4}mm {:.3}s",
+            e0.0, e0.1, low_secs, e1.0, e1.1, high_secs
+        );
     }
 
     #[test]
@@ -536,5 +562,4 @@ pub(crate) mod tests {
         mesh.positions[0][0] += 0.1;
         assert_ne!(before, mesh_hash(&mesh));
     }
-
 }

@@ -118,7 +118,8 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
             ui.add_space(2.0);
             egui::Grid::new("svg_import_grid").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
                 ui.label(RichText::new("大きさ").color(style::DIM));
-                ui.add(egui::DragValue::new(&mut d.target).speed(0.5).range(1.0..=500.0).suffix(" mm").max_decimals(1)).on_hover_text("長いほうの辺の長さ");
+                ui.add(egui::DragValue::new(&mut d.target).speed(0.5).range(1.0..=500.0).suffix(" mm").max_decimals(1))
+                    .on_hover_text("長いほうの辺の長さ");
                 ui.end_row();
                 ui.label(RichText::new("高さ").color(style::DIM));
                 ui.add(egui::DragValue::new(&mut d.height).speed(0.2).range(0.5..=200.0).suffix(" mm").max_decimals(1)).on_hover_text("押し出す高さ");
@@ -135,7 +136,9 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
             ui.add_space(4.0);
             ui.horizontal(|ui| {
                 ui.add_enabled_ui(d.art.is_some(), |ui| {
-                    let b = egui::Button::new(RichText::new("読みこむ").strong().color(Color32::WHITE)).fill(style::ACCENT_SOFT).stroke(Stroke::new(1.0, style::ACCENT));
+                    let b = egui::Button::new(RichText::new("読みこむ").strong().color(Color32::WHITE))
+                        .fill(style::ACCENT_SOFT)
+                        .stroke(Stroke::new(1.0, style::ACCENT));
                     if ui.add(b).clicked() {
                         go = true;
                     }

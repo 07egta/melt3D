@@ -35,7 +35,8 @@ impl Rig {
             all.push(Event::ModifiersChanged(self.mods));
         }
         all.extend(events);
-        let input = RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, self.size)), events: all, time: Some(self.time), ..Default::default() };
+        let input =
+            RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, self.size)), events: all, time: Some(self.time), ..Default::default() };
         let app = &mut self.app;
         let mut out = self.ctx.run_ui(input, |ui| {
             // Match frame_body ordering: keys, canvas, then the interactive overlay.

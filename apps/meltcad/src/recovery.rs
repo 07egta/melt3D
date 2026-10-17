@@ -60,8 +60,7 @@ fn read_limited(path: &Path) -> io::Result<Vec<u8>> {
 
 fn parse_scene(text: &str) -> Result<(Scene, Vec<String>), String> {
     // A damaged design must never unwind through the event loop.
-    std::panic::catch_unwind(|| Scene::from_json_notes(text))
-        .map_err(|_| "破損した作品データの読み取りが中断されました".to_owned())?
+    std::panic::catch_unwind(|| Scene::from_json_notes(text)).map_err(|_| "破損した作品データの読み取りが中断されました".to_owned())?
 }
 
 pub fn read_project(path: &Path) -> Result<(Scene, Vec<String>), String> {
@@ -342,9 +341,7 @@ mod tests {
         fs::create_dir_all(&root).expect("create root");
         let original = root.join("original.meltcad");
         fs::write(&original, b"old project").expect("seed");
-        let err = atomic_write_with(&original, b"new project", |_| {
-            Err(io::Error::other("simulated failure before rename"))
-        }).expect_err("failure");
+        let err = atomic_write_with(&original, b"new project", |_| Err(io::Error::other("simulated failure before rename"))).expect_err("failure");
         assert_eq!(err.kind(), io::ErrorKind::Other);
         assert_eq!(fs::read(&original).expect("read"), b"old project");
         assert_eq!(fs::read_dir(&root).expect("list").count(), 1, "failed temp file is deleted");

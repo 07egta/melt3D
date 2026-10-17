@@ -335,7 +335,8 @@ impl App {
     fn actions(&mut self, ui: &mut Ui) {
         if self.picks().len() > 1 {
             ui.label(RichText::new(format!("{} selected (Shift + click adds or removes)", self.picks().len())).size(12.0).color(style::ACCENT));
-            if style::pill(ui, "Group them (Ctrl+G)", false).on_hover_text("Put the selected shapes in one new group so they melt together").clicked() {
+            if style::pill(ui, "Group them (Ctrl+G)", false).on_hover_text("Put the selected shapes in one new group so they melt together").clicked()
+            {
                 self.group_selected();
             }
         }
@@ -413,9 +414,12 @@ impl App {
             .map(|i| self.scene.groups[i].name.clone())
             .collect();
         ui.label(
-            RichText::new(format!("Melts with: {} (inside {into})", if partners.is_empty() { "nothing else".to_string() } else { partners.join(", ") }))
-                .size(12.0)
-                .color(style::DIM),
+            RichText::new(format!(
+                "Melts with: {} (inside {into})",
+                if partners.is_empty() { "nothing else".to_string() } else { partners.join(", ") }
+            ))
+            .size(12.0)
+            .color(style::DIM),
         );
         let mut reselect = None;
         ui.horizontal_wrapped(|ui| {
@@ -425,7 +429,9 @@ impl App {
             if style::pill_enabled(ui, "↓", false, self.scene.next_sibling(g).is_some()).on_hover_text("Move down").clicked() {
                 reselect = self.scene.shift_group(g, true);
             }
-            if style::pill_enabled(ui, "→ Into group above", false, g > 0).on_hover_text("Put this group inside the group above it, so they melt as one").clicked()
+            if style::pill_enabled(ui, "→ Into group above", false, g > 0)
+                .on_hover_text("Put this group inside the group above it, so they melt as one")
+                .clicked()
                 && self.scene.indent_group(g)
             {
                 reselect = Some(g);
@@ -471,7 +477,8 @@ impl App {
                     ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
                     for k in Kind::ALL {
                         let on = sh.kind == k;
-                        if style::icon_button(ui, 32.0, k.label(), on, |p, r, ink| glyphs::kind(p, r, k, ink, Color32::from_white_alpha(18))).clicked()
+                        if style::icon_button(ui, 32.0, k.label(), on, |p, r, ink| glyphs::kind(p, r, k, ink, Color32::from_white_alpha(18)))
+                            .clicked()
                             && !on
                         {
                             if sh.name == sh.kind.label() {
@@ -536,7 +543,13 @@ impl App {
                     }
                 }
                 if sh.blend > 0.0 {
-                    style::labeled_slider(ui, "Melt amount", &mut sh.blend, 0.0..=80.0, "How much this shape melts into the other shapes of its group");
+                    style::labeled_slider(
+                        ui,
+                        "Melt amount",
+                        &mut sh.blend,
+                        0.0..=80.0,
+                        "How much this shape melts into the other shapes of its group",
+                    );
                 }
             }
             style::labeled_slider(ui, "Shell", &mut sh.shell, 0.0..=40.0, "Hollow out the inside, leaving walls this thick (mm). 0 = solid");
@@ -559,7 +572,13 @@ impl App {
                     }
                 }
                 if fm.face > 0 {
-                    style::labeled_slider(ui, "Swell", &mut fm.amount, -30.0..=30.0, "How far this face swells out (+) or sinks in (-), in mm; other faces keep their size");
+                    style::labeled_slider(
+                        ui,
+                        "Swell",
+                        &mut fm.amount,
+                        -30.0..=30.0,
+                        "How far this face swells out (+) or sinks in (-), in mm; other faces keep their size",
+                    );
                     style::labeled_slider(ui, "Depth", &mut fm.reach, 2.0..=60.0, "How far the melt reaches from the face, in mm");
                 }
             }
@@ -635,7 +654,12 @@ impl App {
             let (rect, _) = ui.allocate_exact_size(vec2(72.0, 72.0), Sense::hover());
             style::gfx::vgrad(ui.painter(), rect, 14.0, style::INSET_TOP, style::INSET_BOTTOM);
             ui.painter().rect_stroke(rect, 14.0, Stroke::new(1.0, Color32::from_white_alpha(18)), egui::StrokeKind::Inside);
-            style::gfx::shadow(&ui.painter_at(rect), Rect::from_center_size(rect.center() + vec2(0.0, 24.0), vec2(36.0, 4.0)), 2.0, &[(0, 10, 0, 90)]);
+            style::gfx::shadow(
+                &ui.painter_at(rect),
+                Rect::from_center_size(rect.center() + vec2(0.0, 24.0), vec2(36.0, 4.0)),
+                2.0,
+                &[(0, 10, 0, 90)],
+            );
             materials::swatch(&ui.painter_at(rect), rect.center(), 28.0, &m);
             ui.vertical(|ui| {
                 ui.label(RichText::new(current.unwrap_or("Custom")).strong().size(14.0));
@@ -1106,5 +1130,3 @@ fn gradient_controls(ui: &mut Ui, m: &mut Material) {
     style::labeled_slider(ui, "From", &mut m.grad_from, 0.0..=1.0, "Where the color starts to change (0 = edge)");
     style::labeled_slider(ui, "To", &mut m.grad_to, 0.0..=1.0, "Where the color finishes changing (1 = opposite edge)");
 }
-
-

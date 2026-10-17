@@ -72,7 +72,8 @@ impl Camera {
         }
         let (right, up, _) = self.basis();
         let k = self.mm_per_px(self.target, height_px);
-        self.target = add(self.target, add(mul(right, -dx.clamp(-MAX_DRAG_STEP, MAX_DRAG_STEP) * k), mul(up, dy.clamp(-MAX_DRAG_STEP, MAX_DRAG_STEP) * k)));
+        self.target =
+            add(self.target, add(mul(right, -dx.clamp(-MAX_DRAG_STEP, MAX_DRAG_STEP) * k), mul(up, dy.clamp(-MAX_DRAG_STEP, MAX_DRAG_STEP) * k)));
     }
     pub fn zoom(&mut self, scroll: f32) {
         if !scroll.is_finite() {

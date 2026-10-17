@@ -139,7 +139,10 @@ fn preview() {
                 tray(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 4.0;
-                        for (i, (o, c)) in [(crate::model::Op::Add, ADD), (crate::model::Op::Subtract, CUT), (crate::model::Op::Paint, PAINT)].into_iter().enumerate() {
+                        for (i, (o, c)) in [(crate::model::Op::Add, ADD), (crate::model::Op::Subtract, CUT), (crate::model::Op::Paint, PAINT)]
+                            .into_iter()
+                            .enumerate()
+                        {
                             let on = i == 0;
                             icon_button(ui, 38.0, "", on, |p, r, _| crate::glyphs::op(p, r, o, if on { Color32::WHITE } else { c }));
                         }
@@ -208,7 +211,6 @@ fn preview() {
     let path = std::env::var("YURA_PREVIEW").unwrap_or_else(|_| "yura_preview.ppm".into());
     assert!(std::fs::write(path, data).is_ok());
 }
-
 
 pub(crate) fn write_ppm(img: Vec<[f32; 3]>, w: usize, h: usize, path: &str) {
     let mut data = format!("P6\n{w} {h}\n255\n").into_bytes();

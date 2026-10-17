@@ -355,7 +355,9 @@ pub fn shape_polyline(s: &Shape) -> Option<Poly> {
             to_world(crate::curve::build(&s.path, &s.params).iter().map(|p| [p[0], p[1], p[2]]).collect(), closed)
         }
         Kind::Sweep => to_world(s.path.iter().filter(|p| p.iter().all(|v| v.is_finite())).map(|p| [p[0], p[1], p[2]]).collect(), false),
-        Kind::Extrude | Kind::Loft => to_world(s.outline.iter().filter(|p| p.iter().all(|v| v.is_finite())).map(|p| [p[0], p[1], 0.0]).collect(), true),
+        Kind::Extrude | Kind::Loft => {
+            to_world(s.outline.iter().filter(|p| p.iter().all(|v| v.is_finite())).map(|p| [p[0], p[1], 0.0]).collect(), true)
+        }
         Kind::Revolve => to_world(s.outline.iter().filter(|p| p.iter().all(|v| v.is_finite())).map(|p| [p[0].max(0.0), 0.0, p[1]]).collect(), true),
         _ => None,
     }
@@ -365,17 +367,36 @@ pub fn shape_polyline(s: &Shape) -> Option<Poly> {
 /// (when it is a line).
 fn shape_points(s: &Shape) -> Vec<(V3, Option<V3>)> {
     let nodes: Option<(Vec<V3>, bool)> = match s.kind {
-        Kind::Curve | Kind::Sweep => Some((s.path.iter().filter(|p| p.iter().all(|v| v.is_finite())).map(|p| world_of(s, [p[0], p[1], p[2]])).collect(), s.kind == Kind::Curve && crate::curve::settings(&s.params).0)),
-        Kind::Extrude | Kind::Loft => Some((s.outline.iter().filter(|p| p.iter().all(|v| v.is_finite())).map(|p| world_of(s, [p[0], p[1], 0.0])).collect(), true)),
-        Kind::Revolve => Some((s.outline.iter().filter(|p| p.iter().all(|v| v.is_finite())).map(|p| world_of(s, [p[0].max(0.0), 0.0, p[1]])).collect(), true)),
+        Kind::Curve | Kind::Sweep => Some((
+            s.path.iter().filter(|p| p.iter().all(|v| v.is_finite())).map(|p| world_of(s, [p[0], p[1], p[2]])).collect(),
+            s.kind == Kind::Curve && crate::curve::settings(&s.params).0,
+        )),
+        Kind::Extrude | Kind::Loft => {
+            Some((s.outline.iter().filter(|p| p.iter().all(|v| v.is_finite())).map(|p| world_of(s, [p[0], p[1], 0.0])).collect(), true))
+        }
+        Kind::Revolve => {
+            Some((s.outline.iter().filter(|p| p.iter().all(|v| v.is_finite())).map(|p| world_of(s, [p[0].max(0.0), 0.0, p[1]])).collect(), true))
+        }
         _ => None,
     };
     if let Some((pts, closed)) = nodes {
         let n = pts.len();
         return (0..n)
             .map(|i| {
-                let prev = if i > 0 { pts.get(i - 1) } else if closed { pts.get(n - 1) } else { None };
-                let next = if i + 1 < n { pts.get(i + 1) } else if closed { pts.first() } else { None };
+                let prev = if i > 0 {
+                    pts.get(i - 1)
+                } else if closed {
+                    pts.get(n - 1)
+                } else {
+                    None
+                };
+                let next = if i + 1 < n {
+                    pts.get(i + 1)
+                } else if closed {
+                    pts.first()
+                } else {
+                    None
+                };
                 let here = pts.get(i).copied().unwrap_or([0.0; 3]);
                 let tangent = match (prev, next) {
                     (Some(a), Some(b)) => Some(sub(*b, *a)),
@@ -1127,7 +1148,8 @@ mod tests {
 
     #[test]
     fn patterns_round_trip_and_old_files_and_unknown_patterns_open() {
-        let mut sc = scene_with(vec![ball([0.0; 3])], Some(Pattern::Circular { count: 5, angle: 270.0, axis: 1, centre: [1.0, 2.0, 3.0], rotate: false }));
+        let mut sc =
+            scene_with(vec![ball([0.0; 3])], Some(Pattern::Circular { count: 5, angle: 270.0, axis: 1, centre: [1.0, 2.0, 3.0], rotate: false }));
         sc.ensure_group_uid(0);
         sc.groups[0].xform = Xform { pos: [1.0, 2.0, 3.0], rot: [4.0, 5.0, 6.0], scale: 1.5 };
         sc.groups[0].instance_of = Some(9);

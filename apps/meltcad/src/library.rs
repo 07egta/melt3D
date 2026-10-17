@@ -173,16 +173,8 @@ mod tests {
         // Different-sized parts and many tiny details must not determine the
         // insertion position by the arithmetic mean of their centre points.
         let mut g = Group::new("片寄ったモデル");
-        g.shapes.push(crate::model::Shape::new(
-            crate::model::Kind::Sphere,
-            [-20.0, 0.0, 20.0],
-            crate::model::Material::default(),
-        ));
-        g.shapes.push(crate::model::Shape::new(
-            crate::model::Kind::Box,
-            [45.0, 0.0, 20.0],
-            crate::model::Material::default(),
-        ));
+        g.shapes.push(crate::model::Shape::new(crate::model::Kind::Sphere, [-20.0, 0.0, 20.0], crate::model::Material::default()));
+        g.shapes.push(crate::model::Shape::new(crate::model::Kind::Box, [45.0, 0.0, 20.0], crate::model::Material::default()));
         let it = Item { name: "テスト".into(), tags: vec![], group: g };
         let placed = Item { name: it.name.clone(), tags: vec![], group: it.placed([0.0, 0.0]) };
         assert!(placed.centre_xy().iter().all(|x| x.abs() < 1e-3));
@@ -215,5 +207,4 @@ mod tests {
             assert_eq!(pixels.len(), 16 * 16 * 4);
         }
     }
-
 }

@@ -261,11 +261,7 @@ pub fn scene_has_glow(scene: &Scene) -> bool {
 
 /// The same test with the already-resolved groups (packing must not resolve instances twice).
 pub fn scene_has_glow_resolved(scene: &Scene, resolved: &[crate::pattern::RGroup]) -> bool {
-    resolved.iter().any(|rg| {
-        scene.groups.get(rg.src).is_some_and(|source| {
-            source.shapes.iter().any(|s| s.visible && s.material.glow > 0.0)
-        })
-    })
+    resolved.iter().any(|rg| scene.groups.get(rg.src).is_some_and(|source| source.shapes.iter().any(|s| s.visible && s.material.glow > 0.0)))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -344,7 +340,14 @@ impl Drawn {
 
     /// Does the picture differ from what is now on the screen's model? Asks for another frame at
     /// most `MAX_STALE_RUN` times in a row.
-    pub fn wants_another_frame(&mut self, rev: u64, sel: Option<crate::model::Pick>, hover: Option<crate::model::Pick>, cam: &Camera, clean: bool) -> bool {
+    pub fn wants_another_frame(
+        &mut self,
+        rev: u64,
+        sel: Option<crate::model::Pick>,
+        hover: Option<crate::model::Pick>,
+        cam: &Camera,
+        clean: bool,
+    ) -> bool {
         let shown_sel = if clean { None } else { sel };
         let shown_hover = if clean { None } else { hover };
         let stale = self.rev != rev || self.sel != shown_sel || self.hover != shown_hover || self.cam != cam_key(cam) || self.clean != clean;
@@ -434,7 +437,8 @@ pub fn quality_menu(ui: &mut egui::Ui, menu: &mut MenuState, extra: impl FnOnce(
         }
         ui.separator();
         ui.checkbox(&mut menu.hud, "フレーム時間を表示　F3").on_hover_text("1秒あたりの枚数・CPU と GPU の時間・描画の倍率を絵の上に出します");
-        if ui.button("速さをはかる…").on_hover_text("いくつかのシーンを描いて、この機械での速さを表にします").clicked() {
+        if ui.button("速さをはかる…").on_hover_text("いくつかのシーンを描いて、この機械での速さを表にします").clicked()
+        {
             menu.bench = true;
             ui.close();
         }

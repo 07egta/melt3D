@@ -193,7 +193,8 @@ impl Affine {
 
     pub fn determinant(&self) -> f64 {
         let m = &self.0;
-        m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0]) + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0])
+        m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
+            + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0])
     }
 
     #[allow(dead_code)]
@@ -911,7 +912,16 @@ pub fn import_bytes(bytes: &[u8], name: &str, opts: &ImportOptions) -> Result<Im
     if longest > 0.0 && s.iter().any(|d| *d < longest * 1e-6) {
         notes.push("平らな形です（厚みがありません）".to_string());
     }
-    Ok(Imported { mesh, appearance: appearance_info.material, appearance_varies: appearance_info.varies, format, turned_y_up: y_up, dropped_triangles, health, notes })
+    Ok(Imported {
+        mesh,
+        appearance: appearance_info.material,
+        appearance_varies: appearance_info.varies,
+        format,
+        turned_y_up: y_up,
+        dropped_triangles,
+        health,
+        notes,
+    })
 }
 
 /// Read a mesh file (refusing anything over 256 MB).
@@ -936,7 +946,9 @@ pub mod tests {
 
     /// A closed unit-ish box from `lo` to `hi`, outward facing, 12 triangles.
     pub fn box_mesh(lo: [f32; 3], hi: [f32; 3]) -> ImportedMesh {
-        let p = |x: usize, y: usize, z: usize| [if x == 0 { lo[0] } else { hi[0] }, if y == 0 { lo[1] } else { hi[1] }, if z == 0 { lo[2] } else { hi[2] }];
+        let p = |x: usize, y: usize, z: usize| {
+            [if x == 0 { lo[0] } else { hi[0] }, if y == 0 { lo[1] } else { hi[1] }, if z == 0 { lo[2] } else { hi[2] }]
+        };
         let mut positions = Vec::new();
         for z in 0..2 {
             for y in 0..2 {
