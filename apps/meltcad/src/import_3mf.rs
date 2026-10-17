@@ -402,7 +402,6 @@ pub(crate) fn appearance_3mf(bytes: &[u8]) -> crate::import_mesh::AppearanceInfo
     let mut pos = 0;
     let mut groups: HashMap<u32, Vec<crate::model::Material>> = HashMap::new();
     let mut current_group: Option<u32> = None;
-    let mut object_default: HashMap<u32, (u32, usize)> = HashMap::new();
     let mut palette_refs: Vec<(u32, usize)> = Vec::new();
     let mut unsupported = false;
     let mut textures = false;
@@ -431,7 +430,7 @@ pub(crate) fn appearance_3mf(bytes: &[u8]) -> crate::import_mesh::AppearanceInfo
                     t.attr("pid").and_then(|s| s.parse::<u32>().ok()),
                     t.attr("pindex").and_then(|s| s.parse::<usize>().ok()),
                 ) {
-                    object_default.insert(id, (pid, idx));
+                    let _ = id;
                     palette_refs.push((pid, idx));
                 }
             }
