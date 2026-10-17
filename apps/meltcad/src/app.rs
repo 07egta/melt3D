@@ -1024,12 +1024,18 @@ impl App {
                                     self.set_sketch_tool(!self.sk.on);
                                 }
                                 if !narrow {
-                                    ui.horizontal(|ui| { self.curve_button(ui); ui.label(RichText::new("線を描く").size(11.0)); });
-                                    ui.horizontal(|ui| { self.pipe_button(ui); ui.label(RichText::new("パイプ").size(11.0)); });
+                                    if ui.add_sized([tool_width, 30.0], egui::Button::new(if self.ct.drawing { "✓ 線を描く" } else { "線を描く" }))
+                                        .on_hover_text("クリックで点を置き、線を作ります").clicked() {
+                                        self.toggle_curve_tool();
+                                    }
+                                    if ui.add_sized([tool_width, 30.0], egui::Button::new(if self.pt.on { "✓ パイプ" } else { "パイプ" }))
+                                        .on_hover_text("ドラッグで立体のパイプを描きます").clicked() {
+                                        self.set_pipe_tool(!self.pt.on);
+                                    }
                                 } else {
                                     style::menu_button(ui, "線・パイプ", false, |ui| {
-                                        ui.horizontal(|ui| { self.curve_button(ui); ui.label("線を描く"); });
-                                        ui.horizontal(|ui| { self.pipe_button(ui); ui.label("パイプを描く"); });
+                                        if ui.button("線を描く").clicked() { self.toggle_curve_tool(); ui.close(); }
+                                        if ui.button("パイプを描く").clicked() { self.set_pipe_tool(!self.pt.on); ui.close(); }
                                     });
                                 }
                                 ui.separator();
