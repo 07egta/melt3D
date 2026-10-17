@@ -318,8 +318,10 @@ impl App {
                 clipped.text(egui::pos2(used.right() + 6.0, rect.center().y), Align2::LEFT_CENTER, badge, FontId::proportional(11.5), style::ACCENT);
             }
         }
-        let er = ui.interact(eye, id.with("eye"), Sense::click())
-            .on_hover_text(if visible { "非表示にする（削除ではありません）" } else { "表示する" });
+        let inherited_hidden = matches!(pick, Pick::Shape(g, _) if self.scene.groups.get(g).is_some_and(|gr| !gr.visible));
+        let effectively_visible = self.scene.is_visible(pick);
+        let er = ui.interact(eye, id.with("eye"), if inherited_hidden { Sense::hover() } else { Sense::click() })
+            .on_hover_text(if inherited_hidden { "親グループが非表示です。親の目を開いてください" } else if visible { "非表示にする（削除ではありません）" } else { "表示する" });
         let inherited_lock = effective_locked && !local_locked;
         let lr = ui.interact(lock, id.with("lock"), if inherited_lock { Sense::hover() } else { Sense::click() })
             .on_hover_text(if inherited_lock { "親グループがロック中です。親の鍵を外してください" } else if local_locked { "ロックを解除" } else { "ロックして編集・削除を防ぐ" });
@@ -330,7 +332,7 @@ impl App {
                 ui.painter().rect_filled(r.rect, 5.0, Color32::from_white_alpha(22));
             }
         }
-        glyphs::eye(ui.painter(), eye, visible, if er.hovered() { Color32::WHITE } else { style::DIM });
+        glyphs::eye(ui.painter(), eye, effectively_visible, if er.hovered() { Color32::WHITE } else { style::DIM });
         draw_outliner_lock(ui.painter(), lock, effective_locked, if lr.hovered() { Color32::WHITE } else { style::DIM });
         glyphs::op(ui.painter(), opr, op, style::op_color(op).gamma_multiply(if orr.hovered() { 1.0 } else { 0.8 }));
         out.eye = er.clicked();
