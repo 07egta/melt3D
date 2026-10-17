@@ -360,7 +360,7 @@ fn pack_shape(s: &crate::model::Shape, out: &mut Vec<f32>, poly: &mut Vec<f32>, 
         };
     }
     push(out, [s.pos[0], s.pos[1], s.pos[2], radius]);
-    push(out, [p.inv[0][0], p.inv[0][1], p.inv[0][2], 0.0]);
+    push(out, [p.inv[0][0], p.inv[0][1], p.inv[0][2], if s.deformation.is_some() { 1.0 } else { 0.0 }]);
     push(out, [p.inv[1][0], p.inv[1][1], p.inv[1][2], 0.0]);
     push(out, [p.inv[2][0], p.inv[2][1], p.inv[2][2], 0.0]);
     push(out, [s.pos[0], s.pos[1], s.pos[2], p.min_scale()]);
