@@ -375,11 +375,13 @@ pub struct Perf {
 }
 
 /// The 'がしつ' menu of the top bar.
-pub fn quality_menu(ui: &mut egui::Ui, quality: &mut Quality) {
+/// `extra` adds entries below the quality choices (the graphics path's: simple view, backend, log).
+pub fn quality_menu(ui: &mut egui::Ui, quality: &mut Quality, extra: impl FnOnce(&mut egui::Ui)) {
     ui.menu_button(egui::RichText::new(format!("がしつ　{}", quality.label())).size(13.0), |ui| {
         for q in Quality::ALL {
             ui.selectable_value(quality, q, q.label()).on_hover_text(q.hint());
         }
+        extra(ui);
     });
 }
 
