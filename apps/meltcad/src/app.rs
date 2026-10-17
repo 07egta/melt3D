@@ -636,6 +636,12 @@ impl App {
             return;
         }
         use egui::{Key, Modifiers};
+        // Cancel only the active gesture; do not drop the selection or commit its preview.
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+            && self.cancel_gizmo_drag()
+        {
+            return;
+        }
         self.sketch_keys(ctx);
         self.curve_keys(ctx);
         self.clipboard_events(ctx);
