@@ -898,6 +898,16 @@ impl App {
                     self.curve_button(ui);
                     self.pipe_button(ui);
                     self.sketch_button(ui);
+                    // Direct preset access: one click, separate from the long primitive list.
+                    style::menu_button(ui, "家具", false, |ui| {
+                        ui.label(egui::RichText::new("Organic Furniture").size(12.0).color(style::DIM));
+                        for design in crate::organic_furniture::Design::ALL {
+                            if ui.button(design.label()).on_hover_text("作ったあとも幅・高さ・脚を変えられます").clicked() {
+                                crate::organic_furniture::insert(self, &ctx, design);
+                                ui.close();
+                            }
+                        }
+                    });
                     style::menu_button(ui, "…", false, |ui| {
                         ui.set_min_width(190.0);
                         ui.label(egui::RichText::new("ほかの形").size(12.0).color(style::DIM));
@@ -909,14 +919,6 @@ impl App {
                             });
                             if r.inner.clicked() {
                                 self.add_shape(&ctx, k);
-                                ui.close();
-                            }
-                        }
-                        ui.separator();
-                        ui.label(egui::RichText::new("Organic Furniture｜有機家具").size(12.0).color(style::DIM));
-                        for design in crate::organic_furniture::Design::ALL {
-                            if ui.button(design.label()).on_hover_text("一体化した家具を作る。右側で高さ・幅・脚を変更できます").clicked() {
-                                crate::organic_furniture::insert(self, &ctx, design);
                                 ui.close();
                             }
                         }
