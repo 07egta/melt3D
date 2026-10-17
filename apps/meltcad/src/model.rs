@@ -567,7 +567,18 @@ pub struct Group {
 
 impl Group {
     pub fn new(name: impl Into<String>) -> Group {
-        Group { name: name.into(), op: Op::Add, blend: 0.0, visible: true, shapes: Vec::new(), bag: None, uid: 0, pattern: None, instance_of: None, xform: Xform::default() }
+        Group {
+            name: name.into(),
+            op: Op::Add,
+            blend: 0.0,
+            visible: true,
+            shapes: Vec::new(),
+            bag: None,
+            uid: 0,
+            pattern: None,
+            instance_of: None,
+            xform: Xform::default(),
+        }
     }
 }
 
