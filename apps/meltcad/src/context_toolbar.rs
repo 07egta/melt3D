@@ -461,6 +461,46 @@ mod tests {
         assert!(app.disabled_reason(Action::Delete).is_some());
     }
 
+    /// EgUI tree rows plus toolbar, not just the constant-time action selector.
+    /// The numbers are logged on the runner; no hardware-dependent pass threshold.
+    #[test]
+    fn toolbar_and_scene_list_160_objects_ui_p95() {
+        fn sample(count: usize) -> (f64, f64) {
+            let ctx = egui::Context::default();
+            crate::style::apply(&ctx);
+            let mut app = App::new(true, None);
+            for i in 1..count {
+                app.scene.groups[0].shapes.push(Shape::new(Kind::Box, [i as f32, 0.0, 10.0], Material::default()));
+            }
+            app.view_rect = egui::Rect::from_min_size(pos2(280.0, 45.0), vec2(550.0, 640.0));
+            let mut times = Vec::new();
+            for i in 0..24 {
+                app.select_pick(Some(Pick::Shape(0, i % count)), false);
+                let started = Instant::now();
+                let mut output = ctx.run_ui(egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(pos2(0.0, 0.0), vec2(1100.0, 760.0))),
+                    ..Default::default()
+                }, |ui| {
+                    egui::CentralPanel::default().show_inside(ui, |ui| {
+                        ui.set_width(272.0);
+                        app.layers(ui);
+                    });
+                    app.selection_toolbar(ui.ctx());
+                });
+                output.textures_delta.clear();
+                if i > 3 { times.push(started.elapsed().as_secs_f64() * 1000.0); }
+            }
+            times.sort_by(f64::total_cmp);
+            let mid = times[times.len() / 2];
+            let p95 = times[((times.len() as f64 * 0.95).ceil() as usize).saturating_sub(1)];
+            (mid, p95)
+        }
+        let one = sample(1);
+        let many = sample(160);
+        eprintln!("YuraCAD context UI: 1 shape p50={:.3}ms p95={:.3}ms; 160 shapes p50={:.3}ms p95={:.3}ms (debug runner, not GPU latency)", one.0, one.1, many.0, many.1);
+        assert!(many.0.is_finite() && many.1.is_finite());
+    }
+
     /// Test selection changes, action filtering and drawing controls without timing an SDF bake.
     /// Report elapsed time rather than using a brittle millisecond pass/fail threshold.
     #[test]
