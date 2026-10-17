@@ -673,7 +673,7 @@ mod tests {
         unrelated.groups[2].instance_of = Some(999_999);
         assert!(!scene_has_glow(&unrelated));
         unrelated.groups[1].visible = true;
-        assert!(!scene_has_glow(&unrelated));
+        assert!(scene_has_glow(&unrelated), "a directly visible lamp must still emit");
         unrelated.groups[1].visible = false;
         unrelated.groups[2].instance_of = Some(uid);
         unrelated.groups[0].shapes[0].material.glow = 2.0;
