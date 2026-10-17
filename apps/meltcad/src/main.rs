@@ -64,6 +64,7 @@ mod shader_portability;
 mod sdf_volume;
 mod sketch;
 mod sketch_edit_ops;
+mod sketch_dimensions;
 mod sketch_ui;
 mod stroke;
 mod style;

@@ -20,6 +20,7 @@ use crate::model::{Kind, MAX_OUTLINE, MAX_PATH, MAX_SHAPES, Material, Op, Pick, 
 use crate::sdf::V3;
 use crate::sketch::{self, Frame, SketchError, Which};
 use crate::sketch_edit_ops::{self, EditError};
+use crate::sketch_dimensions::Dimensions;
 use crate::style;
 
 /// Pixels within which a click on the first point closes the outline.
@@ -263,6 +264,8 @@ pub struct State {
     pub edit_op: Option<EditOp>,
     pub edit_index: Option<usize>,
     pub edit_value: f32,
+    /// Transient precise numeric editor (saved geometry remains in the existing profile).
+    pub dimension: Option<Dimensions>,
 }
 
 impl Default for State {
@@ -299,6 +302,7 @@ impl Default for State {
             edit_op: None,
             edit_index: None,
             edit_value: 2.0,
+            dimension: None,
         }
     }
 }
@@ -331,6 +335,7 @@ impl State {
         self.dragging = false;
         self.cursor = None;
         self.mouse = None;
+        self.dimension = None;
     }
 
     /// Back to a blank page (the settings stay).
@@ -872,6 +877,7 @@ impl App {
         }
         let primary_down = ui.input(|i| i.pointer.primary_down());
         let mut done = None;
+        let mut measured = None;
         if matches!(self.sk.active_pen(), Pen::Rect | Pen::Circle) {
             if resp.drag_started_by(egui::PointerButton::Primary)
                 && let Some(o) = ui.input(|i| i.pointer.press_origin()).or(pos).filter(|o| !over_gnomon(*o))
@@ -884,7 +890,11 @@ impl App {
                 out.busy = true;
                 if !primary_down || resp.drag_stopped() {
                     match self.sk.cursor {
-                        Some(q) => done = self.sk.release(q),
+                        Some(q) => {
+                            let a = self.sk.anchor;
+                            done = self.sk.release(q);
+                            if done.is_some() { measured = a.map(|p| (p, q)); }
+                        },
                         None => self.sk.dragging = false,
                     }
                 }
@@ -895,7 +905,14 @@ impl App {
         {
             let first = self.sk.pts.first().and_then(|f| self.sketch_px(rect, &frame, *f));
             let close = self.sk.pts.len() >= 3 && first.is_some_and(|f| (f - m).length() <= CLOSE_PX);
+            let a = self.sk.anchor;
             done = done.or_else(|| self.sk.click(q, close));
+            if done.is_some() && matches!(self.sk.active_pen(), Pen::Rect | Pen::Circle) {
+                measured = a.map(|p| (p, q));
+            } else if done.is_none() {
+                // A new click supersedes any previous point/segment dimension editor.
+                self.sk.dimension = None;
+            }
             out.taken = true;
         }
         if resp.double_clicked_by(egui::PointerButton::Primary) && mouse.is_some() {
@@ -903,7 +920,14 @@ impl App {
             out.taken = true;
         }
         if let Some(d) = done {
+            let is_profile = matches!(d, Finished::Profile(_));
+            let top = self.sk.stage == Stage::LoftTop;
+            let pen = self.sk.active_pen();
             self.sketch_done(d);
+            if is_profile && let Some((a, b)) = measured {
+                let p = if top { &self.sk.profile2 } else { &self.sk.profile };
+                self.sk.dimension = Dimensions::for_shape(pen, a, b, p, top);
+            }
         }
         out
     }
@@ -912,14 +936,46 @@ impl App {
 
     /// Enter, Backspace / Delete and Esc while the tool is on. Call before the other shortcuts.
     /// Delete passes through to shape deletion only when drawing has no pending point.
-    pub fn sketch_keys(&mut self, ctx: &egui::Context) {
+    pub fn sketch_keys(&mut self, ctx: &egui::Context) -> bool {
         if !self.sketch_active() {
-            return;
+            return false;
         }
         use egui::{Key, Modifiers};
-        // A focused numeric field owns its Enter/Delete/Esc and text input.
-        if ctx.wants_keyboard_input() { return; }
         let hit = |k: Key| ctx.input_mut(|i| i.consume_key(Modifiers::NONE, k));
+        if self.sk.dimension.as_ref().is_some_and(|d| d.editing) {
+            if hit(Key::Tab) {
+                if let Some(d) = self.sk.dimension.as_mut() {
+                    d.selected = (d.selected + 1) % 2;
+                    d.needs_focus = true;
+                }
+            }
+            if hit(Key::Escape) {
+                if let Some(d) = self.sk.dimension.as_mut() {
+                    let profile = if d.top_profile { &mut self.sk.profile2 } else { &mut self.sk.profile };
+                    d.cancel(&mut self.sk.pts, profile);
+                }
+            } else if hit(Key::Enter) {
+                if let Some(d) = self.sk.dimension.as_mut() {
+                    let profile = if d.top_profile { &self.sk.profile2 } else { &self.sk.profile };
+                    d.accept(&self.sk.pts, profile);
+                }
+            }
+            // Stop all global shortcuts, including the numeric view keys.
+            return true;
+        }
+        if self.sk.edit.is_none()
+            && (self.sk.dimension.is_some() || !self.sk.pts.is_empty())
+            && hit(Key::Tab)
+        {
+            if let Some(d) = self.sk.dimension.as_mut() {
+                d.begin_again();
+            } else if let Some(d) = Dimensions::for_last_point(&self.sk.pts, self.sk.active_pen()) {
+                self.sk.dimension = Some(d);
+            }
+            return true;
+        }
+        // A focused numeric field owns its Enter/Delete/Esc and text input.
+        if ctx.wants_keyboard_input() { return false; }
         let sketch_uses_delete = self.sk.edit.is_some() || !self.sk.pts.is_empty() || self.sk.anchor.is_some();
         let del = (sketch_uses_delete && hit(Key::Delete)) | hit(Key::Backspace);
         let enter = hit(Key::Enter);
@@ -928,7 +984,7 @@ impl App {
             if self.sk.edit_op.is_some() {
                 if esc { self.sk.edit_op = None; self.sk.edit_index = None; }
                 else if enter { self.edit_commit_operation(); }
-                return;
+                return esc || enter;
             }
             if del {
                 self.sketch_edit_delete();
@@ -941,17 +997,14 @@ impl App {
                 self.edit_release();
                 self.sk.edit = None;
             }
-            return;
+            return del || enter || esc;
         }
         if enter && let Some(d) = self.sk.enter() {
             self.sketch_done(d);
         }
-        if del {
-            self.sk.back();
-        }
-        if esc && self.sk.escape() {
-            self.set_sketch_tool(false);
-        }
+        if del { self.sk.back(); }
+        if esc && self.sk.escape() { self.set_sketch_tool(false); }
+        del || enter || esc
     }
 
     // ----- editing a made shape -----
@@ -1376,6 +1429,12 @@ impl App {
                 self.paint_saved_path(p, rect);
                 self.paint_draft(p, rect);
             }
+        }
+        if let Some(d) = &st.dimension
+            && let Some(q) = d.position(&st.pts)
+            && let Some(px) = self.sketch_px(rect, &st.frame, q)
+        {
+            tag(p, px + vec2(16.0, -27.0), &d.readout());
         }
     }
 
@@ -1840,6 +1899,7 @@ impl App {
             hint(ui, pen_hint(pen, stage));
             hint(ui, "1mmきざみ　Shift = 10mm　Ctrl = 0.1mm　Backspaceで1つもどる　Escでやりなおし");
         }
+        self.dimension_card(ui);
         if stage == Stage::Draw && !self.sk.path.is_empty() {
             hint(ui, &format!("おぼえている線: {}点（スイープで使えます）", self.sk.path.len()));
         }
@@ -1930,6 +1990,53 @@ impl App {
                 }
             }
         }
+    }
+
+    /// Inline numeric fields; their edits change the visible sketch immediately.
+    fn dimension_card(&mut self, ui: &mut Ui) {
+        let Some(d) = self.sk.dimension.as_mut() else {
+            if !self.sk.pts.is_empty() {
+                hint(ui, "Tabで最後の点・線分の寸法を入力");
+            }
+            return;
+        };
+        if !d.editing {
+            if style::pill(ui, "寸法を再入力 (Tab)", false).clicked() {
+                d.begin_again();
+            }
+            return;
+        }
+        ui.separator();
+        let labels = d.labels();
+        let units = d.units();
+        let mut changed = None;
+        let mut focus = None;
+        ui.horizontal(|ui| {
+            for index in 0..2 {
+                ui.label(labels[index]);
+                let id = ui.make_persistent_id(("sketch_dimension", index));
+                let response = ui.add(egui::TextEdit::singleline(&mut d.fields[index])
+                    .id(id).desired_width(75.0));
+                if response.changed() { changed = Some(index); }
+                if d.needs_focus && d.selected == index { focus = Some(id); }
+                ui.label(units[index]);
+            }
+        });
+        if let Some(id) = focus {
+            ui.memory_mut(|m| m.request_focus(id));
+            d.needs_focus = false;
+        }
+        if let Some(index) = changed {
+            d.selected = index;
+            let profile = if d.top_profile { &mut self.sk.profile2 } else { &mut self.sk.profile };
+            let prevent_cross = matches!(self.sk.pen, Pen::Polygon | Pen::Spline) && !self.sk.smooth;
+            d.update(&mut self.sk.pts, profile, index, prevent_cross);
+            ui.ctx().request_repaint();
+        }
+        if let Some(error) = &d.error {
+            ui.colored_label(style::CUT, error);
+        }
+        hint(ui, "Tab: 次の入力欄  /  Enter: 確定  /  Esc: 取消");
     }
 
     /// The part of the card that asks what to make.
@@ -2841,6 +2948,68 @@ mod tests {
         key(egui::Key::Enter);
         app.sketch_keys(&ctx);
         assert_eq!(app.sk.stage, Stage::Ready);
+    }
+
+
+    #[test]
+    fn live_dimensions_survive_save_reload_and_one_undo_redo() {
+        let ctx = egui::Context::default();
+        let mut app = app();
+        app.set_sketch_tool(true);
+        app.sk.pen = Pen::Rect;
+        let a = [8.0, 12.0];
+        let b = [28.0, 22.0];
+        let raw = profile_of(app.sk.click(a, false).or_else(|| app.sk.click(b, false)));
+        app.sketch_done(Finished::Profile(raw.clone()));
+        app.sk.dimension = Dimensions::for_shape(Pen::Rect, a, b, &raw, false);
+        let Some(d) = app.sk.dimension.as_mut() else { panic!("editor missing") };
+        d.fields = ["100".into(), "50".into()];
+        d.update(&mut app.sk.pts, &mut app.sk.profile, 1, false);
+        assert!(d.error.is_none(), "{:?}", d.error);
+        assert!(d.accept(&app.sk.pts, &app.sk.profile));
+        assert_eq!(sketch::bbox(&app.sk.profile), Some(([8.0, 12.0], [108.0, 62.0])));
+        assert!(app.sketch_make(&ctx));
+        app.settle(&ctx);
+        let Some(Pick::Shape(g, si)) = app.sel else { panic!("shape not selected") };
+        let saved = app.scene.to_json();
+        let reloaded = Scene::from_json(&saved).expect("valid saved scene");
+        let original_outline = app.scene.shape(g, si).map(|s| s.outline.clone()).expect("new shape");
+        assert_eq!(reloaded.shape(g, si).map(|s| &s.outline), Some(&original_outline));
+        app.undo();
+        assert_eq!(app.scene.shape_count(), 1, "one Enter plus make: one scene edit");
+        app.redo();
+        assert_eq!(app.scene.shape(g, si).map(|s| &s.outline), Some(&original_outline));
+    }
+
+    #[test]
+    fn tab_enters_point_dimensions_without_global_view_shortcut() {
+        let ctx = egui::Context::default();
+        let mut app = app();
+        app.set_sketch_tool(true);
+        app.sk.pen = Pen::Line;
+        app.sk.click([0.0, 0.0], false);
+        app.sk.click([10.0, 0.0], false);
+        let key = |k: egui::Key| ctx.input_mut(|i| i.events.push(egui::Event::Key {
+            key: k, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE,
+        }));
+        key(egui::Key::Tab);
+        app.keys(&ctx);
+        assert!(app.sk.dimension.as_ref().is_some_and(|d| d.editing));
+        assert_eq!(app.sk.dimension.as_ref().map(|d| d.selected), Some(0));
+        ctx.input_mut(|i| i.events.clear());
+        key(egui::Key::Tab);
+        app.keys(&ctx);
+        assert_eq!(app.sk.dimension.as_ref().map(|d| d.selected), Some(1));
+        let cam = app.cam;
+        ctx.input_mut(|i| i.events.clear());
+        key(egui::Key::Num1);
+        app.keys(&ctx);
+        assert_eq!((app.cam.yaw, app.cam.pitch, app.cam.ortho), (cam.yaw, cam.pitch, cam.ortho), "number keys must not switch views while entering dimensions");
+        ctx.input_mut(|i| i.events.clear());
+        key(egui::Key::Escape);
+        app.keys(&ctx);
+        assert!(app.sk.on && app.sk.dimension.as_ref().is_some_and(|d| !d.editing));
+        assert_eq!(app.sk.pts, vec![[0.0, 0.0], [10.0, 0.0]]);
     }
 
     #[test]
