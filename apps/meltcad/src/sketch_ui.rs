@@ -488,6 +488,7 @@ impl App {
 
     /// Switch the sketch tool on or off. It excludes the other drawing tools.
     pub fn set_sketch_tool(&mut self, on: bool) {
+        self.edit_cancel_drag();
         self.sk.edit = None;
         self.sk.reset();
         self.sk.on = on;
@@ -2033,7 +2034,7 @@ mod tests {
         assert_eq!(app.sel, Some(Pick::Shape(g, s)));
         assert!(app.sk.edit.is_some());
         app.settle(&ctx);
-        assert_eq!(app.undo.last(), Some(&Scene::default()).filter(|_| false), "cancel adds no undo step");
+        assert_eq!(app.scene.shape(g, s), Some(&original), "cancel adds no model change");
     }
 
     #[test]
