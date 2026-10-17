@@ -5,6 +5,7 @@ Run: MELTCAD_BIN=... python3 tools_b.py   (writes tools_b.json and renders previ
 import math
 
 from lib import *
+from kitchen import build_kitchen_items
 
 FILE = "tools_b.json"
 CAT = "くらしのもの"
@@ -349,7 +350,7 @@ def build_items():
         item("かぎ", ["key", "鍵"], key()),
         item("とけい", ["clock", "alarm clock", "時計"], clock()),
         item("ペン立て", ["pen holder", "pen stand", "筆立て", "ペンたて"], pen_holder()),
-    ]
+    ] + build_kitchen_items()
 
 
 if __name__ == "__main__":
