@@ -1308,6 +1308,27 @@ mod tests {
     use super::*;
 
     #[test]
+    fn twist_preset_is_one_undo_step_and_redoes_after_saving() {
+        use crate::deform::{Deformation, Twist};
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        let original = app.scene.clone();
+        app.scene.groups[0].shapes[0].deformation = Some(Deformation::Twist(Twist::preset(90.0)));
+        app.scene.groups[0].shapes[0].deformation = Some(Deformation::Twist(Twist::preset(180.0)));
+        app.scene.groups[0].shapes[0].deformation = Some(Deformation::Twist(Twist::preset(360.0)));
+        app.settle(&ctx);
+        assert_eq!(app.undo.len(), 1);
+        let twisted = app.scene.clone();
+        assert_ne!(twisted, original);
+        app.undo();
+        assert_eq!(app.scene, original, "undo restores source with no modifier");
+        app.redo();
+        assert_eq!(app.scene, twisted, "redo restores twist and its angle");
+        let json = app.scene.to_json();
+        assert_eq!(crate::model::Scene::from_json(&json).unwrap(), twisted);
+    }
+
+    #[test]
     fn adding_undoing_and_deleting_shapes() {
         let ctx = egui::Context::default();
         let mut app = App::new(true, None);
