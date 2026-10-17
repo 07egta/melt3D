@@ -272,7 +272,7 @@ pub fn format_table(r: &Report) -> String {
         out.push_str(&format!("cpu pack  : {} ms per frame that changes the scene\n", list.join(", ")));
     }
     out.push('\n');
-    out.push_str(&format!("{:<10} {:>6}  {:<10} {:<5} {:>8} {:>8} {:>8} {:>8} {:>7} {:>8}\n", "scene", "shapes", "size", "mode", "avg ms", "p95 ms", "min", "max", "fps*", "wall ms"));
+    out.push_str(&format!("{:<10} {:>6}  {:<10} {:<5} {:>8} {:>8} {:>8} {:>8} {:>7} {:>8} {:>8}\n", "scene", "shapes", "size", "mode", "avg ms", "p95 ms", "min", "max", "fps*", "wall ms", "wall p95"));
     let mut last_scene = String::new();
     for row in &r.rows {
         if !last_scene.is_empty() && last_scene != row.scene {
@@ -280,7 +280,7 @@ pub fn format_table(r: &Report) -> String {
         }
         last_scene = row.scene.clone();
         out.push_str(&format!(
-            "{:<10} {:>6}  {:<10} {:<5} {:>8} {:>8} {:>8} {:>8} {:>7.1} {:>8}\n",
+            "{:<10} {:>6}  {:<10} {:<5} {:>8} {:>8} {:>8} {:>8} {:>7.1} {:>8} {:>8}\n",
             row.scene,
             row.shapes,
             format!("{}x{}", row.size[0], row.size[1]),
@@ -290,13 +290,15 @@ pub fn format_table(r: &Report) -> String {
             ms_text(row.min_ms),
             ms_text(row.max_ms),
             row.fps(),
-            ms_text(row.wall_avg_ms)
+            ms_text(row.wall_avg_ms),
+            ms_text(row.wall_p95_ms)
         ));
     }
     out.push_str("\n* fps is 1000 / scene-pass average ms, a GPU-only throughput estimate, NOT measured window FPS.\n");
     out.push_str("GPU load is reported as scene-pass GPU ms (or explicitly wall ms), not a GPU-utilization percentage.\n");
+    out.push_str("If no GPU timestamp is available, predicted adaptive resolution from wall timings is only a proxy.\n");
     if !r.preview_quality.is_empty() {
-        out.push_str("\nPreview image difference (static full vs fast adaptive; bilinear upscale approximation, no UI sharpening):\n");
+        out.push_str("\nPreview image difference (static high vs interactive adaptive; bilinear upscale approximation, no UI sharpening):\n");
         out.push_str("scene       shapes       viewport      preview      RGB MAE /255   RGB p95 /255\n");
         for p in &r.preview_quality {
             out.push_str(&format!("{:<10} {:>6}  {:>10}  {:>10} {:>13.2} {:>14.2}\n",
