@@ -176,6 +176,7 @@ impl App {
                 None
             }
             Action::Delete => {
+                if self.sk.edit.is_some() { return Some("輪郭の編集中です。先に編集を終了してください"); }
                 if self.multi_sel.is_empty() || self.selected_shape_keys().is_some() { None }
                 else { Some("グループと形の混在選択は削除できません") }
             }
@@ -481,7 +482,7 @@ mod tests {
                     screen_rect: Some(egui::Rect::from_min_size(pos2(0.0, 0.0), vec2(1100.0, 760.0))),
                     ..Default::default()
                 }, |ui| {
-                    egui::CentralPanel::default().show_inside(ui, |ui| {
+                    ui.vertical(|ui| {
                         ui.set_width(272.0);
                         app.layers(ui);
                     });
