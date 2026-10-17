@@ -948,6 +948,7 @@ impl App {
             return false;
         }
         let before = ol.clone();
+        self.sk.snap_hit = None;
         if let Some(e) = self.sk.edit.as_mut() {
             e.drag = Some(DragPoint { idx, before });
             e.sel = Some(idx);
@@ -961,6 +962,7 @@ impl App {
         let Some(idx) = self.sk.edit.as_ref().and_then(|e| e.drag.as_ref()).map(|d| d.idx) else { return };
         let Some((q, hit)) = self.sketch_resolve_snap(rect, m, step, &f, self.sk.snap_hit, Some(idx)) else { return };
         self.sk.snap_hit = hit;
+        self.sk.mouse = Some(m);
         if let Some((ol, rev)) = self.edit_outline_mut()
             && let Some(p) = ol.get_mut(idx)
         {
@@ -971,6 +973,7 @@ impl App {
     /// The button came up: keep the new outline unless it now crosses itself.
     pub fn edit_release(&mut self) {
         let Some(d) = self.sk.edit.as_mut().and_then(|e| e.drag.take()) else { return };
+        self.sk.snap_hit = None;
         let Some((ol, _)) = self.edit_outline_mut() else { return };
         if sketch::is_simple(&d.before) && !sketch::is_simple(ol) {
             *ol = d.before;
@@ -1044,6 +1047,7 @@ impl App {
         let over_gnomon = |p: Pos2| (p - pos2(rect.right() - 62.0, rect.top() + 62.0)).length() < GNOMON_PX;
         let mouse = pos.filter(|p| resp.hovered() && !over_gnomon(*p) && !mods.alt);
         self.sk.snap_hit = None;
+        self.sk.mouse = mouse;
         let hover = mouse.and_then(|m| self.edit_hit(rect, m));
         if let Some(e) = self.sk.edit.as_mut() {
             e.hover = hover;
@@ -2020,6 +2024,43 @@ mod tests {
             let (_, _, fwd) = app.cam.basis();
             assert!(crate::sdf::dot(fwd, fr.normal()) < -0.99, "{pl:?}: the camera looks into the plane");
         }
+    }
+
+    #[test]
+    fn screen_space_snap_targets_nearby_existing_vertex_at_different_zoom_levels() {
+        let mut app = app();
+        app.cam = Camera::default();
+        app.cam.look(0.0, std::f32::consts::FRAC_PI_2);
+        app.cam.target = [0.0, 0.0, 0.0];
+        app.sk.on = true;
+        app.sk.pen = Pen::Polygon;
+        app.sk.pts = vec![[20.0, 10.0], [30.0, 10.0]];
+        let r=rect();
+        let f=Frame::floor();
+        for distance in [90.0, 250.0] {
+            app.cam.dist=distance;
+            let px=app.cam.project(r,f.to_world([20.0,10.0])).unwrap();
+            let mouse=px+vec2(6.0,0.0);
+            let (point,hit)=app.sketch_resolve_snap(r,mouse,1.0,&f,None,None).unwrap();
+            assert_eq!(point,[20.0,10.0]);
+            assert_eq!(hit.unwrap().kind,SnapKind::Endpoint);
+        }
+    }
+
+    #[test]
+    fn screen_space_snap_keeps_cursor_free_when_no_target_is_close() {
+        let mut app = app();
+        app.cam = Camera::default();
+        app.cam.look(0.0, std::f32::consts::FRAC_PI_2);
+        app.cam.dist=100.0;
+        app.sk.on=true;
+        app.sk.pts=vec![[30.0,30.0]];
+        let r=rect();
+        let f=Frame::floor();
+        let point=app.cam.project(r,f.to_world([45.2,55.4])).unwrap();
+        let (at,hit)=app.sketch_resolve_snap(r,point,1.0,&f,None,None).unwrap();
+        assert!(at[0].is_finite() && at[1].is_finite());
+        assert!(hit.is_none_or(|h| h.kind==SnapKind::Grid));
     }
 
     /// Edit the outline of a made shape point by point, with undo.
