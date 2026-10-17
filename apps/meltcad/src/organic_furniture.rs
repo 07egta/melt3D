@@ -108,7 +108,9 @@ impl Settings {
         self.width = safe(self.width, MIN_WIDTH, MAX_WIDTH, def.width);
         self.depth = safe(self.depth, MIN_WIDTH, MAX_WIDTH, def.depth);
         self.height = safe(self.height, 65.0, 1000.0, def.height);
-        let max_d = (self.width.min(self.depth) * 0.40).min(self.height * 0.42).max(8.0);
+        // Limit radii relative to seat span so the 3/4 supports remain distinguishable.
+        let share = match self.legs { Legs::Four => 0.20, Legs::Three => 0.28, Legs::Centre => 0.40 };
+        let max_d = (self.width.min(self.depth) * share).min(self.height * 0.42).max(8.0);
         self.leg_diameter = safe(self.leg_diameter, 8.0, max_d, def.leg_diameter.min(max_d));
         self.roundness = safe(self.roundness, 0.0, 1.0, def.roundness);
         self.puff = safe(self.puff, 0.0, 20.0, def.puff);
