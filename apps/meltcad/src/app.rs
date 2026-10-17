@@ -1119,7 +1119,7 @@ impl App {
                     } else if !note.is_empty() {
                         note.to_string()
                     } else if hidden {
-                        "この操作のヒントは非表示です。? / F1 から復元できます".to_string()
+                        "F1: 操作のしかた".to_string()
                     } else {
                         format!("次: {}　｜　{}", info.action, info.controls)
                     };
