@@ -8,6 +8,78 @@ use serde_json::Value;
 
 use crate::import_mesh::{Affine, BAD_INDEX, BAD_NUMBER, CUT_OFF, ImportedMesh, MAX_TRIANGLES, MAX_VERTICES, NO_SHAPE, TOO_MANY_TRIS, TOO_MANY_VERTS, append_transformed};
 
+/// Read only appearance metadata; never changes geometry decoding or allocates image pixels.
+pub(crate) fn appearance_glb(bytes: &[u8]) -> crate::import_mesh::AppearanceInfo {
+    use crate::import_mesh::AppearanceInfo;
+    let mut out = AppearanceInfo::default();
+    if bytes.get(..4) != Some(b"glTF") { return out; }
+    let mut offset = 12usize;
+    let json_bytes = loop {
+        let Some(length) = u32at(bytes, offset).map(|n| n as usize) else { return out };
+        let Some(kind) = u32at(bytes, offset + 4) else { return out };
+        let Some(start) = offset.checked_add(8) else { return out };
+        let Some(end) = start.checked_add(length) else { return out };
+        let Some(chunk) = bytes.get(start..end) else { return out };
+        if kind == 0x4E4F_534A { break chunk; }
+        let Some(next) = start.checked_add(length.div_ceil(4) * 4) else { return out };
+        if next <= offset || next >= bytes.len() { return out; }
+        offset = next;
+    };
+    let Ok(doc) = serde_json::from_slice::<Value>(json_bytes) else { return out };
+    let materials = doc.get("materials").and_then(Value::as_array);
+    let mut used: Vec<usize> = Vec::new();
+    let mut vertex_colours = false;
+    if let Some(meshes) = doc.get("meshes").and_then(Value::as_array) {
+        for mesh in meshes {
+            if let Some(primitives) = mesh.get("primitives").and_then(Value::as_array) {
+                for p in primitives {
+                    if p.get("mode").and_then(Value::as_u64).unwrap_or(4) < 4 { continue; }
+                    if p.get("attributes").and_then(|a| a.get("COLOR_0")).is_some() { vertex_colours = true; }
+                    let idx = usz(p.get("material")).unwrap_or(usize::MAX);
+                    if !used.contains(&idx) { used.push(idx); }
+                }
+            }
+        }
+    }
+    if used.len() > 1 || vertex_colours { out.varies = true; }
+    for idx in used {
+        let Some(mat) = materials.and_then(|a| a.get(idx)) else { continue };
+        let pbr = mat.get("pbrMetallicRoughness");
+        let v = pbr.and_then(|p| p.get("baseColorFactor")).and_then(Value::as_array);
+        let mut rgba = [1.0f32; 4];
+        if let Some(a) = v {
+            if a.len() == 4 {
+                for (i, slot) in rgba.iter_mut().enumerate() {
+                    let Some(x) = a[i].as_f64() else { return out };
+                    *slot = x as f32;
+                }
+            }
+        }
+        let rough = pbr.and_then(|p| p.get("roughnessFactor")).and_then(Value::as_f64).unwrap_or(1.0) as f32;
+        let metal = pbr.and_then(|p| p.get("metallicFactor")).and_then(Value::as_f64).unwrap_or(1.0) as f32;
+        if out.material.is_none() { out.material = crate::materials::from_gltf_pbr(rgba, rough, metal); }
+        if pbr.and_then(|p| p.get("baseColorTexture")).is_some() ||
+           mat.get("normalTexture").is_some() || mat.get("occlusionTexture").is_some() ||
+           mat.get("emissiveTexture").is_some() {
+            out.notes.push("GLB の画像テクスチャ（ベース色・法線など）は読み込めません。単色で代用します".into());
+        }
+        if mat.get("extensions").is_some() {
+            out.notes.push("GLB の拡張マテリアルは完全には再現できません".into());
+        }
+        if rgba[3] < 1.0 || mat.get("alphaMode").and_then(Value::as_str).is_some_and(|a| a != "OPAQUE") {
+            out.notes.push("GLB の透明度はガラス材質への近似です（アルファ描画とは異なります）".into());
+        }
+        if mat.get("emissiveFactor").is_some() {
+            out.notes.push("GLB の発光色は再現されません".into());
+        }
+    }
+    if vertex_colours { out.notes.push("GLB の頂点色 COLOR_0 は単色SDFへ変換できません".into()); }
+    if out.material.is_none() && vertex_colours {
+        out.notes.push("頂点色のみのGLBのため、既定の材質を使います".into());
+    }
+    out
+}
+
 const BAD_GLB: &str = "GLB ファイルがこわれています";
 const MAX_NODE_VISITS: usize = 100_000;
 const MAX_DEPTH: usize = 64;
