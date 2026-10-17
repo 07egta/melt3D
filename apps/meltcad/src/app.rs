@@ -49,6 +49,9 @@ pub struct App {
     redo: Vec<Scene>,
     pub cam: Camera,
     pub sel: Option<Pick>,
+    /// More picks next to `sel` (Shift + click). Only valid while `multi_for` is still `sel`.
+    pub multi: Vec<Pick>,
+    multi_for: Option<Pick>,
     pub tool: Tool,
     /// What a new shape does: add to the group or carve from it.
     pub new_op: Op,
@@ -148,6 +151,8 @@ impl App {
             redo: Vec::new(),
             cam: Camera::default(),
             sel: Some(Pick::Shape(0, 0)),
+            multi: Vec::new(),
+            multi_for: None,
             tool: Tool::All,
             new_op: Op::Add,
             drag: None,
@@ -224,13 +229,13 @@ impl App {
         let Some(path) = self.recovery.pending_path().map(std::path::Path::to_path_buf) else { return };
         let mut choice = None;
         egui::Modal::new(egui::Id::new("yuracad_recovery")).show(ctx, |ui| {
-            ui.heading("前回の未保存作品が見つかりました");
-            ui.label(format!("復旧データ: {}", path.display()));
-            ui.label("復元しても元の作品ファイルは上書きしません。");
+            ui.heading("Unsaved work found");
+            ui.label(format!("Recovery data: {}", path.display()));
+            ui.label("Restoring will not overwrite the original file.");
             ui.horizontal(|ui| {
-                if ui.button("未保存のコピーとして復元").clicked() { choice = Some(0); }
-                if ui.button("あとで").clicked() { choice = Some(1); }
-                if ui.button("復旧データを削除").clicked() { choice = Some(2); }
+                if ui.button("Restore as unsaved copy").clicked() { choice = Some(0); }
+                if ui.button("Later").clicked() { choice = Some(1); }
+                if ui.button("Delete recovery data").clicked() { choice = Some(2); }
             });
         });
         match choice {
@@ -248,16 +253,16 @@ impl App {
                     self.dirty = true;
                     self.sel = None;
                     self.frame_now();
-                    self.say(ctx, if notes.is_empty() { "未保存のコピーとして復元しました".into() } else { format!("復元しました: {}", notes.join("　")) });
+                    self.say(ctx, if notes.is_empty() { "Restored as unsaved copy".into() } else { format!("Restored: {}", notes.join(", ")) });
                 }
                 Err(e) => {
-                    self.say(ctx, format!("復旧ファイルが破損しているか開けません: {e}"));
+                    self.say(ctx, format!("Recovery file is damaged or cannot be opened: {e}"));
                     self.recovery.postpone();
                 }
             },
             Some(1) => self.recovery.postpone(),
             Some(2) => if let Err(e) = self.recovery.discard_pending() {
-                self.say(ctx, format!("復旧データを削除できませんでした: {e}"));
+                self.say(ctx, format!("Could not delete recovery data: {e}"));
             },
             _ => {}
         }
@@ -342,7 +347,7 @@ impl App {
                 match crate::recovery::read_project(&path) {
                     Ok((scene, notes)) => (scene, Some(path), notes),
                     Err(e) => {
-                        self.status = (format!("開けませんでした: {e}"), 0.0);
+                        self.status = (format!("Could not open: {e}"), 0.0);
                         return;
                     }
                 }
@@ -350,7 +355,7 @@ impl App {
             PendingFileAction::Close => return,
         };
         if let Err(e) = self.recovery.clear_active() {
-            self.notice = Some(format!("復旧データを整理できませんでした: {e}"));
+            self.notice = Some(format!("Could not clean up recovery data: {e}"));
         }
         self.scene = scene.clone();
         self.committed = scene;
@@ -360,7 +365,7 @@ impl App {
         self.path = path;
         self.dirty = false;
         if !notes.is_empty() {
-            self.notice = Some(notes.join("　"));
+            self.notice = Some(notes.join(", "));
         }
         self.frame_now();
     }
@@ -405,17 +410,17 @@ impl App {
         }
         let mut decision = None;
         egui::Modal::new(egui::Id::new("unsaved_file_action")).show(ctx, |ui| {
-            ui.heading("保存していない変更があります");
-            ui.label("いまの作品を保存してから続けますか？");
+            ui.heading("You have unsaved changes");
+            ui.label("Save current work before continuing?");
             ui.add_space(8.0);
             ui.horizontal(|ui| {
-                if ui.button("保存して続ける").clicked() {
+                if ui.button("Save and continue").clicked() {
                     decision = Some(PendingFileDecision::Save);
                 }
-                if ui.button("保存せず続ける").clicked() {
+                if ui.button("Continue without saving").clicked() {
                     decision = Some(PendingFileDecision::Discard);
                 }
-                if ui.button("キャンセル").clicked() {
+                if ui.button("Cancel").clicked() {
                     decision = Some(PendingFileDecision::Cancel);
                 }
             });
@@ -434,7 +439,7 @@ impl App {
         match g {
             Some(g) if g < self.scene.groups.len() => Some(g),
             _ => {
-                self.scene.groups.push(Group::new("グループ 1"));
+                self.scene.groups.push(Group::new("Group 1"));
                 Some(self.scene.groups.len() - 1)
             }
         }
@@ -442,7 +447,7 @@ impl App {
 
     pub fn add_shape(&mut self, ctx: &egui::Context, kind: Kind) {
         if self.scene.shape_count() >= MAX_SHAPES {
-            self.say(ctx, format!("形は{MAX_SHAPES}個までです"));
+            self.say(ctx, format!("Up to {MAX_SHAPES} shapes"));
             return;
         }
         let Some(g) = self.target_group() else { return };
@@ -479,7 +484,7 @@ impl App {
     pub fn add_group(&mut self) {
         if self.scene.groups.len() < MAX_GROUPS {
             let n = self.scene.groups.len() + 1;
-            self.scene.groups.push(Group::new(format!("グループ {n}")));
+            self.scene.groups.push(Group::new(format!("Group {n}")));
             self.sel = Some(Pick::Group(self.scene.groups.len() - 1));
         }
     }
@@ -493,25 +498,32 @@ impl App {
                         return;
                     }
                     c.pos = [c.pos[0] + 8.0, c.pos[1] + 8.0, c.pos[2]];
-                    c.name = format!("{} コピー", c.name);
+                    c.name = format!("{} copy", c.name);
                     self.scene.groups[g].shapes.insert(s + 1, c);
                     self.sel = Some(Pick::Shape(g, s + 1));
                 }
             }
-            Some(Pick::Group(g))
-                if self.scene.groups.len() < MAX_GROUPS && self.scene.shape_count() + self.scene.groups[g].shapes.len() <= MAX_SHAPES =>
-            {
-                let mut c = self.scene.groups[g].clone();
-                if let Err(why) = crate::mesh::can_add(&self.scene, c.shapes.iter()) {
+            Some(Pick::Group(g)) if g < self.scene.groups.len() => {
+                let e = self.scene.subtree_end(g);
+                let copies: Vec<Group> = self.scene.groups[g..e].to_vec();
+                let shapes: usize = copies.iter().map(|c| c.shapes.len()).sum();
+                if self.scene.groups.len() + copies.len() > MAX_GROUPS || self.scene.shape_count() + shapes > MAX_SHAPES {
+                    return;
+                }
+                if let Err(why) = crate::mesh::can_add(&self.scene, copies.iter().flat_map(|c| c.shapes.iter())) {
                     self.notice = Some(why.into());
                     return;
                 }
-                c.name = format!("{} コピー", c.name);
-                for s in &mut c.shapes {
-                    s.pos = [s.pos[0] + 8.0, s.pos[1] + 8.0, s.pos[2]];
+                for (i, mut c) in copies.into_iter().enumerate() {
+                    if i == 0 {
+                        c.name = format!("{} copy", c.name);
+                    }
+                    for s in &mut c.shapes {
+                        s.pos = [s.pos[0] + 8.0, s.pos[1] + 8.0, s.pos[2]];
+                    }
+                    self.scene.groups.insert(e + i, c);
                 }
-                self.scene.groups.insert(g + 1, c);
-                self.sel = Some(Pick::Group(g + 1));
+                self.sel = Some(Pick::Group(e));
             }
             _ => {}
         }
@@ -535,13 +547,94 @@ impl App {
                 p[0] = -p[0];
             }
             c.outline.reverse();
-            c.name = format!("{} (左右)", c.name);
+            c.name = format!("{} (mirror)", c.name);
             self.scene.groups[g].shapes.insert(s + 1, c);
             self.sel = Some(Pick::Shape(g, s + 1));
         }
     }
 
+    /// Everything that is selected: `sel` first, then the Shift + click ones.
+    pub fn picks(&self) -> Vec<Pick> {
+        let mut v: Vec<Pick> = self.sel.into_iter().collect();
+        if self.sel.is_some() && self.multi_for == self.sel {
+            v.extend(self.multi.iter().copied().filter(|p| Some(*p) != self.sel));
+        }
+        v
+    }
+
+    /// The shapes of everything that is selected, each once.
+    pub fn sel_targets(&self) -> Vec<(usize, usize)> {
+        crate::view::targets_all(&self.scene, &self.picks())
+    }
+
+    /// Shift + click: add `p` to the selection, or take it out again.
+    pub fn toggle_pick(&mut self, p: Pick) {
+        if self.multi_for != self.sel {
+            self.multi.clear();
+        }
+        match self.sel {
+            None => self.sel = Some(p),
+            Some(s) if s == p => {
+                self.sel = if self.multi.is_empty() { None } else { Some(self.multi.remove(0)) };
+            }
+            Some(_) => {
+                if let Some(i) = self.multi.iter().position(|m| *m == p) {
+                    self.multi.remove(i);
+                } else {
+                    self.multi.push(p);
+                }
+            }
+        }
+        self.multi_for = self.sel;
+    }
+
+    /// Put the selected shapes into one new group (they melt together; the group is the unit to move and melt with others).
+    pub fn group_selected(&mut self) {
+        let mut shapes: Vec<(usize, usize)> = self.picks().into_iter().filter_map(|p| if let Pick::Shape(g, s) = p { Some((g, s)) } else { None }).collect();
+        if shapes.len() < 2 || self.scene.groups.len() >= MAX_GROUPS {
+            return;
+        }
+        shapes.sort();
+        shapes.dedup();
+        let mut group = Group::new(format!("Group {}", self.scene.groups.len() + 1));
+        let mut taken: Vec<Shape> = Vec::new();
+        for (g, s) in shapes.iter().rev() {
+            if let Some(sh) = self.scene.groups.get_mut(*g).filter(|gr| *s < gr.shapes.len()).map(|gr| gr.shapes.remove(*s)) {
+                taken.push(sh);
+            }
+        }
+        taken.reverse();
+        group.shapes = taken;
+        let at = self.scene.groups.len();
+        self.scene.groups.push(group);
+        self.folded.clear();
+        self.multi.clear();
+        self.sel = Some(Pick::Group(at));
+        self.multi_for = self.sel;
+    }
+
     pub fn delete_selected(&mut self) {
+        let picks = self.picks();
+        if picks.len() > 1 {
+            let mut shapes: Vec<(usize, usize)> = picks.iter().filter_map(|p| if let Pick::Shape(g, s) = p { Some((*g, *s)) } else { None }).collect();
+            let mut groups: Vec<usize> = picks.iter().filter_map(|p| if let Pick::Group(g) = p { Some(*g) } else { None }).collect();
+            shapes.sort();
+            shapes.dedup();
+            groups.sort();
+            groups.dedup();
+            for (g, s) in shapes.into_iter().rev() {
+                if let Some(gr) = self.scene.groups.get_mut(g).filter(|gr| s < gr.shapes.len()) {
+                    gr.shapes.remove(s);
+                }
+            }
+            for g in groups.into_iter().rev() {
+                self.scene.remove_group(g);
+            }
+            self.folded.clear();
+            self.multi.clear();
+            self.sel = None;
+            return;
+        }
         match self.sel {
             Some(Pick::Shape(g, s)) if self.scene.shape(g, s).is_some() => {
                 self.scene.groups[g].shapes.remove(s);
@@ -552,7 +645,8 @@ impl App {
                 };
             }
             Some(Pick::Group(g)) if g < self.scene.groups.len() => {
-                self.scene.groups.remove(g);
+                self.scene.remove_group(g);
+                self.folded.clear();
                 self.sel = None;
             }
             _ => {}
@@ -587,13 +681,20 @@ impl App {
                 if g >= self.scene.groups.len() || g2 >= self.scene.groups.len() || g == g2 {
                     return;
                 }
-                let gr = self.scene.groups.remove(g);
-                let mut idx = if g < g2 { g2 - 1 } else { g2 };
-                if after {
-                    idx += 1;
+                let e = self.scene.subtree_end(g);
+                if (g..e).contains(&g2) {
+                    return;
                 }
-                let idx = idx.min(self.scene.groups.len());
-                self.scene.groups.insert(idx, gr);
+                // (the place among the groups that stay, and the depth of the group it lands beside)
+                let removed = e - g;
+                let t = if g2 >= e { g2 - removed } else { g2 };
+                let (tdepth, tend) = (self.scene.groups[g2].depth, self.scene.subtree_end(g2));
+                let idx = if after {
+                    (if tend >= e { tend - removed } else { tend }).max(t + 1)
+                } else {
+                    t
+                };
+                let idx = self.scene.move_subtree(g, idx, tdepth);
                 self.folded.clear();
                 self.sel = Some(Pick::Group(idx));
             }
@@ -602,7 +703,7 @@ impl App {
 
     /// Move the selection by `d` millimetres.
     pub fn nudge(&mut self, d: [f32; 3]) {
-        for (g, s) in crate::view::targets(&self.scene, self.sel) {
+        for (g, s) in self.sel_targets() {
             if let Some(sh) = self.scene.shape_mut(g, s) {
                 sh.pos = [sh.pos[0] + d[0], sh.pos[1] + d[1], sh.pos[2] + d[2]];
             }
@@ -645,7 +746,7 @@ impl App {
     fn try_save(&mut self, ctx: &egui::Context, ask: bool) -> bool {
         let path = match (&self.path, ask) {
             (Some(p), false) => Some(p.clone()),
-            _ => rfd::FileDialog::new().add_filter("MELTCAD", &["meltcad"]).set_file_name("作品.meltcad").save_file(),
+            _ => rfd::FileDialog::new().add_filter("MELTCAD", &["meltcad"]).set_file_name("Untitled.meltcad").save_file(),
         };
         let Some(path) = path else { return false };
         match crate::recovery::save_project(&path, &self.scene) {
@@ -654,13 +755,13 @@ impl App {
                 self.dirty = false;
                 let revision = self.track_scene();
                 if let Err(e) = self.recovery.document_saved(revision) {
-                    self.notice = Some(format!("復旧データの整理に失敗しました: {e}"));
+                    self.notice = Some(format!("Could not clean up recovery data: {e}"));
                 }
-                self.say(ctx, "保存しました");
+                self.say(ctx, "Saved");
                 true
             }
             Err(e) => {
-                self.say(ctx, format!("保存できませんでした: {e}"));
+                self.say(ctx, format!("Could not save: {e}"));
                 false
             }
         }
@@ -729,6 +830,9 @@ impl App {
         }
         if hit(cmd, Key::D) {
             self.duplicate();
+        }
+        if hit(cmd, Key::G) {
+            self.group_selected();
         }
         let plain = Modifiers::NONE;
         if hit(plain, Key::Delete) || hit(plain, Key::Backspace) {
@@ -809,68 +913,68 @@ impl App {
                     ui.painter().circle_filled(mark.center() + egui::vec2(-2.5, -2.5), 2.6, Color32::from_white_alpha(120));
                     ui.label(RichText::new("MELTCAD").size(14.0).strong().color(style::TEXT));
                     style::vsep(ui);
-                    style::menu_button(ui, "ファイル", false, |ui| {
-                        if ui.button("新しく作る").clicked() {
+                    style::menu_button(ui, "File", false, |ui| {
+                        if ui.button("New").clicked() {
                             self.new_scene(Scene::default());
                             ui.close();
                         }
-                        if ui.button("開く…　Ctrl+O").clicked() {
+                        if ui.button("Open…  Ctrl+O").clicked() {
                             self.open_dialog(&ctx);
                             ui.close();
                         }
-                        if ui.button("SVGを読み込む…").clicked() {
+                        if ui.button("Import SVG…").clicked() {
                             crate::svg_dialog::open(&ctx);
                             ui.close();
                         }
-                        if ui.button("メッシュを読み込む…").on_hover_text("STL・OBJ・3MF・PLY・GLB").clicked() {
+                        if ui.button("Import mesh…").on_hover_text("STL, OBJ, 3MF, PLY, GLB").clicked() {
                             crate::mesh_dialog::open(&ctx);
                             ui.close();
                         }
-                        if ui.button("保存　Ctrl+S").clicked() {
+                        if ui.button("Save  Ctrl+S").clicked() {
                             self.save(&ctx, false);
                             ui.close();
                         }
-                        if ui.button("名前をつけて保存…").clicked() {
+                        if ui.button("Save as…").clicked() {
                             self.save(&ctx, true);
                             ui.close();
                         }
                         ui.separator();
-                        if ui.button("書き出し…").on_hover_text("STL・3MF・OBJ・PLY・GLB").clicked() {
+                        if ui.button("Export…").on_hover_text("STL, 3MF, OBJ, PLY, GLB").clicked() {
                             crate::export_dialog::open(&ctx, None);
                             ui.close();
                         }
-                        if ui.button("前の設定でもう一度書き出す　Ctrl+E").clicked() {
+                        if ui.button("Export again with last settings  Ctrl+E").clicked() {
                             self.export_stl(&ctx);
                             ui.close();
                         }
-                        if ui.button("画像(PNG)で書き出す").clicked() {
+                        if ui.button("Export image (PNG)").clicked() {
                             self.start_png(&ctx);
                             ui.close();
                         }
                     });
-                    style::menu_button(ui, "編集", false, |ui| {
-                        if ui.button("コピー　Ctrl+C").clicked() {
+                    style::menu_button(ui, "Edit", false, |ui| {
+                        if ui.button("Copy  Ctrl+C").clicked() {
                             self.copy(&ctx);
                             ui.close();
                         }
-                        if ui.button("切り取り　Ctrl+X").clicked() {
+                        if ui.button("Cut  Ctrl+X").clicked() {
                             self.cut(&ctx);
                             ui.close();
                         }
-                        if ui.button("貼りつけ　Ctrl+V").clicked() {
+                        if ui.button("Paste  Ctrl+V").clicked() {
                             self.paste(&ctx, None);
                             ui.close();
                         }
                         ui.separator();
-                        if ui.button("複製　Ctrl+D").clicked() {
+                        if ui.button("Duplicate  Ctrl+D").clicked() {
                             self.duplicate();
                             ui.close();
                         }
-                        if ui.button("ならべてコピー…").clicked() {
+                        if ui.button("Array copy…").clicked() {
                             crate::array::open(&ctx);
                             ui.close();
                         }
-                        ui.menu_button("パターン", |ui| {
+                        ui.menu_button("Pattern", |ui| {
                             for k in crate::pattern::PatternKind::ALL {
                                 if ui.button(k.label()).on_hover_text(k.hint()).clicked() {
                                     self.set_pattern_kind(&ctx, k);
@@ -878,53 +982,53 @@ impl App {
                                 }
                             }
                             ui.separator();
-                            if ui.button("パターンをやめる").clicked() {
+                            if ui.button("Clear pattern").clicked() {
                                 self.clear_pattern();
                                 ui.close();
                             }
                         });
-                        if ui.button("インスタンスを作る").on_hover_text("リンクコピー：元を直すと、コピーも変わります").clicked() {
+                        if ui.button("Make instance").on_hover_text("Linked copy: edits to the original update it too").clicked() {
                             self.make_instance(&ctx);
                             ui.close();
                         }
-                        if ui.button("左右コピー").clicked() {
+                        if ui.button("Mirror copy").clicked() {
                             self.mirror_copy();
                             ui.close();
                         }
-                        if ui.button("削除　Delete").clicked() {
+                        if ui.button("Delete  Del").clicked() {
                             self.delete_selected();
                             ui.close();
                         }
                     });
                     style::vsep(ui);
-                    if style::icon_button(ui, 32.0, "元に戻す (Ctrl+Z)", false, glyphs::undo).clicked() {
+                    if style::icon_button(ui, 32.0, "Undo (Ctrl+Z)", false, glyphs::undo).clicked() {
                         self.undo();
                     }
-                    if style::icon_button(ui, 32.0, "やり直し (Ctrl+Shift+Z)", false, glyphs::redo).clicked() {
+                    if style::icon_button(ui, 32.0, "Redo (Ctrl+Shift+Z)", false, glyphs::redo).clicked() {
                         self.redo();
                     }
                     style::vsep(ui);
-                    if style::pill(ui, "さがす  F", false).on_hover_text("形・ライブラリ・コマンドをさがす (F)").clicked() {
+                    if style::pill(ui, "Find  F", false).on_hover_text("Find shapes, library, commands (F)").clicked() {
                         palette::open(&ctx);
                     }
                     let left_end = ui.cursor().left();
                     let right_start = ui.max_rect().right();
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        style::menu_button(ui, "書き出し", true, |ui| {
-                            if ui.button("書き出し…").on_hover_text("STL・3MF・OBJ・PLY・GLB。細かさ・単位・色など").clicked() {
+                        style::menu_button(ui, "Export", true, |ui| {
+                            if ui.button("Export…").on_hover_text("STL, 3MF, OBJ, PLY, GLB. Detail, units, color").clicked() {
                                 crate::export_dialog::open(&ctx, None);
                                 ui.close();
                             }
-                            if ui.button("前の設定でもう一度").on_hover_text("Ctrl+E").clicked() {
+                            if ui.button("Export again").on_hover_text("Ctrl+E").clicked() {
                                 self.export_stl(&ctx);
                                 ui.close();
                             }
-                            if ui.button("画像 PNG").on_hover_text("見えているとおりに保存").clicked() {
+                            if ui.button("Image (PNG)").on_hover_text("Save as seen on screen").clicked() {
                                 self.start_png(&ctx);
                                 ui.close();
                             }
                             ui.separator();
-                            if ui.button("プリントチェック").on_hover_text("大きさ・体積・穴がないか").clicked() {
+                            if ui.button("Print check").on_hover_text("Size, volume, holes").clicked() {
                                 self.print_check(&ctx);
                                 ui.close();
                             }
@@ -936,7 +1040,7 @@ impl App {
                         self.perf.bench_requested |= menu.bench;
                     });
                     // the file name in the middle of the bar
-                    let name = self.path.as_ref().and_then(|p| p.file_stem()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "名前なし".into());
+                    let name = self.path.as_ref().and_then(|p| p.file_stem()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "Untitled".into());
                     let label = format!("{}{}", name, if self.dirty { " ●" } else { "" });
                     let cx = bar.center().x.clamp(left_end + 60.0, (right_start - 220.0).max(left_end + 60.0));
                     ui.painter().text(egui::pos2(cx, bar.center().y), egui::Align2::CENTER_CENTER, label, egui::FontId::proportional(13.0), style::DIM);
@@ -966,7 +1070,7 @@ impl App {
                     self.sketch_button(ui);
                     style::menu_button(ui, "…", false, |ui| {
                         ui.set_min_width(190.0);
-                        ui.label(egui::RichText::new("ほかの形").size(12.0).color(style::DIM));
+                        ui.label(egui::RichText::new("Other shapes").size(12.0).color(style::DIM));
                         for k in Kind::MORE {
                             let r = ui.horizontal(|ui| {
                                 let (rc, _) = ui.allocate_exact_size(egui::vec2(24.0, 24.0), egui::Sense::hover());
@@ -979,7 +1083,7 @@ impl App {
                             }
                         }
                         ui.separator();
-                        ui.label(egui::RichText::new("CADの機能").size(12.0).color(style::DIM));
+                        ui.label(egui::RichText::new("CAD tools").size(12.0).color(style::DIM));
                         for k in Kind::CAD {
                             let r = ui.horizontal(|ui| {
                                 let (rc, _) = ui.allocate_exact_size(egui::vec2(24.0, 24.0), egui::Sense::hover());
@@ -997,17 +1101,17 @@ impl App {
                         let on = self.new_op == op;
                         let col = if on { Color32::WHITE } else { style::op_color(op) };
                         let tip = match op {
-                            Op::Add => "つぎは「足す」(くっつく)",
-                            Op::Subtract => "つぎは「削る」(くり抜く)",
-                            Op::Paint => "つぎは「ぬる」(形は変えずに色だけ)",
-                            Op::Intersect => "つぎは「重ねる」(前の形とかさなる所だけのこす)",
+                            Op::Add => "Next: Add (join)",
+                            Op::Subtract => "Next: Subtract (cut out)",
+                            Op::Paint => "Next: Paint (color only)",
+                            Op::Intersect => "Next: Intersect (keep overlap only)",
                         };
                         if style::icon_button(ui, 38.0, tip, on, |p, r, _| glyphs::op(p, r, op, col)).clicked() {
                             self.new_op = op;
                         }
                     }
                     style::hsep(ui);
-                    if style::icon_button(ui, 38.0, "グループを作る", false, glyphs::group).clicked() {
+                    if style::icon_button(ui, 38.0, "New group", false, glyphs::group).clicked() {
                         self.add_group();
                     }
                 });
@@ -1022,7 +1126,7 @@ impl App {
             ui,
             |ui| {
                 style::panel_sheen(ui, ui.max_rect().expand2(egui::vec2(10.0, 10.0)), style::PANEL_DARK, style::Edge::Left);
-                let tabs = [("シーン", ""), ("ライブラリ", "")];
+                let tabs = [("Scene", ""), ("Library", "")];
                 if let Some(i) = style::segmented(ui, "dock_tabs", &tabs, Some(usize::from(self.lib_open)), true) {
                     self.lib_open = i == 1;
                 }
@@ -1031,9 +1135,9 @@ impl App {
                     crate::library_ui::panel(self, ui);
                 } else {
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new(format!("{}こ", self.scene.shape_count())).size(12.0).color(style::DIM));
+                        ui.label(RichText::new(format!("{} shapes", self.scene.shape_count())).size(12.0).color(style::DIM));
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if style::icon_button(ui, 26.0, "グループを作る", false, glyphs::group).clicked() {
+                            if style::icon_button(ui, 26.0, "New group", false, glyphs::group).clicked() {
                                 self.add_group();
                             }
                         });
@@ -1061,27 +1165,28 @@ impl App {
             .show(&ctx, |ui| {
                 style::card().show(ui, |ui| {
                     ui.set_width(300.0);
-                    ui.label(RichText::new("操作のしかた").strong().size(14.0));
+                    ui.label(RichText::new("Controls").strong().size(14.0));
                     ui.separator();
                     for (k, v) in [
-                        ("中ボタンドラッグ", "回す"),
-                        ("右ドラッグ", "動かす (パン)"),
-                        ("ホイール", "ズーム (マウスの位置へ)"),
-                        ("左ドラッグ (何もない所)", "回す"),
-                        ("クリック", "選ぶ　Shiftでグループ"),
-                        ("ダブルクリック", "その形を見る"),
-                        ("描くとき: 左クリック → 右クリック", "点をうつ → 決定 (どの描く道具でも同じ)"),
-                        ("F", "さがす（形・ライブラリ・コマンド）"),
-                        ("Shift+F / Home", "選んだもの / 全体を見る"),
-                        ("1 3 7 (Ctrlで反対)", "正面 / 右 / 上から"),
-                        ("5", "遠近 ⇄ 平行"),
-                                                ("H / Alt+H", "隠す ⇄ 出す / ぜんぶ出す"),
-                        ("Tab", "足す ⇄ 削る"),
-                        ("Ctrl + ドラッグ", "1mm・15度ずつ"),
-                        ("矢印キー", "1mm動かす (Shiftで10mm)"),
-                        ("Ctrl+C / X / V", "コピー / 切り取り / 貼りつけ"),
-                        ("Ctrl+D / Delete", "複製 / 消す"),
-                        ("Ctrl+Z / Ctrl+Shift+Z", "元に戻す / やり直し"),
+                        ("Middle drag", "Orbit"),
+                        ("Right drag", "Pan"),
+                        ("Wheel", "Zoom to cursor"),
+                        ("Left drag (empty)", "Orbit"),
+                        ("Click", "Select  Shift: add/remove  Ctrl: whole group"),
+                        ("Double click", "Focus on shape"),
+                        ("Drawing: left click → right click", "Place point → finish (all draw tools)"),
+                        ("F", "Find shapes, library, commands"),
+                        ("Shift+F / Home", "Frame selection / Frame all"),
+                        ("1 3 7 (Ctrl: opposite)", "Front / Right / Top"),
+                        ("5", "Perspective ⇄ Ortho"),
+                                                ("H / Alt+H", "Hide ⇄ show / Show all"),
+                        ("Tab", "Add ⇄ Subtract"),
+                        ("Ctrl + drag", "1 mm / 15° steps"),
+                        ("Arrow keys", "Move 1 mm (Shift: 10 mm)"),
+                        ("Ctrl+C / X / V", "Copy / Cut / Paste"),
+                        ("Ctrl+D / Delete", "Duplicate / Delete"),
+                        ("Ctrl+G", "Group the selected shapes"),
+                        ("Ctrl+Z / Ctrl+Shift+Z", "Undo / Redo"),
                     ] {
                         ui.horizontal(|ui| {
                             ui.add_sized([150.0, 18.0], egui::Label::new(RichText::new(k).size(12.0).color(style::ACCENT)));
@@ -1113,10 +1218,10 @@ impl App {
                             .as_ref()
                             .and_then(|p| p.file_name())
                             .map(|n| n.to_string_lossy().into_owned())
-                            .unwrap_or_else(|| "名前なし".into());
-                        let dims = self.selection_size().map(|d| format!("　{d}")).unwrap_or_default();
+                            .unwrap_or_else(|| "Untitled".into());
+                        let dims = self.selection_size().map(|d| format!(" | {d}")).unwrap_or_default();
                         ui.label(
-                            RichText::new(format!("{}{}　形 {}{}", name, if self.dirty { " *" } else { "" }, self.scene.shape_count(), dims))
+                            RichText::new(format!("{}{} | Shapes {}{}", name, if self.dirty { " *" } else { "" }, self.scene.shape_count(), dims))
                                 .size(12.0)
                                 .color(style::DIM),
                         );
@@ -1134,15 +1239,15 @@ impl App {
                 let h = sh.local_half();
                 let turned = sh.rot.iter().any(|r| (r % 90.0).abs() > 0.01);
                 if turned {
-                    return Some(format!("おおよそ {:.0} mm", crate::view::radius_of(sh) * 2.0));
+                    return Some(format!("About {:.0} mm", crate::view::radius_of(sh) * 2.0));
                 }
                 // a quarter turn about one axis swaps two sizes: keep it simple and exact only when not turned
                 let dim = |i: usize| h[i] * sh.scale[i] * 2.0;
-                Some(format!("幅 {:.1} × 奥行 {:.1} × 高さ {:.1} mm", dim(0), dim(1), dim(2)))
+                Some(format!("W {:.1} × D {:.1} × H {:.1} mm", dim(0), dim(1), dim(2)))
             }
             Pick::Group(g) => {
                 let (_, r) = crate::gpu::bounds(&self.scene, Some(Pick::Group(g)));
-                (r > 0.0).then(|| format!("グループ おおよそ {:.0} mm", r * 2.0))
+                (r > 0.0).then(|| format!("Group about {:.0} mm", r * 2.0))
             }
         }
     }
@@ -1151,7 +1256,7 @@ impl App {
 
     /// Ask where to save, then take a clean picture of the viewport a moment later.
     fn start_png(&mut self, ctx: &egui::Context) {
-        let Some(path) = rfd::FileDialog::new().add_filter("PNG", &["png"]).set_file_name("作品.png").save_file() else { return };
+        let Some(path) = rfd::FileDialog::new().add_filter("PNG", &["png"]).set_file_name("Untitled.png").save_file() else { return };
         self.capture = Some(Capture { path, frames: 0 });
         ctx.request_repaint();
     }
@@ -1195,8 +1300,8 @@ impl App {
         let res =
             crate::png::encode_rgba((x1 - x0) as u32, (y1 - y0) as u32, &rgba).and_then(|b| std::fs::write(&cap.path, b).map_err(|e| e.to_string()));
         match res {
-            Ok(()) => self.say(ctx, "画像を保存しました"),
-            Err(e) => self.say(ctx, format!("画像を保存できませんでした: {e}")),
+            Ok(()) => self.say(ctx, "Image saved"),
+            Err(e) => self.say(ctx, format!("Could not save image: {e}")),
         }
     }
 
@@ -1318,14 +1423,14 @@ impl App {
                 let rev = self.track_scene();
                 let changed = self.has_unsaved_work();
                 if let Err(e) = self.recovery.checkpoint(&self.scene, self.path.as_deref(), changed, rev, std::time::Instant::now()) {
-                    self.notice = Some(format!("自動復旧データを保存できません: {e}"));
+                    self.notice = Some(format!("Could not save auto-recovery data: {e}"));
                 }
             }
         }
         self.test_hooks(&ctx);
         let title = format!(
             "MELTCAD — {}{}",
-            self.path.as_ref().and_then(|p| p.file_stem()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "名前なし".into()),
+            self.path.as_ref().and_then(|p| p.file_stem()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "Untitled".into()),
             if self.dirty { " *" } else { "" }
         );
         // Only when it changed: every viewport command wakes the event loop for another frame,
@@ -1607,6 +1712,55 @@ mod tests {
         assert_eq!(app.scene.shape(g, s).map(|x| x.op), Some(Op::Subtract));
         app.flip_op();
         assert_eq!(app.scene.shape(g, s).map(|x| x.op), Some(Op::Add));
+    }
+
+    #[test]
+    fn shift_click_selects_several_and_they_group_move_and_delete_together() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        app.add_shape(&ctx, Kind::Sphere);
+        app.add_shape(&ctx, Kind::Box);
+        app.add_shape(&ctx, Kind::Cylinder);
+        let all: Vec<Pick> = (0..app.scene.groups.iter().map(|g| g.shapes.len()).sum::<usize>())
+            .filter_map(|n| {
+                let mut left = n;
+                for (g, gr) in app.scene.groups.iter().enumerate() {
+                    if left < gr.shapes.len() {
+                        return Some(Pick::Shape(g, left));
+                    }
+                    left -= gr.shapes.len();
+                }
+                None
+            })
+            .collect();
+        assert!(all.len() >= 3);
+        app.sel = Some(all[0]);
+        app.toggle_pick(all[1]);
+        app.toggle_pick(all[2]);
+        assert_eq!(app.picks().len(), 3);
+        // Shift on one that is already in takes it out
+        app.toggle_pick(all[1]);
+        assert_eq!(app.picks(), vec![all[0], all[2]]);
+        // a plain selection elsewhere drops the extras
+        app.sel = Some(all[1]);
+        assert_eq!(app.picks(), vec![all[1]]);
+        // moving by the arrow keys moves all of them
+        app.sel = Some(all[0]);
+        app.multi.clear();
+        app.toggle_pick(all[2]);
+        let before: Vec<f32> = app.sel_targets().iter().filter_map(|(g, s)| app.scene.shape(*g, *s).map(|x| x.pos[0])).collect();
+        app.nudge([5.0, 0.0, 0.0]);
+        let after: Vec<f32> = app.sel_targets().iter().filter_map(|(g, s)| app.scene.shape(*g, *s).map(|x| x.pos[0])).collect();
+        assert!(before.iter().zip(&after).all(|(b, a)| (a - b - 5.0).abs() < 1e-4));
+        // group them: one new group holding exactly those two
+        let total = app.scene.shape_count();
+        app.group_selected();
+        let Some(Pick::Group(g)) = app.sel else { panic!("the new group is selected") };
+        assert_eq!(app.scene.groups[g].shapes.len(), 2);
+        assert_eq!(app.scene.shape_count(), total);
+        // delete the new group with another shape picked too
+        app.delete_selected();
+        assert_eq!(app.scene.shape_count(), total - 2);
     }
 
     #[test]

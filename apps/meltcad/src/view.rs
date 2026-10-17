@@ -19,9 +19,35 @@ pub fn targets(scene: &Scene, pick: Option<Pick>) -> Vec<(usize, usize)> {
     }
 }
 
+/// The shapes of all these picks, each once.
+pub fn targets_all(scene: &Scene, picks: &[Pick]) -> Vec<(usize, usize)> {
+    let mut out: Vec<(usize, usize)> = Vec::new();
+    for p in picks {
+        for t in targets(scene, Some(*p)) {
+            if !out.contains(&t) {
+                out.push(t);
+            }
+        }
+    }
+    out
+}
+
 /// What a hit of the CPU field stands for: a shape, or (when `s` is `sdf::LINKED`) a whole linked copy.
 pub fn as_pick(g: usize, s: usize) -> Pick {
     if s == crate::sdf::LINKED { Pick::Group(g) } else { Pick::Shape(g, s) }
+}
+
+/// Where the handles sit for several picks: the middle of all their shapes.
+pub fn centre_of_picks(scene: &Scene, picks: &[Pick]) -> Option<V3> {
+    if let [one] = picks {
+        return centre_of(scene, Some(*one));
+    }
+    let t = targets_all(scene, picks);
+    let mut sum = [0.0; 3];
+    for (g, s) in &t {
+        sum = add(sum, scene.shape(*g, *s)?.pos);
+    }
+    (!t.is_empty()).then(|| mul(sum, 1.0 / t.len() as f32))
 }
 
 /// Where the handles sit: the shape, or the middle of a group.
@@ -89,7 +115,7 @@ impl App {
 
         // The handles
         let tool = self.tool;
-        let geom = if clean || self.ct.drawing || self.pt.on || self.sketch_active() { None } else { gizmo::build(&self.cam, rect, &self.scene, self.sel, tool) };
+        let geom = if clean || self.ct.drawing || self.pt.on || self.sketch_active() { None } else { gizmo::build_multi(&self.cam, rect, &self.scene, &self.picks(), tool) };
         let over_gnomon = !clean && pos.is_some_and(|p| self.gnomon_hit(rect, p).is_some());
         let hover_handle = match (&geom, pos, &self.drag) {
             (Some(g), Some(p), None) if resp.hovered() && !over_gnomon && !ct.over => gizmo::hit(g, tool, p),
@@ -216,7 +242,12 @@ impl App {
             if let Some(axis) = self.gnomon_hit(rect, p) {
                 self.look_along(axis);
             } else {
-                self.pick_at(rect, p, mods.shift);
+                if mods.shift {
+                    self.toggle_at(rect, p);
+                } else {
+                    // (Ctrl / Cmd + click takes the whole group the shape is in)
+                    self.pick_at(rect, p, mods.command || mods.ctrl);
+                }
             }
         }
         // while a drawing tool is on, the right click belongs to the tool (it confirms)
@@ -325,7 +356,7 @@ impl App {
         let draw_geom = if clean || self.ct.drawing || self.pt.on || self.sketch_active() {
             None
         } else if moved_camera || self.drag.is_some() {
-            gizmo::build(&self.cam, rect, &self.scene, self.sel, tool)
+            gizmo::build_multi(&self.cam, rect, &self.scene, &self.picks(), tool)
         } else {
             geom
         };
@@ -453,6 +484,13 @@ impl App {
     pub fn shape_at(&self, rect: Rect, p: Pos2) -> Option<(usize, usize)> {
         let (o, d) = self.cam.ray_at(rect, p);
         self.field().ray(o, d, 5000.0).and_then(|(_, s)| s.nearest)
+    }
+
+    /// Shift + click: add the thing under the point to the selection, or take it out again.
+    fn toggle_at(&mut self, rect: Rect, p: Pos2) {
+        if let Some((g, s)) = self.shape_at(rect, p) {
+            self.toggle_pick(as_pick(g, s));
+        }
     }
 
     fn pick_at(&mut self, rect: Rect, p: Pos2, keep: bool) {

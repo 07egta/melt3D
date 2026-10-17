@@ -102,7 +102,7 @@ fn ask(ctx: &egui::Context, cat: usize, i: usize, item: &Item) {
 /// Put an item into the scene. Returns false when the scene is full.
 pub fn insert(app: &mut App, ctx: &egui::Context, item: &Item) -> bool {
     if !item.fits(app.scene.groups.len(), app.scene.shape_count()) {
-        let why = if app.scene.groups.len() >= MAX_GROUPS { format!("グループは{MAX_GROUPS}個までです") } else { format!("形は{MAX_SHAPES}個までです") };
+        let why = if app.scene.groups.len() >= MAX_GROUPS { format!("Up to {MAX_GROUPS} groups") } else { format!("Up to {MAX_SHAPES} shapes") };
         app.say(ctx, why);
         return false;
     }
@@ -113,7 +113,7 @@ pub fn insert(app: &mut App, ctx: &egui::Context, item: &Item) -> bool {
     app.scene.groups.push(item.placed(at));
     app.sel = Some(Pick::Group(app.scene.groups.len() - 1));
     app.frame_view(false);
-    app.say(ctx, format!("「{}」を入れました", item.name));
+    app.say(ctx, format!("Added {}", item.name));
     true
 }
 
@@ -121,7 +121,7 @@ pub fn insert(app: &mut App, ctx: &egui::Context, item: &Item) -> bool {
 pub fn panel(app: &mut App, ui: &mut egui::Ui) {
     let cats = library::all();
     if cats.is_empty() {
-        ui.label(RichText::new("ライブラリは空です").color(style::DIM));
+        ui.label(RichText::new("Library is empty").color(style::DIM));
         return;
     }
     app.lib_cat = app.lib_cat.min(cats.len() - 1);
@@ -129,7 +129,7 @@ pub fn panel(app: &mut App, ui: &mut egui::Ui) {
     collect(&ctx);
     let mut made_one = false;
     let mut pick: Option<(usize, usize)> = None;
-    ui.add(egui::TextEdit::singleline(&mut app.lib_query).hint_text("さがす（なまえ・English）").desired_width(f32::INFINITY));
+    ui.add(egui::TextEdit::singleline(&mut app.lib_query).hint_text("Search by name").desired_width(f32::INFINITY));
     ui.add_space(2.0);
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing = Vec2::new(4.0, 4.0);
@@ -180,7 +180,7 @@ pub fn panel(app: &mut App, ui: &mut egui::Ui) {
                                 ui.painter().text(r.center(), Align2::CENTER_CENTER, "…", egui::FontId::proportional(14.0), style::DIM);
                             }
                         }
-                        if resp.on_hover_text(format!("{} をシーンに入れる", it.name)).clicked() {
+                        if resp.on_hover_text(format!("Add {} to the scene", it.name)).clicked() {
                             pick = Some((ci, ii));
                         }
                         ui.label(RichText::new(&it.name).size(11.5));
@@ -192,7 +192,7 @@ pub fn panel(app: &mut App, ui: &mut egui::Ui) {
             }
         });
         if n == 0 {
-            ui.label(RichText::new("見つかりませんでした").color(style::DIM));
+            ui.label(RichText::new("No results").color(style::DIM));
         }
     });
     if made_one {

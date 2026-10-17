@@ -24,14 +24,14 @@ pub enum EditError {
 impl EditError {
     pub fn message(self) -> &'static str {
         match self {
-            EditError::InvalidOutline => "元の輪郭が不正です。先に交差や微小線分を直してください",
-            EditError::InvalidValue => "距離・半径は0より大きい有限値にしてください",
-            EditError::TooFewEdges => "これ以上辺を減らせません",
-            EditError::Parallel => "ほぼ平行な線は安全に交点を決められません",
-            EditError::CannotTrim => "この辺は隣の2辺を延長しても安全につながりません",
-            EditError::TooLarge => "距離・半径が大きすぎるか、角に十分な長さがありません",
-            EditError::TooManyPoints => "曲線の精度を保つと点数の上限を超えます",
-            EditError::InvalidResult => "自己交差・輪郭の反転・微小線分を生むため確定できません",
+            EditError::InvalidOutline => "Original outline is invalid. Fix crossings or tiny segments first",
+            EditError::InvalidValue => "Distance and radius must be finite values greater than 0",
+            EditError::TooFewEdges => "Cannot remove more edges",
+            EditError::Parallel => "Nearly parallel lines have no safe intersection",
+            EditError::CannotTrim => "This edge can't be trimmed; neighbors don't connect safely",
+            EditError::TooLarge => "Distance or radius too large, or corners too short",
+            EditError::TooManyPoints => "Keeping curve accuracy would exceed the point limit",
+            EditError::InvalidResult => "Can't apply: would create self-intersections, flipped outline, or tiny segments",
         }
     }
 }

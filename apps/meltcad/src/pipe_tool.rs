@@ -121,7 +121,7 @@ impl App {
     /// The top-bar toggle for the pipe tool.
     pub fn pipe_button(&mut self, ui: &mut Ui) {
         let on = self.pt.on;
-        if style::icon_button(ui, 34.0, "パイプ (ドラッグでなぞって、パイプを作る)", on, glyph).clicked() {
+        if style::icon_button(ui, 34.0, "Pipe (drag across the view to trace a pipe)", on, glyph).clicked() {
             self.set_pipe_tool(!on);
         }
     }
@@ -194,7 +194,7 @@ impl App {
         cfg.sanitize();
         let pos = stroke::centre(&nodes);
         let mut sh = Shape::new(Kind::Curve, pos, Material::plain(cfg.color, 0.4, 0.0));
-        sh.name = "パイプ".to_string();
+        sh.name = "Pipe".to_string();
         sh.path = nodes.iter().map(|p| [p[0] - pos[0], p[1] - pos[1], p[2] - pos[2], cfg.radius]).collect();
         sh.params = [0.0, 1.0, 0.0, 1.0];
         sh.blend = 2.0;
@@ -340,42 +340,42 @@ impl App {
                 style::card().show(ui, |ui| {
                     let cfg = &mut self.pt.cfg;
                     ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("パイプ").strong().color(style::ACCENT));
+                        ui.label(egui::RichText::new("Pipe").strong().color(style::ACCENT));
                         if self.pt.on {
-                            ui.label(egui::RichText::new("ドラッグでなぞる").size(11.0).color(style::DIM));
-                            if style::pill(ui, "やめる", false).on_hover_text("パイプツールを切る (Esc)").clicked() {
+                            ui.label(egui::RichText::new("Drag to trace").size(11.0).color(style::DIM));
+                            if style::pill(ui, "Cancel", false).on_hover_text("Turn off the pipe tool (Esc)").clicked() {
                                 off = true;
                             }
                         } else {
-                            ui.label(egui::RichText::new("えらんだパイプをなおす").size(11.0).color(style::DIM));
+                            ui.label(egui::RichText::new("Fix the selected pipe").size(11.0).color(style::DIM));
                         }
                     });
-                    style::labeled_slider(ui, "外半径", &mut cfg.radius, 0.5..=40.0, "パイプの外がわの半径 (mm)");
+                    style::labeled_slider(ui, "Outer radius", &mut cfg.radius, 0.5..=40.0, "Outer radius of the pipe (mm)");
                     let max_wall = (cfg.radius - 0.1).clamp(0.0, 20.0);
-                    style::labeled_slider(ui, "かべの\nあつさ", &mut cfg.wall, 0.0..=max_wall.max(0.1), "0 = つまった棒 / それより大きい = 中が空のパイプ (mm)");
+                    style::labeled_slider(ui, "Wall\nthickness", &mut cfg.wall, 0.0..=max_wall.max(0.1), "0 = solid rod / larger = hollow pipe (mm)");
                     ui.horizontal(|ui| {
-                        if style::pill(ui, "とじた輪", cfg.closed).on_hover_text("さいごとさいしょをつなぐ").clicked() {
+                        if style::pill(ui, "Closed loop", cfg.closed).on_hover_text("Join the last and first node").clicked() {
                             cfg.closed = !cfg.closed;
                         }
-                        ui.label(egui::RichText::new("はし").size(11.0).color(style::DIM));
-                        if style::pill(ui, "まる", !cfg.open_ends).on_hover_text("はしを丸くふさぐ").clicked() {
+                        ui.label(egui::RichText::new("Ends").size(11.0).color(style::DIM));
+                        if style::pill(ui, "Round", !cfg.open_ends).on_hover_text("Close the ends round").clicked() {
                             cfg.open_ends = false;
                         }
-                        if style::pill(ui, "すっぱり", cfg.open_ends).on_hover_text("はしをまっすぐ切る (中の穴が見える)").clicked() {
+                        if style::pill(ui, "Flat", cfg.open_ends).on_hover_text("Cut the ends straight (shows the hole)").clicked() {
                             cfg.open_ends = true;
                         }
                         style::color_edit(ui, &mut cfg.color);
                     });
                     if self.pt.on {
                         ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new("なぞる面").size(11.0).color(style::DIM));
+                            ui.label(egui::RichText::new("Trace plane").size(11.0).color(style::DIM));
                             for pl in Plane::ALL {
-                                if style::pill(ui, pl.label(), self.pt.plane == pl).on_hover_text("形にあたらない所は、この面の上になぞる").clicked() {
+                                if style::pill(ui, pl.label(), self.pt.plane == pl).on_hover_text("Where there is no shape, trace on this plane").clicked() {
                                     self.pt.plane = pl;
                                 }
                             }
                         });
-                        ui.label(egui::RichText::new("形の上は表面にそってなぞれる　Alt+ドラッグで回す").size(11.0).color(style::DIM));
+                        ui.label(egui::RichText::new("Over a shape, traces along its surface   Alt+drag to rotate view").size(11.0).color(style::DIM));
                     }
                 });
             });

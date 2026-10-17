@@ -87,15 +87,16 @@ impl App {
                     return Err("ふやせる数をこえます".into());
                 }
                 crate::mesh::can_add(&self.scene, (0..copies).flat_map(|_| base.shapes.iter()))?;
+                let end = self.scene.subtree_end(g);
                 for k in 1..=copies {
                     let mut c = base.clone();
                     for s in &mut c.shapes {
                         place(s, d, k);
                     }
                     c.name = format!("{} {}", base.name, k + 1);
-                    self.scene.groups.insert(g + k as usize, c);
+                    self.scene.groups.insert(end + k as usize - 1, c);
                 }
-                self.sel = Some(Pick::Group(g + copies as usize));
+                self.sel = Some(Pick::Group(end + copies as usize - 1));
                 Ok(copies as usize)
             }
             None => Err("ならべるものをえらんでください".into()),

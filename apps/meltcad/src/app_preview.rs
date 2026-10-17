@@ -139,7 +139,6 @@ fn app_preview() {
                 }
             });
             app.tool_strip(ui);
-            app.tool_pill(ui);
             app.pipe_card(ui.ctx());
             app.sketch_card(ui.ctx());
             app.keys_card(ui);

@@ -156,23 +156,23 @@ fn ms(v: f32) -> String {
 /// The HUD text, one line per entry.
 pub fn lines(s: &Summary, c: &Context) -> Vec<String> {
     let mut out = Vec::new();
-    out.push(format!("{:.0} fps　間隔 平均 {} / 最悪 {} ms (10秒で {})", s.fps, ms(s.interval_avg_ms), ms(s.interval_worst_ms), ms(s.interval_worst_long_ms)));
-    out.push(format!("CPU 平均 {} / 最悪 {} ms", ms(s.cpu_avg_ms), ms(s.cpu_worst_ms)));
+    out.push(format!("{:.0} fps  interval avg {} / worst {} ms (10 s worst {})", s.fps, ms(s.interval_avg_ms), ms(s.interval_worst_ms), ms(s.interval_worst_long_ms)));
+    out.push(format!("CPU avg {} / worst {} ms", ms(s.cpu_avg_ms), ms(s.cpu_worst_ms)));
     out.push(match (s.gpu_avg_ms, s.gpu_worst_ms) {
-        (Some(a), Some(w)) => format!("GPU(シーン) 平均 {} / 最悪 {} ms", ms(a), ms(w)),
-        _ if s.gpu_last_ms.is_some() => format!("GPU(シーン) さいごの1回 {} ms", ms(s.gpu_last_ms.unwrap_or(0.0))),
-        _ if c.gpu_timing => "GPU(シーン) 計測まち…".to_string(),
-        _ => "GPU の時間はこの機械では測れません".to_string(),
+        (Some(a), Some(w)) => format!("GPU (scene) avg {} / worst {} ms", ms(a), ms(w)),
+        _ if s.gpu_last_ms.is_some() => format!("GPU (scene) last pass {} ms", ms(s.gpu_last_ms.unwrap_or(0.0))),
+        _ if c.gpu_timing => "GPU (scene) measuring...".to_string(),
+        _ => "GPU time not available on this machine".to_string(),
     });
     let state = if c.fast {
-        "うごき中 (かるい絵)".to_string()
+        "moving (light picture)".to_string()
     } else if c.sharp < 1.0 {
-        format!("きれいに描画中 {:.0}%", c.sharp * 100.0)
+        format!("sharpening {:.0}%", c.sharp * 100.0)
     } else {
-        "きれい (止まっている)".to_string()
+        "sharp (still)".to_string()
     };
-    out.push(format!("{}　絵 {}x{} 倍率 {:.2}　{}", c.quality, c.pixels[0], c.pixels[1], c.scale, state));
-    out.push(format!("形 {}　グループ {}　コピー {}", c.shapes, c.groups, c.instances));
+    out.push(format!("{}  picture {}x{} scale {:.2}  {}", c.quality, c.pixels[0], c.pixels[1], c.scale, state));
+    out.push(format!("shapes {}  groups {}  copies {}", c.shapes, c.groups, c.instances));
     if !c.adapter.is_empty() {
         out.push(c.adapter.clone());
     }
@@ -287,18 +287,18 @@ mod tests {
         let ctx = Context { shapes: 12, instances: 3, groups: 2, scale: 0.5, adapter: "Vulkan / Test".into(), gpu_timing: true, fast: true, sharp: 0.0, pixels: [1264, 720], quality: "じどう".into() };
         let l = lines(&sum, &ctx);
         let all = l.join("\n");
-        assert!(all.contains("31 fps") && all.contains("最悪 120") && all.contains("700"));
-        assert!(all.contains("GPU(シーン) 平均 28.0 / 最悪 40.0"));
-        assert!(all.contains("倍率 0.50") && all.contains("1264x720") && all.contains("うごき中"));
-        assert!(all.contains("形 12") && all.contains("コピー 3") && all.contains("Vulkan / Test"));
+        assert!(all.contains("31 fps") && all.contains("worst 120") && all.contains("700"));
+        assert!(all.contains("GPU (scene) avg 28.0 / worst 40.0"));
+        assert!(all.contains("scale 0.50") && all.contains("1264x720") && all.contains("moving"));
+        assert!(all.contains("shapes 12") && all.contains("copies 3") && all.contains("Vulkan / Test"));
         // no timestamps: it says so; sharp in progress shows the share
         let none = Summary { gpu_avg_ms: None, gpu_worst_ms: None, ..sum };
         let c2 = Context { gpu_timing: false, fast: false, sharp: 0.4, ..ctx.clone() };
         let all = lines(&none, &c2).join("\n");
-        assert!(all.contains("測れません") && all.contains("40%"));
+        assert!(all.contains("not available") && all.contains("40%"));
         let c3 = Context { gpu_timing: true, fast: false, sharp: 1.0, ..ctx };
-        assert!(lines(&none, &c3).join("\n").contains("計測まち"));
+        assert!(lines(&none, &c3).join("\n").contains("measuring"));
         let last = Summary { gpu_last_ms: Some(12.5), ..none };
-        assert!(lines(&last, &c3).join("\n").contains("さいごの1回 12.5 ms"));
+        assert!(lines(&last, &c3).join("\n").contains("last pass 12.5 ms"));
     }
 }

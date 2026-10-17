@@ -1,6 +1,6 @@
 [package]
 name = "meltcad"
-description = "YURACAD: a light Womp3D-style blob modeller"
+description = "MELTCAD: a light blob modeller with CAD-style dimensions"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

@@ -98,6 +98,10 @@ pub struct FieldGroup {
     pub insts: Vec<crate::pattern::Inst>,
     /// A linked copy: what is hit counts as the copy (its group), not as the source's shapes.
     pub linked: bool,
+    /// Nesting level (0 = top): a group melts into its parent group, and that into the scene.
+    pub depth: usize,
+    /// Nothing is nested below this group.
+    pub leaf: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -390,7 +394,9 @@ impl Field {
                 sources.push(PreparedGroup { shapes, origin, bounds, info });
                 sources.len() - 1
             });
-            groups.push(FieldGroup { gi: rg.gi, op: g.op, blend: g.blend, src, insts: rg.insts, linked: rg.linked });
+            let depth = usize::from(g.depth);
+            let leaf = scene.groups.get(rg.gi + 1).is_none_or(|n| usize::from(n.depth) <= depth);
+            groups.push(FieldGroup { gi: rg.gi, op: g.op, blend: g.blend, src, insts: rg.insts, linked: rg.linked, depth, leaf });
         }
         let m = scene.melt;
         Field { groups, sources, mode: m.mode, amount: m.amount, drip: m.drip, ripple: m.ripple }
@@ -458,47 +464,85 @@ impl Field {
     pub fn sample(&self, p: V3) -> Sample {
         use crate::accel::{far_enough, paint_far};
         let p = warp(p, self.drip, self.ripple);
-        let mut acc: Option<Sample> = None;
+        // groups nest: a group melts into the group it sits in, and that group (with all it holds)
+        // melts into the scene. `stack` holds the groups that are still open.
+        struct Open {
+            depth: usize,
+            op: Op,
+            k: f32,
+            acc: Option<Sample>,
+        }
+        fn fold(target: &mut Option<Sample>, gs: Sample, op: Op, k: f32, mode: BlendMode) {
+            *target = match target.take() {
+                None => {
+                    if op != Op::Add {
+                        return;
+                    }
+                    Some(gs)
+                }
+                Some(a) => Some(combine(a, gs, op, k, mode)),
+            };
+        }
+        fn close(stack: &mut Vec<Open>, root: &mut Option<Sample>, mode: BlendMode) {
+            if let Some(done) = stack.pop() {
+                if let Some(gs) = done.acc {
+                    let parent = match stack.last_mut() {
+                        Some(o) => &mut o.acc,
+                        None => root,
+                    };
+                    fold(parent, gs, done.op, done.k, mode);
+                }
+            }
+        }
+        let mut root: Option<Sample> = None;
+        let mut stack: Vec<Open> = Vec::new();
         for fg in &self.groups {
             let Some(src) = self.sources.get(fg.src) else { continue };
             let k = fg.blend * self.amount;
             for j in 0..fg.insts.len().max(1) {
                 let inst = fg.insts.get(j);
-                if let Some(a) = &acc {
-                    let lb = match inst {
-                        Some(i) => i.bound(src.info.bound).lower(p),
-                        None => src.info.bound.lower(p),
-                    };
-                    let far = match fg.op {
-                        Op::Intersect => false,
-                        Op::Add => lb >= far_enough(a.dist, k, self.mode),
-                        Op::Subtract => lb >= far_enough(-a.dist, k, self.mode),
-                        Op::Paint => lb >= paint_far(k),
-                    };
-                    if far {
-                        continue;
+                while stack.last().is_some_and(|o| o.depth >= fg.depth) {
+                    close(&mut stack, &mut root, self.mode);
+                }
+                let parent_acc = match stack.last() {
+                    Some(o) => o.acc.as_ref(),
+                    None => root.as_ref(),
+                };
+                if let Some(a) = parent_acc {
+                    if fg.leaf {
+                        let lb = match inst {
+                            Some(i) => i.bound(src.info.bound).lower(p),
+                            None => src.info.bound.lower(p),
+                        };
+                        let far = match fg.op {
+                            Op::Intersect => false,
+                            Op::Add => lb >= far_enough(a.dist, k, self.mode),
+                            Op::Subtract => lb >= far_enough(-a.dist, k, self.mode),
+                            Op::Paint => lb >= paint_far(k),
+                        };
+                        if far {
+                            continue;
+                        }
                     }
                 }
                 let (q, scale) = match inst {
                     Some(i) => (i.back(p), i.s),
                     None => (p, 1.0),
                 };
-                let Some(mut gs) = self.group(src, q) else { continue };
-                gs.dist *= scale;
-                if fg.linked && gs.nearest.is_some() {
-                    gs.nearest = Some((fg.gi, LINKED));
-                }
-                acc = Some(match acc {
-                    None => {
-                        if fg.op != Op::Add {
-                            continue;
-                        }
-                        gs
+                let mut own = self.group(src, q);
+                if let Some(gs) = own.as_mut() {
+                    gs.dist *= scale;
+                    if fg.linked && gs.nearest.is_some() {
+                        gs.nearest = Some((fg.gi, LINKED));
                     }
-                    Some(a) => combine(a, gs, fg.op, k, self.mode),
-                });
+                }
+                stack.push(Open { depth: fg.depth, op: fg.op, k, acc: own });
             }
         }
+        while !stack.is_empty() {
+            close(&mut stack, &mut root, self.mode);
+        }
+        let acc = root;
         let mut out = acc.unwrap_or(Sample { dist: 1e6, color: [0.8; 3], roughness: 0.5, metallic: 0.0, nearest: None });
         if self.drip > 0.0 {
             out.dist *= drip_safety(self.drip, self.ripple);
@@ -606,6 +650,128 @@ mod tests {
         assert!(f(Kind::Cone, [0.0, 0.0, -30.0]) > 9.9 && f(Kind::Cone, [0.0, 0.0, 0.0]) < 0.0);
         assert!((f(Kind::Extrude, [25.0, 0.0, 0.0]) - 10.0).abs() < 1e-3, "{}", f(Kind::Extrude, [25.0, 0.0, 0.0]));
         assert!(f(Kind::Extrude, [0.0, 0.0, 0.0]) < 0.0);
+    }
+
+    fn ball(x: f32, r: f32) -> Shape {
+        let mut s = Shape::new(Kind::Sphere, [x, 0.0, 0.0], Material::default());
+        s.size[0] = r;
+        s.blend = 0.0;
+        s
+    }
+
+    fn group_of(name: &str, depth: u8, shapes: Vec<Shape>) -> crate::model::Group {
+        let mut g = crate::model::Group::new(name);
+        g.depth = depth;
+        g.shapes = shapes;
+        g
+    }
+
+    #[test]
+    fn a_face_melt_changes_only_the_chosen_face() {
+        let mut s = Shape::new(Kind::Box, [0.0; 3], Material::default());
+        s.size = [20.0, 20.0, 20.0];
+        let plain = Prepared::new(&s);
+        s.face_melt = crate::model::FaceMelt { face: 5, amount: 6.0, reach: 8.0 };
+        let melted = Prepared::new(&s);
+        // far from the +z face (the bottom, and the middle of the side) nothing moves
+        for p in [[0.0, 0.0, -10.0], [10.0, 0.0, -4.0], [0.0, 25.0, -9.0]] {
+            assert!((plain.distance(p) - melted.distance(p)).abs() < 1e-4, "{p:?}");
+        }
+        // on the +z face the surface swells somewhere
+        let mut moved = false;
+        for i in 0..40 {
+            let p = [-9.0 + i as f32 * 0.45, -9.0 + i as f32 * 0.31, 12.0];
+            moved |= (plain.distance(p) - melted.distance(p)).abs() > 0.5;
+        }
+        assert!(moved, "the melted face looks the same");
+        // switched off: the same as plain
+        s.face_melt.amount = 0.0;
+        assert!((Prepared::new(&s).distance([3.0, 4.0, 10.0]) - plain.distance([3.0, 4.0, 10.0])).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_subtract_inside_a_group_only_cuts_that_group() {
+        // top: two balls apart; the second ball's group holds a hole at the first ball's place
+        let cut = ball(-30.0, 8.0);
+        let mut sc = Scene { groups: vec![], melt: Default::default(), env: Default::default(), saved: Vec::new() };
+        sc.groups.clear();
+        sc.groups.push(group_of("a", 0, vec![ball(-30.0, 10.0)]));
+        sc.groups.push(group_of("b", 0, vec![ball(30.0, 10.0)]));
+        // nested in b: a subtract at x = 30 cuts b only, never a (a is not in b)
+        let mut hole = ball(30.0, 5.0);
+        hole.op = Op::Subtract;
+        sc.groups[1].shapes.push(hole);
+        sc.normalize_depths();
+        let f = Field::new(&sc);
+        assert!(f.distance([-30.0, 0.0, 0.0]) < -5.0, "a is whole");
+        assert!(f.distance([30.0, 0.0, 0.0]) > 0.0, "b has its hole");
+        // a group nested in a: its subtract cuts a (its parent), and b stays whole
+        let mut sc = Scene { groups: vec![], melt: Default::default(), env: Default::default(), saved: Vec::new() };
+        sc.groups.clear();
+        sc.groups.push(group_of("a", 0, vec![ball(-30.0, 10.0)]));
+        let mut inner = group_of("a-cut", 1, vec![cut]);
+        inner.op = Op::Subtract;
+        sc.groups.push(inner);
+        sc.groups.push(group_of("b", 0, vec![ball(-30.0, 10.0)]));
+        // b sits on top of a at the same place: the cut inside a must not touch it
+        sc.normalize_depths();
+        let f = Field::new(&sc);
+        assert!(f.distance([-30.0, 0.0, 0.0]) < -5.0, "b fills the hole a-cut made in a");
+        sc.groups.remove(2);
+        let f = Field::new(&sc);
+        assert!(f.distance([-30.0, 0.0, 0.0]) > 0.0, "without b the cut shows");
+    }
+
+    #[test]
+    fn nested_groups_melt_inside_before_they_melt_outside() {
+        // two balls 18 apart melt in one group; a third group far away stays separate
+        let mut sc = Scene { groups: vec![], melt: Default::default(), env: Default::default(), saved: Vec::new() };
+        sc.groups.clear();
+        let mut parent = group_of("parent", 0, vec![]);
+        parent.blend = 0.0;
+        sc.groups.push(parent);
+        let mut c1 = group_of("c1", 1, vec![ball(-9.0, 10.0)]);
+        let mut c2 = group_of("c2", 1, vec![ball(9.0, 10.0)]);
+        c1.blend = 0.0;
+        c2.blend = 14.0;
+        sc.groups.push(c1);
+        sc.groups.push(c2);
+        sc.normalize_depths();
+        let melted = Field::new(&sc).distance([0.0, 0.0, 0.0]);
+        sc.groups[2].blend = 0.0;
+        let hard = Field::new(&sc).distance([0.0, 0.0, 0.0]);
+        assert!(melted < hard, "the children melt together inside the parent ({melted} vs {hard})");
+        // the empty parent is only a container: it adds nothing of its own
+        assert!(Field::new(&sc).distance([0.0, 40.0, 0.0]) > 25.0);
+    }
+
+    #[test]
+    fn the_outline_helpers_keep_it_valid() {
+        let mut sc = Scene { groups: vec![], melt: Default::default(), env: Default::default(), saved: Vec::new() };
+        sc.groups.clear();
+        for (n, d) in [("a", 0), ("b", 1), ("c", 2), ("d", 0)] {
+            sc.groups.push(group_of(n, d, vec![]));
+        }
+        assert_eq!(sc.subtree_end(0), 3);
+        assert_eq!(sc.parent_of(2), Some(1));
+        assert!(sc.indent_group(3), "d goes into a's last child group c? it goes under the group above");
+        sc.normalize_depths();
+        let depths: Vec<u8> = sc.groups.iter().map(|g| g.depth).collect();
+        assert_eq!(depths, vec![0, 1, 2, 1]);
+        let at = sc.outdent_group(3);
+        assert_eq!(at, Some(3));
+        assert_eq!(sc.groups[3].depth, 0);
+        sc.remove_group(1);
+        let names: Vec<&str> = sc.groups.iter().map(|g| g.name.as_str()).collect();
+        assert_eq!(names, vec!["a", "c", "d"]);
+        assert_eq!(sc.groups[1].depth, 1, "c moved up one level with b gone");
+        let mut bad = Scene { groups: vec![], melt: Default::default(), env: Default::default(), saved: Vec::new() };
+        bad.groups.clear();
+        for d in [3, 3, 0, 2] {
+            bad.groups.push(group_of("x", d, vec![]));
+        }
+        bad.normalize_depths();
+        assert_eq!(bad.groups.iter().map(|g| g.depth).collect::<Vec<_>>(), vec![0, 1, 0, 1]);
     }
 
     #[test]
