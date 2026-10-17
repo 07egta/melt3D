@@ -99,7 +99,7 @@ impl Settings {
     pub fn safe(self) -> Self {
         let finite = |v: f32, default: f32, lo: f32, hi: f32| if v.is_finite() { v.clamp(lo, hi) } else { default };
         Settings {
-            height_mm: finite(self.height_mm, 64.0, 24.0, 110.0),
+            height_mm: finite(self.height_mm, 64.0, 14.0, 110.0),
             diameter_mm: finite(self.diameter_mm, 22.0, 14.0, 48.0),
             ornament: finite(self.ornament, 0.6, 0.0, 1.0),
             ..self
@@ -199,7 +199,6 @@ fn pedestal(r: f32, top: f32, design: Design, ornament: f32) -> Vec<[f32; 2]> {
 }
 
 fn add_king(g: &mut Group, m: Material, at: [f32; 2], h: f32, r: f32, s: Settings) {
-    let top = 0.77*h;
     // The cross sinks into the solid foot, and both bars overlap each other.
     let bar = (r*0.28 + 0.045*h*s.ornament).max(1.2);
     let upright_z = 0.885*h;
@@ -211,7 +210,7 @@ fn add_king(g: &mut Group, m: Material, at: [f32; 2], h: f32, r: f32, s: Setting
             [0.58*r,0.82*h],[0.38*r,0.83*h],[0.0,0.83*h],
         ]);
     }
-    let _ = top;
+
 }
 fn add_queen(g: &mut Group, m: Material, at: [f32; 2], h: f32, r: f32, s: Settings) {
     revolve(g, m, "女王の冠", at, &[
@@ -280,7 +279,7 @@ fn add_knight(g: &mut Group, m: Material, at: [f32; 2], h: f32, r: f32, s: Setti
     for side in [-1.0_f32, 1.0] {
         let cheek = [at[0]-0.06*r, at[1]+side*0.42*r, 0.705*h];
         ball(g, m, "馬の頬", cheek, 0.40*r);
-        let eye = [at[0]+0.15*r, at[1]+side*0.67*r, 0.77*h];
+        let eye = [at[0]+0.15*r, at[1]+side*0.67*r, 0.73*h];
         let rad = (r*0.12).max(0.7);
         ball(g, m, "馬の目", eye, rad);
     }
