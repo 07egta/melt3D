@@ -5,6 +5,7 @@
 // band of rows at a time while the scene is still. Rows of B above `c.x` (a share of the height)
 // are finished and shown; the rest shows A. When a picture is smaller than the window it is
 // scaled up with a bilinear read and a light contrast-adaptive sharpen (`c.y`, 0 = none).
+// `c.z` feathers the handoff *inside completed B rows*, without sampling unfinished rows.
 @group(0) @binding(0) var tex_a: texture_2d<f32>;
 @group(0) @binding(1) var tex_b: texture_2d<f32>;
 @group(0) @binding(2) var samp: sampler;
@@ -41,7 +42,11 @@ fn read_a(uv: vec2<f32>) -> vec3<f32> {
 }
 
 fn read_b(uv: vec2<f32>) -> vec3<f32> {
-    return textureSampleLevel(tex_b, samp, at(uv, P.b.xy, P.b.zw), 0.0).rgb;
+    // Bilinear reads at the unfinished band boundary must not touch rows
+    // the GPU has not rendered yet.
+    let p = at(uv, P.b.xy, P.b.zw);
+    let last_finished = max(P.b.w * 0.5, P.c.x * P.b.y - P.b.w * 0.5);
+    return textureSampleLevel(tex_b, samp, vec2<f32>(p.x, min(p.y, last_finished)), 0.0).rgb;
 }
 
 fn read_pic(from_b: bool, uv: vec2<f32>) -> vec3<f32> {
@@ -51,7 +56,14 @@ fn read_pic(from_b: bool, uv: vec2<f32>) -> vec3<f32> {
 
 @fragment
 fn fs(in: VOut) -> @location(0) vec4<f32> {
-    let from_b = in.uv.y < P.c.x;
+    // Smooth over the *last finished* 10 or fewer rows. A completed B
+    // picture is displayed unchanged; a fast-moving picture still uses A.
+    let reveal = clamp(P.c.x, 0.0, 1.0);
+    var weight_b = select(0.0, 1.0, in.uv.y < reveal);
+    if (reveal > 0.0 && reveal < 0.999 && P.c.z > 0.0) {
+        weight_b = 1.0 - smoothstep(max(0.0, reveal - P.c.z), reveal, in.uv.y);
+    }
+    let from_b = weight_b > 0.0;
     var share = P.a.xy;
     var texel = P.a.zw;
     if (from_b) {
@@ -73,6 +85,10 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
         let amp = sqrt(clamp(min(mn, vec3<f32>(1.0) - mx) / max(mx, vec3<f32>(1e-4)), vec3<f32>(0.0), vec3<f32>(1.0)));
         let k = -amp * mix(0.125, 0.2, clamp(P.c.y, 0.0, 1.0));
         c = clamp((c + (n + s + w + e) * k) / (vec3<f32>(1.0) + 4.0 * k), vec3<f32>(0.0), vec3<f32>(1.0));
+    }
+    if (weight_b > 0.0 && weight_b < 1.0) {
+        // Only the narrow transition reads both textures.
+        c = mix(read_a(in.uv), c, weight_b);
     }
     return vec4<f32>(c, 1.0);
 }
