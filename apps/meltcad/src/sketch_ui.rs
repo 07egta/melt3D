@@ -19,6 +19,7 @@ use crate::curve_tool::Input;
 use crate::model::{Kind, MAX_OUTLINE, MAX_PATH, MAX_SHAPES, Material, Op, Pick, Shape};
 use crate::sdf::V3;
 use crate::sketch::{self, Frame, SketchError, Which};
+use crate::sketch_edit_ops::{self, EditError};
 use crate::style;
 
 /// Pixels within which a click on the first point closes the outline.
@@ -184,6 +185,15 @@ pub enum Hover {
     Edge(usize, [f32; 2]),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EditOp { Trim, Offset, Fillet }
+
+impl EditOp {
+    pub fn label(self) -> &'static str {
+        match self { Self::Trim => "トリム", Self::Offset => "オフセット", Self::Fillet => "フィレット" }
+    }
+}
+
 pub struct State {
     /// The sketch tool is on.
     pub on: bool,
@@ -221,6 +231,9 @@ pub struct State {
     /// A friendly message under the tool name.
     pub msg: String,
     pub edit: Option<Edit>,
+    pub edit_op: Option<EditOp>,
+    pub edit_index: Option<usize>,
+    pub edit_value: f32,
 }
 
 impl Default for State {
@@ -249,6 +262,9 @@ impl Default for State {
             sweep_scale: 1.0,
             msg: String::new(),
             edit: None,
+            edit_op: None,
+            edit_index: None,
+            edit_value: 2.0,
         }
     }
 }
@@ -487,6 +503,8 @@ impl App {
     /// Switch the sketch tool on or off. It excludes the other drawing tools.
     pub fn set_sketch_tool(&mut self, on: bool) {
         self.sk.edit = None;
+        self.sk.edit_op = None;
+        self.sk.edit_index = None;
         self.sk.reset();
         self.sk.on = on;
         if on {
@@ -741,6 +759,11 @@ impl App {
         let enter = hit(Key::Enter);
         let esc = hit(Key::Escape);
         if self.sk.edit.is_some() {
+            if self.sk.edit_op.is_some() {
+                if esc { self.sk.edit_op = None; self.sk.edit_index = None; }
+                else if enter { self.edit_commit_operation(); }
+                return;
+            }
             if del {
                 self.sketch_edit_delete();
             }
@@ -775,6 +798,8 @@ impl App {
         self.sk.on = false;
         self.sel = Some(Pick::Shape(g, s));
         self.sk.edit = Some(Edit { g, s, which: Which::Main, sel: None, drag: None, hover: None });
+        self.sk.edit_op = None;
+        self.sk.edit_index = None;
         if let Some(f) = self.scene.shape(g, s).and_then(|sh| sketch::edit_frame(sh, Which::Main)) {
             self.sketch_fly(&f);
         }
@@ -847,6 +872,48 @@ impl App {
         let sh = self.scene.shape_mut(g, s)?;
         let rev = sh.kind == Kind::Revolve;
         Some((sketch::outline_of_mut(sh, which), rev))
+    }
+
+    /// Compute a non-destructive preview; validation occurs again on commit.
+    fn edit_preview(&self) -> Option<Result<Vec<[f32; 2]>, EditError>> {
+        let e = self.sk.edit.as_ref()?;
+        let op = self.sk.edit_op?;
+        let shape = self.scene.shape(e.g, e.s)?;
+        let outline = sketch::outline_of(shape, e.which);
+        Some(match op {
+            EditOp::Trim => self.sk.edit_index.map_or(Err(EditError::CannotTrim), |i| sketch_edit_ops::trim_edge(outline, i)),
+            EditOp::Offset => sketch_edit_ops::offset_profile(outline, self.sk.edit_value),
+            EditOp::Fillet => self.sk.edit_index.map_or(Err(EditError::InvalidOutline), |i| sketch_edit_ops::fillet_corner(outline, i, self.sk.edit_value)),
+        })
+    }
+
+    fn edit_commit_operation(&mut self) {
+        let Some(op) = self.sk.edit_op else { return };
+        let Some(result) = self.edit_preview() else { return };
+        match result {
+            Err(err) => self.sk.msg = err.message().to_owned(),
+            Ok(points) => {
+                if op == EditOp::Offset {
+                    // Keep the source solid untouched. Offer the new contour as a pending sketch.
+                    let Some(e) = self.sk.edit.as_ref() else { return };
+                    let Some(sh) = self.scene.shape(e.g, e.s) else { return };
+                    let Some(frame) = sketch::edit_frame(sh, e.which) else { return };
+                    self.sk.edit = None;
+                    self.sk.on = true;
+                    self.sk.reset();
+                    self.sk.profile = points;
+                    self.sk.pframe = frame;
+                    self.sk.frame = frame;
+                    self.sk.stage = Stage::Ready;
+                    self.sk.msg = "オフセット輪郭を作りました。立体化するか Esc で破棄できます".to_owned();
+                } else if let Some((outline, _)) = self.edit_outline_mut() {
+                    *outline = points;
+                    self.sk.msg.clear();
+                }
+                self.sk.edit_index = None;
+                self.sk.edit_op = None;
+            }
+        }
     }
 
     /// The button went down on point `idx`: start moving it.
@@ -934,6 +1001,23 @@ impl App {
     fn sketch_edit_input(&mut self, ui: &Ui, resp: &egui::Response, rect: Rect, pos: Option<Pos2>, mods: egui::Modifiers) -> Input {
         let mut out = Input::default();
         if self.edit_target().is_none() {
+            return out;
+        }
+        if let Some(op) = self.sk.edit_op {
+            let mouse = pos.filter(|p| resp.hovered() && !mods.alt);
+            let hit = mouse.and_then(|m| self.edit_hit(rect, m));
+            if let Some(e) = self.sk.edit.as_mut() { e.hover = hit; }
+            if let Some(m) = mouse {
+                if resp.clicked_by(egui::PointerButton::Primary) {
+                    self.sk.edit_index = match (op, self.edit_hit(rect, m)) {
+                        (EditOp::Trim, Some(Hover::Edge(i, _))) => Some(i),
+                        (EditOp::Fillet, Some(Hover::Point(i))) => Some(i),
+                        _ => None,
+                    };
+                    out.taken = true;
+                }
+            }
+            out.over = hit.is_some();
             return out;
         }
         let step = step_for(mods);
@@ -1232,6 +1316,9 @@ impl App {
         }
         let ol = sketch::outline_of(sh, e.which);
         self.paint_poly(p, rect, &f, ol, true, style::ACCENT, 2.0);
+        if let Some(Ok(preview)) = self.edit_preview() {
+            self.paint_poly(p, rect, &f, &preview, true, Color32::from_rgb(90, 228, 160), 2.8);
+        }
         for (i, q) in ol.iter().enumerate() {
             let Some(c) = self.sketch_px(rect, &f, *q) else { continue };
             let hot = e.hover == Some(Hover::Point(i)) || e.drag.as_ref().is_some_and(|d| d.idx == i);
@@ -1299,6 +1386,36 @@ impl App {
                         }
                     }
                 }
+            });
+        }
+        ui.horizontal_wrapped(|ui| {
+            ui.label("編集:");
+            for op in [EditOp::Trim, EditOp::Offset, EditOp::Fillet] {
+                if style::pill(ui, op.label(), self.sk.edit_op == Some(op)).clicked() {
+                    self.sk.edit_op = if self.sk.edit_op == Some(op) { None } else { Some(op) };
+                    self.sk.edit_index = None;
+                    self.sk.msg.clear();
+                }
+            }
+        });
+        if let Some(op) = self.sk.edit_op {
+            if op != EditOp::Trim {
+                ui.horizontal(|ui| {
+                    ui.label(if op == EditOp::Offset { "距離 (mm、負数は内側)" } else { "半径 (mm)" });
+                    ui.add(egui::DragValue::new(&mut self.sk.edit_value).speed(0.1));
+                });
+            }
+            hint(ui, match op {
+                EditOp::Trim => "削除する短い辺をクリック。隣の辺を延長し、閉じた輪郭を維持します",
+                EditOp::Offset => "距離を指定すると緑色の輪郭がプレビューされます。元の立体は残ります",
+                EditOp::Fillet => "丸める頂点をクリック。緑色の円弧を確認してください",
+            });
+            if let Some(Err(err)) = self.edit_preview() { hint(ui, err.message()); }
+            ui.horizontal(|ui| {
+                if style::pill_enabled(ui, "適用", false, self.edit_preview().is_some_and(|p| p.is_ok())).clicked() {
+                    self.edit_commit_operation();
+                }
+                if style::pill(ui, "キャンセル", false).clicked() { self.sk.edit_op = None; self.sk.edit_index = None; }
             });
         }
         let n = self.sk.edit.as_ref().and_then(|e| self.scene.shape(e.g, e.s).map(|s| sketch::outline_of(s, e.which).len())).unwrap_or(0);
