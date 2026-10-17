@@ -49,6 +49,10 @@ pub struct App {
     redo: Vec<Scene>,
     pub cam: Camera,
     pub sel: Option<Pick>,
+    /// Additional Ctrl-clicked selections; the primary one is still sel for existing gizmos.
+    pub multi_sel: Vec<Pick>,
+    /// Detect selections written by legacy tools, clearing stale additional selections.
+    pub selection_anchor: Option<Pick>,
     pub tool: Tool,
     /// What a new shape does: add to the group or carve from it.
     pub new_op: Op,
@@ -150,6 +154,8 @@ impl App {
             redo: Vec::new(),
             cam: Camera::default(),
             sel: Some(Pick::Shape(0, 0)),
+            multi_sel: Vec::new(),
+            selection_anchor: Some(Pick::Shape(0, 0)),
             tool: Tool::All,
             new_op: Op::Add,
             drag: None,
@@ -300,9 +306,11 @@ impl App {
         if !ok {
             self.sel = None;
         }
+        self.sync_multi_selection();
     }
 
     pub fn undo(&mut self) {
+        self.clear_multi_selection();
         if let Some(prev) = self.undo.pop() {
             self.redo.push(std::mem::replace(&mut self.scene, prev.clone()));
             self.committed = prev;
@@ -311,6 +319,7 @@ impl App {
     }
 
     pub fn redo(&mut self) {
+        self.clear_multi_selection();
         if let Some(next) = self.redo.pop() {
             self.undo.push(std::mem::replace(&mut self.scene, next.clone()));
             self.committed = next;
@@ -360,6 +369,7 @@ impl App {
         self.undo.clear();
         self.redo.clear();
         self.sel = if self.scene.shape(0, 0).is_some() { Some(Pick::Shape(0, 0)) } else { None };
+        self.clear_multi_selection();
         self.path = path;
         self.dirty = false;
         if !notes.is_empty() {
@@ -444,6 +454,7 @@ impl App {
     }
 
     pub fn add_shape(&mut self, ctx: &egui::Context, kind: Kind) {
+        self.clear_multi_selection();
         if self.scene.shape_count() >= MAX_SHAPES {
             self.say(ctx, format!("形は{MAX_SHAPES}個までです"));
             return;
@@ -480,6 +491,7 @@ impl App {
     }
 
     pub fn add_group(&mut self) {
+        self.clear_multi_selection();
         if self.scene.groups.len() < MAX_GROUPS {
             let n = self.scene.groups.len() + 1;
             self.scene.groups.push(Group::new(format!("グループ {n}")));
@@ -488,6 +500,10 @@ impl App {
     }
 
     pub fn duplicate(&mut self) {
+        if !self.multi_sel.is_empty() {
+            self.duplicate_multi();
+            return;
+        }
         match self.sel {
             Some(Pick::Shape(g, s)) if self.scene.shape_count() < MAX_SHAPES => {
                 if let Some(mut c) = self.scene.shape(g, s).cloned() {
@@ -545,6 +561,10 @@ impl App {
     }
 
     pub fn delete_selected(&mut self) {
+        if !self.multi_sel.is_empty() {
+            self.delete_multi();
+            return;
+        }
         match self.sel {
             Some(Pick::Shape(g, s)) if self.scene.shape(g, s).is_some() => {
                 self.scene.groups[g].shapes.remove(s);
@@ -564,6 +584,7 @@ impl App {
 
     /// Drag-and-drop in the scene list: put `from` next to `to` (before it, or after it).
     pub fn move_layer(&mut self, from: Pick, to: Pick, after: bool) {
+        self.clear_multi_selection();
         match (from, to) {
             (Pick::Shape(g, s), Pick::Shape(g2, s2)) => {
                 if self.scene.shape(g, s).is_none() || self.scene.shape(g2, s2).is_none() || (g, s) == (g2, s2) {
@@ -775,7 +796,7 @@ impl App {
             self.frame_view(false);
         }
         if hit(plain, Key::Escape) {
-            self.sel = None;
+            self.select_pick(None, false);
         }
         // Blender-style views on the number keys
         let v = |k: Key, back: bool| hit(if back { Modifiers::CTRL } else { plain }, k);
@@ -1073,9 +1094,6 @@ impl App {
                         let tools = [
                             (Tool::Select, "選ぶ", "選ぶだけ (Q)"),
                             (Tool::All, "ぜんぶ", "動かす・回す・大きさ ぜんぶ (A)"),
-                            (Tool::Move, "動かす", "動かす (W)"),
-                            (Tool::Rotate, "回す", "回す (E)"),
-                            (Tool::Scale, "大きさ", "大きさ (R)"),
                         ];
                         let items: Vec<(&str, &str)> = tools.iter().map(|t| (t.1, t.2)).collect();
                         let sel = tools.iter().position(|t| t.0 == self.tool);
@@ -1121,6 +1139,8 @@ impl App {
                         ("ホイール", "ズーム (マウスの位置へ)"),
                         ("左ドラッグ (何もない所)", "回す"),
                         ("クリック", "選ぶ　Shiftでグループ"),
+                        ("Ctrl+クリック", "複数選択（もう一度で解除）"),
+                        ("右クリック", "選択に合った操作を表示"),
                         ("ダブルクリック", "その形を見る"),
                         ("F", "さがす（形・ライブラリ・コマンド）"),
                         ("Shift+F / Home", "選んだもの / 全体を見る"),
@@ -1345,6 +1365,7 @@ impl App {
         if self.capture.is_none() {
             self.tool_strip(ui);
             self.tool_pill(ui);
+            self.selection_toolbar(&ctx);
             self.draw_card(&ctx);
             self.pipe_card(&ctx);
             self.sketch_card(&ctx);
