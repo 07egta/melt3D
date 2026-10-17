@@ -359,6 +359,29 @@ impl Material {
     }
 }
 
+/// A node on a tube curve can retain the historical Catmull-Rom behaviour, have
+/// coupled C1-continuous Bezier handles, or independent handles for a sharp corner.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CurveNodeMode {
+    #[default]
+    Auto,
+    Smooth,
+    Corner,
+}
+
+/// Handle offsets from the node centre, in its local XYZ coordinates (millimetres).
+/// These are true cubic Bezier control handles, not interpolated polyline points.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct CurveHandles {
+    #[serde(default)]
+    pub mode: CurveNodeMode,
+    #[serde(default)]
+    pub incoming: [f32; 3],
+    #[serde(default)]
+    pub outgoing: [f32; 3],
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Shape {
     pub name: String,
@@ -384,6 +407,10 @@ pub struct Shape {
     /// Nodes (x, y, z, radius) of a `Curve` or `Sweep`, in the shape's own space.
     #[serde(default)]
     pub path: Vec<[f32; 4]>,
+    /// Optional, index-aligned handles for Curve nodes. Empty in old files: their
+    /// exact Catmull-Rom interpolation is preserved when no handle is authored.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub curve_handles: Vec<CurveHandles>,
     /// The top profile of a `Loft`.
     #[serde(default)]
     pub outline2: Vec<[f32; 2]>,
@@ -445,6 +472,7 @@ impl Shape {
             outline: kind.default_outline(),
             params: kind.default_params(),
             path: kind.default_path(),
+            curve_handles: Vec::new(),
             outline2: kind.default_outline2(),
             shell: 0.0,
             corner: Corner::Round,
@@ -490,7 +518,7 @@ impl Shape {
                 let y = mx(&self.outline, 1).max(mx(&self.outline2, 1));
                 [x, y, s[0] * 0.5]
             }
-            Kind::Curve => crate::curve::half_extent(&self.path, &self.params),
+            Kind::Curve => crate::curve::half_extent_shape(self),
             // the box of the volume's nodes as seen from the shape's origin (the origin need not be its middle)
             Kind::Mesh => match &self.volume {
                 Some(v) => {
