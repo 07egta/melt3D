@@ -441,10 +441,6 @@ fn ctrl_click_selects_multiple_shapes_and_right_click_keeps_the_selection() {
     assert!(r.app.is_pick_selected(Pick::Shape(0, 1)));
     assert_eq!(r.app.multi_sel.len(), 1);
 
-    // Right-click one member for the context menu: both picks must remain.
-    r.frame(vec![Event::PointerButton { pos: p1, button: PointerButton::Secondary, pressed: true, modifiers: r.mods }]);
-    r.frame(vec![Event::PointerButton { pos: p1, button: PointerButton::Secondary, pressed: false, modifiers: r.mods }]);
-    assert_eq!(r.app.multi_sel.len(), 1);
     r.click(p1);
     assert_eq!(r.app.multi_sel.len(), 0, "Ctrl-click again toggles the additional pick off");
 
@@ -452,4 +448,15 @@ fn ctrl_click_selects_multiple_shapes_and_right_click_keeps_the_selection() {
     r.mods = egui::Modifiers::SHIFT;
     r.click(p0);
     assert_eq!(r.app.sel, Some(Pick::Group(0)));
+    r.mods = egui::Modifiers::NONE;
+    r.click(p0);
+    assert_eq!(r.app.sel, Some(Pick::Shape(0, 0)));
+    r.mods = egui::Modifiers::CTRL;
+    r.click(p1);
+    assert_eq!(r.app.multi_sel.len(), 1);
+
+    // Right-click one member for the context menu: both picks must remain.
+    r.frame(vec![Event::PointerButton { pos: p1, button: PointerButton::Secondary, pressed: true, modifiers: r.mods }]);
+    r.frame(vec![Event::PointerButton { pos: p1, button: PointerButton::Secondary, pressed: false, modifiers: r.mods }]);
+    assert_eq!(r.app.multi_sel.len(), 1);
 }
