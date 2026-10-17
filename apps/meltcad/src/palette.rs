@@ -180,8 +180,19 @@ fn gram_keys(text: &str, width: usize) -> Vec<String> {
 }
 
 fn action_key(action: Action) -> String {
-    // Stable across sessions, independent of the library's current display order.
-    format!("{action:?}")
+    // Models are identified by their category and label, not mutable row indices.
+    // Other commands use their existing enum identity, independent of UI translation.
+    match action {
+        Action::Insert(cat, item) => {
+            if let Some(category) = library::all().get(cat)
+                && let Some(model) = category.items.get(item)
+            {
+                return format!("library:{}:{}", category.name, model.name);
+            }
+            format!("library:missing:{cat}:{item}")
+        }
+        _ => format!("{action:?}"),
+    }
 }
 
 #[derive(Default, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -314,31 +325,13 @@ impl Catalog {
         Self { entries, keys, by_key, postings, defaults }
     }
 
-    fn indexed_candidates(&self, words: &[String], width: usize) -> Vec<usize> {
-        let mut lists: Vec<&Vec<usize>> = Vec::new();
-        for word in words {
-            for gram in gram_keys(word, width.min(word.chars().count())) {
-                let Some(list) = self.postings.get(&gram) else { return Vec::new() };
-                lists.push(list);
-            }
-        }
-        lists.sort_by_key(|list| list.len());
-        let Some(first) = lists.first() else { return Vec::new() };
-        let mut ids = first.to_vec();
-        for list in lists.iter().skip(1) {
-            ids.retain(|i| list.binary_search(i).is_ok());
-            if ids.is_empty() { break; }
-        }
-        ids
-    }
-
-    fn candidates(&self, query: &str) -> Vec<usize> {
-        let tokens: Vec<String> = query.split_whitespace().map(str::to_owned).collect();
+    /// Intersection of postings for all query n-grams. No full catalog iteration.
+    fn candidates_at_width(&self, query: &str, forced_width: Option<usize>) -> Vec<usize> {
+        let tokens: Vec<&str> = query.split_whitespace().collect();
         if tokens.is_empty() { return Vec::new(); }
-        // Each token uses its longest available 1, 2 or 3-character grams.
         let mut lists: Vec<&Vec<usize>> = Vec::new();
-        for token in &tokens {
-            let n = token.chars().count().min(3);
+        for token in tokens {
+            let n = forced_width.unwrap_or_else(|| token.chars().count().min(3));
             for gram in gram_keys(token, n) {
                 let Some(list) = self.postings.get(&gram) else { return Vec::new() };
                 lists.push(list);
@@ -352,6 +345,10 @@ impl Catalog {
             if ids.is_empty() { break; }
         }
         ids
+    }
+
+    fn candidates(&self, query: &str) -> Vec<usize> {
+        self.candidates_at_width(query, None)
     }
 
     fn search(&self, query: &str, prefs: &Prefs, limit: usize) -> Vec<usize> {
@@ -377,7 +374,7 @@ impl Catalog {
         // Retain the old initials / ordered-letters search without the old full scan:
         // only try intersecting per-character postings if no substring matches.
         if scored.is_empty() && !q.contains(char::is_whitespace) && q.chars().count() > 1 {
-            candidates = self.indexed_candidates(&[q.clone()], 1);
+            candidates = self.candidates_at_width(&q, Some(1));
             scored = self.rank_candidates(&candidates, &q, prefs);
         }
         scored.truncate(limit);
@@ -632,7 +629,12 @@ impl App {
                                 execute = Some(i);
                             }
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                ui.label(RichText::new(e.tag).size(11.0).color(style::DIM));
+                                let section = if st.query.trim().is_empty() && self.palette_prefs.recent.contains(&cat.keys[i]) {
+                                    "最近"
+                                } else {
+                                    e.tag
+                                };
+                                ui.label(RichText::new(section).size(11.0).color(style::DIM));
                             });
                         });
                         if let Some(why) = reason {
