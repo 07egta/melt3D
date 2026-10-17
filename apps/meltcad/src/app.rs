@@ -1268,7 +1268,7 @@ impl App {
             .fixed_pos(rect.right_bottom() - egui::vec2(16.0, 72.0))
             .show(&ctx, |ui| {
                 style::card().show(ui, |ui| {
-                    ui.set_width((rect.width() - 28.0).clamp(170.0, 300.0));
+                    ui.set_width((rect.width() - 28.0).clamp(94.0, 300.0));
                     ui.label(RichText::new("操作のしかた").strong().size(14.0));
                     ui.separator();
                     egui::ScrollArea::vertical().max_height((rect.height() - 124.0).max(64.0)).show(ui, |ui| {
@@ -1291,10 +1291,16 @@ impl App {
                         ("Ctrl+D / Delete", "複製 / 消す"),
                         ("Ctrl+Z / Ctrl+Shift+Z", "元に戻す / やり直し"),
                     ] {
-                        ui.horizontal(|ui| {
-                            ui.add_sized([ui.available_width().min(150.0) * 0.52, 18.0], egui::Label::new(RichText::new(k).size(12.0).color(style::ACCENT)));
-                            ui.label(RichText::new(v).size(12.0).color(style::TEXT));
-                        });
+                        if rect.width() < 260.0 {
+                            ui.label(RichText::new(k).size(12.0).color(style::ACCENT));
+                            ui.label(RichText::new(v).size(11.0).color(style::TEXT));
+                            ui.separator();
+                        } else {
+                            ui.horizontal(|ui| {
+                                ui.add_sized([ui.available_width().min(150.0) * 0.52, 18.0], egui::Label::new(RichText::new(k).size(12.0).color(style::ACCENT)));
+                                ui.label(RichText::new(v).size(12.0).color(style::TEXT));
+                            });
+                        }
                     }
                     });
                 });
