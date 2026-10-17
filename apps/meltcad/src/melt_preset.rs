@@ -448,7 +448,7 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
                 ui.label(RichText::new("再適用すると、このグループの手動変更や追加形状が置き換わります。").color(Color32::YELLOW).small());
             }
             if let Some(message) = &editor.error {
-                ui.label(RichText::new(message).color(Color32::LIGHT_RED));
+                ui.label(RichText::new(message).color(Color32::RED));
             }
             ui.separator();
             ui.horizontal(|ui| {
