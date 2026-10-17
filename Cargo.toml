@@ -117,6 +117,17 @@ debug = "line-tables-only"
 [profile.release.package.meltcad]
 codegen-units = 1
 
+# Experimental size comparison only. The shipping workflow stays on --release
+# until Windows build, RAM, startup and 300-shape speed parity are verified.
+# Keep opt-level=3, thin LTO, unwinding and all functional dependencies.
+# Strip only embedded debug information; do not use UPX or size-oriented opt-level.
+[profile.yuracad-small]
+inherits = "release"
+strip = "debuginfo"
+
+[profile.yuracad-small.package.meltcad]
+codegen-units = 1
+
 # truck-shapeops with SolidCraft fixes (Apache-2.0, see vendor/truck-shapeops and ATTRIBUTION.md).
 [patch.crates-io]
 truck-shapeops = { path = "vendor/truck-shapeops" }
