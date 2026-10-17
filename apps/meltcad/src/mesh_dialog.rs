@@ -5,7 +5,7 @@
 //! The state lives in egui's memory like the other cards, so `App` needs no new fields.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -15,33 +15,45 @@ use crate::app::App;
 use crate::mesh_import::{self, Baked, Loaded, RES_CHOICES, Settings, Up};
 use crate::model::{Group, MAX_GROUPS, MAX_SHAPES, Material, Pick};
 use crate::sdf_volume::{BakeControl, ERR_CANCEL};
+use crate::work_budget;
 use crate::style;
 
-/// A job on another thread whose answer is picked up later.
+/// A worker that holds its memory permit until the actual thread exits.
 struct Job<T> {
     slot: Mutex<Option<Result<T, String>>>,
+    cancel: AtomicBool,
+    progress: AtomicU32,
 }
 
 impl<T: Send + 'static> Job<T> {
-    fn spawn(name: &str, f: impl FnOnce() -> Result<T, String> + Send + 'static) -> Arc<Job<T>> {
-        let job = Arc::new(Job { slot: Mutex::new(None) });
+    fn spawn(name: &str, ctx: &egui::Context, f: impl FnOnce(&AtomicBool, &AtomicU32) -> Result<T, String> + Send + 'static) -> Arc<Job<T>> {
+        let job = Arc::new(Job { slot: Mutex::new(None), cancel: AtomicBool::new(false), progress: AtomicU32::new(0) });
+        let permit = match work_budget::try_acquire(ctx) {
+            Ok(permit) => permit,
+            Err(e) => {
+                if let Ok(mut slot) = job.slot.lock() { *slot = Some(Err(e)); }
+                return job;
+            }
+        };
         let j = job.clone();
         let spawned = std::thread::Builder::new().name(name.into()).spawn(move || {
-            let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).unwrap_or_else(|_| Err("途中で止まってしまいました".into()));
-            if let Ok(mut s) = j.slot.lock() {
-                *s = Some(res);
+            let _permit = permit;
+            let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(&j.cancel, &j.progress)))
+                .unwrap_or_else(|_| Err("途中で止まってしまいました".into()));
+            let res = if j.cancel.load(Ordering::Relaxed) { Err(crate::import_mesh::IMPORT_CANCELLED.into()) } else { res };
+            if let Ok(mut slot) = j.slot.lock() {
+                *slot = Some(res);
             }
         });
-        if spawned.is_err()
-            && let Ok(mut s) = job.slot.lock()
-        {
-            *s = Some(Err("読みこみを始められませんでした".into()));
+        if let Err(e) = spawned && let Ok(mut slot) = job.slot.lock() {
+            *slot = Some(Err(format!("読みこみを始められませんでした: {e}")));
         }
         job
     }
-    fn take(&self) -> Option<Result<T, String>> {
-        self.slot.lock().ok()?.take()
-    }
+    fn cancel(&self) { self.cancel.store(true, Ordering::Relaxed); }
+    fn cancelled(&self) -> bool { self.cancel.load(Ordering::Relaxed) }
+    fn fraction(&self) -> f32 { (self.progress.load(Ordering::Relaxed) as f32 / 1000.0).clamp(0.0, 1.0) }
+    fn take(&self) -> Option<Result<T, String>> { self.slot.lock().ok()?.take() }
 }
 
 struct BakeJob {
@@ -83,15 +95,18 @@ pub fn open(ctx: &egui::Context) {
 /// Show the card for this file (a dropped file, or the one just chosen).
 pub fn open_path(ctx: &egui::Context, path: PathBuf) {
     let mut d = ctx.data_mut(|m| m.remove_temp::<Dlg>(id())).filter(|d| d.open).unwrap_or_default();
-    if let Some(b) = &d.bake {
-        b.ctl.cancel.store(true, Ordering::Relaxed);
+    // A cancelled worker still owns large allocations until it has actually exited.
+    if d.reading.is_some() || d.bake.is_some() {
+        d.msg = "処理中です。中止して終了するまで別のファイルは開けません".into();
+        ctx.data_mut(|m| m.insert_temp(id(), d));
+        return;
     }
     d.bake = None;
     d.loaded = None;
     d.msg.clear();
     d.open = true;
     let p = path.clone();
-    d.reading = Some((Job::spawn("meltcad-mesh-read", move || mesh_import::load(&p)), path));
+    d.reading = Some((Job::spawn("meltcad-mesh-read", ctx, move |cancel, progress| mesh_import::load_with_control(&p, cancel, progress)), path));
     ctx.data_mut(|m| m.insert_temp(id(), d));
     ctx.request_repaint();
 }
@@ -132,15 +147,19 @@ fn size_text(s: [f32; 3]) -> String {
 
 /// Friendly words for an error from the readers or the bake.
 fn jp_error(e: &str) -> String {
-    if e == ERR_CANCEL { "やめました".into() } else { e.to_string() }
+    if e == ERR_CANCEL || e == crate::import_mesh::IMPORT_CANCELLED { "やめました".into() } else { e.to_string() }
 }
 
-fn start_bake(d: &mut Dlg) {
+fn start_bake(d: &mut Dlg, ctx: &egui::Context) {
     let Some(loaded) = d.loaded.clone() else { return };
     let settings = d.st.sanitized();
     let ctl = Arc::new(BakeControl::new());
     let (l, c) = (loaded.clone(), ctl.clone());
-    let job = Job::spawn("meltcad-mesh-bake", move || mesh_import::bake(&l.imported.mesh, l.imported.format, &settings, &c));
+    let job = Job::spawn("meltcad-mesh-bake", ctx, move |cancel, _| {
+        if cancel.load(Ordering::Relaxed) { return Err(ERR_CANCEL.into()); }
+        let out = mesh_import::bake(&l.imported.mesh, l.imported.format, &settings, &c);
+        if cancel.load(Ordering::Relaxed) { Err(ERR_CANCEL.into()) } else { out }
+    });
     d.bake = Some(Arc::new(BakeJob { job, ctl, started: Instant::now(), loaded, settings }));
     d.msg.clear();
 }
@@ -182,6 +201,12 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
     if let Some((job, path)) = d.reading.clone() {
         match job.take() {
             Some(Ok(l)) => {
+                if job.cancelled() {
+                    d.reading = None;
+                    d.msg = "やめました".into();
+                    ctx.data_mut(|m| m.insert_temp(id(), d));
+                    return;
+                }
                 d.st = Settings::new(l.size);
                 d.msg.clear();
                 d.loaded = Some(Arc::new(l));
@@ -200,7 +225,11 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
         match b.job.take() {
             Some(Ok(baked)) => {
                 d.bake = None;
-                close = finish(app, ctx, &b, &baked);
+                if b.ctl.cancel.load(Ordering::Relaxed) || b.job.cancelled() {
+                    d.msg = "やめました".into();
+                } else {
+                    close = finish(app, ctx, &b, &baked);
+                }
             }
             Some(Err(e)) => {
                 d.bake = None;
@@ -222,6 +251,10 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
                 baking(ui, &b);
             } else if busy_read {
                 ui.label(RichText::new("ファイルを読んでいます…").color(style::DIM));
+                if let Some((job, _)) = &d.reading {
+                    ui.add(egui::ProgressBar::new(job.fraction()).show_percentage());
+                    if job.cancelled() { ui.label("中止処理を待っています…（解析完了後にメモリを解放します）"); }
+                }
                 if let Some((_, p)) = &d.reading {
                     ui.label(RichText::new(p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()).size(11.5).color(style::DIM));
                 }
@@ -234,12 +267,14 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
             }
             ui.add_space(4.0);
             ui.horizontal(|ui| {
-                if d.bake.is_some() {
-                    if style::pill(ui, "中止", false).clicked()
-                        && let Some(b) = &d.bake
-                    {
+                if let Some(b) = &d.bake {
+                    if style::pill(ui, "中止", false).clicked() {
                         b.ctl.cancel.store(true, Ordering::Relaxed);
+                        b.job.cancel();
                     }
+                    if b.ctl.cancel.load(Ordering::Relaxed) { ui.label("中止処理を待っています…"); }
+                } else if let Some((job, _)) = &d.reading {
+                    if style::pill(ui, "中止", false).clicked() { job.cancel(); }
                 } else {
                     ui.add_enabled_ui(d.loaded.is_some(), |ui| {
                         let b = egui::Button::new(RichText::new("読みこむ").strong().color(Color32::WHITE)).fill(style::ACCENT_SOFT).stroke(Stroke::new(1.0, style::ACCENT));
@@ -263,7 +298,7 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
         let nodes = d.loaded.as_ref().map_or(0, |l| estimate_of(l, &d.st).nodes);
         match mesh_import::refuse(&app.scene, nodes) {
             Some(why) => d.msg = why.to_string(),
-            None => start_bake(&mut d),
+            None => start_bake(&mut d, ctx),
         }
     }
     if close {
@@ -427,7 +462,7 @@ mod tests {
         d.st.floor = true;
         d.st.centre = true;
         app.cam.target = [40.0, -10.0, 0.0];
-        start_bake(&mut d);
+        start_bake(&mut d, &ctx);
         ctx.data_mut(|m| m.insert_temp(id(), d));
         pump(&mut app, &ctx, |a| a.scene.groups.len() > groups);
         assert_eq!((app.scene.groups.len(), app.scene.shape_count()), (groups + 1, shapes + 1), "a new group with one shape");
@@ -475,7 +510,7 @@ mod tests {
         pump(&mut app, &ctx, |_| ctx.data(|m| m.get_temp::<Dlg>(id())).is_some_and(|d| d.loaded.is_some()));
         let mut d = ctx.data(|m| m.get_temp::<Dlg>(id())).unwrap();
         d.st.res = 160;
-        start_bake(&mut d);
+        start_bake(&mut d, &ctx);
         if let Some(b) = &d.bake {
             b.ctl.cancel.store(true, Ordering::Relaxed);
         }
