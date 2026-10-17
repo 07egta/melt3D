@@ -150,8 +150,9 @@ mod tests {
     use super::*;
     use crate::model::Kind as ShapeKind;
 
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     fn path(name: &str) -> PathBuf {
-        std::env::temp_dir().join(format!("yura_docjob_{}_{}_{}", std::process::id(), crate::atomic_files::test_sequence(), name))
+        std::env::temp_dir().join(format!("yura_docjob_{}_{}_{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed), name))
     }
 
     fn wait(job: &Job) -> Result<Completed, String> {
