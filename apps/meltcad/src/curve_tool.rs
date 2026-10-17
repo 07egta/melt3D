@@ -10,7 +10,7 @@ use egui::{Color32, Painter, Pos2, Rect, Stroke, Ui, pos2, vec2};
 
 use crate::app::App;
 use crate::camera::Camera;
-use crate::model::{Group, Kind, MAX_PATH, MAX_SHAPES, Material, Pick, Shape};
+use crate::model::{CurveHandles, CurveNodeMode, Group, Kind, MAX_PATH, MAX_SHAPES, Material, Pick, Shape};
 use crate::sdf::{V3, add, dot, len, mul, norm, rotation, sub};
 use crate::{curve, style};
 
@@ -69,6 +69,13 @@ pub fn set_all_radii(path: &mut [[f32; 4]], r: f32) {
     let r = if r.is_finite() { r.clamp(0.1, 500.0) } else { 5.0 };
     for p in path {
         p[3] = r;
+    }
+}
+
+/// Keep the optional handles aligned with nodes as paths are edited.
+fn align_handles(shape: &mut Shape) {
+    if !shape.curve_handles.is_empty() {
+        shape.curve_handles.resize(shape.path.len(), CurveHandles::default());
     }
 }
 
@@ -136,6 +143,8 @@ pub enum Hit {
     End(End),
     /// The `+` on segment `i` (between node `i` and the next): click to add a node there.
     Mid(usize),
+    /// Incoming/outgoing cubic Bezier control point.
+    Bezier(usize, bool),
 }
 
 /// Where everything of one path sits on screen this frame.
@@ -147,6 +156,8 @@ pub struct Layout {
     pub ends: Vec<(End, Pos2, Pos2)>,
     /// The smooth curve, projected.
     pub line: Vec<Pos2>,
+    /// (node index, outgoing, centre, handle position)
+    pub bezier: Vec<(usize, bool, Pos2, Pos2)>,
 }
 
 const END_GAP: f32 = 17.0;
@@ -180,7 +191,20 @@ pub fn layout(cam: &Camera, rect: Rect, s: &Shape) -> Layout {
             }
         }
     }
-    let pts = if is_curve { curve::build(&s.path, &s.params) } else { s.path.clone() };
+    if is_curve {
+        for (i, h) in s.curve_handles.iter().enumerate() {
+            if h.mode == CurveNodeMode::Auto { continue; }
+            let Some(node) = s.path.get(i) else { continue };
+            let centre = [node[0],node[1],node[2]];
+            for (outgoing, delta) in [(false,h.incoming),(true,h.outgoing)] {
+                let end = add(centre,delta);
+                if let (Some(c),Some(p)) = (cam.project(rect,to_world(s,centre)),cam.project(rect,to_world(s,end))) {
+                    out.bezier.push((i,outgoing,c,p));
+                }
+            }
+        }
+    }
+    let pts = if is_curve { curve::build_shape(s) } else { s.path.clone() };
     out.line = pts.iter().filter_map(|p| cam.project(rect, to_world(s, [p[0], p[1], p[2]]))).collect();
     out
 }
@@ -192,6 +216,13 @@ pub fn hit(l: &Layout, p: Pos2, chosen: Option<usize>) -> Option<Hit> {
         && (pos2(n.c.x + n.r, n.c.y) - p).length() <= 7.0
     {
         return Some(Hit::Radius(i));
+    }
+    if let Some(i) = chosen {
+        for (idx, outgoing, _, point) in &l.bezier {
+            if *idx == i && (*point - p).length() <= 9.0 {
+                return Some(Hit::Bezier(i, *outgoing));
+            }
+        }
     }
     let mut best: Option<(f32, usize)> = None;
     for (i, n) in l.nodes.iter().enumerate() {
@@ -227,6 +258,7 @@ pub struct NodeDrag {
     pub s: usize,
     pub i: usize,
     pub radius: bool,
+    pub handle: Option<bool>,
     /// The Shift key state last frame (level with the ground instead of facing the camera).
     pub level: bool,
     /// Node position minus the pointer's place on the plane when grabbed.
@@ -352,8 +384,22 @@ impl App {
         let Some(sh) = self.scene.shape_mut(g, s) else { return false };
         let n = sh.path.len();
         let at = |sh: &Shape, i: usize| sh.path.get(i).map(|p| [p[0], p[1], p[2]]);
-        let mut drag = NodeDrag { g, s, i: 0, radius: false, level: false, grab: [0.0; 3] };
+        let mut drag = NodeDrag { g, s, i: 0, radius: false, handle: None, level: false, grab: [0.0; 3] };
+        align_handles(sh);
         match h {
+            Hit::Bezier(i, outgoing) => {
+                drag.i = i;
+                drag.handle = Some(outgoing);
+                let Some(node) = sh.path.get(i) else { return false };
+                let Some(handles) = sh.curve_handles.get(i) else { return false };
+                let v = if outgoing { handles.outgoing } else { handles.incoming };
+                let w = to_world(sh, add([node[0],node[1],node[2]],v));
+                if let Some(origin) = origin {
+                    if let Some(hit) = unproject_on_plane(&cam,rect,origin,w,false) {
+                        drag.grab = sub(w,hit);
+                    }
+                }
+            }
             Hit::Radius(i) => {
                 drag.i = i;
                 drag.radius = true;
@@ -369,6 +415,7 @@ impl App {
                     insert_node(&mut sh.path, i, at4)
                 };
                 let Some(idx) = idx else { return false };
+                if !sh.curve_handles.is_empty() { sh.curve_handles.insert(idx, CurveHandles::default()); }
                 drag.i = idx;
             }
             Hit::Node(i) => {
@@ -385,12 +432,14 @@ impl App {
                 let i = if end == End::Start { 0 } else { n.saturating_sub(1) };
                 let Some(p) = at(sh, i) else { return false };
                 let Some(idx) = extend_end(&mut sh.path, end, p) else { return false };
+                if !sh.curve_handles.is_empty() { sh.curve_handles.insert(idx, CurveHandles::default()); }
                 drag.i = idx;
             }
             Hit::Mid(seg) => {
                 let (closed, smooth, _, _) = if sh.kind == Kind::Curve { curve::settings(&sh.params) } else { (false, 0.0, false, 1.0) };
                 let m = curve::segment_point(&sh.path, seg, 0.5, smooth, closed && n >= 3);
                 let Some(idx) = insert_node(&mut sh.path, seg, m) else { return false };
+                if !sh.curve_handles.is_empty() { sh.curve_handles.insert(idx, CurveHandles::default()); }
                 drag.i = idx;
             }
         }
@@ -412,7 +461,25 @@ impl App {
             return;
         };
         let w = to_world(sh, [node[0], node[1], node[2]]);
-        if d.radius {
+        if let Some(outgoing) = d.handle {
+            let h = sh.curve_handles.get(d.i).copied().unwrap_or_default();
+            let delta = if outgoing { h.outgoing } else { h.incoming };
+            let handle_world = to_world(sh, add([node[0],node[1],node[2]],delta));
+            if let Some(intersection) = unproject_on_plane(&cam,rect,p,handle_world,false) {
+                let target = to_local(sh,add(intersection,d.grab));
+                let mut offset = sub(target,[node[0],node[1],node[2]]);
+                if mods.ctrl { offset = snap(offset, 1.0); }
+                if offset.iter().all(|v| v.is_finite()) && len(offset) <= 10000.0 {
+                    if let Some(h) = sh.curve_handles.get_mut(d.i) {
+                        if outgoing { h.outgoing = offset; } else { h.incoming = offset; }
+                        if h.mode == CurveNodeMode::Smooth {
+                            if outgoing { h.incoming = offset.map(|v| -v); }
+                            else { h.outgoing = offset.map(|v| -v); }
+                        }
+                    }
+                }
+            }
+        } else if d.radius {
             if let Some(c) = cam.project(rect, w) {
                 let thick = if sh.kind == Kind::Curve { curve::settings(&sh.params).3 } else { 1.0 };
                 let k = sh.scale[0].min(sh.scale[1]).min(sh.scale[2]) * thick;
@@ -450,6 +517,7 @@ impl App {
     fn click_node(&mut self, h: Hit) -> bool {
         let Some((g, s)) = self.node_shape() else { return false };
         match h {
+            Hit::Bezier(i, _) => { self.ct.node = Some((g,s,i)); true }
             Hit::Node(i) => {
                 self.ct.node = Some((g, s, i));
                 true
@@ -464,6 +532,7 @@ impl App {
                 let step = len(dir).max(pa[3] * 2.0).max(4.0);
                 let np = add([pa[0], pa[1], pa[2]], mul(norm(dir), step));
                 if let Some(idx) = extend_end(&mut sh.path, end, np) {
+                    if !sh.curve_handles.is_empty() { sh.curve_handles.insert(idx, CurveHandles::default()); }
                     self.ct.node = Some((g, s, idx));
                 }
                 true
@@ -474,6 +543,7 @@ impl App {
                 let (closed, smooth, _, _) = if sh.kind == Kind::Curve { curve::settings(&sh.params) } else { (false, 0.0, false, 1.0) };
                 let m = curve::segment_point(&sh.path, seg, 0.5, smooth, closed && n >= 3);
                 if let Some(idx) = insert_node(&mut sh.path, seg, m) {
+                    if !sh.curve_handles.is_empty() { sh.curve_handles.insert(idx, CurveHandles::default()); }
                     self.ct.node = Some((g, s, idx));
                 }
                 true
@@ -537,10 +607,9 @@ impl App {
             && let Some(sh) = self.scene.shape_mut(g, s)
         {
             let local = to_local(sh, w);
-            if extend_end(&mut sh.path, End::Last, local).is_some()
-                && let Some(n) = sh.path.last_mut()
-            {
-                n[3] = r;
+            if extend_end(&mut sh.path, End::Last, local).is_some() {
+                if !sh.curve_handles.is_empty() { sh.curve_handles.push(CurveHandles::default()); }
+                if let Some(n) = sh.path.last_mut() { n[3] = r; }
             }
             return;
         }
@@ -574,6 +643,7 @@ impl App {
         let Some((g, s)) = self.ct.draw_shape else { return };
         let Some(sh) = self.scene.shape_mut(g, s) else { return };
         sh.path.pop();
+        if !sh.curve_handles.is_empty() { sh.curve_handles.pop(); }
         if sh.path.is_empty()
             && let Some(group) = self.scene.groups.get_mut(g)
         {
@@ -667,6 +737,7 @@ impl App {
             if let Some(sh) = self.scene.shape_mut(g, s)
                 && delete_node(&mut sh.path, i)
             {
+                if i < sh.curve_handles.len() { sh.curve_handles.remove(i); }
                 self.ct.node = Some((g, s, i.saturating_sub(1)));
             }
             return;
@@ -698,6 +769,12 @@ impl App {
         let chosen = self.chosen_node(g, s);
         let hover = if self.ct.drawing { None } else { self.ct.hover };
         if !self.ct.drawing {
+            for (i, outgoing, centre, handle) in &lay.bezier {
+                if chosen != Some(*i) { continue; }
+                p.line_segment([*centre,*handle],Stroke::new(1.2,style::ACCENT.gamma_multiply(0.8)));
+                let hot = hover == Some(Hit::Bezier(*i,*outgoing));
+                p.circle_filled(*handle,if hot {6.5} else {5.0},if hot {Color32::WHITE} else {style::ACCENT});
+            }
             for (i, c) in &lay.mids {
                 let hot = hover == Some(Hit::Mid(*i));
                 paint_plus(p, *c, MID_R * if hot { 1.25 } else { 1.0 }, hot, false);
@@ -753,6 +830,33 @@ impl App {
             ui.label(egui::RichText::new("端の＋でのばす / 間の＋でふやす").size(10.5).color(style::DIM));
         });
         if is_curve {
+            // Populate the optional handle array on first inspection so a
+            // legacy shape can enter Smooth/Corner mode without any migration.
+            if sh.curve_handles.is_empty() && chosen.is_some() {
+                sh.curve_handles.resize(sh.path.len(), CurveHandles::default());
+            }
+            align_handles(sh);
+            if let Some(i) = chosen {
+                if let Some(h) = sh.curve_handles.get_mut(i) {
+                    ui.horizontal(|ui| {
+                        ui.label("接線");
+                        for (mode,label) in [(CurveNodeMode::Auto,"自動"),(CurveNodeMode::Smooth,"滑らか"),(CurveNodeMode::Corner,"角")] {
+                            if ui.selectable_label(h.mode == mode,label).clicked() {
+                                if h.mode == CurveNodeMode::Auto && mode != CurveNodeMode::Auto {
+                                    let direction = if i>0 && i+1<sh.path.len() {
+                                        sub([sh.path[i+1][0],sh.path[i+1][1],sh.path[i+1][2]],
+                                            [sh.path[i-1][0],sh.path[i-1][1],sh.path[i-1][2]])
+                                    } else { [3.0,0.0,0.0] };
+                                    h.outgoing = mul(direction,1.0/6.0);
+                                    h.incoming = mul(h.outgoing,-1.0);
+                                }
+                                if mode == CurveNodeMode::Smooth { h.incoming = mul(h.outgoing,-1.0); }
+                                h.mode = mode;
+                            }
+                        }
+                    });
+                }
+            }
             style::labeled_slider(ui, "なめらか", &mut sh.params[1], 0.0..=1.0, "0 = カクカク / 1 = なめらか");
             ui.horizontal(|ui| {
                 let mut closed = sh.params[0] > 0.5;
@@ -808,6 +912,7 @@ impl App {
                 let d = sub([a[0], a[1], a[2]], [b[0], b[1], b[2]]);
                 let np = add([a[0], a[1], a[2]], mul(norm(d), len(d).max(a[3] * 2.0).max(4.0)));
                 if let Some(idx) = extend_end(&mut sh.path, End::Last, np) {
+                    if !sh.curve_handles.is_empty() { sh.curve_handles.insert(idx, CurveHandles::default()); }
                     pick = Some(idx);
                 }
             }
@@ -815,6 +920,7 @@ impl App {
         if let Some(i) = del
             && delete_node(&mut sh.path, i)
         {
+            if i < sh.curve_handles.len() { sh.curve_handles.remove(i); }
             pick = Some(i.saturating_sub(1));
         }
         if let Some(i) = pick {

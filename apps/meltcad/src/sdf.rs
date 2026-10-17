@@ -134,7 +134,7 @@ impl Prepared {
             material: s.material,
             outline,
             params: s.params,
-            path: if s.kind == Kind::Curve { crate::curve::build(&s.path, &s.params) } else { s.path.clone() },
+            path: if s.kind == Kind::Curve { crate::curve::build_shape(s) } else { s.path.clone() },
             outline2: s.outline2.clone(),
             shell: if s.shell.is_finite() { s.shell.max(0.0) } else { 0.0 },
             poly_orient,
