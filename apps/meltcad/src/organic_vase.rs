@@ -287,7 +287,10 @@ pub fn inspector(ui: &mut egui::Ui, shape: &mut Shape) {
         apply(shape);
     }
     let v = shape.vase.unwrap_or(value);
-    let minimum = v.estimated_min_wall();
+    // Non-uniform object scaling can only reduce physical wall thickness:
+    // the smallest scale is a conservative lower bound for print warnings.
+    let minimum = v.estimated_min_wall()
+        * shape.scale.into_iter().fold(f32::INFINITY, f32::min).max(0.01);
     if minimum < FDM_WALL_WARNING_MM {
         ui.colored_label(
             egui::Color32::from_rgb(237, 174, 78),
@@ -344,7 +347,11 @@ mod tests {
             assert!(f.distance([0.0, 0.0, v.height + 2.0]) > 0.0, "open mouth {design:?}");
             let r = v.radius(0.5);
             let z = v.height * 0.5;
-            assert!(f.distance([r - v.wall * 0.5, 0.0, z]) < 0.0, "solid wall {design:?}");
+            // At theta=0 the wall is radially shifted by the same wave as the
+            // SDF. Sample its actual middle, not the unwarped revolution radius.
+            let shift = v.wave_strength * angular_envelope(0.5)
+                * (std::f32::consts::TAU * 0.4 * 0.5).sin();
+            assert!(f.distance([r - v.wall * 0.5 + shift, 0.0, z]) < 0.0, "solid wall {design:?}");
         }
     }
 
