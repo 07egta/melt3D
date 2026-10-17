@@ -222,11 +222,17 @@ impl App {
             self.frame_view(self.sel.is_some());
         }
 
+        // Input can change geometry *after* the revision noted at the start of this frame.
+        // Use the resulting revision for the scene pack, so a drag/Undo never renders stale data.
+        let render_rev = self.track_scene();
         // The picture itself. It is made after the input above so that it shows this frame's state.
         // Fast mode (cheap shading, fewer pixels) runs while the view or a handle moves, and for a
         // moment after; then one full-quality frame follows.
         let cam_now = crate::perf::cam_key(&self.cam);
-        if cam_now != self.perf.last_cam || self.drag.is_some() || (scene_changed && ui.input(|i| i.pointer.any_down())) {
+        let editing_drag = self.drag.is_some() || ct.busy || self.sk.dragging
+            || self.sk.edit.as_ref().is_some_and(|e| e.drag.is_some());
+        if cam_now != self.perf.last_cam || editing_drag
+            || ((render_rev != rev || scene_changed) && ui.input(|i| i.pointer.any_down())) {
             self.perf.activity.touch(now);
         }
         self.perf.last_cam = cam_now;
@@ -244,7 +250,7 @@ impl App {
         let mut counts = (self.scene.shape_count(), self.scene.groups.len(), 0);
         let mut scale_shown = 1.0;
         if crate::gpu_ui::use_gpu(&self.gpu.status.snapshot(), self.gpu.easy) {
-            let pack = self.perf.pack.get(&self.scene, rev);
+            let pack = self.perf.pack.get(&self.scene, render_rev);
             let mut globals = pack.globals(&self.scene, &self.cam, [vp[0] as f32, vp[1] as f32], shown_sel, shown_hover, self.srgb);
             crate::gpu::set_view_flags(&mut globals, crate::perf::view_flags(self.srgb, false, pack.glow));
             counts = (self.scene.shape_count(), pack.group_n, pack.instances);
@@ -273,7 +279,7 @@ impl App {
         }
         self.perf.last_scale = scale_moving;
         self.perf.last_fast = fast;
-        self.perf.drawn.note(rev, shown_sel, shown_hover, &self.cam, clean);
+        self.perf.drawn.note(render_rev, shown_sel, shown_hover, &self.cam, clean);
         if self.perf.hud && !clean {
             let fbs = self.perf.feedback.state();
             let info = crate::hud::Context {
