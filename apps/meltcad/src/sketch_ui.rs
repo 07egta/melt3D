@@ -729,13 +729,15 @@ impl App {
     // ----- the keys -----
 
     /// Enter, Backspace / Delete and Esc while the tool is on. Call before the other shortcuts.
+    /// Delete passes through to shape deletion only when drawing has no pending point.
     pub fn sketch_keys(&mut self, ctx: &egui::Context) {
         if !self.sketch_active() {
             return;
         }
         use egui::{Key, Modifiers};
         let hit = |k: Key| ctx.input_mut(|i| i.consume_key(Modifiers::NONE, k));
-        let del = hit(Key::Delete) | hit(Key::Backspace);
+        let sketch_uses_delete = self.sk.edit.is_some() || !self.sk.pts.is_empty() || self.sk.anchor.is_some();
+        let del = (sketch_uses_delete && hit(Key::Delete)) | hit(Key::Backspace);
         let enter = hit(Key::Enter);
         let esc = hit(Key::Escape);
         if self.sk.edit.is_some() {
@@ -2064,7 +2066,7 @@ mod tests {
         let screen = Rect::from_min_size(Pos2::ZERO, vec2(1380.0, 860.0));
         let frame = |app: &mut App| {
             let input = egui::RawInput { screen_rect: Some(screen), ..Default::default() };
-            let out = ctx.run_ui(input, |ui| {
+            let mut out = ctx.run_ui(input, |ui| {
                 app.sketch_card(ui.ctx());
                 let painter = ui.painter().clone();
                 app.sketch_paint(&painter, rect());
@@ -2073,6 +2075,8 @@ mod tests {
                 });
             });
             assert!(!out.shapes.is_empty());
+            // This headless test has no renderer to apply or release texture updates.
+            out.textures_delta.clear();
         };
         // not active: nothing to show
         frame(&mut app);

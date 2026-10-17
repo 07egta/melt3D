@@ -398,8 +398,9 @@ fn pack_curve(s: &crate::model::Shape, path: &mut Vec<f32>) -> (usize, usize) {
         return (0, 0);
     }
     let (lo, hi) = crate::curve::bounds(&pts);
-    push(path, [lo[0], lo[1], lo[2], 0.0]);
-    push(path, [hi[0], hi[1], hi[2], 0.0]);
+    let closed = s.params[0] > 0.5;
+    push(path, [lo[0], lo[1], lo[2], crate::curve::max_joint_blend(&pts, closed)]);
+    push(path, [hi[0], hi[1], hi[2], crate::curve::closed_joint_blend(&pts, closed)]);
     let st = used + 2;
     for pt in &pts {
         push(path, *pt);
@@ -2037,6 +2038,63 @@ mod headless_tests {
     fn the_library_scene_has_the_asked_size() {
         let sc = library_scene(300);
         assert!(sc.shape_count() >= 300 && sc.shape_count() <= 340 && sc.groups.len() < MAX_GROUPS, "{} shapes in {} groups", sc.shape_count(), sc.groups.len());
+    }
+
+    /// Read the real WGSL curve distance back as pixels on an adapter. This covers the rounded
+    /// join at a box edge, a closure and a join across two segment search groups.
+    #[test]
+    #[ignore = "needs a graphics adapter"]
+    fn curve_gpu_distance_matches_cpu() {
+        use crate::model::{Kind, Material, Shape};
+        let Some((device, queue, info)) = headless::open_device(false) else {
+            eprintln!("no graphics adapter: skipped");
+            return;
+        };
+        eprintln!("{info}");
+        let mut src = shader_source();
+        let entry = src.find("fn fs(in: VOut)").expect("fragment entry");
+        let open = entry + src[entry..].find('{').expect("fragment body");
+        let mut depth = 0_i32;
+        let mut close = None;
+        for (off, ch) in src[open..].char_indices() {
+            if ch == '{' { depth += 1; }
+            if ch == '}' {
+                depth -= 1;
+                if depth == 0 { close = Some(open + off); break; }
+            }
+        }
+        src.replace_range(open..=close.expect("fragment end"), "{\n    let q = vec3<f32>(in.uv.x * 48.0 - 24.0, in.uv.y * 48.0 - 24.0, 0.0);\n    let d = curve_dist(shape_at(0), q);\n    return vec4<f32>(clamp((d + 16.0) / 32.0, 0.0, 1.0), 0.0, 0.0, 1.0);\n}");
+        let res = try_build_from(&device, &queue, wgpu::TextureFormat::Rgba8Unorm, &src).expect("distance shader");
+        let mut gpu = headless::Gpu { device, queue, res, info };
+        let mut apex = Shape::new(Kind::Curve, [0.0; 3], Material::default());
+        apex.path = vec![[0.0, -16.0, 0.0, 4.0], [16.0, 0.0, 0.0, 4.0], [0.0, 16.0, 0.0, 4.0]];
+        apex.params = [0.0, 0.0, 0.0, 1.0];
+        let mut looped = Shape::new(Kind::Curve, [0.0; 3], Material::default());
+        looped.path = (0..12).map(|i| {
+            let a = i as f32 * std::f32::consts::TAU / 12.0;
+            [12.0 * a.cos(), 12.0 * a.sin(), 0.0, 4.0]
+        }).collect();
+        looped.params = [1.0, 0.0, 0.0, 1.0];
+        let size = [64_u32, 64_u32];
+        for shape in [apex, looped] {
+            let prep = Prepared::new(&shape);
+            let scene = Scene { groups: vec![Group { shapes: vec![shape], ..Group::new("pipe") }], melt: Default::default(), env: Default::default(), saved: Vec::new() };
+            let data = pack(&scene, &Camera::default(), [size[0] as f32, size[1] as f32], None, None, false);
+            let (pixels, _) = gpu.render(&data, size);
+            assert_eq!(pixels.len(), (size[0] * size[1] * 4) as usize);
+            let mut compared = 0;
+            for y in (0..size[1]).step_by(3) {
+                for x in (0..size[0]).step_by(3) {
+                    let q = [(x as f32 + 0.5) * 48.0 / size[0] as f32 - 24.0, (y as f32 + 0.5) * 48.0 / size[1] as f32 - 24.0, 0.0];
+                    let cpu = prep.distance(q);
+                    if !(-15.5..15.5).contains(&cpu) { continue; }
+                    let gpu_d = f32::from(pixels[((y * size[0] + x) * 4) as usize]) * 32.0 / 255.0 - 16.0;
+                    assert!((gpu_d - cpu).abs() < 0.18, "at {q:?}: GPU {gpu_d}, CPU {cpu}");
+                    compared += 1;
+                }
+            }
+            assert!(compared > 100, "measured {compared} points");
+        }
     }
 
     /// The picture the shader makes and the CPU field agree about what is there: the silhouette of

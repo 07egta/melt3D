@@ -529,10 +529,17 @@ impl App {
             ui.vertical(|ui| {
                 ui.label(RichText::new(current.unwrap_or("オリジナル")).strong().size(14.0));
                 ui.horizontal(|ui| {
-                    if style::pill(ui, "★ ほぞん", false).on_hover_text("この材質をとっておく (「★マイ」に入ります)").clicked()
-                        && self.scene.saved.len() < MAX_SAVED
-                        && !self.scene.saved.contains(&m)
-                    {
+                    let save_reason = if self.scene.saved.contains(&m) {
+                        Some("この材質は、すでに「★マイ」に保存されています")
+                    } else if self.scene.saved.len() >= MAX_SAVED {
+                        Some("保存できる数の上限です。右クリックで保存した材質を消してください")
+                    } else {
+                        None
+                    };
+                    let save = style::pill_enabled(ui, "★ ほぞん", false, save_reason.is_none());
+                    if let Some(reason) = save_reason {
+                        save.on_hover_text(reason);
+                    } else if save.clicked() {
                         self.scene.saved.push(m);
                         self.mat_cat = None;
                     }

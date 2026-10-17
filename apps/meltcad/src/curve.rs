@@ -4,7 +4,8 @@
 //!
 //! The nodes are first resampled with a (centripetal) Catmull-Rom spline into at most `MAX_POINTS` points (the
 //! GPU and the CPU both measure the *resampled* points, so they always agree). The tube is then the
-//! union of round cones (a capsule whose two ends have different radii) between neighbours.
+//! union of round cones (a capsule whose two ends have different radii) between neighbours. Adjacent
+//! spans melt locally where they turn, without repeatedly swelling a long straight tube.
 //!
 //! Extra numbers (`Shape::params`): 0 = closed loop (0 / 1), 1 = smoothness 0..1 (0 = straight
 //! pieces with round joints), 2 = flat ends (0 round / 1 flat), 3 = thickness multiplier (all radii).
@@ -174,7 +175,9 @@ pub fn bounds(points: &[[f32; 4]]) -> (V3, V3) {
     if points.is_empty() {
         return ([0.0; 3], [0.0; 3]);
     }
-    let g = rmax + 0.01;
+    // A smooth join can extend at most k/4 beyond a round cone. joint_blend caps k below
+    // 0.71 * the local radius, so 0.25 radius covers every join, including a group boundary.
+    let g = rmax * 1.25 + 0.01;
     ([lo[0] - g, lo[1] - g, lo[2] - g], [hi[0] + g, hi[1] + g, hi[2] + g])
 }
 
@@ -193,7 +196,7 @@ pub fn group_spheres(points: &[[f32; 4]]) -> Vec<[f32; 4]> {
                 ([lo[0].min(p[0]), lo[1].min(p[1]), lo[2].min(p[2])], [hi[0].max(p[0]), hi[1].max(p[1]), hi[2].max(p[2])])
             });
             let c = [(lo[0] + hi[0]) * 0.5, (lo[1] + hi[1]) * 0.5, (lo[2] + hi[2]) * 0.5];
-            let r = part.iter().map(|p| len(sub([p[0], p[1], p[2]], c)) + p[3]).fold(0.0_f32, f32::max);
+            let r = part.iter().map(|p| len(sub([p[0], p[1], p[2]], c)) + p[3] * 1.25).fold(0.0_f32, f32::max);
             [c[0], c[1], c[2], r * 1.0005 + 0.005]
         })
         .collect()
@@ -204,7 +207,7 @@ pub fn half_extent(path: &[[f32; 4]], params: &[f32; 4]) -> V3 {
     let mut h = [1.0_f32; 3];
     for p in build(path, params) {
         for (i, hi) in h.iter_mut().enumerate() {
-            *hi = hi.max(p[i].abs() + p[3]);
+            *hi = hi.max(p[i].abs() + p[3] * 1.25);
         }
     }
     h
@@ -249,6 +252,69 @@ pub fn tube(points: &[[f32; 4]], q: V3, flat: bool) -> f32 {
     if flat { d.max(end_cut(points, q)) } else { d }
 }
 
+/// How much the spans on either side of a node melt. A straight line needs no extra material;
+/// a turn gets a reach proportional to its smallest ball, capped by its two span lengths. The
+/// shader uses the same formula in `curve_joint_blend`.
+pub fn joint_blend(a: [f32; 4], b: [f32; 4], c: [f32; 4]) -> f32 {
+    let ab = sub([b[0], b[1], b[2]], [a[0], a[1], a[2]]);
+    let bc = sub([c[0], c[1], c[2]], [b[0], b[1], b[2]]);
+    let (la, lb) = (len(ab), len(bc));
+    if la < 1.0e-4 || lb < 1.0e-4 {
+        return 0.0;
+    }
+    let turn = (1.0 - (dot(ab, bc) / (la * lb)).clamp(-1.0, 1.0)).max(0.0).sqrt();
+    (a[3].min(b[3]).min(c[3]) * 0.5 * turn).min(la * 0.5).min(lb * 0.5)
+}
+
+/// The greatest joint reach of the resampled path, packed into the shader's curve header. It
+/// lets the grouped search keep its fast skips while accounting for a join across group borders.
+pub fn max_joint_blend(points: &[[f32; 4]], closed: bool) -> f32 {
+    let mut max_k = 0.0_f32;
+    for i in 1..points.len().saturating_sub(1) {
+        max_k = max_k.max(joint_blend(points[i - 1], points[i], points[i + 1]));
+    }
+    max_k.max(closed_joint_blend(points, closed))
+}
+
+/// The reach where a closed curve's last and first spans meet, packed into the high box corner.
+pub fn closed_joint_blend(points: &[[f32; 4]], closed: bool) -> f32 {
+    if closed && points.len() >= 4 { joint_blend(points[points.len() - 2], points[0], points[1]) } else { 0.0 }
+}
+
+/// Polynomial soft minimum for one pair of adjoining spans, matching `curve_smin` in the shader.
+fn joint_min(a: f32, b: f32, k: f32) -> f32 {
+    if k <= 1.0e-6 {
+        return a.min(b);
+    }
+    let h = (0.5 + 0.5 * (b - a) / k).clamp(0.0, 1.0);
+    b + (a - b) * h - k * h * (1.0 - h)
+}
+
+/// The rounded path. Each adjacent pair is softened independently, so a long chain never grows
+/// with its number of nodes. Unrelated spans and straight joins keep their exact round-cone SDF.
+pub fn smooth_tube(points: &[[f32; 4]], q: V3, flat: bool, closed: bool) -> f32 {
+    let mut d = 1.0e6_f32;
+    let mut first = None;
+    let mut prev = None;
+    for (i, w) in points.windows(2).enumerate() {
+        let (a, b) = (w[0], w[1]);
+        let one = round_cone(q, [a[0], a[1], a[2]], a[3], [b[0], b[1], b[2]], b[3]);
+        d = d.min(one);
+        if let Some(before) = prev {
+            d = d.min(joint_min(before, one, joint_blend(points[i - 1], a, b)));
+        } else {
+            first = Some(one);
+        }
+        prev = Some(one);
+    }
+    if closed && let (Some(last), Some(first)) = (prev, first)
+    {
+        let k = closed_joint_blend(points, closed);
+        d = d.min(joint_min(last, first, k));
+    }
+    if flat { d.max(end_cut(points, q)) } else { d }
+}
+
 /// The two half-spaces that cut a tube flat at its first and last point (positive beyond an end).
 fn end_cut(points: &[[f32; 4]], q: V3) -> f32 {
     if points.len() < 2 {
@@ -279,10 +345,10 @@ pub fn distance(p: &Prepared, q: V3) -> f32 {
     let cut = flat && !closed;
     let wall = if p.shell.is_finite() { p.shell.max(0.0) / p.min_scale().max(1.0e-6) } else { 0.0 };
     if wall > 0.0 {
-        let d = hollow(tube(&p.path, q, false), wall);
+        let d = hollow(smooth_tube(&p.path, q, false, closed), wall);
         return if cut { d.max(end_cut(&p.path, q)) } else { d };
     }
-    tube(&p.path, q, cut)
+    smooth_tube(&p.path, q, cut, closed)
 }
 
 #[cfg(test)]
@@ -330,6 +396,30 @@ mod tests {
         let f = crate::sdf::Field::new(&scene);
         assert!((f.distance([5.0, 10.0, 0.0]) - 7.0).abs() < 1e-3);
         assert!((f.distance([20.0, 0.0, 0.0]) - 2.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn a_bent_chain_of_round_nodes_has_a_full_rounded_elbow() {
+        let mut s = Shape::new(Kind::Curve, [0.0; 3], Material::default());
+        s.path = vec![[-20.0, 0.0, 0.0, 4.0], [0.0, 0.0, 0.0, 4.0], [0.0, 20.0, 0.0, 4.0]];
+        s.params = [0.0, 0.0, 0.0, 1.0];
+        let p = Prepared::new(&s);
+        let d = p.distance([-4.0, 4.0, 0.0]);
+        assert!(d < -0.3, "two spherical spans should melt at the outside elbow, got {d}");
+
+        // Collinear spans already make one exact cylinder and must not swell at their shared node.
+        s.path = vec![[-20.0, 0.0, 0.0, 4.0], [0.0, 0.0, 0.0, 4.0], [20.0, 0.0, 0.0, 4.0]];
+        let straight = Prepared::new(&s);
+        assert!(straight.distance([0.0, 4.0, 0.0]).abs() < 1e-4);
+    }
+
+    #[test]
+    fn the_join_of_a_closed_chain_is_rounded_too() {
+        let mut s = Shape::new(Kind::Curve, [0.0; 3], Material::default());
+        s.path = vec![[-20.0, -20.0, 0.0, 4.0], [20.0, -20.0, 0.0, 4.0], [20.0, 20.0, 0.0, 4.0], [-20.0, 20.0, 0.0, 4.0]];
+        s.params = [1.0, 0.0, 0.0, 1.0];
+        let d = Prepared::new(&s).distance([-16.0, -16.0, 0.0]);
+        assert!(d < -0.3, "the last and first spans should melt at the loop join, got {d}");
     }
 
     #[test]
