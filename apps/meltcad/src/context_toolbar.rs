@@ -191,7 +191,20 @@ impl App {
                 if !self.multi_sel.is_empty() {
                     let Ok((_, count)) = self.quick_group_check() else { return Some("同じグループ内の形だけ複製できます"); };
                     if self.scene.shape_count().saturating_add(count) > MAX_SHAPES { return Some("形の上限に達します"); }
-                } else if self.scene.shape_count() >= MAX_SHAPES { return Some("形の上限に達しました"); }
+                } else {
+                    match self.sel {
+                        Some(Pick::Shape(..)) if self.scene.shape_count() >= MAX_SHAPES =>
+                            return Some("形の上限に達しました"),
+                        Some(Pick::Group(g)) => {
+                            if self.scene.groups.len() >= MAX_GROUPS { return Some("グループ数の上限に達しました"); }
+                            let count = self.scene.groups.get(g).map_or(0, |gr| gr.shapes.len());
+                            if self.scene.shape_count().saturating_add(count) > MAX_SHAPES {
+                                return Some("形の上限に達します");
+                            }
+                        }
+                        _ => {}
+                    }
+                }
                 None
             }
             Action::Delete => {
@@ -208,8 +221,13 @@ impl App {
             }
             Action::EndSketchEdit => self.sk.edit.is_none().then_some("輪郭を編集中ではありません"),
             Action::Extrude => {
-                (!(self.sk.on && self.sk.stage == Stage::Ready && !self.sk.profile.is_empty()))
-                    .then_some("2D輪郭を完成させてください")
+                if !(self.sk.on && self.sk.stage == Stage::Ready && !self.sk.profile.is_empty()) {
+                    Some("2D輪郭を完成させてください")
+                } else if self.scene.shape_count().saturating_add(1 + self.sk.holes.len()) > MAX_SHAPES {
+                    Some("形の上限に達しました")
+                } else if !self.sk.holes.is_empty() && self.scene.groups.len() >= MAX_GROUPS {
+                    Some("穴付きスケッチを作るためのグループが足りません")
+                } else { None }
             }
             Action::ExtrudeSettings => {
                 match self.sel {
@@ -230,7 +248,11 @@ impl App {
                 }
                 None
             }
-            Action::Frame | Action::Rename | Action::Flip => None,
+            Action::Frame | Action::Rename | Action::Flip => {
+                if !self.multi_sel.is_empty() && matches!(action, Action::Flip | Action::Frame) {
+                    Some("複数選択中は主選択だけに適用されるため、1つ選択してください")
+                } else { None }
+            },
         }
     }
 
