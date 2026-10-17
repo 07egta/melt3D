@@ -39,9 +39,9 @@ fn round_cone(p: vec3<f32>, a: vec3<f32>, ra: f32, b: vec3<f32>, rb: f32) -> f32
 
 // Exactly the Curve-only section_cone transform in curve.rs. For ordinary
 // circular tubes the original round_cone path is retained for interactive speed.
-fn curve_section_cone(s: Shape, q: vec3<f32>, a: vec3<f32>, ra: f32, b: vec3<f32>, rb: f32) -> f32 {
-    let aspect = clamp(s.size.y, 0.45, 1.0);
-    let squircle = s.size.z >= 1.5;
+fn curve_section_cone(width: f32, section: f32, q: vec3<f32>, a: vec3<f32>, ra: f32, b: vec3<f32>, rb: f32) -> f32 {
+    let aspect = clamp(width, 0.45, 1.0);
+    let squircle = section >= 1.5;
     if (aspect >= 0.9999 && !squircle) {
         return round_cone(q, a, ra, b, rb);
     }
@@ -129,7 +129,7 @@ fn curve_dist(s: Shape, q: vec3<f32>) -> f32 {
             let i = i0 + k;
             if (i >= n) { break; }
             let b = path_pt(st + i);
-            let one = curve_section_cone(s, q, a.xyz, a.w, b.xyz, b.w);
+            let one = curve_section_cone(s.size.y, s.size.z, q, a.xyz, a.w, b.xyz, b.w);
             d = min(d, one);
             if (i == 1) { first_d = one; }
             if (prev_i == i - 2) {
