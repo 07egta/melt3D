@@ -45,6 +45,8 @@ mod mesh;
 mod mesh_dialog;
 mod mesh_import;
 mod cad;
+mod chess;
+mod chess_dialog;
 mod cpu_render;
 mod curve;
 mod curve_tool;
