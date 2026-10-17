@@ -264,6 +264,8 @@ ray candidate filtering, fixed-capacity textures, banded sharp pass and upscale 
 - The existing offscreen speed test now records p95 GPU pass time (or wall wait
   if timestamp queries are unavailable), wall-wait p95 and samples the
   **pipe** (one curved shape; ordinary editing) and **shapes300** benchmark scenes.
+  The extra `auto` timing row draws at that smaller estimated adaptive size and
+  records actual pass timings independently from full/fast-at-full-size rows.
   Image error compares full-size full-shading reference pixels against an estimated
   adaptive-size fast pass bilinearly reconstructed at 64x64 sample positions.
   It reports RGB mean absolute error and RGB p95 on the 0..255 scale. This
