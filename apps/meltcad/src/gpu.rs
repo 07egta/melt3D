@@ -1595,6 +1595,7 @@ pub(crate) mod offscreen {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::{Material, Shape};
 
     /// A reader for a packed frame: where each list starts.
     pub(super) struct Frame<'a> {
@@ -1707,7 +1708,8 @@ mod tests {
             assert_eq!(undone.shape_n, n);
             let mut op_change = changed.clone();
             op_change.groups[0].shapes[3].op = crate::model::Op::Intersect;
-            op_change.groups[1.min(op_change.groups.len()-1)].op = crate::model::Op::Subtract;
+            let other = 1.min(op_change.groups.len()-1);
+            op_change.groups[other].op = crate::model::Op::Subtract;
             let _ = same_pack_as_cold(&op_change, Some((&changed, &fresh)));
 
             // Insertion/deletion shifts the slots and polygon offsets; no old slot can leak.
@@ -1730,7 +1732,8 @@ mod tests {
             let mut reuse_time = Duration::ZERO;
             for k in 0..REPEATS {
                 let mut edited = scene.clone();
-                edited.groups[k/10].shapes[k%10].pos[0] += 0.3;
+                let si = k % n;
+                edited.groups[si/10].shapes[si%10].pos[0] += 0.3;
                 let started = Instant::now();
                 let cold = ScenePack::new(&edited, VolumeSet::of(&edited));
                 cold_time += started.elapsed();
