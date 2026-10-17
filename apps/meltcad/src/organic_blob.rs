@@ -387,7 +387,11 @@ mod tests {
         assert_eq!(built.groups.len(), before.groups.len() + 1);
         assert_eq!(app.sel, Some(Pick::Group(built.groups.len() - 1)));
         let json = built.to_json();
-        let after = Scene::from_json(&json).expect("load saved scene");
+        let path = std::env::temp_dir().join(format!("organic_blob_save_{}.meltcad", std::process::id()));
+        std::fs::write(&path, &json).expect("write native design");
+        let saved = std::fs::read_to_string(&path).expect("read native design");
+        let _ = std::fs::remove_file(path);
+        let after = Scene::from_json(&saved).expect("load saved scene");
         assert_eq!(after, built, "ordinary spheres must round-trip without a special format");
 
         app.settle(&ctx);
