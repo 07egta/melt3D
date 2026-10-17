@@ -407,6 +407,8 @@ impl App {
                                 sh.name = k.label().to_string();
                             }
                             sh.kind = k;
+                            // A different primitive must never inherit stale vase parameters.
+                            sh.vase = None;
                             sh.size = k.default_size();
                             sh.params = k.default_params();
                             if k.uses_path() && sh.path.len() < 2 {
@@ -425,6 +427,9 @@ impl App {
             style::xyz(ui, "位置", &mut sh.pos, 0.5, -5000.0..=5000.0, "");
             style::xyz(ui, "回転", &mut sh.rot, 1.0, -3600.0..=3600.0, "°");
             style::xyz(ui, "大きさ", &mut sh.scale, 0.01, 0.01..=100.0, "×");
+            if sh.vase.is_some() {
+                crate::organic_vase::inspector(ui, sh);
+            } else {
             let labels = sh.kind.size_labels();
             ui.horizontal_wrapped(|ui| {
                 for (i, l) in labels.iter().enumerate() {
@@ -452,7 +457,8 @@ impl App {
             }
             style::labeled_slider(ui, "とけあい", &mut sh.blend, 0.0..=80.0, "この形が、まわりとどのくらい溶けてくっつくか (グープ)");
             style::labeled_slider(ui, "ちゅうぐう\nシェル", &mut sh.shell, 0.0..=40.0, "中をくり抜いて、かべの あつさ(mm)だけ のこす。0 = つまっている");
-            if sh.kind.uses_outline() {
+            }
+            if sh.kind.uses_outline() && sh.vase.is_none() {
                 outline_changed = true;
                 top_changed = sh.kind.uses_outline2();
             }
