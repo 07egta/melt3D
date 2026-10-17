@@ -384,13 +384,13 @@ impl Catalog {
         scored.into_iter().map(|(_, i)| i).collect()
     }
 
-    fn rank_candidates(&self, ids: &[usize], q: &str, prefs: &Prefs) -> Vec<((u32, usize, usize, usize), usize)> {
+    fn rank_candidates(&self, ids: &[usize], q: &str, prefs: &Prefs) -> Vec<((u32, usize, usize, usize, usize), usize)> {
         let favorite: HashSet<&str> = prefs.favorites.iter().map(String::as_str).collect();
         let recent: HashMap<&str, usize> = prefs.recent.iter().enumerate().map(|(i, s)| (s.as_str(), i)).collect();
         let mut hits: Vec<_> = ids.iter().filter_map(|&i| {
             let score = score(self.entries.get(i)?, q)?;
             let key = self.keys[i].as_str();
-            Some(((score, usize::from(!favorite.contains(key)), recent.get(key).copied().unwrap_or(usize::MAX), i), i))
+            Some(((score, usize::from(self.entries[i].tag != "コマンド"), usize::from(!favorite.contains(key)), recent.get(key).copied().unwrap_or(usize::MAX), i), i))
         }).collect();
         hits.sort_unstable_by_key(|(rank, _)| *rank);
         hits
@@ -679,8 +679,8 @@ mod tests {
     use super::*;
 
     fn top(q: &str) -> Option<Action> {
-        let all = entries();
-        search(&all, q, 5).first().and_then(|i| all.get(*i)).map(|e| e.action)
+        let cat = catalog();
+        cat.search(q, &Prefs::default(), 5).first().and_then(|i| cat.entries.get(*i)).map(|e| e.action)
     }
 
     #[test]
@@ -697,28 +697,154 @@ mod tests {
 
     #[test]
     fn library_models_are_found_by_name_and_tag() {
-        let all = entries();
+        let cat = catalog();
+        let all = &cat.entries;
         assert!(all.iter().any(|e| matches!(e.action, Action::Insert(_, _))), "the library is in the palette");
         let first = library::all().first().and_then(|c| c.items.first()).map(|i| i.name.clone()).unwrap_or_default();
-        let hits = search(&all, &first, 5);
+        let hits = cat.search(&first, &Prefs::default(), 5);
         assert!(hits.iter().any(|i| all.get(*i).is_some_and(|e| e.label == first)));
     }
 
     #[test]
     fn empty_and_nonsense_queries_are_safe() {
-        let all = entries();
-        let n = search(&all, "", 9).len();
+        let cat = catalog();
+        let p = Prefs::default();
+        let n = cat.search("", &p, 9).len();
         assert!(n > 0 && n <= 9);
-        assert!(search(&all, "zzzzqqqqxxxx😀", 9).is_empty());
-        assert!(search(&all, "   ", 3).len() <= 3);
+        assert!(cat.search("zzzzqqqqxxxx😀", &p, 9).is_empty());
+        assert!(cat.search("   ", &p, 3).len() <= 3);
     }
 
     #[test]
     fn best_matches_come_first() {
-        let all = entries();
-        let hits = search(&all, "コピー", 20);
-        let labels: Vec<&str> = hits.iter().filter_map(|i| all.get(*i)).map(|e| e.label.as_str()).collect();
+        let cat = catalog();
+        let hits = cat.search("コピー", &Prefs::default(), 20);
+        let labels: Vec<&str> = hits.iter().filter_map(|i| cat.entries.get(*i)).map(|e| e.label.as_str()).collect();
         assert_eq!(labels.first(), Some(&"コピー"), "{labels:?}");
+    }
+
+
+    #[test]
+    fn indexed_substrings_and_bilingual_aliases_match_without_scanning_every_entry() {
+        let cat = catalog();
+        assert_eq!(top("phere"), Some(Action::AddShape(Kind::Sphere)));
+        assert_eq!(top("やり直"), Some(Action::Redo));
+        assert_eq!(top("plicate"), Some(Action::Duplicate));
+        assert_eq!(top("書き出"), Some(Action::Export(ExportFormat::Stl)));
+        assert!(cat.search("sPhErE", &Prefs::default(), 5).iter().any(|&i| cat.entries[i].action == Action::AddShape(Kind::Sphere)));
+
+        // Many commands: a rare substring visits only a short posting list.
+        let mut entries = Vec::new();
+        for n in 0..8000 {
+            entries.push(cmd(&format!("feature_{n:05}_処理"), "generic action", Action::Help));
+        }
+        let big = Catalog::new(entries);
+        let q = "feature_07999";
+        let candidates = big.candidates(q);
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(big.search(q, &Prefs::default(), 9).len(), 1);
+        assert!(big.candidates("不明な機能").is_empty());
+    }
+
+    #[test]
+    fn favorite_recent_and_missing_ids_have_a_stable_order_and_round_trip() {
+        let cat = catalog();
+        let mut prefs = Prefs::default();
+        prefs.record(Action::Undo);
+        prefs.record(Action::Save);
+        prefs.toggle(Action::ImportSvg);
+        prefs.toggle(Action::Save);
+        let hits = cat.search("", &prefs, 9);
+        assert_eq!(cat.entries[hits[0]].action, Action::ImportSvg);
+        assert_eq!(cat.entries[hits[1]].action, Action::Save);
+        assert_eq!(cat.entries[hits[2]].action, Action::Undo);
+        prefs.toggle(Action::Save);
+        assert!(!prefs.contains(Action::Save));
+        let encoded = serde_json::to_string(&prefs).unwrap();
+        assert_eq!(serde_json::from_str::<Prefs>(&encoded).unwrap(), prefs);
+        prefs.favorites.insert(0, "RemovedOldCommand".into());
+        assert_eq!(cat.entries[cat.search("", &prefs, 9)[0]].action, Action::ImportSvg);
+        for _ in 0..30 { prefs.record(Action::Delete); }
+        assert_eq!(prefs.recent.iter().filter(|x| *x == &action_key(Action::Delete)).count(), 1);
+        assert!(prefs.recent.len() <= Prefs::RECENT_LIMIT);
+    }
+
+    fn key(key: Key, modifiers: egui::Modifiers) -> egui::Event {
+        egui::Event::Key {
+            key, physical_key: None, pressed: true, repeat: false, modifiers,
+        }
+    }
+
+    fn frame(ctx: &egui::Context, app: &mut App, events: Vec<egui::Event>) {
+        let raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1024.0, 768.0))),
+            events,
+            ..Default::default()
+        };
+        let mut out = ctx.run_ui(raw, |ui| {
+            app.keys(ui.ctx());
+            app.palette_ui(ui.ctx());
+        });
+        out.textures_delta.clear();
+    }
+
+    #[test]
+    fn keyboard_ctrl_k_arrows_enter_escape_and_shortcut_isolation() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        app.palette_prefs = Prefs::default();
+        app.tool = Tool::Select;
+        frame(&ctx, &mut app, vec![key(Key::K, egui::Modifiers::COMMAND)]);
+        assert!(is_open(&ctx), "Ctrl+K opens the existing palette");
+        let mut state = ctx.data(|m| m.get_temp::<State>(id())).unwrap();
+        state.query = "道具:".into();
+        state.dirty = true;
+        state.fresh = false;
+        ctx.data_mut(|m| m.insert_temp(id(), state));
+        frame(&ctx, &mut app, vec![]);
+        let first = ctx.data(|m| m.get_temp::<State>(id())).unwrap();
+        assert!(first.hits.len() >= 3, "multiple tool commands are searchable");
+        frame(&ctx, &mut app, vec![key(Key::ArrowDown, egui::Modifiers::NONE)]);
+        let second = ctx.data(|m| m.get_temp::<State>(id())).unwrap();
+        assert_eq!(second.sel, 1, "down moves only palette selection");
+        assert_eq!(app.tool, Tool::Select, "down did not operate a viewport shortcut");
+        let action = catalog().entries[second.hits[second.sel]].action;
+        assert!(matches!(action, Action::SetTool(_)));
+        frame(&ctx, &mut app, vec![key(Key::Enter, egui::Modifiers::NONE)]);
+        assert!(!is_open(&ctx), "Enter executed the selected result and closed");
+        if let Action::SetTool(tool) = action {
+            assert_eq!(app.tool, tool);
+        }
+        assert_eq!(app.palette_prefs.recent.first(), Some(&action_key(action)));
+        frame(&ctx, &mut app, vec![key(Key::K, egui::Modifiers::COMMAND)]);
+        assert!(is_open(&ctx));
+        frame(&ctx, &mut app, vec![key(Key::Escape, egui::Modifiers::NONE)]);
+        assert!(!is_open(&ctx));
+    }
+
+    #[test]
+    fn unavailable_result_shows_reason_and_enter_does_not_execute() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        app.palette_prefs = Prefs::default();
+        app.sel = None;
+        assert_eq!(app.palette_disabled_reason(Action::Duplicate), Some("先に形かグループを選択してください"));
+        assert_eq!(app.palette_disabled_reason(Action::Undo), Some("元に戻す操作がありません"));
+        open(&ctx);
+        let mut st = ctx.data(|m| m.get_temp::<State>(id())).unwrap();
+        st.query = "duplicate".into();
+        st.dirty = true;
+        ctx.data_mut(|m| m.insert_temp(id(), st));
+        frame(&ctx, &mut app, vec![]);
+        let before = app.scene.shape_count();
+        frame(&ctx, &mut app, vec![key(Key::Enter, egui::Modifiers::NONE)]);
+        assert!(is_open(&ctx));
+        assert_eq!(app.scene.shape_count(), before);
+        assert!(app.palette_prefs.recent.is_empty());
+        app.sel = Some(Pick::Shape(0, 0));
+        frame(&ctx, &mut app, vec![key(Key::Enter, egui::Modifiers::NONE)]);
+        assert_eq!(app.scene.shape_count(), before + 1);
+        assert!(!is_open(&ctx));
     }
 
     #[test]
