@@ -626,27 +626,37 @@ fn nh_reset() {
 }
 
 fn nh_close(from_l: i32, mode: i32) {
-    for (var l = 3; l >= from_l; l = l - 1) {
-        if (!nh_open[l]) { continue; }
-        nh_open[l] = false;
-        if (!nh_have[l]) { continue; }
-        var pl = l - 1;
-        loop { if (pl < 0 || nh_open[pl]) { break; } pl = pl - 1; }
-        var pacc = nh_root;
-        var phave = nh_rhave;
-        if (pl >= 0) { pacc = nh_acc[pl]; phave = nh_have[pl]; }
-        var res = nh_acc[l];
-        if (phave) { res = combine(pacc, nh_acc[l], nh_op[l], nh_k[l], mode); }
-        if (phave || nh_op[l] >= 0.5) {
-            if (pl >= 0) { nh_acc[pl] = res; nh_have[pl] = true; } else { nh_root = res; nh_rhave = true; }
+    // (fixed-count loops only: some shader compilers cannot unroll a loop that counts to a variable)
+    for (var i = 0; i < 4; i = i + 1) {
+        let l = 3 - i;
+        if (l >= from_l && nh_open[l]) {
+            nh_open[l] = false;
+            if (nh_have[l]) {
+                var pl = -1;
+                for (var j = 0; j < 3; j = j + 1) {
+                    let c = l - 1 - j;
+                    if (pl < 0 && c >= 0 && nh_open[c]) { pl = c; }
+                }
+                var pacc = nh_root;
+                var phave = nh_rhave;
+                if (pl >= 0) { pacc = nh_acc[pl]; phave = nh_have[pl]; }
+                var res = nh_acc[l];
+                if (phave) { res = combine(pacc, nh_acc[l], nh_op[l], nh_k[l], mode); }
+                if (phave || nh_op[l] >= 0.5) {
+                    if (pl >= 0) { nh_acc[pl] = res; nh_have[pl] = true; } else { nh_root = res; nh_rhave = true; }
+                }
+            }
         }
     }
 }
 
 // (distance, 1 if there is one): what a group at depth d melts into
 fn nh_parent(d: i32) -> vec2<f32> {
-    var pl = d - 1;
-    loop { if (pl < 0 || nh_open[pl]) { break; } pl = pl - 1; }
+    var pl = -1;
+    for (var j = 0; j < 3; j = j + 1) {
+        let c = d - 1 - j;
+        if (pl < 0 && c >= 0 && nh_open[c]) { pl = c; }
+    }
     if (pl < 0) { return vec2<f32>(nh_root.d, select(0.0, 1.0, nh_rhave)); }
     return vec2<f32>(nh_acc[pl].d, select(0.0, 1.0, nh_have[pl]));
 }
@@ -675,26 +685,36 @@ fn nd_fold(acc: f32, gv: f32, op: f32, k: f32, mode: i32) -> f32 {
 }
 
 fn nd_close(from_l: i32, mode: i32) {
-    for (var l = 3; l >= from_l; l = l - 1) {
-        if (!nd_open[l]) { continue; }
-        nd_open[l] = false;
-        if (!nd_have[l]) { continue; }
-        var pl = l - 1;
-        loop { if (pl < 0 || nd_open[pl]) { break; } pl = pl - 1; }
-        var pacc = nd_root;
-        var phave = nd_rhave;
-        if (pl >= 0) { pacc = nd_acc[pl]; phave = nd_have[pl]; }
-        var res = nd_acc[l];
-        if (phave) { res = nd_fold(pacc, nd_acc[l], nd_op[l], nd_k[l], mode); }
-        if (phave || nd_op[l] >= 0.5) {
-            if (pl >= 0) { nd_acc[pl] = res; nd_have[pl] = true; } else { nd_root = res; nd_rhave = true; }
+    // (fixed-count loops only: some shader compilers cannot unroll a loop that counts to a variable)
+    for (var i = 0; i < 4; i = i + 1) {
+        let l = 3 - i;
+        if (l >= from_l && nd_open[l]) {
+            nd_open[l] = false;
+            if (nd_have[l]) {
+                var pl = -1;
+                for (var j = 0; j < 3; j = j + 1) {
+                    let c = l - 1 - j;
+                    if (pl < 0 && c >= 0 && nd_open[c]) { pl = c; }
+                }
+                var pacc = nd_root;
+                var phave = nd_rhave;
+                if (pl >= 0) { pacc = nd_acc[pl]; phave = nd_have[pl]; }
+                var res = nd_acc[l];
+                if (phave) { res = nd_fold(pacc, nd_acc[l], nd_op[l], nd_k[l], mode); }
+                if (phave || nd_op[l] >= 0.5) {
+                    if (pl >= 0) { nd_acc[pl] = res; nd_have[pl] = true; } else { nd_root = res; nd_rhave = true; }
+                }
+            }
         }
     }
 }
 
 fn nd_parent(d: i32) -> vec2<f32> {
-    var pl = d - 1;
-    loop { if (pl < 0 || nd_open[pl]) { break; } pl = pl - 1; }
+    var pl = -1;
+    for (var j = 0; j < 3; j = j + 1) {
+        let c = d - 1 - j;
+        if (pl < 0 && c >= 0 && nd_open[c]) { pl = c; }
+    }
     if (pl < 0) { return vec2<f32>(nd_root, select(0.0, 1.0, nd_rhave)); }
     return vec2<f32>(nd_acc[pl], select(0.0, 1.0, nd_have[pl]));
 }
