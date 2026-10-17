@@ -1,0 +1,49 @@
+name: Organic Furniture regression
+on:
+  push:
+    branches: [feat/yuracad-organic-furniture-20261017]
+  pull_request:
+    branches: [easy-layout-and-melt]
+    paths:
+      - "apps/meltcad/src/organic_furniture.rs"
+      - "apps/meltcad/src/model.rs"
+      - "apps/meltcad/src/app.rs"
+      - "apps/meltcad/src/panels.rs"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    name: SDF geometry, scene persistence and mesh export
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Linux UI dependencies
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libx11-dev mesa-vulkan-drivers
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Compile MeltCAD
+        run: cargo check --locked -p meltcad
+      - name: Organic Furniture tests (includes watertight and 3MF/GLB round trips)
+        run: cargo test --locked -p meltcad organic_furniture -- --nocapture
+      - name: Run entire MeltCAD regression suite
+        run: cargo test --locked -p meltcad
+  windows:
+    name: Windows Organic Furniture compile and tests
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Compile and test
+        run: |
+          cargo check --locked -p meltcad
+          cargo test --locked -p meltcad organic_furniture -- --nocapture
