@@ -1563,6 +1563,58 @@ mod headless_tests {
         assert!((gpu_only + cpu_only) * 100 < both * 6, "the silhouettes differ by more than 6%");
     }
 
+    /// Renders a set of scenes that touch every part of the scene shader (floor and grid with
+    /// shadows, selection, fast mode, glass, glow, metal, patterns) and writes them as PPM files
+    /// into `$MELTCAD_GOLDEN_DIR`. Run it before and after a change of how the shader is written
+    /// (not of what it computes): `cmp` of the two folders must be silent. Also prints the
+    /// seconds the pipeline took to compile.
+    /// `MELTCAD_GOLDEN_DIR=/tmp/golden cargo test -p meltcad --release gpu_headless_golden -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn gpu_headless_golden() {
+        use crate::model::{Kind, Material, Shape};
+        let Some(dir) = std::env::var_os("MELTCAD_GOLDEN_DIR").map(std::path::PathBuf::from) else {
+            eprintln!("set MELTCAD_GOLDEN_DIR");
+            return;
+        };
+        let _ = std::fs::create_dir_all(&dir);
+        let t = std::time::Instant::now();
+        let Some(mut gpu) = headless::open(std::env::var_os("YURA_GL_LIMITS").is_some()) else {
+            eprintln!("no graphics adapter here");
+            return;
+        };
+        eprintln!("COMPILE {:.1} s on {}", t.elapsed().as_secs_f64(), gpu.info);
+        let mut scenes: Vec<(&str, Scene, Option<Pick>, bool)> = Vec::new();
+        scenes.push(("default", Scene::default(), Some(Pick::Shape(0, 0)), false));
+        scenes.push(("default_fast", Scene::default(), Some(Pick::Shape(0, 0)), true));
+        let mut glass = Scene::default();
+        glass.groups[0].shapes.clear();
+        let mut ball = Shape::new(Kind::Sphere, [0.0, 0.0, 22.0], Material { glass: 1.0, color: [0.6, 0.8, 1.0], roughness: 0.1, ..Material::default() });
+        ball.size = [22.0, 22.0, 22.0];
+        glass.groups[0].shapes.push(ball);
+        glass.groups[0].shapes.push(Shape::new(Kind::Box, [40.0, 10.0, 12.0], Material { metallic: 1.0, roughness: 0.25, iridescence: 0.6, coat: 0.8, ..Material::default() }));
+        glass.groups[0].shapes.push(Shape::new(Kind::Torus, [-40.0, 0.0, 14.0], Material { translucency: 0.8, color: [0.9, 0.5, 0.3], ..Material::default() }));
+        scenes.push(("glass", glass.clone(), None, false));
+        scenes.push(("glass_fast", glass.clone(), None, true));
+        let mut lamp = glass.clone();
+        lamp.groups[0].shapes.push(Shape::new(Kind::Sphere, [0.0, 50.0, 30.0], Material { glow: 3.0, color: [1.0, 0.7, 0.3], ..Material::default() }));
+        scenes.push(("lamp", lamp, Some(Pick::Shape(0, 1)), false));
+        scenes.push(("library", library_scene(12), Some(Pick::Group(0)), false));
+        let size = [240u32, 156u32];
+        for (name, sc, sel, fast) in scenes {
+            let mut cam = Camera::default();
+            let (cc, r) = bounds(&sc, sel);
+            cam.frame(cc, r);
+            let mut data = pack(&sc, &cam, [size[0] as f32, size[1] as f32], sel, None, false);
+            set_view_flags(&mut data, crate::perf::view_flags(false, fast, crate::perf::scene_has_glow(&sc)));
+            let (rgba, secs) = gpu.render(&data, size);
+            let ppm = [format!("P6\n{} {}\n255\n", size[0], size[1]).into_bytes(), rgba.chunks(4).flat_map(|p| [p[0], p[1], p[2]]).collect()].concat();
+            let _ = std::fs::write(dir.join(format!("{name}.ppm")), ppm);
+            let lit = rgba.chunks(4).filter(|p| p[0] > 8 || p[1] > 8 || p[2] > 8).count();
+            eprintln!("{name}: {secs:.2} s, {lit} lit pixels");
+        }
+    }
+
     /// An imported mesh as the (software) GPU draws it, against the CPU field: our own STL of a small
     /// model is read back, baked and put in a scene beside a sphere that melts into it and a
     /// cylinder that carves it. The silhouettes of the two renderers must agree, and the mesh must
