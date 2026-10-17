@@ -400,6 +400,8 @@ pub struct Shape {
     /// from each other share it (it is never copied), and scenes compare it by pointer.
     #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "crate::mesh::lenient_volume")]
     pub volume: Option<SharedVolume>,
+    /// Sketch outlines remain vertex arrays. Precision dimensions are applied directly to these
+    /// arrays, so existing saves and Extrude/Revolve/Loft/Sweep readers need no schema migration.
     /// Where an imported mesh came from (its file name), shown in the inspector.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub source: String,
