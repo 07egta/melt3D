@@ -35,11 +35,14 @@ pub fn viewport_width(window_width: f32, left: bool, right: bool, simple: bool) 
 /// Horizontal center and width of a floating drawing card, relative to the viewport.
 /// Leave room for the left tool strip instead of covering its buttons on narrow screens.
 pub fn floating_card_area(view_width: f32, beginner: bool, max_width: f32) -> (f32, f32) {
-    let left = if beginner {
-        if view_width < 430.0 { 105.0 } else { 144.0 }
-    } else { 62.0 };
+    // At very small widths the modelling card temporarily takes priority over
+    // the tool rail, which is hidden while drawing (see app::tool_strip).
+    let left = if view_width < 260.0 { 4.0 }
+        else if beginner {
+            if view_width < 430.0 { 105.0 } else { 144.0 }
+        } else { 62.0 };
     let right = 12.0;
-    let free = (view_width - left - right).max(160.0);
+    let free = (view_width - left - right).max(60.0);
     (left + free * 0.5, free.min(max_width))
 }
 
@@ -76,6 +79,8 @@ mod tests {
 
     #[test]
     fn drawing_cards_do_not_cover_the_left_toolbar_in_common_small_windows() {
+        let (center, card_width) = floating_card_area(180.0, true, 440.0);
+        assert!((center - 90.0).abs() < 0.1 && card_width < 180.0);
         for width in [320.0, 430.0, 640.0, 900.0] {
             let (center, card_width) = floating_card_area(width, true, 440.0);
             let card_left = center - card_width / 2.0;
