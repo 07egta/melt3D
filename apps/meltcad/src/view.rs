@@ -105,7 +105,9 @@ impl App {
             });
         }
 
-        // The shape under the mouse lights up a little (looked up only when the mouse moved, 30 times a second at most)
+        // The shape under the mouse lights up a little (looked up only when the mouse moved, 30 times a second at most).
+        // During a hover transition we use the existing cheap picture, then refine after settling.
+        let previous_hover = self.hover;
         let idle = self.drag.is_none() && !ui.input(|i| i.pointer.any_down());
         match (resp.hovered() && idle && hover_handle.is_none() && !over_gnomon, pos) {
             (true, Some(p)) => {
