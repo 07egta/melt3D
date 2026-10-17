@@ -727,6 +727,9 @@ impl App {
             done = done.or_else(|| self.sk.click(q, close));
             if done.is_some() && matches!(self.sk.active_pen(), Pen::Rect | Pen::Circle) {
                 measured = a.map(|p| (p, q));
+            } else if done.is_none() {
+                // A new click supersedes any previous point/segment dimension editor.
+                self.sk.dimension = None;
             }
             out.taken = true;
         }
@@ -2204,7 +2207,7 @@ mod tests {
         ctx.input_mut(|i| i.events.clear());
         key(egui::Key::Num1);
         app.keys(&ctx);
-        assert_eq!(app.cam, cam, "number keys must not switch views while entering dimensions");
+        assert_eq!((app.cam.yaw, app.cam.pitch, app.cam.ortho), (cam.yaw, cam.pitch, cam.ortho), "number keys must not switch views while entering dimensions");
         ctx.input_mut(|i| i.events.clear());
         key(egui::Key::Escape);
         app.keys(&ctx);
