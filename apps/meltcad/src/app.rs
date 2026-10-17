@@ -378,6 +378,16 @@ impl App {
         true
     }
 
+    /// Never let a multi-selection or locked child enter the single-object gizmo.
+    pub fn can_transform_primary(&self) -> bool {
+        self.extra_selected.is_empty()
+            && self.sel.is_some_and(|p| {
+                !self.scene.is_locked(p)
+                    && crate::view::targets(&self.scene, Some(p)).into_iter()
+                        .all(|(g, s)| !self.scene.is_locked(Pick::Shape(g, s)))
+            })
+    }
+
     pub fn focus_tree_item(&mut self, pick: Pick) {
         self.select_item(pick, false);
         if self.scene.is_visible(pick) {
