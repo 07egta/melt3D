@@ -7,6 +7,8 @@
 //! are ignored. Hostile files never panic: the size, the number of commands, points, outlines and
 //! the nesting are all capped.
 
+use std::collections::HashMap;
+
 use crate::model::{Group, Kind, MAX_OUTLINE, Material, Op, Shape};
 
 /// A bigger file is refused.
@@ -50,6 +52,8 @@ pub struct Artwork {
     pub natural_mm: [f32; 2],
     /// How many outlines were thrown away (too tiny, too many, too deeply nested).
     pub dropped: usize,
+    /// Nonfatal omissions: the user must not mistake a partial import for an exact SVG.
+    pub warnings: Vec<String>,
 }
 
 impl Artwork {
@@ -110,7 +114,38 @@ pub fn parse(text: &str) -> Result<Artwork, String> {
     // pass 2: curves flattened to ~0.05 mm for a 60 mm picture
     let tol = FLAT_TOL_MM / (REF_MM / side);
     let raws = walk(text, Some(tol));
-    build_artwork(&raws, side)
+    let mut art = build_artwork(&raws, side)?;
+    art.warnings = unsupported_features(text);
+    Ok(art)
+}
+
+/// Report features we deliberately do not rasterize or convert into geometry.
+/// This pass parses only tags; it never resolves external resources.
+fn unsupported_features(src: &str) -> Vec<String> {
+    let mut tags = std::collections::BTreeSet::new();
+    let mut pos = 0;
+    let mut scanned = 0;
+    while let Some(tag) = next_tag(src, &mut pos) {
+        scanned += 1;
+        if scanned > MAX_ELEMENTS * 2 { break; }
+        if tag.closing { continue; }
+        match tag.name.as_str() {
+            "text" | "image" | "foreignobject" | "filter" | "clippath" | "mask"
+            | "lineargradient" | "radialgradient" | "pattern" | "marker" => {
+                tags.insert(tag.name.clone());
+            }
+            "use" => {
+                if tag.attr("href").or_else(|| tag.attr("xlink:href")).is_some_and(|s| !s.starts_with('#')) {
+                    tags.insert("external use".into());
+                }
+            }
+            _ => {}
+        }
+        if tag.prop("stroke").is_some_and(|s| s != "none") {
+            tags.insert("stroke".into());
+        }
+    }
+    tags.into_iter().map(|t| format!("未対応のSVG要素/指定: {t}（読み込みません）")).collect()
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -468,6 +503,7 @@ fn parse_color(s: &str) -> Option<[f32; 3]> {
 // XML
 
 struct Tag<'a> {
+    start: usize,
     name: String,
     attrs: Vec<(&'a str, &'a str)>,
     closing: bool,
@@ -606,7 +642,7 @@ fn next_tag<'a>(src: &'a str, pos: &mut usize) -> Option<Tag<'a>> {
         if closing {
             selfclose = false;
         }
-        return Some(Tag { name, attrs, closing, selfclose });
+        return Some(Tag { start: s, name, attrs, closing, selfclose });
     }
 }
 
@@ -957,7 +993,6 @@ fn skipped(name: &str) -> bool {
             | "foreignobject"
             | "text"
             | "image"
-            | "use"
             | "switch"
             | "animate"
             | "animatetransform"
@@ -965,17 +1000,70 @@ fn skipped(name: &str) -> bool {
     )
 }
 
-/// Walk the document and flatten every filled shape. `tol` = allowed error in document units
-/// (None = rough pass, only for measuring).
+/// Index id-bearing elements without executing scripts, loading URLs or expanding entities.
+/// Referencing a subtree is bounded by both a recursion limit and the shared geometry budget.
+fn collect_ids(src: &str) -> HashMap<&str, (usize, usize)> {
+    let mut ids = HashMap::new();
+    let mut open: Vec<(Option<&str>, usize)> = Vec::new();
+    let mut pos = 0;
+    while let Some(tag) = next_tag(src, &mut pos) {
+        if tag.closing {
+            if let Some((Some(id), begin)) = open.pop() {
+                if ids.len() < MAX_ELEMENTS {
+                    ids.entry(id).or_insert((begin, pos));
+                }
+            }
+            continue;
+        }
+        let id = tag.attr("id").filter(|v| !v.is_empty() && v.len() <= 128);
+        if tag.selfclose {
+            if let Some(id) = id {
+                if ids.len() < MAX_ELEMENTS {
+                    ids.entry(id).or_insert((tag.start, pos));
+                }
+            }
+        } else {
+            if open.len() >= MAX_DEPTH {
+                break;
+            }
+            open.push((id, tag.start));
+        }
+    }
+    ids
+}
+
+/// Walk the document. Local #id references are expanded in the same paint order as <use>;
+/// external hrefs are never read or fetched.
 fn walk(src: &str, tol: Option<f64>) -> Vec<Raw> {
+    let ids = collect_ids(src);
     let mut budget = Budget { commands: 0, points: 0, elements: 0 };
-    let mut out: Vec<Raw> = Vec::new();
-    let mut stack = vec![State { xf: Affine::ID, fill_none: false, evenodd: false, hidden: false, color: None }];
+    let mut out = Vec::new();
+    let initial = State { xf: Affine::ID, fill_none: false, evenodd: false, hidden: false, color: None };
+    walk_part(src, src, tol, &ids, &mut budget, &mut out, initial, false, &mut Vec::new());
+    out
+}
+
+#[allow(clippy::too_many_arguments)]
+fn walk_part<'a>(
+    document: &'a str,
+    fragment: &'a str,
+    tol: Option<f64>,
+    ids: &HashMap<&'a str, (usize, usize)>,
+    budget: &mut Budget,
+    out: &mut Vec<Raw>,
+    inherited: State,
+    referenced: bool,
+    active: &mut Vec<String>,
+) {
+    let mut stack = vec![inherited];
     let mut skip = 0usize;
     let mut over = 0usize;
-    let mut seen_root = false;
+    let mut seen_root = referenced;
     let mut pos = 0usize;
-    while let Some(tag) = next_tag(src, &mut pos) {
+    while let Some(tag) = next_tag(fragment, &mut pos) {
+        if budget.elements >= MAX_ELEMENTS || budget.points >= MAX_POINTS || budget.commands >= MAX_COMMANDS {
+            break;
+        }
         if tag.closing {
             if skip > 0 {
                 skip -= 1;
@@ -998,13 +1086,12 @@ fn walk(src: &str, tol: Option<f64>) -> Vec<Raw> {
         }
         let name = tag.name.as_str();
         let hide = tag.prop("display").is_some_and(|v| v == "none") || tag.prop("opacity").and_then(length).is_some_and(|o| o <= 0.0);
-        if skipped(name) || hide {
+        if (skipped(name) && !(referenced && name == "symbol")) || hide {
             if !tag.selfclose {
                 skip = 1;
                 if name == "style" || name == "script" {
-                    // raw text: jump over it
                     let close = format!("</{name}");
-                    if let Some(i) = src.get(pos..).and_then(|r| r.find(&close)) {
+                    if let Some(i) = fragment.get(pos..).and_then(|r| r.find(&close)) {
                         pos += i;
                     }
                 }
@@ -1035,19 +1122,38 @@ fn walk(src: &str, tol: Option<f64>) -> Vec<Raw> {
         if let Some(r) = tag.prop("fill-rule") {
             st.evenodd = r == "evenodd";
         }
-        let own_fill = tag.prop("fill");
-        if let Some(f) = own_fill {
+        if let Some(f) = tag.prop("fill") {
             if f != "none" {
                 st.color = parse_color(f).or(st.color);
             }
             st.fill_none = f == "none";
+        }
+        if name == "use" {
+            if !st.hidden && active.len() < 16
+                && let Some(id) = tag.attr("href").or_else(|| tag.attr("xlink:href")).and_then(|v| v.strip_prefix('#'))
+                && let Some(&(begin, end)) = ids.get(id)
+                && !active.iter().any(|v| v == id)
+                && let Some(part) = document.get(begin..end)
+            {
+                // x/y is a translation inside the use element's own transform.
+                st.xf = st.xf.mul(&Affine([1.0, 0.0, 0.0, 1.0, tag.len("x").unwrap_or(0.0), tag.len("y").unwrap_or(0.0)]));
+                if st.xf.ok() {
+                    active.push(id.to_owned());
+                    walk_part(document, part, tol, ids, budget, out, st, true, active);
+                    active.pop();
+                }
+            }
+            if !tag.selfclose {
+                skip = 1;
+            }
+            continue;
         }
         let drawable = matches!(name, "path" | "rect" | "circle" | "ellipse" | "polygon" | "polyline");
         if drawable {
             if !st.hidden && !st.fill_none && budget.elements < MAX_ELEMENTS && budget.points < MAX_POINTS && budget.commands < MAX_COMMANDS {
                 budget.elements += 1;
                 let sf = xf.scale().max(1e-12);
-                let mut pen = Pen { xf, tol: tol.map(|t| t / sf), out: Vec::new(), sub: Vec::new(), budget: &mut budget };
+                let mut pen = Pen { xf, tol: tol.map(|t| t / sf), out: Vec::new(), sub: Vec::new(), budget };
                 let n = |k: &str| tag.len(k);
                 match name {
                     "path" => {
@@ -1071,7 +1177,6 @@ fn walk(src: &str, tol: Option<f64>) -> Vec<Raw> {
                     out.push(Raw { polys, evenodd: st.evenodd, color: st.color });
                 }
             }
-            // a shape has no children worth reading
             if !tag.selfclose {
                 skip = 1;
             }
@@ -1085,7 +1190,6 @@ fn walk(src: &str, tol: Option<f64>) -> Vec<Raw> {
             }
         }
     }
-    out
 }
 
 /// The matrix from the `<svg>` element's viewBox to its width and height (px).
@@ -1230,6 +1334,7 @@ fn build_artwork(raws: &[Raw], side: f64) -> Result<Artwork, String> {
         aspect: [(hi[0] - lo[0]) / w, (hi[1] - lo[1]) / w],
         natural_mm: [((hi[0] - lo[0]) as f64 * px_to_mm) as f32, ((hi[1] - lo[1]) as f64 * px_to_mm) as f32],
         dropped,
+        warnings: Vec::new(),
     })
 }
 
@@ -1494,6 +1599,46 @@ mod tests {
         assert_eq!(a.contours[0].color.map(|c| (c[0] * 255.0).round() as u32), Some(0x33));
         assert!(parse("not an svg").is_err());
         assert!(parse(&wrap(r#"<line x1="0" y1="0" x2="5" y2="5"/>"#)).is_err());
+    }
+
+    #[test]
+    fn unsupported_features_are_reported() {
+        let a = parse(&wrap(r#"<rect width="20" height="20" stroke="red"/><text>hello</text><image href="data:abc"/>"#)).unwrap();
+        assert!(a.warnings.iter().any(|s| s.contains("stroke")));
+        assert!(a.warnings.iter().any(|s| s.contains("text")));
+        assert!(a.warnings.iter().any(|s| s.contains("image")));
+    }
+
+    #[test]
+    fn local_use_repeats_defs_and_preserves_instance_transform() {
+        let doc = wrap(r##"<defs><g id="motif"><rect width="10" height="20" fill="#336699"/></g></defs>
+            <use href="#motif" x="10" y="5"/>
+            <use href="#motif" transform="translate(40 5) scale(2)"/>"##);
+        let a = parse(&doc).unwrap();
+        assert_eq!((a.solids(), a.holes()), (2, 0));
+        assert!(a.contours.iter().all(|c| c.color.is_some()));
+        let (lo, hi) = extent(&a);
+        assert!((hi[0] - lo[0] - 60.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn local_use_cycles_and_external_references_do_not_expand() {
+        let doc = wrap(r##"<defs><g id="a"><use href="#b"/></g>
+             <g id="b"><use href="#a"/><rect width="8" height="8"/></g></defs>
+             <use href="#a"/><use href="https://example.com/evil.svg#x"/>"##);
+        let a = parse(&doc).unwrap();
+        assert_eq!(a.solids(), 1);
+        assert!(parse(&wrap(r##"<use href="file:///etc/passwd#s"/>"##)).is_err());
+    }
+
+    #[test]
+    fn referenced_hole_has_matching_extrusion() {
+        let a = parse(&wrap(r##"<defs><path id="ring" fill-rule="evenodd"
+          d="M0 0 H80 V80 H0 Z M20 20 H60 V60 H20 Z"/></defs>
+          <use href="#ring"/>"##)).unwrap();
+        assert_eq!((a.solids(), a.holes()), (1, 1));
+        let (g, _) = build_group(&a, "ring", &BuildOpts::default(), 64);
+        assert_eq!(g.shapes.iter().map(|s| s.op).collect::<Vec<_>>(), vec![Op::Add, Op::Subtract]);
     }
 
     #[test]
