@@ -116,6 +116,8 @@ pub struct App {
     pub gpu: crate::gpu_ui::GpuUi,
     /// The speed test window ("速さをはかる…").
     pub bench: crate::bench::Job,
+    /// Task-level usability recording, separate from the GPU-only bench.
+    pub ux: crate::ux_bench::Ui,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -184,6 +186,7 @@ impl App {
             notice: None,
             gpu: Default::default(),
             bench: Default::default(),
+            ux: Default::default(),
         };
         if let Some(p) = open {
             app.open_path(p);
@@ -917,6 +920,9 @@ impl App {
                         });
                         let mut menu = crate::perf::MenuState { quality: self.perf.quality, hud: self.perf.hud, bench: false };
                         crate::perf::quality_menu(ui, &mut menu, |ui| self.gpu_menu_items(ui));
+                        if style::pill(ui, "操作性テスト", false).clicked() {
+                            self.ux.open = true;
+                        }
                         self.perf.quality = menu.quality;
                         self.perf.hud = menu.hud;
                         self.perf.bench_requested |= menu.bench;
@@ -1334,6 +1340,7 @@ impl App {
                 self.bench.start(&ctx, backends);
             }
             self.bench.show(&ctx);
+            self.ux.show(&ctx, self.perf.quality.label());
         }
         self.pending_file_dialog(&ctx);
         self.recovery_dialog(&ctx);
@@ -1367,7 +1374,9 @@ impl App {
         if self.perf.drawn.wants_another_frame(rev, self.sel, self.hover, &self.cam, clean) {
             ctx.request_repaint();
         }
-        self.perf.stats.end(frame_began.elapsed().as_secs_f32() * 1000.0);
+        let cpu_ms = frame_began.elapsed().as_secs_f64() * 1000.0;
+        self.perf.stats.end(cpu_ms as f32);
+        self.ux.record_frame(&ctx, cpu_ms);
     }
 }
 
