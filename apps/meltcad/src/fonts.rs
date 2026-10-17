@@ -61,19 +61,38 @@ pub fn install(ctx: &egui::Context, bytes: Option<Vec<u8>>) {
 
 /// Looking for and reading the CJK font (a file of several MB) can take a while on a cold disk,
 /// so it runs on its own thread from the first moment of start-up, while the window opens.
-pub struct FontJob(Option<std::thread::JoinHandle<Option<Vec<u8>>>>);
+pub struct FontJob(Option<std::sync::mpsc::Receiver<Option<Vec<u8>>>>);
 
 impl FontJob {
     pub fn start() -> FontJob {
-        FontJob(std::thread::Builder::new().name("meltcad-font".into()).spawn(find_cjk_font).ok())
+        let (tx, rx) = std::sync::mpsc::channel();
+        let started = std::thread::Builder::new()
+            .name("meltcad-font".into())
+            .spawn(move || {
+                let _ = tx.send(find_cjk_font());
+            });
+        FontJob(started.ok().map(|_| rx))
     }
 
-    /// The font bytes (waits for the thread if it is still busy). Without a thread, searches now.
-    pub fn finish(self) -> Option<Vec<u8>> {
-        match self.0 {
-            Some(handle) => handle.join().ok().flatten(),
-            None => find_cjk_font(),
+    /// Poll without ever blocking the UI while a cold disk is searching for CJK fonts.
+    /// Some(None) means search failed, and None means it is still running.
+    pub fn poll(&mut self) -> Option<Option<Vec<u8>>> {
+        let result = self.0.as_ref()?.try_recv();
+        match result {
+            Ok(bytes) => {
+                self.0 = None;
+                Some(bytes)
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => None,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.0 = None;
+                Some(None)
+            }
         }
+    }
+
+    pub fn pending(&self) -> bool {
+        self.0.is_some()
     }
 }
 
@@ -164,4 +183,21 @@ fn scan_dir_for_font(dir: &Path, depth: usize, is_wanted: fn(&str) -> bool) -> O
 /// Whether a lower-case font file name looks like a CJK font.
 fn is_cjk_font_name(file_name: &str) -> bool {
     CJK_FONT_KEYWORDS.iter().any(|keyword| file_name.contains(keyword))
+}
+
+#[cfg(test)]
+mod job_tests {
+    use super::*;
+
+    #[test]
+    fn polling_never_waits_and_consumes_exactly_one_result() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut job = FontJob(Some(rx));
+        assert!(job.poll().is_none(), "no result yet");
+        assert!(job.pending());
+        tx.send(None).expect("send");
+        assert!(matches!(job.poll(), Some(None)));
+        assert!(!job.pending());
+        assert!(job.poll().is_none());
+    }
 }

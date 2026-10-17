@@ -109,6 +109,8 @@ pub struct App {
     pub lib_open: bool,
     pub lib_cat: usize,
     pub lib_query: String,
+    /// Font discovery runs on a worker; do not wait for it while opening the window.
+    font_job: Option<crate::fonts::FontJob>,
     /// A message from code that has no window context (shown in the status bar next frame).
     pub notice: Option<String>,
     /// The graphics path (GPU picture or the simple CPU one) and its cards.
@@ -179,6 +181,7 @@ impl App {
             lib_open: false,
             lib_cat: 0,
             lib_query: String::new(),
+            font_job: None,
             notice: None,
             gpu: Default::default(),
             bench: Default::default(),
@@ -187,6 +190,24 @@ impl App {
             app.open_path(p);
         }
         app
+    }
+
+    pub fn attach_font_job(&mut self, job: crate::fonts::FontJob) {
+        if job.pending() {
+            self.font_job = Some(job);
+        }
+    }
+
+    fn poll_font(&mut self, ctx: &egui::Context) {
+        let Some(job) = &mut self.font_job else { return };
+        if let Some(bytes) = job.poll() {
+            crate::fonts::install(ctx, bytes);
+            crate::perf::mark("font installed without blocking startup");
+            self.font_job = None;
+            ctx.request_repaint();
+        } else {
+            ctx.request_repaint_after(std::time::Duration::from_millis(60));
+        }
     }
 
     /// The field for picking. It is built when asked for, and again only after the scene changed
@@ -958,7 +979,11 @@ impl App {
                 style::panel_sheen(ui, ui.max_rect().expand2(egui::vec2(10.0, 10.0)), style::PANEL_DARK, style::Edge::Left);
                 let tabs = [("シーン", ""), ("ライブラリ", "")];
                 if let Some(i) = style::segmented(ui, "dock_tabs", &tabs, Some(usize::from(self.lib_open)), true) {
+                    let was_open = self.lib_open;
                     self.lib_open = i == 1;
+                    if was_open && !self.lib_open {
+                        crate::library_ui::suspend(ui.ctx());
+                    }
                 }
                 ui.add_space(6.0);
                 if self.lib_open {
@@ -1240,6 +1265,7 @@ impl App {
         static FIRST: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
         crate::perf::mark_once(&FIRST, "first ui frame");
         let ctx = ui.ctx().clone();
+        self.poll_font(&ctx);
         let frame_began = std::time::Instant::now();
         self.perf.stats.begin(ctx.input(|i| i.time));
         self.fix_selection();

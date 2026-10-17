@@ -141,8 +141,11 @@ fn main() -> eframe::Result {
         options,
         Box::new(move |cc| {
             perf::mark("window and graphics ready");
-            fonts::install(&cc.egui_ctx, font_job.finish());
-            perf::mark("fonts installed");
+            let mut font_job = font_job;
+            if let Some(bytes) = font_job.poll() {
+                fonts::install(&cc.egui_ctx, bytes);
+                perf::mark("font installed before first frame");
+            }
             style::apply(&cc.egui_ctx);
             let rs = cc.wgpu_render_state.clone();
             if rs.is_none() {
@@ -150,6 +153,7 @@ fn main() -> eframe::Result {
             }
             let srgb = rs.as_ref().is_none_or(|rs| rs.target_format.is_srgb());
             let mut app = app::App::new(srgb, std::env::args_os().nth(1).map(std::path::PathBuf::from));
+            app.attach_font_job(font_job);
             // the shader compiles on its own thread: the window shows first, with the simple view
             app.attach_gpu(rs, &cc.egui_ctx, settings.easy);
             perf::mark("app created");
