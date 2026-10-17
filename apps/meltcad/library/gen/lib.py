@@ -16,7 +16,7 @@ Set MELTCAD_BIN to the prebuilt meltcad binary (see README.md).
 import json, os, subprocess, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-OUT_DIR = os.path.dirname(HERE)  # apps/meltcad/library
+OUT_DIR = os.environ.get("MELTCAD_OUT_DIR", os.path.dirname(HERE))  # overridden during reproducibility checks
 
 SIZE_DEFAULT = {
     "Sphere": (20, 1, 1), "Box": (30, 30, 30), "Cylinder": (15, 40, 1), "Torus": (20, 7, 1),
@@ -70,6 +70,8 @@ def scene_of(it):
 
 def preview(items, outdir="/tmp/lib_preview", size=220, only=None):
     """Render each item to <outdir>/<n>_<name>.png (4 views: 3/4, front, right, top)."""
+    if os.environ.get("MELTCAD_SKIP_PREVIEW") == "1":
+        return
     binp = os.environ.get("MELTCAD_BIN")
     if not binp or not os.path.exists(binp):
         sys.exit("set MELTCAD_BIN to the meltcad binary")

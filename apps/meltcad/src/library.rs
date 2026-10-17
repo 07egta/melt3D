@@ -88,11 +88,25 @@ impl Item {
         Scene { groups: vec![self.group.clone()], ..Scene::default() }
     }
 
-    /// Its footprint: the centre of its shapes in x and y (so it can be put down at a chosen spot).
+    /// Approximate XY midpoint of the visible additive geometry, not the average
+    /// of shape origins (small eyes/fingers otherwise pull a model off centre).
     fn centre_xy(&self) -> [f32; 2] {
-        let n = self.group.shapes.len().max(1) as f32;
-        let (x, y) = self.group.shapes.iter().fold((0.0, 0.0), |a, s| (a.0 + s.pos[0], a.1 + s.pos[1]));
-        [x / n, y / n]
+        let mut lo = [f32::INFINITY; 2];
+        let mut hi = [f32::NEG_INFINITY; 2];
+        for s in &self.group.shapes {
+            if !s.visible || s.op != crate::model::Op::Add {
+                continue;
+            }
+            let r = crate::view::radius_of(s);
+            for axis in 0..2 {
+                lo[axis] = lo[axis].min(s.pos[axis] - r);
+                hi[axis] = hi[axis].max(s.pos[axis] + r);
+            }
+        }
+        if !lo[0].is_finite() || !lo[1].is_finite() {
+            return [0.0, 0.0];
+        }
+        [(lo[0] + hi[0]) * 0.5, (lo[1] + hi[1]) * 0.5]
     }
 
     /// Can it still be added to a scene with this many groups and shapes?
@@ -141,16 +155,37 @@ mod tests {
     }
 
     #[test]
-    fn placing_moves_the_middle_and_keeps_the_height() {
-        let c = parse(FILES[0]).unwrap_or(Category { name: String::new(), items: Vec::new() });
+    fn placing_moves_the_geometry_midpoint_without_resizing_or_lifting_it() {
+        let c = parse(FILES[0]).expect("valid library");
         for it in c.items.iter().take(3) {
             let g = it.placed([100.0, -50.0]);
-            let n = g.shapes.len() as f32;
-            let mx = g.shapes.iter().map(|s| s.pos[0]).sum::<f32>() / n;
-            let my = g.shapes.iter().map(|s| s.pos[1]).sum::<f32>() / n;
+            let placed = Item { name: it.name.clone(), tags: it.tags.clone(), group: g };
+            let [mx, my] = placed.centre_xy();
             assert!((mx - 100.0).abs() < 1e-3 && (my + 50.0).abs() < 1e-3);
-            assert_eq!(g.shapes[0].pos[2], it.group.shapes[0].pos[2]);
+            for (before, after) in it.group.shapes.iter().zip(&placed.group.shapes) {
+                assert_eq!(after.pos[2], before.pos[2]);
+                assert_eq!(after.size, before.size);
+                assert_eq!(after.scale, before.scale);
+                assert_eq!(after.rot, before.rot);
+            }
         }
+
+        // Different-sized parts and many tiny details must not determine the
+        // insertion position by the arithmetic mean of their centre points.
+        let mut g = Group::new("片寄ったモデル");
+        g.shapes.push(crate::model::Shape::new(
+            crate::model::Kind::Sphere,
+            [-20.0, 0.0, 20.0],
+            crate::model::Material::default(),
+        ));
+        g.shapes.push(crate::model::Shape::new(
+            crate::model::Kind::Box,
+            [45.0, 0.0, 20.0],
+            crate::model::Material::default(),
+        ));
+        let it = Item { name: "テスト".into(), tags: vec![], group: g };
+        let placed = Item { name: it.name.clone(), tags: vec![], group: it.placed([0.0, 0.0]) };
+        assert!(placed.centre_xy().iter().all(|x| x.abs() < 1e-3));
     }
 
     #[test]
