@@ -229,8 +229,9 @@ fn cell(ui: &mut egui::Ui, ci: usize, ii: usize, name: &str, ctx: &egui::Context
         let _ = library::request_category(ci, ctx);
     }
     let model = category.and_then(Result::ok).and_then(|cat| cat.items.get(ii));
-    ui.allocate_ui(Vec2::new(CELL - 3.0, ROW_HEIGHT - 4.0), |ui| {
+    ui.allocate_ui_with_layout(Vec2::new(CELL - 3.0, ROW_HEIGHT), egui::Layout::top_down(egui::Align::Center), |ui| {
         ui.set_width(CELL - 8.0);
+        ui.set_min_height(ROW_HEIGHT);
         let (rect, response) = ui.allocate_exact_size(
             Vec2::splat(THUMB as f32 + 8.0),
             egui::Sense::click(),
