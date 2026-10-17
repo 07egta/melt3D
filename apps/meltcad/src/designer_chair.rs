@@ -355,7 +355,7 @@ pub fn regenerate(group: &mut Group, next: Parameters) {
 }
 
 /// Render the in-place whole-chair controls for the selected group.
-pub fn controls(ui: &mut Ui, group: &mut Group) -> bool {
+pub fn controls(ui: &mut Ui, group: &mut Group, other_shapes: usize) -> bool {
     let Some(mut params) = group.designer_chair else { return false };
     let before = params;
     ui.separator();
@@ -383,8 +383,12 @@ pub fn controls(ui: &mut Ui, group: &mut Group) -> bool {
     if params == before {
         return false;
     }
-    // The maximum for these seven parameters is 1+1+2+4+1+1 = 10,
-    // so regular presets stay safely within the existing group/shape caps.
+    let manual_parts = group.shapes.iter().filter(|s| s.source != GENERATOR_TAG).count();
+    let total = other_shapes.saturating_add(manual_parts).saturating_add(generated_shapes(params).len());
+    if total > crate::model::MAX_SHAPES {
+        ui.label(RichText::new(format!("これ以上パーツを増やせません（シーンは{}個まで）。不要な形を削除してください。", crate::model::MAX_SHAPES)).color(style::CUT));
+        return false;
+    }
     regenerate(group, params);
     true
 }
@@ -506,12 +510,14 @@ mod tests {
             assert!(!built.surface.mesh.triangles.is_empty());
             assert!(built.closed, "{} generated an open mesh", style.label());
             for format in [Format::ThreeMf, Format::Obj] {
-                let output = export_job::serialize(&built, &Options { format, ..opts.clone() }, std::path::Path::new("DesignerChair"))
+                let extension = format.ext();
+                let filename = format!("DesignerChair.{extension}");
+                let output = export_job::serialize(&built, &Options { format, ..opts.clone() }, std::path::Path::new(&filename))
                     .unwrap_or_else(|e| panic!("{} {:?}: {e}", style.label(), format));
                 assert!(!output.is_empty());
                 assert!(output.iter().all(|(_, bytes)| !bytes.is_empty()));
                 let suffix = if format == Format::Obj { "obj" } else { "3mf" };
-                assert!(output.iter().any(|(path, _)| path.extension().is_some_and(|e| e == suffix)));
+                assert!(output.iter().any(|(path, _)| path.extension().and_then(|e| e.to_str()) == Some(suffix)));
             }
         }
     }
