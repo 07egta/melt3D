@@ -396,10 +396,29 @@ mod tests {
         app.redo();
         assert_eq!(app.scene, built);
 
-        // Normal tools are not locked after preset insertion.
+        // Normal tools are not locked after preset insertion, and subsequent
+        // edits also keep an ordinary Undo/Redo step and survive serialization.
         let index = built.groups.len() - 1;
         app.scene.groups[index].shapes[1].pos[0] += 8.0;
         assert_ne!(app.scene, built);
+        app.settle(&ctx);
+        let edited = app.scene.clone();
+        assert_eq!(Scene::from_json(&edited.to_json()).expect("reload edited blob"), edited);
+        app.undo();
+        assert_eq!(app.scene, built, "lobe drag is a separate undo step");
+        app.redo();
+        assert_eq!(app.scene, edited);
+    }
+
+    #[test]
+    fn a_full_scene_rejects_insertion_without_partial_edits() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        app.scene.groups[0].shapes.resize(MAX_SHAPES,
+            Shape::new(Kind::Sphere, [0.0, 0.0, 20.0], Material::default()));
+        let before = app.scene.clone();
+        assert!(insert(&mut app, &ctx, Settings::default()).is_err());
+        assert_eq!(app.scene, before, "failure must not leave a half-generated blob");
     }
 
     /// Full mesh export uses the existing SDF/Boolean mesher; run in a release build.
