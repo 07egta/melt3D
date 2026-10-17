@@ -967,6 +967,48 @@ mod tests {
     use super::*;
 
     #[test]
+    fn twist_preserves_the_original_shape_and_old_json_can_be_loaded() {
+        use crate::deform::{Deformation, Twist, Axis};
+        let mut sc = Scene::default();
+        sc.groups[0].shapes[0] = Shape::new(Kind::Box, [0.0, 0.0, 15.0], Material::default());
+        let original = sc.groups[0].shapes[0].clone();
+        let unmodified_json = sc.to_json();
+        assert!(!unmodified_json.contains("deformation"), "no needless legacy file diff");
+        let twist = Twist { axis: Axis::Z, degrees: 180.0, ..Twist::default() };
+        sc.groups[0].shapes[0].deformation = Some(Deformation::Twist(twist));
+        let sh = &sc.groups[0].shapes[0];
+        assert_eq!(sh.kind, original.kind);
+        assert_eq!(sh.size, original.size);
+        assert_eq!(sh.params, original.params);
+        assert_eq!(sh.outline, original.outline);
+        assert!(sh.local_half()[0] > original.local_half()[0]);
+        let saved = sc.to_json();
+        assert_eq!(Scene::from_json(&saved).unwrap(), sc, "modifier survives scene round trip");
+        assert_eq!(Scene::from_json(&unmodified_json).unwrap().groups[0].shapes[0].deformation, None);
+        sc.groups[0].shapes[0].deformation = None;
+        assert_eq!(sc.groups[0].shapes[0], original, "undoing modifier restores exact primitive data");
+    }
+
+    #[test]
+    fn twisted_input_is_sanitized_without_changing_primitive() {
+        use crate::deform::{Deformation, Twist};
+        let mut sc = Scene::default();
+        let shape = &mut sc.groups[0].shapes[0];
+        let kind = shape.kind;
+        shape.deformation = Some(Deformation::Twist(Twist {
+            degrees: f32::INFINITY, begin: -12.0, end: -5.0, lower: -2.0,
+            upper: 99.0, ..Twist::default()
+        }));
+        sc.sanitize();
+        let shape = &sc.groups[0].shapes[0];
+        assert_eq!(shape.kind, kind);
+        let Some(Deformation::Twist(t)) = shape.deformation else { panic!("twist retained") };
+        assert!(t.degrees.is_finite() && t.degrees <= 1440.0);
+        assert!((0.0..=0.98).contains(&t.begin) && t.end - t.begin >= 0.02);
+        assert_eq!((t.lower, t.upper), (0.0, 2.0));
+    }
+
+    #[test]
     fn a_scene_round_trips_and_hostile_numbers_are_made_safe() {
         let s = Scene::default();
         assert_eq!(Scene::from_json(&s.to_json()).unwrap(), s);
