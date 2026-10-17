@@ -478,6 +478,15 @@ impl State {
         }
     }
 
+    /// Abandon a rectangle/circle drag lost outside the viewport.
+    /// Do not leave a stale two-click anchor behind.
+    pub fn cancel_drag(&mut self) {
+        self.dragging = false;
+        self.anchor = None;
+        self.cursor = None;
+        self.mouse = None;
+    }
+
     /// The button came up at `p` after a drag.
     pub fn release(&mut self, p: [f32; 2]) -> Option<Finished> {
         if !self.dragging {
@@ -495,7 +504,10 @@ impl State {
     /// Enter (or a double click): close the outline / end the line.
     pub fn enter(&mut self) -> Option<Finished> {
         match self.active_pen() {
-            Pen::Rect | Pen::Circle => None,
+            Pen::Rect | Pen::Circle => match (self.anchor, self.cursor) {
+                (Some(a), Some(b)) if !same(a, b) => self.finish_shape(a, b),
+                _ => None,
+            },
             _ if self.pts.is_empty() => None,
             _ => self.finish_points(),
         }
@@ -926,6 +938,11 @@ impl App {
         let frame = self.sk.frame;
         let step = step_for(mods);
         let mouse = pos.filter(|p| resp.hovered() && !over_gnomon(*p));
+        // Losing the pointer during a shape gesture cancels it, rather than
+        // reusing its first corner on the next click.
+        if self.sk.dragging && ui.input(|i| i.pointer.interact_pos()).is_none() {
+            self.sk.cancel_drag();
+        }
         self.sk.mouse = mouse;
         let resolved = mouse.and_then(|p| self.sketch_resolve_snap(rect, p, step, &frame, self.sk.snap_hit, None));
         self.sk.cursor = resolved.map(|r| r.0);
@@ -959,7 +976,7 @@ impl App {
                             done = self.sk.release(q);
                             if done.is_some() { measured = a.map(|p| (p, q)); }
                         },
-                        None => self.sk.dragging = false,
+                        None => self.sk.cancel_drag(),
                     }
                 }
             }
@@ -992,6 +1009,16 @@ impl App {
                 let p = if top { &self.sk.profile2 } else { &self.sk.profile };
                 self.sk.dimension = Dimensions::for_shape(pen, a, b, p, top);
             }
+        }
+        // Every primary sketch gesture belongs to the sketch, including drags
+        // which have not produced a point. Never fall through to object picking.
+        if !mods.alt && (resp.drag_started_by(egui::PointerButton::Primary)
+            || resp.dragged_by(egui::PointerButton::Primary)
+            || resp.drag_stopped_by(egui::PointerButton::Primary)
+            || resp.clicked_by(egui::PointerButton::Primary)
+            || resp.double_clicked_by(egui::PointerButton::Primary))
+        {
+            out.taken = true;
         }
         out
     }
@@ -1423,7 +1450,8 @@ impl App {
             out.taken = true;
             out.busy = true;
             match (primary_down, ui.input(|i| i.pointer.interact_pos())) {
-                (true, Some(p)) => self.edit_drag(rect, p, step),
+                (true, Some(p)) if rect.contains(p) => self.edit_drag(rect, p, step),
+                (true, _) => self.edit_cancel_drag(),
                 _ => self.edit_release(),
             }
             return out;
