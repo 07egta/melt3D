@@ -167,6 +167,7 @@ pub struct Edit {
     pub sel: Option<usize>,
     pub drag: Option<DragPoint>,
     pub hover: Option<Hover>,
+    pub edge_sel: Option<usize>,
 }
 
 #[derive(Clone, Debug)]
@@ -774,7 +775,7 @@ impl App {
         self.sk.reset();
         self.sk.on = false;
         self.sel = Some(Pick::Shape(g, s));
-        self.sk.edit = Some(Edit { g, s, which: Which::Main, sel: None, drag: None, hover: None });
+        self.sk.edit = Some(Edit { g, s, which: Which::Main, sel: None, drag: None, hover: None, edge_sel: None });
         if let Some(f) = self.scene.shape(g, s).and_then(|sh| sketch::edit_frame(sh, Which::Main)) {
             self.sketch_fly(&f);
         }
@@ -859,6 +860,7 @@ impl App {
         if let Some(e) = self.sk.edit.as_mut() {
             e.drag = Some(DragPoint { idx, before });
             e.sel = Some(idx);
+            e.edge_sel = None;
         }
         true
     }
@@ -878,10 +880,11 @@ impl App {
     /// The button came up: keep the new outline unless it now crosses itself.
     pub fn edit_release(&mut self) {
         let Some(d) = self.sk.edit.as_mut().and_then(|e| e.drag.take()) else { return };
-        let Some((ol, _)) = self.edit_outline_mut() else { return };
-        if sketch::is_simple(&d.before) && !sketch::is_simple(ol) {
+        let Some((ol, rev)) = self.edit_outline_mut() else { return };
+        let result = sketch::validate_edit(&d.before, ol, rev);
+        if let Err(err) = result {
             *ol = d.before;
-            self.sk.msg = SketchError::SelfIntersect.message();
+            self.sk.msg = err.message();
         } else {
             self.sk.msg.clear();
         }
@@ -893,6 +896,7 @@ impl App {
             Some(Hover::Point(i)) => {
                 if let Some(e) = self.sk.edit.as_mut() {
                     e.sel = Some(i);
+                    e.edge_sel = None;
                 }
             }
             Some(Hover::Edge(i, at)) => {
@@ -902,6 +906,7 @@ impl App {
                 });
                 if let Some(e) = self.sk.edit.as_mut() {
                     e.sel = added.then_some(i + 1);
+                    e.edge_sel = Some(i);
                 }
                 if !added {
                     self.sk.msg = format!("点は{MAX_OUTLINE}こまでです");
@@ -910,9 +915,44 @@ impl App {
             None => {
                 if let Some(e) = self.sk.edit.as_mut() {
                     e.sel = None;
+                    e.edge_sel = None;
                 }
             }
         }
+    }
+
+    /// Commit a precision edit atomically; rejected edits never touch the scene.
+    fn precision_edit(&mut self, f: impl FnOnce(&[[f32; 2]], bool) -> Result<Vec<[f32; 2]>, SketchError>) -> bool {
+        let Some((outline, rev)) = self.edit_outline_mut() else { return false };
+        let result = f(outline, rev);
+        match result {
+            Ok(next) => {
+                *outline = next;
+                self.sk.msg.clear();
+                true
+            }
+            Err(e) => {
+                self.sk.msg = e.message();
+                false
+            }
+        }
+    }
+
+    /// A deliberately small alternative to a general constraint solver.
+    pub fn precision_vertex(&mut self, idx: usize, point: [f32; 2]) -> bool {
+        self.precision_edit(|pts, rev| sketch::move_vertex(pts, idx, point, rev))
+    }
+
+    pub fn precision_edge_length(&mut self, idx: usize, length: f32) -> bool {
+        self.precision_edit(|pts, rev| sketch::set_edge_length(pts, idx, length, rev))
+    }
+
+    pub fn precision_rectangle(&mut self, width: f32, height: f32) -> bool {
+        self.precision_edit(|pts, rev| sketch::set_rectangle_size(pts, width, height, rev))
+    }
+
+    pub fn precision_circle(&mut self, diameter: f32) -> bool {
+        self.precision_edit(|pts, rev| sketch::set_circle_diameter(pts, diameter, rev))
     }
 
     /// Delete: remove the chosen point (three stay at least).
@@ -1292,6 +1332,7 @@ impl App {
                     {
                         e.which = w;
                         e.sel = None;
+                        e.edge_sel = None;
                         e.drag = None;
                         let frame = self.scene.shape(e.g, e.s).and_then(|s| sketch::edit_frame(s, w));
                         if let Some(f) = frame {
@@ -1304,6 +1345,54 @@ impl App {
         let n = self.sk.edit.as_ref().and_then(|e| self.scene.shape(e.g, e.s).map(|s| sketch::outline_of(s, e.which).len())).unwrap_or(0);
         hint(ui, &format!("点をドラッグして動かす　線をクリックで点をふやす　点をクリックして Delete で消す　{n}/{MAX_OUTLINE}こ"));
         hint(ui, "1mmきざみ　Shift = 10mm　Ctrl = 0.1mm　Alt+ドラッグで見る向きを回す");
+        // Values are transient UI inputs. Geometry is changed only after a validated edit.
+        let current = self.sk.edit.as_ref().and_then(|e| self.scene.shape(e.g, e.s).map(|s| (sketch::outline_of(s, e.which).clone(), e.sel, e.edge_sel)));
+        if let Some((outline, selected, edge)) = current {
+            if let Some(i) = selected.filter(|i| *i < outline.len()) {
+                let mut x = outline[i][0];
+                let mut y = outline[i][1];
+                ui.horizontal(|ui| {
+                    ui.label("点 X / Y (mm)");
+                    let changed_x = ui.add(egui::DragValue::new(&mut x).speed(0.1).max_decimals(3)).changed();
+                    let changed_y = ui.add(egui::DragValue::new(&mut y).speed(0.1).max_decimals(3)).changed();
+                    if changed_x || changed_y {
+                        self.precision_vertex(i, [x, y]);
+                    }
+                });
+            }
+            if let Some(size) = sketch::rectangle_size(&outline) {
+                let mut w = size[0];
+                let mut h = size[1];
+                ui.horizontal(|ui| {
+                    ui.label("幅 / 高さ (mm)");
+                    let cw = ui.add(egui::DragValue::new(&mut w).speed(0.1).range(0.5..=2000.0).max_decimals(3)).changed();
+                    let ch = ui.add(egui::DragValue::new(&mut h).speed(0.1).range(0.5..=2000.0).max_decimals(3)).changed();
+                    if cw || ch {
+                        self.precision_rectangle(w, h);
+                    }
+                });
+            } else if let Some(diameter) = sketch::circle_diameter(&outline) {
+                let mut d = diameter;
+                ui.horizontal(|ui| {
+                    ui.label("直径 (mm)");
+                    if ui.add(egui::DragValue::new(&mut d).speed(0.1).range(1.0..=2000.0).max_decimals(3)).changed() {
+                        self.precision_circle(d);
+                    }
+                });
+            }
+            if let Some(i) = edge.filter(|i| *i < outline.len()) {
+                let p = outline[i];
+                let q = outline[(i + 1) % outline.len()];
+                let mut length = (q[0] - p[0]).hypot(q[1] - p[1]);
+                ui.horizontal(|ui| {
+                    ui.label("線分の長さ (mm)");
+                    if ui.add(egui::DragValue::new(&mut length).speed(0.1).range(0.5..=2000.0).max_decimals(3)).changed() {
+                        self.precision_edge_length(i, length);
+                    }
+                });
+            }
+        }
+
         if !self.sk.msg.is_empty() {
             ui.label(egui::RichText::new(&self.sk.msg).size(11.5).color(style::CUT));
         }
@@ -1595,6 +1684,37 @@ mod tests {
         for p in pts {
             assert!(st.click(*p, false).is_none());
         }
+    }
+
+    #[test]
+    fn precise_edits_are_rejected_atomically_and_support_undo_redo() {
+        let ctx = egui::Context::default();
+        let mut app = app();
+        app.set_sketch_tool(true);
+        app.sk.pen = Pen::Rect;
+        app.sk.click([0.0, 0.0], false);
+        let profile = app.sk.click([20.0, 10.0], false).unwrap();
+        app.sketch_done(profile);
+        assert!(app.sketch_make(&ctx));
+        app.settle(&ctx);
+        let Some(Pick::Shape(g, s)) = app.sel else { panic!("selected") };
+        app.sketch_edit_begin(g, s);
+        let before = app.scene.shape(g, s).unwrap().outline.clone();
+        assert!(app.precision_rectangle(40.0, 15.0));
+        app.settle(&ctx);
+        assert_eq!(sketch::rectangle_size(&app.scene.shape(g, s).unwrap().outline), Some([40.0, 15.0]));
+        let good = app.scene.shape(g, s).unwrap().outline.clone();
+        assert!(!app.precision_vertex(2, good[0]));
+        assert_eq!(app.scene.shape(g, s).unwrap().outline, good);
+        app.undo();
+        assert_eq!(app.scene.shape(g, s).unwrap().outline, before);
+        app.redo();
+        assert_eq!(app.scene.shape(g, s).unwrap().outline, good);
+        assert!(app.precision_edge_length(0, 42.0));
+        assert!(sketch::validate_profile(&app.scene.shape(g, s).unwrap().outline).is_ok());
+        let saved = app.scene.to_json();
+        assert_eq!(Scene::from_json(&saved).unwrap().shape(g, s).unwrap().outline,
+                   app.scene.shape(g, s).unwrap().outline);
     }
 
     #[test]
