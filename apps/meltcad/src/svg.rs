@@ -976,7 +976,9 @@ fn collect_ids(src: &str) -> HashMap<&str, (usize, usize)> {
     while let Some(tag) = next_tag(src, &mut pos) {
         if tag.closing {
             if let Some((Some(id), begin)) = open.pop() {
-                ids.entry(id).or_insert((begin, pos));
+                if ids.len() < MAX_ELEMENTS {
+                    ids.entry(id).or_insert((begin, pos));
+                }
             }
             continue;
         }
@@ -1563,6 +1565,38 @@ mod tests {
         assert_eq!(a.contours[0].color.map(|c| (c[0] * 255.0).round() as u32), Some(0x33));
         assert!(parse("not an svg").is_err());
         assert!(parse(&wrap(r#"<line x1="0" y1="0" x2="5" y2="5"/>"#)).is_err());
+    }
+
+    #[test]
+    fn local_use_repeats_defs_and_preserves_instance_transform() {
+        let doc = wrap(r##"<defs><g id="motif"><rect width="10" height="20" fill="#336699"/></g></defs>
+            <use href="#motif" x="10" y="5"/>
+            <use href="#motif" transform="translate(40 5) scale(2)"/>"##);
+        let a = parse(&doc).unwrap();
+        assert_eq!((a.solids(), a.holes()), (2, 0));
+        assert!(a.contours.iter().all(|c| c.color.is_some()));
+        let (lo, hi) = extent(&a);
+        assert!((hi[0] - lo[0] - 60.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn local_use_cycles_and_external_references_do_not_expand() {
+        let doc = wrap(r##"<defs><g id="a"><use href="#b"/></g>
+             <g id="b"><use href="#a"/><rect width="8" height="8"/></g></defs>
+             <use href="#a"/><use href="https://example.com/evil.svg#x"/>"##);
+        let a = parse(&doc).unwrap();
+        assert_eq!(a.solids(), 1);
+        assert!(parse(&wrap(r##"<use href="file:///etc/passwd#s"/>"##)).is_err());
+    }
+
+    #[test]
+    fn referenced_hole_has_matching_extrusion() {
+        let a = parse(&wrap(r##"<defs><path id="ring" fill-rule="evenodd"
+          d="M0 0 H80 V80 H0 Z M20 20 H60 V60 H20 Z"/></defs>
+          <use href="#ring"/>"##)).unwrap();
+        assert_eq!((a.solids(), a.holes()), (1, 1));
+        let (g, _) = build_group(&a, "ring", &BuildOpts::default(), 64);
+        assert_eq!(g.shapes.iter().map(|s| s.op).collect::<Vec<_>>(), vec![Op::Add, Op::Subtract]);
     }
 
     #[test]
