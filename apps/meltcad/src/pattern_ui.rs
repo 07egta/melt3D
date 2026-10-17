@@ -143,6 +143,10 @@ impl App {
             self.say(ctx, "グループか形をえらんでください");
             return;
         };
+        if self.scene.is_locked(Pick::Group(g)) || !self.extra_selected.is_empty() {
+            self.say(ctx, "ロックを外して、グループを1つ選んでください");
+            return;
+        }
         let Some(gr) = self.scene.groups.get_mut(g) else { return };
         match &mut gr.pattern {
             None => {
