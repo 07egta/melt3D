@@ -399,6 +399,20 @@ mod tests {
     }
 
     #[test]
+    fn inspector_draws_without_graphics_device_and_keeps_parameters() {
+        let mut shape = new(Design::Ripple);
+        let before = shape.vase;
+        let ctx = egui::Context::default();
+        for _ in 0..2 {
+            ctx.run_ui(egui::RawInput::default(), |ui| {
+                inspector(ui, &mut shape);
+            }).textures_delta.clear();
+        }
+        assert_eq!(shape.vase, before);
+        assert!(shape.outline.len() <= crate::model::MAX_OUTLINE);
+    }
+
+    #[test]
     fn narrow_normals_trigger_a_print_warning() {
         let mut v = Design::Ripple.params();
         v.wall = 0.45;
