@@ -330,16 +330,18 @@ impl App {
             return;
         }
         let rect = self.view_rect;
+        let (card_center, card_width) = crate::ui_layout::floating_card_area(rect.width(), self.beginner_ui, 430.0);
         let before = self.pt.cfg;
         let mut off = false;
         egui::Area::new(egui::Id::new("pipe_card"))
             .order(egui::Order::Middle)
             .pivot(egui::Align2::CENTER_TOP)
-            .fixed_pos(pos2(rect.center().x, rect.top() + 12.0))
+            .fixed_pos(pos2(rect.left() + card_center, rect.top() + 12.0))
             .show(ctx, |ui| {
                 style::card().show(ui, |ui| {
+                    ui.set_max_width(card_width);
                     let cfg = &mut self.pt.cfg;
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
                         ui.label(egui::RichText::new("パイプ").strong().color(style::ACCENT));
                         if self.pt.on {
                             ui.label(egui::RichText::new("ドラッグでなぞる").size(11.0).color(style::DIM));
@@ -353,7 +355,7 @@ impl App {
                     style::labeled_slider(ui, "外半径", &mut cfg.radius, 0.5..=40.0, "パイプの外がわの半径 (mm)");
                     let max_wall = (cfg.radius - 0.1).clamp(0.0, 20.0);
                     style::labeled_slider(ui, "かべの\nあつさ", &mut cfg.wall, 0.0..=max_wall.max(0.1), "0 = つまった棒 / それより大きい = 中が空のパイプ (mm)");
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
                         if style::pill(ui, "とじた輪", cfg.closed).on_hover_text("さいごとさいしょをつなぐ").clicked() {
                             cfg.closed = !cfg.closed;
                         }
@@ -367,7 +369,7 @@ impl App {
                         style::color_edit(ui, &mut cfg.color);
                     });
                     if self.pt.on {
-                        ui.horizontal(|ui| {
+                        ui.horizontal_wrapped(|ui| {
                             ui.label(egui::RichText::new("なぞる面").size(11.0).color(style::DIM));
                             for pl in Plane::ALL {
                                 if style::pill(ui, pl.label(), self.pt.plane == pl).on_hover_text("形にあたらない所は、この面の上になぞる").clicked() {

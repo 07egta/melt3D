@@ -64,6 +64,7 @@ mod sketch;
 mod sketch_ui;
 mod stroke;
 mod style;
+mod ui_layout;
 mod svg;
 mod svg_dialog;
 mod view;

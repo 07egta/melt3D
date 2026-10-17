@@ -594,19 +594,22 @@ impl App {
         self.ct.node = None;
     }
 
+    /// The curve tool switches the same way from icons and labeled beginner buttons.
+    pub fn toggle_curve_tool(&mut self) {
+        let on = self.ct.drawing;
+        if on { self.finish_drawing(); }
+        self.ct.drawing = !on;
+        self.ct.draw_shape = None;
+        if self.ct.drawing {
+            self.set_pipe_tool(false);
+            self.sketch_off();
+        }
+    }
+
     /// The top-bar toggle for the "せん" tool.
     pub fn curve_button(&mut self, ui: &mut Ui) {
-        let on = self.ct.drawing;
-        if style::icon_button(ui, 34.0, "せん (クリックで点をうって、線をひく)", on, glyph).clicked() {
-            if on {
-                self.finish_drawing();
-            }
-            self.ct.drawing = !on;
-            self.ct.draw_shape = None;
-            if self.ct.drawing {
-                self.set_pipe_tool(false);
-                self.sketch_off();
-            }
+        if style::icon_button(ui, 34.0, "せん (クリックで点をうって、線をひく)", self.ct.drawing, glyph).clicked() {
+            self.toggle_curve_tool();
         }
     }
 
@@ -616,13 +619,15 @@ impl App {
             return;
         }
         let rect = self.view_rect;
+        let (card_center, card_width) = crate::ui_layout::floating_card_area(rect.width(), self.beginner_ui, 430.0);
         egui::Area::new(egui::Id::new("curve_card"))
             .order(egui::Order::Middle)
             .pivot(egui::Align2::CENTER_TOP)
-            .fixed_pos(pos2(rect.center().x, rect.top() + 12.0))
+            .fixed_pos(pos2(rect.left() + card_center, rect.top() + 12.0))
             .show(ctx, |ui| {
                 style::card().show(ui, |ui| {
-                    ui.horizontal(|ui| {
+                    ui.set_max_width(card_width);
+                    ui.horizontal_wrapped(|ui| {
                         ui.label(egui::RichText::new("せん").strong().color(style::ACCENT));
                         style::labeled_slider(ui, "ふとさ", &mut self.ct.draw_radius, 0.5..=40.0, "あたらしい点の太さ (半径 mm)");
                         if style::pill(ui, "おわり", false).on_hover_text("この線を終える (Enter / ダブルクリック)").clicked() {
