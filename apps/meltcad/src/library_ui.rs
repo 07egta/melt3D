@@ -126,6 +126,9 @@ pub fn panel(app: &mut App, ui: &mut egui::Ui) {
     }
     app.lib_cat = app.lib_cat.min(cats.len() - 1);
     let ctx = ui.ctx().clone();
+    if ui.button("♟ Chess Set · チェスの駒").on_hover_text("6種類・3デザイン・32駒を生成").clicked() {
+        crate::chess_dialog::open(&ctx, app);
+    }
     collect(&ctx);
     let mut made_one = false;
     let mut pick: Option<(usize, usize)> = None;
