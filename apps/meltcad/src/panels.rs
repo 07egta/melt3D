@@ -420,7 +420,7 @@ impl App {
         style::title(ui, "グループ");
         if self.scene.is_locked(Pick::Group(g)) {
             ui.label(RichText::new("ロック中：左の鍵を外すと編集できます").size(11.0).color(style::DIM));
-            ui.set_enabled(false);
+            ui.disable();
         }
         let n = self.scene.groups.len();
         let mut swap = None;
@@ -459,7 +459,7 @@ impl App {
         style::title(ui, "形");
         if self.scene.is_locked(Pick::Shape(g, s)) {
             ui.label(RichText::new("ロック中：左の鍵を外すと編集できます").size(11.0).color(style::DIM));
-            ui.set_enabled(false);
+            ui.disable();
         }
         let ngroups = self.scene.groups.len();
         let nshapes = self.scene.groups[g].shapes.len();
