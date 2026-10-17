@@ -541,6 +541,144 @@ pub fn scaled(pts: &[[f32; 2]], s: f32) -> Vec<[f32; 2]> {
     pts.iter().map(|p| [c[0] + (p[0] - c[0]) * s, c[1] + (p[1] - c[1]) * s]).collect()
 }
 
+// ------------------------------------------------------------------ precise edits (keep the existing outline format)
+
+// These edits operate on the polygon already stored in Shape::outline / outline2.
+// There is deliberately no constraint graph or new serialized metadata.
+
+/// Validate a proposed edit without silently removing or reordering any vertices.
+/// Reversing the winding would reverse the solid's face normals, so reject it too.
+pub fn validate_edit(before: &[[f32; 2]], after: &[[f32; 2]], revolve: bool) -> Result<(), SketchError> {
+    if before.len() != after.len() || after.len() < 3 {
+        return Err(SketchError::TooFewPoints);
+    }
+    if revolve && after.iter().any(|p| p[0] < 0.0) {
+        return Err(SketchError::LeftOfAxis);
+    }
+    let checked = validate_profile(after)?;
+    if checked.len() != after.len() {
+        return Err(SketchError::TooSmall); // a duplicate endpoint would disappear
+    }
+    if signed_area(before) * signed_area(after) <= 0.0 {
+        return Err(SketchError::TooSmall);
+    }
+    Ok(())
+}
+
+/// Move one vertex while its two neighbouring edges remain connected.
+pub fn move_vertex(pts: &[[f32; 2]], i: usize, at: [f32; 2], revolve: bool) -> Result<Vec<[f32; 2]>, SketchError> {
+    if i >= pts.len() {
+        return Err(SketchError::TooFewPoints);
+    }
+    let mut out = pts.to_vec();
+    out[i] = at;
+    validate_edit(pts, &out, revolve)?;
+    Ok(out)
+}
+
+/// Change the length of edge i -> i+1, keeping the first endpoint fixed.
+/// Other edges still share the moved endpoint, so the polygon cannot open.
+pub fn set_edge_length(pts: &[[f32; 2]], i: usize, length: f32, revolve: bool) -> Result<Vec<[f32; 2]>, SketchError> {
+    if i >= pts.len() || pts.len() < 3 {
+        return Err(SketchError::TooFewPoints);
+    }
+    if !length.is_finite() {
+        return Err(SketchError::BadNumber);
+    }
+    if length < MIN_SIDE {
+        return Err(SketchError::TooSmall);
+    }
+    let next = (i + 1) % pts.len();
+    let old = dist(pts[i], pts[next]);
+    if old <= 1e-3 {
+        return Err(SketchError::TooSmall);
+    }
+    let factor = length / old;
+    let at = [
+        pts[i][0] + (pts[next][0] - pts[i][0]) * factor,
+        pts[i][1] + (pts[next][1] - pts[i][1]) * factor,
+    ];
+    move_vertex(pts, next, at, revolve)
+}
+
+/// Recognise the exact axis-aligned rectangle form without changing user-drawn polygons.
+pub fn rectangle_size(pts: &[[f32; 2]]) -> Option<[f32; 2]> {
+    if pts.len() != 4 || validate_profile(pts).is_err() {
+        return None;
+    }
+    let (lo, hi) = bbox(pts)?;
+    let w = hi[0] - lo[0];
+    let h = hi[1] - lo[1];
+    if w < MIN_SIDE || h < MIN_SIDE {
+        return None;
+    }
+    let corners = rect(lo, hi);
+    if pts.iter().all(|p| corners.iter().any(|q| dist(*p, *q) < 1e-3)) {
+        Some([w, h])
+    } else {
+        None
+    }
+}
+
+/// Resize a rectangle about its current centre (no translation of the solid).
+pub fn set_rectangle_size(pts: &[[f32; 2]], width: f32, height: f32, revolve: bool) -> Result<Vec<[f32; 2]>, SketchError> {
+    let Some(_) = rectangle_size(pts) else { return Err(SketchError::SelfIntersect) };
+    if !width.is_finite() || !height.is_finite() {
+        return Err(SketchError::BadNumber);
+    }
+    if width < MIN_SIDE || height < MIN_SIDE {
+        return Err(SketchError::TooSmall);
+    }
+    let (lo, hi) = bbox(pts).ok_or(SketchError::TooFewPoints)?;
+    let c = [(lo[0] + hi[0]) * 0.5, (lo[1] + hi[1]) * 0.5];
+    let out: Vec<_> = pts
+        .iter()
+        .map(|p| [c[0] + if p[0] < c[0] { -width * 0.5 } else { width * 0.5 },
+                  c[1] + if p[1] < c[1] { -height * 0.5 } else { height * 0.5 }])
+        .collect();
+    validate_edit(pts, &out, revolve)?;
+    Ok(out)
+}
+
+/// Diameter of a regular 32-segment circle. Once a vertex is freely moved,
+/// it is no longer treated as a circle and generic point/edge editing applies.
+pub fn circle_diameter(pts: &[[f32; 2]]) -> Option<f32> {
+    if pts.len() != CIRCLE_POINTS {
+        return None;
+    }
+    let n = pts.len() as f32;
+    let center = [pts.iter().map(|p| p[0]).sum::<f32>() / n, pts.iter().map(|p| p[1]).sum::<f32>() / n];
+    let r = pts.iter().map(|p| dist(*p, center)).sum::<f32>() / n;
+    if !r.is_finite() || r < MIN_SIDE {
+        return None;
+    }
+    let expected_chord = 2.0 * r * (std::f32::consts::PI / n).sin();
+    if pts.iter().enumerate().any(|(i, p)| {
+        (dist(*p, center) - r).abs() > r * 0.003 + 1e-4
+            || (dist(*p, pts[(i + 1) % pts.len()]) - expected_chord).abs() > r * 0.003 + 1e-4
+    }) {
+        return None;
+    }
+    Some(2.0 * r)
+}
+
+/// Scale a recognised circle about its centre, retaining its 32 vertices.
+pub fn set_circle_diameter(pts: &[[f32; 2]], diameter: f32, revolve: bool) -> Result<Vec<[f32; 2]>, SketchError> {
+    let Some(old) = circle_diameter(pts) else { return Err(SketchError::SelfIntersect) };
+    if !diameter.is_finite() {
+        return Err(SketchError::BadNumber);
+    }
+    if diameter < MIN_SIDE * 2.0 {
+        return Err(SketchError::TooSmall);
+    }
+    let n = pts.len() as f32;
+    let center = [pts.iter().map(|p| p[0]).sum::<f32>() / n, pts.iter().map(|p| p[1]).sum::<f32>() / n];
+    let factor = diameter / old;
+    let out: Vec<_> = pts.iter().map(|p| [center[0] + (p[0] - center[0]) * factor, center[1] + (p[1] - center[1]) * factor]).collect();
+    validate_edit(pts, &out, revolve)?;
+    Ok(out)
+}
+
 // ------------------------------------------------------------------ editing an outline
 
 /// Insert `at` after corner `after` (between it and the next one). False when the outline is full.
@@ -823,6 +961,43 @@ mod tests {
     }
     fn near(a: f32, b: f32) -> bool {
         (a - b).abs() < 1e-3
+    }
+
+    #[test]
+    fn precise_rectangle_and_circle_dimensions_keep_closed_profiles() {
+        let square = rect([-10.0, -5.0], [10.0, 5.0]);
+        assert_eq!(rectangle_size(&square), Some([20.0, 10.0]));
+        let r = set_rectangle_size(&square, 30.0, 12.0, false).unwrap();
+        assert_eq!(rectangle_size(&r), Some([30.0, 12.0]));
+        assert_eq!(centre(&r), centre(&square));
+        assert_eq!(r.len(), 4);
+        assert!(validate_profile(&r).is_ok());
+        assert_eq!(set_rectangle_size(&square, 0.01, 10.0, false), Err(SketchError::TooSmall));
+        assert_eq!(set_rectangle_size(&square, f32::NAN, 10.0, false), Err(SketchError::BadNumber));
+
+        let ring = circle([3.0, 4.0], 10.0, CIRCLE_POINTS);
+        assert!((circle_diameter(&ring).unwrap() - 20.0).abs() < 1e-3);
+        let enlarged = set_circle_diameter(&ring, 40.0, false).unwrap();
+        assert!((circle_diameter(&enlarged).unwrap() - 40.0).abs() < 1e-3);
+        assert_eq!(enlarged.len(), CIRCLE_POINTS);
+        assert!(validate_profile(&enlarged).is_ok());
+        assert_eq!(set_circle_diameter(&ring, 0.2, false), Err(SketchError::TooSmall));
+    }
+
+    #[test]
+    fn precise_vertex_and_edge_edits_cannot_break_topology() {
+        let square = rect([0.0, 0.0], [20.0, 20.0]);
+        let changed = move_vertex(&square, 2, [25.0, 25.0], false).unwrap();
+        assert_eq!(changed[2], [25.0, 25.0]);
+        assert_eq!(changed.len(), square.len());
+        let longer = set_edge_length(&square, 0, 25.0, false).unwrap();
+        assert!((dist(longer[0], longer[1]) - 25.0).abs() < 1e-4);
+        assert!(validate_profile(&longer).is_ok());
+        assert!(move_vertex(&square, 2, [0.0, 0.0], false).is_err());
+        assert!(move_vertex(&square, 2, [20.0, -10.0], false).is_err());
+        assert_eq!(move_vertex(&square, 0, [f32::NAN, 0.0], false), Err(SketchError::BadNumber));
+        assert_eq!(move_vertex(&square, 0, [-1.0, 0.0], true), Err(SketchError::LeftOfAxis));
+        assert_eq!(set_edge_length(&square, 0, 0.0, false), Err(SketchError::TooSmall));
     }
 
     #[test]
