@@ -294,6 +294,7 @@ impl App {
     }
 
     fn apply_file_action(&mut self, action: PendingFileAction) {
+        let was_new = matches!(action, PendingFileAction::New(_));
         let (scene, path, notes) = match action {
             PendingFileAction::New(scene) => (scene, None, Vec::new()),
             PendingFileAction::Open(path) => {
@@ -307,7 +308,6 @@ impl App {
             }
             PendingFileAction::Close => return,
         };
-        let was_new = matches!(action, PendingFileAction::New(_));
         self.scene = scene.clone();
         self.committed = scene;
         if was_new {
