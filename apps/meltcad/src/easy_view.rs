@@ -259,6 +259,9 @@ fn pixel(s: &Setup, x: usize, y: usize) -> [u8; 4] {
     [r, g, b, 255]
 }
 
+/// The finished rows of one thread: (row number, its RGBA bytes).
+type Rows = Vec<(usize, Vec<u8>)>;
+
 /// Draw the scene as RGBA bytes (`size[0] * size[1] * 4`, rows from the top), using `threads`
 /// threads. The same input always gives the same bytes, whatever the thread count. `cancel` is
 /// asked once per row; when it says yes the drawing stops and the result is `None`.
@@ -268,7 +271,7 @@ pub fn render(scene: &Scene, cam: &Camera, size: [usize; 2], fine: bool, threads
     let bound = crate::gpu::bounds(scene, None);
     let setup = Setup { field: &field, env: &scene.env, cam, size, aspect: size[0] as f32 / size[1] as f32, bound, fine };
     let threads = threads.clamp(1, 64).min(size[1]);
-    let rows: Vec<Option<Vec<(usize, Vec<u8>)>>> = std::thread::scope(|sc| {
+    let rows: Vec<Option<Rows>> = std::thread::scope(|sc| {
         let handles: Vec<_> = (0..threads)
             .map(|tid| {
                 let setup = &setup;
