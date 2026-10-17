@@ -28,6 +28,19 @@ pub enum ExportFormat {
     Obj,
 }
 
+enum PendingFileAction {
+    New(Scene),
+    Open(PathBuf),
+    Close,
+}
+
+#[derive(Clone, Copy)]
+enum PendingFileDecision {
+    Save,
+    Discard,
+    Cancel,
+}
+
 pub struct App {
     pub scene: Scene,
     /// The scene as of the last finished edit (what undo returns to).
@@ -56,6 +69,8 @@ pub struct App {
     pub(crate) field_builds: std::cell::Cell<u64>,
     pub path: Option<PathBuf>,
     pub dirty: bool,
+    pending_file_action: Option<PendingFileAction>,
+    close_approved: bool,
     status: (String, f64),
     pub renaming: Option<Pick>,
     pub folded: HashSet<usize>,
@@ -139,6 +154,8 @@ impl App {
             last_view_height: 600.0,
             path: None,
             dirty: false,
+            pending_file_action: None,
+            close_approved: false,
             status: (String::new(), 0.0),
             renaming: None,
             folded: HashSet::new(),
@@ -254,13 +271,110 @@ impl App {
     }
 
     pub fn new_scene(&mut self, scene: Scene) {
+        self.request_file_action(PendingFileAction::New(scene));
+    }
+
+    fn has_unsaved_work(&self) -> bool {
+        self.dirty || self.scene != self.committed
+    }
+
+    fn request_file_action(&mut self, action: PendingFileAction) {
+        if self.pending_file_action.is_some() {
+            return;
+        }
+        if self.has_unsaved_work() {
+            self.pending_file_action = Some(action);
+            self.capture = None;
+        } else {
+            self.apply_file_action(action);
+        }
+    }
+
+    fn apply_file_action(&mut self, action: PendingFileAction) {
+        let (scene, path, notes) = match action {
+            PendingFileAction::New(scene) => (scene, None, Vec::new()),
+            PendingFileAction::Open(path) => {
+                match std::fs::read_to_string(&path).map_err(|e| e.to_string()).and_then(|t| Scene::from_json_notes(&t)) {
+                    Ok((scene, notes)) => (scene, Some(path), notes),
+                    Err(e) => {
+                        self.status = (format!("開けませんでした: {e}"), 0.0);
+                        return;
+                    }
+                }
+            }
+            PendingFileAction::Close => return,
+        };
         self.scene = scene.clone();
         self.committed = scene;
         self.undo.clear();
         self.redo.clear();
         self.sel = if self.scene.shape(0, 0).is_some() { Some(Pick::Shape(0, 0)) } else { None };
+        self.path = path;
         self.dirty = false;
+        if !notes.is_empty() {
+            self.notice = Some(notes.join("　"));
+        }
         self.frame_now();
+    }
+
+    fn resolve_pending_file_action(&mut self, ctx: &egui::Context, decision: PendingFileDecision) {
+        let Some(action) = self.pending_file_action.take() else { return };
+        match decision {
+            PendingFileDecision::Cancel => {}
+            PendingFileDecision::Discard => self.finish_pending_file_action(ctx, action),
+            PendingFileDecision::Save => {
+                if self.try_save(ctx, false) {
+                    self.finish_pending_file_action(ctx, action);
+                } else {
+                    self.pending_file_action = Some(action);
+                }
+            }
+        }
+    }
+
+    fn finish_pending_file_action(&mut self, ctx: &egui::Context, action: PendingFileAction) {
+        if matches!(action, PendingFileAction::Close) {
+            self.close_approved = true;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        } else {
+            self.apply_file_action(action);
+        }
+    }
+
+    fn handle_close_request(&mut self, ctx: &egui::Context) {
+        if ctx.input(|i| i.viewport().close_requested()) && !self.close_approved && (self.has_unsaved_work() || self.pending_file_action.is_some()) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            if self.pending_file_action.is_none() {
+                self.pending_file_action = Some(PendingFileAction::Close);
+            }
+            self.capture = None;
+        }
+    }
+
+    fn pending_file_dialog(&mut self, ctx: &egui::Context) {
+        if self.pending_file_action.is_none() {
+            return;
+        }
+        let mut decision = None;
+        egui::Modal::new(egui::Id::new("unsaved_file_action")).show(ctx, |ui| {
+            ui.heading("保存していない変更があります");
+            ui.label("いまの作品を保存してから続けますか？");
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                if ui.button("保存して続ける").clicked() {
+                    decision = Some(PendingFileDecision::Save);
+                }
+                if ui.button("保存せず続ける").clicked() {
+                    decision = Some(PendingFileDecision::Discard);
+                }
+                if ui.button("キャンセル").clicked() {
+                    decision = Some(PendingFileDecision::Cancel);
+                }
+            });
+        });
+        if let Some(decision) = decision {
+            self.resolve_pending_file_action(ctx, decision);
+        }
     }
 
     /// The group a new shape goes into (made when there is none).
@@ -467,38 +581,36 @@ impl App {
     // ----- files -----
 
     pub fn open_path(&mut self, path: PathBuf) {
-        match std::fs::read_to_string(&path).map_err(|e| e.to_string()).and_then(|t| Scene::from_json_notes(&t)) {
-            Ok((s, notes)) => {
-                self.new_scene(s);
-                self.path = Some(path);
-                if !notes.is_empty() {
-                    self.notice = Some(notes.join("　"));
-                }
-            }
-            Err(e) => self.status = (format!("開けませんでした: {e}"), 0.0),
-        }
+        self.request_file_action(PendingFileAction::Open(path));
     }
 
-    fn open_dialog(&mut self, ctx: &egui::Context) {
+    fn open_dialog(&mut self, _ctx: &egui::Context) {
         if let Some(p) = rfd::FileDialog::new().add_filter("MELTCAD", &["meltcad", "yura", "json"]).pick_file() {
             self.open_path(p);
-            self.say(ctx, "開きました");
         }
     }
 
     fn save(&mut self, ctx: &egui::Context, ask: bool) {
+        self.try_save(ctx, ask);
+    }
+
+    fn try_save(&mut self, ctx: &egui::Context, ask: bool) -> bool {
         let path = match (&self.path, ask) {
             (Some(p), false) => Some(p.clone()),
             _ => rfd::FileDialog::new().add_filter("MELTCAD", &["meltcad"]).set_file_name("作品.meltcad").save_file(),
         };
-        let Some(path) = path else { return };
+        let Some(path) = path else { return false };
         match std::fs::write(&path, self.scene.to_json()) {
             Ok(()) => {
                 self.path = Some(path);
                 self.dirty = false;
                 self.say(ctx, "保存しました");
+                true
             }
-            Err(e) => self.say(ctx, format!("保存できませんでした: {e}")),
+            Err(e) => {
+                self.say(ctx, format!("保存できませんでした: {e}"));
+                false
+            }
         }
     }
 
@@ -520,7 +632,7 @@ impl App {
     // ----- shortcuts -----
 
     fn keys(&mut self, ctx: &egui::Context) {
-        if ctx.egui_wants_keyboard_input() {
+        if self.pending_file_action.is_some() || ctx.egui_wants_keyboard_input() {
             return;
         }
         use egui::{Key, Modifiers};
@@ -634,7 +746,6 @@ impl App {
                     style::menu_button(ui, "ファイル", false, |ui| {
                         if ui.button("新しく作る").clicked() {
                             self.new_scene(Scene::default());
-                            self.path = None;
                             ui.close();
                         }
                         if ui.button("開く…　Ctrl+O").clicked() {
@@ -1132,6 +1243,7 @@ impl App {
         let frame_began = std::time::Instant::now();
         self.perf.stats.begin(ctx.input(|i| i.time));
         self.fix_selection();
+        self.handle_close_request(&ctx);
         if let Some(n) = self.notice.take() {
             self.say(&ctx, n);
         }
@@ -1166,6 +1278,7 @@ impl App {
             }
             self.bench.show(&ctx);
         }
+        self.pending_file_dialog(&ctx);
         self.capture_step(&ctx);
         self.settle(&ctx);
         self.test_hooks(&ctx);
@@ -1212,6 +1325,235 @@ mod tests {
         app.delete_selected();
         assert_eq!(app.scene.shape_count(), 1);
         assert_eq!(app.sel, Some(Pick::Shape(0, 0)));
+    }
+
+    #[test]
+    fn delete_key_removes_selected_shape_when_sketch_has_no_draft() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        app.set_sketch_tool(true);
+        assert_eq!(app.sel, Some(Pick::Shape(0, 0)));
+        assert!(app.sk.pts.is_empty() && app.sk.anchor.is_none());
+
+        ctx.input_mut(|i| i.events.push(egui::Event::Key {
+            key: egui::Key::Delete,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }));
+        app.keys(&ctx);
+
+        assert_eq!(app.scene.shape_count(), 0, "Delete should remove the selected shape when no sketch points are pending");
+    }
+
+    #[test]
+    fn backspace_removes_pending_sketch_point_without_deleting_shape() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        app.set_sketch_tool(true);
+        app.sk.click([0.0, 0.0], false);
+        assert_eq!(app.sk.pts.len(), 1);
+
+        ctx.input_mut(|i| i.events.push(egui::Event::Key {
+            key: egui::Key::Backspace,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }));
+        app.keys(&ctx);
+
+        assert!(app.sk.pts.is_empty());
+        assert_eq!(app.scene.shape_count(), 1);
+    }
+
+    #[test]
+    fn delete_removes_pending_sketch_point_without_deleting_shape() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        app.set_sketch_tool(true);
+        app.sk.click([0.0, 0.0], false);
+        assert_eq!(app.sk.pts.len(), 1);
+
+        ctx.input_mut(|i| i.events.push(egui::Event::Key {
+            key: egui::Key::Delete,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }));
+        app.keys(&ctx);
+
+        assert!(app.sk.pts.is_empty());
+        assert_eq!(app.scene.shape_count(), 1);
+    }
+
+    #[test]
+    fn delete_cancels_sketch_anchor_without_deleting_shape() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        app.set_sketch_tool(true);
+        app.sk.pen = crate::sketch_ui::Pen::Rect;
+        app.sk.click([0.0, 0.0], false);
+        assert_eq!(app.sk.anchor, Some([0.0, 0.0]));
+
+        ctx.input_mut(|i| i.events.push(egui::Event::Key {
+            key: egui::Key::Delete,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }));
+        app.keys(&ctx);
+
+        assert!(app.sk.anchor.is_none());
+        assert_eq!(app.scene.shape_count(), 1);
+    }
+
+    #[test]
+    fn delete_in_outline_edit_without_chosen_point_keeps_the_shape() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        app.set_sketch_tool(true);
+        app.sk.pen = crate::sketch_ui::Pen::Rect;
+        app.sk.click([0.0, 0.0], false);
+        let profile = app.sk.click([20.0, 20.0], false).expect("rectangle profile");
+        app.sketch_done(profile);
+        assert!(app.sketch_make(&ctx));
+        let Some(Pick::Shape(g, s)) = app.sel else { panic!("new solid selected") };
+        app.sketch_edit_begin(g, s);
+        assert!(app.sk.edit.as_ref().is_some_and(|edit| edit.sel.is_none()));
+        let before = app.scene.shape_count();
+
+        ctx.input_mut(|i| i.events.push(egui::Event::Key {
+            key: egui::Key::Delete,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }));
+        app.keys(&ctx);
+
+        assert_eq!(app.scene.shape_count(), before, "Delete without a chosen outline point must not remove the solid");
+        assert_eq!(app.sel, Some(Pick::Shape(g, s)));
+    }
+
+    #[test]
+    fn new_scene_waits_for_unsaved_work_to_be_resolved() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        app.add_shape(&ctx, Kind::Box);
+        app.settle(&ctx);
+        assert!(app.dirty);
+
+        app.new_scene(Scene::default());
+
+        assert_eq!(app.scene.shape_count(), 2, "New must leave the edited work in place until a choice is made");
+        assert!(app.dirty);
+        assert!(app.pending_file_action.is_some());
+        app.resolve_pending_file_action(&ctx, PendingFileDecision::Cancel);
+        assert_eq!(app.scene.shape_count(), 2);
+        assert!(app.pending_file_action.is_none());
+    }
+
+    #[test]
+    fn opening_another_file_waits_for_unsaved_work_to_be_resolved() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        app.add_shape(&ctx, Kind::Box);
+        app.settle(&ctx);
+        let path = std::env::temp_dir().join(format!("meltcad_open_guard_{}.meltcad", std::process::id()));
+        std::fs::write(&path, Scene::default().to_json()).expect("sample file");
+
+        app.open_path(path.clone());
+
+        assert_eq!(app.scene.shape_count(), 2, "Open must leave the edited work in place until a choice is made");
+        assert!(app.pending_file_action.is_some());
+        app.resolve_pending_file_action(&ctx, PendingFileDecision::Discard);
+        assert_eq!(app.scene.shape_count(), 1);
+        assert_eq!(app.path.as_ref(), Some(&path));
+        assert!(!app.dirty);
+        std::fs::remove_file(path).expect("remove sample file");
+    }
+
+    #[test]
+    fn failed_save_does_not_replace_unsaved_work() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        app.add_shape(&ctx, Kind::Box);
+        app.settle(&ctx);
+        app.path = Some(std::env::temp_dir().join(format!("meltcad_missing_{}", std::process::id())).join("scene.meltcad"));
+        app.new_scene(Scene::default());
+
+        app.resolve_pending_file_action(&ctx, PendingFileDecision::Save);
+
+        assert_eq!(app.scene.shape_count(), 2);
+        assert!(app.dirty);
+        assert!(app.pending_file_action.is_some());
+    }
+
+    #[test]
+    fn closing_with_unsaved_work_asks_before_exiting() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        app.add_shape(&ctx, Kind::Box);
+        app.settle(&ctx);
+        let mut input = egui::RawInput::default();
+        input.viewports.get_mut(&egui::ViewportId::ROOT).expect("root viewport").events.push(egui::ViewportEvent::Close);
+
+        let mut output = ctx.run_ui(input, |_ui| app.handle_close_request(&ctx));
+
+        assert!(matches!(app.pending_file_action, Some(PendingFileAction::Close)));
+        assert!(output.viewport_output.get(&egui::ViewportId::ROOT).is_some_and(|v| v.commands.contains(&egui::ViewportCommand::CancelClose)));
+        output.textures_delta.clear();
+        app.resolve_pending_file_action(&ctx, PendingFileDecision::Cancel);
+        assert!(app.pending_file_action.is_none());
+        assert_eq!(app.scene.shape_count(), 2);
+    }
+
+    #[test]
+    fn saving_before_reopening_the_current_file_keeps_the_saved_edit() {
+        let path = std::env::temp_dir().join(format!("meltcad_reopen_guard_{}.meltcad", std::process::id()));
+        std::fs::write(&path, Scene::default().to_json()).expect("initial file");
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, Some(path.clone()));
+        app.add_shape(&ctx, Kind::Box);
+        app.settle(&ctx);
+
+        app.open_path(path.clone());
+        app.resolve_pending_file_action(&ctx, PendingFileDecision::Save);
+
+        assert_eq!(app.scene.shape_count(), 2, "the just-saved edit must still be on screen");
+        let disk = std::fs::read_to_string(&path).expect("saved file");
+        assert_eq!(Scene::from_json_notes(&disk).expect("saved scene").0.shape_count(), 2);
+        assert!(!app.dirty);
+        std::fs::remove_file(path).expect("remove sample file");
+    }
+
+    #[test]
+    fn pending_file_decision_blocks_other_shortcuts_and_file_actions() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        app.add_shape(&ctx, Kind::Box);
+        app.settle(&ctx);
+        app.new_scene(Scene::default());
+        let path = std::env::temp_dir().join(format!("meltcad_pending_guard_{}.meltcad", std::process::id()));
+        std::fs::write(&path, Scene::default().to_json()).expect("other file");
+
+        app.open_path(path.clone());
+        ctx.input_mut(|i| i.events.push(egui::Event::Key {
+            key: egui::Key::Delete,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }));
+        app.keys(&ctx);
+
+        assert!(matches!(app.pending_file_action, Some(PendingFileAction::New(_))), "the first decision stays pending");
+        assert_eq!(app.scene.shape_count(), 2, "Delete cannot edit behind the dialog");
+        std::fs::remove_file(path).expect("remove sample file");
     }
 
     #[test]
