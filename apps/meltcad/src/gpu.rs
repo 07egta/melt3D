@@ -32,11 +32,11 @@ pub const GLOBAL_V4: usize = V4_ENV + ENV_V4;
 pub const GLOBAL_BYTES: usize = GLOBAL_V4 * 16;
 /// vec4 per texture row of the scene list.
 pub const ROW: usize = 1024;
-/// vec4 per group, per block of shapes, per instance, per shape (a bounding sphere and the 15 of `struct Shape`).
+/// vec4 per group, block, instance and shape (sphere + 15 base vec4 + 2 modifier vec4).
 const G_STRIDE: usize = 3;
 const B_STRIDE: usize = 2;
 const I_STRIDE: usize = 4;
-const S_STRIDE: usize = 16;
+const S_STRIDE: usize = 18;
 /// Outline points the lists hold (two points per vec4) and path nodes (one per vec4).
 pub const POLY_PTS: usize = 65536;
 pub const PATH_V4: usize = 32768;
@@ -320,7 +320,7 @@ impl ScenePack {
     }
 }
 
-/// One shape's 16 vec4 (a bounding sphere, then `struct Shape`); its outline points and path nodes
+/// One shape's 18 vec4 (a bounding sphere, then `struct Shape`); its outline points and path nodes
 /// go into the shared pools.
 fn pack_shape(s: &crate::model::Shape, out: &mut Vec<f32>, poly: &mut Vec<f32>, path: &mut Vec<f32>, vols: &VolumeSet) {
     let p = Prepared::new(s);
@@ -379,6 +379,11 @@ fn pack_shape(s: &crate::model::Shape, out: &mut Vec<f32>, poly: &mut Vec<f32>, 
     push(out, [p.shell, p.poly_limit, p.poly_orient, if p.chamfer && p.round > 0.0 { 1.0 } else { 0.0 }]);
     push(out, [m.color2[0], m.color2[1], m.color2[2], if m.has_gradient() { m.gradient } else { 0.0 }]);
     push(out, [f32::from(m.grad_axis.min(2)) + if m.grad_local { 3.0 } else { 0.0 }, m.grad_soft, m.grad_from, m.grad_to]);
+    // Non-destructive modifier lives in the already-packed scene-list texture.
+    // (0 in twist0.x means no deformation, so legacy model behaviour is exact.)
+    let (twist0, twist1) = s.deformation.map_or(([0.0; 4], [0.0; 4]), |d| d.gpu_parameters(s.base_local_half()));
+    push(out, twist0);
+    push(out, twist1);
 }
 
 /// A curve's smoothed points go into the path list behind two header entries (the low and high
