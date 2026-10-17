@@ -591,11 +591,33 @@ fn map_d(p0: vec3<f32>) -> f32 {
 
 fn dist_only(p: vec3<f32>) -> f32 { return map_d(p); }
 
+// the four corners of the tetrahedron the normal is taken over
+fn tetra_k(i: i32) -> vec3<f32> {
+    if (i == 0) { return vec3<f32>(1.0, -1.0, -1.0); }
+    if (i == 1) { return vec3<f32>(-1.0, -1.0, 1.0); }
+    if (i == 2) { return vec3<f32>(-1.0, 1.0, -1.0); }
+    return vec3<f32>(1.0, 1.0, 1.0);
+}
+
+// The surface normal from the distance field: four taps on a tetrahedron, or (`fast`, while the
+// view moves) three forward differences from the distance `d0` already known at `p`. All the taps
+// go through ONE call of the distance function inside a loop: a driver compiler inlines every
+// call site of it, and the distance function is by far the biggest thing in the shader.
+fn surface_normal(p: vec3<f32>, e: f32, fast: bool, d0: f32) -> vec3<f32> {
+    var acc = vec3<f32>(0.0);
+    let taps = select(4, 3, fast);
+    for (var i = 0; i < taps; i = i + 1) {
+        var k = tetra_k(i);
+        if (fast) { k = vec3<f32>(select(0.0, 1.0, i == 0), select(0.0, 1.0, i == 1), select(0.0, 1.0, i == 2)); }
+        let d = dist_only(p + k * e);
+        if (fast) { acc[i] = d - d0; } else { acc = acc + k * d; }
+    }
+    if (fast) { return normalize(acc + vec3<f32>(0.0, 0.0, 1e-7)); }
+    return normalize(acc);
+}
+
 fn normal_at(p: vec3<f32>, e: f32) -> vec3<f32> {
-    let k = vec2<f32>(1.0, -1.0);
-    return normalize(
-        k.xyy * dist_only(p + k.xyy * e) + k.yyx * dist_only(p + k.yyx * e) +
-        k.yxy * dist_only(p + k.yxy * e) + k.xxx * dist_only(p + k.xxx * e));
+    return surface_normal(p, e, false, 0.0);
 }
 
 // distance to the selected shapes only (for the outline)
@@ -889,14 +911,8 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
 
     if (hit && (t_ground > t || !(grid_on || floor_on))) {
         let p = ro + rd * t;
-        var n = vec3<f32>(0.0, 0.0, 1.0);
-        if (fast) {
-            // three taps are enough while moving
-            let e = 0.03 + t * 0.0015;
-            n = normalize(vec3<f32>(map_d(p + vec3<f32>(e, 0.0, 0.0)) - h.d, map_d(p + vec3<f32>(0.0, e, 0.0)) - h.d, map_d(p + vec3<f32>(0.0, 0.0, e)) - h.d) + vec3<f32>(0.0, 0.0, 1e-7));
-        } else {
-            n = normal_at(p, 0.02 + t * 0.0008);
-        }
+        // (three taps are enough while moving)
+        let n = surface_normal(p, select(0.02 + t * 0.0008, 0.03 + t * 0.0015, fast), fast, h.d);
         let v = -rd;
         let rough = clamp(h.rough, 0.04, 1.0);
         let metal = h.metal;
