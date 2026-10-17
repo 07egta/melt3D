@@ -13,6 +13,7 @@ use crate::style;
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Action {
     AddShape(Kind),
+    MeltPreset,
     AddGroup,
     /// (category, item)
     Insert(usize, usize),
@@ -113,6 +114,7 @@ pub fn entries() -> Vec<Entry> {
         }
     }
     v.extend([
+        cmd("Melt（とろける形状）を作る", "melt preset syrup dripping viscous blob みずあめ とろける たれる", Action::MeltPreset),
         cmd("グループを作る", "group new まとめる", Action::AddGroup),
         cmd("元に戻す", "undo もどす", Action::Undo),
         cmd("やり直し", "redo", Action::Redo),
@@ -233,6 +235,7 @@ impl App {
         let pi = std::f32::consts::PI;
         match a {
             Action::AddShape(k) => self.add_shape(ctx, k),
+            Action::MeltPreset => crate::melt_preset::open(ctx),
             Action::AddGroup => self.add_group(),
             Action::Insert(c, i) => {
                 if let Some(item) = library::all().get(c).and_then(|c| c.items.get(i)) {

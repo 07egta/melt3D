@@ -41,6 +41,7 @@ mod import_mesh;
 mod library;
 mod library_ui;
 mod materials;
+mod melt_preset;
 mod mesh;
 mod mesh_dialog;
 mod mesh_import;

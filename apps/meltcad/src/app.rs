@@ -632,7 +632,7 @@ impl App {
     // ----- shortcuts -----
 
     fn keys(&mut self, ctx: &egui::Context) {
-        if self.pending_file_action.is_some() || ctx.egui_wants_keyboard_input() {
+        if self.pending_file_action.is_some() || crate::melt_preset::is_open(ctx) || ctx.egui_wants_keyboard_input() {
             return;
         }
         use egui::{Key, Modifiers};
@@ -911,6 +911,11 @@ impl App {
                                 self.add_shape(&ctx, k);
                                 ui.close();
                             }
+                        }
+                        ui.separator();
+                        if ui.button("Melt（とろける形状）…").on_hover_text("重力で垂れる液だれを生成するプリセット").clicked() {
+                            crate::melt_preset::open(&ctx);
+                            ui.close();
                         }
                         ui.separator();
                         ui.label(egui::RichText::new("CADの機能").size(12.0).color(style::DIM));
@@ -1272,6 +1277,7 @@ impl App {
             crate::array::update(self, &ctx);
             crate::export_dialog::update(self, &ctx);
             self.palette_ui(&ctx);
+            crate::melt_preset::update(self, &ctx);
             if std::mem::take(&mut self.perf.bench_requested) {
                 let backends = self.current_backend().map(|b| b.to_wgpu());
                 self.bench.start(&ctx, backends);
