@@ -16,6 +16,8 @@ struct Shape {
     extra: vec4<f32>,   // x = shell wall thickness (0 = solid), y z = profile rounding limit, winding, w = 1: chamfer instead of round
     gcol: vec4<f32>,    // gradient: second colour rgb, strength (0 = no gradient)
     gpar: vec4<f32>,    // gradient: direction (0 x, 1 y, 2 z; +3 = along the shape's own box), softness, from, to
+    twist0: vec4<f32>,  // axis ID (0 = off, 1 X / 2 Y / 3 Z), signed degrees, range start/end
+    twist1: vec4<f32>,  // bottom/top factors, pre-deform axis half-height, radial extent
 };
 
 // Everything per frame and small is in the uniform buffer; the scene itself (groups, blocks,
@@ -47,11 +49,11 @@ fn D(i: i32) -> vec4<f32> { return textureLoad(DT, vec2<i32>(i & 1023, i >> 10),
 //   group  (3 vec4): [first block, block count, op sign, blend] [first instance, instance count, first item (see cand), 0] [bounding sphere]
 //   block  (2 vec4): [bounding sphere] [largest blend, 1 = never skip, first shape, shape count]
 //   instance (4 vec4): three rows (x y z, offset) taking a world point back into the group's own space, then [world centre of the group's sphere, scale]
-//   shape (16 vec4): [bounding sphere = position, radius] then the 15 vec4 of struct Shape
+//   shape (18 vec4): [bounding sphere = position, radius] then the 17 vec4 of struct Shape
 fn group_at(gi: i32) -> i32 { return i32(G.offs.x + 0.5) + gi * 3; }
 fn block_at(bi: i32) -> i32 { return i32(G.offs.y + 0.5) + bi * 2; }
 fn inst_at(i: i32) -> i32 { return i32(G.offs.z + 0.5) + i * 4; }
-fn shape_rec(i: i32) -> i32 { return i32(G.offs.w + 0.5) + i * 16; }
+fn shape_rec(i: i32) -> i32 { return i32(G.offs.w + 0.5) + i * 18; }
 fn path_pt(i: i32) -> vec4<f32> { return D(i32(G.offs2.y + 0.5) + i); }
 
 fn shape_at(i: i32) -> Shape {
@@ -72,11 +74,54 @@ fn shape_at(i: i32) -> Shape {
     s.extra = D(b + 12);
     s.gcol = D(b + 13);
     s.gpar = D(b + 14);
+    s.twist0 = D(b + 15);
+    s.twist1 = D(b + 16);
     return s;
 }
 
 fn flag(bit: i32) -> bool { return (i32(G.view.w + 0.5) & bit) != 0; }
 fn is_fast() -> bool { return flag(2); }
+
+// Inverse (sample-point) deformation shared with deform.rs. It rotates each
+// transverse slice rigidly; no scale is applied to that slice. A cubic smooth
+// interpolation stops the angular derivative at both editable range limits.
+fn twist_angle(s: Shape, q: vec3<f32>) -> f32 {
+    let axis = i32(s.twist0.x + 0.5);
+    if (axis == 0) { return 0.0; }
+    var along = q.z;
+    if (axis == 1) { along = q.x; }
+    if (axis == 2) { along = q.y; }
+    let half_height = max(s.twist1.z, 0.01);
+    let t = clamp((along / (2.0 * half_height) + 0.5 - s.twist0.z) / max(s.twist0.w - s.twist0.z, 0.02), 0.0, 1.0);
+    let eased = t * t * (3.0 - 2.0 * t);
+    let amount = mix(s.twist1.x, s.twist1.y, eased);
+    return radians(s.twist0.y) * amount;
+}
+
+fn untwist_shape(s: Shape, q: vec3<f32>) -> vec3<f32> {
+    let axis = i32(s.twist0.x + 0.5);
+    if (axis == 0) { return q; }
+    let angle = -twist_angle(s, q);
+    let cs = cos(angle);
+    let sn = sin(angle);
+    if (axis == 1) { return vec3<f32>(q.x, cs * q.y - sn * q.z, sn * q.y + cs * q.z); }
+    if (axis == 2) { return vec3<f32>(sn * q.z + cs * q.x, q.y, cs * q.z - sn * q.x); }
+    return vec3<f32>(cs * q.x - sn * q.y, sn * q.x + cs * q.y, q.z);
+}
+
+// Twist is not an isometry in 3D (slices rotate by differing angles). Keep
+// sphere-tracing and the exported CPU field conservative with the same
+// Lipschitz step correction. The zero surface is not modified by it.
+fn twist_step_safety(s: Shape, q: vec3<f32>) -> f32 {
+    let axis = i32(s.twist0.x + 0.5);
+    if (axis == 0) { return 1.0; }
+    let height = max(2.0 * max(s.twist1.z, 0.01) * max(s.twist0.w - s.twist0.z, 0.02), 0.01);
+    let slope = 1.5 * abs(radians(s.twist0.y)) * abs(s.twist1.y - s.twist1.x) / height;
+    var radial = length(q.xy);
+    if (axis == 1) { radial = length(q.yz); }
+    if (axis == 2) { radial = length(q.zx); }
+    return 1.0 / (1.0 + slope * max(s.twist1.w, radial));
+}
 
 // How far away a shape must be (at least) for a blend with value `a` to ignore it: beyond that
 // the soft minimum returns `a` exactly. Round blends also feel any shape closer than their radius.
@@ -170,7 +215,8 @@ fn get_pt(i: i32) -> vec2<f32> {
 
 fn shape_dist(s: Shape, p: vec3<f32>) -> f32 {
     let d = p - s.pos.xyz;
-    let q = vec3<f32>(dot(s.r0.xyz, d), dot(s.r1.xyz, d), dot(s.r2.xyz, d)) / s.scale.xyz;
+    let source_q = vec3<f32>(dot(s.r0.xyz, d), dot(s.r1.xyz, d), dot(s.r2.xyz, d)) / s.scale.xyz;
+    let q = untwist_shape(s, source_q);
     let kind = i32(s.scale.w + 0.5);
     let sz = s.size.xyz;
     let rd = s.size.w;
@@ -252,7 +298,7 @@ fn shape_dist(s: Shape, p: vec3<f32>) -> f32 {
             r = min(max(w.x, w.y), 0.0) + length(max(w, vec2<f32>(0.0))) - rr;
         }
     }
-    r = r * s.pos.w;
+    r = r * s.pos.w * twist_step_safety(s, source_q);
     // hollow walls of thickness `shell`
     let sh = s.extra.x;
     if (sh > 0.0 && kind != 18) { r = abs(r + sh * 0.5) - sh * 0.5; }
@@ -267,7 +313,8 @@ fn shape_color(s: Shape, p: vec3<f32>) -> vec3<f32> {
     let d = p - s.pos.xyz;
     var c = d[ax];
     if (code >= 3) {
-        let q = vec3<f32>(dot(s.r0.xyz, d), dot(s.r1.xyz, d), dot(s.r2.xyz, d)) / s.scale.xyz;
+        let sample_q = vec3<f32>(dot(s.r0.xyz, d), dot(s.r1.xyz, d), dot(s.r2.xyz, d)) / s.scale.xyz;
+        let q = untwist_shape(s, sample_q);
         c = q[ax];
     }
     let t = clamp(c * s.mat2.z + 0.5, 0.0, 1.0);
