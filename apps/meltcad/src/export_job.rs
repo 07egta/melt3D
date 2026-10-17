@@ -5,6 +5,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::Instant;
 
 use solidcraft_geom::melt::{self, TriMesh};
@@ -593,13 +594,25 @@ pub struct Job {
     rx: std::sync::Mutex<Receiver<Result<Report, String>>>,
     started: Instant,
     pub label: String,
-    writing: Arc<std::sync::atomic::AtomicBool>,
+    // 0 = cancellable; 1 = cancel requested; 2 = final commit (cannot cancel).
+    writing: Arc<AtomicU8>,
 }
 
 impl Job {
     pub fn start(scene: Scene, sel: Option<Pick>, opts: Options, path: PathBuf) -> Job {
+        Self::start_with_permit(scene, sel, opts, path, None)
+    }
+
+    /// The UI passes an exclusive high-memory permit; it remains owned by the worker until exit.
+    pub fn start_with_permit(
+        scene: Scene,
+        sel: Option<Pick>,
+        opts: Options,
+        path: PathBuf,
+        permit: Option<crate::work_budget::Permit>,
+    ) -> Job {
         let progress = Arc::new(Progress::new());
-        let writing = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let writing = Arc::new(AtomicU8::new(0));
         let (tx, rx) = channel();
         let p = progress.clone();
         let w = writing.clone();
@@ -608,6 +621,7 @@ impl Job {
             let t0 = Instant::now();
             let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(&scene, sel, &opts, &path, &p, &w, t0)));
             let res = res.unwrap_or_else(|_| Err("the export stopped unexpectedly".into()));
+            drop(permit); // unlock before the completion is observed on the next UI frame
             let _ = tx.send(res);
         });
         if let Err(e) = spawned {
@@ -628,8 +642,18 @@ impl Job {
         }
     }
 
-    pub fn cancel(&self) {
-        self.progress.cancel();
+    /// Cancellation wins only while the worker has not entered the final file commit.
+    pub fn cancel(&self) -> bool {
+        if self.writing.compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire).is_ok() {
+            self.progress.cancel();
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn can_cancel(&self) -> bool {
+        self.writing.load(Ordering::Acquire) == 0
     }
 
     pub fn elapsed(&self) -> f64 {
@@ -642,8 +666,11 @@ impl Job {
     }
 
     pub fn phase_name(&self) -> &'static str {
-        if self.writing.load(std::sync::atomic::Ordering::Relaxed) {
-            return "ファイルに書いています";
+        if self.writing.load(Ordering::Acquire) == 2 {
+            return "保存ファイルを確定しています（この段階は中止できません）";
+        }
+        if self.writing.load(Ordering::Acquire) == 1 {
+            return "中止処理を待っています…";
         }
         NAMES.get(self.progress.phase() as usize).copied().unwrap_or("つくっています")
     }
@@ -655,21 +682,19 @@ fn run(
     o: &Options,
     path: &Path,
     prog: &Progress,
-    writing: &std::sync::atomic::AtomicBool,
+    writing: &AtomicU8,
     t0: Instant,
 ) -> Result<Report, String> {
     let built = build(scene, sel, o, prog)?;
-    writing.store(true, std::sync::atomic::Ordering::Relaxed);
+    if prog.cancelled() { return Err(export_mesh::CANCELLED.into()); }
     prog.set(0.95);
     let files = serialize(&built, &o.sanitized(), path)?;
-    let mut bytes = 0u64;
-    for (p, data) in &files {
-        if prog.cancelled() {
-            return Err(export_mesh::CANCELLED.into());
-        }
-        std::fs::write(p, data).map_err(|e| format!("could not save {}: {e}", p.display()))?;
-        bytes += data.len() as u64;
-    }
+    let bytes = crate::atomic_files::write_files(
+        &files,
+        &|| prog.cancelled(),
+        &|| writing.compare_exchange(0, 2, Ordering::AcqRel, Ordering::Acquire).is_ok(),
+        &|p| prog.set(0.96 + p * 0.039),
+    )?;
     prog.set(1.0);
     Ok(Report {
         path: path.to_path_buf(),
