@@ -181,7 +181,7 @@ fn pedestal(r: f32, top: f32, design: Design, ornament: f32) -> Vec<[f32; 2]> {
         Design::Minimal => {
             p.extend_from_slice(&[
                 [0.91*r, 0.0], [0.91*r, 0.09*top], [0.47*r, 0.24*top],
-                [0.43*r, 0.76*top], [0.55*r, 0.94*top], [0.52*r, top],
+                [(0.40+0.06*ornament)*r, 0.76*top], [(0.50+0.08*ornament)*r, 0.94*top], [0.52*r, top],
             ]);
         }
         Design::Organic => {
@@ -201,8 +201,9 @@ fn pedestal(r: f32, top: f32, design: Design, ornament: f32) -> Vec<[f32; 2]> {
 fn add_king(g: &mut Group, m: Material, at: [f32; 2], h: f32, r: f32, s: Settings) {
     // The cross sinks into the solid foot, and both bars overlap each other.
     let bar = (r*0.28 + 0.045*h*s.ornament).max(1.2);
-    let upright_z = 0.885*h;
-    block(g, m, "十字・たて", [at[0],at[1],upright_z], [bar,bar,0.23*h], bar*0.13);
+    let upright_z = 0.87*h;
+    // The bottom is 0.74*h, so it intersects even the minimal pedestal (top 0.77*h).
+    block(g, m, "十字・たて", [at[0],at[1],upright_z], [bar,bar,0.26*h], bar*0.13);
     block(g, m, "十字・よこ", [at[0],at[1],0.89*h], [r*1.04,bar,bar], bar*0.12);
     if s.design == Design::Classic && s.ornament > 0.15 {
         revolve(g, m, "王冠の台座", at, &[
@@ -238,7 +239,7 @@ fn add_rook(g: &mut Group, m: Material, at: [f32; 2], h: f32, r: f32, s: Setting
         if s.design == Design::Organic {
             ball(g, m, "有機的な城壁", pos, (0.09*h).min(0.32*r));
         } else {
-            block(g, m, "城壁の凸", pos, [0.49*r,0.49*r,0.145*h], r*0.04);
+            block(g, m, "城壁の凸", pos, [0.49*r,0.49*r,(0.125+0.035*s.ornament)*h], r*0.04);
         }
     }
 }
@@ -257,7 +258,7 @@ fn add_bishop(g: &mut Group, m: Material, at: [f32; 2], h: f32, r: f32, s: Setti
         cut.name = "司教帽の斜めの溝".into();
         g.shapes.push(cut);
     }
-    ball(g, m, "帽子の先", [at[0],at[1],0.976*h], 0.022*h.max(24.0));
+    ball(g, m, "帽子の先", [at[0],at[1],0.976*h], (0.018+0.006*s.ornament)*h.max(24.0));
 }
 fn add_knight(g: &mut Group, m: Material, at: [f32; 2], h: f32, r: f32, s: Settings) {
     // An upright horse's head, not a flat horse image:
@@ -280,7 +281,7 @@ fn add_knight(g: &mut Group, m: Material, at: [f32; 2], h: f32, r: f32, s: Setti
         let cheek = [at[0]-0.06*r, at[1]+side*0.42*r, 0.705*h];
         ball(g, m, "馬の頬", cheek, 0.40*r);
         let eye = [at[0]+0.15*r, at[1]+side*0.67*r, 0.73*h];
-        let rad = (r*0.12).max(0.7);
+        let rad = (r*(0.08+0.065*s.ornament)).max(0.7);
         ball(g, m, "馬の目", eye, rad);
     }
     ball(g, m, "鼻先", [at[0]+0.42*r,at[1],0.69*h], 0.32*r);
