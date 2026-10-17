@@ -50,8 +50,9 @@ fn curve_section_cone(width: f32, section: f32, q: vec3<f32>, a: vec3<f32>, ra: 
         return round_cone(q, a, ra, b, rb);
     }
     let tangent = normalize(delta);
-    var reference = vec3<f32>(0.0, 0.0, 1.0);
-    if (abs(tangent.z) > 0.95) { reference = vec3<f32>(0.0, 1.0, 0.0); }
+    let w0 = clamp((abs(tangent.z) - 0.80) / 0.18, 0.0, 1.0);
+    let w = w0 * w0 * (3.0 - 2.0 * w0);
+    let reference = vec3<f32>(0.0, w, 1.0 - w);
     let side = normalize(cross(reference, tangent));
     let up = cross(tangent, side);
     let v = q - a;
