@@ -331,6 +331,7 @@ impl App {
             Pick::Shape(g, s) => self.scene.shape(g, s).map(|s| s.name.clone()),
         }.unwrap_or_default();
         self.renaming = Some(pick);
+        self.reveal_in_tree(pick);
     }
 
     pub fn finish_tree_rename(&mut self, apply: bool) {
@@ -382,6 +383,15 @@ impl App {
             self.notice = Some("ロック中の形はグループ化できません".into());
             return false;
         }
+        // Grouping a pattern source can silently retarget linked instances.
+        // Refuse rather than destroy their parametric relationship.
+        if shapes.iter().any(|&(g, _)| self.scene.groups.get(g).is_some_and(|gr| {
+            gr.pattern.is_some() || gr.is_linked()
+                || (gr.uid != 0 && self.scene.groups.iter().any(|other| other.instance_of == Some(gr.uid)))
+        })) {
+            self.notice = Some("パターン・リンク元の形はそのままグループ化できません。リンクを解除してから操作してください".into());
+            return false;
+        }
         // Snapshot the selected shapes first; remove from the original parents in
         // descending index order so no index shifts can drop or duplicate a shape.
         let moved: Vec<Shape> = shapes.iter().filter_map(|&(g, s)| self.scene.shape(g, s).cloned()).collect();
@@ -394,6 +404,7 @@ impl App {
         self.extra_selected.clear();
         self.sel = Some(Pick::Group(self.scene.groups.len() - 1));
         self.tree_anchor = self.sel;
+        self.tree_scroll_target = self.sel;
         self.notice = Some("グループ化しました。結合・くり抜きの順番が変わる場合はUndoで戻せます".into());
         true
     }
