@@ -35,7 +35,7 @@ struct Globals {
     hover: vec4<f32>,     // first hovered shape (-1 none), count
     selsph: vec4<f32>,    // bounding sphere of the selected shapes (centre, radius)
     offs: vec4<f32>,      // first vec4 of the group table, the block table, the instance table, the shapes
-    offs2: vec4<f32>,     // first vec4 of the outline points, the path nodes, 1 = something keeps only an overlap (nothing may be left out of the march)
+    offs2: vec4<f32>,     // polygon start, path start, overlap flag, ray step factor (1 without modifiers)
     env: array<vec4<f32>, 11>,      // exposure/ambient/shadow/flags, backdrop+lights, 3 sky colours, 3 x (light dir+power, light colour)
 };
 
@@ -113,20 +113,6 @@ fn untwist_shape(s: Shape, q: vec3<f32>) -> vec3<f32> {
     if (axis == 1) { return vec3<f32>(q.x, cs * q.y - sn * q.z, sn * q.y + cs * q.z); }
     if (axis == 2) { return vec3<f32>(sn * q.z + cs * q.x, q.y, cs * q.z - sn * q.x); }
     return vec3<f32>(cs * q.x - sn * q.y, sn * q.x + cs * q.y, q.z);
-}
-
-// Twist is not an isometry in 3D (slices rotate by differing angles). Keep
-// sphere-tracing and the exported CPU field conservative with the same
-// Lipschitz step correction. The zero surface is not modified by it.
-fn twist_step_safety(s: Shape, q: vec3<f32>) -> f32 {
-    let axis = i32(s.twist0.x + 0.5);
-    if (axis == 0) { return 1.0; }
-    let height = max(2.0 * max(s.twist1.z, 0.01) * max(s.twist0.w - s.twist0.z, 0.02), 0.01);
-    let slope = 1.5 * abs(radians(s.twist0.y)) * abs(s.twist1.y - s.twist1.x) / height;
-    var radial = length(q.xy);
-    if (axis == 1) { radial = length(q.yz); }
-    if (axis == 2) { radial = length(q.zx); }
-    return 1.0 / (1.0 + slope * max(s.twist1.w, radial));
 }
 
 // How far away a shape must be (at least) for a blend with value `a` to ignore it: beyond that
@@ -304,7 +290,7 @@ fn shape_dist(s: Shape, p: vec3<f32>) -> f32 {
             r = min(max(w.x, w.y), 0.0) + length(max(w, vec2<f32>(0.0))) - rr;
         }
     }
-    r = r * s.pos.w * twist_step_safety(s, source_q);
+    r = r * s.pos.w;
     // hollow walls of thickness `shell`
     let sh = s.extra.x;
     if (sh > 0.0 && kind != 18) { r = abs(r + sh * 0.5) - sh * 0.5; }
@@ -513,6 +499,8 @@ var<private> cs: array<u32, 24>;
 var<private> ncs: i32;
 var<private> ovf: bool;
 var<private> use_cand: bool;
+// Conservative marching step for twisted shapes that affect this ray.
+var<private> candidate_step_safety: f32;
 
 fn is_cand(i: i32) -> bool {
     if (!use_cand || i >= 256) { return true; }
@@ -554,6 +542,7 @@ fn curve_far(rec: i32, o: vec3<f32>, d: vec3<f32>, t0: f32, t1: f32, scl: f32, m
 // The items and shapes near the ray `ro + rd * t` for t in [t0, t1]; `slack` is added to every reach
 // (the drip moves the point the shapes are measured at, and the selection outline looks a few pixels out).
 fn find_candidates(ro: vec3<f32>, rd: vec3<f32>, t0: f32, t1: f32, slack: f32) {
+    candidate_step_safety = 1.0;
     for (var w = 0; w < 8; w = w + 1) { cand[w] = 0u; }
     ncs = 0;
     ovf = false;
@@ -616,6 +605,11 @@ fn find_candidates(ro: vec3<f32>, rd: vec3<f32>, t0: f32, t1: f32, slack: f32) {
                     // A twisted curve must NOT be rejected by its unwarped
                     // segment spheres; the full shape sphere above is safe.
                     if (op < 1.5 && D(rec + 1).w < 0.5 && i32(D(rec + 5).w + 0.5) == 18 && curve_far(rec, o, d, t0, t1, scl, reach)) { continue; }
+                    // Keep Boolean distances unscaled. Restrict only the ray
+                    // step when a modifier actually influences this ray.
+                    if (D(rec + 1).w > 0.5) {
+                        candidate_step_safety = min(candidate_step_safety, clamp(D(rec + 2).w, 0.01, 1.0));
+                    }
                     if (ncs < MAXC) {
                         cs[ncs] = (key << 9u) | u32(first + si);
                         ncs = ncs + 1;
@@ -938,12 +932,14 @@ fn soft_shadow(ro: vec3<f32>, rd: vec3<f32>, maxt: f32, nsteps: i32) -> f32 {
     // Only the shapes near the shadow ray are read (as for the primary march). The penumbra is
     // 10 h / t, so a shape farther than tend / 10 from the ray cannot darken any point of it.
     var list_ok = false;
+    var shadow_step_safety = max(G.offs2.w, 0.01);
     use_cand = false;
     if (G.offs2.z < 0.5) {
         find_candidates(ro, rd, t, tend, 1.0 + G.melt.z + 0.1 * tend);
         if (ncs == 0 && !ovf) { return 1.0; }
         use_cand = true;
         list_ok = !ovf;
+        shadow_step_safety = candidate_step_safety;
     }
     let max_step = select(6.0, 14.0, nsteps < 20);
     for (var i = 0; i < nsteps; i = i + 1) {
@@ -954,7 +950,7 @@ fn soft_shadow(ro: vec3<f32>, rd: vec3<f32>, maxt: f32, nsteps: i32) -> f32 {
             h = map_d(ro + rd * t);
         }
         res = min(res, 10.0 * h / t);
-        t = t + clamp(h, 0.4, max_step);
+        t = t + clamp(h * shadow_step_safety, 0.05, max_step);
         if (res < 0.001 || t > tend) { break; }
     }
     use_cand = false;
@@ -1135,6 +1131,7 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
         if (t > t_cut) { run = false; }
     }
     var last = false;
+    var trace_safety = max(G.offs2.w, 0.01);
     // a little per-pixel jitter turns banding in the lamp glow into fine noise
     t = t + fract(sin(dot(in.pos.xy, vec2<f32>(12.9898, 78.233))) * 43758.5453) * 1.5;
     // groups and pattern copies far from this ray are left out of the march (not with lamps: their glow reaches far)
@@ -1144,6 +1141,7 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
         // (the selection outline looks a few pixels out from the ray)
         let slack = 1.0 + G.melt.z + 3.0 * select(t_cut * foot, foot, tanh <= 0.0);
         find_candidates(ro, rd, t, t_cut, slack);
+        trace_safety = candidate_step_safety;
         use_cand = true;
         list_ok = !ovf;
         // nothing near the ray: it cannot hit anything
@@ -1155,7 +1153,8 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
     var relax = select(1.1, select(1.5, 1.3, list_ok), fast);
     if (glow_scene || (has_sel && sel_carving)) { relax = 0.9; }
     var max_it = select(128, 48, fast);
-    if (glow_scene) { max_it = 200; }
+    if (trace_safety < 0.95) { max_it = select(240, 120, fast); }
+    if (glow_scene) { max_it = 240; }
     var prev_r = 0.0;
     var stp = 0.0;
     for (var i = 0; i < max_it; i = i + 1) {
@@ -1175,7 +1174,7 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
             d = map_d(p);
         }
         let pix = select(t * foot, foot, tanh <= 0.0);
-        var step = d * relax;
+        var step = d * relax * trace_safety;
         if (glow_scene && h.glow > 0.0) {
             // small steps near lamps keep their glow smooth (no rings)
             step = min(step, max(3.0, d * 0.25));
