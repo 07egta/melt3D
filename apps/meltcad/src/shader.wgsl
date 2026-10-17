@@ -33,7 +33,7 @@ struct Globals {
     hover: vec4<f32>,     // first hovered shape (-1 none), count
     selsph: vec4<f32>,    // bounding sphere of the selected shapes (centre, radius)
     offs: vec4<f32>,      // first vec4 of the group table, the block table, the instance table, the shapes
-    offs2: vec4<f32>,     // first vec4 of the outline points, the path nodes
+    offs2: vec4<f32>,     // first vec4 of the outline points, the path nodes, 1 = something keeps only an overlap (nothing may be left out of the march)
     env: array<vec4<f32>, 11>,      // exposure/ambient/shadow/flags, backdrop+lights, 3 sky colours, 3 x (light dir+power, light colour)
 };
 
@@ -444,12 +444,21 @@ fn group_far(gr: vec4<f32>, gs: vec4<f32>, p: vec3<f32>, acc_d: f32, amount: f32
     return lb >= paint_far(k);
 }
 
-// Per-ray candidates (set once per pixel before the primary march, see `fs`): one bit for every
-// item (a group, or one instance of a pattern group) whose bounding sphere comes near the ray. An
-// item far from the whole ray can neither be hit nor bend the surface where the ray meets it, so
-// the march leaves it out without reading anything about it. It is switched on only while marching
-// the primary ray: every other query (normals, shadows, occlusion) is about points off the ray.
+// Per-ray candidates, found once per pixel before the primary march (see `fs`).
+//  * `cand`: one bit for every item (a group, or one instance of a pattern group) whose bounding
+//    sphere comes near the ray.
+//  * `cs`: the shapes of those items whose own sphere comes near the ray, in the order the march
+//    melts them (group, instance, shape): the primary march then reads only these (`map_d_cand`).
+//    More than MAXC of them (`ovf`): the march falls back to the groups' bits above.
+// What is left out is far from the whole ray, so it can neither be hit nor bend the surface where
+// the ray meets it (the blend leaves a shape alone beyond its reach, and a ray that never comes
+// that close cannot be stopped by it either). Every other query (shadows, occlusion, glass) is
+// about points off the ray and uses the full scan; the normal at the hit uses the bits.
+const MAXC: i32 = 24;
 var<private> cand: array<u32, 8>;
+var<private> cs: array<u32, 24>;
+var<private> ncs: i32;
+var<private> ovf: bool;
 var<private> use_cand: bool;
 
 fn is_cand(i: i32) -> bool {
@@ -457,35 +466,80 @@ fn is_cand(i: i32) -> bool {
     return ((cand[i >> 5] >> u32(i & 31)) & 1u) != 0u;
 }
 
-// The items near the ray `ro + rd * t` for t in [t0, t1]: those whose sphere (grown by the reach of
-// their blend, the melt's drip and a margin) is touched by it.
+// How near the segment o + d * t, t in [t0, t1] comes to the sphere c, r (negative: it goes through), in the units of `d`.
+fn seg_sphere(o: vec3<f32>, d: vec3<f32>, dd: f32, t0: f32, t1: f32, s: vec4<f32>) -> f32 {
+    let tp = clamp(dot(s.xyz - o, d) / dd, t0, t1);
+    return length(s.xyz - (o + d * tp)) - s.w;
+}
+
+// The items and shapes near the ray `ro + rd * t` for t in [t0, t1].
 fn find_candidates(ro: vec3<f32>, rd: vec3<f32>, t0: f32, t1: f32) {
     for (var w = 0; w < 8; w = w + 1) { cand[w] = 0u; }
+    ncs = 0;
+    ovf = false;
     let amount = G.melt.y;
     let rm = reach_mult();
+    // (the drip moves the point the shapes are measured at, up to G.melt.z; a little for pixel footprint and rounding)
     let slack = 1.0 + G.melt.z + 0.004 * t1;
     let ng = i32(G.counts.x + 0.5);
     for (var gi = 0; gi < ng; gi = gi + 1) {
         let gb = group_at(gi);
         let gr = D(gb);
+        if (gr.z > -0.5 && gr.z < 0.5) { continue; }   // a stain group changes no distance
         let gn = D(gb + 1);
         let gs = D(gb + 2);
         let ni = i32(gn.y + 0.5);
         let fi = i32(gn.x + 0.5);
         let ib0 = i32(gn.z + 0.5);
         let grow = rm * gr.w * amount + slack;
+        let fb = i32(gr.x + 0.5);
+        let nb = i32(gr.y + 0.5);
         for (var j = 0; j < max(ni, 1); j = j + 1) {
             var sphere = gs;
+            var o = ro;
+            var d = rd;
+            var scl = 1.0;
+            let ib = inst_at(fi + j);
             if (ni > 0) {
-                let ic = D(inst_at(fi + j) + 3);
-                sphere = vec4<f32>(ic.xyz, gs.w * ic.w);
+                let ic = D(ib + 3);
+                scl = ic.w;
+                sphere = vec4<f32>(ic.xyz, gs.w * scl);
             }
-            let tp = clamp(dot(sphere.xyz - ro, rd), t0, t1);
-            let near = length(sphere.xyz - (ro + rd * tp)) - sphere.w;
-            let item = ib0 + j;
+            let near = seg_sphere(ro, rd, 1.0, t0, t1, sphere);
             // (a group that keeps only the overlap changes the result everywhere: never left out)
-            if ((near < grow || gr.z > 1.5) && item < 256) {
-                cand[item >> 5] = cand[item >> 5] | (1u << u32(item & 31));
+            if (near >= grow && gr.z < 1.5) { continue; }
+            let item = ib0 + j;
+            if (item < 256) { cand[item >> 5] = cand[item >> 5] | (1u << u32(item & 31)); }
+            // the ray in the group's own space (the instance's rows carry a world point back)
+            if (ni > 0) {
+                let r0 = D(ib);
+                let r1 = D(ib + 1);
+                let r2 = D(ib + 2);
+                o = vec3<f32>(dot(r0.xyz, ro) + r0.w, dot(r1.xyz, ro) + r1.w, dot(r2.xyz, ro) + r2.w);
+                d = vec3<f32>(dot(r0.xyz, rd), dot(r1.xyz, rd), dot(r2.xyz, rd));
+            }
+            let dd = max(dot(d, d), 1e-12);
+            let key = (u32(gi) << 8u) | u32(j & 255);
+            for (var bi = 0; bi < nb; bi = bi + 1) {
+                let bb = block_at(fb + bi);
+                let b0 = D(bb);
+                let b1 = D(bb + 1);
+                if (b1.y < 0.5 && seg_sphere(o, d, dd, t0, t1, b0) * scl >= rm * b1.x * amount + slack) { continue; }
+                let first = i32(b1.z + 0.5);
+                let cnt = i32(b1.w + 0.5);
+                for (var si = 0; si < cnt; si = si + 1) {
+                    let rec = shape_rec(first + si);
+                    let misc = D(rec + 7);
+                    let op = misc.x;
+                    if (op > -0.5 && op < 0.5) { continue; }   // a stain changes no distance
+                    if (op < 1.5 && seg_sphere(o, d, dd, t0, t1, D(rec)) * scl >= rm * misc.y * amount + slack) { continue; }
+                    if (ncs < MAXC) {
+                        cs[ncs] = (key << 9u) | u32(first + si);
+                        ncs = ncs + 1;
+                    } else {
+                        ovf = true;
+                    }
+                }
             }
         }
     }
@@ -506,10 +560,8 @@ fn map(p0: vec3<f32>) -> Hit {
         let gs = D(gb + 2);
         let ni = i32(gn.y + 0.5);
         let fi = i32(gn.x + 0.5);
-        let ib0 = i32(gn.z + 0.5);
         // every instance of the group melts into the result in turn (none: the group once, as it is)
         for (var j = 0; j < max(ni, 1); j = j + 1) {
-            if (!is_cand(ib0 + j)) { continue; }
             var sc = 1.0;
             var sphere = gs;
             let ib = inst_at(fi + j);
@@ -631,6 +683,103 @@ fn map_d(p0: vec3<f32>) -> f32 {
             } else {
                 acc = -smin_h(-acc, gv, gr.w * amount, mode).x;
             }
+        }
+    }
+    if (G.melt.z > 0.0) {
+        let slope = G.melt.z * 1.32 * 0.12 * G.melt.w;
+        acc = acc / sqrt(1.0 + slope * slope);
+    }
+    return acc;
+}
+
+// map_d for the primary march: only the shapes of `cs` (see find_candidates), in their order, with
+// the same rules as map_d / group_dist.
+fn map_d_cand(p0: vec3<f32>) -> f32 {
+    let p = warp(p0);
+    let mode = i32(G.melt.x + 0.5);
+    let amount = G.melt.y;
+    let rm = reach_mult();
+    var acc = 1e6;
+    var have = false;
+    var key = -1;
+    var skip = false;
+    var q = p;
+    var sc = 1.0;
+    var gop = 0.0;
+    var gk = 0.0;
+    var g = 0.0;
+    var gh = false;
+    for (var e = 0; e <= ncs; e = e + 1) {
+        var ent = 0xffffffffu;
+        if (e < ncs) { ent = cs[e]; }
+        let nkey = i32(ent >> 9u);
+        if (nkey != key) {
+            // the group item before is finished: melt it into the result
+            if (gh && !skip) {
+                let gv = g * sc;
+                if (!have) {
+                    if (gop >= 0.5) {
+                        acc = gv;
+                        have = true;
+                    }
+                } else if (gop > 1.5) {
+                    acc = -smin_h(-acc, -gv, gk, mode).x;
+                } else if (gop > 0.0) {
+                    acc = smin_h(acc, gv, gk, mode).x;
+                } else {
+                    acc = -smin_h(-acc, gv, gk, mode).x;
+                }
+            }
+            if (e >= ncs) { break; }
+            key = nkey;
+            gh = false;
+            g = 0.0;
+            skip = false;
+            let gi = nkey >> 8;
+            let gb = group_at(gi);
+            let gr = D(gb);
+            let gn = D(gb + 1);
+            let gs = D(gb + 2);
+            let ni = i32(gn.y + 0.5);
+            let ib = inst_at(i32(gn.x + 0.5) + (nkey & 255));
+            gop = gr.z;
+            gk = gr.w * amount;
+            var sphere = gs;
+            sc = 1.0;
+            if (ni > 0) {
+                let ic = D(ib + 3);
+                sc = ic.w;
+                sphere = vec4<f32>(ic.xyz, gs.w * sc);
+            }
+            skip = have && group_far(gr, sphere, p, acc, amount, rm, mode);
+            q = to_group(ni, ib, p);
+        }
+        if (skip) { continue; }
+        let si = i32(ent & 511u);
+        let rec = shape_rec(si);
+        let misc = D(rec + 7);
+        let op = misc.x;
+        let k = misc.y * amount;
+        if (!gh) {
+            if (op < 0.5) { continue; }
+        } else {
+            if (op > -0.5 && op < 0.5) { continue; }
+            if (op < 1.5) {
+                let bs = D(rec);
+                let lb = length(q - bs.xyz) - bs.w;
+                if (lb >= far_enough(select(-g, g, op > 0.0), k, rm, mode)) { continue; }
+            }
+        }
+        let b = shape_dist(shape_at(si), q);
+        if (!gh) {
+            g = b;
+            gh = true;
+        } else if (op > 1.5) {
+            g = -smin_h(-g, -b, k, mode).x;
+        } else if (op > 0.0) {
+            g = smin_h(g, b, k, mode).x;
+        } else {
+            g = -smin_h(-g, b, k, mode).x;
         }
     }
     if (G.melt.z > 0.0) {
@@ -870,22 +1019,27 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
             t_max = -bq + sq;
         }
     }
-    // the floor hides everything behind it: the march stops there
-    if (run && ro.z >= 0.0 && t_ground < 1e8 && (grid_on || floor_on)) {
-        t_max = min(t_max, t_ground + 0.05);
-        if (t > t_max) { run = false; }
+    // the floor hides everything behind it: the march ends there (the last step is taken just to it)
+    var t_cut = t_max;
+    if (run && !glow_scene && ro.z >= 0.0 && t_ground < 1e8 && (grid_on || floor_on)) {
+        t_cut = min(t_max, t_ground + 0.05);
+        if (t > t_cut) { run = false; }
     }
+    var last = false;
     // a little per-pixel jitter turns banding in the lamp glow into fine noise
     t = t + fract(sin(dot(in.pos.xy, vec2<f32>(12.9898, 78.233))) * 43758.5453) * 1.5;
     // groups and pattern copies far from this ray are left out of the march (not with lamps: their glow reaches far)
     use_cand = false;
-    if (run && !glow_scene) {
-        find_candidates(ro, rd, t, t_max);
+    var list_ok = false;
+    if (run && !glow_scene && G.offs2.z < 0.5) {
+        find_candidates(ro, rd, t, t_cut);
         use_cand = true;
+        list_ok = !ovf;
     }
     // Over-relaxed sphere tracing: steps a little longer than the distance, taken back when two
     // steps would have jumped over a surface. Lamps and a selected carver need small steps.
-    var relax = select(1.1, 1.5, fast);
+    // (a march that reads only what is near the ray takes longer steps than one that reads everything, so it is relaxed a little less)
+    var relax = select(1.1, select(1.5, 1.3, list_ok), fast);
     if (glow_scene || (has_sel && sel_carving)) { relax = 0.9; }
     var max_it = select(128, 48, fast);
     if (glow_scene) { max_it = 200; }
@@ -902,6 +1056,8 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
                 // a soft glow in the air around lamps
                 halo = halo + lin(h.col) * h.glow * exp(-max(h.d, 0.0) * 0.15) * max(h.d, 0.05) * 0.9 * 0.009;
             }
+        } else if (list_ok) {
+            d = map_d_cand(p);
         } else {
             d = map_d(p);
         }
@@ -927,17 +1083,27 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
             stp = 0.0;
             prev_r = 0.0;
             relax = 0.9;
+            last = false;
             continue;
         }
         // hit when closer than a fraction of a pixel (never finer than the old fixed limit)
         if (d < max(0.004 * (1.0 + t * 0.002), pix * select(0.2, 0.5, fast))) { hit = true; break; }
         stp = step;
         prev_r = d;
+        if (last) { break; }
+        if (t_cut < t_max && t + step >= t_cut) {
+            // no jump past the floor: the last point looked at is the floor itself
+            step = max(t_cut - t, 0.0);
+            stp = step;
+            last = true;
+        }
         t = t + step;
         if (t > t_max) { break; }
     }
-    use_cand = false;
-    if (hit && !glow_scene) { h = map(ro + rd * t); }
+    if (hit && !glow_scene) {
+        use_cand = false;
+        h = map(ro + rd * t);
+    }
 
     // ground
     let above = ro.z >= 0.0;
@@ -961,8 +1127,11 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
             // contact shadow of the blob on the ground
             if (fast) {
                 // while moving: one tap for a soft dark patch under the blob
-                let ao = clamp(map_d(gp + vec3<f32>(0.0, 0.0, 6.0)) / 6.0, 0.0, 1.0);
-                col = col * mix(1.0, mix(0.6, 1.0, ao), shadow_k);
+                // (a floor point more than 6 mm clear of the scene's sphere gets full light: no need to measure)
+                if (G.bound.w > 0.0 && length(gp - G.bound.xyz) < G.bound.w + 12.0) {
+                    let ao = clamp(map_d(gp + vec3<f32>(0.0, 0.0, 6.0)) / 6.0, 0.0, 1.0);
+                    col = col * mix(1.0, mix(0.6, 1.0, ao), shadow_k);
+                }
             } else {
                 let sh = soft_shadow(gp + vec3<f32>(0.0, 0.0, 0.05), key, 300.0, 32);
                 col = col * mix(1.0, mix(0.55, 1.0, sh), shadow_k);

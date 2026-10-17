@@ -301,8 +301,13 @@ fn stats(v: &[f32]) -> (f32, f32, f32) {
 /// Run the test. `sizes`: window sizes; `frames`: frames per row; `progress` is told what is being
 /// drawn; `stop` (checked between rows) ends it early with what is done so far.
 pub fn run(sizes: &[[u32; 2]], frames: usize, scenes: &[BenchScene], progress: &mut dyn FnMut(&str), stop: &dyn Fn() -> bool) -> Result<Report, String> {
+    run_with(sizes, frames, scenes, progress, stop, None)
+}
+
+/// `run`, with another source for the scene shader (experiments).
+pub fn run_with(sizes: &[[u32; 2]], frames: usize, scenes: &[BenchScene], progress: &mut dyn FnMut(&str), stop: &dyn Fn() -> bool, source: Option<&str>) -> Result<Report, String> {
     progress("グラフィックスを準備しています…");
-    let mut gpu = crate::gpu::offscreen::Offscreen::open()?;
+    let mut gpu = crate::gpu::offscreen::Offscreen::open_with(source)?;
     let mut report = Report {
         version: env!("CARGO_PKG_VERSION").to_string(),
         when: now_text(),
@@ -712,10 +717,27 @@ mod tests {
         let only: Option<Vec<String>> = std::env::var("MELTCAD_BENCH_SCENES").ok().map(|v| v.split(',').map(str::to_string).collect());
         let scenes: Vec<BenchScene> = scenes().into_iter().filter(|s| only.as_ref().is_none_or(|o| o.iter().any(|n| n == s.name))).collect();
         let mut progress = |s: &str| eprintln!("[bench] {s}");
-        match run(&sizes, frames, &scenes, &mut progress, &|| false) {
+        match run_with(&sizes, frames, &scenes, &mut progress, &|| false, shader_experiment().as_deref()) {
             Ok(r) => println!("{}", format_table(&r)),
             Err(e) => eprintln!("no adapter: {e}"),
         }
+    }
+
+    /// `MELTCAD_SHADER_SED="old=>new||old2=>new2"`: the shader with text replaced, to see what a part of it costs
+    /// (every `old` must occur in the source).
+    fn shader_experiment() -> Option<String> {
+        shader_experiment_on(&crate::gpu::shader_source(), "MELTCAD_SHADER_SED")
+    }
+
+    fn shader_experiment_on(source: &str, var: &str) -> Option<String> {
+        let spec = std::env::var(var).ok()?;
+        let mut src = source.to_string();
+        for pair in spec.split("||") {
+            let (old, new) = pair.split_once("=>")?;
+            assert!(src.contains(old), "the shader has no {old:?}");
+            src = src.replace(old, new);
+        }
+        Some(src)
     }
 
     /// The shader with counters: every read of the scene list and every distance evaluation of a
@@ -786,6 +808,230 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    /// Scenes for the comparison of the march with and without the per-ray candidates: patterns of
+    /// every kind, a linked copy, a carved group, an overlap shape, a group that melts into a
+    /// carved one with a big blend, and the library scenes.
+    fn parity_scenes() -> Vec<(&'static str, Scene)> {
+        use crate::model::Op;
+        use crate::pattern::{Pattern, Xform};
+        let mut out: Vec<(&'static str, Scene)> = Vec::new();
+        let mut sc = Scene::default();
+        sc.groups.clear();
+        let mut boxes = Group::new("boxes");
+        let mut b = Shape::new(Kind::Box, [30.0, 60.0, 15.0], Material::default());
+        b.size = [25.0, 25.0, 25.0];
+        boxes.shapes.push(b);
+        boxes.pattern = Some(Pattern::Mirror { axes: [true, true, false], centre: false });
+        sc.groups.push(boxes);
+        let mut ring = Group::new("ring");
+        let mut c = Shape::new(Kind::Cylinder, [50.0, -20.0, 0.0], Material::default());
+        c.size = [8.0, 30.0, 1.0];
+        let mut c2 = Shape::new(Kind::Sphere, [50.0, -20.0, 20.0], Material::default());
+        c2.size[0] = 10.0;
+        ring.shapes.push(c);
+        ring.shapes.push(c2);
+        ring.pattern = Some(Pattern::Circular { count: 5, angle: 360.0, axis: 2, centre: [0.0; 3], rotate: true });
+        sc.groups.push(ring);
+        let mut balls = Group::new("balls");
+        balls.shapes.push(Shape::new(Kind::Sphere, [-20.0, -20.0, 12.0], Material::default()));
+        balls.pattern = Some(Pattern::Rect { counts: [4, 3, 2], spacing: [25.0, 25.0, 30.0] });
+        let uid = sc.ensure_group_uid(0).unwrap_or(0);
+        sc.groups.push(balls);
+        let mut copy = Group::new("copy");
+        copy.instance_of = Some(uid);
+        copy.xform = Xform { pos: [0.0, 0.0, 70.0], rot: [0.0, 0.0, 45.0], scale: 1.5 };
+        sc.groups.push(copy);
+        // a carving group and a group that keeps only the overlap
+        let mut cut = Group::new("cut");
+        cut.op = Op::Subtract;
+        cut.blend = 4.0;
+        let mut k = Shape::new(Kind::Sphere, [30.0, 60.0, 15.0], Material::default());
+        k.size[0] = 14.0;
+        cut.shapes.push(k);
+        sc.groups.push(cut);
+        out.push(("patterns", sc.clone()));
+        let mut lens = Group::new("lens");
+        lens.op = Op::Intersect;
+        let mut l = Shape::new(Kind::Sphere, [0.0, 0.0, 30.0], Material::default());
+        l.size[0] = 160.0;
+        lens.shapes.push(l);
+        sc.groups.push(lens);
+        out.push(("pat+lens", sc));
+        // a carver and an intersect shape inside one group, with big blends
+        let mut one = Scene::default();
+        one.groups.clear();
+        let mut g = Group::new("g");
+        for i in 0..6 {
+            let mut s = Shape::new(Kind::Sphere, [i as f32 * 14.0 - 35.0, (i % 2) as f32 * 8.0, 18.0], Material::default());
+            s.size[0] = 12.0;
+            s.blend = 8.0;
+            g.shapes.push(s);
+        }
+        let mut carve = Shape::new(Kind::Box, [0.0, 0.0, 22.0], Material::default());
+        carve.op = Op::Subtract;
+        carve.size = [10.0, 60.0, 10.0];
+        carve.blend = 3.0;
+        g.shapes.push(carve);
+        one.groups.push(g.clone());
+        out.push(("blends", one.clone()));
+        let mut keep = Shape::new(Kind::Sphere, [0.0, 0.0, 20.0], Material::default());
+        keep.size[0] = 48.0;
+        keep.op = Op::Intersect;
+        keep.blend = 2.0;
+        g.shapes.push(keep);
+        one.groups[0] = g;
+        out.push(("blend+keep", one));
+        for b in scenes() {
+            if b.name != "gradient" {
+                out.push((b.name, b.scene));
+            }
+        }
+        out
+    }
+
+    /// The shader that writes where the ray hit (distance as a 24-bit number in RGB, alpha 255 for a hit)
+    /// instead of the picture, with the candidates on or off.
+    fn depth_source(candidates: bool) -> String {
+        let mut src = crate::gpu::shader_source();
+        let on = "        use_cand = true;\n        list_ok = !ovf;";
+        assert!(src.contains(on));
+        // MELTCAD_BENCH_VARIANT=bits: the groups' bits alone (no shape list) for the "with" side
+        let bits = std::env::var("MELTCAD_BENCH_VARIANT").is_ok_and(|v| v == "bits");
+        if !candidates {
+            src = src.replace(on, "        use_cand = false;\n        list_ok = false;");
+        } else if bits {
+            src = src.replace(on, "        use_cand = true;\n        list_ok = false;");
+        }
+        if candidates && let Some(extra) = shader_experiment_on(&src, "MELTCAD_SHADER_SED") {
+            src = extra;
+        }
+        if let Some(extra) = shader_experiment_on(&src, "MELTCAD_SHADER_SED_ALL") {
+            src = extra;
+        }
+        let end = "    return vec4<f32>(encode(col), 1.0);\n}";
+        assert!(src.contains(end));
+        if let Ok(custom) = std::env::var("MELTCAD_BENCH_END") {
+            return src.replace(end, &format!("    {custom}\n}}"));
+        }
+        src.replace(end, "    let tq = u32(clamp(t * 256.0, 0.0, 16777215.0));\n    return vec4<f32>(f32(tq & 255u) / 255.0, f32((tq >> 8u) & 255u) / 255.0, f32((tq >> 16u) & 255u) / 255.0, select(0.0, 1.0, hit));\n}")
+    }
+
+    /// The per-ray candidates leave out only what cannot matter: the distance at which every pixel's
+    /// ray hits is the same with them as with the full scan (to the march's own tolerance), and the
+    /// same pixels hit.
+    /// `cargo test -p meltcad --release candidates_match_the_full_scan -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn candidates_match_the_full_scan() {
+        let (mut with, mut without) = match (crate::gpu::offscreen::Offscreen::open_with(Some(&depth_source(true))), crate::gpu::offscreen::Offscreen::open_with(Some(&depth_source(false)))) {
+            (Ok(a), Ok(b)) => (a, b),
+            _ => {
+                eprintln!("no adapter");
+                return;
+            }
+        };
+        let gold_src = {
+            let mut g = depth_source(false);
+            for (a, b) in [("var relax = select(1.1, 1.5, fast);", "var relax = 0.9;"), ("var max_it = select(128, 48, fast);", "var max_it = 400;")] {
+                g = g.replace(a, b);
+            }
+            g
+        };
+        let mut gold = if std::env::var("MELTCAD_BENCH_GOLD").is_ok() { crate::gpu::offscreen::Offscreen::open_with(Some(&gold_src)).ok() } else { None };
+        let size = [320u32, 200u32];
+        for (name, scene) in parity_scenes() {
+            let cam = camera_for(&scene);
+            let pack = crate::gpu::ScenePack::new(&scene, crate::gpu::VolumeSet::of(&scene));
+            if std::env::var("MELTCAD_BENCH_DUMP").is_ok_and(|v| v == name) {
+                let mut n = 0;
+                for (gi, g) in scene.groups.iter().enumerate() {
+                    for (si, sh) in g.shapes.iter().enumerate() {
+                        println!("shape {n:>3} (g{gi} s{si}) {:?} pos {:?} size {:?} scale {:?} rot {:?} op {:?} blend {} round {} radius {:.1}", sh.kind, sh.pos, sh.size, sh.scale, sh.rot, sh.op, sh.blend, sh.round, crate::perf::shape_radius(sh));
+                        n += 1;
+                    }
+                }
+            }
+            let fast = std::env::var("MELTCAD_BENCH_FAST").is_ok();
+            // (what the march itself leaves open: a fraction of a pixel's footprint at the distance of the hit, more while moving)
+            let footprint = 2.0 * crate::camera::TAN_HALF_FOV / size[1] as f32;
+            let tol_at = |t: f32| (t * footprint * if fast { 3.0 } else { 1.5 }).max(if fast { 1.5 } else { 0.5 });
+            let mut results = Vec::new();
+            for gpu in [&mut with, &mut without] {
+                gpu.load(&pack);
+                let pic = gpu.picture(size);
+                let mut globals = pack.globals(&scene, &cam, [size[0] as f32, size[1] as f32], None, None, false);
+                crate::gpu::set_view_flags(&mut globals, crate::perf::view_flags(false, fast, pack.glow));
+                gpu.frame(&pic, &globals, fast);
+                results.push(gpu.read(&pic));
+            }
+            if let Some(gold) = gold.as_mut() {
+                gold.load(&pack);
+                let pic = gold.picture(size);
+                let mut globals = pack.globals(&scene, &cam, [size[0] as f32, size[1] as f32], None, None, false);
+                crate::gpu::set_view_flags(&mut globals, crate::perf::view_flags(false, fast, pack.glow));
+                gold.frame(&pic, &globals, fast);
+                let g = gold.read(&pic);
+                let hit = |p: &[u8]| p[3] > 127;
+                let t_of = |p: &[u8]| (u32::from(p[0]) + (u32::from(p[1]) << 8) + (u32::from(p[2]) << 16)) as f32 / 256.0;
+                for (tag, img) in [("candidates", &results[0]), ("full scan", &results[1])] {
+                    let (mut wrong_hit, mut wrong_depth, mut n) = (0, 0, 0);
+                    for (p, q) in img.chunks(4).zip(g.chunks(4)) {
+                        if hit(q) {
+                            n += 1;
+                        }
+                        if hit(p) != hit(q) {
+                            wrong_hit += 1;
+                        } else if hit(p) && (t_of(p) - t_of(q)).abs() > tol_at(t_of(q)) {
+                            wrong_depth += 1;
+                        }
+                    }
+                    println!("    against the careful march: {tag}: {wrong_hit} pixels hit differently, {wrong_depth} at another depth (of {n})");
+                }
+            }
+            let (a, b) = (&results[0], &results[1]);
+            if let Some(dir) = std::env::var_os("MELTCAD_BENCH_OUT") {
+                for (tag, px) in [("with", a), ("without", b)] {
+                    let mut pgm = format!("P5\n{} {}\n255\n", size[0], size[1]).into_bytes();
+                    pgm.extend(px.chunks(4).map(|p| if p[3] > 127 { 40 + (p[1] / 2) } else { 0 }));
+                    let _ = std::fs::write(std::path::Path::new(&dir).join(format!("{name}_{tag}.pgm")), pgm);
+                    let mut ppm = format!("P6\n{} {}\n255\n", size[0], size[1]).into_bytes();
+                    ppm.extend(px.chunks(4).flat_map(|p| [p[0], p[1], p[2]]));
+                    let _ = std::fs::write(std::path::Path::new(&dir).join(format!("{name}_{tag}.ppm")), ppm);
+                }
+            }
+            let decode = |p: &[u8]| (p[3] > 127, (u32::from(p[0]) + (u32::from(p[1]) << 8) + (u32::from(p[2]) << 16)) as f32 / 256.0);
+            let (w, h) = (size[0] as usize, size[1] as usize);
+            let px = |img: &Vec<u8>, x: usize, y: usize| decode(&img[(y * w + x) * 4..(y * w + x) * 4 + 4]);
+            let (mut both, mut only_a, mut only_b, mut inner, mut far, mut worst) = (0, 0, 0, 0, 0, 0.0_f32);
+            for y in 0..h {
+                for x in 0..w {
+                    let ((ha, ta), (hb, tb)) = (px(a, x, y), px(b, x, y));
+                    match (ha, hb) {
+                        (true, true) => both += 1,
+                        (true, false) => only_a += 1,
+                        (false, true) => only_b += 1,
+                        _ => {}
+                    }
+                    // away from silhouettes (a ray that grazes a surface hits it anywhere along a long stretch)
+                    if ha && hb && x > 0 && y > 0 && x + 1 < w && y + 1 < h {
+                        let all = (y - 1..=y + 1).all(|yy| (x - 1..=x + 1).all(|xx| px(a, xx, yy).0 && px(b, xx, yy).0));
+                        if all {
+                            inner += 1;
+                            worst = worst.max((ta - tb).abs());
+                            if (ta - tb).abs() > tol_at(tb) {
+                                far += 1;
+                            }
+                        }
+                    }
+                }
+            }
+            println!("{name:<10} {both:>6} hit by both ({inner} away from the silhouette), {only_a} only with candidates, {only_b} only without; away from the silhouette the worst distance difference is {worst:.3} mm, {far} pixels differ by more than the march's own tolerance");
+            assert!(both > 200, "{name}: the scene is in the picture");
+            assert!(only_a + only_b <= both / 12 + 2, "{name}: about the same pixels hit (the rest is silhouette)");
+            assert!(far <= inner / 300 + 1, "{name}: the hits are at the same distance");
         }
     }
 }
