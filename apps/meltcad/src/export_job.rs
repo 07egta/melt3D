@@ -1230,6 +1230,33 @@ mod tests {
     }
 
     #[test]
+    fn twist_sparse_pruning_is_conservative_but_mesh_field_stays_exact() {
+        use crate::deform::{Deformation, Twist};
+        let mut sh = Shape::new(Kind::Box, [0.0, 0.0, 16.0], Material::default());
+        sh.size = [20.0, 14.0, 32.0];
+        sh.blend = 0.0;
+        let sc = scene_of(vec![sh.clone()]);
+        let field = Field::new(&sc);
+        let original = ExportField::from_scene(&field, &sc);
+        assert!(original.twists.is_empty());
+        let p = [10.0, 5.0, 16.0];
+        let d = export_mesh::Sdf::dist(&original, p);
+        assert_eq!(export_mesh::Sdf::pruning_distance(&original, p, 5.0), d);
+        sh.deformation = Some(Deformation::Twist(Twist::preset(360.0)));
+        let tw = scene_of(vec![sh]);
+        let field = Field::new(&tw);
+        let sdf = ExportField::from_scene(&field, &tw);
+        assert_eq!(sdf.twists.len(), 1);
+        let exact = export_mesh::Sdf::dist(&sdf, p);
+        let safe = export_mesh::Sdf::pruning_distance(&sdf, p, 10.0);
+        assert!((safe.abs() - exact.abs()) <= 1e-6, "pruning may only shrink magnitudes");
+        let outside = [5000.0, 5000.0, 5000.0];
+        let exact = export_mesh::Sdf::dist(&sdf, outside);
+        let safe = export_mesh::Sdf::pruning_distance(&sdf, outside, 0.5);
+        assert_eq!(safe, exact, "far cells still use efficient legacy pruning");
+    }
+
+    #[test]
     fn the_estimate_is_in_the_right_range() {
         let e = estimate(&Scene::default(), None, &Options::default(), &Progress::new()).unwrap();
         let area = 4.0 * std::f64::consts::PI * 400.0;
