@@ -134,6 +134,8 @@ pub struct ScenePack {
     /// Does any visible group or shape keep only an overlap (`Op::Intersect`)? Then what is far
     /// from a ray still decides where it stops, and the march may not leave anything out.
     pub overlaps: bool,
+    /// Conservative ray tracing step when twisted shapes are present.
+    pub ray_step: f32,
     /// Instances in the list (a plain group counts none).
     pub instances: usize,
     /// Shapes in the list and groups to draw.
@@ -159,6 +161,7 @@ impl ScenePack {
         let mut path: Vec<f32> = Vec::new();
         let mut shape_n = 0usize;
         let mut packed_overlap = false;
+        let mut ray_step = 1.0_f32;
         let mut block_n = 0usize;
         let mut inst_n = 0usize;
         let mut slots: Vec<(usize, usize, usize)> = Vec::new();
@@ -183,6 +186,9 @@ impl ScenePack {
                     continue;
                 }
                 pack_shape(s, &mut shapes, &mut poly, &mut path, &vols);
+                if let Some(d) = s.deformation {
+                    ray_step = ray_step.min(d.ray_step_safety(s.base_local_half()));
+                }
                 packed_overlap |= s.op == crate::model::Op::Intersect;
                 members.push(s);
                 slots.push((gi, si, shape_n));
@@ -250,6 +256,7 @@ impl ScenePack {
             list: Arc::new(list),
             vols: Arc::new(vols),
             glow: crate::perf::scene_has_glow(scene),
+            ray_step,
             overlaps: resolved.iter().filter_map(|r| scene.groups.get(r.gi)).any(|g| g.op == crate::model::Op::Intersect)
                 || packed_overlap,
             instances: inst_n,
@@ -299,7 +306,7 @@ impl ScenePack {
         }
         put(&mut u, 6, [self.group_n as f32, self.shape_n as f32, sel_first, sel_count]);
         put(&mut u, V4_OFFS, self.offs);
-        put(&mut u, V4_OFFS2, [self.offs2[0], self.offs2[1], if self.overlaps { 1.0 } else { 0.0 }, 0.0]);
+        put(&mut u, V4_OFFS2, [self.offs2[0], self.offs2[1], if self.overlaps { 1.0 } else { 0.0 }, self.ray_step]);
         let (bc, br) = bounds_of(scene, selected, &self.resolved);
         put(&mut u, V4_BOUND, [bc[0], bc[1], bc[2], br]);
         put(&mut u, V4_HOVER, [hover_first, hover_count, 0.0, 0.0]);
@@ -361,7 +368,7 @@ fn pack_shape(s: &crate::model::Shape, out: &mut Vec<f32>, poly: &mut Vec<f32>, 
     }
     push(out, [s.pos[0], s.pos[1], s.pos[2], radius]);
     push(out, [p.inv[0][0], p.inv[0][1], p.inv[0][2], if s.deformation.is_some() { 1.0 } else { 0.0 }]);
-    push(out, [p.inv[1][0], p.inv[1][1], p.inv[1][2], 0.0]);
+    push(out, [p.inv[1][0], p.inv[1][1], p.inv[1][2], s.deformation.map_or(1.0, |d| d.ray_step_safety(s.base_local_half()))]);
     push(out, [p.inv[2][0], p.inv[2][1], p.inv[2][2], 0.0]);
     push(out, [s.pos[0], s.pos[1], s.pos[2], p.min_scale()]);
     push(out, [s.scale[0], s.scale[1], s.scale[2], s.kind.id()]);
