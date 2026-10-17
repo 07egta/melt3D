@@ -104,4 +104,26 @@ mod tests {
             }
         }
     }
+    #[test]
+    fn kitchen_glass_exports_obj_and_3mf_from_one_closed_mesh() {
+        let category = crate::library::all().iter().find(|c| c.name == "くらしのもの").unwrap();
+        let glass = category.items.iter().find(|i| i.name == "ロックグラス").unwrap();
+        let opts = Options {
+            format: Format::Obj,
+            tolerance: 0.9,
+            lighten: Lighten::Off,
+            ..Options::default()
+        };
+        let mesh = build(&glass.scene(), None, &opts, &Progress::new()).expect("glass mesh");
+        assert!(mesh.closed && mesh.tris > 100, "a printable, closed glass mesh");
+        let obj = crate::export_job::serialize(&mesh, &opts, std::path::Path::new("kitchen.obj")).expect("OBJ export");
+        let obj_bytes = &obj.iter().find(|(p, _)| p.extension().is_some_and(|e| e == "obj")).unwrap().1;
+        let obj_text = String::from_utf8_lossy(obj_bytes);
+        assert!(obj_text.contains("\nv ") && obj_text.contains("\nf "), "OBJ vertices and faces");
+        let mf_opts = Options { format: Format::ThreeMf, ..opts };
+        let threemf = crate::export_job::serialize(&mesh, &mf_opts, std::path::Path::new("kitchen.3mf")).expect("3MF export");
+        assert_eq!(threemf.len(), 1);
+        assert!(threemf[0].1.starts_with(b"PK"), "3MF is a ZIP package");
+    }
+
 }

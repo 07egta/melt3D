@@ -158,4 +158,41 @@ mod tests {
         let it = Item { name: "いぬ".into(), tags: vec!["Dog".into()], group: Group::new("x") };
         assert!(it.matches("") && it.matches("いぬ") && it.matches("dog") && !it.matches("ねこ"));
     }
+    #[test]
+    fn everyday_kitchen_models_are_distinct_hollow_and_survive_save() {
+        let c = parse(FILES[4]).expect("the everyday objects category");
+        assert_eq!(c.name, "くらしのもの");
+        let expected = [
+            "陶器マグ", "ロックグラス", "お皿", "お茶碗", "フライパン",
+            "両手鍋", "やかん", "スプーン", "フォーク", "包丁",
+        ];
+        assert_eq!(c.items.len(), 27, "existing 17 objects and 10 kitchen models");
+        for name in expected {
+            let it = c.items.iter().find(|i| i.name == name).unwrap_or_else(|| panic!("missing {name}"));
+            assert!((1..=24).contains(&it.group.shapes.len()), "{name}");
+            assert!(it.fits(0, 0), "{name} exceeds scene limits");
+            let scene = it.scene();
+            let restored = Scene::from_json(&scene.to_json()).expect("saved scene reload");
+            assert_eq!(scene, restored, "{name} must survive saving and reloading");
+            let moved = it.placed([120.0, -75.0]);
+            let n = moved.shapes.len() as f32;
+            let (cx, cy) = moved.shapes.iter().fold((0.0, 0.0), |acc, s| (acc.0 + s.pos[0], acc.1 + s.pos[1]));
+            assert!((cx / n - 120.0).abs() < 0.001 && (cy / n + 75.0).abs() < 0.001, "{name} placement");
+        }
+        for (name, z) in [
+            ("陶器マグ", 45.0), ("ロックグラス", 40.0), ("お皿", 14.0),
+            ("お茶碗", 39.0), ("フライパン", 22.0), ("両手鍋", 43.0), ("やかん", 48.0),
+        ] {
+            let it = c.items.iter().find(|i| i.name == name).unwrap();
+            let vessel = it.group.shapes.iter().find(|s| s.kind == crate::model::Kind::Revolve).unwrap();
+            assert!(crate::sdf::Prepared::new(vessel).distance([0.0, 0.0, z]) > 1.0,
+                "{name} must have an actually open interior at z={z}");
+        }
+        for name in ["やかん", "スプーン"] {
+            let it = c.items.iter().find(|i| i.name == name).unwrap();
+            assert!(it.group.shapes.iter().any(|s| s.op == crate::model::Op::Subtract),
+                "{name} requires an actual hollow cut");
+        }
+    }
+
 }
