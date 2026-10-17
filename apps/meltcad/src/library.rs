@@ -141,6 +141,62 @@ mod tests {
     }
 
     #[test]
+    fn requested_food_models_are_real_3d_and_survive_save_and_export() {
+        use crate::export_formats::Format;
+        use crate::export_job::{self, Lighten, Options, Scope};
+        use crate::export_mesh::Progress;
+        use std::path::Path;
+
+        let c = all().iter().find(|c| c.name == "たべもの").expect("food category");
+        let wanted = [
+            "りんご", "バナナ", "いちご", "食パン", "クロワッサン",
+            "おにぎり", "ハンバーガー", "ピザ", "ドーナツ", "ソフトクリーム",
+        ];
+        for name in wanted {
+            assert_eq!(c.items.iter().filter(|it| it.name == name).count(), 1, "duplicate or missing {name}");
+            let it = c.items.iter().find(|it| it.name == name).expect("food item");
+            assert!(!it.group.shapes.is_empty() && it.group.shapes.len() <= 24, "{name}");
+            let scene = it.scene();
+            let back = Scene::from_json(&scene.to_json()).expect("food scene reload");
+            assert_eq!(back, scene, "{name} failed save/reload");
+            assert!(it.fits(0, 0));
+        }
+        let croissant = c.items.iter().find(|it| it.name == "クロワッサン").expect("croissant");
+        assert!(croissant.group.shapes.iter().filter(|s| s.kind == crate::model::Kind::Curve).count() >= 5);
+        let spiral = c.items.iter().find(|it| it.name == "ソフトクリーム").expect("soft serve");
+        assert!(spiral.group.shapes.iter().any(|s| s.kind == crate::model::Kind::Curve && s.path.len() >= 24));
+
+        // Test both the OBJ/MTL and 3MF file serializers on the newly generated SDF geometry.
+        // A coarse tolerance keeps CI work modest while exercising the actual mesh pipeline.
+        for name in ["食パン", "クロワッサン", "ソフトクリーム"] {
+            let it = c.items.iter().find(|it| it.name == name).expect("new food");
+            for format in [Format::Obj, Format::ThreeMf] {
+                let opts = Options {
+                    format,
+                    tolerance: 1.2,
+                    lighten: Lighten::Flat,
+                    scope: Scope::Visible,
+                    ..Options::default()
+                };
+                let built = export_job::build(&it.scene(), None, &opts, &Progress::new())
+                    .unwrap_or_else(|e| panic!("{name} {format:?} meshing failed: {e}"));
+                assert!(built.closed && built.tris > 20, "{name} {format:?}: open or empty mesh");
+                let path = Path::new(if format == Format::Obj { "food.obj" } else { "food.3mf" });
+                let files = export_job::serialize(&built, &opts, path)
+                    .unwrap_or_else(|e| panic!("{name} {format:?} export failed: {e}"));
+                assert!(!files.is_empty() && files.iter().all(|(_, bytes)| !bytes.is_empty()));
+                if format == Format::Obj {
+                    let obj = std::str::from_utf8(&files[0].1).expect("OBJ is UTF-8");
+                    assert!(obj.lines().any(|line| line.starts_with("v ")));
+                    assert!(obj.lines().any(|line| line.starts_with("f ")));
+                } else {
+                    assert!(files[0].1.starts_with(b"PK"), "3MF must be ZIP");
+                }
+            }
+        }
+    }
+
+    #[test]
     fn placing_moves_the_middle_and_keeps_the_height() {
         let c = parse(FILES[0]).unwrap_or(Category { name: String::new(), items: Vec::new() });
         for it in c.items.iter().take(3) {
