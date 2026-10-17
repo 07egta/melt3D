@@ -5,7 +5,7 @@ use egui::{Align2, Color32, FontId, Pos2, Rect, RichText, Sense, Stroke, Ui, vec
 
 use crate::app::{App, Tab};
 use crate::materials::{self, Category};
-use crate::model::{BlendMode, Corner, Kind, Light, MAX_LIGHTS, MAX_OUTLINE, MAX_SAVED, Material, Melt, Op, Pick, ROUND_MAX};
+use crate::model::{BlendMode, Corner, Group, Kind, Light, MAX_LIGHTS, MAX_OUTLINE, MAX_SAVED, Material, Melt, Op, Pick, ROUND_MAX};
 use crate::sdf;
 use crate::view::targets;
 use crate::{glyphs, style};
@@ -95,17 +95,23 @@ impl App {
         ui.spacing_mut().item_spacing.y = 2.0;
         let ngroups = self.scene.groups.len();
         // "x12" after a patterned group, "link" after a linked copy (looked up once for the whole list)
-        let badges: Vec<String> = if self.scene.groups.iter().any(|g| g.pattern.is_some() || g.is_linked()) {
-            let resolved = crate::pattern::resolve(&self.scene);
+        let patterned = self.scene.groups.iter().any(|g| g.pattern.is_some() || g.is_linked());
+        let badges: Vec<String> = if patterned || self.scene.groups.iter().any(|g| g.fusion.is_some()) {
+            // A plain Fusion group needs only an O(1) badge, not pattern resolution.
+            let resolved = if patterned { crate::pattern::resolve(&self.scene) } else { Vec::new() };
             (0..ngroups)
                 .map(|gi| {
                     let g = &self.scene.groups[gi];
                     let n = resolved.iter().find(|r| r.gi == gi).map_or(0, |r| r.insts.len().max(1));
-                    match (g.is_linked(), g.pattern.is_some()) {
-                        (true, true) => format!("リンク ×{n}"),
-                        (true, false) => "リンク".to_string(),
-                        (false, true) => format!("×{n}"),
-                        _ => String::new(),
+                    if g.fusion.is_some() {
+                        format!("Fusion · {}", g.shapes.len())
+                    } else {
+                        match (g.is_linked(), g.pattern.is_some()) {
+                            (true, true) => format!("リンク ×{n}"),
+                            (true, false) => "リンク".to_string(),
+                            (false, true) => format!("×{n}"),
+                            _ => String::new(),
+                        }
                     }
                 })
                 .collect()
@@ -343,6 +349,35 @@ impl App {
         }
     }
 
+    /// Group-level editor for editable Smooth Fusion primitives. The old smooth
+    /// union kernel handles rendering; only shape.blend/positions are changed here.
+    fn fusion_controls(ui: &mut Ui, group: &mut Group) {
+        let Some(settings) = group.fusion else { return };
+        style::title(ui, "Smooth Fusion（なめらか合体）");
+        ui.label(RichText::new(format!("{}個の形が別々に編集できます", group.shapes.len())).size(12.0).color(style::DIM));
+        let mut radius = settings.radius_mm;
+        if style::labeled_slider(
+            ui, "接合部の丸み", &mut radius, 0.0..=80.0,
+            "Smooth Unionの丸み（mm）。0mmは普通のBoolean Unionです",
+        ) {
+            crate::fusion::set_radius(group, radius);
+        }
+        let mut contact = settings.contact;
+        if style::labeled_slider(
+            ui, "融合範囲", &mut contact, 0.0..=1.0,
+            "0=深く重ねて完全融合、1=離して軽い接触。位置のみ更新、各形の回転とサイズは維持",
+        ) {
+            crate::fusion::set_contact(group, contact);
+        }
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("完全融合").size(11.0).color(style::DIM));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label(RichText::new("軽い接触").size(11.0).color(style::DIM));
+            });
+        });
+        ui.label(RichText::new("画面で形を直接ドラッグできます。形を個別に選ぶと位置・回転・大きさ・色を編集できます。").size(11.5).color(style::DIM));
+    }
+
     fn group_inspector(&mut self, ui: &mut Ui, g: usize) {
         style::title(ui, "グループ");
         let n = self.scene.groups.len();
@@ -358,6 +393,22 @@ impl App {
                 0.0..=80.0,
                 "このグループ全体が、前のグループとどのくらい溶けるか (グープ)",
             );
+            Self::fusion_controls(ui, gr);
+        }
+        if self.scene.groups.get(g).is_some_and(|group| group.fusion.is_some()) {
+            if self.scene.melt.mode != BlendMode::Smooth || self.scene.melt.amount != 1.0 || self.scene.melt.drip != 0.0 {
+                ui.colored_label(style::CUT, "シーン全体のメルト設定が変わり、Smooth Fusionの見え方が変化しています");
+                if ui.button("なめらか合体のメルト設定に戻す").clicked() {
+                    self.scene.melt.mode = BlendMode::Smooth;
+                    self.scene.melt.amount = 1.0;
+                    self.scene.melt.drip = 0.0;
+                }
+            }
+            if ui.button("子形状を編集する").on_hover_text("最初の形を選択。シーン一覧で他の形も選べます").clicked()
+                && !self.scene.groups[g].shapes.is_empty()
+            {
+                self.sel = Some(Pick::Shape(g, 0));
+            }
         }
         ui.horizontal(|ui| {
             if style::pill_enabled(ui, "↑ 前へ", false, g > 0).clicked() {
@@ -892,6 +943,19 @@ impl App {
 
     pub fn melt_panel(&mut self, ui: &mut Ui) {
         style::title(ui, "メルト（とけあい）");
+        ui.label(RichText::new("Smooth Fusion：球や基本形状をつなげて、後から1個ずつ編集").size(12.0).color(style::DIM));
+        let mut add_fusion = None;
+        ui.horizontal_wrapped(|ui| {
+            for count in crate::fusion::COUNTS {
+                if style::pill(ui, &format!("{count}個を合体"), false).clicked() {
+                    add_fusion = Some(count);
+                }
+            }
+        });
+        if let Some(count) = add_fusion {
+            crate::fusion::insert(self, ui.ctx(), count);
+        }
+        ui.separator();
         let m: &mut Melt = &mut self.scene.melt;
         ui.horizontal_wrapped(|ui| {
             for (name, mode, amount, drip, ripple) in MELT_PRESETS {
@@ -997,3 +1061,19 @@ fn gradient_controls(ui: &mut Ui, m: &mut Material) {
 }
 
 
+
+#[cfg(test)]
+mod smooth_fusion_ui_tests {
+    use super::*;
+
+    #[test]
+    fn controls_render_without_allocating_baked_geometry() {
+        let ctx = egui::Context::default();
+        let mut group = crate::fusion::sample(6).unwrap().group;
+        ctx.run_ui(egui::RawInput::default(), |ui| {
+            App::fusion_controls(ui, &mut group);
+        }).textures_delta.clear();
+        assert_eq!(group.shapes.len(), 6);
+        assert!(group.shapes.iter().all(|s| s.volume.is_none()));
+    }
+}

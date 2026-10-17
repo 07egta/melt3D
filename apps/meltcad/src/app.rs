@@ -898,6 +898,18 @@ impl App {
                     self.curve_button(ui);
                     self.pipe_button(ui);
                     self.sketch_button(ui);
+                    style::menu_button(ui, "合体", false, |ui| {
+                        ui.set_min_width(230.0);
+                        ui.label(RichText::new("Smooth Fusion（なめらか合体）").strong().color(style::ACCENT));
+                        ui.label(RichText::new("元の球・基本形状を後から編集できます").size(12.0).color(style::DIM));
+                        for count in crate::fusion::COUNTS {
+                            let label = format!("{count}個の形から作る");
+                            if ui.button(label).clicked() {
+                                crate::fusion::insert(self, &ctx, count);
+                                ui.close();
+                            }
+                        }
+                    });
                     style::menu_button(ui, "…", false, |ui| {
                         ui.set_min_width(190.0);
                         ui.label(egui::RichText::new("ほかの形").size(12.0).color(style::DIM));

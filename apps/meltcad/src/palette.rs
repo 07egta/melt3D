@@ -383,6 +383,18 @@ mod tests {
     }
 
     #[test]
+    fn smooth_fusion_is_found_in_the_existing_search_without_a_second_palette() {
+        let all = entries();
+        for q in ["Smooth Fusion", "なめらか合体", "Smooth Union"] {
+            let hits = search(&all, q, 40);
+            assert!(hits.iter().any(|&i| match all[i].action {
+                Action::Insert(c, _) => library::all().get(c).is_some_and(|cat| cat.name == "Fusion"),
+                _ => false,
+            }), "{q} is not searchable");
+        }
+    }
+
+    #[test]
     fn empty_and_nonsense_queries_are_safe() {
         let all = entries();
         let n = search(&all, "", 9).len();
