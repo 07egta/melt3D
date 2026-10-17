@@ -360,9 +360,11 @@ fn pack_shape(s: &crate::model::Shape, out: &mut Vec<f32>, poly: &mut Vec<f32>, 
         };
     }
     push(out, [s.pos[0], s.pos[1], s.pos[2], radius]);
-    push(out, [p.inv[0][0], p.inv[0][1], p.inv[0][2], 0.0]);
-    push(out, [p.inv[1][0], p.inv[1][1], p.inv[1][2], 0.0]);
-    push(out, [p.inv[2][0], p.inv[2][1], p.inv[2][2], 0.0]);
+    // (the free fourth numbers of the three rotation rows carry a face melt: face, amount, reach)
+    let fm = p.face_melt.map_or([0.0; 3], |(ax, sg, a, r)| [(ax * 2 + usize::from(sg < 0.0) + 1) as f32, a, r]);
+    push(out, [p.inv[0][0], p.inv[0][1], p.inv[0][2], fm[0]]);
+    push(out, [p.inv[1][0], p.inv[1][1], p.inv[1][2], fm[1]]);
+    push(out, [p.inv[2][0], p.inv[2][1], p.inv[2][2], fm[2]]);
     push(out, [s.pos[0], s.pos[1], s.pos[2], p.min_scale()]);
     push(out, [s.scale[0], s.scale[1], s.scale[2], s.kind.id()]);
     push(out, size4);
@@ -373,7 +375,7 @@ fn pack_shape(s: &crate::model::Shape, out: &mut Vec<f32>, poly: &mut Vec<f32>, 
     // the gradient: slot 13 = second colour + strength, slot 14 = direction (+ 3 when it follows
     // the shape's own box), softness, from, to; mat2.z = signed 1 / the gradient's length
     let inv_len = if m.has_gradient() { (if m.grad_flip { -0.5 } else { 0.5 }) / p.grad_half.max(1e-3) } else { 0.0 };
-    push(out, [m.coat, m.translucency, inv_len, 0.0]);
+    push(out, [m.coat, m.translucency, inv_len, p.face_melt.map_or(0.0, |(ax, _, _, _)| p.half[ax])]);
     push(out, params4);
     push(out, ext4);
     push(out, [p.shell, p.poly_limit, p.poly_orient, if p.chamfer && p.round > 0.0 { 1.0 } else { 0.0 }]);

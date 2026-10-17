@@ -277,7 +277,8 @@ pub fn shape_radius(s: &Shape) -> f32 {
     let h = s.local_half();
     let sc = s.scale;
     let v = [h[0] * sc[0].abs(), h[1] * sc[1].abs(), h[2] * sc[2].abs()];
-    let r = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt() * 1.08 + 1.0;
+    let swell = s.face_melt.parts().map_or(0.0, |m| m.2.abs());
+    let r = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt() * 1.08 + 1.0 + swell;
     if r.is_finite() { r.min(1.0e4) } else { 1.0e4 }
 }
 

@@ -447,6 +447,39 @@ pub struct Shape {
     /// Optional source reference, absent in all legacy .meltcad files.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mesh_source: Option<MeshSource>,
+    /// Melt only one face: the rest of the shape keeps its exact size.
+    #[serde(default, skip_serializing_if = "FaceMelt::is_off")]
+    pub face_melt: FaceMelt,
+}
+
+/// A melt that touches just one face of a shape (and a little way into it).
+/// `face`: 0 = none, 1..6 = +x -x +y -y +z -z in the shape's own axes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct FaceMelt {
+    #[serde(default)]
+    pub face: u8,
+    /// How far the melted face swells out (+) or sinks in (-), in mm.
+    #[serde(default)]
+    pub amount: f32,
+    /// How deep the melt reaches from the face, in mm.
+    #[serde(default)]
+    pub reach: f32,
+}
+
+impl FaceMelt {
+    pub const FACES: [(&'static str, &'static str); 6] =
+        [("右", "+x の面"), ("左", "-x の面"), ("奥", "+y の面"), ("手前", "-y の面"), ("上", "+z の面"), ("下", "-z の面")];
+    pub fn is_off(&self) -> bool {
+        self.face == 0 || self.face > 6 || !self.amount.is_finite() || self.amount == 0.0
+    }
+    /// The values the renderers use: (axis, +1/-1, amount, reach); nothing if the melt is off.
+    pub fn parts(&self) -> Option<(usize, f32, f32, f32)> {
+        if self.is_off() || !self.reach.is_finite() {
+            return None;
+        }
+        let i = usize::from(self.face - 1);
+        Some((i / 2, if i % 2 == 0 { 1.0 } else { -1.0 }, self.amount.clamp(-60.0, 60.0), self.reach.clamp(1.0, 200.0)))
+    }
 }
 
 /// The style of a shape's cut edges: what `Shape::round` makes of them.
@@ -497,6 +530,7 @@ impl Shape {
             volume: None,
             source: String::new(),
             mesh_source: None,
+            face_melt: FaceMelt::default(),
         }
     }
 

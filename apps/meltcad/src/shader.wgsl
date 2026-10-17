@@ -252,11 +252,33 @@ fn shape_dist(s: Shape, p: vec3<f32>) -> f32 {
             r = min(max(w.x, w.y), 0.0) + length(max(w, vec2<f32>(0.0))) - rr;
         }
     }
+    let fc = i32(s.r0.w + 0.5);
+    if (fc > 0) { r = face_melt(s, q, r, fc); }
     r = r * s.pos.w;
     // hollow walls of thickness `shell`
     let sh = s.extra.x;
     if (sh > 0.0 && kind != 18) { r = abs(r + sh * 0.5) - sh * 0.5; }
     return r;
+}
+
+// A melt on one face (face_melt_distance in sdf.rs): swells or sinks that face, nothing else.
+fn face_melt(s: Shape, q: vec3<f32>, d: f32, fc: i32) -> f32 {
+    let ax = (fc - 1) / 2;
+    var sg = 1.0;
+    if (((fc - 1) % 2) == 1) { sg = -1.0; }
+    let amount = s.r1.w;
+    let reach = max(s.r2.w, 1.0);
+    let t = sg * q[ax] - s.mat2.w;
+    let k = 1.0 / reach;
+    var w = clamp(1.0 - abs(t) * k, 0.0, 1.0);
+    if (w <= 0.0) { return d; }
+    w = w * w * (3.0 - 2.0 * w);
+    let u = q[(ax + 1) % 3];
+    let v = q[(ax + 2) % 3];
+    let f = 6.2832 / (reach * 1.6);
+    let wave = 0.5 + 0.5 * sin(u * f + sin(v * f * 1.3)) * cos(v * f * 0.8 + cos(u * f * 0.6));
+    let slope = abs(amount) * (1.6 * k + 1.32 * f);
+    return (d - amount * w * wave) / sqrt(1.0 + slope * slope);
 }
 
 // The surface colour of a shape at p: its colour, or the gradient (Material::gradient_weight).
