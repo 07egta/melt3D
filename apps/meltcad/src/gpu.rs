@@ -205,7 +205,7 @@ impl ScenePack {
                 let reused = previous.is_some_and(|(old_scene, old_pack)| {
                     old_scene.shape(gi, si).is_some_and(|old| old == s)
                         && old_slots.get(&(gi, si)).is_some_and(|&slot| {
-                            reuse_shape_pack(s, old_pack, slot, &mut shapes, &mut poly, &mut path)
+                            reuse_shape_pack(s, old_pack, slot, &vols, &mut shapes, &mut poly, &mut path)
                         })
                 });
                 if reused { shapes_reused += 1; }
@@ -364,14 +364,14 @@ impl ScenePack {
 /// Copy a previously packed unchanged shape without redoing transforms, CAD inset or polygon
 /// preparation. Rebase its outline/path indices to the current compact pools. Returns false
 /// (falling back to the original packer) if any pool would overflow or the old data was truncated.
-/// Important: curves' adaptive tessellation and mesh volume addresses depend on neighbouring
-/// shapes, so those types always use the exact original packer instead.
+/// Curves are reused only when their old path-pool offset is unchanged (the adaptive
+/// subdivision then had identical room); meshes only when volume layout is identical.
 fn reuse_shape_pack(
-    shape: &crate::model::Shape, old: &ScenePack, slot: usize,
+    shape: &crate::model::Shape, old: &ScenePack, slot: usize, vols: &VolumeSet,
     shapes: &mut Vec<f32>, poly: &mut Vec<f32>, path: &mut Vec<f32>,
 ) -> bool {
     use crate::model::Kind;
-    if matches!(shape.kind, Kind::Curve | Kind::Mesh) {
+    if shape.kind == Kind::Mesh && !vols.same_as(&old.vols) {
         return false;
     }
     let start = (old.offs[3] as usize + slot * S_STRIDE) * 4;
@@ -380,6 +380,23 @@ fn reuse_shape_pack(
 
     let poly_base = old.offs2[0] as usize * 4;
     let path_base = old.offs2[1] as usize * 4;
+
+    if shape.kind == Kind::Curve {
+        // pack_curve starts with two bounding-box records, then points, then one
+        // bounding sphere per GROUP_SEGMENTS edges. If the pool prefix is unchanged,
+        // both the available adaptive-subdivision budget and all packed values match.
+        let old_start = data[12*4] as usize;
+        let count = data[12*4 + 1] as usize;
+        let Some(first) = old_start.checked_sub(2) else { return false };
+        if count < 2 || first != path.len()/4 { return false; }
+        let nodes = 2 + count + (count-1).div_ceil(crate::curve::GROUP_SEGMENTS);
+        if first + nodes > PATH_V4 { return false; }
+        let at = path_base + first * 4;
+        let Some(old_path) = old.list.get(at..at + nodes * 4) else { return false };
+        path.extend_from_slice(old_path);
+        shapes.extend_from_slice(&data);
+        return true;
+    }
     let grab_poly = |start_slot: usize, count_slot: usize, enabled: bool, count_expected: usize| -> Option<&[f32]> {
         if !enabled { return Some(&[]); }
         let (first, count) = (data[start_slot] as usize, data[count_slot] as usize);
@@ -1712,8 +1729,8 @@ mod tests {
             changed.groups[0].shapes[0].pos[0] += 1.25;
             changed.melt.mode = crate::model::BlendMode::Gooey;
             let fresh = same_pack_as_cold(&changed, Some((&original, &old)));
-            assert_eq!(fresh.shapes_reused, n - n/7 - 1, "{n} shapes; curves rebuilt exactly");
-            assert_eq!(fresh.shapes_repacked, n/7 + 1);
+            assert_eq!(fresh.shapes_reused, n - 1, "{n} shapes; unchanged curve payloads retain exact room");
+            assert_eq!(fresh.shapes_repacked, 1);
 
             // Undo/redo must not resurrect cached positions or a previous Boolean op.
             let undone = same_pack_as_cold(&original, Some((&changed, &fresh)));
@@ -1723,6 +1740,12 @@ mod tests {
             let other = 1.min(op_change.groups.len()-1);
             op_change.groups[other].op = crate::model::Op::Subtract;
             let _ = same_pack_as_cold(&op_change, Some((&changed, &fresh)));
+
+            // When an earlier path grows, a later Curve must fall back to exact
+            // adaptive packing; it cannot reuse a path offset from the old layout.
+            let mut path_change = original.clone();
+            path_change.groups[0].shapes[3].path.push([17.0, 8.0, 3.0, 2.0]);
+            let _ = same_pack_as_cold(&path_change, Some((&original, &old)));
 
             // Insertion/deletion shifts the slots and polygon offsets; no old slot can leak.
             let mut deleted = original.clone();
