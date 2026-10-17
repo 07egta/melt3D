@@ -2,7 +2,7 @@
 //! command - and press Enter. It matches Japanese names and English / other common names.
 //! This is a child module of `app` so it can reach the app's private pieces.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
@@ -279,6 +279,7 @@ impl Prefs {
 struct Catalog {
     entries: Vec<Entry>,
     keys: Vec<String>,
+    folded_labels: Vec<String>,
     by_key: HashMap<String, usize>,
     postings: HashMap<String, Vec<usize>>,
     /// Computed only once, rather than finding default commands on every open.
@@ -289,14 +290,17 @@ impl Catalog {
     fn new(entries: Vec<Entry>) -> Self {
         let mut postings: HashMap<String, Vec<usize>> = HashMap::new();
         let mut keys = Vec::with_capacity(entries.len());
+        let mut folded_labels = Vec::with_capacity(entries.len());
         let mut by_key = HashMap::with_capacity(entries.len());
         for (i, e) in entries.iter().enumerate() {
             let key = action_key(e.action);
             by_key.insert(key.clone(), i);
             keys.push(key);
+            let folded_label = e.label.to_lowercase();
+            folded_labels.push(folded_label.clone());
             // Keep label and aliases separate: do not create imaginary substrings
             // crossing from the Japanese name into its English aliases.
-            for text in [e.label.to_lowercase(), e.words.to_lowercase()] {
+            for text in [folded_label, e.words.to_lowercase()] {
                 for width in 1..=3 {
                     for gram in gram_keys(&text, width) {
                         let list = postings.entry(gram).or_default();
@@ -322,7 +326,7 @@ impl Catalog {
         for (i, e) in entries.iter().enumerate() {
             if e.tag != "ライブラリ" && !defaults.contains(&i) { defaults.push(i); }
         }
-        Self { entries, keys, by_key, postings, defaults }
+        Self { entries, keys, folded_labels, by_key, postings, defaults }
     }
 
     /// Intersection of postings for all query n-grams. No full catalog iteration.
@@ -370,25 +374,40 @@ impl Catalog {
             return out;
         }
         let mut candidates = self.candidates(&q);
-        let mut scored = self.rank_candidates(&candidates, &q, prefs);
+        let mut scored = self.rank_candidates(&candidates, &q, prefs, limit);
         // Retain the old initials / ordered-letters search without the old full scan:
         // only try intersecting per-character postings if no substring matches.
         if scored.is_empty() && !q.contains(char::is_whitespace) && q.chars().count() > 1 {
             candidates = self.candidates_at_width(&q, Some(1));
-            scored = self.rank_candidates(&candidates, &q, prefs);
+            scored = self.rank_candidates(&candidates, &q, prefs, limit);
         }
-        scored.truncate(limit);
         scored.into_iter().map(|(_, i)| i).collect()
     }
 
-    fn rank_candidates(&self, ids: &[usize], q: &str, prefs: &Prefs) -> Vec<((u32, usize, usize, usize, usize), usize)> {
+    /// Bounded top-k heap: one-letter queries may have many candidates, but sorting
+    /// stays O(matches * log(limit)), not O(all_entries * log(all_entries)).
+    fn rank_candidates(&self, ids: &[usize], q: &str, prefs: &Prefs, limit: usize) -> Vec<((u32, usize, usize, usize, usize), usize)> {
         let favorite: HashSet<&str> = prefs.favorites.iter().map(String::as_str).collect();
         let recent: HashMap<&str, usize> = prefs.recent.iter().enumerate().map(|(i, s)| (s.as_str(), i)).collect();
-        let mut hits: Vec<_> = ids.iter().filter_map(|&i| {
-            let score = score(self.entries.get(i)?, q)?;
+        let mut best = BinaryHeap::new();
+        for &i in ids {
+            let Some(score) = score(&self.entries[i], &self.folded_labels[i], q) else { continue };
             let key = self.keys[i].as_str();
-            Some(((score, usize::from(self.entries[i].tag != "コマンド"), usize::from(!favorite.contains(key)), recent.get(key).copied().unwrap_or(usize::MAX), i), i))
-        }).collect();
+            let rank = (
+                score,
+                usize::from(self.entries[i].tag != "コマンド"),
+                usize::from(!favorite.contains(key)),
+                recent.get(key).copied().unwrap_or(usize::MAX),
+                i,
+            );
+            if best.len() < limit {
+                best.push((rank, i));
+            } else if best.peek().is_some_and(|(worst, _)| rank < *worst) {
+                best.pop();
+                best.push((rank, i));
+            }
+        }
+        let mut hits = best.into_vec();
         hits.sort_unstable_by_key(|(rank, _)| *rank);
         hits
     }
@@ -396,8 +415,7 @@ impl Catalog {
 
 /// How well q matches an existing entry. Ranking is unchanged; only candidate
 /// generation is indexed. Lower rank is better.
-fn score(e: &Entry, q: &str) -> Option<u32> {
-    let label = e.label.to_lowercase();
+fn score(e: &Entry, label: &str, q: &str) -> Option<u32> {
     if label == q { return Some(0); }
     if label.starts_with(q) { return Some(1); }
     if label.contains(q) { return Some(2); }
