@@ -691,4 +691,21 @@ mod tests {
             assert!((vol(&m) - v).abs() / v < 1e-3, "{u:?}: {} vs {v}", vol(&m));
         }
     }
+    #[test]
+    fn basematerials_and_multicolour_are_reported() {
+        let mesh = TETRA;
+        let prefix = "<resources><basematerials id=\"9\"><base name=\"red\" displaycolor=\"#FF0000\"/><base name=\"blue\" displaycolor=\"#0000FF\"/></basematerials>";
+        let xml = model("millimeter", &format!("{prefix}<object id=\"1\" pid=\"9\" pindex=\"0\">{mesh}</object></resources><build><item objectid=\"1\"/></build>"));
+        let a = appearance_3mf(&pkg(&xml));
+        assert_eq!(a.material.unwrap().color, [1.0, 0.0, 0.0]);
+        assert!(!a.varies);
+        let xml = model("millimeter", &format!("{prefix}<object id=\"1\" pid=\"9\" pindex=\"0\">{}</object></resources><build><item objectid=\"1\"/></build>", mesh.replacen("<triangle v1=", "<triangle pid=\"9\" p1=\"1\" v1=", 1)));
+        let a = appearance_3mf(&pkg(&xml));
+        assert!(a.varies);
+        let s = surface(&box_mesh([0.0;3],[1.0;3]));
+        let z = export_formats::threemf(&s, "roundtrip", Units::Mm).unwrap();
+        let m = appearance_3mf(&z).material.unwrap();
+        assert!((m.color[0] - 200.0 / 255.0).abs() < 0.002);
+    }
+
 }
