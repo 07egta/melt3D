@@ -122,6 +122,25 @@ impl App {
         Some(picks)
     }
 
+    /// The UI asks this every frame. Check selection in O(k) without sorting or allocating.
+    fn quick_group_check(&self) -> Result<(usize, usize), &'static str> {
+        let Some(Pick::Shape(group, first)) = self.sel else {
+            return Err("形をCtrl＋クリックで複数選んでください");
+        };
+        if self.scene.shape(group, first).is_none() {
+            return Err("選択した形が見つかりません");
+        }
+        let mut count = 1;
+        for &pick in &self.multi_sel {
+            let Pick::Shape(g, s) = pick else { return Err("形とグループを混ぜて選択できません"); };
+            if g != group { return Err("別のグループの形は一緒に操作できません"); }
+            if self.scene.shape(g, s).is_none() { return Err("選択した形が見つかりません"); }
+            count += 1;
+        }
+        if count < 2 { return Err("形を2個以上選んでください"); }
+        Ok((group, count))
+    }
+
     fn same_group_shapes(&self) -> Result<(usize, Vec<usize>), &'static str> {
         let keys = self.selected_shape_keys().ok_or("形をCtrl＋クリックで複数選んでください")?;
         if keys.len() < 2 { return Err("形を2個以上選んでください"); }
@@ -170,15 +189,16 @@ impl App {
             }
             Action::Duplicate => {
                 if !self.multi_sel.is_empty() {
-                    let Ok((_, keys)) = self.same_group_shapes() else { return Some("同じグループ内の形だけ複製できます"); };
-                    if self.scene.shape_count().saturating_add(keys.len()) > MAX_SHAPES { return Some("形の上限に達します"); }
+                    let Ok((_, count)) = self.quick_group_check() else { return Some("同じグループ内の形だけ複製できます"); };
+                    if self.scene.shape_count().saturating_add(count) > MAX_SHAPES { return Some("形の上限に達します"); }
                 } else if self.scene.shape_count() >= MAX_SHAPES { return Some("形の上限に達しました"); }
                 None
             }
             Action::Delete => {
                 if self.sk.edit.is_some() { return Some("輪郭の編集中です。先に編集を終了してください"); }
-                if self.multi_sel.is_empty() || self.selected_shape_keys().is_some() { None }
-                else { Some("グループと形の混在選択は削除できません") }
+                if self.multi_sel.is_empty() ||
+                    (matches!(self.sel, Some(Pick::Shape(..))) && self.multi_sel.iter().all(|p| matches!(p, Pick::Shape(..))))
+                { None } else { Some("グループと形の混在選択は削除できません") }
             }
             Action::EditSketch => {
                 match self.sel {
@@ -197,9 +217,9 @@ impl App {
                     _ => Some("押し出した形を選んでください"),
                 }
             }
-            Action::AlignX | Action::AlignY | Action::AlignZ => self.same_group_shapes().err(),
+            Action::AlignX | Action::AlignY | Action::AlignZ => self.quick_group_check().err(),
             Action::Group => {
-                let Ok((g, _)) = self.same_group_shapes() else { return Some("同じグループ内の形を2個以上選んでください"); };
+                let Ok((g, _)) = self.quick_group_check() else { return Some("同じグループ内の形を2個以上選んでください"); };
                 if self.scene.groups.len() >= MAX_GROUPS { return Some("グループ数の上限に達しました"); }
                 let src = &self.scene.groups[g];
                 if src.pattern.is_some() || src.instance_of.is_some() || src.sketch_holes {
