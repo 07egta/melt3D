@@ -241,6 +241,18 @@ mod tests {
     }
 
     #[test]
+    fn adding_an_organic_vase_opens_its_parametric_inspector() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        let category = library::all().iter().find(|c| c.name == "花瓶・Vase").expect("vases");
+        assert!(insert(&mut app, &ctx, &category.items[0]));
+        assert_eq!(app.sel, Some(Pick::Shape(1, 0)));
+        let shape = app.scene.shape(1, 0).expect("vase");
+        assert!(shape.vase.is_some());
+        assert_eq!(shape.kind, Kind::Revolve);
+    }
+
+    #[test]
     fn the_panel_draws() {
         let ctx = egui::Context::default();
         let mut app = App::new(true, None);
