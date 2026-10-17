@@ -322,7 +322,18 @@ impl App {
                 style::labeled_slider(ui, "壁厚", &mut p.thickness, 0.8..=4.0, "傘の肉厚（mm）。強度保証ではありません");
                 ui.checkbox(&mut p.hollow, "傘を中空にする（下面に開口）");
                 style::labeled_slider(ui, "発光", &mut p.glow, 0.0..=4.0, "見た目の発光。電気部品は含まれません");
-                ui.label(egui::RichText::new("傘・支柱・土台はシーン一覧から個別に編集可能。パラメータ変更で断面は再生成されます。")
+                ui.horizontal_wrapped(|ui| {
+                    ui.label("部品を選択");
+                    for (i, label) in ["傘", "支柱", "土台"].iter().enumerate() {
+                        let selected = self.sel == Some(Pick::Shape(gi, i));
+                        if style::pill(ui, label, selected).clicked()
+                            && self.scene.shape(gi, i).is_some()
+                        {
+                            self.sel = Some(Pick::Shape(gi, i));
+                        }
+                    }
+                });
+                ui.label(egui::RichText::new("選択した部品は右側の位置・回転・材質・輪郭などを個別編集できます。寸法変更で断面は再生成されます。")
                     .size(11.5).color(style::DIM));
                 if ui.button("3Dプリント用に3部品へ分割").clicked() { split = true; }
                 ui.label(egui::RichText::new("分割すると造形面に別々に並びます。個別選択してSTL/3MFで書き出せます。")
