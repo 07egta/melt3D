@@ -202,6 +202,12 @@ impl App {
     ) -> RowResult {
         let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 30.0), Sense::click_and_drag());
         self.row_rects.push((pick, rect));
+        // Right-clicking a scene row opens the same menu as the 3D viewport.
+        // Preserve a Ctrl-created selection when the row is already one of its members.
+        if resp.secondary_clicked() && !self.is_pick_selected(pick) {
+            self.select_pick(Some(pick), false);
+        }
+        resp.context_menu(|ui| self.context_actions(ui));
         let mut out = RowResult::default();
         style::row_bg(ui, &resp, rect, selected);
         // the grip says "drag me"
