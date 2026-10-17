@@ -1071,6 +1071,18 @@ impl App {
         if dir.join("png").exists() && std::fs::remove_file(dir.join("png")).is_ok() {
             self.capture = Some(Capture { path: dir.join("out.png"), frames: 0 });
         }
+        // `hud` shows or hides the frame-time overlay, `bench` starts the speed test window
+        if dir.join("hud").exists() && std::fs::remove_file(dir.join("hud")).is_ok() {
+            self.perf.hud = !self.perf.hud;
+        }
+        if dir.join("where").exists() {
+            // where the overlay is (written to `dir/where.txt` every frame while the file `where` exists)
+            let r = ctx.memory(|m| m.area_rect(egui::Id::new("frame_hud")));
+            let _ = std::fs::write(dir.join("where.txt"), format!("hud {} area {r:?} view {:?} ppp {}\n", self.perf.hud, self.view_rect, ctx.pixels_per_point()));
+        }
+        if dir.join("bench").exists() && std::fs::remove_file(dir.join("bench")).is_ok() {
+            self.perf.bench_requested = true;
+        }
         // `lib` opens the library card; `insert` puts the first people-model and a few more into the scene
         if dir.join("lib").exists() && std::fs::remove_file(dir.join("lib")).is_ok() {
             self.lib_open = true;

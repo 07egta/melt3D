@@ -1,5 +1,5 @@
 //! Keeping MELTCAD light. Pure helpers (so they can be tested without a GPU) for:
-//! - the frame cache: the picture is drawn again only when something it shows has changed;
+//! - the scene revision: the picture is drawn again only when something it shows has changed (see `gpu.rs`);
 //! - the fast mode: while the view or a handle is moving, a cheaper picture is drawn, and a full
 //!   one follows when things have been still for a moment;
 //! - the picture quality choice (render scale);
@@ -33,16 +33,6 @@ pub fn mark(label: &str) {
     if timing_on() {
         let ms = START.get().map_or(0.0, |s| s.elapsed().as_secs_f64() * 1000.0);
         eprintln!("[meltcad] {ms:8.1} ms  {label}");
-    }
-}
-
-/// `mark`, with the time since the last `mark_interval` (for per-frame places), when `MELTCAD_TIMING=1`.
-pub fn mark_interval(label: &str) {
-    if timing_on() {
-        static LAST_US: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let now = START.get().map_or(0, |s| s.elapsed().as_micros() as u64);
-        let before = LAST_US.swap(now, Ordering::Relaxed);
-        mark(&format!("{label} (+{:.1} ms)", now.saturating_sub(before) as f64 / 1000.0));
     }
 }
 
@@ -166,38 +156,6 @@ impl Activity {
     pub fn settle_in(&self, now: f64) -> Option<f64> {
         let left = self.last + SETTLE_SECS - now;
         (left > 0.0).then_some(left + 0.005)
-    }
-}
-
-// ---------------------------------------------------------------------------------------------
-// Frame cache
-
-/// Remembers what the last picture was made from, so that an unchanged scene is not drawn again.
-#[derive(Default, Debug)]
-pub struct FrameCache {
-    last: Vec<f32>,
-    size: [u32; 2],
-    valid: bool,
-}
-
-impl FrameCache {
-    /// True when the picture must be drawn: first time, other numbers or another size.
-    /// Remembers `data` and `size` for next time.
-    pub fn needs_render(&mut self, data: &[f32], size: [u32; 2]) -> bool {
-        let same = self.valid && self.size == size && self.last.len() == data.len() && self.last.iter().zip(data).all(|(a, b)| a.to_bits() == b.to_bits());
-        if same {
-            return false;
-        }
-        self.last.clear();
-        self.last.extend_from_slice(data);
-        self.size = size;
-        self.valid = true;
-        true
-    }
-
-    /// The picture is gone (new texture): draw it again next time.
-    pub fn invalidate(&mut self) {
-        self.valid = false;
     }
 }
 
@@ -428,8 +386,6 @@ pub struct Perf {
     /// What the graphics side reports (timings, how much of the sharp picture is done).
     pub feedback: crate::gpu::Feedback,
     pub pack: PackCache,
-    /// When the frame started (for the processor time of the frame) and when the one before did.
-    pub frame_start: Option<std::time::Instant>,
     /// The scale the last moving picture was asked for, and whether it was a moving picture.
     pub last_scale: f32,
     pub last_fast: bool,
@@ -470,31 +426,6 @@ mod tests {
     use super::*;
     use crate::model::{Kind, Material};
     use crate::sdf::Prepared;
-
-    #[test]
-    fn the_frame_cache_redraws_only_on_change() {
-        let mut c = FrameCache::default();
-        let a = vec![1.0_f32, 2.0, 3.0];
-        assert!(c.needs_render(&a, [10, 10]), "first frame");
-        assert!(!c.needs_render(&a, [10, 10]), "same again");
-        assert!(!c.needs_render(&a.clone(), [10, 10]), "equal copy");
-        assert!(c.needs_render(&[1.0, 2.5, 3.0], [10, 10]), "a number changed");
-        assert!(!c.needs_render(&[1.0, 2.5, 3.0], [10, 10]));
-        assert!(c.needs_render(&[1.0, 2.5, 3.0], [11, 10]), "other size");
-        assert!(c.needs_render(&[1.0, 2.5], [11, 10]), "other length");
-        c.invalidate();
-        assert!(c.needs_render(&[1.0, 2.5], [11, 10]), "texture was replaced");
-    }
-
-    #[test]
-    fn the_frame_cache_is_not_fooled_by_nan() {
-        let mut c = FrameCache::default();
-        let a = [f32::NAN, 1.0];
-        assert!(c.needs_render(&a, [4, 4]));
-        assert!(!c.needs_render(&a, [4, 4]), "NaN equals itself bit for bit");
-        assert!(c.needs_render(&[0.0, 1.0], [4, 4]));
-        assert!(c.needs_render(&[-0.0, 1.0], [4, 4]), "compared bit for bit");
-    }
 
     #[test]
     fn fast_mode_lasts_a_moment_after_the_last_move() {

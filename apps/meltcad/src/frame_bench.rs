@@ -28,6 +28,10 @@ impl Rig {
         crate::style::apply(&ctx);
         ctx.set_pixels_per_point(2.0);
         let mut app = App::new(true, None);
+        // the graphics path counts as ready: the frame packs the scene and hands it to a paint callback (which a test window never runs)
+        app.gpu.easy = false;
+        let generation = app.gpu.status.begin(Instant::now());
+        app.gpu.status.finish_ok(generation, 0.0);
         app.new_scene(scene);
         let mut rig = Rig { ctx, app, time: 0.0, times: Vec::new() };
         for _ in 0..3 {
@@ -165,6 +169,27 @@ fn the_undo_step_is_made_once_when_the_mouse_is_up() {
     assert_ne!(r.app.scene, before);
     r.app.undo();
     assert_eq!(r.app.scene, before, "one drag is one undo step");
+}
+
+#[test]
+fn the_hud_is_drawn_inside_the_viewport_when_switched_on() {
+    let (sc, pick) = scene_with_pipe(5);
+    let mut r = Rig::new(sc);
+    r.app.sel = Some(pick);
+    r.frame(vec![]);
+    assert!(r.ctx.memory(|m| m.area_rect(egui::Id::new("frame_hud"))).is_none(), "off by default");
+    r.app.perf.hud = true;
+    for _ in 0..3 {
+        r.frame(vec![]);
+    }
+    let Some(area) = r.ctx.memory(|m| m.area_rect(egui::Id::new("frame_hud"))) else { panic!("the HUD was not drawn") };
+    let view = r.app.view_rect;
+    assert!(area.width() > 100.0 && area.height() > 40.0, "{area:?}");
+    assert!(view.contains_rect(area), "{area:?} not inside {view:?}");
+    // the F3 key switches it
+    r.app.perf.hud = false;
+    r.frame(vec![egui::Event::Key { key: egui::Key::F3, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE }]);
+    assert!(r.app.perf.hud, "F3 switches the HUD on");
 }
 
 /// `cargo test -p meltcad --release frame_cpu_bench -- --ignored --nocapture`

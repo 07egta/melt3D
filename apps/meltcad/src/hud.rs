@@ -44,6 +44,8 @@ pub struct Summary {
     pub cpu_worst_ms: f32,
     pub gpu_avg_ms: Option<f32>,
     pub gpu_worst_ms: Option<f32>,
+    /// The last scene pass, when none was timed in the last second (the picture was still).
+    pub gpu_last_ms: Option<f32>,
 }
 
 impl FrameStats {
@@ -109,6 +111,7 @@ impl FrameStats {
             cpu_worst_ms: worst(&cpu),
             gpu_avg_ms: (!gpu.is_empty()).then(|| avg(&gpu)),
             gpu_worst_ms: (!gpu.is_empty()).then(|| worst(&gpu)),
+            gpu_last_ms: if gpu.is_empty() { self.gpu.back().map(|g| g.1) } else { None },
         }
     }
 
@@ -157,6 +160,7 @@ pub fn lines(s: &Summary, c: &Context) -> Vec<String> {
     out.push(format!("CPU 平均 {} / 最悪 {} ms", ms(s.cpu_avg_ms), ms(s.cpu_worst_ms)));
     out.push(match (s.gpu_avg_ms, s.gpu_worst_ms) {
         (Some(a), Some(w)) => format!("GPU(シーン) 平均 {} / 最悪 {} ms", ms(a), ms(w)),
+        _ if s.gpu_last_ms.is_some() => format!("GPU(シーン) さいごの1回 {} ms", ms(s.gpu_last_ms.unwrap_or(0.0))),
         _ if c.gpu_timing => "GPU(シーン) 計測まち…".to_string(),
         _ => "GPU の時間はこの機械では測れません".to_string(),
     });
@@ -279,7 +283,7 @@ mod tests {
 
     #[test]
     fn the_hud_lines_tell_the_story() {
-        let sum = Summary { fps: 31.0, interval_avg_ms: 32.0, interval_worst_ms: 120.0, interval_worst_long_ms: 700.0, cpu_avg_ms: 2.5, cpu_worst_ms: 9.0, gpu_avg_ms: Some(28.0), gpu_worst_ms: Some(40.0) };
+        let sum = Summary { fps: 31.0, interval_avg_ms: 32.0, interval_worst_ms: 120.0, interval_worst_long_ms: 700.0, cpu_avg_ms: 2.5, cpu_worst_ms: 9.0, gpu_avg_ms: Some(28.0), gpu_worst_ms: Some(40.0), gpu_last_ms: None };
         let ctx = Context { shapes: 12, instances: 3, groups: 2, scale: 0.5, adapter: "Vulkan / Test".into(), gpu_timing: true, fast: true, sharp: 0.0, pixels: [1264, 720], quality: "じどう".into() };
         let l = lines(&sum, &ctx);
         let all = l.join("\n");
@@ -294,5 +298,7 @@ mod tests {
         assert!(all.contains("測れません") && all.contains("40%"));
         let c3 = Context { gpu_timing: true, fast: false, sharp: 1.0, ..ctx };
         assert!(lines(&none, &c3).join("\n").contains("計測まち"));
+        let last = Summary { gpu_last_ms: Some(12.5), ..none };
+        assert!(lines(&last, &c3).join("\n").contains("さいごの1回 12.5 ms"));
     }
 }

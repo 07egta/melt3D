@@ -56,6 +56,7 @@ impl ScaleController {
     }
 
     /// Forget what was measured (another scene, another window size).
+    #[cfg(test)]
     pub fn reset(&mut self) {
         *self = ScaleController::default();
     }
@@ -145,6 +146,7 @@ impl BandPacer {
         }
     }
 
+    #[cfg(test)]
     pub fn reset(&mut self) {
         *self = BandPacer::default();
     }

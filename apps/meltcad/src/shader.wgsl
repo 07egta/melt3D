@@ -472,15 +472,40 @@ fn seg_sphere(o: vec3<f32>, d: vec3<f32>, dd: f32, t0: f32, t1: f32, s: vec4<f32
     return length(s.xyz - (o + d * tp)) - s.w;
 }
 
-// The items and shapes near the ray `ro + rd * t` for t in [t0, t1].
-fn find_candidates(ro: vec3<f32>, rd: vec3<f32>, t0: f32, t1: f32) {
+// A curve (kind 18) is a thin tube inside a big sphere: is the ray (o + d * t, t in [t0, t1], in the
+// space of the group, `scl` = its scale) farther than `margin` from every one of the spheres around
+// its groups of segments (shader_curve.wgsl)?
+fn curve_far(rec: i32, o: vec3<f32>, d: vec3<f32>, t0: f32, t1: f32, scl: f32, margin: f32) -> bool {
+    let ext = D(rec + 12);
+    let st = i32(ext.x + 0.5);
+    let n = min(i32(ext.y + 0.5), 96);
+    if (n < 2 || st < 2) { return false; }
+    let sc = D(rec + 5);
+    let pos = D(rec + 4);
+    let r0 = D(rec + 1);
+    let r1 = D(rec + 2);
+    let r2 = D(rec + 3);
+    // the ray in the curve's own space, where shape_dist measures (and then scales the distance by pos.w)
+    let oo = o - pos.xyz;
+    let q0 = vec3<f32>(dot(r0.xyz, oo), dot(r1.xyz, oo), dot(r2.xyz, oo)) / sc.xyz;
+    let qd = vec3<f32>(dot(r0.xyz, d), dot(r1.xyz, d), dot(r2.xyz, d)) / sc.xyz;
+    let dd = max(dot(qd, qd), 1e-12);
+    let ng = (n - 1 + CURVE_GROUP - 1) / CURVE_GROUP;
+    for (var g = 0; g < ng; g = g + 1) {
+        let sp = path_pt(st + n + g);
+        if (seg_sphere(q0, qd, dd, t0, t1, sp) * pos.w * scl < margin) { return false; }
+    }
+    return true;
+}
+
+// The items and shapes near the ray `ro + rd * t` for t in [t0, t1]; `slack` is added to every reach
+// (the drip moves the point the shapes are measured at, and the selection outline looks a few pixels out).
+fn find_candidates(ro: vec3<f32>, rd: vec3<f32>, t0: f32, t1: f32, slack: f32) {
     for (var w = 0; w < 8; w = w + 1) { cand[w] = 0u; }
     ncs = 0;
     ovf = false;
     let amount = G.melt.y;
     let rm = reach_mult();
-    // (the drip moves the point the shapes are measured at, up to G.melt.z; a little for pixel footprint and rounding)
-    let slack = 1.0 + G.melt.z + 0.004 * t1;
     let ng = i32(G.counts.x + 0.5);
     for (var gi = 0; gi < ng; gi = gi + 1) {
         let gb = group_at(gi);
@@ -532,7 +557,9 @@ fn find_candidates(ro: vec3<f32>, rd: vec3<f32>, t0: f32, t1: f32) {
                     let misc = D(rec + 7);
                     let op = misc.x;
                     if (op > -0.5 && op < 0.5) { continue; }   // a stain changes no distance
-                    if (op < 1.5 && seg_sphere(o, d, dd, t0, t1, D(rec)) * scl >= rm * misc.y * amount + slack) { continue; }
+                    let reach = rm * misc.y * amount + slack;
+                    if (op < 1.5 && seg_sphere(o, d, dd, t0, t1, D(rec)) * scl >= reach) { continue; }
+                    if (op < 1.5 && i32(D(rec + 5).w + 0.5) == 18 && curve_far(rec, o, d, t0, t1, scl, reach)) { continue; }
                     if (ncs < MAXC) {
                         cs[ncs] = (key << 9u) | u32(first + si);
                         ncs = ncs + 1;
@@ -1032,9 +1059,13 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
     use_cand = false;
     var list_ok = false;
     if (run && !glow_scene && G.offs2.z < 0.5) {
-        find_candidates(ro, rd, t, t_cut);
+        // (the selection outline looks a few pixels out from the ray)
+        let slack = 1.0 + G.melt.z + 3.0 * select(t_cut * foot, foot, tanh <= 0.0);
+        find_candidates(ro, rd, t, t_cut, slack);
         use_cand = true;
         list_ok = !ovf;
+        // nothing near the ray: it cannot hit anything
+        if (ncs == 0 && !ovf) { run = false; }
     }
     // Over-relaxed sphere tracing: steps a little longer than the distance, taken back when two
     // steps would have jumped over a surface. Lamps and a selected carver need small steps.
