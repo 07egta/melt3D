@@ -274,9 +274,12 @@ impl ExportField<'_> {
                     // of any world point; instances have rigid rotations.
                     let min_scale = sh.scale.iter().copied().fold(f32::INFINITY, f32::min)
                         .max(0.01) * instance.s.max(1e-6);
-                    let radius = (reach_of(sh) as f32 * 1.1
+                    // Only the source's geometric radius follows the
+                    // pattern scale; drip and Boolean blend reach are in the
+                    // receiving scene's world units.
+                    let radius = (reach_of(sh) as f32 * 1.1 * instance.s.max(1e-6))
                         + mult * amount * (sh.blend + group.blend).max(0.0)
-                        + drip + 4.0) * instance.s.max(1e-6);
+                        + drip + 4.0;
                     twists.push(TwistInfluence {
                         center: instance.apply(sh.pos),
                         radius,
