@@ -54,6 +54,8 @@ pub struct App {
     pub extra_selected: BTreeSet<Pick>,
     pub tree_anchor: Option<Pick>,
     pub tree_query: String,
+    /// Request a single jump when the viewport selects an out-of-view tree row.
+    pub tree_scroll_target: Option<Pick>,
     pub rename_text: String,
     pub tool: Tool,
     /// What a new shape does: add to the group or carve from it.
@@ -156,6 +158,7 @@ impl App {
             extra_selected: BTreeSet::new(),
             tree_anchor: None,
             tree_query: String::new(),
+            tree_scroll_target: None,
             rename_text: String::new(),
             tool: Tool::All,
             new_op: Op::Add,
@@ -286,6 +289,23 @@ impl App {
             self.sel = Some(pick);
         }
         self.tree_anchor = Some(pick);
+        if let Pick::Shape(g, _) = pick { self.folded.remove(&g); }
+    }
+
+    /// Reveal viewport selections in the tree even when a group is folded or a
+    /// stale name filter would otherwise hide the selected object.
+    pub fn reveal_in_tree(&mut self, pick: Pick) {
+        if let Pick::Shape(g, _) = pick { self.folded.remove(&g); }
+        if !self.tree_query.trim().is_empty() {
+            let search = self.tree_query.trim().to_lowercase();
+            let matches = match pick {
+                Pick::Group(g) => self.scene.groups.get(g).is_some_and(|gr| gr.name.to_lowercase().contains(&search)),
+                Pick::Shape(g, s) => self.scene.groups.get(g).is_some_and(|gr| gr.name.to_lowercase().contains(&search)
+                    || gr.shapes.get(s).is_some_and(|sh| sh.name.to_lowercase().contains(&search))),
+            };
+            if !matches { self.tree_query.clear(); }
+        }
+        self.tree_scroll_target = Some(pick);
     }
 
     pub fn select_tree_range(&mut self, clicked: Pick, visible: &[Pick]) {
@@ -473,6 +493,7 @@ impl App {
         self.extra_selected.clear();
         self.tree_anchor = self.sel;
         self.renaming = None;
+        self.tree_scroll_target = None;
         self.folded.clear();
         self.path = path;
         self.dirty = false;
@@ -674,7 +695,7 @@ impl App {
         if picks.is_empty() {
             return;
         }
-        if picks.iter().any(|&p| self.scene.is_locked(p)) {
+        if picks.iter().any(|&p| self.scene.is_locked(p) || matches!(p, Pick::Group(g) if self.scene.groups.get(g).is_some_and(|gr| gr.shapes.iter().any(|sh| sh.locked)))) {
             self.notice = Some("ロック中の形・グループは削除できません。先に鍵を外してください".into());
             return;
         }
