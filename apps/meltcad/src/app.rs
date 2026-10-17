@@ -1314,8 +1314,17 @@ impl App {
                         // the message goes away by itself: wake up when it is due
                         ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64((5.0 - (now - self.status.1)).max(0.0) + 0.05));
                     }
-                    let hint = crate::gizmo::hint(self.tool);
-                    ui.label(RichText::new(if note.is_empty() { hint.to_string() } else { note }).size(12.0).color(style::DIM));
+                    let hint = if self.beginner_ui {
+                        if ui.available_width() < 760.0 {
+                            "左で形を追加 → 上の「編集」で調整".to_string()
+                        } else {
+                            "左の「箱・球」から形を追加 → 形を選ぶ → 上の「編集」で大きさを変える".to_string()
+                        }
+                    } else {
+                        crate::gizmo::hint(self.tool).to_string()
+                    };
+                    ui.label(RichText::new(if note.is_empty() { hint } else { note }).size(12.0).color(style::DIM));
+                    if ui.available_width() > 470.0 {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let name = self
                             .path
@@ -1330,6 +1339,7 @@ impl App {
                                 .color(style::DIM),
                         );
                     });
+                    }
                 });
             });
     }
