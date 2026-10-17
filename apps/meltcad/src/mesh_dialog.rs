@@ -102,7 +102,11 @@ fn launch_rebake(req: &mut RebakeRequest) {
         if c.cancel.load(Ordering::Relaxed) { return Err(ERR_CANCEL.into()); }
         let y_up = orig.mesh_source.as_ref().map_or(loaded.imported.format.y_up_by_default(), |src| src.y_up);
         let size = [0, 1, 2].map(|a| orig.size[a] * orig.scale[a]);
-        let before = mesh_import::surface_residual(&loaded.imported.mesh, y_up, size, &old);
+        let before = mesh_import::surface_residual(&loaded.imported.mesh, y_up, orig.size, &old);
+        // The old SDF is sampled in its original unscaled local coordinates.
+        // Convert the old residuals into conservative world-mm values.
+        let old_scale = orig.scale.into_iter().fold(0.0f32, f32::max);
+        let before = (before.0 * old_scale, before.1 * old_scale, before.2);
         let baked = mesh_import::rebake(&loaded.imported.mesh, y_up, size, resolution, &c)?;
         if c.cancel.load(Ordering::Relaxed) { return Err(ERR_CANCEL.into()); }
         let after = mesh_import::surface_residual(&loaded.imported.mesh, y_up, size, &baked.volume);
@@ -203,7 +207,11 @@ fn rebake_panel(app: &mut App, ctx: &egui::Context) {
         if let Some(path) = rfd::FileDialog::new().add_filter("メッシュ", &mesh_import::EXTENSIONS).pick_file() { req.path = Some(path); }
     }
     if start { launch_rebake(&mut req); }
-    if !close { ctx.data_mut(|m| m.insert_temp(rebake_id(), req)); }
+    if close {
+        if let Some(j) = &req.job { j.ctl.cancel.store(true, Ordering::Relaxed); }
+    } else {
+        ctx.data_mut(|m| m.insert_temp(rebake_id(), req));
+    }
 }
 
 #[derive(Clone)]
