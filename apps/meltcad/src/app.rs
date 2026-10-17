@@ -10,7 +10,7 @@ use crate::gizmo::{Drag, Tool};
 use crate::model::{Group, Kind, MAX_GROUPS, MAX_SHAPES, Material, Op, Pick, Scene, Shape};
 use crate::sdf::Field;
 use crate::view::centre_of;
-use crate::{glyphs, style};
+use crate::{glyphs, style, ui_layout};
 
 #[cfg(test)]
 #[path = "app_preview.rs"]
@@ -89,6 +89,11 @@ pub struct App {
     /// A left-drag that began on empty space is turning the view.
     pub orbiting: bool,
     pub show_keys: bool,
+    /// Simplified first-run layout: visible labels and only frequently used tools.
+    pub beginner_ui: bool,
+    /// Docks can be independently opened; closed docks do not consume viewport width.
+    pub show_scene_dock: bool,
+    pub show_properties: bool,
     /// Which tab of the right panel is showing.
     pub tab: Tab,
     /// The material list's chosen category (None = the person's saved ones).
@@ -168,6 +173,9 @@ impl App {
             fly: None,
             orbiting: false,
             show_keys: false,
+            beginner_ui: true,
+            show_scene_dock: false,
+            show_properties: false,
             tab: Tab::Shape,
             mat_cat: Some(crate::materials::Category::Basic),
             mat_group: false,
@@ -420,6 +428,7 @@ impl App {
         let n = self.scene.groups[g].shapes.len();
         self.scene.groups[g].shapes.push(sh);
         self.sel = Some(Pick::Shape(g, n));
+        if self.beginner_ui { self.show_properties = true; self.show_scene_dock = false; }
     }
 
     fn next_material(&self) -> Material {
@@ -728,22 +737,33 @@ impl App {
 
     // ----- layout -----
 
-    fn top_bar(&mut self, ui: &mut Ui) {
-        let ctx = ui.ctx().clone();
-        egui::Panel::top("top").exact_size(46.0).frame(egui::Frame::new().fill(style::PANEL_DARK).inner_margin(egui::Margin::symmetric(12, 6))).show(
-            ui,
-            |ui| {
-                let bar = ui.max_rect();
-                style::panel_sheen(ui, bar.expand2(egui::vec2(12.0, 6.0)), style::PANEL_DARK, style::Edge::Bottom);
-                // left: logo, file, edit, undo / redo, search.  right: export.  middle: the file name.
-                ui.horizontal_centered(|ui| {
-                    ui.spacing_mut().item_spacing.x = 6.0;
-                    let (mark, _) = ui.allocate_exact_size(egui::vec2(18.0, 18.0), egui::Sense::hover());
-                    ui.painter().circle_filled(mark.center(), 8.0, style::ACCENT);
-                    ui.painter().circle_filled(mark.center() + egui::vec2(-2.5, -2.5), 2.6, Color32::from_white_alpha(120));
-                    ui.label(RichText::new("MELTCAD").size(14.0).strong().color(style::TEXT));
-                    style::vsep(ui);
-                    style::menu_button(ui, "ファイル", false, |ui| {
+    fn set_display_mode(&mut self, beginner: bool, window_width: f32) {
+        self.beginner_ui = beginner;
+        if beginner {
+            self.show_scene_dock = false;
+            self.show_properties = false;
+        } else {
+            self.show_properties = true;
+            self.show_scene_dock = !ui_layout::compact(window_width);
+        }
+    }
+
+    fn toggle_dock(&mut self, scene: bool, window_width: f32) {
+        if scene {
+            self.show_scene_dock = !self.show_scene_dock;
+            if self.show_scene_dock && ui_layout::compact(window_width) {
+                self.show_properties = false;
+            }
+        } else {
+            self.show_properties = !self.show_properties;
+            if self.show_properties && ui_layout::compact(window_width) {
+                self.show_scene_dock = false;
+            }
+        }
+    }
+
+    fn file_menu_items(&mut self, ui: &mut Ui, ctx: &egui::Context) {
+
                         if ui.button("新しく作る").clicked() {
                             self.new_scene(Scene::default());
                             ui.close();
@@ -781,8 +801,11 @@ impl App {
                             self.start_png(&ctx);
                             ui.close();
                         }
-                    });
-                    style::menu_button(ui, "編集", false, |ui| {
+
+    }
+
+    fn edit_menu_items(&mut self, ui: &mut Ui, ctx: &egui::Context) {
+
                         if ui.button("コピー　Ctrl+C").clicked() {
                             self.copy(&ctx);
                             ui.close();
@@ -829,22 +852,11 @@ impl App {
                             self.delete_selected();
                             ui.close();
                         }
-                    });
-                    style::vsep(ui);
-                    if style::icon_button(ui, 32.0, "元に戻す (Ctrl+Z)", false, glyphs::undo).clicked() {
-                        self.undo();
-                    }
-                    if style::icon_button(ui, 32.0, "やり直し (Ctrl+Shift+Z)", false, glyphs::redo).clicked() {
-                        self.redo();
-                    }
-                    style::vsep(ui);
-                    if style::pill(ui, "さがす  F", false).on_hover_text("形・ライブラリ・コマンドをさがす (F)").clicked() {
-                        palette::open(&ctx);
-                    }
-                    let left_end = ui.cursor().left();
-                    let right_start = ui.max_rect().right();
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        style::menu_button(ui, "書き出し", true, |ui| {
+
+    }
+
+    fn export_menu_items(&mut self, ui: &mut Ui, ctx: &egui::Context) {
+
                             if ui.button("書き出し…").on_hover_text("STL・3MF・OBJ・PLY・GLB。細かさ・単位・色など").clicked() {
                                 crate::export_dialog::open(&ctx, None);
                                 ui.close();
@@ -862,32 +874,197 @@ impl App {
                                 self.print_check(&ctx);
                                 ui.close();
                             }
+
+    }
+
+    /// All creation commands remain reachable, grouped by the kind of thing made.
+    fn shape_category_menu(&mut self, ui: &mut Ui, ctx: &egui::Context) {
+        ui.label(RichText::new("基本の立体").strong());
+        for kind in Kind::MAIN {
+            if ui.button(format!("＋ {}", kind.label())).on_hover_text("クリックすると新しい形を追加します").clicked() {
+                self.add_shape(ctx, kind);
+                ui.close();
+            }
+        }
+        ui.separator();
+        ui.menu_button("装飾・特殊な立体", |ui| {
+            for kind in Kind::MORE {
+                if ui.button(format!("＋ {}", kind.label())).clicked() {
+                    self.add_shape(ctx, kind);
+                    ui.close();
+                }
+            }
+        });
+        ui.menu_button("CAD作図・曲線", |ui| {
+            for kind in Kind::CAD {
+                if ui.button(format!("＋ {}", kind.label())).clicked() {
+                    self.add_shape(ctx, kind);
+                    ui.close();
+                }
+            }
+        });
+        ui.separator();
+        if ui.button("スケッチを描く（平面から立体へ）").clicked() {
+            self.set_sketch_tool(true);
+            ui.close();
+        }
+        if ui.button("モデルライブラリから選ぶ").clicked() {
+            self.lib_open = true;
+            self.show_scene_dock = true;
+            self.show_properties = false;
+            ui.close();
+        }
+    }
+
+    fn top_bar(&mut self, ui: &mut Ui) {
+        let ctx = ui.ctx().clone();
+        let width = ui.available_width();
+        let compact = width < ui_layout::COMPACT_WINDOW;
+        let tiny = width < ui_layout::TINY_HEADER;
+        egui::Panel::top("top").exact_size(48.0)
+            .frame(egui::Frame::new().fill(style::PANEL_DARK).inner_margin(egui::Margin::symmetric(if tiny { 5 } else { 10 }, 5)))
+            .show(ui, |ui| {
+                style::panel_sheen(ui, ui.max_rect(), style::PANEL_DARK, style::Edge::Bottom);
+                ui.horizontal_centered(|ui| {
+                    ui.spacing_mut().item_spacing.x = if tiny { 3.0 } else { 6.0 };
+                    ui.label(RichText::new(if tiny { "YURA" } else { "YuraCAD" }).size(if tiny { 12.0 } else { 14.0 }).strong().color(style::TEXT));
+                    if compact {
+                        style::menu_button(ui, "メニュー", false, |ui| {
+                            ui.menu_button("ファイル", |ui| self.file_menu_items(ui, &ctx));
+                            ui.menu_button("編集", |ui| self.edit_menu_items(ui, &ctx));
+                            ui.separator();
+                            if ui.button("元に戻す (Ctrl+Z)").clicked() { self.undo(); ui.close(); }
+                            if ui.button("やり直し (Ctrl+Shift+Z)").clicked() { self.redo(); ui.close(); }
+                            if ui.button("すべての機能をさがす (F)").clicked() { palette::open(&ctx); ui.close(); }
+                            if ui.button("操作のしかた (F1)").clicked() { self.show_keys = true; ui.close(); }
+                            if tiny {
+                                ui.separator();
+                                if ui.button(if self.beginner_ui { "詳細表示にする" } else { "初心者向け表示にする" }).clicked() {
+                                    self.set_display_mode(!self.beginner_ui, width);
+                                    ui.close();
+                                }
+                                if ui.button(if self.show_scene_dock { "シーンを閉じる" } else { "シーン一覧を開く" }).clicked() {
+                                    self.toggle_dock(true, width);
+                                    ui.close();
+                                }
+                                if ui.button("書き出し…").clicked() { crate::export_dialog::open(&ctx, None); ui.close(); }
+                            }
+                            let mut menu = crate::perf::MenuState { quality: self.perf.quality, hud: self.perf.hud, bench: false };
+                            crate::perf::quality_menu(ui, &mut menu, |ui| self.gpu_menu_items(ui));
+                            self.perf.quality = menu.quality;
+                            self.perf.hud = menu.hud;
+                            self.perf.bench_requested |= menu.bench;
                         });
-                        let mut menu = crate::perf::MenuState { quality: self.perf.quality, hud: self.perf.hud, bench: false };
-                        crate::perf::quality_menu(ui, &mut menu, |ui| self.gpu_menu_items(ui));
-                        self.perf.quality = menu.quality;
-                        self.perf.hud = menu.hud;
-                        self.perf.bench_requested |= menu.bench;
+                    } else {
+                        style::menu_button(ui, "ファイル", false, |ui| self.file_menu_items(ui, &ctx));
+                        style::menu_button(ui, "編集", false, |ui| self.edit_menu_items(ui, &ctx));
+                        if style::icon_button(ui, 30.0, "元に戻す (Ctrl+Z)", false, glyphs::undo).clicked() { self.undo(); }
+                        if style::icon_button(ui, 30.0, "やり直し (Ctrl+Shift+Z)", false, glyphs::redo).clicked() { self.redo(); }
+                        if style::pill(ui, "さがす F", false).on_hover_text("形・モデル・操作を名前でさがす").clicked() { palette::open(&ctx); }
+                    }
+
+                    if tiny {
+                        if ui.button("編集").on_hover_text("選択した形の設定パネルを開閉").clicked() { self.toggle_dock(false, width); }
+                        if ui.button("保存").on_hover_text("作品を保存 (Ctrl+S)").clicked() { self.save(&ctx, false); }
+                    } else {
+                        if style::pill(ui, "保存", false).on_hover_text("作品を保存 (Ctrl+S)").clicked() { self.save(&ctx, false); }
+                        if style::pill(ui, if self.show_scene_dock { "シーン ×" } else { "シーン" }, self.show_scene_dock)
+                            .on_hover_text("形の一覧・モデルライブラリを開閉").clicked() { self.toggle_dock(true, width); }
+                        if style::pill(ui, if self.show_properties { "編集 ×" } else { "編集" }, self.show_properties)
+                            .on_hover_text("選択した形のサイズ・位置・材質などを表示").clicked() { self.toggle_dock(false, width); }
+                        if style::pill(ui, if self.beginner_ui { "詳細へ" } else { "かんたんへ" }, false)
+                            .on_hover_text("初心者向け / 詳細表示を切り替える。機能は削除されません").clicked() {
+                            self.set_display_mode(!self.beginner_ui, width);
+                        }
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if !tiny {
+                            style::menu_button(ui, "書き出し", true, |ui| self.export_menu_items(ui, &ctx));
+                        }
+                        if !compact {
+                            let mut menu = crate::perf::MenuState { quality: self.perf.quality, hud: self.perf.hud, bench: false };
+                            crate::perf::quality_menu(ui, &mut menu, |ui| self.gpu_menu_items(ui));
+                            self.perf.quality = menu.quality;
+                            self.perf.hud = menu.hud;
+                            self.perf.bench_requested |= menu.bench;
+                        }
                     });
-                    // the file name in the middle of the bar
-                    let name = self.path.as_ref().and_then(|p| p.file_stem()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "名前なし".into());
-                    let label = format!("{}{}", name, if self.dirty { " ●" } else { "" });
-                    let cx = bar.center().x.clamp(left_end + 60.0, (right_start - 220.0).max(left_end + 60.0));
-                    ui.painter().text(egui::pos2(cx, bar.center().y), egui::Align2::CENTER_CENTER, label, egui::FontId::proportional(13.0), style::DIM);
                 });
-            },
-        );
+            });
+    }
+
+    fn simple_tool_strip(&mut self, _ui: &mut Ui) {
+        let ctx = _ui.ctx().clone();
+        let rect = self.view_rect;
+        let narrow = rect.width() < 430.0;
+        let tool_width = if narrow { 82.0 } else { 118.0 };
+        egui::Area::new(egui::Id::new("simple_tool_strip"))
+            .order(egui::Order::Middle)
+            .fixed_pos(rect.left_top() + egui::vec2(7.0, 9.0))
+            .show(&ctx, |ui| {
+                style::strip().show(ui, |ui| {
+                    ui.set_width(tool_width);
+                    egui::ScrollArea::vertical()
+                        .max_height((rect.height() - 82.0).clamp(65.0, rect.height().max(65.0)))
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            ui.vertical(|ui| {
+                                ui.spacing_mut().item_spacing.y = 5.0;
+                                if !narrow { ui.label(RichText::new("形を作る").size(12.0).strong().color(style::DIM)); }
+                                for kind in [Kind::Box, Kind::Sphere, Kind::Cylinder] {
+                                    if ui.add_sized([tool_width, 30.0], egui::Button::new(format!("＋ {}", kind.label())))
+                                        .on_hover_text("クリックすると立体を追加します").clicked() {
+                                        self.add_shape(&ctx, kind);
+                                    }
+                                }
+                                style::menu_button(ui, "ほかの形 ▾", false, |ui| self.shape_category_menu(ui, &ctx));
+                                ui.separator();
+                                if ui.add_sized([tool_width, 32.0], egui::Button::new(if self.sk.on { "✓ スケッチ" } else { "スケッチ" }))
+                                    .on_hover_text("平面に線を描き、押し出しなどで立体にする").clicked() {
+                                    self.set_sketch_tool(!self.sk.on);
+                                }
+                                if !narrow {
+                                    ui.horizontal(|ui| { self.curve_button(ui); ui.label(RichText::new("線を描く").size(11.0)); });
+                                    ui.horizontal(|ui| { self.pipe_button(ui); ui.label(RichText::new("パイプ").size(11.0)); });
+                                } else {
+                                    style::menu_button(ui, "線・パイプ", false, |ui| {
+                                        ui.horizontal(|ui| { self.curve_button(ui); ui.label("線を描く"); });
+                                        ui.horizontal(|ui| { self.pipe_button(ui); ui.label("パイプを描く"); });
+                                    });
+                                }
+                                ui.separator();
+                                for (op, label, tip) in [
+                                    (Op::Add, "＋ 足す", "次の形をくっつける"),
+                                    (Op::Subtract, "－ 削る", "次の形で穴をあける"),
+                                ] {
+                                    if ui.add_sized([tool_width, 28.0], egui::Button::new(label).selected(self.new_op == op))
+                                        .on_hover_text(tip).clicked() { self.new_op = op; }
+                                }
+                                style::menu_button(ui, "その他の操作", false, |ui| {
+                                    for (op, label) in [(Op::Paint, "● 色を塗る"), (Op::Intersect, "◐ 重なりだけ残す")] {
+                                        if ui.selectable_label(self.new_op == op, label).clicked() { self.new_op = op; ui.close(); }
+                                    }
+                                    if ui.button("グループを作る").clicked() { self.add_group(); ui.close(); }
+                                });
+                            });
+                        });
+                });
+            });
     }
 
     /// The tools down the left side of the viewport: the shapes to add, the curve, the operation, groups.
     fn tool_strip(&mut self, ui: &mut Ui) {
+        if self.beginner_ui {
+            self.simple_tool_strip(ui);
+            return;
+        }
         let ctx = ui.ctx().clone();
         let rect = self.view_rect;
         egui::Area::new(egui::Id::new("tool_strip")).order(egui::Order::Middle).fixed_pos(rect.left_top() + egui::vec2(12.0, 12.0)).show(&ctx, |ui| {
             style::strip().show(ui, |ui| {
                 ui.spacing_mut().item_spacing = egui::vec2(0.0, 4.0);
                 // a tall strip scrolls instead of running off a small window
-                egui::ScrollArea::vertical().max_height((rect.height() - 40.0).max(120.0)).auto_shrink([true, true]).show(ui, |ui| {
+                egui::ScrollArea::vertical().max_height((rect.height() - 40.0).clamp(45.0, rect.height().max(45.0))).auto_shrink([true, true]).show(ui, |ui| {
                 ui.vertical_centered(|ui| {
                     for k in Kind::MAIN {
                         let r = style::icon_button(ui, 38.0, k.label(), false, |p, r, ink| glyphs::kind(p, r, k, ink, Color32::from_white_alpha(18)));
@@ -952,12 +1129,21 @@ impl App {
 
     /// The docked panel on the left: the scene list (outliner) and the ready-made models (assets).
     fn left_dock(&mut self, ui: &mut Ui) {
-        egui::Panel::left("dock").exact_size(272.0).resizable(false).frame(egui::Frame::new().fill(style::PANEL_DARK).inner_margin(egui::Margin::symmetric(10, 10))).show(
+        let dock_width = ui_layout::dock_width(ui.available_width(), if self.beginner_ui { ui_layout::SIMPLE_DOCK } else { ui_layout::CLASSIC_DOCK });
+        egui::Panel::left("dock").exact_size(dock_width).resizable(false).frame(egui::Frame::new().fill(style::PANEL_DARK).inner_margin(egui::Margin::symmetric(10, 10))).show(
             ui,
             |ui| {
                 style::panel_sheen(ui, ui.max_rect().expand2(egui::vec2(10.0, 10.0)), style::PANEL_DARK, style::Edge::Left);
                 let tabs = [("シーン", ""), ("ライブラリ", "")];
-                if let Some(i) = style::segmented(ui, "dock_tabs", &tabs, Some(usize::from(self.lib_open)), true) {
+                if dock_width < 210.0 {
+                    egui::ComboBox::from_id_salt("dock_tabs_compact")
+                        .selected_text(if self.lib_open { "モデルライブラリ" } else { "シーン一覧" })
+                        .width(ui.available_width())
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut self.lib_open, false, "シーン一覧");
+                            ui.selectable_value(&mut self.lib_open, true, "モデルライブラリ");
+                        });
+                } else if let Some(i) = style::segmented(ui, "dock_tabs", &tabs, Some(usize::from(self.lib_open)), true) {
                     self.lib_open = i == 1;
                 }
                 ui.add_space(6.0);
@@ -993,6 +1179,7 @@ impl App {
                 style::card().show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 8.0;
+                        let compact_tools = rect.width() < ui_layout::COMPACT_TOOLS;
                         let tools = [
                             (Tool::Select, "選ぶ", "選ぶだけ (Q)"),
                             (Tool::All, "ぜんぶ", "動かす・回す・大きさ ぜんぶ (A)"),
@@ -1000,16 +1187,33 @@ impl App {
                             (Tool::Rotate, "回す", "回す (E)"),
                             (Tool::Scale, "大きさ", "大きさ (R)"),
                         ];
-                        let items: Vec<(&str, &str)> = tools.iter().map(|t| (t.1, t.2)).collect();
-                        let sel = tools.iter().position(|t| t.0 == self.tool);
-                        if let Some(i) = style::segmented(ui, "tool_pill_tools", &items, sel, false)
-                            && let Some(t) = tools.get(i)
-                        {
-                            self.tool = t.0;
-                        }
-                        style::vsep(ui);
-                        if style::pill(ui, if self.cam.ortho { "平行" } else { "遠近" }, false).on_hover_text("遠近 / 平行 (5)").clicked() {
-                            self.cam.ortho = !self.cam.ortho;
+                        if compact_tools {
+                            let label = tools.iter().find(|t| t.0 == self.tool).map_or("選ぶ", |t| t.1);
+                            style::menu_button(ui, &format!("道具: {label} ▾"), false, |ui| {
+                                for (tool, name, hint) in tools {
+                                    if ui.selectable_label(self.tool == tool, name).on_hover_text(hint).clicked() {
+                                        self.tool = tool;
+                                        ui.close();
+                                    }
+                                }
+                                ui.separator();
+                                if ui.button(if self.cam.ortho { "遠近に切り替える" } else { "平行に切り替える" }).clicked() {
+                                    self.cam.ortho = !self.cam.ortho;
+                                    ui.close();
+                                }
+                            });
+                        } else {
+                            let items: Vec<(&str, &str)> = tools.iter().map(|t| (t.1, t.2)).collect();
+                            let sel = tools.iter().position(|t| t.0 == self.tool);
+                            if let Some(i) = style::segmented(ui, "tool_pill_tools", &items, sel, false)
+                                && let Some(t) = tools.get(i)
+                            {
+                                self.tool = t.0;
+                            }
+                            style::vsep(ui);
+                            if style::pill(ui, if self.cam.ortho { "平行" } else { "遠近" }, false).on_hover_text("遠近 / 平行 (5)").clicked() {
+                                self.cam.ortho = !self.cam.ortho;
+                            }
                         }
                         if style::pill(ui, "全体", false).on_hover_text("全体を見る (Home)").clicked() {
                             self.frame_view(false);
@@ -1035,9 +1239,10 @@ impl App {
             .fixed_pos(rect.right_bottom() - egui::vec2(16.0, 72.0))
             .show(&ctx, |ui| {
                 style::card().show(ui, |ui| {
-                    ui.set_width(300.0);
+                    ui.set_width((rect.width() - 28.0).clamp(170.0, 300.0));
                     ui.label(RichText::new("操作のしかた").strong().size(14.0));
                     ui.separator();
+                    egui::ScrollArea::vertical().max_height((rect.height() - 124.0).max(64.0)).show(ui, |ui| {
                     for (k, v) in [
                         ("中ボタンドラッグ", "回す"),
                         ("右ドラッグ", "動かす (パン)"),
@@ -1058,10 +1263,11 @@ impl App {
                         ("Ctrl+Z / Ctrl+Shift+Z", "元に戻す / やり直し"),
                     ] {
                         ui.horizontal(|ui| {
-                            ui.add_sized([150.0, 18.0], egui::Label::new(RichText::new(k).size(12.0).color(style::ACCENT)));
+                            ui.add_sized([ui.available_width().min(150.0) * 0.52, 18.0], egui::Label::new(RichText::new(k).size(12.0).color(style::ACCENT)));
                             ui.label(RichText::new(v).size(12.0).color(style::TEXT));
                         });
                     }
+                    });
                 });
             });
     }
@@ -1179,6 +1385,17 @@ impl App {
     fn test_hooks(&mut self, ctx: &egui::Context) {
         let Some(dir) = self.shot.clone() else { return };
         ctx.request_repaint_after(std::time::Duration::from_millis(60));
+        // UI screenshots from Windows CI: change display modes without synthetic clicks.
+        for (file, beginner) in [("ui-simple", true), ("ui-detailed", false)] {
+            if dir.join(file).exists() && std::fs::remove_file(dir.join(file)).is_ok() {
+                self.set_display_mode(beginner, ctx.content_rect().width());
+            }
+        }
+        if dir.join("ui-edit").exists() && std::fs::remove_file(dir.join("ui-edit")).is_ok() {
+            self.show_properties = true;
+            self.show_scene_dock = false;
+        }
+
         if dir.join("png").exists() && std::fs::remove_file(dir.join("png")).is_ok() {
             self.capture = Some(Capture { path: dir.join("out.png"), frames: 0 });
         }
@@ -1254,8 +1471,11 @@ impl App {
         }
         self.top_bar(ui);
         self.status_bar(ui);
-        self.left_dock(ui);
-        self.side(ui);
+        if ui_layout::compact(ui.available_width()) && self.show_scene_dock && self.show_properties {
+            self.show_scene_dock = false;
+        }
+        if self.show_scene_dock { self.left_dock(ui); }
+        if self.show_properties { self.side(ui); }
         egui::CentralPanel::default().frame(egui::Frame::new().fill(Color32::from_rgb(52, 52, 56))).show(ui, |ui| {
             self.last_view_height = ui.available_height();
             self.viewport(ui);
@@ -1306,6 +1526,33 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn beginner_mode_opens_empty_workspace_and_keeps_data_when_toggled() {
+        let mut app = App::new(true, None);
+        assert!(app.beginner_ui);
+        assert!(!app.show_scene_dock && !app.show_properties);
+        let original_scene = app.scene.clone();
+        app.set_display_mode(false, 1280.0);
+        assert!(!app.beginner_ui && app.show_scene_dock && app.show_properties);
+        app.set_display_mode(true, 1280.0);
+        assert!(app.beginner_ui);
+        assert!(!app.show_scene_dock && !app.show_properties);
+        assert_eq!(app.scene, original_scene, "UI toggles must not edit a model or its undo history");
+    }
+
+    #[test]
+    fn narrow_windows_never_keep_two_docks_open() {
+        let mut app = App::new(true, None);
+        app.set_display_mode(false, 480.0);
+        assert!(!app.show_scene_dock && app.show_properties);
+        app.toggle_dock(true, 480.0);
+        assert!(app.show_scene_dock && !app.show_properties);
+        app.toggle_dock(false, 480.0);
+        assert!(!app.show_scene_dock && app.show_properties);
+        app.toggle_dock(false, 480.0);
+        assert!(!app.show_scene_dock && !app.show_properties);
+    }
 
     #[test]
     fn adding_undoing_and_deleting_shapes() {
