@@ -1,7 +1,5 @@
 //! The viewport: camera controls, picking and the handles' input.
 
-use std::sync::Arc;
-
 use egui::{Align2, Color32, FontId, PointerButton, Pos2, Rect, Sense, Stroke, Ui, pos2, vec2};
 
 use crate::app::App;
@@ -74,7 +72,8 @@ impl App {
         let ppp = ui.ctx().pixels_per_point();
         let clean = self.capture.is_some();
         let now = ui.input(|i| i.time);
-        let scene_changed = self.perf.drawn.scene_changed(&self.scene);
+        let rev = self.track_scene();
+        let scene_changed = self.perf.drawn.scene_changed(rev);
 
         let mods = ui.input(|i| i.modifiers);
         let pos = resp.hover_pos().or_else(|| ui.input(|i| i.pointer.interact_pos()));
@@ -237,21 +236,60 @@ impl App {
         {
             ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(wait));
         }
-        let scale = if clean { 1.0 } else { self.perf.quality.scale(fast) };
-        let size = crate::perf::render_size(crate::perf::viewport_px(rect, ppp), scale, 16384);
+        let vp = crate::perf::viewport_px(rect, ppp);
+        let (scale_moving, scale_still) = if clean { (1.0, 1.0) } else { self.picture_scales(now, fast) };
         let shown_sel = if clean { None } else { self.sel };
         let shown_hover = if clean { None } else { self.hover };
+        let mut sharp = 1.0;
+        let mut counts = (self.scene.shape_count(), self.scene.groups.len(), 0);
+        let mut scale_shown = 1.0;
         if crate::gpu_ui::use_gpu(&self.gpu.status.snapshot(), self.gpu.easy) {
-            let volumes = crate::gpu::VolumeSet::of(&self.scene);
-            let mut data = crate::gpu::pack_with(&self.scene, &self.cam, [size[0] as f32, size[1] as f32], shown_sel, shown_hover, self.srgb, &volumes);
-            crate::gpu::set_view_flags(&mut data, crate::perf::view_flags(self.srgb, fast, crate::perf::scene_has_glow(&self.scene)));
-            ui.painter().add(egui_wgpu::Callback::new_paint_callback(rect, crate::gpu::Callback { data: Arc::new(data), volumes: Arc::new(volumes), size, status: self.gpu.status.clone() }));
+            let pack = self.perf.pack.get(&self.scene, rev);
+            let mut globals = pack.globals(&self.scene, &self.cam, [vp[0] as f32, vp[1] as f32], shown_sel, shown_hover, self.srgb);
+            crate::gpu::set_view_flags(&mut globals, crate::perf::view_flags(self.srgb, false, pack.glow));
+            counts = (self.scene.shape_count(), pack.group_n, pack.instances);
+            let fbs = self.perf.feedback.state();
+            sharp = if fast { 0.0 } else { fbs.sharp };
+            scale_shown = if fast { scale_moving } else { scale_still };
+            let cb = crate::gpu::Callback {
+                globals,
+                pack,
+                viewport: vp,
+                fast,
+                scale_moving,
+                scale_still,
+                sharpen: self.perf.sharpen,
+                whole: clean,
+                frame_ms: self.perf.stats.last_interval_ms(),
+                status: self.gpu.status.clone(),
+                feedback: self.perf.feedback.clone(),
+                ctx: ui.ctx().clone(),
+            };
+            ui.painter().add(egui_wgpu::Callback::new_paint_callback(rect, cb));
         } else {
             // the simple view: drawn on the CPU by a worker thread, never blocking the window
-            self.gpu.easy_view.update(ui.ctx(), &self.scene, &self.cam, crate::perf::viewport_px(rect, ppp), fast);
+            self.gpu.easy_view.update(ui.ctx(), &self.scene, &self.cam, vp, fast);
             self.gpu.easy_view.paint(&ui.painter_at(rect), rect, self.scene.env.backdrop);
         }
-        self.perf.drawn.note(&self.scene, shown_sel, shown_hover, &self.cam, clean);
+        self.perf.last_scale = scale_moving;
+        self.perf.last_fast = fast;
+        self.perf.drawn.note(rev, shown_sel, shown_hover, &self.cam, clean);
+        if self.perf.hud && !clean {
+            let fbs = self.perf.feedback.state();
+            let info = crate::hud::Context {
+                shapes: counts.0,
+                groups: counts.1,
+                instances: counts.2,
+                scale: scale_shown,
+                adapter: self.gpu.status.snapshot().info.short(),
+                gpu_timing: fbs.timing,
+                fast,
+                sharp,
+                pixels: crate::perf::render_size(vp, scale_shown, 16384),
+                quality: self.perf.quality.label().to_string(),
+            };
+            crate::hud::show(ui.ctx(), rect, &self.perf.stats.summary(now), &info);
+        }
         let painter = ui.painter_at(rect);
 
         // Draw the handles over the picture
@@ -267,6 +305,28 @@ impl App {
         self.pipe_paint(&painter, rect);
         self.sketch_paint(&painter, rect);
         self.draw_gnomon(&painter, rect, pos);
+    }
+
+    /// The render scales for this frame: the cheap picture while moving, the sharp one when still.
+    /// Feeds the controller with what the last frames cost (graphics card timings when the device
+    /// gives them, else the time between frames).
+    fn picture_scales(&mut self, now: f64, fast: bool) -> (f32, f32) {
+        let passes = self.perf.feedback.take_passes();
+        let mut timed = false;
+        for p in &passes {
+            self.perf.stats.gpu(now, p.ms);
+            if p.kind == crate::gpu_timing::Kind::Moving {
+                self.perf.scale.observe(crate::adapt::Sample::Gpu { ms: p.ms, scale: p.scale });
+                timed = true;
+            }
+        }
+        // no timestamps: while moving, the time between frames is the best sign of the picture's cost
+        let interval = self.perf.stats.last_interval_ms();
+        if !timed && !self.perf.feedback.state().timing && fast && self.perf.last_fast && interval > 0.0 {
+            self.perf.scale.observe(crate::adapt::Sample::Frame { ms: interval, scale: self.perf.last_scale, cpu_ms: self.perf.stats.prev_cpu_ms() });
+        }
+        let q = self.perf.quality;
+        (q.moving_scale().unwrap_or_else(|| self.perf.scale.scale()), q.still_scale())
     }
 
     fn gnomon_items(&self, rect: Rect) -> Vec<(V3, Pos2, bool)> {

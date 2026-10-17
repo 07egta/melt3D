@@ -111,3 +111,129 @@ with the `downlevel_webgl2_defaults` limits egui-wgpu asks for there): the old 4
 have been bound under those limits, the scene texture can. On OpenGL the shader is now compiled on the
 main thread (a compile on a second thread holds the GL context lock, and egui's texture upload on the
 main thread then aborts with "Could not lock adapter context").
+
+
+# Second round: "lags, make it silky" (adaptive resolution, banded sharp picture, shader work)
+
+A screen recording from a Windows PC (Intel Core Ultra 258V, integrated Arc 140V, window about
+2528 x 1440 physical pixels, 120 Hz display) showed 30 fps (median 33 ms between pictures, the slowest
+tenth 67 ms or more, hitches of 200 to 730 ms) while a single pipe (a `Kind::Curve`, about 12 nodes) was
+orbited and dragged. Nothing here could be run on that GPU. The numbers below come from the software
+Vulkan driver (llvmpipe, 4 cores) and are **a proxy**: llvmpipe is bound by shader arithmetic and
+divergence, an integrated GPU by arithmetic, divergence **and the latency of texture reads** (the scene is
+read with `textureLoad`). So besides timings the change reports *reads of the scene list per pixel* (they do
+not depend on the machine) and ships instruments that the person can run on their own PC.
+
+## What was wrong (reasoned from the code and from the counters below)
+
+1. **The pipe distance looped over all of the (up to 96) points** of the smoothed curve at every march
+   step of every pixel whose ray was inside the pipe's box: 89 round cones per evaluation.
+2. **The sharp picture was one single submission.** With "じどう", the frame drawn 150 ms after the last
+   move was a full-quality picture of the whole window: floor shadow (32 steps) and occlusion for every
+   floor pixel, 4-tap normals, glass... On a weak GPU that is hundreds of milliseconds in one piece, during
+   which the window cannot present or take input. That is the 200 to 730 ms hitch.
+3. **Moving frames had a fixed size** (half the window in each direction) whatever the GPU managed.
+4. Every scene read was a texture read from the long list: for a library model in a 100-shape scene about
+   1100 reads per pixel while moving, 250 reads per distance evaluation.
+5. Rays that cannot hit anything marched anyway (every pixel inside the bounding sphere, floor pixels
+   marched through the floor to the far side of the sphere).
+6. CPU side: the whole scene was compared three times per frame and cloned once (`settle`, `Drawn`), packed
+   completely for every frame (also when only the camera moved), and the picking field was rebuilt after every
+   change. Together this is 1 to 3 ms in a 300-shape scene (measured, see below), so it was *not* the cause of the
+   hitches, but it is gone. The library card drew one thumbnail per frame on the main thread (a few ms each);
+   they are drawn on a thread now.
+
+## What was done
+
+| Part | What | Where |
+|---|---|---|
+| Frame-time HUD (F3, または「がしつ」→「フレーム時間を表示」) | CPU time of the window code and the interval between frames (rolling second: average and worst; worst of the last 10 s), GPU time of the scene pass (timestamp queries, resolved and read back asynchronously a few frames late, never waited for), render scale, shapes / groups / instances, adapter and backend. | `hud.rs`, `gpu_timing.rs`, `view.rs` |
+| Speed test (`meltcad --bench [out.txt] [--quick] [--frames N]`, or 「がしつ」→「速さをはかる…」) | Draws five standard scenes (pipe like the report, library model of about 20 shapes, 100 shapes, 300 shapes, a gradient / rounded / glass scene) at 1280x720, 1920x1080, 2560x1440, full quality and in fast mode, in a texture of its own with the window's pipelines, on the backend the window uses. Time of each frame: GPU timestamps, else wall clock around submit + wait. Writes `meltcad-bench.txt` next to the program (or the temp folder), prints the table, shows it (window: copy button). Also prints the resolution the adaptive scale would settle at. | `bench.rs`, `gpu::offscreen` |
+| Adaptive resolution (「じどう」) | While things move, `ScaleController` picks the render scale between 0.25 and 1 so that the scene pass costs about 10 ms of GPU time (from timestamps; without them: 60 fps from the frame interval, ignoring frames slow because of the processor). Down at once (at most a quarter per measurement), up by 3 % per measurement and only after a wait that triples when a drop follows a rise soon after, so it does not swing. The pictures live in textures as big as the window and only a corner of them is drawn, so changing the scale never makes a new texture. | `adapt.rs`, `gpu.rs` |
+| Banded sharp picture | The sharp picture is drawn a band of rows at a time (`BandPacer`: as many rows as fit in about 6 ms, measured), into its own texture. The blit shows the cheap picture and, above the finished row, the sharp one: it sharpens from the top, no frame is longer than a band. A new move abandons the bands. | `gpu.rs`, `blit.wgsl`, `adapt.rs` |
+| Upscale | Bilinear read plus a light contrast-adaptive sharpen (5 taps, only where the picture is smaller than the window; weaker for tiny pictures). | `blit.wgsl` |
+| Pipe distance | The tube's segments are grouped by 8; each group has a bounding sphere (made on the CPU, `curve::group_spheres`). A point looks at the (up to 12) spheres first: far from all of them it answers with a lower bound, else only the groups that can hold something nearer than what is known are measured. Exact (test `the_grouped_search_equals_the_plain_loop`). | `shader_curve.wgsl`, `curve.rs`, `gpu.rs` |
+| Candidates per ray | Once per pixel, before the primary march, the shader finds the groups / instances / shapes whose bounding sphere (grown by the reach of their blend) the ray comes near, in the order they melt, and the march (`map_d_cand`) reads only those (24 at most; more: bits per group instead). A pipe is also tested against the spheres of its segment groups. If nothing is near the ray, it is not marched at all. Shadow rays do the same (a shape farther than `tend / 10` from the ray cannot darken it). Switched off when a group or a shape keeps only an overlap (then what is far still decides where a ray stops) and for lamps. | `shader.wgsl` (`find_candidates`, `map_d_cand`), `gpu.rs` |
+| Floor | The march ends at the floor (the last step is taken exactly to it, so that an over-relaxed step cannot jump over a surface in front of it); the floor tap in fast mode is skipped far from the scene. | `shader.wgsl` |
+| Fast mode | 4 shadow steps (was 10); `relax` 1.3 instead of 1.5 when candidates are used (longer steps than the full scan, see below). | `shader.wgsl` |
+| One call site | The key light's shadow and the occlusion are found once, in one place, for what is seen (floor or surface); `cargo test inlining_cost_report` still passes (shape_dist 15 copies, 141 000 expressions). | `shader.wgsl` |
+| CPU | A scene revision number (`App::track_scene`: one comparison per call, a clone only on change) replaces whole-scene comparisons and clones; the scene is packed once per revision (`ScenePack`: the camera moves repack nothing), the list is uploaded row-wise only where it differs; the picking field is built when picking asks and the scene has changed. Library thumbnails come from a worker thread. | `app.rs`, `perf.rs`, `gpu.rs`, `library_ui.rs` |
+
+## Measured (llvmpipe, 4 cores, 640 x 360, before and after; **proxy only**)
+
+`cargo test -p meltcad --release bench_on_this_machine -- --ignored --nocapture` with
+`MELTCAD_BENCH_SIZES=640x360 MELTCAD_BENCH_FRAMES=3` (before: `MELTCAD_SHADER_DIR=<the old shader files>`).
+GPU timestamp of the scene pass, average of 3 frames; run to run the full numbers vary by about 15 %.
+
+| scene (shapes) | full before | full after | fast (moving) before | fast after | fast speed-up |
+|---|---|---|---|---|---|
+| pipe, 12 nodes (1) | 93 - 95 ms | 36 - 42 ms | 47 - 49 ms | 18 - 22 ms | 2.4 x |
+| library model (35) | 267 - 279 ms | 161 - 223 ms | 89 - 90 ms | 20 - 23 ms | 4.2 x |
+| library models (106) | 642 - 694 ms | 355 - 407 ms | 236 - 261 ms | 40 ms | 6.2 x |
+| library models (305) | 1420 - 1436 ms | 815 - 871 ms | 580 - 629 ms | 83 - 84 ms | 7.2 x |
+| gradient / rounded / glass (4) | 60 - 66 ms | 47 ms | 40 ms | 18 - 22 ms | 2 x |
+
+(Full quality is not what a moving window draws; it is what the sharp picture costs, now spread over bands.
+The library scenes contain glowing parts, which keep the full-quality march on the slow path: see "Not done".)
+
+Reads of the scene list per pixel (`count_work`, 320 x 180, average over the picture, fast mode; before -> after):
+pipe 121 -> 45, library model 403 -> 86, 106 shapes 1090 -> 183, 305 shapes 2179 -> 387, gradient 182 -> 86.
+Distance evaluations per pixel (fast): 2.4 -> 0.3 (pipe), 2.5 -> 0.3, 3.1 -> 0.4, 3.4 -> 0.4, 3.2 -> 0.6. (What is
+left of the reads is mostly the once-per-pixel search for the shapes near the ray; rays that miss everything
+pay only that.)
+
+CPU per frame of the real window code (`frame_cpu_bench`, 2528 x 1440 pixels, pointer events through
+`App::frame_body`): pipe alone 0.4 to 0.9 ms, with 100 shapes 1.0 to 1.3 ms, with 300 shapes 2.0 to 2.6 ms;
+worst frame while dragging a node with 300 shapes 4.2 ms. No frame above 10 ms. The only large CPU item that
+remained was the thumbnails (now off the main thread).
+
+## What this should mean on the Arc 140V (estimates, **not verified**)
+
+* Moving: 3 to 5 times fewer scene reads and evaluations, plus a cost-driven resolution: at 2560 x 1440 the
+  controller takes whatever scale fits 10 ms; for the pipe that is expected to be near the full window or 0.75,
+  for a 100-shape scene 0.5 to 0.75. The report's 33 ms median frame should become one frame per display
+  refresh in the pipe case (60 to 120 fps).
+* No stall when stopping: the sharp picture takes a few frames (1 to 12 depending on the scene) instead of one
+  frame of hundreds of ms.
+* What cannot be told without the GPU: whether texture reads or arithmetic dominate there (the counters say
+  which got fewer), and how well the GPU compiler copes with the larger shader (about 7 % more expressions
+  than before the work; llvmpipe compile of the whole pipeline about 90 s, as before).
+
+## Checking it
+
+* `meltcad --bench` (see README): the table is the thing to send. Rows with `wall ms` close to `avg ms` mean the
+  timing is from the GPU (timestamps) or the card is the bottleneck.
+* F3 while orbiting: `GPU(シーン)` should be near 10 ms or less, the scale (倍率) below 1 only while moving.
+* `cargo test -p meltcad --release candidates_match_the_full_scan -- --ignored --nocapture` (also with
+  `MELTCAD_BENCH_FAST=1`): every pixel's ray hits the same surface at the same distance with and without the
+  per-ray candidates (to the march's own tolerance); `shadow_candidates_match_the_full_scan` the same for the
+  picture with the shadows; `count_work` prints reads per pixel; `gpu_headless_golden` + `cmp` against an older
+  build shows what changed in the picture (edges and thin paint patches differ by a fraction of a pixel,
+  the selection outline is a little bolder while moving).
+* Experiments: `MELTCAD_SHADER_SED="old=>new||old2=>new2"` (tests only) replaces text in the shader for one
+  run; `MELTCAD_SHADER_DIR=dir` loads the six shader files from another folder (A/B against an old version).
+
+## Things that changed on purpose
+
+* Moving pictures are smaller when the GPU is slow (down to a quarter of the window in each direction); the
+  upscale is sharpened.
+* The selection outline is a little bolder while moving (the march takes shorter steps, so more samples fall
+  next to the outline).
+* The sharp picture appears from the top downwards instead of at once.
+* Fast mode: shadows have 4 steps (long shadows of far objects are missing while moving).
+* Where a march used to jump past an (invisible) part of a shape below the floor it now stops at the floor.
+
+## Not done / ideas
+
+* Lamps (a visible shape with glow) still march with full materials (`map`) in full quality, with 200 steps,
+  and read the whole scene; scenes with lamps are the slowest to sharpen (library models with glowing
+  parts). A glow-only distance for the halo would fix it but changes the halo slightly.
+* A uniform-buffer window for the first 1000 vec4 of the list (small scenes would then read from uniform
+  memory instead of texture memory) is possible within the 16 KB limit of GL; it needs an experiment on a
+  real iGPU (`--bench` is the harness) before it is worth the extra code.
+* The shape records could be packed more densely (5 instead of about 9 vec4 per distance evaluation).
+* The hover highlight changes the picture, so a hover change redraws the scene; as an id buffer it would be free.
+* On a fast GPU the moving picture could keep its full effects: when the measured cost of a whole sharp picture (the bands
+  give ms per row) is below about 5 ms, draw it in one pass instead of the cheap picture. Not done: it needs a real GPU to tune.
+* Testing the window: `MELTCAD_HUD=1` starts with the HUD on; with `MELTCAD_TEST_DIR=dir` the files `dir/hud` (toggle the HUD)
+  and `dir/bench` (open the speed test window) are taken like `snap` and `png`; `dir/where` writes where the HUD is to `dir/where.txt`.

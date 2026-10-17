@@ -28,6 +28,77 @@ fn make(ctx: &egui::Context, cat: usize, i: usize, item: &Item) -> TextureHandle
     h
 }
 
+/// Pictures of the models are drawn on a thread of their own (each one is a small ray march on the
+/// processor): the card never waits for them, it shows "…" until a picture arrives.
+/// Finished pictures: (category, item, RGBA pixels).
+type Done = std::sync::Arc<std::sync::Mutex<Vec<(usize, usize, Vec<u8>)>>>;
+
+struct Worker {
+    tx: std::sync::Mutex<std::sync::mpsc::Sender<Job>>,
+    done: Done,
+    asked: std::sync::Mutex<std::collections::HashSet<(usize, usize)>>,
+}
+
+struct Job {
+    cat: usize,
+    item: usize,
+    scene: crate::model::Scene,
+    ctx: egui::Context,
+}
+
+fn worker() -> Option<&'static Worker> {
+    static W: std::sync::OnceLock<Option<Worker>> = std::sync::OnceLock::new();
+    W.get_or_init(|| {
+        let (tx, rx) = std::sync::mpsc::channel::<Job>();
+        let done: Done = Default::default();
+        let out = done.clone();
+        std::thread::Builder::new()
+            .name("meltcad-thumbs".into())
+            .spawn(move || {
+                for job in rx {
+                    let rgba = std::panic::catch_unwind(|| crate::cpu_render::thumb(&job.scene, THUMB)).unwrap_or_default();
+                    if rgba.len() == THUMB * THUMB * 4 {
+                        out.lock().unwrap_or_else(|e| e.into_inner()).push((job.cat, job.item, rgba));
+                    }
+                    job.ctx.request_repaint();
+                }
+            })
+            .ok()?;
+        Some(Worker { tx: std::sync::Mutex::new(tx), done, asked: Default::default() })
+    })
+    .as_ref()
+}
+
+/// Turn the pictures the thread has finished into textures (a few per frame).
+fn collect(ctx: &egui::Context) {
+    let Some(w) = worker() else { return };
+    let ready: Vec<(usize, usize, Vec<u8>)> = {
+        let mut g = w.done.lock().unwrap_or_else(|e| e.into_inner());
+        let n = g.len().min(6);
+        g.drain(..n).collect()
+    };
+    for (cat, i, rgba) in ready {
+        let img = egui::ColorImage::from_rgba_unmultiplied([THUMB, THUMB], &rgba);
+        let h = ctx.load_texture(format!("lib_{cat}_{i}"), img, TextureOptions::LINEAR);
+        ctx.data_mut(|d| d.insert_temp(tex_id(cat, i), h));
+    }
+    if !w.done.lock().unwrap_or_else(|e| e.into_inner()).is_empty() {
+        ctx.request_repaint();
+    }
+}
+
+/// Ask the thread for a picture (once per model).
+fn ask(ctx: &egui::Context, cat: usize, i: usize, item: &Item) {
+    let Some(w) = worker() else { return };
+    if !w.asked.lock().unwrap_or_else(|e| e.into_inner()).insert((cat, i)) {
+        return;
+    }
+    let sent = w.tx.lock().unwrap_or_else(|e| e.into_inner()).send(Job { cat, item: i, scene: item.scene(), ctx: ctx.clone() });
+    if sent.is_err() {
+        w.asked.lock().unwrap_or_else(|e| e.into_inner()).remove(&(cat, i));
+    }
+}
+
 /// Put an item into the scene. Returns false when the scene is full.
 pub fn insert(app: &mut App, ctx: &egui::Context, item: &Item) -> bool {
     if !item.fits(app.scene.groups.len(), app.scene.shape_count()) {
@@ -55,6 +126,7 @@ pub fn panel(app: &mut App, ui: &mut egui::Ui) {
     }
     app.lib_cat = app.lib_cat.min(cats.len() - 1);
     let ctx = ui.ctx().clone();
+    collect(&ctx);
     let mut made_one = false;
     let mut pick: Option<(usize, usize)> = None;
     ui.add(egui::TextEdit::singleline(&mut app.lib_query).hint_text("さがす（なまえ・English）").desired_width(f32::INFINITY));
@@ -87,8 +159,13 @@ pub fn panel(app: &mut App, ui: &mut egui::Ui) {
                         ui.set_width(CELL - 8.0);
                         let (r, resp) = ui.allocate_exact_size(Vec2::splat(THUMB as f32 + 8.0), egui::Sense::click());
                         ui.painter().rect_filled(r, 8.0, if resp.hovered() { style::HOVER } else { style::INSET_BOTTOM });
-                        // one new picture per frame so opening the tab never stalls
+                        // the pictures come from a thread of their own, so opening the tab never stalls
+                        // (without a thread: one new picture per frame)
                         let tex = cached(ui.ctx(), ci, ii).or_else(|| {
+                            if worker().is_some() {
+                                ask(ui.ctx(), ci, ii, it);
+                                return None;
+                            }
                             if made_one {
                                 return None;
                             }
@@ -164,6 +241,26 @@ mod tests {
         }
         app.lib_query = "zzzz".into();
         ctx.run_ui(egui::RawInput::default(), |ui| panel(&mut app, ui)).textures_delta.clear();
+    }
+
+    #[test]
+    fn thumbnails_arrive_from_the_thread_without_the_panel_waiting() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        let t = std::time::Instant::now();
+        ctx.run_ui(egui::RawInput::default(), |ui| panel(&mut app, ui)).textures_delta.clear();
+        assert!(t.elapsed().as_millis() < 1500, "the first frame of the card asks, it does not draw ({} ms)", t.elapsed().as_millis());
+        // within a few seconds the first picture is a texture
+        let mut have = false;
+        for _ in 0..200 {
+            std::thread::sleep(std::time::Duration::from_millis(25));
+            ctx.run_ui(egui::RawInput::default(), |ui| panel(&mut app, ui)).textures_delta.clear();
+            if cached(&ctx, 0, 0).is_some() {
+                have = true;
+                break;
+            }
+        }
+        assert!(have, "a picture arrived");
     }
 
     #[test]
