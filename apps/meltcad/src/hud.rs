@@ -37,12 +37,15 @@ pub struct FrameStats {
 pub struct Summary {
     pub fps: f32,
     pub interval_avg_ms: f32,
+    /// 95th-percentile inter-frame interval; real window pacing, not theoretical GPU FPS.
+    pub interval_p95_ms: f32,
     pub interval_worst_ms: f32,
     /// The worst interval of the last `WORST_SECS`.
     pub interval_worst_long_ms: f32,
     pub cpu_avg_ms: f32,
     pub cpu_worst_ms: f32,
     pub gpu_avg_ms: Option<f32>,
+    pub gpu_p95_ms: Option<f32>,
     pub gpu_worst_ms: Option<f32>,
     /// The last scene pass, when none was timed in the last second (the picture was still).
     pub gpu_last_ms: Option<f32>,
@@ -98,6 +101,12 @@ impl FrameStats {
         let timed: Vec<f32> = recent.iter().map(|f| f.interval_ms).filter(|v| *v > 0.0).collect();
         let avg = |v: &[f32]| if v.is_empty() { 0.0 } else { v.iter().sum::<f32>() / v.len() as f32 };
         let worst = |v: &[f32]| v.iter().cloned().fold(0.0_f32, f32::max);
+        let p95 = |v: &[f32]| {
+            if v.is_empty() { return 0.0; }
+            let mut sorted = v.to_vec();
+            sorted.sort_by(|a, b| a.total_cmp(b));
+            sorted[((sorted.len() as f32 * 0.95).ceil() as usize).saturating_sub(1)]
+        };
         let cpu: Vec<f32> = recent.iter().map(|f| f.cpu_ms).collect();
         let long: Vec<f32> = self.frames.iter().map(|f| f.interval_ms).collect();
         let interval_avg_ms = avg(&timed);
@@ -105,11 +114,13 @@ impl FrameStats {
         Summary {
             fps: if interval_avg_ms > 0.0 { 1000.0 / interval_avg_ms } else { 0.0 },
             interval_avg_ms,
+            interval_p95_ms: p95(&timed),
             interval_worst_ms: worst(&timed),
             interval_worst_long_ms: worst(&long),
             cpu_avg_ms: avg(&cpu),
             cpu_worst_ms: worst(&cpu),
             gpu_avg_ms: (!gpu.is_empty()).then(|| avg(&gpu)),
+            gpu_p95_ms: (!gpu.is_empty()).then(|| p95(&gpu)),
             gpu_worst_ms: (!gpu.is_empty()).then(|| worst(&gpu)),
             gpu_last_ms: if gpu.is_empty() { self.gpu.back().map(|g| g.1) } else { None },
         }
@@ -156,10 +167,10 @@ fn ms(v: f32) -> String {
 /// The HUD text, one line per entry.
 pub fn lines(s: &Summary, c: &Context) -> Vec<String> {
     let mut out = Vec::new();
-    out.push(format!("{:.0} fps　間隔 平均 {} / 最悪 {} ms (10秒で {})", s.fps, ms(s.interval_avg_ms), ms(s.interval_worst_ms), ms(s.interval_worst_long_ms)));
+    out.push(format!("{:.0} fps　間隔 平均 {} / p95 {} / 最悪 {} ms (10秒で {})", s.fps, ms(s.interval_avg_ms), ms(s.interval_p95_ms), ms(s.interval_worst_ms), ms(s.interval_worst_long_ms)));
     out.push(format!("CPU 平均 {} / 最悪 {} ms", ms(s.cpu_avg_ms), ms(s.cpu_worst_ms)));
-    out.push(match (s.gpu_avg_ms, s.gpu_worst_ms) {
-        (Some(a), Some(w)) => format!("GPU(シーン) 平均 {} / 最悪 {} ms", ms(a), ms(w)),
+    out.push(match (s.gpu_avg_ms, s.gpu_p95_ms, s.gpu_worst_ms) {
+        (Some(a), Some(p), Some(w)) => format!("GPU(シーン) 平均 {} / p95 {} / 最悪 {} ms", ms(a), ms(p), ms(w)),
         _ if s.gpu_last_ms.is_some() => format!("GPU(シーン) さいごの1回 {} ms", ms(s.gpu_last_ms.unwrap_or(0.0))),
         _ if c.gpu_timing => "GPU(シーン) 計測まち…".to_string(),
         _ => "GPU の時間はこの機械では測れません".to_string(),
@@ -211,6 +222,7 @@ mod tests {
         assert!((sum.fps - 62.5).abs() < 0.5, "{}", sum.fps);
         assert!((sum.interval_avg_ms - 16.0).abs() < 0.1);
         assert!((sum.interval_worst_ms - 16.0).abs() < 0.1);
+        assert!((sum.interval_p95_ms - 16.0).abs() < 0.1);
         assert!((sum.cpu_avg_ms - 2.0).abs() < 1e-3 && (sum.cpu_worst_ms - 2.0).abs() < 1e-3);
         assert_eq!(s.total_frames, 120);
     }
@@ -268,6 +280,7 @@ mod tests {
         let sum = s.summary(2.4);
         assert_eq!(sum.gpu_avg_ms, Some(6.0));
         assert_eq!(sum.gpu_worst_ms, Some(8.0));
+        assert_eq!(sum.gpu_p95_ms, Some(8.0));
         assert_eq!(FrameStats::default().summary(0.0), Summary::default());
     }
 
@@ -283,16 +296,16 @@ mod tests {
 
     #[test]
     fn the_hud_lines_tell_the_story() {
-        let sum = Summary { fps: 31.0, interval_avg_ms: 32.0, interval_worst_ms: 120.0, interval_worst_long_ms: 700.0, cpu_avg_ms: 2.5, cpu_worst_ms: 9.0, gpu_avg_ms: Some(28.0), gpu_worst_ms: Some(40.0), gpu_last_ms: None };
+        let sum = Summary { fps: 31.0, interval_avg_ms: 32.0, interval_p95_ms: 45.0, interval_worst_ms: 120.0, interval_worst_long_ms: 700.0, cpu_avg_ms: 2.5, cpu_worst_ms: 9.0, gpu_avg_ms: Some(28.0), gpu_p95_ms: Some(35.0), gpu_worst_ms: Some(40.0), gpu_last_ms: None };
         let ctx = Context { shapes: 12, instances: 3, groups: 2, scale: 0.5, adapter: "Vulkan / Test".into(), gpu_timing: true, fast: true, sharp: 0.0, pixels: [1264, 720], quality: "じどう".into() };
         let l = lines(&sum, &ctx);
         let all = l.join("\n");
         assert!(all.contains("31 fps") && all.contains("最悪 120") && all.contains("700"));
-        assert!(all.contains("GPU(シーン) 平均 28.0 / 最悪 40.0"));
+        assert!(all.contains("GPU(シーン) 平均 28.0 / p95 35.0 / 最悪 40.0"));
         assert!(all.contains("倍率 0.50") && all.contains("1264x720") && all.contains("うごき中"));
         assert!(all.contains("形 12") && all.contains("コピー 3") && all.contains("Vulkan / Test"));
         // no timestamps: it says so; sharp in progress shows the share
-        let none = Summary { gpu_avg_ms: None, gpu_worst_ms: None, ..sum };
+        let none = Summary { gpu_avg_ms: None, gpu_p95_ms: None, gpu_worst_ms: None, ..sum };
         let c2 = Context { gpu_timing: false, fast: false, sharp: 0.4, ..ctx.clone() };
         let all = lines(&none, &c2).join("\n");
         assert!(all.contains("測れません") && all.contains("40%"));
