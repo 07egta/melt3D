@@ -52,6 +52,8 @@ pub struct Artwork {
     pub natural_mm: [f32; 2],
     /// How many outlines were thrown away (too tiny, too many, too deeply nested).
     pub dropped: usize,
+    /// Nonfatal omissions: the user must not mistake a partial import for an exact SVG.
+    pub warnings: Vec<String>,
 }
 
 impl Artwork {
@@ -112,7 +114,38 @@ pub fn parse(text: &str) -> Result<Artwork, String> {
     // pass 2: curves flattened to ~0.05 mm for a 60 mm picture
     let tol = FLAT_TOL_MM / (REF_MM / side);
     let raws = walk(text, Some(tol));
-    build_artwork(&raws, side)
+    let mut art = build_artwork(&raws, side)?;
+    art.warnings = unsupported_features(text);
+    Ok(art)
+}
+
+/// Report features we deliberately do not rasterize or convert into geometry.
+/// This pass parses only tags; it never resolves external resources.
+fn unsupported_features(src: &str) -> Vec<String> {
+    let mut tags = std::collections::BTreeSet::new();
+    let mut pos = 0;
+    let mut scanned = 0;
+    while let Some(tag) = next_tag(src, &mut pos) {
+        scanned += 1;
+        if scanned > MAX_ELEMENTS * 2 { break; }
+        if tag.closing { continue; }
+        match tag.name.as_str() {
+            "text" | "image" | "foreignobject" | "filter" | "clippath" | "mask"
+            | "lineargradient" | "radialgradient" | "pattern" | "marker" => {
+                tags.insert(tag.name.clone());
+            }
+            "use" => {
+                if tag.attr("href").or_else(|| tag.attr("xlink:href")).is_some_and(|s| !s.starts_with('#')) {
+                    tags.insert("external use".into());
+                }
+            }
+            _ => {}
+        }
+        if tag.prop("stroke").is_some_and(|s| s != "none") {
+            tags.insert("stroke".into());
+        }
+    }
+    tags.into_iter().map(|t| format!("未対応のSVG要素/指定: {t}（読み込みません）")).collect()
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1301,6 +1334,7 @@ fn build_artwork(raws: &[Raw], side: f64) -> Result<Artwork, String> {
         aspect: [(hi[0] - lo[0]) / w, (hi[1] - lo[1]) / w],
         natural_mm: [((hi[0] - lo[0]) as f64 * px_to_mm) as f32, ((hi[1] - lo[1]) as f64 * px_to_mm) as f32],
         dropped,
+        warnings: Vec::new(),
     })
 }
 
@@ -1565,6 +1599,14 @@ mod tests {
         assert_eq!(a.contours[0].color.map(|c| (c[0] * 255.0).round() as u32), Some(0x33));
         assert!(parse("not an svg").is_err());
         assert!(parse(&wrap(r#"<line x1="0" y1="0" x2="5" y2="5"/>"#)).is_err());
+    }
+
+    #[test]
+    fn unsupported_features_are_reported() {
+        let a = parse(&wrap(r#"<rect width="20" height="20" stroke="red"/><text>hello</text><image href="data:abc"/>"#)).unwrap();
+        assert!(a.warnings.iter().any(|s| s.contains("stroke")));
+        assert!(a.warnings.iter().any(|s| s.contains("text")));
+        assert!(a.warnings.iter().any(|s| s.contains("image")));
     }
 
     #[test]
