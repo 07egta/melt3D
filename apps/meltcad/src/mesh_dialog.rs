@@ -37,10 +37,10 @@ impl<T: Send + 'static> Job<T> {
         };
         let j = job.clone();
         let spawned = std::thread::Builder::new().name(name.into()).spawn(move || {
-            let _permit = permit;
             let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(&j.cancel, &j.progress)))
                 .unwrap_or_else(|_| Err("途中で止まってしまいました".into()));
             let res = if j.cancel.load(Ordering::Relaxed) { Err(crate::import_mesh::IMPORT_CANCELLED.into()) } else { res };
+            drop(permit); // free the budget before the UI can see a completed read
             if let Ok(mut slot) = j.slot.lock() {
                 *slot = Some(res);
             }
