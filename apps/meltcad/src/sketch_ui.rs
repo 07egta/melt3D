@@ -1066,7 +1066,7 @@ impl App {
             return true;
         }
         // A focused numeric field owns its Enter/Delete/Esc and text input.
-        if ctx.wants_keyboard_input() { return false; }
+        if ctx.egui_wants_keyboard_input() { return false; }
         let sketch_uses_delete = self.sk.edit.is_some() || !self.sk.pts.is_empty() || self.sk.anchor.is_some();
         let del = (sketch_uses_delete && hit(Key::Delete)) | hit(Key::Backspace);
         let enter = hit(Key::Enter);
@@ -1404,7 +1404,7 @@ impl App {
     /// Delete: remove the chosen point (three stay at least).
     pub fn sketch_edit_delete(&mut self) {
         let Some(i) = self.sk.edit.as_ref().and_then(|e| e.sel) else { return };
-        let res = self.sk.edit.as_ref().and_then(|e| self.scene.shape(e.g, e.s).map(|s| (e.g, e.s, e.which, sketch::outline_of(s, e.which).clone()))).map(|(g, s, which, mut candidate)| {
+        let res: Option<Result<(), SketchError>> = self.sk.edit.as_ref().and_then(|e| self.scene.shape(e.g, e.s).map(|s| (e.g, e.s, e.which, sketch::outline_of(s, e.which).clone()))).map(|(g, s, which, mut candidate)| {
             sketch::remove_point(&mut candidate, i)?;
             self.scene.shape_mut(g, s).ok_or(SketchError::BadNumber)?.set_sketch_outline(which == Which::Top, candidate).map_err(|_| SketchError::SelfIntersect)?;
             Ok(())
@@ -1451,7 +1451,7 @@ impl App {
             out.busy = true;
             match (primary_down, ui.input(|i| i.pointer.interact_pos())) {
                 (true, Some(p)) if rect.contains(p) => self.edit_drag(rect, p, step),
-                (true, _) => self.edit_cancel_drag(),
+                (true, _) => { self.edit_cancel_drag(); }
                 _ => self.edit_release(),
             }
             return out;
@@ -1528,6 +1528,7 @@ impl App {
                 self.paint_saved_path(p, rect);
                 self.paint_draft(p, rect);
             }
+        }
         if self.sk.stage != Stage::Ready {
             self.paint_snap_marker(p, rect, &self.sk.frame);
         }

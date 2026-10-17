@@ -132,7 +132,11 @@ fn begin_selected_rebake(app: &App, ctx: &egui::Context) {
 }
 
 fn rebake_panel(app: &mut App, ctx: &egui::Context) {
-    let Some(mut req) = ctx.data_mut(|m| m.remove_temp::<RebakeRequest>(rebake_id())) else { return };
+    let Some(mut req) = ctx.data_mut(|m| {
+        let r = m.get_temp::<RebakeRequest>(rebake_id());
+        m.remove::<RebakeRequest>(rebake_id());
+        r
+    }) else { return };
     let mut close = false;
     if let Some(j) = req.job.clone() {
         match j.job.take() {

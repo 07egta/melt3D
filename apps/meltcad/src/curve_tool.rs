@@ -1144,7 +1144,7 @@ mod tests {
             to_world(sh, [sh.path[1][0], sh.path[1][1], sh.path[1][2]])
         };
         let c = app.cam.project(rect, w0).expect("in front");
-        app.ct.drag = Some(NodeDrag { g, s, i: 1, radius: false, level: false, grab: [0.0; 3] });
+        app.ct.drag = Some(NodeDrag { g, s, i: 1, radius: false, handle: None, level: false, grab: [0.0; 3] });
         app.apply_node_drag(rect, c + vec2(40.0, 0.0), egui::Modifiers::NONE);
         let sh = app.scene.shape(g, s).expect("there");
         let w1 = to_world(sh, [sh.path[1][0], sh.path[1][1], sh.path[1][2]]);
