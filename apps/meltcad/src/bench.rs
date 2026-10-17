@@ -1045,4 +1045,40 @@ mod tests {
             assert!(far <= inner / 300 + 1, "{name}: the hits are at the same distance");
         }
     }
+
+    /// The picture with the shadow rays reading only what is near them is the picture with them reading everything.
+    /// `cargo test -p meltcad --release shadow_candidates_match_the_full_scan -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn shadow_candidates_match_the_full_scan() {
+        let on = crate::gpu::shader_source();
+        let marker = "    if (G.offs2.z < 0.5) {\n        find_candidates(ro, rd, t, tend, 1.0 + G.melt.z + 0.1 * tend);";
+        assert!(on.contains(marker), "the shadow's candidates are where the test looks for them");
+        let off = on.replace(marker, "    if (false) {\n        find_candidates(ro, rd, t, tend, 1.0 + G.melt.z + 0.1 * tend);");
+        let (mut with, mut without) = match (crate::gpu::offscreen::Offscreen::open_with(Some(&on)), crate::gpu::offscreen::Offscreen::open_with(Some(&off))) {
+            (Ok(a), Ok(b)) => (a, b),
+            _ => {
+                eprintln!("no adapter");
+                return;
+            }
+        };
+        let size = [320u32, 200u32];
+        for (name, scene) in parity_scenes() {
+            let cam = camera_for(&scene);
+            let pack = crate::gpu::ScenePack::new(&scene, crate::gpu::VolumeSet::of(&scene));
+            let mut images = Vec::new();
+            for gpu in [&mut with, &mut without] {
+                gpu.load(&pack);
+                let pic = gpu.picture(size);
+                let mut globals = pack.globals(&scene, &cam, [size[0] as f32, size[1] as f32], None, None, false);
+                crate::gpu::set_view_flags(&mut globals, crate::perf::view_flags(false, false, pack.glow));
+                gpu.frame(&pic, &globals, false);
+                images.push(gpu.read(&pic));
+            }
+            let differing = images[0].chunks(4).zip(images[1].chunks(4)).filter(|(a, b)| a[..3].iter().zip(&b[..3]).any(|(x, y)| x.abs_diff(*y) > 6)).count();
+            let total = (size[0] * size[1]) as usize;
+            println!("{name:<10} {differing} of {total} pixels differ by more than 6/255 with the shadows reading less");
+            assert!(differing * 500 <= total, "{name}: the shadows are the same");
+        }
+    }
 }

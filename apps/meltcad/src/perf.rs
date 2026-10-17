@@ -46,6 +46,9 @@ pub fn mark_once(flag: &AtomicBool, label: &str) {
 // ---------------------------------------------------------------------------------------------
 // Quality
 
+/// How much a picture that is drawn smaller than the window is sharpened when it is scaled up (0..1).
+pub const DEFAULT_SHARPEN: f32 = 0.6;
+
 /// How sharp the viewport is drawn (がしつ).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum Quality {
