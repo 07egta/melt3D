@@ -174,6 +174,8 @@ pub struct DragPoint {
     pub idx: usize,
     /// The outline before the drag (put back when the result would cross itself).
     pub before: Vec<[f32; 2]>,
+    /// Lightweight preview; the actual 3D shape is updated only on release.
+    pub candidate: Vec<[f32; 2]>,
 }
 
 /// What the mouse is on while editing.
@@ -486,6 +488,7 @@ impl App {
 
     /// Switch the sketch tool on or off. It excludes the other drawing tools.
     pub fn set_sketch_tool(&mut self, on: bool) {
+        self.edit_cancel_drag();
         self.sk.edit = None;
         self.sk.reset();
         self.sk.on = on;
@@ -744,7 +747,12 @@ impl App {
             if del {
                 self.sketch_edit_delete();
             }
-            if enter || esc {
+            if esc {
+                if !self.edit_cancel_drag() {
+                    self.sk.edit = None;
+                }
+            } else if enter {
+                self.edit_release();
                 self.sk.edit = None;
             }
             return;
@@ -786,6 +794,7 @@ impl App {
         let tip = "この形の輪かくを、画面の中で点をうごかして なおします";
         if style::pill(ui, if editing { "スケッチの編集をおわる" } else { "スケッチを編集" }, editing).on_hover_text(tip).clicked() {
             if editing {
+                self.edit_release();
                 self.sk.edit = None;
             } else {
                 self.sketch_edit_begin(g, s);
@@ -857,33 +866,43 @@ impl App {
         }
         let before = ol.clone();
         if let Some(e) = self.sk.edit.as_mut() {
-            e.drag = Some(DragPoint { idx, before });
+            e.drag = Some(DragPoint { idx, candidate: before.clone(), before });
             e.sel = Some(idx);
         }
         true
     }
 
-    /// The dragged point follows the mouse.
+    /// Update just the 2D draft while dragging. Do not invalidate the SDF cache every frame.
     pub fn edit_drag(&mut self, rect: Rect, m: Pos2, step: f32) {
         let Some((f, _)) = self.edit_target() else { return };
-        let Some(idx) = self.sk.edit.as_ref().and_then(|e| e.drag.as_ref()).map(|d| d.idx) else { return };
         let Some(q) = self.sketch_cursor(rect, m, step, &f) else { return };
-        if let Some((ol, rev)) = self.edit_outline_mut()
-            && let Some(p) = ol.get_mut(idx)
+        let revolved = self.sk.edit.as_ref().and_then(|e| self.scene.shape(e.g, e.s)).is_some_and(|s| s.kind == Kind::Revolve);
+        if let Some(d) = self.sk.edit.as_mut().and_then(|e| e.drag.as_mut())
+            && let Some(p) = d.candidate.get_mut(d.idx)
         {
-            *p = if rev { [q[0].max(0.0), q[1]] } else { q };
+            *p = if revolved { [q[0].max(0.0), q[1]] } else { q };
         }
     }
 
-    /// The button came up: keep the new outline unless it now crosses itself.
+    /// Esc cancels the in-progress gesture but preserves the editing session and selection.
+    pub fn edit_cancel_drag(&mut self) -> bool {
+        let Some(e) = self.sk.edit.as_mut() else { return false };
+        if e.drag.take().is_none() {
+            return false;
+        }
+        e.hover = None;
+        self.sk.msg.clear();
+        true
+    }
+
+    /// On release, validate the draft and atomically replace the solid's outline.
     pub fn edit_release(&mut self) {
-        let Some(d) = self.sk.edit.as_mut().and_then(|e| e.drag.take()) else { return };
-        let Some((ol, _)) = self.edit_outline_mut() else { return };
-        if sketch::is_simple(&d.before) && !sketch::is_simple(ol) {
-            *ol = d.before;
-            self.sk.msg = SketchError::SelfIntersect.message();
-        } else {
-            self.sk.msg.clear();
+        let Some((g, s, which, d)) = self.sk.edit.as_mut().and_then(|e| e.drag.take().map(|d| (e.g, e.s, e.which, d))) else { return };
+        let result = self.scene.shape_mut(g, s).map(|sh| sh.set_sketch_outline(which == Which::Top, d.candidate));
+        match result {
+            Some(Ok(_)) => self.sk.msg.clear(),
+            Some(Err(err)) => self.sk.msg = err,
+            None => self.sk.msg = "編集する形が見つかりません".to_string(),
         }
     }
 
@@ -896,9 +915,10 @@ impl App {
                 }
             }
             Some(Hover::Edge(i, at)) => {
-                let added = self.edit_outline_mut().is_some_and(|(ol, rev)| {
-                    let at = if rev { [at[0].max(0.0), at[1]] } else { at };
-                    sketch::insert_point(ol, i, at)
+                let added = self.sk.edit.as_ref().and_then(|e| self.scene.shape(e.g, e.s).map(|sh| (e.g, e.s, e.which, sh.kind, sketch::outline_of(sh, e.which).clone()))).is_some_and(|(g, s, which, kind, mut ol)| {
+                    let at = if kind == Kind::Revolve { [at[0].max(0.0), at[1]] } else { at };
+                    sketch::insert_point(&mut ol, i, at)
+                        && self.scene.shape_mut(g, s).is_some_and(|sh| sh.set_sketch_outline(which == Which::Top, ol).is_ok())
                 });
                 if let Some(e) = self.sk.edit.as_mut() {
                     e.sel = added.then_some(i + 1);
@@ -918,7 +938,11 @@ impl App {
     /// Delete: remove the chosen point (three stay at least).
     pub fn sketch_edit_delete(&mut self) {
         let Some(i) = self.sk.edit.as_ref().and_then(|e| e.sel) else { return };
-        let res = self.edit_outline_mut().map(|(ol, _)| sketch::remove_point(ol, i));
+        let res = self.sk.edit.as_ref().and_then(|e| self.scene.shape(e.g, e.s).map(|s| (e.g, e.s, e.which, sketch::outline_of(s, e.which).clone()))).map(|(g, s, which, mut candidate)| {
+            sketch::remove_point(&mut candidate, i)?;
+            self.scene.shape_mut(g, s).ok_or(SketchError::BadNumber)?.set_sketch_outline(which == Which::Top, candidate).map_err(|_| SketchError::SelfIntersect)?;
+            Ok(())
+        });
         match res {
             Some(Ok(())) => {
                 self.sk.msg.clear();
@@ -1230,7 +1254,7 @@ impl App {
                 self.paint_poly(p, rect, &of, sketch::outline_of(sh, other), true, Color32::from_white_alpha(70), 1.2);
             }
         }
-        let ol = sketch::outline_of(sh, e.which);
+        let ol = e.drag.as_ref().map(|d| &d.candidate).unwrap_or_else(|| sketch::outline_of(sh, e.which));
         self.paint_poly(p, rect, &f, ol, true, style::ACCENT, 2.0);
         for (i, q) in ol.iter().enumerate() {
             let Some(c) = self.sketch_px(rect, &f, *q) else { continue };
@@ -1290,6 +1314,7 @@ impl App {
                     if style::pill(ui, label, cur == Some(w)).clicked()
                         && let Some(e) = self.sk.edit.as_mut()
                     {
+                        // Cancel an unfinished drag rather than committing an unexpected point.
                         e.which = w;
                         e.sel = None;
                         e.drag = None;
@@ -1308,6 +1333,7 @@ impl App {
             ui.label(egui::RichText::new(&self.sk.msg).size(11.5).color(style::CUT));
         }
         if done {
+            self.edit_release();
             self.sk.edit = None;
             self.sk.msg.clear();
         }
@@ -1942,7 +1968,8 @@ mod tests {
         assert!(app.edit_begin_drag(2));
         let target = app.cam.project(r, [30.0, 30.0, 0.0]).expect("on screen");
         app.edit_drag(r, target, 1.0);
-        let moved = app.scene.shape(g, s).expect("there").outline[2];
+        assert_eq!(app.scene.shape(g, s).expect("there").outline, before, "the heavy 3D shape stays stable during preview");
+        let moved = app.sk.edit.as_ref().unwrap().drag.as_ref().unwrap().candidate[2];
         assert!((moved[0] - before[2][0] - 10.0).abs() < 1.0 && (moved[1] - before[2][1] - 10.0).abs() < 1.0, "{moved:?}");
         app.edit_release();
         app.settle(&ctx);
@@ -1955,7 +1982,7 @@ mod tests {
         assert!(app.edit_begin_drag(0));
         let across = app.cam.project(r, [40.0, 0.0, 0.0]).expect("on screen");
         app.edit_drag(r, across, 1.0);
-        assert_ne!(app.scene.shape(g, s).expect("there").outline, good, "it follows the mouse while the button is down");
+        assert_ne!(app.sk.edit.as_ref().unwrap().drag.as_ref().unwrap().candidate, good, "the preview follows the mouse");
         app.edit_release();
         assert_eq!(app.scene.shape(g, s).expect("there").outline, good, "a crossing outline is put back when the mouse is let go");
         assert!(!app.sk.msg.is_empty());
@@ -1986,6 +2013,28 @@ mod tests {
         // the shape deleted: the editing ends by itself
         app.delete_selected();
         assert!(app.edit_target().is_none() && app.sk.edit.is_none());
+    }
+
+    #[test]
+    fn escape_cancels_only_drag_and_preserves_solid_selection() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        app.add_shape(&ctx, Kind::Extrude);
+        app.settle(&ctx);
+        let Some(Pick::Shape(g, s)) = app.sel else { panic!("shape") };
+        app.sketch_edit_begin(g, s);
+        let original = app.scene.shape(g, s).unwrap().clone();
+        assert!(app.edit_begin_drag(2));
+        let r = rect();
+        let f = sketch::edit_frame(&original, Which::Main).unwrap();
+        let at = app.cam.project(r, f.to_world([35.0, 35.0])).unwrap();
+        app.edit_drag(r, at, 1.0);
+        assert!(app.edit_cancel_drag());
+        assert_eq!(app.scene.shape(g, s), Some(&original));
+        assert_eq!(app.sel, Some(Pick::Shape(g, s)));
+        assert!(app.sk.edit.is_some());
+        app.settle(&ctx);
+        assert_eq!(app.scene.shape(g, s), Some(&original), "cancel adds no model change");
     }
 
     #[test]
