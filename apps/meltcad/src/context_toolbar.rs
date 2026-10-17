@@ -363,8 +363,13 @@ impl App {
             }
         } else { action.label() };
         let button = egui::Button::new(RichText::new(label).size(if menu { 13.0 } else { 12.5 }).color(if action == Action::Delete { style::CUT } else { style::TEXT }));
-        let response = ui.add_enabled(why.is_none(), button)
-            .on_hover_text(why.unwrap_or(action.hint()));
+        let response = ui.add_enabled(why.is_none(), button);
+        // Disabled egui widgets use a separate hover path; plain on_hover_text
+        // does not reliably display the reason when the button is inactive.
+        let response = match why {
+            Some(reason) => response.on_disabled_hover_text(reason),
+            None => response.on_hover_text(action.hint()),
+        };
         if response.clicked() {
             let ctx = ui.ctx().clone();
             self.run_action(action, &ctx);
