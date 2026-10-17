@@ -1565,7 +1565,11 @@ mod tests {
         let data = Frame::new(&frame);
         // One bounding sphere record precedes the 15-field shader Shape struct.
         assert_eq!(data.shape(0, 11)[0], 1.25);
-        assert!(crate::sdf::Prepared::new(shape).distance([10.75, 0.0, 20.0]) > 0.0 || shape.pos[2] != 20.0);
+        let sample = [10.75, 0.0, 20.0];
+        assert!(crate::sdf::Prepared::new(shape).distance(sample) < 0.0, "inflated outline reaches the sample");
+        let mut plain = shape.clone();
+        plain.params[0] = 0.0;
+        assert!(crate::sdf::Prepared::new(&plain).distance(sample) > 0.0, "legacy uninflated outline does not");
         assert!(include_str!("shader.wgsl").contains("r -= clamp(s.params.x, -40.0, 40.0)"));
     }
 
