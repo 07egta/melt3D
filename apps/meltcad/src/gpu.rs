@@ -2132,6 +2132,67 @@ mod headless_tests {
         }
     }
 
+    /// Directly read WGSL twist distance for box/cylinder and all three axes.
+    /// Requires Vulkan/DX12/GL; ignored by default in CI without a graphics adapter.
+    #[test]
+    #[ignore = "requires graphics adapter"]
+    fn twist_gpu_distance_matches_cpu() {
+        use crate::deform::{Axis, Deformation, Twist};
+        use crate::model::{Kind, Material, Shape};
+        let Some((device, queue, info)) = headless::open_device(false) else {
+            eprintln!("no graphics adapter for twist parity");
+            return;
+        };
+        eprintln!("{info}");
+        let mut src = shader_source();
+        let entry = src.find("fn fs(in: VOut)").expect("fragment entry");
+        let open = entry + src[entry..].find('{').expect("fragment body");
+        let mut depth = 0_i32;
+        let mut close = None;
+        for (off, ch) in src[open..].char_indices() {
+            if ch == '{' { depth += 1; }
+            if ch == '}' {
+                depth -= 1;
+                if depth == 0 { close = Some(open + off); break; }
+            }
+        }
+        src.replace_range(open..=close.expect("fragment end"),
+            "{\n    let q = vec3<f32>(in.uv.x * 48.0 - 24.0, in.uv.y * 48.0 - 24.0, 6.0);\n    let d = shape_dist(shape_at(0), q);\n    return vec4<f32>(clamp((d + 16.0) / 32.0, 0.0, 1.0), 0.0, 0.0, 1.0);\n}");
+        let res = try_build_from(&device, &queue, wgpu::TextureFormat::Rgba8Unorm, &src).expect("twist shader");
+        let mut gpu = headless::Gpu { device, queue, res, info };
+        let size = [64_u32, 64_u32];
+        for kind in [Kind::Box, Kind::Cylinder] {
+            for axis in Axis::ALL {
+                let mut shape = Shape::new(kind, [0.0; 3], Material::default());
+                shape.size = if kind == Kind::Box { [30.0, 18.0, 40.0] } else { [14.0, 40.0, 1.0] };
+                shape.deformation = Some(Deformation::Twist(Twist {
+                    axis, degrees: 180.0, begin: 0.1, end: 0.9, ..Twist::default()
+                }));
+                let prep = Prepared::new(&shape);
+                let scene = Scene {
+                    groups: vec![Group { shapes: vec![shape], ..Group::new("twist") }],
+                    melt: Default::default(), env: Default::default(), saved: Vec::new()
+                };
+                let data = pack(&scene, &Camera::default(), [64.0, 64.0], None, None, false);
+                let (pixels, _) = gpu.render(&data, size);
+                assert_eq!(pixels.len(), (size[0] * size[1] * 4) as usize);
+                let mut compared = 0;
+                for y in (0..size[1]).step_by(4) {
+                    for x in (0..size[0]).step_by(4) {
+                        let q = [(x as f32 + 0.5) * 48.0 / 64.0 - 24.0,
+                                 (y as f32 + 0.5) * 48.0 / 64.0 - 24.0, 6.0];
+                        let cpu = prep.distance(q);
+                        if !(-15.5..15.5).contains(&cpu) { continue; }
+                        let gpu_d = f32::from(pixels[((y * 64 + x) * 4) as usize]) * 32.0 / 255.0 - 16.0;
+                        assert!((gpu_d - cpu).abs() < 0.25, "{kind:?}/{axis:?} at {q:?}: GPU {gpu_d} CPU {cpu}");
+                        compared += 1;
+                    }
+                }
+                assert!(compared > 20, "{kind:?}/{axis:?}: only {compared} comparable points");
+            }
+        }
+    }
+
     /// The picture the shader makes and the CPU field agree about what is there: the silhouette of
     /// a scene with a mirror, a ring, a grid and a linked copy, as drawn by the (software) GPU, is
     /// the same as the silhouette found by the CPU's ray marching.
