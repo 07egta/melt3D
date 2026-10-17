@@ -222,14 +222,8 @@ impl App {
             Action::Move => self.tool = Tool::Move,
             Action::Rotate => self.tool = Tool::Rotate,
             Action::Scale => self.tool = Tool::Scale,
-            Action::Duplicate => {
-                if self.multi_sel.is_empty() { self.duplicate(); }
-                else { self.duplicate_multi(ctx); }
-            }
-            Action::Delete => {
-                if self.multi_sel.is_empty() { self.delete_selected(); }
-                else { self.delete_multi(); }
-            }
+            Action::Duplicate => self.duplicate(),
+            Action::Delete => self.delete_selected(),
             Action::EditSketch => {
                 if let Some(Pick::Shape(g, s)) = self.sel { self.sketch_edit_begin(g, s); }
             }
@@ -258,15 +252,15 @@ impl App {
         }
     }
 
-    fn duplicate_multi(&mut self, ctx: &egui::Context) {
+    pub(crate) fn duplicate_multi(&mut self) {
         let Ok((g, keys)) = self.same_group_shapes() else { return };
         if self.scene.shape_count().saturating_add(keys.len()) > MAX_SHAPES {
-            self.say(ctx, "形の上限に達します");
+            self.notice = Some("形の上限に達します".into());
             return;
         }
         let copies: Vec<_> = keys.iter().filter_map(|s| self.scene.shape(g, *s).cloned()).collect();
         if let Err(why) = crate::mesh::can_add(&self.scene, copies.iter()) {
-            self.say(ctx, why);
+            self.notice = Some(why.into());
             return;
         }
         let mut copies = copies;
@@ -280,8 +274,11 @@ impl App {
         self.clear_multi_selection();
     }
 
-    fn delete_multi(&mut self) {
-        let Some(mut keys) = self.selected_shape_keys() else { return };
+    pub(crate) fn delete_multi(&mut self) {
+        let Some(mut keys) = self.selected_shape_keys() else {
+            self.notice = Some("グループと形は同時には削除できません".into());
+            return;
+        };
         keys.sort_unstable_by(|a, b| b.cmp(a));
         let first_g = keys.last().map(|(g, _)| *g);
         for (g, s) in keys {
@@ -423,6 +420,7 @@ mod tests {
         let mut app = App::new(true, None);
         app.scene.groups[0].shapes.push(Shape::new(Kind::Box, [20.0, 7.0, 9.0], Material::default()));
         app.scene.groups[0].shapes.push(Shape::new(Kind::Box, [-14.0, 11.0, 12.0], Material::default()));
+        app.settle(&ctx); // Establish the scene before testing a single undo transaction.
         app.select_pick(Some(Pick::Shape(0, 0)), false);
         app.select_pick(Some(Pick::Shape(0, 1)), true);
         app.select_pick(Some(Pick::Shape(0, 2)), true);
