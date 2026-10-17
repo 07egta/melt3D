@@ -216,14 +216,18 @@ impl App {
             if let Some(axis) = self.gnomon_hit(rect, p) {
                 self.look_along(axis);
             } else {
-                self.pick_at(rect, p, mods.shift);
+                self.pick_at(rect, p, mods.shift, mods.ctrl);
             }
         }
         if resp.secondary_clicked()
             && !self.sketch_active()
             && let Some(p) = pos
         {
-            self.pick_at(rect, p, false);
+            // Keep the multi-selection when right-clicking one of its members.
+            let under = self.shape_at(rect, p).map(|(g, s)| as_pick(g, s));
+            if !under.is_some_and(|item| self.is_pick_selected(item)) {
+                self.select_pick(under, false);
+            }
         }
         resp.context_menu(|ui| self.context_menu(ui));
         if resp.double_clicked_by(PointerButton::Primary)
@@ -332,6 +336,7 @@ impl App {
         self.curve_paint(&painter, rect);
         self.pipe_paint(&painter, rect);
         self.sketch_paint(&painter, rect);
+        self.paint_multi_selection(&painter, rect);
         self.draw_gnomon(&painter, rect, pos);
     }
 
@@ -451,13 +456,19 @@ impl App {
         self.field().ray(o, d, 5000.0).and_then(|(_, s)| s.nearest)
     }
 
-    fn pick_at(&mut self, rect: Rect, p: Pos2, keep: bool) {
+    fn pick_at(&mut self, rect: Rect, p: Pos2, keep: bool, additive: bool) {
         match self.shape_at(rect, p) {
             Some((g, s)) => {
                 let want = as_pick(g, s);
-                self.sel = if keep && self.sel == Some(want) { Some(Pick::Group(g)) } else { Some(want) };
+                if additive {
+                    self.select_pick(Some(want), true);
+                } else {
+                    let single = if keep && self.sel == Some(want) { Pick::Group(g) } else { want };
+                    self.select_pick(Some(single), false);
+                }
             }
-            None => self.sel = None,
+            None if !additive => self.select_pick(None, false),
+            None => {}
         }
     }
 
