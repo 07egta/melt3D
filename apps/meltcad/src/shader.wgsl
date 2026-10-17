@@ -44,7 +44,7 @@ struct Globals {
 fn D(i: i32) -> vec4<f32> { return textureLoad(DT, vec2<i32>(i & 1023, i >> 10), 0); }
 
 // Layout (keep in step with gpu.rs):
-//   group  (3 vec4): [first block, block count, op sign, blend] [first instance, instance count, 0, 0] [bounding sphere]
+//   group  (3 vec4): [first block, block count, op sign, blend] [first instance, instance count, first item (see cand), 0] [bounding sphere]
 //   block  (2 vec4): [bounding sphere] [largest blend, 1 = never skip, first shape, shape count]
 //   instance (4 vec4): three rows (x y z, offset) taking a world point back into the group's own space, then [world centre of the group's sphere, scale]
 //   shape (16 vec4): [bounding sphere = position, radius] then the 15 vec4 of struct Shape
@@ -444,6 +444,53 @@ fn group_far(gr: vec4<f32>, gs: vec4<f32>, p: vec3<f32>, acc_d: f32, amount: f32
     return lb >= paint_far(k);
 }
 
+// Per-ray candidates (set once per pixel before the primary march, see `fs`): one bit for every
+// item (a group, or one instance of a pattern group) whose bounding sphere comes near the ray. An
+// item far from the whole ray can neither be hit nor bend the surface where the ray meets it, so
+// the march leaves it out without reading anything about it. It is switched on only while marching
+// the primary ray: every other query (normals, shadows, occlusion) is about points off the ray.
+var<private> cand: array<u32, 8>;
+var<private> use_cand: bool;
+
+fn is_cand(i: i32) -> bool {
+    if (!use_cand || i >= 256) { return true; }
+    return ((cand[i >> 5] >> u32(i & 31)) & 1u) != 0u;
+}
+
+// The items near the ray `ro + rd * t` for t in [t0, t1]: those whose sphere (grown by the reach of
+// their blend, the melt's drip and a margin) is touched by it.
+fn find_candidates(ro: vec3<f32>, rd: vec3<f32>, t0: f32, t1: f32) {
+    for (var w = 0; w < 8; w = w + 1) { cand[w] = 0u; }
+    let amount = G.melt.y;
+    let rm = reach_mult();
+    let slack = 1.0 + G.melt.z + 0.004 * t1;
+    let ng = i32(G.counts.x + 0.5);
+    for (var gi = 0; gi < ng; gi = gi + 1) {
+        let gb = group_at(gi);
+        let gr = D(gb);
+        let gn = D(gb + 1);
+        let gs = D(gb + 2);
+        let ni = i32(gn.y + 0.5);
+        let fi = i32(gn.x + 0.5);
+        let ib0 = i32(gn.z + 0.5);
+        let grow = rm * gr.w * amount + slack;
+        for (var j = 0; j < max(ni, 1); j = j + 1) {
+            var sphere = gs;
+            if (ni > 0) {
+                let ic = D(inst_at(fi + j) + 3);
+                sphere = vec4<f32>(ic.xyz, gs.w * ic.w);
+            }
+            let tp = clamp(dot(sphere.xyz - ro, rd), t0, t1);
+            let near = length(sphere.xyz - (ro + rd * tp)) - sphere.w;
+            let item = ib0 + j;
+            // (a group that keeps only the overlap changes the result everywhere: never left out)
+            if ((near < grow || gr.z > 1.5) && item < 256) {
+                cand[item >> 5] = cand[item >> 5] | (1u << u32(item & 31));
+            }
+        }
+    }
+}
+
 fn map(p0: vec3<f32>) -> Hit {
     let p = warp(p0);
     let mode = i32(G.melt.x + 0.5);
@@ -459,8 +506,10 @@ fn map(p0: vec3<f32>) -> Hit {
         let gs = D(gb + 2);
         let ni = i32(gn.y + 0.5);
         let fi = i32(gn.x + 0.5);
+        let ib0 = i32(gn.z + 0.5);
         // every instance of the group melts into the result in turn (none: the group once, as it is)
         for (var j = 0; j < max(ni, 1); j = j + 1) {
+            if (!is_cand(ib0 + j)) { continue; }
             var sc = 1.0;
             var sphere = gs;
             let ib = inst_at(fi + j);
@@ -555,7 +604,9 @@ fn map_d(p0: vec3<f32>) -> f32 {
         let gs = D(gb + 2);
         let ni = i32(gn.y + 0.5);
         let fi = i32(gn.x + 0.5);
+        let ib0 = i32(gn.z + 0.5);
         for (var j = 0; j < max(ni, 1); j = j + 1) {
+            if (!is_cand(ib0 + j)) { continue; }
             var sc = 1.0;
             var sphere = gs;
             let ib = inst_at(fi + j);
@@ -819,8 +870,19 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
             t_max = -bq + sq;
         }
     }
+    // the floor hides everything behind it: the march stops there
+    if (run && ro.z >= 0.0 && t_ground < 1e8 && (grid_on || floor_on)) {
+        t_max = min(t_max, t_ground + 0.05);
+        if (t > t_max) { run = false; }
+    }
     // a little per-pixel jitter turns banding in the lamp glow into fine noise
     t = t + fract(sin(dot(in.pos.xy, vec2<f32>(12.9898, 78.233))) * 43758.5453) * 1.5;
+    // groups and pattern copies far from this ray are left out of the march (not with lamps: their glow reaches far)
+    use_cand = false;
+    if (run && !glow_scene) {
+        find_candidates(ro, rd, t, t_max);
+        use_cand = true;
+    }
     // Over-relaxed sphere tracing: steps a little longer than the distance, taken back when two
     // steps would have jumped over a surface. Lamps and a selected carver need small steps.
     var relax = select(1.1, 1.5, fast);
@@ -874,6 +936,7 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
         t = t + step;
         if (t > t_max) { break; }
     }
+    use_cand = false;
     if (hit && !glow_scene) { h = map(ro + rd * t); }
 
     // ground
@@ -944,7 +1007,7 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
             let lc = light_col(i);
             var sh = 1.0;
             if (i == 0) {
-                sh = mix(1.0, soft_shadow(p + n * 0.1, L, 300.0, select(32, 10, fast)), shadow_k);
+                sh = mix(1.0, soft_shadow(p + n * 0.1, L, 300.0, select(32, 4, fast)), shadow_k);
                 sh = mix(sh, 1.0, h.glass * 0.6);
             }
             let ndl = max(dot(n, L), 0.0);

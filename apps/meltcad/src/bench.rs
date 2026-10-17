@@ -717,4 +717,75 @@ mod tests {
             Err(e) => eprintln!("no adapter: {e}"),
         }
     }
+
+    /// The shader with counters: every read of the scene list and every distance evaluation of a
+    /// pixel is counted, and the counts become the pixel's colour (R, G = reads low and high byte,
+    /// B = evaluations). Reads of the scene list are what an integrated graphics card runs out of
+    /// first, and the numbers do not depend on the machine.
+    fn counting_source() -> String {
+        let src = crate::gpu::shader_source();
+        let fetch = "fn D(i: i32) -> vec4<f32> { return textureLoad(DT, vec2<i32>(i & 1023, i >> 10), 0); }";
+        assert!(src.contains(fetch), "the scene-list reader is the one the counters wrap");
+        src.replace(fetch, "var<private> n_fetch: u32;\nvar<private> n_eval: u32;\nfn D(i: i32) -> vec4<f32> { n_fetch = n_fetch + 1u; return textureLoad(DT, vec2<i32>(i & 1023, i >> 10), 0); }")
+            .replace("fn map_d(p0: vec3<f32>) -> f32 {\n", "fn map_d(p0: vec3<f32>) -> f32 {\n    n_eval = n_eval + 1u;\n")
+            .replace("fn map(p0: vec3<f32>) -> Hit {\n", "fn map(p0: vec3<f32>) -> Hit {\n    n_eval = n_eval + 1u;\n")
+            .replace(
+                "    return vec4<f32>(encode(col), 1.0);\n}",
+                "    return vec4<f32>(f32(n_fetch & 255u) / 255.0, f32((n_fetch >> 8u) & 255u) / 255.0, f32(min(n_eval, 255u)) / 255.0, 1.0);\n}",
+            )
+    }
+
+    /// Reads of the scene list and distance evaluations per pixel, for every scene, full and fast.
+    /// `cargo test -p meltcad --release count_work -- --ignored --nocapture`
+    /// (`MELTCAD_BENCH_SIZES=w x h` as for the timing test; default 320x180)
+    #[test]
+    #[ignore]
+    fn count_work() {
+        let sizes: Vec<[u32; 2]> = std::env::var("MELTCAD_BENCH_SIZES")
+            .ok()
+            .map(|v| v.split(',').filter_map(|s| s.split_once('x').and_then(|(w, h)| Some([w.parse().ok()?, h.parse().ok()?]))).collect())
+            .unwrap_or_else(|| vec![[320, 180]]);
+        let only: Option<Vec<String>> = std::env::var("MELTCAD_BENCH_SCENES").ok().map(|v| v.split(',').map(str::to_string).collect());
+        let mut gpu = match crate::gpu::offscreen::Offscreen::open_with(Some(&counting_source())) {
+            Ok(g) => g,
+            Err(e) => {
+                eprintln!("no adapter: {e}");
+                return;
+            }
+        };
+        println!("{:<10} {:>6} {:<9} {:<5} {:>12} {:>9} {:>12} {:>9} {:>9}", "scene", "shapes", "size", "mode", "reads/px", "p95", "evals/px", "p95", "max");
+        for bs in scenes().into_iter().filter(|s| only.as_ref().is_none_or(|o| o.iter().any(|n| n == s.name))) {
+            let cam = camera_for(&bs.scene);
+            let pack = crate::gpu::ScenePack::new(&bs.scene, crate::gpu::VolumeSet::of(&bs.scene));
+            gpu.load(&pack);
+            for &size in &sizes {
+                let pic = gpu.picture(size);
+                let mut globals = pack.globals(&bs.scene, &cam, [size[0] as f32, size[1] as f32], None, None, false);
+                for mode in [Mode::Full, Mode::Fast] {
+                    crate::gpu::set_view_flags(&mut globals, crate::perf::view_flags(false, mode == Mode::Fast, pack.glow));
+                    gpu.frame(&pic, &globals, mode == Mode::Fast);
+                    let px = gpu.read(&pic);
+                    let mut reads: Vec<u32> = px.chunks(4).map(|p| u32::from(p[0]) + (u32::from(p[1]) << 8)).collect();
+                    let mut evals: Vec<u32> = px.chunks(4).map(|p| u32::from(p[2])).collect();
+                    let mean = |v: &[u32]| v.iter().map(|x| f64::from(*x)).sum::<f64>() / v.len().max(1) as f64;
+                    let (mr, me) = (mean(&reads), mean(&evals));
+                    reads.sort_unstable();
+                    evals.sort_unstable();
+                    let p95 = |v: &[u32]| v.get(v.len() * 95 / 100).copied().unwrap_or(0);
+                    println!(
+                        "{:<10} {:>6} {:<9} {:<5} {:>12.1} {:>9} {:>12.1} {:>9} {:>9}",
+                        bs.name,
+                        bs.scene.shape_count(),
+                        format!("{}x{}", size[0], size[1]),
+                        mode.label(),
+                        mr,
+                        p95(&reads),
+                        me,
+                        p95(&evals),
+                        evals.last().copied().unwrap_or(0)
+                    );
+                }
+            }
+        }
+    }
 }
