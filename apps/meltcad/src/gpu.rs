@@ -139,6 +139,10 @@ pub struct ScenePack {
     /// Shapes in the list and groups to draw.
     pub shape_n: usize,
     pub group_n: usize,
+    /// Number of unchanged shapes whose packed data was safely reused.
+    pub shapes_reused: usize,
+    /// Number of shape payloads computed on this revision.
+    pub shapes_repacked: usize,
     offs: [f32; 4],
     offs2: [f32; 2],
     resolved: Vec<crate::pattern::RGroup>,
@@ -150,6 +154,17 @@ pub struct ScenePack {
 
 impl ScenePack {
     pub fn new(scene: &Scene, vols: VolumeSet) -> ScenePack {
+        Self::reusing(scene, vols, None)
+    }
+
+    /// Keep exact packed payloads of unchanged shapes while updating dependent group bounds,
+    /// ordering, Boolean operations and instance transforms. Pool offsets are rebased below;
+    /// meshes and curves take the original path to avoid reusing context-dependent volume
+    /// locations or an adaptively truncated curve.
+    pub fn reusing(scene: &Scene, vols: VolumeSet, previous: Option<(&Scene, &ScenePack)>) -> ScenePack {
+        let old_slots: std::collections::HashMap<(usize, usize), usize> = previous
+            .map(|(_, pack)| pack.slots.iter().map(|&(g,s,slot)| ((g,s), slot)).collect())
+            .unwrap_or_default();
         let resolved = crate::pattern::resolve(scene);
         let mut groups: Vec<f32> = Vec::new();
         let mut blocks: Vec<f32> = Vec::new();
@@ -163,6 +178,8 @@ impl ScenePack {
         let mut inst_n = 0usize;
         let mut slots: Vec<(usize, usize, usize)> = Vec::new();
         let mut ranges: Vec<(usize, usize, usize)> = Vec::new();
+        let mut shapes_reused = 0;
+        let mut shapes_repacked = 0;
         // every group whose shapes are drawn (itself, or as the source of a linked copy) is packed once
         let mut srcs: Vec<usize> = resolved.iter().map(|r| r.src).collect();
         srcs.sort_unstable();
@@ -182,7 +199,17 @@ impl ScenePack {
                 if !s.visible || shape_n >= MAX_SHAPES {
                     continue;
                 }
-                pack_shape(s, &mut shapes, &mut poly, &mut path, &vols);
+                let reused = previous.is_some_and(|(old_scene, old_pack)| {
+                    old_scene.shape(gi, si).is_some_and(|old| old == s)
+                        && old_slots.get(&(gi, si)).is_some_and(|&slot| {
+                            reuse_shape_pack(s, old_pack, slot, &mut shapes, &mut poly, &mut path)
+                        })
+                });
+                if reused { shapes_reused += 1; }
+                else {
+                    pack_shape(s, &mut shapes, &mut poly, &mut path, &vols);
+                    shapes_repacked += 1;
+                }
                 packed_overlap |= s.op == crate::model::Op::Intersect;
                 members.push(s);
                 slots.push((gi, si, shape_n));
@@ -255,6 +282,8 @@ impl ScenePack {
             instances: inst_n,
             shape_n,
             group_n,
+            shapes_reused,
+            shapes_repacked,
             offs: [0.0, block_base as f32, inst_base as f32, shape_base as f32],
             offs2: [poly_base as f32, path_base as f32],
             resolved,
@@ -318,6 +347,65 @@ impl ScenePack {
         }
         u
     }
+}
+
+/// Copy a previously packed unchanged shape without redoing transforms, CAD inset or polygon
+/// preparation. Rebase its outline/path indices to the current compact pools. Returns false
+/// (falling back to the original packer) if any pool would overflow or the old data was truncated.
+/// Important: curves' adaptive tessellation and mesh volume addresses depend on neighbouring
+/// shapes, so those types always use the exact original packer instead.
+fn reuse_shape_pack(
+    shape: &crate::model::Shape, old: &ScenePack, slot: usize,
+    shapes: &mut Vec<f32>, poly: &mut Vec<f32>, path: &mut Vec<f32>,
+) -> bool {
+    use crate::model::Kind;
+    if matches!(shape.kind, Kind::Curve | Kind::Mesh) {
+        return false;
+    }
+    let start = (old.offs[3] as usize + slot * S_STRIDE) * 4;
+    let Some(old_data) = old.list.get(start..start + S_STRIDE * 4) else { return false };
+    let mut data = old_data.to_vec();
+
+    let poly_base = old.offs2[0] as usize * 4;
+    let path_base = old.offs2[1] as usize * 4;
+    let grab_poly = |start_slot: usize, count_slot: usize, enabled: bool, count_expected: usize| -> Option<&[f32]> {
+        if !enabled { return Some(&[]); }
+        let (first, count) = (data[start_slot] as usize, data[count_slot] as usize);
+        if count != count_expected { return None; }
+        old.list.get(poly_base.checked_add(first.checked_mul(2)?)?..poly_base.checked_add(first.checked_mul(2)?)?.checked_add(count.checked_mul(2)?)?)
+    };
+    let Some(outline) = grab_poly(7*4+2, 7*4+3, shape.kind.uses_outline(), shape.outline.len()) else { return false };
+    let Some(outline2) = grab_poly(12*4+2, 12*4+3, shape.kind.uses_outline2(), shape.outline2.len()) else { return false };
+    let (old_start, old_count) = (data[12*4] as usize, data[12*4+1] as usize);
+    let path_slice = if shape.kind.uses_path() {
+        if old_count != shape.path.len() { return false; }
+        let at = path_base + old_start * 4;
+        let Some(nodes) = old.list.get(at..at + old_count * 4) else { return false };
+        nodes
+    } else {
+        &[]
+    };
+    if poly.len() / 2 + outline.len()/2 + outline2.len()/2 > POLY_PTS
+        || path.len()/4 + path_slice.len()/4 > PATH_V4
+    {
+        return false;
+    }
+    let mut append_poly = |slot: usize, count: usize, enabled: bool, pts: &[f32]| {
+        if enabled && count > 0 {
+            data[slot] = (poly.len()/2) as f32;
+            poly.extend_from_slice(pts);
+        } else {
+            data[slot] = 0.0;
+        }
+    };
+    append_poly(7*4+2, shape.outline.len(), shape.kind.uses_outline(), outline);
+    append_poly(12*4+2, shape.outline2.len(), shape.kind.uses_outline2(), outline2);
+    if shape.kind.uses_path() {
+        data[12*4] = (path.len()/4) as f32;
+        path.extend_from_slice(path_slice);
+    }
+    shapes.extend_from_slice(&data);
+    true
 }
 
 /// One shape's 16 vec4 (a bounding sphere, then `struct Shape`); its outline points and path nodes
