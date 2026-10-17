@@ -150,6 +150,14 @@ impl Activity {
         self.last = now;
     }
 
+    /// Use the existing cheap interactive pass only when the hovered *object* changes.
+    /// Mere pointer movement over the same object must not keep full quality deferred.
+    pub fn hover_changed(&mut self, now: f64, before: Option<crate::model::Pick>, after: Option<crate::model::Pick>) {
+        if before != after {
+            self.touch(now);
+        }
+    }
+
     /// Draw the cheap picture? True while moving and for `SETTLE_SECS` after.
     pub fn is_fast(&self, now: f64) -> bool {
         now - self.last < SETTLE_SECS
@@ -244,11 +252,20 @@ pub fn view_flags(srgb: bool, fast: bool, glow: bool) -> f32 {
     v as f32
 }
 
-/// Does any visible shape glow (so the shader must march with materials and draw halos)?
+/// Does any *rendered* source contain a visible lamp? A visible linked copy can draw a
+/// hidden source, but an unrelated hidden lamp must not force the expensive halo march.
 pub fn scene_has_glow(scene: &Scene) -> bool {
-    // a linked copy shows its source's shapes (even a hidden source's)
-    let linked = scene.groups.iter().any(|g| g.visible && g.is_linked());
-    scene.groups.iter().filter(|g| g.visible || linked).any(|g| g.shapes.iter().any(|s| s.visible && s.material.glow > 0.0))
+    let resolved = crate::pattern::resolve(scene);
+    scene_has_glow_resolved(scene, &resolved)
+}
+
+/// The same test with the already-resolved groups (packing must not resolve instances twice).
+pub fn scene_has_glow_resolved(scene: &Scene, resolved: &[crate::pattern::RGroup]) -> bool {
+    resolved.iter().any(|rg| {
+        scene.groups.get(rg.src).is_some_and(|source| {
+            source.shapes.iter().any(|s| s.visible && s.material.glow > 0.0)
+        })
+    })
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -447,6 +464,25 @@ mod tests {
     }
 
     #[test]
+    fn hover_only_enters_fast_mode_when_the_target_changes() {
+        use crate::model::Pick;
+        let a = Some(Pick::Shape(0, 0));
+        let b = Some(Pick::Shape(0, 1));
+        let mut activity = Activity::default();
+        activity.hover_changed(1.0, None, None);
+        assert!(!activity.is_fast(1.0));
+        activity.hover_changed(2.0, None, a);
+        assert!(activity.is_fast(2.0));
+        activity.hover_changed(2.20, a, a);
+        assert!(!activity.is_fast(2.20), "moving inside a shape must let the sharp image settle");
+        activity.hover_changed(3.0, a, b);
+        assert!(activity.is_fast(3.0));
+        assert!(!activity.is_fast(3.0 + SETTLE_SECS + 0.01));
+        activity.hover_changed(4.0, b, None);
+        assert!(activity.is_fast(4.0), "leaving a shape also uses the cheap pass briefly");
+    }
+
+    #[test]
     fn quality_scales() {
         assert_eq!(Quality::Light.scale(false), 0.5);
         assert_eq!(Quality::Normal.scale(true), 0.75);
@@ -617,6 +653,31 @@ mod tests {
         s.groups.push(copy);
         s.groups[0].visible = false;
         assert!(scene_has_glow(&s));
+        assert_eq!(scene_has_glow(&s), scene_has_glow_resolved(&s, &crate::pattern::resolve(&s)));
+
+        // An unrelated hidden lamp must not turn on the 200-step material march
+        // just because a different visible group happens to be a linked copy.
+        let mut unrelated = Scene::default();
+        let uid = unrelated.ensure_group_uid(0).unwrap_or(0);
+        let mut lit = crate::model::Group::new("hidden, unused lamp");
+        lit.visible = false;
+        lit.shapes.push(Shape::new(Kind::Sphere, [300.0, 0.0, 20.0], Material { glow: 3.0, ..Material::default() }));
+        unrelated.groups.push(lit);
+        let mut linked = crate::model::Group::new("visible ordinary copy");
+        linked.instance_of = Some(uid);
+        unrelated.groups.push(linked);
+        assert!(!scene_has_glow(&unrelated));
+        assert!(!crate::gpu::ScenePack::new(&unrelated, crate::gpu::VolumeSet::of(&unrelated)).glow);
+
+        // Broken links have no rendered source, and non-visible shapes cannot emit.
+        unrelated.groups[2].instance_of = Some(999_999);
+        assert!(!scene_has_glow(&unrelated));
+        unrelated.groups[1].visible = true;
+        assert!(scene_has_glow(&unrelated), "a directly visible lamp must still emit");
+        unrelated.groups[1].visible = false;
+        unrelated.groups[2].instance_of = Some(uid);
+        unrelated.groups[0].shapes[0].material.glow = 2.0;
+        assert!(scene_has_glow(&unrelated));
     }
 
     /// Outside the bounding sphere, a basic solid is never reached (so the shader may skip it).

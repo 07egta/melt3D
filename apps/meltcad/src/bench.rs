@@ -117,13 +117,53 @@ pub fn scenes() -> Vec<BenchScene> {
         tidy_env(&mut s);
         s
     };
+    // Matched pairs keep geometry, instances and camera framing unchanged; only glow differs.
+    let unlit = |n: usize| {
+        let mut scene = lib(n);
+        for group in &mut scene.groups {
+            for shape in &mut group.shapes {
+                shape.material.glow = 0.0;
+            }
+        }
+        scene
+    };
     vec![
         BenchScene { name: "pipe", scene: pipe_scene() },
         BenchScene { name: "library20", scene: lib(20) },
         BenchScene { name: "shapes100", scene: lib(100) },
+        BenchScene { name: "shapes100_unlit", scene: unlit(100) },
         BenchScene { name: "shapes300", scene: lib(300) },
+        BenchScene { name: "shapes300_unlit", scene: unlit(300) },
         BenchScene { name: "gradient", scene: gradient_scene() },
     ]
+}
+
+#[cfg(test)]
+mod performance_scene_tests {
+    use super::*;
+
+    #[test]
+    fn matched_100_and_300_shape_scenes_have_identical_geometry() {
+        let all = scenes();
+        for n in [100, 300] {
+            let lit_name = format!("shapes{n}");
+            let unlit_name = format!("shapes{n}_unlit");
+            let lit = all.iter().find(|s| s.name == lit_name).expect("lit scene");
+            let unlit = all.iter().find(|s| s.name == unlit_name).expect("unlit scene");
+            assert_eq!(lit.scene.shape_count(), unlit.scene.shape_count());
+            assert_eq!(lit.scene.groups.len(), unlit.scene.groups.len());
+            assert_eq!(crate::gpu::bounds(&lit.scene, None).0, crate::gpu::bounds(&unlit.scene, None).0);
+            assert!(!crate::perf::scene_has_glow(&unlit.scene));
+            for (a, b) in lit.scene.groups.iter().zip(&unlit.scene.groups) {
+                assert_eq!(a.shapes.len(), b.shapes.len());
+                for (a, b) in a.shapes.iter().zip(&b.shapes) {
+                    let mut copy = a.clone();
+                    copy.material.glow = 0.0;
+                    assert_eq!(&copy, b);
+                }
+            }
+        }
+    }
 }
 
 /// The camera that frames a scene.
