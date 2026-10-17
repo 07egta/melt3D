@@ -126,3 +126,6 @@ before the draft is verified.
 `ROADMAP.md` (committed) tracks status, milestones and estimates. Update it whenever a
 milestone task lands. `cargo xtask features` regenerates `docs/features.md` (SolidCraft's
 commands by area, from the registry) when commands are added or renamed.
+
+## YuraCAD
+Work in `apps/meltcad` (YuraCAD) follows `apps/meltcad/AGENTS.md`: its base branch is `easy-layout-and-melt`, not `main`. That file overrides anything here about `main` for YuraCAD work.

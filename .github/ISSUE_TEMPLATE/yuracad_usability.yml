@@ -1,0 +1,36 @@
+name: YuraCAD usability problem (使いにくさの報告)
+description: Something in YuraCAD is hard to do, slow, or confusing
+labels: ["yuracad", "usability"]
+body:
+  - type: input
+    id: operation
+    attributes:
+      label: Which operation is hard? (どの操作が難しい？)
+      placeholder: e.g. making a hole in a box, moving a point of the outline
+    validations:
+      required: true
+  - type: input
+    id: clicks
+    attributes:
+      label: How many clicks / steps does it take now? (今は何回クリック？)
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect to happen? (こうなってほしい)
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened instead? (実際の動き)
+  - type: input
+    id: version
+    attributes:
+      label: YuraCAD version / build (バージョン)
+  - type: textarea
+    id: media
+    attributes:
+      label: Video or screenshot (動画・画像)
+      description: Drag files here. Please hide private designs.
