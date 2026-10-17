@@ -315,6 +315,9 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
         d.settings = d.settings.sanitized();
         d.changed_at = Instant::now();
         d.error.clear();
+        // The last slider event may be followed by no further input; schedule the
+        // eventual low-res refresh without forcing continuous full-screen repaints.
+        ctx.request_repaint_after(PREVIEW_SETTLE);
     }
     if apply {
         match insert(app, ctx, d.settings) {
