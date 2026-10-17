@@ -180,7 +180,7 @@ pub fn layout(cam: &Camera, rect: Rect, s: &Shape) -> Layout {
             }
         }
     }
-    let pts = if is_curve { curve::build(&s.path, &s.params) } else { s.path.clone() };
+    let pts = if is_curve { curve::build_shape(s) } else { s.path.clone() };
     out.line = pts.iter().filter_map(|p| cam.project(rect, to_world(s, [p[0], p[1], p[2]]))).collect();
     out
 }
