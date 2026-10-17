@@ -548,6 +548,9 @@ pub struct Group {
     pub blend: f32,
     pub visible: bool,
     pub shapes: Vec<Shape>,
+    /// Parametric Designer Bag settings. Stored alongside editable parts in scene files.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bag: Option<crate::designer_bag::BagConfig>,
     /// A number linked copies and patterns find this group by (0 = none; see `Scene::ensure_group_uid`).
     #[serde(default, skip_serializing_if = "is_zero")]
     pub uid: u32,
@@ -564,7 +567,7 @@ pub struct Group {
 
 impl Group {
     pub fn new(name: impl Into<String>) -> Group {
-        Group { name: name.into(), op: Op::Add, blend: 0.0, visible: true, shapes: Vec::new(), uid: 0, pattern: None, instance_of: None, xform: Xform::default() }
+        Group { name: name.into(), op: Op::Add, blend: 0.0, visible: true, shapes: Vec::new(), bag: None, uid: 0, pattern: None, instance_of: None, xform: Xform::default() }
     }
 }
 
@@ -852,6 +855,9 @@ impl Scene {
         let mut left = MAX_SHAPES;
         for g in &mut self.groups {
             fix(&mut g.blend, 0.0, 200.0, 0.0);
+            if let Some(bag) = &mut g.bag {
+                bag.sanitize();
+            }
             if let Some(p) = &mut g.pattern {
                 p.sanitize();
             }
