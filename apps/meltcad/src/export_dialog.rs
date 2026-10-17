@@ -79,6 +79,8 @@ struct Dlg {
     check: Task<PrintCheck>,
     /// The check should start by itself on the next frame.
     run_check: bool,
+    /// Show technical export options only when needed.
+    advanced: bool,
     msg: String,
     /// Is the card showing? (`remove_temp` leaves a default value behind, which is not open.)
     open: bool,
@@ -110,7 +112,7 @@ fn is_running(ctx: &egui::Context) -> bool {
 
 impl Default for Dlg {
     fn default() -> Dlg {
-        Dlg { opts: Options::default(), snap: None, est: Task::idle(), check: Task::idle(), run_check: false, msg: String::new(), open: false }
+        Dlg { opts: Options::default(), snap: None, est: Task::idle(), check: Task::idle(), run_check: false, advanced: false, msg: String::new(), open: false }
     }
 }
 
@@ -120,7 +122,8 @@ fn new_dlg(ctx: &egui::Context, format: Option<Format>) -> Dlg {
         opts.format = f;
         opts.up = if f.y_up_by_default() { Up::Y } else { Up::Z };
     }
-    Dlg { opts, open: true, ..Dlg::default() }
+    let advanced = has_custom_settings(&opts);
+    Dlg { opts, advanced, open: true, ..Dlg::default() }
 }
 
 /// Open the card (optionally with a file type chosen).
@@ -224,6 +227,29 @@ fn default_name(app: &App, f: Format) -> String {
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "作品".into());
     format!("{stem}.{}", f.ext())
+}
+
+/// Change the file type without unexpectedly resetting scope, scale or quality.
+fn choose_format(o: &mut Options, format: Format) {
+    o.format = format;
+    o.up = if format.y_up_by_default() { Up::Y } else { Up::Z };
+}
+
+fn quality_preset(t: f32) -> Option<usize> {
+    [0.2_f32, 0.1, 0.5].iter().position(|v| (t - v).abs() < 1e-4)
+}
+
+/// Reveal saved expert choices to avoid silently exporting at an unexpected scale.
+fn has_custom_settings(o: &Options) -> bool {
+    !matches!(o.format, Format::Stl | Format::ThreeMf | Format::Glb)
+        || quality_preset(o.tolerance).is_none()
+        || o.units != Units::Mm
+        || (o.scale_pct - 100.0).abs() > 0.01
+        || o.up != (if o.format.y_up_by_default() { Up::Y } else { Up::Z })
+        || o.smooth != 0
+        || o.lighten != Lighten::Flat
+        || o.ignore_paint
+        || !o.colour
 }
 
 // ---------------------------------------------------------------- running
@@ -357,8 +383,92 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
             ui.add_space(4.0);
             let o = &mut d.opts;
 
+            // Most people only need a purpose, a quality preset and the output scope.
+            ui.label(RichText::new("① 何に使いますか？").strong().size(12.5));
+            ui.horizontal_wrapped(|ui| {
+                for (format, label, hint) in [
+                    (Format::Stl, "3Dプリント", "STL: 色なし。多くの3Dプリンターで使えます"),
+                    (Format::ThreeMf, "色つきプリント", "3MF: 色とサイズを保存できます"),
+                    (Format::Glb, "ほかのアプリ", "GLB: Web・CGなどで使えます"),
+                ] {
+                    if style::pill(ui, label, o.format == format).on_hover_text(hint).clicked() {
+                        choose_format(o, format);
+                    }
+                }
+            });
+            let explanation = match o.format {
+                Format::Stl | Format::StlAscii => "STLは色なしで保存します",
+                Format::ThreeMf => "3MFは色とサイズも保存します",
+                Format::Glb => "GLBは色と材質も保存します",
+                _ => "ほかのファイル形式を選択中です（詳細設定で変更できます）",
+            };
+            ui.label(RichText::new(explanation).size(11.5).color(style::DIM));
+            ui.add_space(8.0);
+
+            ui.label(RichText::new("② 仕上がりの細かさ").strong().size(12.5));
+            ui.horizontal(|ui| {
+                for (label, tol, hint) in [
+                    ("標準（おすすめ）", 0.2_f32, "品質と処理時間のバランス"),
+                    ("きれい", 0.1, "細かい形状向け。時間が長くなります"),
+                    ("速い・軽い", 0.5, "確認用。細い部分が消えることがあります"),
+                ] {
+                    if style::pill(ui, label, (o.tolerance - tol).abs() < 1e-4).on_hover_text(hint).clicked() {
+                        o.tolerance = tol;
+                    }
+                }
+            });
+            if quality_preset(o.tolerance).is_none() {
+                ui.label(RichText::new(format!("細かさ {:.3} mm（詳細設定で変更できます）", o.tolerance)).size(11.5).color(style::KEEP));
+            }
+            ui.add_space(8.0);
+
+            ui.label(RichText::new("③ どれを書き出しますか？").strong().size(12.5));
+            ui.horizontal(|ui| {
+                if style::pill(ui, "見えている形", o.scope == Scope::Visible).clicked() {
+                    o.scope = Scope::Visible;
+                }
+                if style::pill_enabled(ui, "選択中だけ", o.scope == Scope::Selected, app.sel.is_some()).clicked() {
+                    o.scope = Scope::Selected;
+                }
+                if style::pill(ui, "全部", o.scope == Scope::All).on_hover_text("非表示の形も含めます").clicked() {
+                    o.scope = Scope::All;
+                }
+            });
+            if o.scope == Scope::Selected && app.sel.is_none() {
+                ui.label(RichText::new("先に形を選ぶか、「見えている形」に切り替えてください").size(11.5).color(style::KEEP));
+            }
+            ui.add_space(6.0);
+
+            if let Some(result) = d.est.result() {
+                match result {
+                    Ok(e) => {
+                        let tol = f64::from(o.tolerance.clamp(MIN_TOLERANCE, MAX_TOLERANCE));
+                        let raw = e.raw_tris(tol);
+                        let secs = e.secs(tol, o.lighten != Lighten::Off);
+                        if raw > (MAX_VERTS as f64) * 1.8 {
+                            ui.label(RichText::new("細かすぎます。「速い・軽い」を試してください").size(11.5).color(style::CUT));
+                        } else {
+                            let col = if raw > 4.0e6 || secs > 60.0 { style::KEEP } else { style::DIM };
+                            ui.label(RichText::new(format!("目安: {} ・ 最大約{}", time_text(secs), bytes_text(raw * bytes_per_tri(o.format)))).size(11.5).color(col));
+                        }
+                        ui.label(RichText::new(format!("大きさ: {}", size_text(e.size))).size(11.5).color(style::DIM));
+                    }
+                    Err(_) => {
+                        ui.label(RichText::new("大きさを確認できませんでした。形を確認してください").size(11.5).color(style::KEEP));
+                    }
+                }
+            } else if d.est.running() {
+                ui.label(RichText::new("大きさを確認中…").size(11.5).color(style::DIM));
+            }
+
+            ui.add_space(6.0);
+            if style::pill(ui, if d.advanced { "詳細設定を閉じる ▲" } else { "詳細設定を開く ▼" }, d.advanced).clicked() {
+                d.advanced = !d.advanced;
+            }
+            if d.advanced {
+                egui::ScrollArea::vertical().id_salt("ex_advanced_scroll").max_height(200.0).show(ui, |ui| {
             // file type
-            row(ui, "ファイル", |ui| {
+            row(ui, "ファイル形式", |ui| {
                 let items: Vec<(&str, &str)> = Format::ALL
                     .iter()
                     .map(|f| {
@@ -379,13 +489,12 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
                 if let Some(i) = style::segmented(ui, "ex_format", &items, cur, false)
                     && let Some(f) = Format::ALL.get(i)
                 {
-                    o.format = *f;
-                    o.up = if f.y_up_by_default() { Up::Y } else { Up::Z };
+                    choose_format(o, *f);
                 }
             });
 
             // precision
-            row(ui, "細かさ", |ui| {
+            row(ui, "数値で細かさ", |ui| {
                 for t in [0.05f32, 0.1, 0.2, 0.5] {
                     let on = (o.tolerance - t).abs() < 1e-4;
                     if style::pill(ui, &format!("{t}"), on).on_hover_text("1マスの大きさ（mm）。小さいほどきれいで重くなります").clicked()
@@ -399,36 +508,6 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
                     egui::DragValue::new(&mut o.tolerance).speed(0.005).range(MIN_TOLERANCE..=MAX_TOLERANCE).suffix(" mm").max_decimals(3),
                 );
             });
-            if let Some(Ok(e)) = d.est.result() {
-                let tol = f64::from(o.tolerance.clamp(MIN_TOLERANCE, MAX_TOLERANCE));
-                let raw = e.raw_tris(tol);
-                let secs = e.secs(tol, o.lighten != Lighten::Off);
-                let too_big = raw > (MAX_VERTS as f64) * 1.8;
-                let col = if too_big {
-                    style::CUT
-                } else if raw > 4.0e6 || secs > 60.0 {
-                    style::KEEP
-                } else {
-                    style::DIM
-                };
-                let after = match o.lighten {
-                    Lighten::Off => String::new(),
-                    Lighten::Flat => "（平らな面をまとめると もっとへります）".to_string(),
-                    Lighten::Target(n) => format!("（{}まで へらします）", count_text(f64::from(n))),
-                };
-                let file = bytes_text(raw * bytes_per_tri(o.format));
-                if too_big {
-                    ui.label(RichText::new("この細かさは 細かすぎます。少しあらくしてください").size(11.5).color(col));
-                } else {
-                    ui.label(RichText::new(format!("三角形 約{}{}", count_text(raw), after)).size(11.5).color(col));
-                    ui.label(RichText::new(format!("時間 {}　ファイル 最大 約{}", time_text(secs), file)).size(11.5).color(col));
-                }
-                ui.label(RichText::new(format!("大きさ {}", size_text(e.size))).size(11.5).color(style::DIM));
-            } else if d.est.running() {
-                ui.label(RichText::new("見つもり中…").size(11.5).color(style::DIM));
-            }
-
-            ui.add_space(2.0);
             row(ui, "単位", |ui| {
                 let items: Vec<(&str, &str)> =
                     Units::ALL.iter().map(|u| (u.label(), if o.format == Format::Glb { "GLBは いつも m です" } else { "" })).collect();
@@ -445,24 +524,6 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
                     egui::DragValue::new(&mut o.scale_pct).speed(1.0).range(1.0..=10000.0).suffix(" %").max_decimals(1),
                 );
             });
-            row(ui, "書き出す所", |ui| {
-                let items = [
-                    ("見えているもの", "目のマークがついている形"),
-                    ("ぜんぶ", "かくれている形も"),
-                    ("えらんだもの", "いまえらんでいる形・グループだけ"),
-                ];
-                let cur = match o.scope {
-                    Scope::Visible => 0,
-                    Scope::All => 1,
-                    Scope::Selected => 2,
-                };
-                if let Some(i) = style::segmented(ui, "ex_scope", &items, Some(cur), false) {
-                    o.scope = [Scope::Visible, Scope::All, Scope::Selected].get(i).copied().unwrap_or(Scope::Visible);
-                }
-            });
-            if o.scope == Scope::Selected && app.sel.is_none() {
-                ui.label(RichText::new("形をえらんでください").size(11.5).color(style::KEEP));
-            }
             row(ui, "上の向き", |ui| {
                 let items = [("Z（そのまま）", "3Dプリンターふう"), ("Y（OBJ・GLBふう）", "Zを上からYを上に回します")];
                 if let Some(i) = style::segmented(ui, "ex_up", &items, Some(usize::from(o.up == Up::Y)), false) {
@@ -513,6 +574,13 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
                 ui.label(RichText::new("STLには色を入れられません").size(11.0).color(style::DIM));
             }
 
+                    if let Some(Ok(e)) = d.est.result() {
+                        let tris = e.raw_tris(f64::from(o.tolerance.clamp(MIN_TOLERANCE, MAX_TOLERANCE)));
+                        ui.label(RichText::new(format!("三角形の目安: 約{}", count_text(tris))).size(11.5).color(style::DIM));
+                    }
+                });
+            }
+
             // the print check
             ui.add_space(4.0);
             ui.horizontal(|ui| {
@@ -540,7 +608,7 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
             ui.add_space(4.0);
             ui.horizontal(|ui| {
                 ui.add_enabled_ui(!busy, |ui| {
-                    let b = egui::Button::new(RichText::new("書き出す…").strong().color(Color32::WHITE))
+                    let b = egui::Button::new(RichText::new(format!("書き出す（{}）…", o.format.label())).strong().color(Color32::WHITE))
                         .fill(style::ACCENT_SOFT)
                         .stroke(Stroke::new(1.0, style::ACCENT));
                     if ui.add(b).clicked() {
@@ -679,6 +747,36 @@ mod tests {
         // an error is said in Japanese
         assert_eq!(jp_error(CANCELLED), "やめました");
         assert!(jp_error("the model is too big for this precision; choose a coarser one").contains("細かさ"));
+    }
+
+    #[test]
+    fn simple_presets_keep_saved_scope_scale_and_axis() {
+        assert!(!has_custom_settings(&Options::default()));
+        let mut opts = Options { units: Units::Cm, scale_pct: 142.0, scope: Scope::Selected, ..Options::default() };
+        assert!(has_custom_settings(&opts));
+        choose_format(&mut opts, Format::Glb);
+        assert_eq!(opts.up, Up::Y);
+        assert_eq!(opts.units, Units::Cm);
+        assert_eq!(opts.scale_pct, 142.0);
+        assert_eq!(opts.scope, Scope::Selected);
+        choose_format(&mut opts, Format::ThreeMf);
+        assert_eq!(opts.up, Up::Z);
+        assert_eq!(quality_preset(0.2), Some(0));
+        assert_eq!(quality_preset(0.1), Some(1));
+        assert_eq!(quality_preset(0.5), Some(2));
+        assert_eq!(quality_preset(0.15), None);
+    }
+
+    #[test]
+    fn saved_custom_options_open_with_details_visible() {
+        let ctx = egui::Context::default();
+        let mut o = Options::default();
+        o.scale_pct = 125.0;
+        ctx.data_mut(|m| m.insert_temp(last_id(), o));
+        let d = new_dlg(&ctx, None);
+        assert!(d.advanced);
+        assert_eq!(d.opts.scale_pct, 125.0);
+        assert!(!new_dlg(&egui::Context::default(), None).advanced);
     }
 
     #[test]
