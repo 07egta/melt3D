@@ -132,7 +132,7 @@ def main():
                     proc = subprocess.run([str(binary), "--render", str(scene), str(png),
                                            str(args.size)], capture_output=True, timeout=120)
                     head = png.read_bytes()[:24] if png.is_file() else b""
-                    dims = struct.unpack(">II", head[16:24]) if len(head) == 24 and head[:8] == b"\\x89PNG\\r\\n\\x1a\\n" else None
+                    dims = struct.unpack(">II", head[16:24]) if len(head) == 24 and head[:8] == b"\x89PNG\r\n\x1a\n" else None
                     if proc.returncode or dims != (2 * args.size, 2 * args.size):
                         raise ValueError("No valid four-view PNG")
                     renders += 1
