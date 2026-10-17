@@ -51,6 +51,7 @@ mod curve_tool;
 mod pipe_tool;
 mod model;
 mod perf;
+mod ux_bench;
 mod prims;
 mod panels;
 mod pattern;
