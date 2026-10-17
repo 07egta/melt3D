@@ -492,6 +492,24 @@ mod tests {
     use super::*;
 
     #[test]
+    fn viewport_pick_reveals_a_collapsed_filtered_tree_item() {
+        let mut app = App::new(true, None);
+        let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0));
+        app.cam.look(0.0, std::f32::consts::FRAC_PI_2);
+        app.cam.target = [0.0, 0.0, 20.0];
+        app.cam.dist = 160.0;
+        app.folded.insert(0);
+        app.tree_query = "not the sphere".into();
+        let pos = app.cam.project(rect, [0.0, 0.0, 20.0]).expect("sphere visible");
+        app.pick_at(rect, pos, false);
+        assert_eq!(app.sel, Some(Pick::Shape(0, 0)));
+        assert!(app.extra_selected.is_empty());
+        assert!(!app.folded.contains(&0), "picked shape becomes visible in the tree");
+        assert!(app.tree_query.is_empty(), "a filter hiding the picked shape is cleared");
+        assert_eq!(app.tree_scroll_target, Some(Pick::Shape(0, 0)));
+    }
+
+    #[test]
     fn a_group_pick_covers_all_its_shapes() {
         let mut s = Scene::default();
         let extra = s.groups[0].shapes[0].clone();
