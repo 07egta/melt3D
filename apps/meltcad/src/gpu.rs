@@ -1559,6 +1559,36 @@ mod tests {
     }
 
     #[test]
+    fn twist_modifier_is_packed_without_corrupting_shape_offsets() {
+        use crate::deform::{Axis, Deformation, Twist};
+        use crate::model::{Kind, Material, Shape};
+        let mut sc = Scene::default();
+        let mut plain = Shape::new(Kind::Box, [0.0, 0.0, 12.0], Material::default());
+        plain.size = [20.0, 10.0, 24.0];
+        let half = plain.base_local_half();
+        let mut twisted = plain.clone();
+        twisted.pos[0] = 35.0;
+        twisted.deformation = Some(Deformation::Twist(Twist {
+            axis: Axis::Y, reverse: true, degrees: 360.0,
+            begin: 0.2, end: 0.85, lower: 0.25, upper: 1.5,
+        }));
+        sc.groups[0].shapes = vec![plain, twisted];
+        let u = pack(&sc, &Camera::default(), [800.0, 600.0], Some(Pick::Shape(0, 1)), None, true);
+        let f = Frame::new(&u);
+        assert_eq!(S_STRIDE, 18, "WGSL shape_rec must use the same stride");
+        assert_eq!(f.shape(0, 16), [0.0; 4]);
+        assert_eq!(f.shape(0, 17), [0.0; 4]);
+        assert_eq!(f.shape(1, 16), [2.0, -360.0, 0.2, 0.85]);
+        let p = f.shape(1, 17);
+        assert_eq!(&p[..3], &[0.25, 1.5, half[1]]);
+        assert!((p[3] - half[2].hypot(half[0])).abs() < 1e-4);
+        assert_eq!(f.shape(1, 4)[0], 35.0, "next shape's position not shifted");
+        assert!(f.shape(1, 0)[3] >= f.shape(0, 0)[3], "expanded bounds enclose rotated corners");
+        // Packed offsets still point to the first 2D outline after both shapes.
+        assert_eq!(f.poly_base() - f.shapes_base(), 2 * S_STRIDE);
+    }
+
+    #[test]
     fn the_default_scene_packs_without_overflow() {
         let u = pack(&Scene::default(), &Camera::default(), [800.0, 600.0], Some(Pick::Shape(0, 0)), None, true);
         let f = Frame::new(&u);
