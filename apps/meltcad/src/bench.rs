@@ -744,7 +744,7 @@ mod tests {
     }
 
     fn sample_report() -> Report {
-        let row = |scene: &str, size: [u32; 2], mode, avg: f32| Row { scene: scene.to_string(), shapes: 1, size, mode, frames: 12, avg_ms: avg, min_ms: avg * 0.9, max_ms: avg * 1.3, source: Source::Gpu, wall_avg_ms: avg + 0.4 };
+        let row = |scene: &str, size: [u32; 2], mode, avg: f32| Row { scene: scene.to_string(), shapes: 1, size, mode, frames: 12, avg_ms: avg, p95_ms: avg * 1.2, min_ms: avg * 0.9, max_ms: avg * 1.3, source: Source::Gpu, wall_avg_ms: avg + 0.4, wall_p95_ms: avg + 0.7 };
         Report {
             version: "0.11.0".into(),
             when: "2026-10-17 12:00 UTC".into(),
@@ -787,6 +787,7 @@ mod tests {
         r.software = true;
         let t = format_table(&r);
         assert!(t.contains("wall clock") && t.contains("software renderer"));
+        assert!(t.contains("fps*") && t.contains("p95 ms") && t.contains("NOT measured window FPS"));
     }
 
     #[test]
