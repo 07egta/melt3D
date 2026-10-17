@@ -69,6 +69,7 @@ pub struct App {
     pub(crate) field_builds: std::cell::Cell<u64>,
     pub path: Option<PathBuf>,
     pub dirty: bool,
+    recovery: crate::recovery::Store,
     pending_file_action: Option<PendingFileAction>,
     close_approved: bool,
     status: (String, f64),
@@ -154,6 +155,7 @@ impl App {
             last_view_height: 600.0,
             path: None,
             dirty: false,
+            recovery: crate::recovery::Store::new(crate::recovery::default_directory(), std::time::Instant::now()),
             pending_file_action: None,
             close_approved: false,
             status: (String::new(), 0.0),
@@ -216,6 +218,49 @@ impl App {
 
     pub fn say(&mut self, ctx: &egui::Context, text: impl Into<String>) {
         self.status = (text.into(), ctx.input(|i| i.time));
+    }
+
+    fn recovery_dialog(&mut self, ctx: &egui::Context) {
+        let Some(path) = self.recovery.pending_path().map(std::path::Path::to_path_buf) else { return };
+        let mut choice = None;
+        egui::Modal::new(egui::Id::new("yuracad_recovery")).show(ctx, |ui| {
+            ui.heading("前回の未保存作品が見つかりました");
+            ui.label(format!("復旧データ: {}", path.display()));
+            ui.label("復元しても元の作品ファイルは上書きしません。");
+            ui.horizontal(|ui| {
+                if ui.button("未保存のコピーとして復元").clicked() { choice = Some(0); }
+                if ui.button("あとで").clicked() { choice = Some(1); }
+                if ui.button("復旧データを削除").clicked() { choice = Some(2); }
+            });
+        });
+        match choice {
+            Some(0) => match self.recovery.recover_pending() {
+                Ok((scene, notes, _source)) => {
+                    self.scene = scene.clone();
+                    self.committed = scene;
+                    self.tracked = self.scene.clone();
+                    self.scene_rev = self.scene_rev.wrapping_add(1);
+                    self.committed_rev = self.scene_rev;
+                    self.deduped_rev = 0;
+                    self.undo.clear();
+                    self.redo.clear();
+                    self.path = None;
+                    self.dirty = true;
+                    self.sel = None;
+                    self.frame_now();
+                    self.say(ctx, if notes.is_empty() { "未保存のコピーとして復元しました".into() } else { format!("復元しました: {}", notes.join("　")) });
+                }
+                Err(e) => {
+                    self.say(ctx, format!("復旧ファイルが破損しているか開けません: {e}"));
+                    self.recovery.postpone();
+                }
+            },
+            Some(1) => self.recovery.postpone(),
+            Some(2) => if let Err(e) = self.recovery.discard_pending() {
+                self.say(ctx, format!("復旧データを削除できませんでした: {e}"));
+            },
+            _ => {}
+        }
     }
 
     // ----- editing -----
@@ -294,7 +339,7 @@ impl App {
         let (scene, path, notes) = match action {
             PendingFileAction::New(scene) => (scene, None, Vec::new()),
             PendingFileAction::Open(path) => {
-                match std::fs::read_to_string(&path).map_err(|e| e.to_string()).and_then(|t| Scene::from_json_notes(&t)) {
+                match crate::recovery::read_project(&path) {
                     Ok((scene, notes)) => (scene, Some(path), notes),
                     Err(e) => {
                         self.status = (format!("開けませんでした: {e}"), 0.0);
@@ -304,6 +349,9 @@ impl App {
             }
             PendingFileAction::Close => return,
         };
+        if let Err(e) = self.recovery.clear_active() {
+            self.notice = Some(format!("復旧データを整理できませんでした: {e}"));
+        }
         self.scene = scene.clone();
         self.committed = scene;
         self.undo.clear();
@@ -600,10 +648,14 @@ impl App {
             _ => rfd::FileDialog::new().add_filter("MELTCAD", &["meltcad"]).set_file_name("作品.meltcad").save_file(),
         };
         let Some(path) = path else { return false };
-        match std::fs::write(&path, self.scene.to_json()) {
+        match crate::recovery::save_project(&path, &self.scene) {
             Ok(()) => {
                 self.path = Some(path);
                 self.dirty = false;
+                let revision = self.track_scene();
+                if let Err(e) = self.recovery.document_saved(revision) {
+                    self.notice = Some(format!("復旧データの整理に失敗しました: {e}"));
+                }
                 self.say(ctx, "保存しました");
                 true
             }
@@ -632,7 +684,7 @@ impl App {
     // ----- shortcuts -----
 
     fn keys(&mut self, ctx: &egui::Context) {
-        if self.pending_file_action.is_some() || ctx.egui_wants_keyboard_input() {
+        if self.pending_file_action.is_some() || self.recovery.pending_path().is_some() || ctx.egui_wants_keyboard_input() {
             return;
         }
         use egui::{Key, Modifiers};
@@ -1229,6 +1281,11 @@ impl App {
 }
 
 impl eframe::App for App {
+    fn on_exit(&mut self) {
+        if let Err(e) = self.recovery.normal_exit() {
+            crate::gpu_log::log(&format!("recovery cleanup failed: {e}"));
+        }
+    }
     fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
         self.frame_body(ui);
     }
@@ -1279,8 +1336,19 @@ impl App {
             self.bench.show(&ctx);
         }
         self.pending_file_dialog(&ctx);
+        self.recovery_dialog(&ctx);
         self.capture_step(&ctx);
         self.settle(&ctx);
+        if !cfg!(test) {
+            ctx.request_repaint_after(crate::recovery::INTERVAL);
+            if self.recovery.pending_path().is_none() {
+                let rev = self.track_scene();
+                let changed = self.has_unsaved_work();
+                if let Err(e) = self.recovery.checkpoint(&self.scene, self.path.as_deref(), changed, rev, std::time::Instant::now()) {
+                    self.notice = Some(format!("自動復旧データを保存できません: {e}"));
+                }
+            }
+        }
         self.test_hooks(&ctx);
         let title = format!(
             "MELTCAD — {}{}",
