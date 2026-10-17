@@ -415,6 +415,7 @@ impl App {
                     insert_node(&mut sh.path, i, at4)
                 };
                 let Some(idx) = idx else { return false };
+                if !sh.curve_handles.is_empty() { sh.curve_handles.insert(idx, CurveHandles::default()); }
                 drag.i = idx;
             }
             Hit::Node(i) => {
@@ -431,12 +432,14 @@ impl App {
                 let i = if end == End::Start { 0 } else { n.saturating_sub(1) };
                 let Some(p) = at(sh, i) else { return false };
                 let Some(idx) = extend_end(&mut sh.path, end, p) else { return false };
+                if !sh.curve_handles.is_empty() { sh.curve_handles.insert(idx, CurveHandles::default()); }
                 drag.i = idx;
             }
             Hit::Mid(seg) => {
                 let (closed, smooth, _, _) = if sh.kind == Kind::Curve { curve::settings(&sh.params) } else { (false, 0.0, false, 1.0) };
                 let m = curve::segment_point(&sh.path, seg, 0.5, smooth, closed && n >= 3);
                 let Some(idx) = insert_node(&mut sh.path, seg, m) else { return false };
+                if !sh.curve_handles.is_empty() { sh.curve_handles.insert(idx, CurveHandles::default()); }
                 drag.i = idx;
             }
         }
@@ -529,6 +532,7 @@ impl App {
                 let step = len(dir).max(pa[3] * 2.0).max(4.0);
                 let np = add([pa[0], pa[1], pa[2]], mul(norm(dir), step));
                 if let Some(idx) = extend_end(&mut sh.path, end, np) {
+                    if !sh.curve_handles.is_empty() { sh.curve_handles.insert(idx, CurveHandles::default()); }
                     self.ct.node = Some((g, s, idx));
                 }
                 true
@@ -539,6 +543,7 @@ impl App {
                 let (closed, smooth, _, _) = if sh.kind == Kind::Curve { curve::settings(&sh.params) } else { (false, 0.0, false, 1.0) };
                 let m = curve::segment_point(&sh.path, seg, 0.5, smooth, closed && n >= 3);
                 if let Some(idx) = insert_node(&mut sh.path, seg, m) {
+                    if !sh.curve_handles.is_empty() { sh.curve_handles.insert(idx, CurveHandles::default()); }
                     self.ct.node = Some((g, s, idx));
                 }
                 true
@@ -602,10 +607,9 @@ impl App {
             && let Some(sh) = self.scene.shape_mut(g, s)
         {
             let local = to_local(sh, w);
-            if extend_end(&mut sh.path, End::Last, local).is_some()
-                && let Some(n) = sh.path.last_mut()
-            {
-                n[3] = r;
+            if extend_end(&mut sh.path, End::Last, local).is_some() {
+                if !sh.curve_handles.is_empty() { sh.curve_handles.push(CurveHandles::default()); }
+                if let Some(n) = sh.path.last_mut() { n[3] = r; }
             }
             return;
         }
@@ -639,6 +643,7 @@ impl App {
         let Some((g, s)) = self.ct.draw_shape else { return };
         let Some(sh) = self.scene.shape_mut(g, s) else { return };
         sh.path.pop();
+        if !sh.curve_handles.is_empty() { sh.curve_handles.pop(); }
         if sh.path.is_empty()
             && let Some(group) = self.scene.groups.get_mut(g)
         {
@@ -732,6 +737,7 @@ impl App {
             if let Some(sh) = self.scene.shape_mut(g, s)
                 && delete_node(&mut sh.path, i)
             {
+                if i < sh.curve_handles.len() { sh.curve_handles.remove(i); }
                 self.ct.node = Some((g, s, i.saturating_sub(1)));
             }
             return;
@@ -901,6 +907,7 @@ impl App {
                 let d = sub([a[0], a[1], a[2]], [b[0], b[1], b[2]]);
                 let np = add([a[0], a[1], a[2]], mul(norm(d), len(d).max(a[3] * 2.0).max(4.0)));
                 if let Some(idx) = extend_end(&mut sh.path, End::Last, np) {
+                    if !sh.curve_handles.is_empty() { sh.curve_handles.insert(idx, CurveHandles::default()); }
                     pick = Some(idx);
                 }
             }
@@ -908,6 +915,7 @@ impl App {
         if let Some(i) = del
             && delete_node(&mut sh.path, i)
         {
+            if i < sh.curve_handles.len() { sh.curve_handles.remove(i); }
             pick = Some(i.saturating_sub(1));
         }
         if let Some(i) = pick {
