@@ -64,7 +64,7 @@ pub struct App {
     committed_rev: u64,
     deduped_rev: u64,
     /// The field for picking, made when picking needs it and the scene has changed since.
-    field_cache: std::cell::RefCell<Option<(u64, std::rc::Rc<Field>)>>,
+    field_cache: std::cell::RefCell<Option<(u64, std::rc::Rc<Field>, Scene)>>,
     /// How many times the field was built (tests and the HUD look at it).
     pub(crate) field_builds: std::cell::Cell<u64>,
     pub path: Option<PathBuf>,
@@ -193,14 +193,19 @@ impl App {
     /// (a drag or a camera move that picks nothing never builds it).
     pub fn field(&self) -> std::rc::Rc<Field> {
         let mut cache = self.field_cache.borrow_mut();
-        if let Some((rev, f)) = cache.as_ref()
+        if let Some((rev, f, _)) = cache.as_ref()
             && *rev == self.scene_rev
         {
             return f.clone();
         }
         self.field_builds.set(self.field_builds.get() + 1);
-        let f = std::rc::Rc::new(Field::new(&self.scene));
-        *cache = Some((self.scene_rev, f.clone()));
+        // Keep only the most recent snapshot. Shape equality guards against stale cached SDFs
+        // after edits, linked-copy changes, undo/redo and load (no probabilistic hash keys).
+        let f = std::rc::Rc::new(Field::reusing(
+            &self.scene,
+            cache.as_ref().map(|(_, field, old_scene)| (field.as_ref(), old_scene)),
+        ));
+        *cache = Some((self.scene_rev, f.clone(), self.scene.clone()));
         f
     }
 
@@ -259,6 +264,9 @@ impl App {
             self.redo.push(std::mem::replace(&mut self.scene, prev.clone()));
             self.committed = prev;
             self.fix_selection();
+            // Invalidate both CPU field and GPU pack before any further hit test/draw.
+            self.track_scene();
+            self.committed_rev = self.scene_rev;
         }
     }
 
@@ -267,6 +275,8 @@ impl App {
             self.undo.push(std::mem::replace(&mut self.scene, next.clone()));
             self.committed = next;
             self.fix_selection();
+            self.track_scene();
+            self.committed_rev = self.scene_rev;
         }
     }
 
