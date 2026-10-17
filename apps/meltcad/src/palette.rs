@@ -11,8 +11,8 @@ use serde::{Deserialize, Serialize};
 
 use super::{App, ExportFormat, Tool};
 use crate::library;
-use crate::model::{Kind, Op};
-use crate::pattern::PatternKind;
+use crate::model::{Kind, Op, Pick, MAX_GROUPS, MAX_SHAPES};
+use crate::pattern::{Pattern, PatternKind};
 use crate::style;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -440,6 +440,56 @@ pub fn is_open(ctx: &egui::Context) -> bool {
 }
 
 impl App {
+    /// An unusable result stays visible, with a reason, but cannot be executed.
+    /// Only the few visible hits (max 9) are checked, never the full catalog.
+    fn palette_disabled_reason(&self, a: Action) -> Option<&'static str> {
+        let selected = match self.sel {
+            Some(Pick::Shape(g, s)) => self.scene.shape(g, s).is_some(),
+            Some(Pick::Group(g)) => g < self.scene.groups.len(),
+            None => false,
+        };
+        let group = self.selected_group();
+        match a {
+            Action::Undo if self.undo.is_empty() => Some("元に戻す操作がありません"),
+            Action::Redo if self.redo.is_empty() => Some("やり直す操作がありません"),
+            Action::Copy | Action::Cut | Action::Delete | Action::Array | Action::FrameSelection if !selected => Some("先に形かグループを選択してください"),
+            Action::Paste if self.clipboard.is_none() => Some("コピーしたデータがありません"),
+            Action::Duplicate if !selected => Some("先に形かグループを選択してください"),
+            Action::Duplicate if self.scene.shape_count() >= MAX_SHAPES => Some("形の最大数に達しています"),
+            Action::Duplicate if matches!(self.sel, Some(Pick::Group(_))) && self.scene.groups.len() >= MAX_GROUPS => Some("グループの最大数に達しています"),
+            Action::MirrorCopy if !matches!(self.sel, Some(Pick::Shape(_, _))) => Some("左右コピーは形を1つ選択してください"),
+            Action::MirrorCopy if self.scene.shape_count() >= MAX_SHAPES => Some("形の最大数に達しています"),
+            Action::AddShape(_) if self.scene.shape_count() >= MAX_SHAPES => Some("形の最大数に達しています"),
+            Action::AddGroup if self.scene.groups.len() >= MAX_GROUPS => Some("グループの最大数に達しています"),
+            Action::Insert(c, i) => {
+                match library::all().get(c).and_then(|category| category.items.get(i)) {
+                    None => Some("このライブラリ項目は利用できません"),
+                    Some(item) if !item.fits(self.scene.groups.len(), self.scene.shape_count()) => Some("追加すると形またはグループの上限を超えます"),
+                    _ => None,
+                }
+            }
+            Action::Pattern(_) | Action::MirrorAxis(_) | Action::ClearPattern | Action::MakeInstance if group.is_none() => {
+                Some("先に形かグループを選択してください")
+            }
+            Action::Pattern(PatternKind::Path) if !self.scene.groups.iter().any(|g| g.shapes.iter().any(|s| crate::pattern::shape_polyline(s).is_some())) => {
+                Some("パスに使う線や輪郭がありません")
+            }
+            Action::Pattern(PatternKind::Geometry) if !self.scene.groups.iter().any(|g| !g.shapes.is_empty()) => {
+                Some("点を参照する形がありません")
+            }
+            Action::MirrorAxis(_) if group.and_then(|g| self.scene.groups.get(g)).and_then(|g| g.pattern.as_ref()).is_some_and(|p| !matches!(p, Pattern::Mirror { .. })) => {
+                Some("別のパターンを先に解除してください")
+            }
+            Action::ClearPattern if !group.and_then(|g| self.scene.groups.get(g)).is_some_and(|g| g.pattern.is_some()) => {
+                Some("解除するパターンがありません")
+            }
+            Action::MakeInstance if self.scene.groups.len() >= MAX_GROUPS => Some("グループの最大数に達しています"),
+            Action::Export(_) | Action::ExportPng | Action::PrintCheck if self.scene.shape_count() == 0 => Some("先に形を作ってください"),
+            Action::NewScene | Action::Open if self.pending_file_action.is_some() => Some("保存確認を先に完了してください"),
+            _ => None,
+        }
+    }
+
     /// Do what a palette entry says.
     pub fn run_action(&mut self, ctx: &egui::Context, a: Action) {
         let pi = std::f32::consts::PI;
@@ -490,69 +540,131 @@ impl App {
         }
     }
 
-    /// Draw the palette when it is open and run the chosen entry.
+    /// One keyboard-accessible palette, reused by F and Ctrl+K.
     pub fn palette_ui(&mut self, ctx: &egui::Context) {
         let Some(mut st) = ctx.data(|m| m.get_temp::<State>(id())) else { return };
-        let all = ENTRIES.get_or_init(entries);
-        let hits = search(all, &st.query, 9);
-        st.sel = st.sel.min(hits.len().saturating_sub(1));
-        let (mut close, mut run) = (false, None);
-        ctx.input_mut(|i| {
-            if i.consume_key(egui::Modifiers::NONE, Key::Escape) {
-                close = true;
-            }
-            if i.consume_key(egui::Modifiers::NONE, Key::ArrowDown) {
-                st.sel = (st.sel + 1).min(hits.len().saturating_sub(1));
-            }
-            if i.consume_key(egui::Modifiers::NONE, Key::ArrowUp) {
-                st.sel = st.sel.saturating_sub(1);
-            }
-            if i.consume_key(egui::Modifiers::NONE, Key::Enter) {
-                run = hits.get(st.sel).copied();
-            }
+        let cat = catalog();
+        let mut close = false;
+        let (up, down, enter, favorite_key) = ctx.input_mut(|i| {
+            close = i.consume_key(egui::Modifiers::NONE, Key::Escape)
+                || i.consume_key(egui::Modifiers::COMMAND, Key::K);
+            (
+                i.consume_key(egui::Modifiers::NONE, Key::ArrowUp),
+                i.consume_key(egui::Modifiers::NONE, Key::ArrowDown),
+                i.consume_key(egui::Modifiers::NONE, Key::Enter),
+                i.consume_key(egui::Modifiers::ALT, Key::F),
+            )
         });
-        let before = st.query.clone();
-        let rect = self.view_rect;
-        egui::Area::new(egui::Id::new("palette_area")).order(egui::Order::Tooltip).pivot(Align2::CENTER_TOP).fixed_pos(egui::pos2(rect.center().x, rect.top() + 70.0)).show(ctx, |ui| {
-            style::card().show(ui, |ui| {
-                ui.set_width(460.0);
-                let r = ui.add(egui::TextEdit::singleline(&mut st.query).hint_text("さがす（形・ライブラリ・コマンド　English もOK）").desired_width(f32::INFINITY).font(egui::FontId::proportional(15.0)));
-                if st.fresh {
-                    r.request_focus();
-                    st.fresh = false;
-                }
-                ui.add_space(4.0);
-                if hits.is_empty() {
-                    ui.label(RichText::new("見つかりませんでした").color(style::DIM));
-                }
-                for (n, &i) in hits.iter().enumerate() {
-                    let Some(e) = all.get(i) else { continue };
-                    let (rc, resp) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 28.0), egui::Sense::click());
-                    if n == st.sel {
-                        ui.painter().rect_filled(rc, 6.0, Color32::from_rgba_unmultiplied(52, 178, 120, 80));
-                    } else if resp.hovered() {
-                        ui.painter().rect_filled(rc, 6.0, Color32::from_white_alpha(16));
-                    }
-                    ui.painter().text(rc.left_center() + Vec2::new(10.0, 0.0), Align2::LEFT_CENTER, &e.label, egui::FontId::proportional(13.5), style::TEXT);
-                    ui.painter().text(rc.right_center() - Vec2::new(10.0, 0.0), Align2::RIGHT_CENTER, e.tag, egui::FontId::proportional(11.5), style::DIM);
-                    if resp.hovered() && ui.input(|i| i.pointer.delta().length() > 0.5) {
-                        st.sel = n;
-                    }
-                    if resp.clicked() {
-                        run = Some(i);
-                    }
-                }
-            });
-        });
-        if st.query != before {
-            st.sel = 0;
+        if close {
+            ctx.data_mut(|m| m.remove::<State>(id()));
+            return;
         }
-        if let Some(i) = run
-            && let Some(e) = all.get(i)
-        {
-            let a = e.action;
-            close = true;
-            self.run_action(ctx, a);
+        if st.dirty {
+            st.hits = cat.search(&st.query, &self.palette_prefs, 9);
+            st.sel = st.sel.min(st.hits.len().saturating_sub(1));
+            st.dirty = false;
+        }
+
+        let mut execute = None;
+        let mut toggle_favorite = None;
+        let rect = self.view_rect;
+        egui::Area::new(egui::Id::new("palette_area"))
+            .order(egui::Order::Tooltip)
+            .pivot(egui::Align2::CENTER_TOP)
+            .fixed_pos(egui::pos2(rect.center().x, rect.top() + 70.0))
+            .show(ctx, |ui| {
+                style::card().show(ui, |ui| {
+                    ui.set_width((rect.width() - 24.0).clamp(240.0, 520.0));
+                    let edit = ui.add(
+                        egui::TextEdit::singleline(&mut st.query)
+                            .hint_text("コマンド・形・ライブラリを検索 / Search commands")
+                            .desired_width(f32::INFINITY)
+                            .font(egui::FontId::proportional(15.0))
+                    );
+                    if st.fresh {
+                        edit.request_focus();
+                        st.fresh = false;
+                    }
+                    if edit.changed() {
+                        st.sel = 0;
+                        st.dirty = true;
+                    }
+                    // Re-indexed only when the query or favorite order changes, not every frame.
+                    if st.dirty {
+                        st.hits = cat.search(&st.query, &self.palette_prefs, 9);
+                        st.sel = st.sel.min(st.hits.len().saturating_sub(1));
+                        st.dirty = false;
+                    }
+                    if up { st.sel = st.sel.saturating_sub(1); }
+                    if down { st.sel = (st.sel + 1).min(st.hits.len().saturating_sub(1)); }
+                    if enter { execute = st.hits.get(st.sel).copied(); }
+                    if favorite_key {
+                        toggle_favorite = st.hits.get(st.sel)
+                            .and_then(|&i| cat.entries.get(i)).map(|e| e.action);
+                    }
+
+                    ui.add_space(5.0);
+                    if st.hits.is_empty() {
+                        ui.label(RichText::new("見つかりませんでした / No results").color(style::DIM));
+                    }
+                    let visible = st.hits.clone(); // at most 9 small indices
+                    for (row, i) in visible.into_iter().enumerate() {
+                        let Some(e) = cat.entries.get(i) else { continue };
+                        let reason = self.palette_disabled_reason(e.action);
+                        let favorite = self.palette_prefs.contains(e.action);
+                        ui.horizontal(|ui| {
+                            let star = if favorite { "★" } else { "☆" };
+                            if ui.small_button(star).on_hover_text("お気に入り切替 (Alt+F)").clicked() {
+                                toggle_favorite = Some(e.action);
+                            }
+                            let label = if let Some(why) = reason {
+                                RichText::new(&e.label).color(style::DIM)
+                                    .size(13.5)
+                            } else {
+                                RichText::new(&e.label).color(style::TEXT)
+                                    .size(13.5)
+                            };
+                            if ui.selectable_label(row == st.sel, label)
+                                .on_hover_text(reason.unwrap_or("Enter / クリックで実行"))
+                                .clicked()
+                            {
+                                st.sel = row;
+                                execute = Some(i);
+                            }
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                ui.label(RichText::new(e.tag).size(11.0).color(style::DIM));
+                            });
+                        });
+                        if let Some(why) = reason {
+                            ui.horizontal(|ui| {
+                                ui.add_space(28.0);
+                                ui.label(RichText::new(why).size(11.0).color(style::DIM));
+                            });
+                        }
+                    }
+                    ui.separator();
+                    ui.label(RichText::new("↑↓ 選択  Enter 実行  Alt+F ★登録  Esc 閉じる").size(11.0).color(style::DIM));
+                });
+            });
+
+        if let Some(action) = toggle_favorite {
+            self.palette_prefs.toggle(action);
+            self.palette_prefs.save();
+            // Mark dirty and refresh next frame (do not traverse the index every repaint).
+            st.dirty = true;
+        }
+        if let Some(i) = execute {
+            if let Some(e) = cat.entries.get(i) {
+                if let Some(reason) = self.palette_disabled_reason(e.action) {
+                    self.say(ctx, reason);
+                } else {
+                    let action = e.action;
+                    self.run_action(ctx, action);
+                    self.palette_prefs.record(action);
+                    self.palette_prefs.save();
+                    close = true;
+                }
+            }
         }
         if close {
             ctx.data_mut(|m| m.remove::<State>(id()));
@@ -561,8 +673,6 @@ impl App {
         }
     }
 }
-
-static ENTRIES: std::sync::OnceLock<Vec<Entry>> = std::sync::OnceLock::new();
 
 #[cfg(test)]
 mod tests {
