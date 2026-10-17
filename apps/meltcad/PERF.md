@@ -237,3 +237,74 @@ remained was the thumbnails (now off the main thread).
   give ms per row) is below about 5 ms, draw it in one pass instead of the cheap picture. Not done: it needs a real GPU to tune.
 * Testing the window: `MELTCAD_HUD=1` starts with the HUD on; with `MELTCAD_TEST_DIR=dir` the files `dir/hud` (toggle the HUD)
   and `dir/bench` (open the speed test window) are taken like `snap` and `png`; `dir/where` writes where the HUD is to `dir/where.txt`.
+
+## 2026-10-17: hover/transient and emissive-scene CPU/GPU optimization
+
+Base revision: `fff80f282891593ecb4523442e0a0aa31725eb29` on `easy-layout-and-melt`.
+This patch preserves the offscreen frame cache, 30 Hz hover picking gate, adaptive
+scale, 150 ms full-quality settle, bounding-sphere acceleration, 48/128/200 shader
+march caps, and F3 timestamp HUD. No WGSL distance, light or shading math changed.
+
+* `perf::scene_has_glow_resolved` checks only group sources actually returned by
+  `pattern::resolve`. An unrelated hidden emissive source no longer activates
+  the expensive full-material 200-iteration shader path merely because another
+  visible group happens to be linked. Hidden sources of visible linked copies
+  **do** activate it. `ScenePack::new` reuses its resolved list.
+* Hover transitions temporarily invoke the already-existing fast/low-resolution
+  frame. Moving the pointer within the same shape does not postpone refinement;
+  after 150 ms of no changes the normal full-resolution picture is restored.
+  The cache still prevents re-marching on egui-only repaints. This improves
+  transition responsiveness; it does **not** eliminate re-marching for changed
+  hover ID, which still participates in the scene shader's colour.
+* `--bench` now includes paired `shapes100`/`shapes100_unlit` and
+  `shapes300`/`shapes300_unlit` cases, using the same geometry with
+  emission zeroed in the matching unlit scene. Existing pipe, 20-shape and
+  complex material benchmarks are retained. Their reported actual shape counts
+  may be greater than the nominal target since library groups are indivisible.
+
+### Verification protocol
+
+```powershell
+git checkout easy-layout-and-melt
+cargo build --release --locked -p meltcad
+target\release\meltcad.exe --bench perf-before.txt --frames 12
+# Switch to the performance branch (keep same driver, power mode, viewport, backend).
+git checkout perf/hover-glow-budget-20261017
+cargo build --release --locked -p meltcad
+target\release\meltcad.exe --bench perf-after.txt --frames 12
+cargo test --release -p meltcad
+cargo test --release -p meltcad -- frame_cpu_bench --ignored --nocapture
+# Full shader golden image comparison on a machine with a working wgpu adapter:
+$env:MELTCAD_GOLDEN_DIR="golden-after"
+cargo test --release -p meltcad -- gpu_headless_golden --ignored --nocapture
+# Collect golden-before from the base commit with the same adapter before comparing.
+# Run gpu_headless_matches_cpu and gpu_headless_mesh_matches_cpu on the same host.
+```
+
+The pre-change CLI does not have `shapes100_unlit` and
+`shapes300_unlit`, so generate paired source cases with the new CLI when
+comparing the two GPU configurations; do **not** treat unmatched rows as
+before/after data. For like-for-like measurements, compare the five pre-existing
+scene rows first, then separately compare emissive/unlit pairs on the new build.
+F3 reports CPU frame time, GPU scene-pass timestamp when supported, and actual
+moving render scale. `frame_cpu_bench` measures CPU app work, *not* GPU frames.
+Use 100/300-shape scenes, with glow and without glow, at equal dimensions and
+normal/full vs fast/moving. Also inspect 300+ shapes including linked copies and
+intersections, check idle GPU/CPU activity and visually compare GPU goldens and
+CPU --render output at fixed camera positions. The CPU simple view intentionally
+omits advanced glass/glow appearance; compare shape silhouettes, not pixels.
+
+### Measurement status (this change)
+
+**Not measured:** This environment cannot run Rust/cargo, an interactive
+Windows viewport, or the Intel Arc 140V GPU. No validated before/after timings,
+F3 readings, GPU/CPU screenshots, power readings, or image-diff results are
+claimed for this patch. Previous llvmpipe measurements elsewhere in this file
+are historical baseline data only, not new results. In particular any Arc 140V
+performance expectation remains a **hypothesis, not a measurement**.
+
+Acceptance: no missing geometry/silhouette regressions in GPU/CPU comparisons;
+equal idle render/cache behaviour; lower GPU scene-pass ms in the relevant
+unlit/hover-interaction cases without worsening interactive p95 CPU frame
+times. Revert hover-fast transitions if pointer motion visibly causes repeated
+resolution changes or the elapsed hover-to-sharp time is unacceptable.

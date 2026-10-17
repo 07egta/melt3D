@@ -249,7 +249,7 @@ impl ScenePack {
             id: PACK_IDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             list: Arc::new(list),
             vols: Arc::new(vols),
-            glow: crate::perf::scene_has_glow(scene),
+            glow: crate::perf::scene_has_glow_resolved(scene, &resolved),
             overlaps: resolved.iter().filter_map(|r| scene.groups.get(r.gi)).any(|g| g.op == crate::model::Op::Intersect)
                 || packed_overlap,
             instances: inst_n,
