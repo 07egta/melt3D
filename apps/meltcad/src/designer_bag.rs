@@ -280,6 +280,12 @@ pub fn make_group(mut config: BagConfig) -> Group {
 /// Regenerate only the five parametric parts. Keep the group identity, position,
 /// visibility, user colour edits and UIDs so other scene features remain stable.
 pub fn rebuild(g: &mut Group, mut config: BagConfig) {
+    // The ordinary move gizmo changes each shape's world position. Recover
+    // that translation before regenerating, otherwise editing one dimension
+    // would snap a placed or moved bag back to its original location.
+    if let Some(body) = g.shapes.iter().find(|s| s.name == "本体（中空）") {
+        config.origin_xy = [body.pos[0], body.pos[1]];
+    }
     config.sanitize();
     let mut fresh = make_group(config.clone());
     for s in &mut fresh.shapes {
@@ -398,6 +404,21 @@ mod tests {
         assert_eq!(read.groups[0].shapes[3].material, handle_colour);
         let f = Field::new(&read);
         assert!(f.distance([315.0, -120.0, p.height + 2.0]) > 0.0);
+    }
+
+    #[test]
+    fn changing_dimensions_after_moving_keeps_the_bag_in_place() {
+        let mut g = make_group(BagConfig::default());
+        for s in &mut g.shapes {
+            s.pos[0] += 270.0;
+            s.pos[1] -= 70.0;
+        }
+        let mut edited = g.bag.clone().expect("bag settings");
+        edited.width = 140.0;
+        rebuild(&mut g, edited);
+        assert!((g.shapes[0].pos[0] - 270.0).abs() < 1e-3);
+        assert!((g.shapes[0].pos[1] + 70.0).abs() < 1e-3);
+        assert_eq!(g.bag.as_ref().map(|b| b.origin_xy), Some([270.0, -70.0]));
     }
 
     #[test]
