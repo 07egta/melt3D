@@ -35,6 +35,14 @@ pub struct ImportedMesh {
     pub triangles: Vec<[u32; 3]>,
 }
 
+/// Appearance information kept separate from geometry so the existing SDF baker is unchanged.
+#[derive(Clone, Debug, Default)]
+pub struct AppearanceInfo {
+    pub material: Option<crate::model::Material>,
+    pub varies: bool,
+    pub notes: Vec<String>,
+}
+
 /// The file formats we can read.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MeshFormat {
@@ -73,6 +81,10 @@ pub struct ImportOptions {
 #[derive(Clone, Debug)]
 pub struct Imported {
     pub mesh: ImportedMesh,
+    /// One material when the imported surface is uniform; otherwise a representative colour.
+    pub appearance: Option<crate::model::Material>,
+    /// The file contains more than one colour/material, which a single baked SDF cannot preserve.
+    pub appearance_varies: bool,
     pub format: MeshFormat,
     /// The mesh was turned from Y up to Z up.
     #[allow(dead_code)] // (the card turns the model itself, from the choice of 向き)
@@ -863,6 +875,11 @@ pub fn import_bytes(bytes: &[u8], name: &str, opts: &ImportOptions) -> Result<Im
         return Err(TOO_BIG_FILE.into());
     }
     let format = sniff(bytes, name).ok_or("このファイルの形式がわかりません（STL・OBJ・PLY・3MF・GLB に対応しています）")?;
+    let appearance_info = match format {
+        MeshFormat::ThreeMf => crate::import_3mf::appearance_3mf(bytes),
+        MeshFormat::Glb => crate::import_glb::appearance_glb(bytes),
+        _ => Default::default(),
+    };
     let raw = match format {
         MeshFormat::Stl => read_stl(bytes),
         MeshFormat::Obj => read_obj(bytes),
@@ -876,7 +893,10 @@ pub fn import_bytes(bytes: &[u8], name: &str, opts: &ImportOptions) -> Result<Im
         mesh.y_up_to_z_up();
     }
     let health = mesh.health();
-    let mut notes = Vec::new();
+    let mut notes = appearance_info.notes;
+    if appearance_info.varies {
+        notes.push("複数の色・材質があります。SDF では面別の色を保持できないため、代表色で読み込みます（元の色分けは保存されません）".into());
+    }
     if health.open_edges > 0 {
         notes.push(format!("穴があいている所があります（開いた辺 {} 本）。形は近似で読みこみます", health.open_edges));
     }
@@ -891,7 +911,7 @@ pub fn import_bytes(bytes: &[u8], name: &str, opts: &ImportOptions) -> Result<Im
     if longest > 0.0 && s.iter().any(|d| *d < longest * 1e-6) {
         notes.push("平らな形です（厚みがありません）".to_string());
     }
-    Ok(Imported { mesh, format, turned_y_up: y_up, dropped_triangles, health, notes })
+    Ok(Imported { mesh, appearance: appearance_info.material, appearance_varies: appearance_info.varies, format, turned_y_up: y_up, dropped_triangles, health, notes })
 }
 
 /// Read a mesh file (refusing anything over 256 MB).

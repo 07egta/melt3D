@@ -126,6 +126,37 @@ pub fn presets() -> &'static [Preset] {
     PRESETS
 }
 
+/// Decode a 3MF base-material or color-group display colour (#RRGGBB or #RRGGBBAA).
+/// 3MF specifies sRGB, just like the colours in YuraCAD's material editor.
+pub(crate) fn from_3mf_hex(value: &str) -> Option<Material> {
+    let hex = value.strip_prefix('#')?;
+    if hex.len() != 6 && hex.len() != 8 {
+        return None;
+    }
+    let byte = |i: usize| u8::from_str_radix(hex.get(i..i + 2)?, 16).ok();
+    let rgb = [f32::from(byte(0)?) / 255.0, f32::from(byte(2)?) / 255.0, f32::from(byte(4)?) / 255.0];
+    let alpha = if hex.len() == 8 { f32::from(byte(6)?) / 255.0 } else { 1.0 };
+    let mut m = Material::plain(rgb, 0.5, 0.0);
+    // Transparency is an approximation: YuraCAD uses refractive glass rather than alpha blending.
+    m.glass = 1.0 - alpha;
+    Some(m)
+}
+
+/// glTF 2.0 PBR factors are *linear* RGB; the YuraCAD editor stores sRGB.
+/// Convert only the limited scalar factors which its renderer can represent.
+pub(crate) fn from_gltf_pbr(rgba: [f32; 4], roughness: f32, metallic: f32) -> Option<Material> {
+    if !rgba.iter().chain([roughness, metallic].iter()).all(|v| v.is_finite()) {
+        return None;
+    }
+    let linear_to_srgb = |v: f32| {
+        let v = v.clamp(0.0, 1.0);
+        if v <= 0.0031308 { 12.92 * v } else { 1.055 * v.powf(1.0 / 2.4) - 0.055 }
+    };
+    let mut m = Material::plain(rgba[..3].try_into().ok()?.map(linear_to_srgb), roughness.clamp(0.0, 1.0), metallic.clamp(0.0, 1.0));
+    m.glass = 1.0 - rgba[3].clamp(0.0, 1.0);
+    Some(m)
+}
+
 /// sRGB 0..1 to a colour (NaN safe, clamped).
 pub fn color32(c: [f32; 3]) -> Color32 {
     let f = |v: f32| if v.is_finite() { (v.clamp(0.0, 1.0) * 255.0).round() as u8 } else { 0 };
@@ -315,4 +346,21 @@ mod tests {
         sc.groups[0].shapes.push(stain);
         let _ = std::fs::write(out, sc.to_json());
     }
+    #[test]
+    fn file_colour_conversions_and_scene_serialization() {
+        let red = from_3mf_hex("#FF0000").unwrap();
+        assert_eq!(red.color, [1.0, 0.0, 0.0]);
+        assert!(from_3mf_hex("#XYZ").is_none());
+        let transparent = from_3mf_hex("#0033FF80").unwrap();
+        assert!((transparent.glass - 127.0 / 255.0).abs() < 1e-6);
+        let gltf = from_gltf_pbr([0.5, 0.0, 1.0, 1.0], 0.2, 0.8).unwrap();
+        assert!((gltf.color[0] - 0.73536).abs() < 0.001);
+        assert!((gltf.roughness - 0.2).abs() < 1e-6);
+        assert!((gltf.metallic - 0.8).abs() < 1e-6);
+        let mut scene = crate::model::Scene::default();
+        scene.groups[0].shapes.push(crate::model::Shape::new(crate::model::Kind::Box, [0.0; 3], gltf));
+        let loaded = crate::model::Scene::from_json(&scene.to_json()).unwrap();
+        assert_eq!(loaded.groups[0].shapes.last().unwrap().material, gltf);
+    }
+
 }
