@@ -88,110 +88,131 @@ impl App {
         }
     }
 
-    // ----- layers -----
+    // ----- virtualized scene outliner -----
+
+    /// Build the cheap flat row index once per frame; only visible rows get egui widgets.
+    /// A filter temporarily opens matching groups without changing their saved fold state.
+    fn tree_rows(&self) -> Vec<TreeRow> {
+        let query = self.tree_query.trim().to_lowercase();
+        let filtering = !query.is_empty();
+        let mut rows = Vec::with_capacity(self.scene.shape_count().min(crate::model::MAX_SHAPES) + self.scene.groups.len());
+        for (g, group) in self.scene.groups.iter().enumerate() {
+            let group_match = filtering && group.name.to_lowercase().contains(&query);
+            let matching: Vec<usize> = if filtering && !group_match {
+                group.shapes.iter().enumerate().filter(|(_, s)| s.name.to_lowercase().contains(&query)).map(|(s, _)| s).collect()
+            } else {
+                Vec::new()
+            };
+            if filtering && !group_match && matching.is_empty() {
+                continue;
+            }
+            let expanded = filtering || !self.folded.contains(&g);
+            rows.push(TreeRow { pick: Pick::Group(g), expanded });
+            if expanded {
+                if filtering && !group_match {
+                    rows.extend(matching.into_iter().map(|s| TreeRow { pick: Pick::Shape(g, s), expanded: false }));
+                } else {
+                    rows.extend((0..group.shapes.len()).map(|s| TreeRow { pick: Pick::Shape(g, s), expanded: false }));
+                }
+            }
+        }
+        rows
+    }
 
     pub fn layers(&mut self, ui: &mut Ui) {
         self.row_rects.clear();
-        ui.spacing_mut().item_spacing.y = 2.0;
-        let ngroups = self.scene.groups.len();
-        // "x12" after a patterned group, "link" after a linked copy (looked up once for the whole list)
+        // Each fixed-size row uses 32 logical points; show_rows only materializes
+        // the viewport's rows even for a synthetic 1,000-object benchmark.
+        let rows = self.tree_rows();
+        if rows.is_empty() {
+            ui.label(RichText::new(if self.tree_query.is_empty() { "グループがありません" } else { "名前が一致する形はありません" }).color(style::DIM).size(12.0));
+            return;
+        }
+        let picks: Vec<Pick> = rows.iter().map(|r| r.pick).collect();
         let badges: Vec<String> = if self.scene.groups.iter().any(|g| g.pattern.is_some() || g.is_linked()) {
             let resolved = crate::pattern::resolve(&self.scene);
-            (0..ngroups)
-                .map(|gi| {
-                    let g = &self.scene.groups[gi];
-                    let n = resolved.iter().find(|r| r.gi == gi).map_or(0, |r| r.insts.len().max(1));
-                    match (g.is_linked(), g.pattern.is_some()) {
-                        (true, true) => format!("リンク ×{n}"),
-                        (true, false) => "リンク".to_string(),
-                        (false, true) => format!("×{n}"),
-                        _ => String::new(),
-                    }
-                })
-                .collect()
+            self.scene.groups.iter().enumerate().map(|(g, gr)| {
+                let n = resolved.iter().find(|r| r.gi == g).map_or(0, |r| r.insts.len().max(1));
+                match (gr.is_linked(), gr.pattern.is_some()) {
+                    (true, true) => format!("リンク ×{n}"),
+                    (true, false) => "リンク".to_string(),
+                    (false, true) => format!("×{n}"),
+                    _ => String::new(),
+                }
+            }).collect()
         } else {
             Vec::new()
         };
-        for gi in 0..ngroups {
-            let folded = self.folded.contains(&gi);
-            let sel = self.sel == Some(Pick::Group(gi));
-            let (name, op, visible, nshapes) = {
-                let g = &self.scene.groups[gi];
-                (g.name.clone(), g.op, g.visible, g.shapes.len())
-            };
-            let id = ui.id().with(("g", gi));
-            let badge = badges.get(gi).cloned().unwrap_or_default();
-            let row = self.row(ui, id, sel, 0.0, name, Pick::Group(gi), op, visible, glyphs::group, !folded, true, &badge);
-            if row.chevron {
-                if folded {
-                    self.folded.remove(&gi);
-                } else {
-                    self.folded.insert(gi);
-                }
-            }
-            if row.select {
-                self.sel = Some(Pick::Group(gi));
-            }
-            if row.drag_started {
-                self.layer_drag = Some(Pick::Group(gi));
-            }
-            if row.eye {
-                self.scene.groups[gi].visible = !visible;
-            }
-            if row.op {
-                self.scene.groups[gi].op = op.next();
-            }
-            if !folded {
-                for si in 0..nshapes {
-                    let Some(s) = self.scene.shape(gi, si) else { continue };
-                    let (name, op, visible, material) = (s.name.clone(), s.op, s.visible, s.material);
-                    let sel = self.sel == Some(Pick::Shape(gi, si));
-                    let id = ui.id().with(("s", gi, si));
-                    let row = self.row(
-                        ui,
-                        id,
-                        sel,
-                        18.0,
-                        name,
-                        Pick::Shape(gi, si),
-                        op,
-                        visible,
-                        move |p, r, _| materials::swatch(p, r.center(), 8.5, &material),
-                        false,
-                        false,
-                        "",
-                    );
+        let scroll = egui::ScrollArea::vertical().id_salt("scene_tree").auto_shrink([false, false])
+            .show_rows(ui, 32.0, rows.len(), |ui, visible_range| {
+                ui.spacing_mut().item_spacing.y = 0.0;
+                for item in &rows[visible_range] {
+                    let pick = item.pick;
+                    let (name, op, visible, local_locked, icon_shape, badge) = match pick {
+                        Pick::Group(g) => {
+                            let group = &self.scene.groups[g];
+                            (group.name.clone(), group.op, group.visible, group.locked, false, badges.get(g).map_or("", String::as_str))
+                        }
+                        Pick::Shape(g, s) => {
+                            let sh = &self.scene.groups[g].shapes[s];
+                            (sh.name.clone(), sh.op, sh.visible, sh.locked, true, "")
+                        }
+                    };
+                    let selected = self.is_tree_selected(pick);
+                    let effective_locked = self.scene.is_locked(pick);
+                    let id = ui.id().with(("scene", pick));
+                    let row = if icon_shape {
+                        let Pick::Shape(g, s) = pick else { continue };
+                        let mat = self.scene.groups[g].shapes[s].material;
+                        self.row(ui, id, selected, 18.0, &name, pick, op, visible, local_locked, effective_locked, move |p, r, _| materials::swatch(p, r.center(), 8.5, &mat), false, false, "")
+                    } else {
+                        self.row(ui, id, selected, 0.0, &name, pick, op, visible, local_locked, effective_locked, glyphs::group, item.expanded, true, badge)
+                    };
+                    if row.chevron && let Pick::Group(g) = pick {
+                        if !self.folded.insert(g) { self.folded.remove(&g); }
+                    }
                     if row.select {
-                        self.sel = Some(Pick::Shape(gi, si));
+                        let mods = ui.input(|i| i.modifiers);
+                        if mods.shift {
+                            self.select_tree_range(pick, &picks);
+                        } else {
+                            self.select_item(pick, mods.command || mods.ctrl);
+                        }
                     }
-                    if row.drag_started {
-                        self.layer_drag = Some(Pick::Shape(gi, si));
+                    if row.focus {
+                        self.focus_tree_item(pick);
                     }
-                    if row.eye
-                        && let Some(s) = self.scene.shape_mut(gi, si)
-                    {
-                        s.visible = !visible;
+                    if row.rename {
+                        self.begin_tree_rename(pick);
                     }
-                    if row.op
-                        && let Some(s) = self.scene.shape_mut(gi, si)
-                    {
-                        s.op = op.next();
+                    if row.drag_started && self.extra_selected.is_empty() && !effective_locked {
+                        self.layer_drag = Some(pick);
+                    }
+                    if row.eye {
+                        self.toggle_item_visibility(pick);
+                    }
+                    if row.lock {
+                        self.toggle_item_lock(pick);
+                    }
+                    if row.op && !effective_locked {
+                        match pick {
+                            Pick::Group(g) => self.scene.groups[g].op = op.next(),
+                            Pick::Shape(g, s) => if let Some(sh) = self.scene.shape_mut(g, s) { sh.op = op.next(); },
+                        }
                     }
                 }
-            }
-        }
-        if ngroups == 0 {
-            ui.label(RichText::new("上の形をクリックして足そう").color(style::DIM).size(12.0));
-        }
+            });
+        let _ = scroll;
         self.layer_drop(ui);
     }
 
-    /// While a row is being dragged: show where it would land, and put it there on release.
+    /// Show the only reachable drop targets: currently materialized viewport rows.
     fn layer_drop(&mut self, ui: &mut Ui) {
         let Some(from) = self.layer_drag else { return };
         let (pos, down) = ui.input(|i| (i.pointer.interact_pos(), i.pointer.primary_down()));
-        let target =
-            pos.and_then(|p| self.row_rects.iter().find(|(_, r)| r.y_range().contains(p.y) && r.x_range().contains(p.x)).map(|(k, r)| (*k, *r, p)));
+        let target = pos.and_then(|p| {
+            self.row_rects.iter().find(|(_, r)| r.contains(p)).map(|(k, r)| (*k, *r, p))
+        });
         if let Some((to, rect, p)) = target {
             let after = p.y > rect.center().y;
             let y = if after { rect.bottom() } else { rect.top() };
@@ -215,85 +236,84 @@ impl App {
         id: egui::Id,
         selected: bool,
         indent: f32,
-        name: String,
+        name: &str,
         pick: Pick,
         op: Op,
         visible: bool,
+        local_locked: bool,
+        effective_locked: bool,
         icon: impl FnOnce(&egui::Painter, Rect, Color32),
         chevron_open: bool,
         has_chevron: bool,
         badge: &str,
     ) -> RowResult {
-        let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 30.0), Sense::click_and_drag());
+        let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 32.0), Sense::click_and_drag());
         self.row_rects.push((pick, rect));
         let mut out = RowResult::default();
         style::row_bg(ui, &resp, rect, selected);
-        // the grip says "drag me"
-        let grip = Color32::from_white_alpha(if resp.hovered() || selected { 120 } else { 44 });
+        let grip = Color32::from_white_alpha(if effective_locked { 22 } else if resp.hovered() || selected { 120 } else { 44 });
         style::gfx::grip(ui.painter(), egui::pos2(rect.left() + 11.0, rect.center().y), grip);
         let mut x = rect.left() + 18.0 + indent;
         if has_chevron {
             let cr = Rect::from_center_size(egui::pos2(x + 6.0, rect.center().y), vec2(16.0, 20.0));
-            let r = ui.interact(cr, id.with("c"), Sense::click());
+            let crsp = ui.interact(cr, id.with("c"), Sense::click()).on_hover_text(if chevron_open { "子を閉じる" } else { "子を開く" });
             let c = cr.center();
             let pts = if chevron_open {
                 vec![c + vec2(-4.0, -2.0), c + vec2(4.0, -2.0), c + vec2(0.0, 3.0)]
             } else {
                 vec![c + vec2(-2.0, -4.0), c + vec2(-2.0, 4.0), c + vec2(3.0, 0.0)]
             };
-            ui.painter().add(egui::Shape::convex_polygon(pts, if r.hovered() { Color32::WHITE } else { style::DIM }, Stroke::NONE));
-            out.chevron = r.clicked();
+            ui.painter().add(egui::Shape::convex_polygon(pts, if crsp.hovered() { Color32::WHITE } else { style::DIM }, Stroke::NONE));
+            out.chevron = crsp.clicked();
             x += 16.0;
         }
         let ir = Rect::from_min_size(egui::pos2(x, rect.center().y - 10.0), vec2(20.0, 20.0));
         icon(ui.painter(), ir, style::TEXT);
         x += 26.0;
-        let eye = Rect::from_center_size(egui::pos2(rect.right() - 18.0, rect.center().y), vec2(22.0, 22.0));
-        let opr = Rect::from_center_size(egui::pos2(rect.right() - 44.0, rect.center().y), vec2(22.0, 22.0));
-        let name_rect = Rect::from_min_max(egui::pos2(x, rect.top()), egui::pos2(opr.left() - 4.0, rect.bottom()));
-        if self.renaming == Some(pick) {
-            let mut text = name.clone();
-            let r = ui.put(name_rect.shrink2(vec2(0.0, 3.0)), egui::TextEdit::singleline(&mut text).font(FontId::proportional(13.0)));
-            r.request_focus();
-            match pick {
-                Pick::Group(g) => {
-                    if let Some(gr) = self.scene.groups.get_mut(g) {
-                        gr.name = text;
-                    }
-                }
-                Pick::Shape(g, s) => {
-                    if let Some(sh) = self.scene.shape_mut(g, s) {
-                        sh.name = text;
-                    }
-                }
-            }
-            if r.lost_focus() {
-                self.renaming = None;
+        let eye = Rect::from_center_size(egui::pos2(rect.right() - 15.0, rect.center().y), vec2(22.0, 22.0));
+        let lock = Rect::from_center_size(egui::pos2(rect.right() - 41.0, rect.center().y), vec2(22.0, 22.0));
+        let opr = Rect::from_center_size(egui::pos2(rect.right() - 67.0, rect.center().y), vec2(22.0, 22.0));
+        let name_rect = Rect::from_min_max(egui::pos2(x, rect.top()), egui::pos2(opr.left() - 3.0, rect.bottom()));
+        if self.renaming == Some(pick) && !effective_locked {
+            let r = ui.put(name_rect.shrink2(vec2(0.0, 3.0)), egui::TextEdit::singleline(&mut self.rename_text)
+                .id(id.with("rename")).font(FontId::proportional(13.0)));
+            if !r.has_focus() { r.request_focus(); }
+            let cancel = ui.input(|i| i.key_pressed(egui::Key::Escape));
+            let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
+            if cancel || enter {
+                self.finish_tree_rename(enter);
             }
         } else {
             let col = if visible { style::TEXT } else { style::DIM };
             let clipped = ui.painter().with_clip_rect(name_rect);
-            let used = clipped.text(egui::pos2(name_rect.left(), rect.center().y), Align2::LEFT_CENTER, &name, FontId::proportional(13.0), col);
+            let used = clipped.text(egui::pos2(name_rect.left(), rect.center().y), Align2::LEFT_CENTER, name, FontId::proportional(13.0), col);
             if !badge.is_empty() {
                 clipped.text(egui::pos2(used.right() + 6.0, rect.center().y), Align2::LEFT_CENTER, badge, FontId::proportional(11.5), style::ACCENT);
             }
         }
-        let er = ui.interact(eye, id.with("e"), Sense::click());
-        let orr = ui.interact(opr, id.with("o"), Sense::click());
-        for r in [&er, &orr] {
+        let er = ui.interact(eye, id.with("eye"), Sense::click())
+            .on_hover_text(if visible { "非表示にする（削除ではありません）" } else { "表示する" });
+        let lr = ui.interact(lock, id.with("lock"), Sense::click())
+            .on_hover_text(if local_locked { "ロックを解除" } else { "ロックして編集・削除を防ぐ" });
+        let orr = ui.interact(opr, id.with("op"), if effective_locked { Sense::hover() } else { Sense::click() })
+            .on_hover_text(if effective_locked { "ロック中：解除すると演算を切り替えられます" } else { "足す・削る・塗るを変更" });
+        for r in [&er, &lr, &orr] {
             if r.hovered() {
-                ui.painter().rect_filled(r.rect, 7.0, Color32::from_white_alpha(22));
+                ui.painter().rect_filled(r.rect, 5.0, Color32::from_white_alpha(22));
             }
         }
         glyphs::eye(ui.painter(), eye, visible, if er.hovered() { Color32::WHITE } else { style::DIM });
-        let opcol = style::op_color(op);
-        glyphs::op(ui.painter(), opr, op, opcol.gamma_multiply(if orr.hovered() { 1.0 } else { 0.8 }));
+        draw_outliner_lock(ui.painter(), lock, local_locked, if lr.hovered() { Color32::WHITE } else { style::DIM });
+        glyphs::op(ui.painter(), opr, op, style::op_color(op).gamma_multiply(if orr.hovered() { 1.0 } else { 0.8 }));
         out.eye = er.clicked();
+        out.lock = lr.clicked();
         out.op = orr.clicked();
-        out.select = resp.clicked() && !out.eye && !out.op;
-        out.drag_started = resp.drag_started() && !out.eye && !out.op;
-        if resp.double_clicked() && !out.eye && !out.op {
-            self.renaming = Some(pick);
+        out.select = resp.clicked() && !(out.eye || out.lock || out.op || out.chevron);
+        out.focus = resp.double_clicked() && !(out.eye || out.lock || out.op || out.chevron);
+        out.drag_started = resp.drag_started() && !(out.eye || out.lock || out.op || out.chevron) && !effective_locked;
+        if resp.secondary_clicked() {
+            out.select = true;
+            out.rename = false;
         }
         out
     }
@@ -301,6 +321,12 @@ impl App {
     // ----- inspector -----
 
     fn inspector(&mut self, ui: &mut Ui) {
+        if !self.extra_selected.is_empty() {
+            style::title(ui, "複数選択");
+            ui.label(RichText::new(format!("{}個を選択中です。左の一覧からグループ化できます。", self.selected_picks().len())).size(12.0).color(style::DIM));
+            ui.label(RichText::new("位置・回転・拡大は1個ずつ編集してください").size(11.0).color(style::DIM));
+            return;
+        }
         match self.sel {
             Some(Pick::Shape(g, s)) if self.scene.shape(g, s).is_some() => self.shape_inspector(ui, g, s),
             Some(Pick::Group(g)) if g < self.scene.groups.len() => self.group_inspector(ui, g),
@@ -345,6 +371,10 @@ impl App {
 
     fn group_inspector(&mut self, ui: &mut Ui, g: usize) {
         style::title(ui, "グループ");
+        if self.scene.is_locked(Pick::Group(g)) {
+            ui.label(RichText::new("ロック中：左の鍵を外すと編集できます").size(11.0).color(style::DIM));
+            ui.set_enabled(false);
+        }
         let n = self.scene.groups.len();
         let mut swap = None;
         {
@@ -380,6 +410,10 @@ impl App {
 
     fn shape_inspector(&mut self, ui: &mut Ui, g: usize, s: usize) {
         style::title(ui, "形");
+        if self.scene.is_locked(Pick::Shape(g, s)) {
+            ui.label(RichText::new("ロック中：左の鍵を外すと編集できます").size(11.0).color(style::DIM));
+            ui.set_enabled(false);
+        }
         let ngroups = self.scene.groups.len();
         let nshapes = self.scene.groups[g].shapes.len();
         let mut move_to: Option<usize> = None;
@@ -920,13 +954,36 @@ impl App {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct TreeRow {
+    pick: Pick,
+    expanded: bool,
+}
+
 #[derive(Default)]
 struct RowResult {
     select: bool,
     eye: bool,
+    lock: bool,
     op: bool,
     chevron: bool,
+    focus: bool,
+    rename: bool,
     drag_started: bool,
+}
+
+fn draw_outliner_lock(p: &egui::Painter, rect: Rect, locked: bool, color: Color32) {
+    let c = rect.center();
+    let top = if locked { c.y - 5.0 } else { c.y - 3.0 };
+    let x = if locked { c.x } else { c.x + 2.0 };
+    p.add(egui::Shape::line(vec![
+        egui::pos2(x - 4.0, c.y - 1.0),
+        egui::pos2(x - 4.0, top),
+        egui::pos2(x, top - 2.0),
+        egui::pos2(x + 4.0, top),
+        egui::pos2(x + 4.0, c.y - 1.0),
+    ], Stroke::new(1.4, color)));
+    p.rect_stroke(Rect::from_center_size(c + vec2(0.0, 4.0), vec2(12.0, 9.0)), 2.0, Stroke::new(1.5, color), egui::StrokeKind::Outside);
 }
 
 /// Two blobs melting together with the chosen curve: a live picture of what the settings do.
