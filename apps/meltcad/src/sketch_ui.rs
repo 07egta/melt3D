@@ -16,7 +16,7 @@ use egui::{Align2, Color32, FontId, Painter, Pos2, Rect, Shape as Gfx, Stroke, U
 
 use crate::app::App;
 use crate::curve_tool::Input;
-use crate::model::{Kind, MAX_OUTLINE, MAX_PATH, MAX_SHAPES, Material, Op, Pick, Shape};
+use crate::model::{Kind, MAX_OUTLINE, MAX_PATH, MAX_SHAPES, Material, Op, Pick, Shape, Scene};
 use crate::sdf::V3;
 use crate::sketch::{self, Frame, SketchError, Which};
 use crate::style;
@@ -736,6 +736,8 @@ impl App {
             return;
         }
         use egui::{Key, Modifiers};
+        // A focused numeric field owns its Enter/Delete/Esc and text input.
+        if ctx.wants_keyboard_input() { return; }
         let hit = |k: Key| ctx.input_mut(|i| i.consume_key(Modifiers::NONE, k));
         let sketch_uses_delete = self.sk.edit.is_some() || !self.sk.pts.is_empty() || self.sk.anchor.is_some();
         let del = (sketch_uses_delete && hit(Key::Delete)) | hit(Key::Backspace);
@@ -1012,7 +1014,18 @@ impl App {
         } else if resp.clicked_by(egui::PointerButton::Primary)
             && let Some(m) = mouse
         {
-            self.edit_click(rect, m);
+            if mods.shift {
+                if let Some(Hover::Edge(i, _)) = self.edit_hit(rect, m) {
+                    if let Some(e) = self.sk.edit.as_mut() {
+                        e.edge_sel = Some(i);
+                        e.sel = None;
+                    }
+                } else {
+                    self.edit_click(rect, m);
+                }
+            } else {
+                self.edit_click(rect, m);
+            }
             out.taken = true;
         }
         out
@@ -1344,7 +1357,7 @@ impl App {
         }
         let n = self.sk.edit.as_ref().and_then(|e| self.scene.shape(e.g, e.s).map(|s| sketch::outline_of(s, e.which).len())).unwrap_or(0);
         hint(ui, &format!("点をドラッグして動かす　線をクリックで点をふやす　点をクリックして Delete で消す　{n}/{MAX_OUTLINE}こ"));
-        hint(ui, "1mmきざみ　Shift = 10mm　Ctrl = 0.1mm　Alt+ドラッグで見る向きを回す");
+        hint(ui, "1mmきざみ　Shift = 10mm　Ctrl = 0.1mm　Shift+線クリックで長さ指定　Alt+ドラッグで見る向きを回す");
         // Values are transient UI inputs. Geometry is changed only after a validated edit.
         let current = self.sk.edit.as_ref().and_then(|e| self.scene.shape(e.g, e.s).map(|s| (sketch::outline_of(s, e.which).clone(), e.sel, e.edge_sel)));
         if let Some((outline, selected, edge)) = current {
