@@ -570,6 +570,10 @@ impl App {
             None => self.scene.groups.len().checked_sub(1),
         };
         match g {
+            Some(g) if g < self.scene.groups.len() && self.scene.groups[g].locked => {
+                self.notice = Some("ロック中のグループには形を追加できません".into());
+                None
+            }
             Some(g) if g < self.scene.groups.len() => Some(g),
             _ => {
                 self.scene.groups.push(Group::new("グループ 1"));
@@ -584,10 +588,6 @@ impl App {
             return;
         }
         let Some(g) = self.target_group() else { return };
-        if self.scene.is_locked(Pick::Group(g)) {
-            self.notice = Some("ロック中のグループには形を追加できません".into());
-            return;
-        }
         // beside the selected shape so the two melt together; else at the view's centre
         let size = kind.default_size();
         let rest = match kind {
@@ -744,7 +744,8 @@ impl App {
 
     /// Drag-and-drop in the scene list: put `from` next to `to` (before it, or after it).
     pub fn move_layer(&mut self, from: Pick, to: Pick, after: bool) {
-        if self.scene.is_locked(from) || self.scene.is_locked(to) || !self.extra_selected.is_empty() {
+        if self.scene.is_locked(from) || self.scene.is_locked(to) || !self.extra_selected.is_empty()
+            || matches!(from, Pick::Group(g) if self.scene.groups.get(g).is_some_and(|gr| gr.shapes.iter().any(|s| s.locked))) {
             self.notice = Some("並べ替えは、ロックを外して1つだけ選んでください".into());
             return;
         }
