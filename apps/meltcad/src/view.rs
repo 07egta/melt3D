@@ -89,7 +89,7 @@ impl App {
 
         // The handles
         let tool = self.tool;
-        let geom = if clean || self.ct.drawing || self.pt.on || self.sketch_active() { None } else { gizmo::build(&self.cam, rect, &self.scene, self.sel, tool) };
+        let geom = if clean || self.ct.drawing || self.pt.on || self.sketch_active() || !self.can_transform_primary() { None } else { gizmo::build(&self.cam, rect, &self.scene, self.sel, tool) };
         let over_gnomon = !clean && pos.is_some_and(|p| self.gnomon_hit(rect, p).is_some());
         let hover_handle = match (&geom, pos, &self.drag) {
             (Some(g), Some(p), None) if resp.hovered() && !over_gnomon && !ct.over => gizmo::hit(g, tool, p),
@@ -301,6 +301,20 @@ impl App {
             let active = self.drag.as_ref().map(gizmo::Drag::handle).or(hover_handle);
             gizmo::draw(&painter, g, tool, active);
         }
+        // Keep viewport and scene tree selection in sync. The primary selection
+        // remains highlighted by the existing GPU/CPU renderer; additional picks
+        // receive lightweight screen-space rings without rebuilding any SDF.
+        for pick in &self.extra_selected {
+            for (g, s) in targets(&self.scene, Some(*pick)) {
+                if self.scene.is_visible(Pick::Shape(g, s))
+                    && let Some(shape) = self.scene.shape(g, s)
+                    && let Some(p) = self.cam.project(rect, shape.pos)
+                {
+                    painter.circle_stroke(p, 12.0, Stroke::new(2.0, style::ACCENT));
+                    painter.circle_filled(p, 3.0, style::ACCENT);
+                }
+            }
+        }
         self.curve_paint(&painter, rect);
         self.pipe_paint(&painter, rect);
         self.sketch_paint(&painter, rect);
@@ -425,18 +439,23 @@ impl App {
 
     fn pick_at(&mut self, rect: Rect, p: Pos2, keep: bool) {
         match self.shape_at(rect, p) {
-            Some((g, s)) => {
-                let want = as_pick(g, s);
-                self.sel = if keep && self.sel == Some(want) { Some(Pick::Group(g)) } else { Some(want) };
+            Some((g, s)) => self.select_item(as_pick(g, s), keep),
+            None if !keep => {
+                self.sel = None;
+                self.extra_selected.clear();
+                self.tree_anchor = None;
             }
-            None => self.sel = None,
+            None => {}
         }
     }
 
     pub fn frame_view(&mut self, only_selected: bool) {
         let spheres: Vec<crate::accel::Bound> = if only_selected && self.sel.is_some() {
-            let t = targets(&self.scene, self.sel);
-            t.iter().filter_map(|(g, s)| self.scene.shape(*g, *s)).filter(|s| s.visible).map(|s| crate::accel::Bound { c: s.pos, r: radius_of(s) }).collect()
+            self.selected_picks().into_iter()
+                .flat_map(|pick| targets(&self.scene, Some(pick)))
+                .filter_map(|(g, s)| self.scene.shape(g, s).filter(|_| self.scene.is_visible(Pick::Shape(g, s))))
+                .map(|s| crate::accel::Bound { c: s.pos, r: radius_of(s) })
+                .collect()
         } else {
             crate::pattern::world_spheres(&self.scene)
         };
