@@ -774,6 +774,8 @@ impl App {
         self.sk.reset();
         self.sk.on = false;
         self.sel = Some(Pick::Shape(g, s));
+        self.extra_selected.clear();
+        self.reveal_in_tree(Pick::Shape(g, s));
         self.sk.edit = Some(Edit { g, s, which: Which::Main, sel: None, drag: None, hover: None });
         if let Some(f) = self.scene.shape(g, s).and_then(|sh| sketch::edit_frame(sh, Which::Main)) {
             self.sketch_fly(&f);
