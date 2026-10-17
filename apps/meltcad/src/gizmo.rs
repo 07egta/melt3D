@@ -96,6 +96,8 @@ impl Drag {
 
 const RING_SEGS: usize = 56;
 const ARROW_PX: f32 = 78.0;
+// Hit distances are egui logical points, so physical click targets grow on high-DPI screens.
+const HANDLE_HIT_PX: f32 = 11.0;
 
 pub struct Geom {
     centre: Pos2,
@@ -233,13 +235,13 @@ fn poly_dist(p: Pos2, pts: &[Pos2]) -> f32 {
 /// Which handle is under `p`. Nearer, smaller things win over big ones.
 pub fn hit(g: &Geom, tool: Tool, p: Pos2) -> Option<Handle> {
     let near = |d: f32, r: f32| d < r;
-    if tool != Tool::Rotate && near((p - g.centre).length(), 9.0) {
+    if tool != Tool::Rotate && near((p - g.centre).length(), HANDLE_HIT_PX) {
         return Some(Handle::Centre);
     }
     if let Some(faces) = &g.faces {
         for (k, c) in faces.iter().enumerate() {
             if let Some(c) = c
-                && near((p - *c).length(), 9.0)
+                && near((p - *c).length(), HANDLE_HIT_PX)
             {
                 return Some(Handle::Face(k));
             }
@@ -260,15 +262,15 @@ pub fn hit(g: &Geom, tool: Tool, p: Pos2) -> Option<Handle> {
     };
     for i in 0..3 {
         if tool == Tool::Rotate {
-            consider(poly_dist(p, &g.arcs[i]), Handle::Axis(i), 8.0);
+            consider(poly_dist(p, &g.arcs[i]), Handle::Axis(i), HANDLE_HIT_PX);
         } else {
             if tool != Tool::Rotate
                 && let Some(e) = g.ends[i]
             {
-                consider(seg_dist(p, g.centre, e), Handle::Axis(i), 8.0);
+                consider(seg_dist(p, g.centre, e), Handle::Axis(i), HANDLE_HIT_PX);
             }
             if tool == Tool::All {
-                consider(poly_dist(p, &g.arcs[i]), Handle::Arc(i), 9.0);
+                consider(poly_dist(p, &g.arcs[i]), Handle::Arc(i), HANDLE_HIT_PX);
             }
         }
     }
@@ -646,6 +648,15 @@ mod tests {
         let p = ray_plane([0.0, 0.0, 10.0], [0.0, 0.0, -1.0], [0.0; 3], [0.0, 0.0, 1.0]);
         assert!(p.is_some_and(|p| p[2].abs() < 1e-5));
         assert!(ray_plane([0.0, 0.0, 10.0], [0.0, 0.0, 1.0], [0.0; 3], [0.0, 0.0, 1.0]).is_none());
+    }
+
+    #[test]
+    fn small_handles_have_a_logical_point_hit_margin() {
+        let app = App::new(true, None);
+        let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0));
+        let Some(g) = build(&app.cam, rect, &app.scene, Some(Pick::Shape(0, 0)), Tool::All) else { panic!("gizmo") };
+        assert_eq!(hit(&g, Tool::All, g.centre + vec2(9.5, 0.0)), Some(Handle::Centre));
+        assert_eq!(hit(&g, Tool::All, g.centre), Some(Handle::Centre));
     }
 
     #[test]
