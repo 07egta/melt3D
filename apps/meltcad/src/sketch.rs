@@ -196,6 +196,199 @@ pub fn snap(p: [f32; 2], step: f32) -> [f32; 2] {
     [t(p[0]), t(p[1])]
 }
 
+// ------------------------------------------------------------------ screen-space snapping
+
+/// Snap priorities (most intentional first). Distance is measured in SCREEN pixels, never in mm.
+/// The weights are small enough that a much closer target wins over a distant high-priority one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SnapKind {
+    Origin,
+    Endpoint,
+    Intersection,
+    Center,
+    Midpoint,
+    Horizontal,
+    Vertical,
+    Angle,
+    Grid,
+}
+
+impl SnapKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Origin => "原点",
+            Self::Endpoint => "端点",
+            Self::Intersection => "交点",
+            Self::Center => "中心",
+            Self::Midpoint => "中点",
+            Self::Horizontal => "水平",
+            Self::Vertical => "垂直",
+            Self::Angle => "15°",
+            Self::Grid => "グリッド",
+        }
+    }
+
+    fn penalty(self) -> f32 {
+        match self {
+            Self::Origin => 0.0,
+            Self::Endpoint => 1.0,
+            Self::Intersection => 2.0,
+            Self::Center => 3.0,
+            Self::Midpoint => 4.0,
+            Self::Horizontal | Self::Vertical => 5.5,
+            Self::Angle => 7.0,
+            Self::Grid => 9.0,
+        }
+    }
+}
+
+/// Acquiring a target is deliberately narrower than keeping one already selected.
+pub const SNAP_RADIUS_PX: f32 = 11.0;
+pub const SNAP_HOLD_PX: f32 = 17.0;
+/// A competing target must be noticeably closer before replacing the current target.
+const SNAP_SWITCH_PX: f32 = 5.0;
+const MAX_SNAP_POINTS: usize = 768;
+const MAX_SNAP_EDGES: usize = 384;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SnapHit {
+    pub at: [f32; 2],
+    pub kind: SnapKind,
+}
+
+/// The current sketch and coplanar saved outlines. Omitted points cannot attract their own drag.
+#[derive(Default, Debug)]
+pub struct SnapGeometry {
+    pub points: Vec<SnapHit>,
+    pub edges: Vec<([f32; 2], [f32; 2])>,
+}
+
+impl SnapGeometry {
+    pub fn add_outline(&mut self, pts: &[[f32; 2]], closed: bool, omit: Option<usize>) {
+        let n = pts.len();
+        if n == 0 || !pts.iter().all(finite) {
+            return;
+        }
+        let edges = if closed && n > 2 { n } else { n.saturating_sub(1) };
+        if n > MAX_SNAP_POINTS
+            || self.points.len().saturating_add(n + 1) > MAX_SNAP_POINTS
+            || self.edges.len().saturating_add(edges) > MAX_SNAP_EDGES
+        {
+            return;
+        }
+        for (i, &at) in pts.iter().enumerate() {
+            if Some(i) != omit {
+                self.points.push(SnapHit { at, kind: SnapKind::Endpoint });
+            }
+        }
+        for i in 0..edges {
+            let next = (i + 1) % n;
+            if Some(i) == omit || Some(next) == omit || pts[i] == pts[next] {
+                continue;
+            }
+            let (a, b) = (pts[i], pts[next]);
+            self.edges.push((a, b));
+            self.points.push(SnapHit { at: [(a[0] + b[0]) * 0.5, (a[1] + b[1]) * 0.5], kind: SnapKind::Midpoint });
+        }
+        if closed && n > 2 && omit.is_none() {
+            if let Some((lo, hi)) = bbox(pts) {
+                self.points.push(SnapHit {
+                    at: [(lo[0] + hi[0]) * 0.5, (lo[1] + hi[1]) * 0.5],
+                    kind: SnapKind::Center,
+                });
+            }
+        }
+    }
+}
+
+/// Only a proper intersection of two finite segments is an intersection snap.
+/// Endpoint contacts have their own (higher-priority) snap type; overlaps are excluded.
+pub fn snap_intersection(a: [f32; 2], b: [f32; 2], c: [f32; 2], d: [f32; 2]) -> Option<[f32; 2]> {
+    if ![a, b, c, d].iter().all(finite) {
+        return None;
+    }
+    let (rx, ry) = ((b[0] - a[0]) as f64, (b[1] - a[1]) as f64);
+    let (sx, sy) = ((d[0] - c[0]) as f64, (d[1] - c[1]) as f64);
+    let (qx, qy) = ((c[0] - a[0]) as f64, (c[1] - a[1]) as f64);
+    let den = rx * sy - ry * sx;
+    let scale = rx.hypot(ry) * sx.hypot(sy);
+    if scale < 1e-12 || den.abs() <= scale * 1e-10 {
+        return None;
+    }
+    let t = (qx * sy - qy * sx) / den;
+    let u = (qx * ry - qy * rx) / den;
+    if !(1e-6..=1.0 - 1e-6).contains(&t) || !(1e-6..=1.0 - 1e-6).contains(&u) {
+        return None;
+    }
+    let p = [(a[0] as f64 + t * rx) as f32, (a[1] as f64 + t * ry) as f32];
+    finite(&p).then_some(p)
+}
+
+/// Project the cursor onto the closest angle multiple, keeping the point on the ray
+/// from the previous vertex. Used only when the optional angle mode is enabled.
+pub fn snap_angle(anchor: [f32; 2], raw: [f32; 2], increment_deg: f32) -> Option<[f32; 2]> {
+    if !finite(&anchor) || !finite(&raw) || !increment_deg.is_finite() || !(0.1..=90.0).contains(&increment_deg) {
+        return None;
+    }
+    let (dx, dy) = (raw[0] - anchor[0], raw[1] - anchor[1]);
+    if dx.hypot(dy) < 1e-3 {
+        return None;
+    }
+    let step = increment_deg.to_radians();
+    let angle = (dy.atan2(dx) / step).round() * step;
+    let (x, y) = (angle.cos(), angle.sin());
+    let distance = dx * x + dy * y;
+    let q = [anchor[0] + distance * x, anchor[1] + distance * y];
+    (distance > 0.0 && finite(&q)).then_some(q)
+}
+
+/// Pick with distance in logical screen pixels (egui points). A stable lock/hysteresis avoids
+/// flickering between nearly coincident candidates when the mouse moves by one pixel.
+pub fn choose_screen_snap(
+    pointer: [f32; 2],
+    candidates: &[(SnapHit, [f32; 2])],
+    previous: Option<SnapHit>,
+) -> Option<SnapHit> {
+    if !pointer[0].is_finite() || !pointer[1].is_finite() {
+        return None;
+    }
+    let distance = |px: [f32; 2]| (px[0] - pointer[0]).hypot(px[1] - pointer[1]);
+    let best = candidates
+        .iter()
+        .filter_map(|(hit, px)| {
+            let d = distance(*px);
+            (d.is_finite() && d <= SNAP_RADIUS_PX).then_some((*hit, d))
+        })
+        .min_by(|(a, da), (b, db)| {
+            (da + a.kind.penalty())
+                .total_cmp(&(db + b.kind.penalty()))
+                .then_with(|| a.kind.penalty().total_cmp(&b.kind.penalty()))
+                .then_with(|| da.total_cmp(db))
+        });
+    let held = previous.and_then(|old| {
+        candidates
+            .iter()
+            .filter(|(hit, _)| hit.kind == old.kind && dist(hit.at, old.at) < 1e-3)
+            .map(|(hit, px)| (*hit, distance(*px)))
+            .filter(|(_, d)| d.is_finite() && *d <= SNAP_HOLD_PX)
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+    });
+    match (held, best) {
+        (Some((locked, old_d)), Some((new, new_d))) if locked != new => {
+            // Priority influences initial selection, but may not make a held snap jump.
+            let old_score = old_d + locked.kind.penalty();
+            let new_score = new_d + new.kind.penalty();
+            if new_d + SNAP_SWITCH_PX < old_d && new_score + 2.0 < old_score {
+                Some(new)
+            } else {
+                Some(locked)
+            }
+        }
+        (Some((locked, _)), _) => Some(locked),
+        (None, best) => best.map(|(hit, _)| hit),
+    }
+}
+
 // ------------------------------------------------------------------ small 2D helpers
 
 fn finite(p: &[f32; 2]) -> bool {
@@ -1124,6 +1317,7 @@ mod tests {
         assert!(len(sub([r[0][0], r[1][0], r[2][0]], [0.0, 0.0, -1.0])) < 1e-4);
     }
 
+
     #[test]
     fn arbitrary_workplanes_have_stable_inverse_transforms() {
         let tilted = Frame::from_axes([32.0, -18.0, 70.0], [0.5, 0.4, 0.8], [-0.6, 0.8, 0.3]).expect("tilt");
@@ -1163,6 +1357,53 @@ mod tests {
         assert!(Frame::from_axes([f32::NAN, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]).is_none());
         assert!(Frame::oriented([0.0; 3], [f32::INFINITY, 0.0, 0.0]).is_none());
         assert!(Frame::oriented([1.0e9, 0.0, 0.0], [0.0; 3]).is_none());
+    }
+
+    fn segment_snap_intersections_are_finite_and_reject_parallel_overlaps() {
+        let cross = snap_intersection([0.0,0.0],[10.0,10.0],[0.0,10.0],[10.0,0.0]);
+        assert_eq!(cross, Some([5.0,5.0]));
+        assert_eq!(snap_intersection([0.0,0.0],[10.0,0.0],[5.0,0.0],[15.0,0.0]), None);
+        assert_eq!(snap_intersection([0.0,0.0],[10.0,0.0],[10.0,0.0],[10.0,8.0]), None);
+        assert_eq!(snap_intersection([f32::NAN,0.0],[10.0,0.0],[5.0,-5.0],[5.0,5.0]), None);
+    }
+
+    #[test]
+    fn snap_geometry_collects_endpoints_midpoints_and_centers_without_dragged_vertex() {
+        let mut geo = SnapGeometry::default();
+        geo.add_outline(&[[0.0,0.0],[20.0,0.0],[20.0,10.0],[0.0,10.0]],true,None);
+        assert_eq!(geo.edges.len(),4);
+        assert!(geo.points.iter().any(|h| h.kind==SnapKind::Center && h.at==[10.0,5.0]));
+        assert!(geo.points.iter().any(|h| h.kind==SnapKind::Midpoint && h.at==[10.0,0.0]));
+        let mut edit = SnapGeometry::default();
+        edit.add_outline(&[[0.0,0.0],[20.0,0.0],[20.0,10.0],[0.0,10.0]],true,Some(0));
+        assert!(!edit.points.iter().any(|h| h.at==[0.0,0.0]));
+        assert_eq!(edit.edges.len(),2);
+    }
+
+    #[test]
+    fn screen_snap_priorities_zoom_and_hysteresis_are_stable() {
+        let a=SnapHit { at:[0.0,0.0],kind:SnapKind::Origin };
+        let b=SnapHit { at:[1.0,1.0],kind:SnapKind::Grid };
+        let hits=vec![(a,[104.0,100.0]),(b,[100.0,100.0])];
+        assert_eq!(choose_screen_snap([100.0,100.0],&hits,None),Some(a));
+        assert_eq!(choose_screen_snap([100.0,100.0],&[(b,[100.0,100.0])],Some(a)),Some(b));
+        // Held target stays while inside release radius, unless the alternative is clearly closer.
+        let swapped=vec![(a,[112.0,100.0]),(b,[108.0,100.0])];
+        assert_eq!(choose_screen_snap([100.0,100.0],&swapped,Some(a)),Some(a));
+        assert_eq!(choose_screen_snap([90.0,100.0],&hits,Some(a)),Some(a));
+        assert_eq!(choose_screen_snap([200.0,100.0],&hits,Some(a)),None);
+        // Equal pixel locations behave identically irrespective of underlying millimetres.
+        let far=SnapHit { at:[1000.0,800.0],kind:SnapKind::Endpoint };
+        assert_eq!(choose_screen_snap([0.0,0.0],&[(far,[8.0,0.0])],None),Some(far));
+        assert_eq!(choose_screen_snap([0.0,0.0],&[(far,[12.0,0.0])],None),None);
+    }
+
+    #[test]
+    fn angle_snap_follows_the_nearest_fifteen_degree_ray() {
+        let p=snap_angle([3.0,4.0],[13.0,6.0],15.0).unwrap();
+        assert!((p[1]-4.0-(p[0]-3.0)*15f32.to_radians().tan()).abs()<1e-3);
+        assert_eq!(snap_angle([0.0,0.0],[0.0,0.0],15.0),None);
+        assert_eq!(snap_angle([0.0,0.0],[5.0,3.0],f32::NAN),None);
     }
 
     #[test]
