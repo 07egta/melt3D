@@ -143,6 +143,8 @@ pub struct ScenePack {
     pub shapes_reused: usize,
     /// Number of shape payloads computed on this revision.
     pub shapes_repacked: usize,
+    /// Group bounds/blocks are retained for unchanged source groups.
+    source_infos: std::collections::HashMap<usize, Arc<crate::accel::GroupInfo>>,
     offs: [f32; 4],
     offs2: [f32; 2],
     resolved: Vec<crate::pattern::RGroup>,
@@ -180,6 +182,7 @@ impl ScenePack {
         let mut ranges: Vec<(usize, usize, usize)> = Vec::new();
         let mut shapes_reused = 0;
         let mut shapes_repacked = 0;
+        let mut source_infos: std::collections::HashMap<usize, Arc<crate::accel::GroupInfo>> = std::collections::HashMap::new();
         // every group whose shapes are drawn (itself, or as the source of a linked copy) is packed once
         let mut srcs: Vec<usize> = resolved.iter().map(|r| r.src).collect();
         srcs.sort_unstable();
@@ -220,7 +223,15 @@ impl ScenePack {
             if count == 0 {
                 continue;
             }
-            let info = crate::accel::group_info(&members, &scene.melt);
+            let info = previous.and_then(|(old_scene, old_pack)| {
+                let old_group = old_scene.groups.get(gi)?;
+                (old_group.shapes == g.shapes
+                    && old_scene.melt.mode == scene.melt.mode
+                    && old_scene.melt.amount == scene.melt.amount)
+                    .then(|| old_pack.source_infos.get(&gi).cloned())
+                    .flatten()
+            }).unwrap_or_else(|| Arc::new(crate::accel::group_info(&members, &scene.melt)));
+            source_infos.insert(gi, Arc::clone(&info));
             for b in &info.blocks {
                 push(&mut blocks, [b.bound.c[0], b.bound.c[1], b.bound.c[2], b.bound.r]);
                 push(&mut blocks, [b.kmax, if b.skippable { 0.0 } else { 1.0 }, (first + b.first) as f32, b.count as f32]);
@@ -284,6 +295,7 @@ impl ScenePack {
             group_n,
             shapes_reused,
             shapes_repacked,
+            source_infos,
             offs: [0.0, block_base as f32, inst_base as f32, shape_base as f32],
             offs2: [poly_base as f32, path_base as f32],
             resolved,
