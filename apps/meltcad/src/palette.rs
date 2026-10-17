@@ -19,6 +19,9 @@ use crate::style;
 pub enum Action {
     AddShape(Kind),
     AddGroup,
+    StartSketch,
+    StartCurve,
+    StartPipe,
     /// (category, item)
     Insert(usize, usize),
     Undo,
@@ -119,6 +122,9 @@ pub fn entries() -> Vec<Entry> {
     }
     v.extend([
         cmd("グループを作る", "group new まとめる", Action::AddGroup),
+        cmd("スケッチを描く", "sketch draw 2d create スケッチ 押し出し", Action::StartSketch),
+        cmd("線を描く", "draw line curve stroke せん かーぶ", Action::StartCurve),
+        cmd("パイプを描く", "pipe freehand stroke drag ぱいぷ", Action::StartPipe),
         cmd("元に戻す", "undo もどす", Action::Undo),
         cmd("やり直し", "redo", Action::Redo),
         cmd("コピー", "copy", Action::Copy),
@@ -314,6 +320,9 @@ impl Catalog {
             Action::AddShape(Kind::Box),
             Action::AddShape(Kind::Sphere),
             Action::Save,
+            Action::StartSketch,
+            Action::StartCurve,
+            Action::StartPipe,
             Action::ShowAssets,
             Action::ImportMesh,
             Action::SetTool(Tool::Move),
@@ -477,7 +486,10 @@ impl App {
             },
             Action::MirrorCopy if !matches!(self.sel, Some(Pick::Shape(_, _))) => Some("左右コピーは形を1つ選択してください"),
             Action::MirrorCopy if self.scene.shape_count() >= MAX_SHAPES => Some("形の最大数に達しています"),
-            Action::AddShape(_) if self.scene.shape_count() >= MAX_SHAPES => Some("形の最大数に達しています"),
+            Action::AddShape(_) | Action::StartSketch | Action::StartCurve | Action::StartPipe if self.scene.shape_count() >= MAX_SHAPES => Some("形の最大数に達しています"),
+            Action::StartSketch if self.sketch_active() => Some("スケッチを編集中です"),
+            Action::StartCurve if self.ct.drawing => Some("線の描画ツールは使用中です"),
+            Action::StartPipe if self.pt.on => Some("パイプの描画ツールは使用中です"),
             Action::AddGroup if self.scene.groups.len() >= MAX_GROUPS => Some("グループの最大数に達しています"),
             Action::Insert(c, i) => {
                 match library::all().get(c).and_then(|category| category.items.get(i)) {
@@ -517,6 +529,9 @@ impl App {
         match a {
             Action::AddShape(k) => self.add_shape(ctx, k),
             Action::AddGroup => self.add_group(),
+            Action::StartSketch => self.set_sketch_tool(true),
+            Action::StartCurve => self.set_curve_tool(true),
+            Action::StartPipe => self.set_pipe_tool(true),
             Action::Insert(c, i) => {
                 if let Some(item) = library::all().get(c).and_then(|c| c.items.get(i)) {
                     crate::library_ui::insert(self, ctx, item);
@@ -712,6 +727,8 @@ mod tests {
     #[test]
     fn japanese_and_english_names_find_the_same_thing() {
         assert_eq!(top("sphere"), Some(Action::AddShape(Kind::Sphere)));
+        assert_eq!(top("sketch"), Some(Action::StartSketch));
+        assert_eq!(top("パイプ"), Some(Action::StartPipe));
         assert_eq!(top("球"), Some(Action::AddShape(Kind::Sphere)));
         assert_eq!(top("たま"), Some(Action::AddShape(Kind::Sphere)));
         assert_eq!(top("undo"), Some(Action::Undo));
