@@ -7,6 +7,7 @@ mod adapt;
 mod app;
 mod array;
 mod camera;
+mod context_toolbar;
 mod clip;
 mod corner;
 mod export;
