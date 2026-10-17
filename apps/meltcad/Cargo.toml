@@ -29,3 +29,6 @@ ttf-parser = { workspace = true }
 
 [dev-dependencies]
 naga = { version = "30.0.1", features = ["wgsl-in", "hlsl-out", "spv-out", "msl-out", "glsl-out"] }
+
+[build-dependencies]
+serde_json = { workspace = true }
