@@ -119,6 +119,13 @@ pub fn generate(settings: Settings) -> Group {
         lobe.blend = 7.0 + 30.0 * p.roundness;
         group.shapes.push(lobe);
     }
+    // Place near the floor at every aspect ratio; account for the smooth union
+    // extending beyond the individual sphere surfaces. Do not change any mesh
+    // resolution or compute a distance volume just to position the preset.
+    let bottom = group.shapes.iter().map(|s| s.pos[2] - s.size[0] * s.scale[2])
+        .fold(f32::INFINITY, f32::min);
+    let lift = 4.0 + (7.0 + 30.0 * p.roundness) * 0.27 * p.aspect - bottom;
+    for shape in &mut group.shapes { shape.pos[2] += lift; }
     group
 }
 
@@ -387,15 +394,21 @@ mod tests {
     fn organic_blob_stl_export_roundtrip() {
         let mut scene = preview_scene(Settings::default());
         scene.melt.amount = 1.0;
-        let opts = Options { scope: Scope::All, format: Format::Stl, tolerance: 2.0, ..Options::default() };
-        let build = crate::export_job::build(&scene, None, &opts, &Progress::new()).expect("mesh SDF blob");
-        assert!(build.tris > 200, "too few triangles: {}", build.tris);
-        let path = std::env::temp_dir().join(format!("organic_blob_{}.stl", std::process::id()));
-        let files = crate::export_job::serialize(&build, &opts, &path).expect("STL serialization");
-        assert_eq!(files.len(), 1);
-        let reloaded = crate::import_mesh::import_bytes(&files[0].1, "organic_blob.stl",
-            &crate::import_mesh::ImportOptions::default()).expect("re-import STL");
-        assert!(!reloaded.mesh.triangles.is_empty());
+        let opts = Options { scope: Scope::All, format: Format::ThreeMf, tolerance: 2.0, ..Options::default() };
+        let built = crate::export_job::build(&scene, None, &opts, &Progress::new()).expect("mesh SDF blob");
+        assert!(built.tris > 200, "too few triangles: {}", built.tris);
+        for (format, extension) in [(Format::Stl, "stl"), (Format::ThreeMf, "3mf")] {
+            let opt = Options { format, ..opts.clone() };
+            let path = std::env::temp_dir().join(format!("organic_blob_{}.{}", std::process::id(), extension));
+            let files = crate::export_job::serialize(&built, &opt, &path).expect("serialize mesh");
+            assert_eq!(files.len(), 1);
+            std::fs::write(&path, &files[0].1).expect("write completed output");
+            let bytes = std::fs::read(&path).expect("reload exported file");
+            let reloaded = crate::import_mesh::import_bytes(&bytes, &format!("organic_blob.{extension}"),
+                &crate::import_mesh::ImportOptions::default()).expect("parse exported mesh");
+            assert!(!reloaded.mesh.triangles.is_empty(), "empty {extension}");
+            let _ = std::fs::remove_file(path);
+        }
     }
 
     #[test]
