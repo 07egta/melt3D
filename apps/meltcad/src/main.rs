@@ -52,7 +52,6 @@ mod pipe_tool;
 mod model;
 mod recovery;
 mod perf;
-mod ux_bench;
 mod prims;
 mod panels;
 mod pattern;
