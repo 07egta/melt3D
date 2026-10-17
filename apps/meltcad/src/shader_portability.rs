@@ -88,9 +88,8 @@ pub fn fxc_report(hlsl: &str) -> FxcReport {
         let t = l.trim_start();
         if t.starts_with("while(true)") || t.starts_with("while (true)") || t.starts_with("for(") || t.starts_with("for (") {
             r.loops += 1;
-            let before = lines[i.saturating_sub(3)..i].join("\n");
-            let after = lines.get(i + 1..(i + 4).min(lines.len())).map(|s| s.join("\n")).unwrap_or_default();
-            if !(before.contains("loop_bound") || after.contains("loop_bound")) && !t.starts_with("for") {
+            let after = lines.get(i + 1..(i + 3).min(lines.len())).map(|s| s.join("\n")).unwrap_or_default();
+            if !after.contains("loop_bound") && !t.starts_with("for") {
                 r.unbounded_loops += 1;
             }
         }
@@ -170,6 +169,27 @@ fn the_blit_shader_translates_everywhere_too() {
     spv::write_vec(&m, &info, &spv::Options::default(), None).expect("spv");
     msl::write_string(&m, &info, &msl::Options::default(), &msl::PipelineOptions::default()).expect("msl");
     no_warnings("blit");
+}
+
+/// Derivatives (`fwidth`) are only well defined where the four pixels of a block run the same
+/// code. DirectX's compiler warns (and may mis-compile) when they sit in flow that depends on what
+/// the pixel shows, so they are taken at the top level of `fs`, before any branch.
+#[test]
+fn derivatives_are_taken_in_uniform_flow_only() {
+    let wgsl = crate::gpu::shader_source();
+    let first_march = wgsl.find("for (var i = 0; i < max_it").expect("the march loop");
+    let last_fwidth = wgsl.rfind("fwidth(").expect("fwidth is used");
+    assert!(last_fwidth < first_march, "every fwidth comes before the march loop's first branch");
+    let text = hlsl_text(hlsl::ShaderModel::V5_1);
+    let fs_at = text.find("float4 fs(").expect("fs");
+    let fs = &text[fs_at..];
+    let loop_at = fs.find("while(true)").expect("a loop in fs");
+    for (i, l) in fs.lines().enumerate().filter(|(_, l)| l.contains("fwidth(")) {
+        let indent = l.len() - l.trim_start().len();
+        assert_eq!(indent, 4, "line {i} of fs: a derivative is not at the top level: {l}");
+    }
+    let first_fwidth = fs.find("fwidth(").expect("fwidth in fs");
+    assert!(first_fwidth < loop_at, "the derivatives come before the first loop");
 }
 
 #[test]
@@ -268,4 +288,12 @@ fn inlining_cost_report() {
     for (name, own, calls, exp) in t.rows.iter().take(14) {
         eprintln!("  {name:<16} own {own:>5}  call sites {calls:>3}  expanded {exp:>8}  copies in fs {:>3}", t.copies_in_fs.get(name).copied().unwrap_or(0));
     }
+    // The distance function is most of the shader and every call site is compiled again by the
+    // driver (software Vulkan: 190 s with 23 copies, 75 s with 11). A new call site must be a
+    // deliberate decision: raise these numbers only knowingly.
+    let copies = |n: &str| t.copies_in_fs.get(n).copied().unwrap_or(0);
+    assert!(copies("map_d") <= 11, "map_d is inlined {} times in fs", copies("map_d"));
+    assert!(copies("map") <= 3, "map is inlined {} times in fs", copies("map"));
+    assert!(copies("shape_dist") <= 15, "shape_dist is inlined {} times in fs", copies("shape_dist"));
+    assert!(t.fs_expanded <= 145_000, "fs is {} expressions after inlining", t.fs_expanded);
 }

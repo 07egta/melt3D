@@ -794,6 +794,16 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
         if (tg > 0.0) { t_ground = tg; }
     }
 
+    // The screen-space widths of the grid lines. A derivative needs every pixel of its 2x2 block to
+    // run the same code, so they are taken here, before anything branches on what the pixel
+    // shows (inside the ground branches, pixels at the edge of a shape took different ways, and
+    // DirectX's compiler warns about gradients in divergent flow).
+    let gp0 = ro + rd * t_ground;
+    let gw1 = max(fwidth(gp0.xy / 10.0), vec2<f32>(1e-4));
+    let gw2 = max(fwidth(gp0.xy / 100.0), vec2<f32>(1e-4));
+    let gwy = max(fwidth(gp0.y), 1e-4);
+    let gwx = max(fwidth(gp0.x), 1e-4);
+
     var t = 0.0;
     var hit = false;
     var h: Hit;
@@ -883,12 +893,12 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
         let fade = clamp(1.0 - length(gp.xy) / 600.0, 0.0, 1.0);
         if (grid_on) {
             let gs = 10.0;
-            let a = abs(fract(gp.xy / gs - 0.5) - 0.5) / max(fwidth(gp.xy / gs), vec2<f32>(1e-4));
+            let a = abs(fract(gp.xy / gs - 0.5) - 0.5) / gw1;
             let line = 1.0 - min(min(a.x, a.y), 1.0);
-            let major = abs(fract(gp.xy / (gs * 10.0) - 0.5) - 0.5) / max(fwidth(gp.xy / (gs * 10.0)), vec2<f32>(1e-4));
+            let major = abs(fract(gp.xy / (gs * 10.0) - 0.5) - 0.5) / gw2;
             let lm = 1.0 - min(min(major.x, major.y), 1.0);
-            let axisx = 1.0 - min(abs(gp.y) / max(fwidth(gp.y), 1e-4), 1.0);
-            let axisy = 1.0 - min(abs(gp.x) / max(fwidth(gp.x), 1e-4), 1.0);
+            let axisx = 1.0 - min(abs(gp.y) / gwy, 1.0);
+            let axisy = 1.0 - min(abs(gp.x) / gwx, 1.0);
             col = mix(col, col + vec3<f32>(0.03), line * 0.5 * fade);
             col = mix(col, col + vec3<f32>(0.05), lm * 0.6 * fade);
             col = mix(col, lin(vec3<f32>(0.85, 0.35, 0.35)), axisx * 0.55 * fade);
@@ -1049,10 +1059,10 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
         let gp = ro + rd * t_ground;
         let fade = clamp(1.0 - length(gp.xy) / 600.0, 0.0, 1.0) * 0.6;
         let gs = 10.0;
-        let a = abs(fract(gp.xy / gs - 0.5) - 0.5) / max(fwidth(gp.xy / gs), vec2<f32>(1e-4));
+        let a = abs(fract(gp.xy / gs - 0.5) - 0.5) / gw1;
         let line = 1.0 - min(min(a.x, a.y), 1.0);
-        let axisx = 1.0 - min(abs(gp.y) / max(fwidth(gp.y), 1e-4), 1.0);
-        let axisy = 1.0 - min(abs(gp.x) / max(fwidth(gp.x), 1e-4), 1.0);
+        let axisx = 1.0 - min(abs(gp.y) / gwy, 1.0);
+        let axisy = 1.0 - min(abs(gp.x) / gwx, 1.0);
         col = mix(col, col + vec3<f32>(0.04), line * 0.5 * fade);
         col = mix(col, lin(vec3<f32>(0.85, 0.35, 0.35)), axisx * 0.55 * fade);
         col = mix(col, lin(vec3<f32>(0.42, 0.78, 0.42)), axisy * 0.55 * fade);
