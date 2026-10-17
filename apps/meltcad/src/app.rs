@@ -734,7 +734,31 @@ impl App {
         if hit(plain, Key::Delete) || hit(plain, Key::Backspace) {
             self.delete_selected();
         }
-        for (k, t) in [(Key::Q, Tool::Select), (Key::A, Tool::All), (Key::W, Tool::Move), (Key::E, Tool::Rotate), (Key::R, Tool::Scale)] {
+        // H hides what is selected, Alt+H shows everything again
+        if hit(plain, Key::H) {
+            match self.sel {
+                Some(Pick::Group(g)) => {
+                    if let Some(x) = self.scene.groups.get_mut(g) {
+                        x.visible = !x.visible;
+                    }
+                }
+                Some(Pick::Shape(g, s)) => {
+                    if let Some(x) = self.scene.groups.get_mut(g).and_then(|x| x.shapes.get_mut(s)) {
+                        x.visible = !x.visible;
+                    }
+                }
+                None => {}
+            }
+        }
+        if hit(Modifiers::ALT, Key::H) {
+            for g in &mut self.scene.groups {
+                g.visible = true;
+                for s in &mut g.shapes {
+                    s.visible = true;
+                }
+            }
+        }
+        for (k, t) in [(Key::Q, Tool::Select), (Key::A, Tool::All), (Key::G, Tool::Move), (Key::R, Tool::Rotate), (Key::S, Tool::Scale)] {
             if hit(plain, k) {
                 self.tool = t;
             }
@@ -1067,9 +1091,9 @@ impl App {
                         let tools = [
                             (Tool::Select, "選ぶ", "選ぶだけ (Q)"),
                             (Tool::All, "ぜんぶ", "動かす・回す・大きさ ぜんぶ (A)"),
-                            (Tool::Move, "動かす", "動かす (W)"),
-                            (Tool::Rotate, "回す", "回す (E)"),
-                            (Tool::Scale, "大きさ", "大きさ (R)"),
+                            (Tool::Move, "動かす", "動かす (G)"),
+                            (Tool::Rotate, "回す", "回す (R)"),
+                            (Tool::Scale, "大きさ", "大きさ (S)"),
                         ];
                         let items: Vec<(&str, &str)> = tools.iter().map(|t| (t.1, t.2)).collect();
                         let sel = tools.iter().position(|t| t.0 == self.tool);
@@ -1121,7 +1145,8 @@ impl App {
                         ("Shift+F / Home", "選んだもの / 全体を見る"),
                         ("1 3 7 (Ctrlで反対)", "正面 / 右 / 上から"),
                         ("5", "遠近 ⇄ 平行"),
-                        ("Q A W E R", "選ぶ / ぜんぶ / 動かす / 回す / 大きさ"),
+                        ("Q A G R S", "選ぶ / ぜんぶ / 動かす / 回す / 大きさ"),
+                        ("H / Alt+H", "隠す ⇄ 出す / ぜんぶ出す"),
                         ("Tab", "足す ⇄ 削る"),
                         ("Ctrl + ドラッグ", "1mm・15度ずつ"),
                         ("矢印キー", "1mm動かす (Shiftで10mm)"),
