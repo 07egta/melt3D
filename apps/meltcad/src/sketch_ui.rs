@@ -40,16 +40,28 @@ pub enum PlaneSel {
     Side,
     /// A level plane through the top of the selected shape.
     OnShape,
+    /// An XY plane at an explicitly entered height.
+    Height,
+    /// A snapshot of the current camera's image plane.
+    Camera,
+    /// A saved movable and rotatable user-defined plane.
+    Custom,
 }
 
 impl PlaneSel {
-    pub const ALL: [PlaneSel; 4] = [PlaneSel::Floor, PlaneSel::Front, PlaneSel::Side, PlaneSel::OnShape];
+    pub const ALL: [PlaneSel; 7] = [
+        PlaneSel::Floor, PlaneSel::Front, PlaneSel::Side, PlaneSel::OnShape,
+        PlaneSel::Height, PlaneSel::Camera, PlaneSel::Custom,
+    ];
     pub fn label(self) -> &'static str {
         match self {
-            PlaneSel::Floor => "床",
-            PlaneSel::Front => "正面",
-            PlaneSel::Side => "横",
+            PlaneSel::Floor => "XY（床）",
+            PlaneSel::Front => "XZ（正面）",
+            PlaneSel::Side => "YZ（横）",
             PlaneSel::OnShape => "えらんだ形の上",
+            PlaneSel::Height => "高さを指定",
+            PlaneSel::Camera => "カメラに平行",
+            PlaneSel::Custom => "自由面",
         }
     }
     pub fn tip(self) -> &'static str {
@@ -58,6 +70,9 @@ impl PlaneSel {
             PlaneSel::Front => "正面 (XZ) にかく。手前に向かって押し出します",
             PlaneSel::Side => "横 (YZ) にかく。右がわに向かって押し出します",
             PlaneSel::OnShape => "えらんでいる形のてっぺんの高さで、水平な面にかく",
+            PlaneSel::Height => "Z 座標を指定した水平な XY 平面でかく",
+            PlaneSel::Camera => "現在のカメラの向きに平行な平面を、注視点を通して固定する。もう一度押すと取り直します",
+            PlaneSel::Custom => "位置 XYZ と回転 XYZ を数値で指定する自由な平面。ほかの面から戻っても設定を保持します",
         }
     }
 }
@@ -188,8 +203,16 @@ pub struct State {
     /// The sketch tool is on.
     pub on: bool,
     pub plane: PlaneSel,
-    /// The plane being drawn on.
+    /// The plane being drawn on (2D draft coordinates are relative to this frame).
     pub frame: Frame,
+    /// Height of the user-selected XY plane.
+    pub level_z: f32,
+    /// Captured at the moment the camera plane is selected, never updated on camera orbit.
+    pub camera_frame: Frame,
+    /// Saved independently of the preset planes so it can be reselected.
+    pub custom_frame: Frame,
+    /// Editing angles in degrees (X, Y, Z), avoiding repeated Euler decomposition on every frame.
+    pub custom_angles: V3,
     pub pen: Pen,
     /// Splines and lines are curves (true) or have corners (false).
     pub smooth: bool,
@@ -229,6 +252,10 @@ impl Default for State {
             on: false,
             plane: PlaneSel::Floor,
             frame: Frame::floor(),
+            level_z: 0.0,
+            camera_frame: Frame::floor(),
+            custom_frame: Frame::floor(),
+            custom_angles: [0.0; 3],
             pen: Pen::Polygon,
             smooth: true,
             stage: Stage::Draw,
@@ -534,17 +561,19 @@ impl App {
             PlaneSel::Front => Frame::front(),
             PlaneSel::Side => Frame::side(),
             PlaneSel::OnShape => Frame::horizontal(self.selection_top().unwrap_or(0.0)),
+            PlaneSel::Height => Frame::horizontal(self.sk.level_z),
+            PlaneSel::Camera => self.sk.camera_frame,
+            PlaneSel::Custom => self.sk.custom_frame,
         }
     }
 
     /// Glide the camera to look straight at a plane, keeping the plane through the view's middle.
     pub fn sketch_fly(&mut self, f: &Frame) {
         let n = f.normal();
-        let (yaw, pitch) = if n[2].abs() > 0.9 {
-            (self.cam.yaw, if n[2] > 0.0 { std::f32::consts::FRAC_PI_2 } else { -std::f32::consts::FRAC_PI_2 })
-        } else {
-            (n[0].atan2(-n[1]), 0.0)
-        };
+        // Camera::look clamps the pole slightly, avoiding its singular right vector.
+        // Unlike the old horizontal-only calculation this also faces oblique planes.
+        let yaw = if n[0].hypot(n[1]) < 1e-5 { self.cam.yaw } else { n[0].atan2(-n[1]) };
+        let pitch = n[2].clamp(-1.0, 1.0).asin();
         let mut goal = self.fly.unwrap_or(self.cam);
         goal.look(yaw, pitch);
         // the target moves onto the plane
@@ -554,13 +583,69 @@ impl App {
         self.fly = Some(goal);
     }
 
-    /// Choose a plane (and glide to it).
+    /// Choose a plane (and glide to it). A camera-aligned plane is captured once,
+    /// not rebuilt after every orbit. A finished profile keeps its independent pframe.
     pub fn sketch_set_plane(&mut self, plane: PlaneSel) {
+        if plane == PlaneSel::Camera {
+            let (right, up, _) = self.cam.basis();
+            let Some(frame) = Frame::from_axes(self.cam.target, right, up) else {
+                self.sk.msg = "カメラの向きから平面を作れません。視点を調整してください".to_string();
+                return;
+            };
+            self.sk.camera_frame = frame;
+        }
+        let interrupted = !self.sk.pts.is_empty() || self.sk.anchor.is_some();
         self.sk.plane = plane;
         self.sk.clear_drawing();
         self.sk.frame = self.sketch_plane();
-        let f = self.sk.frame;
-        self.sketch_fly(&f);
+        self.sk.msg = if interrupted {
+            "平面の切り替えで描画途中の点を消しました。完成した輪かくや立体は変わりません".to_string()
+        } else {
+            String::new()
+        };
+        if plane == PlaneSel::Camera {
+            // A stale camera fly-to would immediately undo the captured orientation.
+            self.fly = None;
+        } else {
+            let f = self.sk.frame;
+            self.sketch_fly(&f);
+        }
+    }
+
+    /// Move an explicit horizontal plane without changing draft-local point coordinates.
+    pub fn sketch_set_level(&mut self, z: f32) -> bool {
+        if !z.is_finite() || !(-5000.0..=5000.0).contains(&z) {
+            return false;
+        }
+        self.sk.level_z = z;
+        if self.sk.plane == PlaneSel::Height {
+            self.sk.frame = Frame::horizontal(z);
+        }
+        true
+    }
+
+    /// Edit a free plane. Existing 2D draft points stay in the same local coordinates:
+    /// moving/turning the plane moves the entire uncommitted sketch with it.
+    pub fn sketch_edit_custom_plane(&mut self, origin: V3, angles: V3) -> bool {
+        let Some(frame) = Frame::oriented(origin, angles) else {
+            self.sk.msg = "平面の位置または角度が正しくありません".to_string();
+            return false;
+        };
+        self.sk.custom_frame = frame;
+        self.sk.custom_angles = angles;
+        if self.sk.plane == PlaneSel::Custom {
+            self.sk.frame = frame;
+        }
+        self.sk.msg.clear();
+        true
+    }
+
+    /// Convert the currently chosen workplane into an editable, reselectable copy.
+    pub fn sketch_copy_plane_to_custom(&mut self) {
+        let frame = self.sk.frame;
+        self.sk.custom_frame = frame;
+        self.sk.custom_angles = frame.euler();
+        self.sketch_set_plane(PlaneSel::Custom);
     }
 
     /// Where the screen position `p` is on the plane `f` (snapped to `step`).
@@ -1344,6 +1429,9 @@ impl App {
                 self.sketch_fly(&f);
             }
         });
+        if plane_free {
+            self.sketch_plane_settings(ui);
+        }
         // the pens
         if matches!(stage, Stage::Draw | Stage::LoftTop) {
             ui.horizontal_wrapped(|ui| {
@@ -1384,6 +1472,71 @@ impl App {
         }
         if off {
             self.set_sketch_tool(false);
+        }
+    }
+
+    /// Numeric positioning and orientation for the two user-defined plane modes.
+    fn sketch_plane_settings(&mut self, ui: &mut Ui) {
+        match self.sk.plane {
+            PlaneSel::Height => {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("水平面の高さ Z").size(11.0).color(style::DIM));
+                    let mut z = self.sk.level_z;
+                    if ui.add(egui::DragValue::new(&mut z).speed(0.25).range(-5000.0..=5000.0).suffix(" mm")).changed() {
+                        self.sketch_set_level(z);
+                    }
+                });
+            }
+            PlaneSel::Custom => {
+                let mut point = self.sk.custom_frame.origin;
+                let mut point_changed = false;
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(egui::RichText::new("通る点").size(11.0).color(style::DIM));
+                    for (axis, label) in ["X", "Y", "Z"].iter().enumerate() {
+                        ui.label(*label);
+                        point_changed |= ui.add(egui::DragValue::new(&mut point[axis]).speed(0.25).range(-5000.0..=5000.0).suffix(" mm")).changed();
+                    }
+                });
+                if point_changed {
+                    self.sketch_edit_custom_plane(point, self.sk.custom_angles);
+                }
+                let mut angles = self.sk.custom_angles;
+                let mut angle_changed = false;
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(egui::RichText::new("回転").size(11.0).color(style::DIM));
+                    for (axis, label) in ["X", "Y", "Z"].iter().enumerate() {
+                        ui.label(*label);
+                        angle_changed |= ui.add(egui::DragValue::new(&mut angles[axis]).speed(0.25).range(-360.0..=360.0).suffix("°")).changed();
+                    }
+                });
+                if angle_changed {
+                    self.sketch_edit_custom_plane(self.sk.custom_frame.origin, angles);
+                }
+                ui.horizontal_wrapped(|ui| {
+                    if style::pill(ui, "カメラの注視点", false).on_hover_text("この面の向きを保ち、カメラの注視点を通す").clicked() {
+                        self.sketch_edit_custom_plane(self.cam.target, self.sk.custom_angles);
+                    }
+                    let chosen = crate::view::targets(&self.scene, self.sel)
+                        .into_iter().find_map(|(g, s)| self.scene.shape(g, s).map(|sh| sh.pos));
+                    if style::pill_enabled(ui, "選択形状の中心", false, chosen.is_some())
+                        .on_hover_text("この面の向きを保ち、選択した形の中心を通す").clicked()
+                        && let Some(origin) = chosen
+                    {
+                        self.sketch_edit_custom_plane(origin, self.sk.custom_angles);
+                    }
+                });
+                hint(ui, "位置・角度の変更中も2D座標を維持し、描画中のスケッチ全体が平面と一緒に移動します");
+            }
+            _ => {
+                if style::pill(ui, "この面を自由面にコピー", false)
+                    .on_hover_text("今の平面を複製し、XYZ移動・回転ができる自由面にする").clicked()
+                {
+                    self.sketch_copy_plane_to_custom();
+                }
+                if self.sk.plane == PlaneSel::Camera {
+                    hint(ui, "カメラを回してもこの面は固定されます。「カメラに平行」をもう一度押すと新しい向きにできます");
+                }
+            }
         }
     }
 
@@ -1844,6 +1997,115 @@ mod tests {
         let Some(Pick::Shape(g, s)) = app.sel else { panic!("selected") };
         let l = app.scene.shape(g, s).expect("there");
         assert_eq!((l.kind, l.outline.len(), l.outline2.len()), (Kind::Loft, 4, sketch::CIRCLE_POINTS));
+    }
+
+    #[test]
+    fn height_and_custom_planes_can_be_reselected_without_coordinate_drift() {
+        let mut app = app();
+        app.set_sketch_tool(true);
+        assert_eq!(app.sketch_plane(), Frame::floor());
+        app.sketch_set_plane(PlaneSel::Height);
+        assert!(app.sketch_set_level(84.25));
+        assert_eq!(app.sk.frame, Frame::horizontal(84.25));
+        assert!(!app.sketch_set_level(f32::NAN));
+        assert_eq!(app.sk.frame, Frame::horizontal(84.25));
+        app.sketch_set_plane(PlaneSel::Side);
+        assert_eq!(app.sk.frame, Frame::side());
+        app.sketch_set_plane(PlaneSel::Height);
+        assert_eq!(app.sk.frame, Frame::horizontal(84.25), "height survives selection changes");
+        app.sketch_set_plane(PlaneSel::Front);
+        app.sketch_copy_plane_to_custom();
+        assert_eq!(app.sk.plane, PlaneSel::Custom);
+        assert_eq!(app.sk.frame, Frame::front(), "copy keeps the original basis");
+
+        let angles = [23.0, -34.0, 58.0];
+        assert!(app.sketch_edit_custom_plane([12.0, -7.0, 31.0], angles));
+        let before_world = app.sk.frame.to_world([4.0, -6.0]);
+        app.sk.pts = vec![[4.0, -6.0], [10.0, 13.0]];
+        let original_points = app.sk.pts.clone();
+        assert!(app.sketch_edit_custom_plane([12.0, -7.0, 44.0], angles));
+        assert_eq!(app.sk.pts, original_points, "moving plane preserves local draft values");
+        let saved_frame = app.sk.frame;
+        let after_world = saved_frame.to_world([4.0, -6.0]);
+        assert!((after_world[2] - before_world[2] - 13.0).abs() < 1e-4);
+        app.sketch_set_plane(PlaneSel::Floor);
+        assert!(app.sk.pts.is_empty(), "switching presets discards only the unfinished gesture");
+        assert!(app.sk.msg.contains("描画途中"));
+        app.sketch_set_plane(PlaneSel::Custom);
+        assert_eq!(app.sk.frame, saved_frame, "custom plane is reselectable");
+        assert!(!app.sketch_edit_custom_plane([f32::NAN, 0.0, 0.0], angles));
+        assert_eq!(app.sk.frame, saved_frame, "invalid edits leave the last valid plane intact");
+    }
+
+    #[test]
+    fn camera_parallel_plane_is_a_fixed_snapshot_with_inverse_ray_mapping() {
+        let mut app = app();
+        app.set_sketch_tool(true);
+        for (yaw, pitch, ortho) in [
+            (0.0, 0.0, false),
+            (1.0, 0.65, true),
+            (-1.2, -0.43, false),
+            (2.7, std::f32::consts::FRAC_PI_2 - 0.002, true),
+        ] {
+            app.cam.look(yaw, pitch);
+            app.cam.target = [10.0, -20.0, 35.0];
+            app.cam.dist = 160.0;
+            app.cam.ortho = ortho;
+            let (_, _, forward) = app.cam.basis();
+            app.sketch_set_plane(PlaneSel::Camera);
+            let f = app.sk.frame;
+            assert!(app.fly.is_none(), "a previous fly-to must not rotate the camera");
+            assert!(crate::sdf::dot(f.normal(), forward) < -0.999, "faces camera: {f:?}");
+            for q in [[0.0, 0.0], [7.0, -3.0], [-12.0, 18.0]] {
+                let px = app.cam.project(rect(), f.to_world(q)).expect("visible workplane");
+                let recovered = app.sketch_cursor(rect(), px, 0.1, &f).expect("hit plane");
+                assert!((recovered[0] - q[0]).abs() < 0.11 && (recovered[1] - q[1]).abs() < 0.11,
+                    "camera={yaw},{pitch} ortho={ortho}: {q:?} -> {recovered:?}");
+            }
+            app.cam.orbit(20.0, -12.0);
+            assert_eq!(app.sketch_plane(), f, "orbiting does not silently turn a saved camera plane");
+        }
+    }
+
+    #[test]
+    fn rotated_plane_profile_and_shape_survive_switch_and_save() {
+        let ctx = egui::Context::default();
+        let mut app = app();
+        app.set_sketch_tool(true);
+        app.sketch_set_plane(PlaneSel::Custom);
+        assert!(app.sketch_edit_custom_plane([35.0, -14.0, 63.0], [20.0, -35.0, 52.0]));
+        let plane = app.sk.frame;
+        app.sk.pen = Pen::Rect;
+        assert!(app.sk.click([0.0, 0.0], false).is_none());
+        let p = app.sk.click([20.0, 12.0], false).expect("rectangle");
+        app.sketch_done(p);
+        assert_eq!(app.sk.pframe, plane);
+        app.sketch_set_plane(PlaneSel::Floor);
+        assert_eq!(app.sk.pframe, plane, "a finished profile owns its original frame");
+        app.sk.height = 8.0;
+        assert!(app.sketch_make(&ctx));
+        let Some(Pick::Shape(g, s)) = app.sel else { panic!("selected extrusion") };
+        let restored = Scene::from_json(&app.scene.to_json()).expect("saved scene loads");
+        let solid = restored.shape(g, s).expect("saved extrusion");
+        let edited = sketch::edit_frame(solid, Which::Main).expect("re-editable shape");
+        let expected = plane.to_world([10.0, 6.0]);
+        assert!(crate::sdf::len(crate::sdf::sub(edited.to_world([0.0, 0.0]), expected)) < 0.02,
+            "saved 2D outline reopens on the correct oblique world plane");
+    }
+
+    #[test]
+    fn camera_fly_faces_a_slanted_custom_plane() {
+        let mut app = app();
+        app.sketch_set_plane(PlaneSel::Custom);
+        assert!(app.sketch_edit_custom_plane([12.0, 30.0, 18.0], [26.0, -37.0, 64.0]));
+        let frame = app.sk.frame;
+        app.sketch_fly(&frame);
+        for _ in 0..300 {
+            app.step_fly(0.016);
+        }
+        let (_, _, forward) = app.cam.basis();
+        assert!(crate::sdf::dot(forward, frame.normal()) < -0.999,
+            "the camera should look straight into any valid plane normal");
     }
 
     #[test]

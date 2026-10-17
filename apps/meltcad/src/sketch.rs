@@ -81,6 +81,34 @@ impl Frame {
     pub fn side() -> Frame {
         Frame { origin: [0.0; 3], u: [0.0, 1.0, 0.0], v: [0.0, 0.0, 1.0] }
     }
+    /// Build a stable, right-handed drawing frame from two directions. The second
+    /// axis is orthogonalized against the first; invalid/parallel axes are rejected
+    /// instead of producing a broken sketch plane.
+    pub fn from_axes(origin: V3, u: V3, v: V3) -> Option<Frame> {
+        if !origin.iter().chain(u.iter()).chain(v.iter()).all(|x| x.is_finite() && x.abs() <= 1.0e6) {
+            return None;
+        }
+        let lu = len(u);
+        if lu < 1e-6 {
+            return None;
+        }
+        let u = mul(u, 1.0 / lu);
+        let v = sub(v, mul(u, dot(u, v)));
+        let lv = len(v);
+        if !lv.is_finite() || lv < 1e-6 {
+            return None;
+        }
+        Some(Frame { origin, u, v: mul(v, 1.0 / lv) })
+    }
+    /// Place a plane through a world point with X/Y/Z Euler rotation (degrees).
+    /// The same rotation convention is used by saved sketch-generated shapes.
+    pub fn oriented(origin: V3, degrees: V3) -> Option<Frame> {
+        if !degrees.iter().all(|a| a.is_finite() && a.abs() <= 36000.0) {
+            return None;
+        }
+        let r = rotation(degrees);
+        Self::from_axes(origin, [r[0][0], r[1][0], r[2][0]], [r[0][1], r[1][1], r[2][1]])
+    }
     /// The unit normal (`u x v`).
     pub fn normal(&self) -> V3 {
         norm(cross(self.u, self.v))
@@ -844,6 +872,47 @@ mod tests {
         let tilted = euler_from_columns([0.0, 0.0, -1.0], [0.0, 1.0, 0.0], [1.0, 0.0, 0.0]);
         let r = rotation(tilted);
         assert!(len(sub([r[0][0], r[1][0], r[2][0]], [0.0, 0.0, -1.0])) < 1e-4);
+    }
+
+    #[test]
+    fn arbitrary_workplanes_have_stable_inverse_transforms() {
+        let tilted = Frame::from_axes([32.0, -18.0, 70.0], [0.5, 0.4, 0.8], [-0.6, 0.8, 0.3]).expect("tilt");
+        let frames = [
+            Frame::floor(),
+            Frame::front(),
+            Frame::side(),
+            Frame::horizontal(-83.25),
+            tilted,
+            Frame::oriented([3.0, 8.0, -42.0], [17.0, -31.0, 73.0]).expect("rotated"),
+            Frame::oriented([-20.0, 14.0, 60.0], [85.0, 89.9, -130.0]).expect("near gimbal lock"),
+        ];
+        for frame in frames {
+            assert!((len(frame.u) - 1.0).abs() < 1e-5);
+            assert!((len(frame.v) - 1.0).abs() < 1e-5);
+            assert!(dot(frame.u, frame.v).abs() < 1e-5);
+            for local in [[0.0, 0.0], [15.25, -48.5], [-97.0, 32.125]] {
+                let world = frame.to_world(local);
+                let recovered = frame.from_world(world);
+                assert!((recovered[0] - local[0]).abs() < 0.002 && (recovered[1] - local[1]).abs() < 0.002,
+                    "{frame:?}: {local:?} -> {recovered:?}");
+                let normal = frame.normal();
+                let ray_origin = add(world, mul(normal, 200.0));
+                let hit = frame.hit(ray_origin, mul(normal, -1.0)).expect("ray hit");
+                assert!((hit[0] - local[0]).abs() < 0.002 && (hit[1] - local[1]).abs() < 0.002);
+            }
+            let reloaded = Frame::oriented(frame.origin, frame.euler()).expect("saved rotation");
+            assert!(len(sub(frame.u, reloaded.u)) < 0.002 && len(sub(frame.v, reloaded.v)) < 0.002,
+                "rotation roundtrip: {frame:?} -> {reloaded:?}");
+        }
+    }
+
+    #[test]
+    fn invalid_workplanes_are_rejected_without_nan_coordinates() {
+        assert!(Frame::from_axes([0.0; 3], [0.0; 3], [0.0, 1.0, 0.0]).is_none());
+        assert!(Frame::from_axes([0.0; 3], [1.0, 0.0, 0.0], [2.0, 0.0, 0.0]).is_none());
+        assert!(Frame::from_axes([f32::NAN, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]).is_none());
+        assert!(Frame::oriented([0.0; 3], [f32::INFINITY, 0.0, 0.0]).is_none());
+        assert!(Frame::oriented([1.0e9, 0.0, 0.0], [0.0; 3]).is_none());
     }
 
     #[test]
