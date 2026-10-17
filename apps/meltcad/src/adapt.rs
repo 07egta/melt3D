@@ -147,6 +147,14 @@ impl PreviewScale {
     }
 }
 
+/// Width of the finished-band transition as a share of the viewport height.
+/// Fade only inside rows which have been completely rendered; a stopped scene
+/// ultimately displays *only* the full-quality pixels.
+pub fn sharp_band_feather(done: u32, height: u32) -> f32 {
+    if height == 0 || done == 0 || done >= height { return 0.0; }
+    (10.0 / height as f32).min(done as f32 / height as f32)
+}
+
 /// How many rows of the sharp picture to draw this frame.
 #[derive(Clone, Debug)]
 pub struct BandPacer {
@@ -271,6 +279,15 @@ mod tests {
         assert!(before <= next + 1e-6, "no sudden rebound");
         let recovered = p.choose(0.90, 4.200);
         assert!(recovered > before && recovered - before <= 0.051);
+    }
+
+    #[test]
+    fn feather_never_reads_beyond_finished_rows() {
+        assert_eq!(sharp_band_feather(0, 720), 0.0);
+        assert_eq!(sharp_band_feather(720, 720), 0.0);
+        assert_eq!(sharp_band_feather(0, 0), 0.0);
+        assert!((sharp_band_feather(3, 720) - 3.0 / 720.0).abs() < 1e-6);
+        assert!((sharp_band_feather(300, 720) - 10.0 / 720.0).abs() < 1e-6);
     }
 
     #[test]
