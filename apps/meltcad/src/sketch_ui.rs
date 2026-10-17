@@ -496,6 +496,11 @@ impl App {
             self.sk.frame = self.sketch_plane();
             let f = self.sk.frame;
             self.sketch_fly(&f);
+            if self.guide.sketch_started() {
+                self.sk.pen = Pen::Rect;
+                self.sk.make = Make::Extrude;
+                self.sk.height = 20.0;
+            }
         }
     }
 
@@ -594,6 +599,9 @@ impl App {
                     }
                 }
                 self.sk.stage = Stage::Ready;
+                if self.sk.pen == Pen::Rect && self.sk.make == Make::Extrude {
+                    self.guide.rectangle_finished();
+                }
             }
             Finished::Line(l) => {
                 let f = self.sk.frame;
@@ -653,6 +661,9 @@ impl App {
         self.sk.reset();
         self.sk.frame = self.sketch_plane();
         self.say(ctx, format!("{}を作りました（「スケッチを編集」で輪かくをなおせます）", make.label()));
+        if make == Make::Extrude {
+            self.guide.extruded();
+        }
         true
     }
 
@@ -695,6 +706,9 @@ impl App {
                 && let Some(o) = ui.input(|i| i.pointer.press_origin()).or(pos).filter(|o| !over_gnomon(*o))
                 && let Some(q) = self.sketch_cursor(rect, o, step, &frame)
             {
+                if self.sk.stage == Stage::Draw && self.sk.active_pen() == Pen::Rect {
+                    self.guide.rectangle_gesture();
+                }
                 self.sk.press(q);
             }
             if self.sk.dragging {
@@ -711,6 +725,9 @@ impl App {
         if resp.clicked_by(egui::PointerButton::Primary)
             && let (Some(m), Some(q)) = (mouse, self.sk.cursor)
         {
+            if self.sk.stage == Stage::Draw && self.sk.active_pen() == Pen::Rect {
+                self.guide.rectangle_gesture();
+            }
             let first = self.sk.pts.first().and_then(|f| self.sketch_px(rect, &frame, *f));
             let close = self.sk.pts.len() >= 3 && first.is_some_and(|f| (f - m).length() <= CLOSE_PX);
             done = done.or_else(|| self.sk.click(q, close));
@@ -1335,7 +1352,14 @@ impl App {
             ui.label(egui::RichText::new("面").size(11.0).color(style::DIM));
             for pl in PlaneSel::ALL {
                 let usable = plane_free && (pl != PlaneSel::OnShape || self.sel.is_some());
-                if style::pill_enabled(ui, pl.label(), self.sk.plane == pl, usable).on_hover_text(pl.tip()).clicked() {
+                let explanation = if !plane_free {
+                    "描画の途中では面を変更できません。Escで一つ前に戻ってください"
+                } else if pl == PlaneSel::OnShape && self.sel.is_none() {
+                    "形の上に描くには、先に形を1つ選んでください"
+                } else {
+                    pl.tip()
+                };
+                if style::pill_enabled(ui, pl.label(), self.sk.plane == pl, usable).on_hover_text(explanation).clicked() {
                     self.sketch_set_plane(pl);
                 }
             }
@@ -1350,7 +1374,8 @@ impl App {
                 ui.label(egui::RichText::new("道具").size(11.0).color(style::DIM));
                 for pen in Pen::ALL {
                     let usable = !(stage == Stage::LoftTop && pen == Pen::Line);
-                    if style::pill_enabled(ui, pen.label(), self.sk.pen == pen, usable).on_hover_text(pen.tip()).clicked() {
+                    let explanation = if !usable { "閉じた輪かくが必要です。ポリゴン・四角・円・スプラインを使ってください" } else { pen.tip() };
+                    if style::pill_enabled(ui, pen.label(), self.sk.pen == pen, usable).on_hover_text(explanation).clicked() {
                         self.sk.pen = pen;
                         self.sk.clear_drawing();
                     }
@@ -1462,7 +1487,12 @@ impl App {
             let b = egui::Button::new(egui::RichText::new(format!("{}を作る", make.label())).strong().color(Color32::WHITE))
                 .fill(style::ACCENT_SOFT)
                 .stroke(Stroke::new(1.0, style::ACCENT));
-            if ui.add_enabled(ready, b).clicked() {
+            let disabled_reason = match make {
+                Make::Sweep if !ready => "スイープには2点以上の通り道が必要です。「線をかく」から追加してください",
+                Make::Loft if !ready => "上側の閉じた輪かくがありません。「上の輪かくをかく」を選んでください",
+                _ => "高さを決めたら押し出しを確定できます",
+            };
+            if ui.add_enabled(ready, b).on_hover_text(disabled_reason).clicked() {
                 self.sketch_make(ctx);
             }
             if style::pill(ui, "かきなおす", false).on_hover_text("輪かくをすてて、もう一度かく (Esc)").clicked() {
