@@ -222,10 +222,15 @@ fn refresh_preview(ctx: &egui::Context, d: &mut Dialog) {
         let result = task.done.lock().unwrap_or_else(|e| e.into_inner()).take();
         if let Some((settings, pixels)) = result {
             d.working = None;
-            if settings == d.settings && pixels.len() == PREVIEW_SIZE * PREVIEW_SIZE * 4 {
-                let image = egui::ColorImage::from_rgba_unmultiplied([PREVIEW_SIZE, PREVIEW_SIZE], &pixels);
-                d.preview = Some(ctx.load_texture("organic_blob_preview", image, TextureOptions::LINEAR));
+            if settings == d.settings {
+                // Failed previews should not repeatedly spawn a worker every UI frame.
                 d.preview_for = Some(settings);
+                if pixels.len() == PREVIEW_SIZE * PREVIEW_SIZE * 4 {
+                    let image = egui::ColorImage::from_rgba_unmultiplied([PREVIEW_SIZE, PREVIEW_SIZE], &pixels);
+                    d.preview = Some(ctx.load_texture("organic_blob_preview", image, TextureOptions::LINEAR));
+                } else {
+                    d.error = "プレビューを表示できません。形の追加と編集はできます".into();
+                }
             }
         }
     }
@@ -233,7 +238,10 @@ fn refresh_preview(ctx: &egui::Context, d: &mut Dialog) {
     if d.working.is_none() && d.changed_at.elapsed() >= PREVIEW_SETTLE {
         match start_preview(ctx, d.settings) {
             Ok(task) => d.working = Some(task),
-            Err(e) => d.error = e,
+            Err(e) => {
+                d.error = e;
+                d.preview_for = Some(d.settings);
+            }
         }
     }
     if d.working.is_some() || d.changed_at.elapsed() < PREVIEW_SETTLE {
@@ -270,10 +278,14 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
                     }
                 });
                 ui.add_space(4.0);
-                ui.add(egui::Slider::new(&mut d.settings.bulge, 0.0..=1.0).text("ふくらみ").fixed_decimals(2));
-                ui.add(egui::Slider::new(&mut d.settings.detail, 0.0..=1.0).text("凹凸・ばらつき").fixed_decimals(2));
-                ui.add(egui::Slider::new(&mut d.settings.roundness, 0.0..=1.0).text("丸み・なめらかさ").fixed_decimals(2));
-                ui.add(egui::Slider::new(&mut d.settings.aspect, 0.60..=1.75).text("縦横比（高さ／幅）").fixed_decimals(2));
+                ui.add(egui::Slider::new(&mut d.settings.bulge, 0.0..=1.0).text("ふくらみ").fixed_decimals(2))
+                    .on_hover_text("大きくするほど、ふくらみが外側へ飛び出します");
+                ui.add(egui::Slider::new(&mut d.settings.detail, 0.0..=1.0).text("凹凸・ばらつき").fixed_decimals(2))
+                    .on_hover_text("ふくらみの数と大小のばらつきを変えます");
+                ui.add(egui::Slider::new(&mut d.settings.roundness, 0.0..=1.0).text("丸み・なめらかさ").fixed_decimals(2))
+                    .on_hover_text("球同士のなめらかな接合幅を変えます（既存のSDFメルト）");
+                ui.add(egui::Slider::new(&mut d.settings.aspect, 0.60..=1.75).text("縦横比（高さ／幅）").fixed_decimals(2))
+                    .on_hover_text("1.0は球形、1より大きいと縦長、小さいと平たい形");
                 ui.horizontal(|ui| {
                     ui.label("シード");
                     ui.add(egui::DragValue::new(&mut d.settings.seed).range(0..=u32::MAX).speed(1.0));
