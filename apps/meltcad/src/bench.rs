@@ -138,6 +138,8 @@ pub fn camera_for(scene: &Scene) -> Camera {
 pub enum Mode {
     Full,
     Fast,
+    /// Fast scene pass actually timed at the GPU-time-inferred adaptive size.
+    Adaptive,
 }
 
 impl Mode {
@@ -145,6 +147,7 @@ impl Mode {
         match self {
             Mode::Full => "full",
             Mode::Fast => "fast",
+            Mode::Adaptive => "auto",
         }
     }
 }
@@ -295,6 +298,7 @@ pub fn format_table(r: &Report) -> String {
         ));
     }
     out.push_str("\n* fps is 1000 / scene-pass average ms, a GPU-only throughput estimate, NOT measured window FPS.\n");
+    out.push_str("auto rows time a real smaller render target chosen from full-size fast-pass cost; size gives render pixels, not the viewport.\n");
     out.push_str("GPU load is reported as scene-pass GPU ms (or explicitly wall ms), not a GPU-utilization percentage.\n");
     out.push_str("If no GPU timestamp is available, predicted adaptive resolution from wall timings is only a proxy.\n");
     if !r.preview_quality.is_empty() {
@@ -452,7 +456,30 @@ pub fn run_with(sizes: &[[u32; 2]], frames: usize, scenes: &[BenchScene], progre
                 if compare_image && mode == Mode::Fast {
                     let preview_size = crate::perf::render_size(size, expected_scale(avg), 8192);
                     let low = gpu.picture(preview_size);
-                    let _ = gpu.frame(&low, &globals, true);
+                    // Time the reduced-size scene pass separately using the
+                    // existing fast shader; this is not window presentation FPS.
+                    let mut auto_gpu = Vec::new();
+                    let mut auto_wall = Vec::new();
+                    for k in 0..WARMUP + frames {
+                        let (wall, measured_gpu) = gpu.frame(&low, &globals, true);
+                        if k >= WARMUP {
+                            auto_wall.push(wall as f32 * 1000.0);
+                            if let Some(ms) = measured_gpu { auto_gpu.push(ms); }
+                        }
+                    }
+                    let (auto_source, auto_used) =
+                        if auto_gpu.len() == auto_wall.len() && !auto_gpu.is_empty() {
+                            (Source::Gpu, &auto_gpu)
+                        } else { (Source::Wall, &auto_wall) };
+                    let (auto_avg, auto_min, auto_max) = stats(auto_used);
+                    let (wall_avg, _, _) = stats(&auto_wall);
+                    report.rows.push(Row {
+                        scene: bs.name.to_string(), shapes: bs.scene.shape_count(),
+                        size: preview_size, mode: Mode::Adaptive, frames,
+                        avg_ms: auto_avg, p95_ms: percentile95(auto_used),
+                        min_ms: auto_min, max_ms: auto_max, source: auto_source,
+                        wall_avg_ms: wall_avg, wall_p95_ms: percentile95(&auto_wall),
+                    });
                     if let Some(reference) = full_reference.as_ref()
                         && let Some((mae_rgb, p95_rgb)) = preview_diff(reference, size, &gpu.read(&low), preview_size)
                     {
