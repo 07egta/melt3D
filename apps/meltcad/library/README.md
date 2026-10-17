@@ -1,6 +1,8 @@
 # MELTCAD model library
 
 Each `*.json` here is one category of ready-made models, compiled into the app (`src/library.rs`).
+
+**Designer Chair** is an intentional exception: its three parametric presets are built in `src/designer_chair.rs` and appended to the same `library::all()` item collection. This avoids duplicating generator math between JSON data and the on-screen controls. They use the same asynchronous CPU thumbnail pipeline and native scene insertion as the JSON items.
 The files are **generated** by Python scripts in `gen/` (one script per file) so a model is a few
 lines of readable code.
 
@@ -53,3 +55,11 @@ Only edit your own `gen/<file>.py` and `<file>.json`.
 - A small part melted into a neighbour of a different colour takes a mixed colour: keep details
   (hair, eyes, buttons) at blend 0.5-1.5.
 - The headless preview ignores `Paint`, the app does not. Colour with real shapes when in doubt.
+
+## Designer Chair / three editable procedural variants
+
+Search **Designer Chair** or switch to the **Designer Chair** library tab. Choose **Shell**, **Four-Leg**, or **Monocoque** to insert a fully editable group. The scene tree contains individual `座面` (Loft), `背もたれ` (Extrude), and `脚 1`…`脚 4` (Curve) parts. Side rails and a base are extra native SDF shapes on applicable styles. All geometry is in millimetres, Z-up, sitting at z≈0.
+
+With the **group** selected, the right-hand Shape tab shows the parametric Designer Chair controls: seat height, width, depth, back tilt, leg count 1–4, leg radius, and overall rounding. The **individual shapes** can be independently selected, repositioned, recoloured, and edited using the ordinary inspector. Whole-chair sliders recalculate procedural geometry; any non-procedural shapes the user adds are retained. Numeric changes keep matching generated-part materials/visibility; switching variant selects its default palette. Undo/Redo is the usual native scene history.
+
+The group's `designer_chair` JSON field stores the settings; the shapes themselves (including modified per-part geometry) are serialized normally. This means files open without needing a new mesh type. The existing SDF field and mesher handle the **3MF/OBJ** export. Existing library thumbnails remain 62×62 RGBA, generated once per item off the UI thread. Avoid asserting structural strength or physical safety from these decorative presets.
