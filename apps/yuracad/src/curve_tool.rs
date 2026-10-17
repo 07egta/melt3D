@@ -1,6 +1,6 @@
 //! Editing curves (and sweep paths) in the viewport, the way Womp3D does it: the nodes show as
 //! small circles; drag one to move it, drag from the `+` at an end to pull out a new node, click
-//! the `+` between two nodes to add one there. Also the "せん" tool that draws a new curve by
+//! the `+` between two nodes to add one there. Also the "Line" tool that draws a new curve by
 //! clicking, and the inspector section for curves.
 //!
 //! The pure helpers (node lists, projection, hit testing) come first and have unit tests; the
@@ -234,13 +234,13 @@ pub struct NodeDrag {
 }
 
 pub struct State {
-    /// Show and edit the nodes of the selected curve ("ふしをいじる").
+    /// Show and edit the nodes of the selected curve ("Edit nodes").
     pub edit_nodes: bool,
     /// The chosen node (group, shape, node).
     pub node: Option<(usize, usize, usize)>,
     pub hover: Option<Hit>,
     pub drag: Option<NodeDrag>,
-    /// The "せん" tool is on: clicks lay down nodes of a new curve.
+    /// The "Line" tool is on: clicks lay down nodes of a new curve.
     pub drawing: bool,
     /// The curve being drawn.
     pub draw_shape: Option<(usize, usize)>,
@@ -476,7 +476,7 @@ impl App {
         }
     }
 
-    // ----- the "せん" tool -----
+    // ----- the "Line" tool -----
 
     /// Forget the curve being drawn if it is gone.
     fn check_drawing(&mut self) {
@@ -547,7 +547,7 @@ impl App {
             _ => match self.scene.groups.len().checked_sub(1) {
                 Some(g) => g,
                 None => {
-                    self.scene.groups.push(Group::new("グループ 1"));
+                    self.scene.groups.push(Group::new("Group 1"));
                     0
                 }
             },
@@ -589,10 +589,10 @@ impl App {
         self.ct.node = None;
     }
 
-    /// The top-bar toggle for the "せん" tool.
+    /// The top-bar toggle for the "Line" tool.
     pub fn curve_button(&mut self, ui: &mut Ui) {
         let on = self.ct.drawing;
-        if style::icon_button(ui, 34.0, "せん (クリックで点をうって、線をひく)", on, glyph).clicked() {
+        if style::icon_button(ui, 34.0, "Line (click to place points and draw a line)", on, glyph).clicked() {
             if on {
                 self.finish_drawing();
             }
@@ -601,7 +601,7 @@ impl App {
         }
     }
 
-    /// The little card under the top bar while the "せん" tool is on.
+    /// The little card under the top bar while the "Line" tool is on.
     pub fn draw_card(&mut self, ctx: &egui::Context) {
         if !self.ct.drawing {
             return;
@@ -614,17 +614,17 @@ impl App {
             .show(ctx, |ui| {
                 style::card().show(ui, |ui| {
                     ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("せん").strong().color(style::ACCENT));
-                        style::labeled_slider(ui, "ふとさ", &mut self.ct.draw_radius, 0.5..=40.0, "あたらしい点の太さ (半径 mm)");
-                        if style::pill(ui, "おわり", false).on_hover_text("この線を終える (Enter / ダブルクリック)").clicked() {
+                        ui.label(egui::RichText::new("Line").strong().color(style::ACCENT));
+                        style::labeled_slider(ui, "Thickness", &mut self.ct.draw_radius, 0.5..=40.0, "New point thickness (radius mm)");
+                        if style::pill(ui, "Done", false).on_hover_text("Finish this line (Enter / double-click)").clicked() {
                             self.finish_drawing();
                         }
-                        if style::pill(ui, "やめる", false).on_hover_text("せんツールを切る (Esc)").clicked() {
+                        if style::pill(ui, "Cancel", false).on_hover_text("Turn off line tool (Esc)").clicked() {
                             self.finish_drawing();
                             self.ct.drawing = false;
                         }
                     });
-                    ui.label(egui::RichText::new("クリックで点をふやす　ダブルクリック / Enterでおわり　Backspaceで1つもどる").size(11.0).color(style::DIM));
+                    ui.label(egui::RichText::new("Click to add a point. Double-click or Enter to finish. Backspace undoes one point.").size(11.0).color(style::DIM));
                 });
             });
     }
@@ -730,27 +730,27 @@ impl App {
 
     // ----- inspector -----
 
-    /// The "ふし" section of the shape panel for a curve or a sweep.
+    /// The "Nodes" section of the shape panel for a curve or a sweep.
     pub fn curve_inspector(&mut self, ui: &mut Ui, g: usize, s: usize) {
         let chosen = self.chosen_node(g, s);
         let Some(sh) = self.scene.shape_mut(g, s) else { return };
         let is_curve = sh.kind == Kind::Curve;
-        style::title(ui, if is_curve { "線のふし" } else { "道のふし" });
+        style::title(ui, if is_curve { "Line node" } else { "Path node" });
         ui.horizontal(|ui| {
-            if style::pill(ui, "ふしをいじる", self.ct.edit_nodes).on_hover_text("画面で、ふしをドラッグして動かす").clicked() {
+            if style::pill(ui, "Edit nodes", self.ct.edit_nodes).on_hover_text("Drag nodes in the view to move them").clicked() {
                 self.ct.edit_nodes = !self.ct.edit_nodes;
             }
-            ui.label(egui::RichText::new("端の＋でのばす / 間の＋でふやす").size(10.5).color(style::DIM));
+            ui.label(egui::RichText::new("Drag the end + to extend / middle + to add").size(10.5).color(style::DIM));
         });
         if is_curve {
-            style::labeled_slider(ui, "なめらか", &mut sh.params[1], 0.0..=1.0, "0 = カクカク / 1 = なめらか");
+            style::labeled_slider(ui, "Smooth", &mut sh.params[1], 0.0..=1.0, "0 = sharp / 1 = smooth");
             ui.horizontal(|ui| {
                 let mut closed = sh.params[0] > 0.5;
-                if ui.checkbox(&mut closed, "輪にする").on_hover_text("さいごとさいしょをつなぐ").changed() {
+                if ui.checkbox(&mut closed, "Make closed loop").on_hover_text("Join the last and first node").changed() {
                     sh.params[0] = if closed { 1.0 } else { 0.0 };
                 }
                 let mut flat = sh.params[2] > 0.5;
-                if ui.checkbox(&mut flat, "はしを平らに").on_hover_text("両はしを丸くしないで、すぱっと切る").changed() {
+                if ui.checkbox(&mut flat, "Flat ends").on_hover_text("Cut both ends flat instead of rounding").changed() {
                     sh.params[2] = if flat { 1.0 } else { 0.0 };
                 }
             });
@@ -758,10 +758,10 @@ impl App {
                 sh.params[3] = 1.0;
             }
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("ぜんたいの太さ").color(style::DIM).size(12.0));
+                ui.label(egui::RichText::new("Overall thickness").color(style::DIM).size(12.0));
                 ui.add(egui::DragValue::new(&mut sh.params[3]).speed(0.01).range(0.1..=5.0).suffix(" ×").max_decimals(2));
             });
-            if style::pill(ui, "ぜんぶのふしを同じ太さに", false).on_hover_text("えらんだふし(なければ先頭)の太さにそろえる").clicked() {
+            if style::pill(ui, "Make all nodes the same thickness", false).on_hover_text("Match the selected node's thickness (or the first)").clicked() {
                 let r = sh.path.get(chosen.unwrap_or(0)).map(|p| p[3]).unwrap_or(5.0);
                 set_all_radii(&mut sh.path, r);
             }
@@ -772,11 +772,11 @@ impl App {
         egui::ScrollArea::vertical().id_salt("curve_nodes").max_height(170.0).show(ui, |ui| {
             for (i, node) in sh.path.iter_mut().enumerate() {
                 ui.horizontal(|ui| {
-                    if ui.selectable_label(chosen == Some(i), format!("ふし {}", i + 1)).clicked() {
+                    if ui.selectable_label(chosen == Some(i), format!("Node {}", i + 1)).clicked() {
                         pick = Some(i);
                     }
-                    ui.add(egui::DragValue::new(&mut node[3]).speed(0.1).range(0.1..=500.0).prefix(if is_curve { "太さ " } else { "倍 " }).max_decimals(1));
-                    if ui.add_enabled(n > 2, egui::Button::new("×").small()).on_hover_text("このふしを消す").clicked() {
+                    ui.add(egui::DragValue::new(&mut node[3]).speed(0.1).range(0.1..=500.0).prefix(if is_curve { "Thickness " } else { "× " }).max_decimals(1));
+                    if ui.add_enabled(n > 2, egui::Button::new("×").small()).on_hover_text("Delete this node").clicked() {
                         del = Some(i);
                     }
                 });
@@ -786,13 +786,13 @@ impl App {
             && let Some(node) = sh.path.get_mut(i)
         {
             let mut v = [node[0], node[1], node[2]];
-            if style::xyz(ui, "ふし", &mut v, 0.5, -5000.0..=5000.0, "") {
+            if style::xyz(ui, "Nodes", &mut v, 0.5, -5000.0..=5000.0, "") {
                 node[0] = v[0];
                 node[1] = v[1];
                 node[2] = v[2];
             }
         }
-        if ui.add_enabled(n < MAX_PATH, egui::Button::new("＋ ふしを足す")).on_hover_text("さいごにふやす").clicked() {
+        if ui.add_enabled(n < MAX_PATH, egui::Button::new("+ Add node")).on_hover_text("Add at the end").clicked() {
             let (a, b) = (sh.path.get(n.wrapping_sub(1)).copied(), sh.path.get(n.wrapping_sub(2)).copied());
             if let (Some(a), Some(b)) = (a, b) {
                 let d = sub([a[0], a[1], a[2]], [b[0], b[1], b[2]]);
@@ -842,7 +842,7 @@ fn paint_node(p: &Painter, n: NodeView, chosen: bool, hot: bool, big: bool) {
     p.circle_stroke(n.c, k, Stroke::new(1.2, if chosen { Color32::WHITE } else { Color32::from_black_alpha(110) }));
 }
 
-/// The icon of the "せん" tool: a wavy line with a node at each end.
+/// The icon of the "Line" tool: a wavy line with a node at each end.
 pub fn glyph(p: &Painter, r: Rect, ink: Color32) {
     let pt = |x: f32, y: f32| pos2(r.min.x + r.width() * x, r.min.y + r.height() * y);
     let mut pts = Vec::new();

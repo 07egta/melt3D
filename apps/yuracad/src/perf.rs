@@ -65,19 +65,19 @@ impl Quality {
 
     pub fn label(self) -> &'static str {
         match self {
-            Quality::Light => "かるい",
-            Quality::Normal => "ふつう",
-            Quality::Fine => "きれい",
-            Quality::Auto => "じどう",
+            Quality::Light => "Light",
+            Quality::Normal => "Normal",
+            Quality::Fine => "Fine",
+            Quality::Auto => "Auto",
         }
     }
 
     pub fn hint(self) -> &'static str {
         match self {
-            Quality::Light => "いちばん軽い (画面の半分の細かさ)",
-            Quality::Normal => "ほどほど (4分の3の細かさ)",
-            Quality::Fine => "いつもフルの細かさ",
-            Quality::Auto => "止まっているときはきれい、動かすときは軽くする",
+            Quality::Light => "Lightest (half resolution)",
+            Quality::Normal => "Medium (3/4 resolution)",
+            Quality::Fine => "Always full resolution",
+            Quality::Auto => "Fine when still, light while moving",
         }
     }
 
@@ -364,7 +364,7 @@ pub struct Perf {
 
 /// The 'がしつ' menu of the top bar.
 pub fn quality_menu(ui: &mut egui::Ui, quality: &mut Quality) {
-    ui.menu_button(egui::RichText::new(format!("がしつ　{}", quality.label())).size(13.0), |ui| {
+    ui.menu_button(egui::RichText::new(format!("Quality  {}", quality.label())).size(13.0), |ui| {
         for q in Quality::ALL {
             ui.selectable_value(quality, q, q.label()).on_hover_text(q.hint());
         }

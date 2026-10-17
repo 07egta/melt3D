@@ -730,13 +730,13 @@ mod tests {
         for _ in 0..3 {
             let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
                 icon_button(ui, 34.0, "tip", on, |_, _, _| {});
-                pill(ui, "あいう", on);
+                pill(ui, "abc", on);
                 pill_enabled(ui, "off", false, false);
-                segmented(ui, "seg", &[("形", "a"), ("ざいしつ", ""), ("メルト", "c")], Some(1), true);
+                segmented(ui, "seg", &[("Shape", "a"), ("Material", ""), ("Melt", "c")], Some(1), true);
                 segmented(ui, "seg2", &[("a", ""), ("b", "")], None, false);
                 segmented(ui, "seg3", &[], None, false);
                 title(ui, "Title");
-                xyz(ui, "位置", &mut xyz3, 0.5, -10.0..=10.0, "");
+                xyz(ui, "Position", &mut xyz3, 0.5, -10.0..=10.0, "");
                 chevron(ui, on);
                 vsep(ui);
                 checkbox(ui, &mut check, "check");
@@ -744,7 +744,7 @@ mod tests {
                 slider(ui, &mut v, 0.0..=1.0, 120.0);
                 slider(ui, &mut bad, 0.0..=1.0, 120.0);
                 slider(ui, &mut v, 1.0..=1.0, 120.0);
-                labeled_slider(ui, "前の組と\nとけあう", &mut v, 0.0..=1.0, "tip");
+                labeled_slider(ui, "Melt into\nprevious group", &mut v, 0.0..=1.0, "tip");
                 color_edit(ui, &mut rgb);
                 card().show(ui, |ui| {
                     ui.label("hello");

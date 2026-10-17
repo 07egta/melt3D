@@ -85,7 +85,7 @@ pub fn load_file(path: &std::path::Path) -> Result<Artwork, String> {
 
 pub fn parse_bytes(bytes: &[u8]) -> Result<Artwork, String> {
     if bytes.len() > MAX_BYTES {
-        return Err("ファイルが大きすぎます（2MBまで）".into());
+        return Err("File too large (up to 2 MB)".into());
     }
     parse(&String::from_utf8_lossy(bytes))
 }
@@ -93,19 +93,19 @@ pub fn parse_bytes(bytes: &[u8]) -> Result<Artwork, String> {
 /// Parse SVG text into outlines.
 pub fn parse(text: &str) -> Result<Artwork, String> {
     if text.len() > MAX_BYTES {
-        return Err("ファイルが大きすぎます（2MBまで）".into());
+        return Err("File too large (up to 2 MB)".into());
     }
     if !text.contains("<svg") && !text.contains("<SVG") {
-        return Err("SVGファイルではないようです".into());
+        return Err("This does not look like an SVG file".into());
     }
     // pass 1: rough, only to learn the size of the picture
     let rough = walk(text, None);
     let Some((lo, hi)) = bounds(rough.iter().flat_map(|r| r.polys.iter().flatten())) else {
-        return Err("塗りつぶしの図形が見つかりませんでした（線だけの絵は読めません）".into());
+        return Err("No filled shapes found (outline-only drawings can't be read)".into());
     };
     let side = (hi.0 - lo.0).max(hi.1 - lo.1);
     if side.is_nan() || side <= 1e-9 || !side.is_finite() {
-        return Err("図形が小さすぎて読めません".into());
+        return Err("Shape too small to read".into());
     }
     // pass 2: curves flattened to ~0.05 mm for a 60 mm picture
     let tol = FLAT_TOL_MM / (REF_MM / side);
@@ -1123,7 +1123,7 @@ struct Cand {
 
 fn build_artwork(raws: &[Raw], side: f64) -> Result<Artwork, String> {
     let all: Vec<&(f64, f64)> = raws.iter().flat_map(|r| r.polys.iter().flatten()).collect();
-    let (lo, hi) = bounds(all.into_iter()).ok_or("図形が見つかりませんでした")?;
+    let (lo, hi) = bounds(all.into_iter()).ok_or("No shapes found")?;
     let centre = ((lo.0 + hi.0) * 0.5, (lo.1 + hi.1) * 0.5);
     let mut dropped = 0usize;
     let mut cands: Vec<Cand> = Vec::new();
@@ -1146,7 +1146,7 @@ fn build_artwork(raws: &[Raw], side: f64) -> Result<Artwork, String> {
         }
     }
     if cands.is_empty() {
-        return Err("塗りつぶしの図形が見つかりませんでした（線だけの絵は読めません）".into());
+        return Err("No filled shapes found (outline-only drawings can't be read)".into());
     }
     // containers of each outline (only inside the same shape element)
     let n = cands.len();
@@ -1206,7 +1206,7 @@ fn build_artwork(raws: &[Raw], side: f64) -> Result<Artwork, String> {
         contours.push(Contour { pts, hole, color: cands[i].color });
     }
     if !contours.iter().any(|c| !c.hole) {
-        return Err("塗りつぶしの図形が見つかりませんでした".into());
+        return Err("No filled shapes found".into());
     }
     // longest side = 1, centred on what is left
     let (mut lo, mut hi) = ([f32::INFINITY; 2], [f32::NEG_INFINITY; 2]);
@@ -1218,7 +1218,7 @@ fn build_artwork(raws: &[Raw], side: f64) -> Result<Artwork, String> {
     }
     let w = (hi[0] - lo[0]).max(hi[1] - lo[1]);
     if w.is_nan() || w <= 0.0 || !w.is_finite() {
-        return Err("図形が小さすぎて読めません".into());
+        return Err("Shape too small to read".into());
     }
     let mid = [(lo[0] + hi[0]) * 0.5, (lo[1] + hi[1]) * 0.5];
     for p in contours.iter_mut().flat_map(|c| c.pts.iter_mut()) {
@@ -1276,7 +1276,7 @@ pub fn build_group(art: &Artwork, name: &str, o: &BuildOpts, room: usize) -> (Gr
         sh.blend = 0.0;
         if c.hole {
             nh += 1;
-            sh.name = format!("{name} あな {nh}");
+            sh.name = format!("{name} holes {nh}");
             sh.op = Op::Subtract;
             sh.size[0] = h + 2.0;
             sh.material = Material::plain([0.9, 0.35, 0.4], 0.6, 0.0);
@@ -1287,7 +1287,7 @@ pub fn build_group(art: &Artwork, name: &str, o: &BuildOpts, room: usize) -> (Gr
         }
         group.shapes.push(sh);
     }
-    let note = (left_out > 0).then(|| format!("形は{}個までなので、のこり{}個は入れませんでした", crate::model::MAX_SHAPES, left_out));
+    let note = (left_out > 0).then(|| format!("Up to {} shapes, so {} more were not added", crate::model::MAX_SHAPES, left_out));
     (group, note)
 }
 

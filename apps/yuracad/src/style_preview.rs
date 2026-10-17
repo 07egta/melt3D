@@ -156,19 +156,19 @@ fn preview() {
                 ui.add_space(12.0);
                 ui.vertical(|ui| {
                     ui.set_width(280.0);
-                    segmented(ui, "t", &[("形", ""), ("ざいしつ", ""), ("メルト", ""), ("ライト・背景", "")], sel, true);
-                    title(ui, "かたち");
-                    xyz(ui, "位置", &mut [1.0, 2.0, 3.0], 0.5, -10.0..=10.0, "");
-                    labeled_slider(ui, "とけあい", &mut v, 0.0..=1.0, "");
-                    labeled_slider(ui, "金属", &mut 0.0, 0.0..=1.0, "");
+                    segmented(ui, "t", &[("Shape", ""), ("Material", ""), ("Melt", ""), ("Light & backdrop", "")], sel, true);
+                    title(ui, "Shape");
+                    xyz(ui, "Position", &mut [1.0, 2.0, 3.0], 0.5, -10.0..=10.0, "");
+                    labeled_slider(ui, "Melt", &mut v, 0.0..=1.0, "");
+                    labeled_slider(ui, "Metal", &mut 0.0, 0.0..=1.0, "");
                     ui.horizontal(|ui| {
-                        checkbox(ui, &mut check, "グループ全部に");
-                        switch(ui, &mut on, "グリッド");
+                        checkbox(ui, &mut check, "Apply to whole group");
+                        switch(ui, &mut on, "Grid");
                     });
                     ui.horizontal(|ui| {
-                        pill(ui, "足す", true);
-                        pill(ui, "削る", false);
-                        pill_enabled(ui, "ぬる", false, false);
+                        pill(ui, "Add", true);
+                        pill(ui, "Subtract", false);
+                        pill_enabled(ui, "Paint", false, false);
                     });
                 });
                 card().show(ui, |ui| {
