@@ -108,7 +108,16 @@ pub struct Loaded {
 
 /// Read a mesh file (checked and cleaned; the up axis is not applied yet).
 pub fn load(path: &Path) -> Result<Loaded, String> {
-    let imported = import_mesh::import_file(path, &ImportOptions { y_up: Some(false) })?;
+    load_with_control(path, &std::sync::atomic::AtomicBool::new(false), &std::sync::atomic::AtomicU32::new(0))
+}
+
+/// The background file reader updates progress and can stop before parsing or after parsing.
+pub fn load_with_control(
+    path: &Path,
+    cancel: &std::sync::atomic::AtomicBool,
+    progress: &std::sync::atomic::AtomicU32,
+) -> Result<Loaded, String> {
+    let imported = import_mesh::import_file_with_control(path, &ImportOptions { y_up: Some(false) }, cancel, progress)?;
     let size = imported.mesh.size();
     let file_name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let stem = path.file_stem().map(|n| n.to_string_lossy().into_owned()).filter(|s| !s.is_empty()).unwrap_or_else(|| "メッシュ".into());
