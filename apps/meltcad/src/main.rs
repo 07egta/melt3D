@@ -15,6 +15,7 @@ mod export_dialog;
 mod export_deflate;
 mod export_formats;
 mod export_job;
+mod work_budget;
 mod export_mesh;
 mod fonts;
 mod gizmo;
