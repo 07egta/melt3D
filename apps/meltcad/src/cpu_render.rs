@@ -88,7 +88,9 @@ pub fn thumb(scene: &Scene, size: usize) -> Vec<u8> {
     let (c, r) = if r > 0.0 { (c, r) } else { ([0.0, 0.0, 20.0], 40.0) };
     let mut cam = Camera::default();
     cam.look(0.6, 0.42);
-    cam.frame(c, r * 0.62);
+    // Include the geometry bounds in the thumbnail; the previous 0.62 factor
+    // cropped long limbs and thin appendages in several library models.
+    cam.frame(c, r);
     let mut img = vec![0u8; size * size * 4];
     for y in 0..size {
         for x in 0..size {
