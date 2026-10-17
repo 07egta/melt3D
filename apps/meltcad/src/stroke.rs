@@ -195,9 +195,9 @@ pub fn smooth(points: &[V3], passes: usize) -> Vec<V3> {
             break;
         }
         let prev = cur.clone();
-        for i in 1..prev.len() - 1 {
+        for (i, point) in cur.iter_mut().enumerate().take(prev.len() - 1).skip(1) {
             if let (Some(a), Some(b), Some(c)) = (prev.get(i - 1), prev.get(i), prev.get(i + 1)) {
-                cur[i] = [(a[0] + 2.0 * b[0] + c[0]) * 0.25, (a[1] + 2.0 * b[1] + c[1]) * 0.25, (a[2] + 2.0 * b[2] + c[2]) * 0.25];
+                *point = [(a[0] + 2.0 * b[0] + c[0]) * 0.25, (a[1] + 2.0 * b[1] + c[1]) * 0.25, (a[2] + 2.0 * b[2] + c[2]) * 0.25];
             }
         }
     }
@@ -357,11 +357,12 @@ mod tests {
 
     /// A sine wave drawn with many tiny steps.
     fn wave(n: usize) -> Vec<V3> {
-        (0..n).map(|i| {
-            let x = i as f32 * 100.0 / (n - 1) as f32;
-            [x, 10.0 * (x * 0.1).sin(), 0.0]
-        })
-        .collect()
+        (0..n)
+            .map(|i| {
+                let x = i as f32 * 100.0 / (n - 1) as f32;
+                [x, 10.0 * (x * 0.1).sin(), 0.0]
+            })
+            .collect()
     }
 
     #[test]
@@ -516,11 +517,12 @@ mod tests {
     #[test]
     fn a_closed_stroke_becomes_a_loop_without_a_repeated_node() {
         // a circle of radius 30 drawn once round, ending where it began
-        let raw: Vec<V3> = (0..=200).map(|i| {
-            let a = i as f32 / 200.0 * std::f32::consts::TAU;
-            [30.0 * a.cos(), 30.0 * a.sin(), 5.0]
-        })
-        .collect();
+        let raw: Vec<V3> = (0..=200)
+            .map(|i| {
+                let a = i as f32 / 200.0 * std::f32::consts::TAU;
+                [30.0 * a.cos(), 30.0 * a.sin(), 5.0]
+            })
+            .collect();
         let o = Options { closed: true, ..opts() };
         let n = pipe_nodes(&raw, &o).expect("a loop");
         assert!((4..=PIPE_NODES).contains(&n.len()), "{}", n.len());

@@ -4,8 +4,6 @@
 //! and mapped into the square centred inside the given rect.
 
 use crate::model::{Kind, Op};
-use crate::style::gfx;
-use egui::epaint::Mesh;
 use egui::{Color32, Painter, Pos2, Rect, Shape, Stroke, pos2, vec2};
 
 const PI: f32 = std::f32::consts::PI;

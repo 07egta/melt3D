@@ -16,6 +16,10 @@ use crate::{glyphs, style};
 #[path = "app_preview.rs"]
 mod preview;
 
+#[cfg(test)]
+#[path = "acceptance_tests.rs"]
+mod acceptance_tests;
+
 #[path = "palette.rs"]
 mod palette;
 
@@ -109,6 +113,8 @@ pub struct App {
     pub lib_open: bool,
     pub lib_cat: usize,
     pub lib_query: String,
+    /// Font discovery runs on a worker; do not wait for it while opening the window.
+    font_job: Option<crate::fonts::FontJob>,
     /// A message from code that has no window context (shown in the status bar next frame).
     pub notice: Option<String>,
     /// The graphics path (GPU picture or the simple CPU one) and its cards.
@@ -174,11 +180,16 @@ impl App {
             ct: Default::default(),
             pt: Default::default(),
             sk: Default::default(),
-            perf: crate::perf::Perf { sharpen: crate::perf::DEFAULT_SHARPEN, hud: std::env::var_os("MELTCAD_HUD").is_some_and(|v| v != "0"), ..Default::default() },
+            perf: crate::perf::Perf {
+                sharpen: crate::perf::DEFAULT_SHARPEN,
+                hud: std::env::var_os("MELTCAD_HUD").is_some_and(|v| v != "0"),
+                ..Default::default()
+            },
             clipboard: None,
             lib_open: false,
             lib_cat: 0,
             lib_query: String::new(),
+            font_job: None,
             notice: None,
             gpu: Default::default(),
             bench: Default::default(),
@@ -187,6 +198,24 @@ impl App {
             app.open_path(p);
         }
         app
+    }
+
+    pub fn attach_font_job(&mut self, job: crate::fonts::FontJob) {
+        if job.pending() {
+            self.font_job = Some(job);
+        }
+    }
+
+    fn poll_font(&mut self, ctx: &egui::Context) {
+        let Some(job) = &mut self.font_job else { return };
+        if let Some(bytes) = job.poll() {
+            crate::fonts::install(ctx, bytes);
+            crate::perf::mark("font installed without blocking startup");
+            self.font_job = None;
+            ctx.request_repaint();
+        } else {
+            ctx.request_repaint_after(std::time::Duration::from_millis(60));
+        }
     }
 
     /// The field for picking. It is built when asked for, and again only after the scene changed
@@ -210,6 +239,10 @@ impl App {
         if self.scene != self.tracked {
             self.tracked.clone_from(&self.scene);
             self.scene_rev += 1;
+            // The revision invalidates these caches even if nothing later asks for a
+            // pick or a GPU pack. Keeping them until their next use pins old volumes.
+            self.field_cache.get_mut().take();
+            self.perf.pack.clear();
         }
         self.scene_rev
     }
@@ -304,6 +337,11 @@ impl App {
             }
             PendingFileAction::Close => return,
         };
+        // A document can hold large prepared SDF data, packed GPU records and a
+        // software-render worker snapshot. Release them *before* replacing it.
+        self.field_cache.get_mut().take();
+        self.perf.pack.clear();
+        self.gpu.easy_view.invalidate();
         self.scene = scene.clone();
         self.committed = scene;
         self.undo.clear();
@@ -817,7 +855,8 @@ impl App {
                                 ui.close();
                             }
                         });
-                        if ui.button("インスタンスを作る").on_hover_text("リンクコピー：元を直すと、コピーも変わります").clicked() {
+                        if ui.button("インスタンスを作る").on_hover_text("リンクコピー：元を直すと、コピーも変わります").clicked()
+                        {
                             self.make_instance(&ctx);
                             ui.close();
                         }
@@ -870,10 +909,17 @@ impl App {
                         self.perf.bench_requested |= menu.bench;
                     });
                     // the file name in the middle of the bar
-                    let name = self.path.as_ref().and_then(|p| p.file_stem()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "名前なし".into());
+                    let name =
+                        self.path.as_ref().and_then(|p| p.file_stem()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "名前なし".into());
                     let label = format!("{}{}", name, if self.dirty { " ●" } else { "" });
                     let cx = bar.center().x.clamp(left_end + 60.0, (right_start - 220.0).max(left_end + 60.0));
-                    ui.painter().text(egui::pos2(cx, bar.center().y), egui::Align2::CENTER_CENTER, label, egui::FontId::proportional(13.0), style::DIM);
+                    ui.painter().text(
+                        egui::pos2(cx, bar.center().y),
+                        egui::Align2::CENTER_CENTER,
+                        label,
+                        egui::FontId::proportional(13.0),
+                        style::DIM,
+                    );
                 });
             },
         );
@@ -883,82 +929,93 @@ impl App {
     fn tool_strip(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
         let rect = self.view_rect;
-        egui::Area::new(egui::Id::new("tool_strip")).order(egui::Order::Middle).fixed_pos(rect.left_top() + egui::vec2(12.0, 12.0)).show(&ctx, |ui| {
-            style::strip().show(ui, |ui| {
-                ui.spacing_mut().item_spacing = egui::vec2(0.0, 4.0);
-                // a tall strip scrolls instead of running off a small window
-                egui::ScrollArea::vertical().max_height((rect.height() - 40.0).max(120.0)).auto_shrink([true, true]).show(ui, |ui| {
-                ui.vertical_centered(|ui| {
-                    for k in Kind::MAIN {
-                        let r = style::icon_button(ui, 38.0, k.label(), false, |p, r, ink| glyphs::kind(p, r, k, ink, Color32::from_white_alpha(18)));
-                        if r.clicked() {
-                            self.add_shape(&ctx, k);
-                        }
-                    }
-                    self.curve_button(ui);
-                    self.pipe_button(ui);
-                    self.sketch_button(ui);
-                    style::menu_button(ui, "…", false, |ui| {
-                        ui.set_min_width(190.0);
-                        ui.label(egui::RichText::new("ほかの形").size(12.0).color(style::DIM));
-                        for k in Kind::MORE {
-                            let r = ui.horizontal(|ui| {
-                                let (rc, _) = ui.allocate_exact_size(egui::vec2(24.0, 24.0), egui::Sense::hover());
-                                glyphs::kind(ui.painter(), rc, k, ui.visuals().text_color(), Color32::from_white_alpha(18));
-                                ui.selectable_label(false, k.label())
-                            });
-                            if r.inner.clicked() {
-                                self.add_shape(&ctx, k);
-                                ui.close();
+        egui::Area::new(egui::Id::new("tool_strip")).order(egui::Order::Middle).fixed_pos(rect.left_top() + egui::vec2(12.0, 12.0)).show(
+            &ctx,
+            |ui| {
+                style::strip().show(ui, |ui| {
+                    ui.spacing_mut().item_spacing = egui::vec2(0.0, 4.0);
+                    // a tall strip scrolls instead of running off a small window
+                    egui::ScrollArea::vertical().max_height((rect.height() - 40.0).max(120.0)).auto_shrink([true, true]).show(ui, |ui| {
+                        ui.vertical_centered(|ui| {
+                            for k in Kind::MAIN {
+                                let r = style::icon_button(ui, 38.0, k.label(), false, |p, r, ink| {
+                                    glyphs::kind(p, r, k, ink, Color32::from_white_alpha(18))
+                                });
+                                if r.clicked() {
+                                    self.add_shape(&ctx, k);
+                                }
                             }
-                        }
-                        ui.separator();
-                        ui.label(egui::RichText::new("CADの機能").size(12.0).color(style::DIM));
-                        for k in Kind::CAD {
-                            let r = ui.horizontal(|ui| {
-                                let (rc, _) = ui.allocate_exact_size(egui::vec2(24.0, 24.0), egui::Sense::hover());
-                                glyphs::kind(ui.painter(), rc, k, ui.visuals().text_color(), Color32::from_white_alpha(18));
-                                ui.selectable_label(false, k.label())
+                            self.curve_button(ui);
+                            self.pipe_button(ui);
+                            self.sketch_button(ui);
+                            style::menu_button(ui, "…", false, |ui| {
+                                ui.set_min_width(190.0);
+                                ui.label(egui::RichText::new("ほかの形").size(12.0).color(style::DIM));
+                                for k in Kind::MORE {
+                                    let r = ui.horizontal(|ui| {
+                                        let (rc, _) = ui.allocate_exact_size(egui::vec2(24.0, 24.0), egui::Sense::hover());
+                                        glyphs::kind(ui.painter(), rc, k, ui.visuals().text_color(), Color32::from_white_alpha(18));
+                                        ui.selectable_label(false, k.label())
+                                    });
+                                    if r.inner.clicked() {
+                                        self.add_shape(&ctx, k);
+                                        ui.close();
+                                    }
+                                }
+                                ui.separator();
+                                ui.label(egui::RichText::new("CADの機能").size(12.0).color(style::DIM));
+                                for k in Kind::CAD {
+                                    let r = ui.horizontal(|ui| {
+                                        let (rc, _) = ui.allocate_exact_size(egui::vec2(24.0, 24.0), egui::Sense::hover());
+                                        glyphs::kind(ui.painter(), rc, k, ui.visuals().text_color(), Color32::from_white_alpha(18));
+                                        ui.selectable_label(false, k.label())
+                                    });
+                                    if r.inner.clicked() {
+                                        self.add_shape(&ctx, k);
+                                        ui.close();
+                                    }
+                                }
                             });
-                            if r.inner.clicked() {
-                                self.add_shape(&ctx, k);
-                                ui.close();
+                            style::hsep(ui);
+                            for op in [Op::Add, Op::Subtract, Op::Paint, Op::Intersect] {
+                                let on = self.new_op == op;
+                                let col = if on { Color32::WHITE } else { style::op_color(op) };
+                                let tip = match op {
+                                    Op::Add => "つぎは「足す」(くっつく)",
+                                    Op::Subtract => "つぎは「削る」(くり抜く)",
+                                    Op::Paint => "つぎは「ぬる」(形は変えずに色だけ)",
+                                    Op::Intersect => "つぎは「重ねる」(前の形とかさなる所だけのこす)",
+                                };
+                                if style::icon_button(ui, 38.0, tip, on, |p, r, _| glyphs::op(p, r, op, col)).clicked() {
+                                    self.new_op = op;
+                                }
                             }
-                        }
+                            style::hsep(ui);
+                            if style::icon_button(ui, 38.0, "グループを作る", false, glyphs::group).clicked() {
+                                self.add_group();
+                            }
+                        });
                     });
-                    style::hsep(ui);
-                    for op in [Op::Add, Op::Subtract, Op::Paint, Op::Intersect] {
-                        let on = self.new_op == op;
-                        let col = if on { Color32::WHITE } else { style::op_color(op) };
-                        let tip = match op {
-                            Op::Add => "つぎは「足す」(くっつく)",
-                            Op::Subtract => "つぎは「削る」(くり抜く)",
-                            Op::Paint => "つぎは「ぬる」(形は変えずに色だけ)",
-                            Op::Intersect => "つぎは「重ねる」(前の形とかさなる所だけのこす)",
-                        };
-                        if style::icon_button(ui, 38.0, tip, on, |p, r, _| glyphs::op(p, r, op, col)).clicked() {
-                            self.new_op = op;
-                        }
-                    }
-                    style::hsep(ui);
-                    if style::icon_button(ui, 38.0, "グループを作る", false, glyphs::group).clicked() {
-                        self.add_group();
-                    }
                 });
-                });
-            });
-        });
+            },
+        );
     }
 
     /// The docked panel on the left: the scene list (outliner) and the ready-made models (assets).
     fn left_dock(&mut self, ui: &mut Ui) {
-        egui::Panel::left("dock").exact_size(272.0).resizable(false).frame(egui::Frame::new().fill(style::PANEL_DARK).inner_margin(egui::Margin::symmetric(10, 10))).show(
-            ui,
-            |ui| {
+        egui::Panel::left("dock")
+            .exact_size(272.0)
+            .resizable(false)
+            .frame(egui::Frame::new().fill(style::PANEL_DARK).inner_margin(egui::Margin::symmetric(10, 10)))
+            .show(ui, |ui| {
                 style::panel_sheen(ui, ui.max_rect().expand2(egui::vec2(10.0, 10.0)), style::PANEL_DARK, style::Edge::Left);
                 let tabs = [("シーン", ""), ("ライブラリ", "")];
                 if let Some(i) = style::segmented(ui, "dock_tabs", &tabs, Some(usize::from(self.lib_open)), true) {
+                    let was_open = self.lib_open;
                     self.lib_open = i == 1;
+                    if was_open && !self.lib_open {
+                        crate::library_ui::suspend(ui.ctx());
+                    }
                 }
                 ui.add_space(6.0);
                 if self.lib_open {
@@ -977,8 +1034,7 @@ impl App {
                         self.layers(ui);
                     });
                 }
-            },
-        );
+            });
     }
 
     /// Tools and view buttons floating at the bottom middle.
@@ -1189,7 +1245,10 @@ impl App {
         if dir.join("where").exists() {
             // where the overlay is (written to `dir/where.txt` every frame while the file `where` exists)
             let r = ctx.memory(|m| m.area_rect(egui::Id::new("frame_hud")));
-            let _ = std::fs::write(dir.join("where.txt"), format!("hud {} area {r:?} view {:?} ppp {}\n", self.perf.hud, self.view_rect, ctx.pixels_per_point()));
+            let _ = std::fs::write(
+                dir.join("where.txt"),
+                format!("hud {} area {r:?} view {:?} ppp {}\n", self.perf.hud, self.view_rect, ctx.pixels_per_point()),
+            );
         }
         if dir.join("bench").exists() && std::fs::remove_file(dir.join("bench")).is_ok() {
             self.perf.bench_requested = true;
@@ -1205,6 +1264,13 @@ impl App {
                 }
             }
             self.lib_open = false;
+        }
+        // Memory QA: close the currently loaded model without terminating the
+        // process, so the same PID can be measured before and after release.
+        if dir.join("reset_scene").exists() && std::fs::remove_file(dir.join("reset_scene")).is_ok() {
+            self.new_scene(Scene::default());
+            let _ = std::fs::write(dir.join("reset_scene.done"), format!("{}\n", self.scene.shape_count()));
+            ctx.request_repaint();
         }
         if dir.join("quit").exists() {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -1240,6 +1306,7 @@ impl App {
         static FIRST: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
         crate::perf::mark_once(&FIRST, "first ui frame");
         let ctx = ui.ctx().clone();
+        self.poll_font(&ctx);
         let frame_began = std::time::Instant::now();
         self.perf.stats.begin(ctx.input(|i| i.time));
         self.fix_selection();
@@ -1335,13 +1402,15 @@ mod tests {
         assert_eq!(app.sel, Some(Pick::Shape(0, 0)));
         assert!(app.sk.pts.is_empty() && app.sk.anchor.is_none());
 
-        ctx.input_mut(|i| i.events.push(egui::Event::Key {
-            key: egui::Key::Delete,
-            physical_key: None,
-            pressed: true,
-            repeat: false,
-            modifiers: egui::Modifiers::NONE,
-        }));
+        ctx.input_mut(|i| {
+            i.events.push(egui::Event::Key {
+                key: egui::Key::Delete,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            })
+        });
         app.keys(&ctx);
 
         assert_eq!(app.scene.shape_count(), 0, "Delete should remove the selected shape when no sketch points are pending");
@@ -1355,13 +1424,15 @@ mod tests {
         app.sk.click([0.0, 0.0], false);
         assert_eq!(app.sk.pts.len(), 1);
 
-        ctx.input_mut(|i| i.events.push(egui::Event::Key {
-            key: egui::Key::Backspace,
-            physical_key: None,
-            pressed: true,
-            repeat: false,
-            modifiers: egui::Modifiers::NONE,
-        }));
+        ctx.input_mut(|i| {
+            i.events.push(egui::Event::Key {
+                key: egui::Key::Backspace,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            })
+        });
         app.keys(&ctx);
 
         assert!(app.sk.pts.is_empty());
@@ -1376,13 +1447,15 @@ mod tests {
         app.sk.click([0.0, 0.0], false);
         assert_eq!(app.sk.pts.len(), 1);
 
-        ctx.input_mut(|i| i.events.push(egui::Event::Key {
-            key: egui::Key::Delete,
-            physical_key: None,
-            pressed: true,
-            repeat: false,
-            modifiers: egui::Modifiers::NONE,
-        }));
+        ctx.input_mut(|i| {
+            i.events.push(egui::Event::Key {
+                key: egui::Key::Delete,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            })
+        });
         app.keys(&ctx);
 
         assert!(app.sk.pts.is_empty());
@@ -1398,13 +1471,15 @@ mod tests {
         app.sk.click([0.0, 0.0], false);
         assert_eq!(app.sk.anchor, Some([0.0, 0.0]));
 
-        ctx.input_mut(|i| i.events.push(egui::Event::Key {
-            key: egui::Key::Delete,
-            physical_key: None,
-            pressed: true,
-            repeat: false,
-            modifiers: egui::Modifiers::NONE,
-        }));
+        ctx.input_mut(|i| {
+            i.events.push(egui::Event::Key {
+                key: egui::Key::Delete,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            })
+        });
         app.keys(&ctx);
 
         assert!(app.sk.anchor.is_none());
@@ -1426,17 +1501,62 @@ mod tests {
         assert!(app.sk.edit.as_ref().is_some_and(|edit| edit.sel.is_none()));
         let before = app.scene.shape_count();
 
-        ctx.input_mut(|i| i.events.push(egui::Event::Key {
-            key: egui::Key::Delete,
-            physical_key: None,
-            pressed: true,
-            repeat: false,
-            modifiers: egui::Modifiers::NONE,
-        }));
+        ctx.input_mut(|i| {
+            i.events.push(egui::Event::Key {
+                key: egui::Key::Delete,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            })
+        });
         app.keys(&ctx);
 
         assert_eq!(app.scene.shape_count(), before, "Delete without a chosen outline point must not remove the solid");
         assert_eq!(app.sel, Some(Pick::Shape(g, s)));
+    }
+
+    #[test]
+    fn switching_documents_drops_old_scene_specific_memory_immediately() {
+        let mut app = App::new(true, None);
+        let rev = app.track_scene();
+        let field = app.field();
+        let old_field = std::rc::Rc::downgrade(&field);
+        drop(field);
+        let pack = app.perf.pack.get(&app.scene, rev);
+        let old_pack = std::sync::Arc::downgrade(&pack);
+        drop(pack);
+        assert!(old_field.upgrade().is_some());
+        assert!(old_pack.upgrade().is_some());
+
+        app.apply_file_action(PendingFileAction::New(Scene::default()));
+        assert!(old_field.upgrade().is_none(), "old picking SDF should not pin deleted meshes");
+        assert!(old_pack.upgrade().is_none(), "old shader pack should not pin deleted meshes");
+
+        let field = app.field();
+        assert_eq!(field.groups.len(), 1, "the new document is still pickable");
+        let rev = app.track_scene();
+        let pack = app.perf.pack.get(&app.scene, rev);
+        assert!(!pack.list.is_empty(), "the new document can still be rendered");
+    }
+
+    #[test]
+    fn changing_scene_revision_releases_idle_caches() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        let rev = app.track_scene();
+        let field = app.field();
+        let old_field = std::rc::Rc::downgrade(&field);
+        drop(field);
+        let pack = app.perf.pack.get(&app.scene, rev);
+        let old_pack = std::sync::Arc::downgrade(&pack);
+        drop(pack);
+
+        app.add_shape(&ctx, Kind::Box);
+        app.track_scene();
+        assert!(old_field.upgrade().is_none());
+        assert!(old_pack.upgrade().is_none());
+        assert_eq!(app.scene.shape_count(), 2, "normal editing remains unaffected");
     }
 
     #[test]
@@ -1542,13 +1662,15 @@ mod tests {
         std::fs::write(&path, Scene::default().to_json()).expect("other file");
 
         app.open_path(path.clone());
-        ctx.input_mut(|i| i.events.push(egui::Event::Key {
-            key: egui::Key::Delete,
-            physical_key: None,
-            pressed: true,
-            repeat: false,
-            modifiers: egui::Modifiers::NONE,
-        }));
+        ctx.input_mut(|i| {
+            i.events.push(egui::Event::Key {
+                key: egui::Key::Delete,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            })
+        });
         app.keys(&ctx);
 
         assert!(matches!(app.pending_file_action, Some(PendingFileAction::New(_))), "the first decision stays pending");

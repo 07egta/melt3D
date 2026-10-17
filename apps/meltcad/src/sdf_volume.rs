@@ -22,8 +22,8 @@
 //! Hostile input: the mesh is checked (finite, indices), the grid is capped (`MAX_CELLS`), the
 //! number of ray crossings is capped, and `from_bytes` checks every length before allocating.
 
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::time::Instant;
 
 use crate::import_inflate::inflate;
@@ -569,13 +569,17 @@ pub fn bake_with(mesh: &ImportedMesh, opts: &BakeOptions, ctl: &BakeControl) -> 
         return Err(crate::import_mesh::TOO_MANY_TRIS.into());
     }
     let np = mesh.positions.len();
-    if !mesh.positions.iter().flatten().all(|c| c.is_finite() && c.abs() <= crate::import_mesh::MAX_COORD) || mesh.triangles.iter().flatten().any(|i| *i as usize >= np) {
+    if !mesh.positions.iter().flatten().all(|c| c.is_finite() && c.abs() <= crate::import_mesh::MAX_COORD)
+        || mesh.triangles.iter().flatten().any(|i| *i as usize >= np)
+    {
         return Err(ERR_BAD_MESH.into());
     }
     let tris: Vec<Tri> = mesh
         .triangles
         .iter()
-        .filter_map(|t| Some(Tri { a: *mesh.positions.get(t[0] as usize)?, b: *mesh.positions.get(t[1] as usize)?, c: *mesh.positions.get(t[2] as usize)? }))
+        .filter_map(|t| {
+            Some(Tri { a: *mesh.positions.get(t[0] as usize)?, b: *mesh.positions.get(t[1] as usize)?, c: *mesh.positions.get(t[2] as usize)? })
+        })
         .collect();
     stats.triangles = tris.len();
     let (lo, hi) = mesh.bounds().ok_or(ERR_EMPTY)?;
@@ -708,7 +712,9 @@ pub fn bake_with(mesh: &ImportedMesh, opts: &BakeOptions, ctl: &BakeControl) -> 
     };
     let at = [locate(0), locate(1), locate(2)];
     let far_limit = (opts.far_band * g.cell as f32).max(0.0);
-    let cval = |ci: usize, cj: usize, ck: usize| coarse.get(ci.min(cn[0] - 1) + cn[0] * (cj.min(cn[1] - 1) + cn[1] * ck.min(cn[2] - 1))).copied().unwrap_or(0.0);
+    let cval = |ci: usize, cj: usize, ck: usize| {
+        coarse.get(ci.min(cn[0] - 1) + cn[0] * (cj.min(cn[1] - 1) + cn[1] * ck.min(cn[2] - 1))).copied().unwrap_or(0.0)
+    };
     let is_far = |ci: usize, cj: usize, ck: usize| -> bool {
         let mut m = f32::INFINITY;
         for (a, b, c) in [(0, 0, 0), (1, 0, 0), (0, 1, 0), (1, 1, 0), (0, 0, 1), (1, 0, 1), (0, 1, 1), (1, 1, 1)] {
@@ -889,6 +895,7 @@ pub fn f32_to_f16_bits(x: f32) -> u16 {
 
 impl Volume {
     /// All distances as half floats (`data` order), for uploading to a 3-D texture.
+    #[cfg(test)]
     pub fn to_f16_bits(&self) -> Vec<u16> {
         self.data.iter().map(|v| f32_to_f16_bits(*v)).collect()
     }
@@ -980,7 +987,11 @@ impl Volume {
         let dims = [u32::from_le_bytes(rd(6)?), u32::from_le_bytes(rd(10)?), u32::from_le_bytes(rd(14)?)];
         let origin = [f32::from_le_bytes(rd(18)?), f32::from_le_bytes(rd(22)?), f32::from_le_bytes(rd(26)?)];
         let cell = f32::from_le_bytes(rd(30)?);
-        if dims.iter().any(|x| *x == 0 || *x > MAX_AXIS) || !origin.iter().all(|x| x.is_finite() && x.abs() < 1.0e9) || !cell.is_finite() || !(1.0e-6..=1.0e6).contains(&cell) {
+        if dims.iter().any(|x| *x == 0 || *x > MAX_AXIS)
+            || !origin.iter().all(|x| x.is_finite() && x.abs() < 1.0e9)
+            || !cell.is_finite()
+            || !(1.0e-6..=1.0e6).contains(&cell)
+        {
             return fail();
         }
         let d = [dims[0] as usize, dims[1] as usize, dims[2] as usize];
@@ -1113,7 +1124,8 @@ mod tests {
     #[test]
     fn the_bvh_matches_brute_force() {
         let m = sphere_mesh(10.0, 20, 40);
-        let tris: Vec<Tri> = m.triangles.iter().map(|t| Tri { a: m.positions[t[0] as usize], b: m.positions[t[1] as usize], c: m.positions[t[2] as usize] }).collect();
+        let tris: Vec<Tri> =
+            m.triangles.iter().map(|t| Tri { a: m.positions[t[0] as usize], b: m.positions[t[1] as usize], c: m.positions[t[2] as usize] }).collect();
         let bvh = Bvh::build(&tris);
         assert_eq!(bvh.tris.len(), tris.len());
         let mut r = rng(3);
@@ -1359,7 +1371,10 @@ mod tests {
         let v = bake(&ok, &BakeOptions { res: 0, pad: 0, max_cells: 0, threads: 1, far_band: -3.0 }).unwrap();
         assert!(v.data.len() <= 100_000);
         // thousands of giant overlapping triangles: refused or finished, never a memory bomb
-        let mut big = ImportedMesh { positions: vec![[-1000.0, -1000.0, 0.0], [1000.0, -1000.0, 0.0], [0.0, 1000.0, 0.0], [0.0, 0.0, 1000.0], [1.0, 1.0, 1.0]], triangles: Vec::new() };
+        let mut big = ImportedMesh {
+            positions: vec![[-1000.0, -1000.0, 0.0], [1000.0, -1000.0, 0.0], [0.0, 1000.0, 0.0], [0.0, 0.0, 1000.0], [1.0, 1.0, 1.0]],
+            triangles: Vec::new(),
+        };
         for i in 0..3000u32 {
             big.triangles.push([0, 1, 2]);
             big.triangles.push([3, (i % 2) + 1, 4]);
@@ -1467,7 +1482,20 @@ mod tests {
 
     #[test]
     fn half_floats() {
-        for (x, h) in [(0.0f32, 0u16), (1.0, 0x3C00), (-2.0, 0xC000), (0.5, 0x3800), (65504.0, 0x7BFF), (1.0e9, 0x7BFF), (-1.0e9, 0xFBFF), (6.103_515_6e-5, 0x0400), (1.0e-9, 0), (f32::NAN, 0), (0.333_333_34, 0x3555), (100.1, 0x5642)] {
+        for (x, h) in [
+            (0.0f32, 0u16),
+            (1.0, 0x3C00),
+            (-2.0, 0xC000),
+            (0.5, 0x3800),
+            (65504.0, 0x7BFF),
+            (1.0e9, 0x7BFF),
+            (-1.0e9, 0xFBFF),
+            (6.103_515_6e-5, 0x0400),
+            (1.0e-9, 0),
+            (f32::NAN, 0),
+            (0.333_333_34, 0x3555),
+            (100.1, 0x5642),
+        ] {
             assert_eq!(f32_to_f16_bits(x), h, "{x}");
         }
         // within half a unit in the last place for ordinary values
@@ -1532,8 +1560,12 @@ mod tests {
     #[test]
     #[ignore = "timing report"]
     fn report_timing_and_size_for_100k_triangles() {
-        let shapes: Vec<(&str, ImportedMesh)> =
-            vec![("sphere 100k", sphere_mesh(30.0, 160, 320)), ("torus 100k", torus_mesh(30.0, 10.0, 360, 140)), ("blob 100k", blob_mesh(160, 320)), ("blob 14k", blob_mesh(60, 120))];
+        let shapes: Vec<(&str, ImportedMesh)> = vec![
+            ("sphere 100k", sphere_mesh(30.0, 160, 320)),
+            ("torus 100k", torus_mesh(30.0, 10.0, 360, 140)),
+            ("blob 100k", blob_mesh(160, 320)),
+            ("blob 14k", blob_mesh(60, 120)),
+        ];
         for (name, m) in shapes {
             println!("{name}: {} triangles", m.triangles.len());
             for res in [64u32, 128, 160] {
@@ -1549,7 +1581,15 @@ mod tests {
                 let b64 = v.to_base64().len();
                 println!(
                     "res {res}: dims {:?} ({} cells) bake {total:.2}s ({} steps per node) [bvh {:.2}s, signs {:.2}s, distances {:.2}s] save {save:.2}s load {load:.2}s -> {} bytes, base64 {} chars, winding {}",
-                    v.dims, st.cells, st.tree_steps / st.cells as u64, st.bvh_secs, st.sign_secs, st.dist_secs, bytes.len(), b64, st.used_winding
+                    v.dims,
+                    st.cells,
+                    st.tree_steps / st.cells as u64,
+                    st.bvh_secs,
+                    st.sign_secs,
+                    st.dist_secs,
+                    bytes.len(),
+                    b64,
+                    st.used_winding
                 );
                 assert_eq!(back.dims, v.dims);
             }

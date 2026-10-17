@@ -476,7 +476,8 @@ impl State {
 
 // ------------------------------------------------------------------ the App side: turning it on, the plane, the camera
 
-const COLORS: [[f32; 3]; 6] = [[0.93, 0.56, 0.45], [0.60, 0.72, 0.98], [0.62, 0.90, 0.74], [0.96, 0.80, 0.45], [0.76, 0.66, 0.96], [0.96, 0.66, 0.82]];
+const COLORS: [[f32; 3]; 6] =
+    [[0.93, 0.56, 0.45], [0.60, 0.72, 0.98], [0.62, 0.90, 0.74], [0.96, 0.80, 0.45], [0.76, 0.66, 0.96], [0.96, 0.66, 0.82]];
 
 impl App {
     /// Is the sketch tool on, or an outline being edited? (The gizmo and the node editing stay out of the way.)
@@ -511,7 +512,8 @@ impl App {
     /// The button in the tool strip.
     pub fn sketch_button(&mut self, ui: &mut Ui) {
         let on = self.sk.on;
-        if style::icon_button(ui, 34.0, "スケッチ (平面に絵をかいて、押し出し・回転体・ロフト・スイープにする)", on, glyph).clicked() {
+        if style::icon_button(ui, 34.0, "スケッチ (平面に絵をかいて、押し出し・回転体・ロフト・スイープにする)", on, glyph).clicked()
+        {
             self.set_sketch_tool(!on);
         }
     }
@@ -663,7 +665,11 @@ impl App {
         if !self.sketch_active() {
             return None;
         }
-        Some(if self.sk.edit.is_some() { self.sketch_edit_input(ui, resp, rect, pos, mods) } else { self.sketch_draw_input(ui, resp, rect, pos, mods) })
+        Some(if self.sk.edit.is_some() {
+            self.sketch_edit_input(ui, resp, rect, pos, mods)
+        } else {
+            self.sketch_draw_input(ui, resp, rect, pos, mods)
+        })
     }
 
     fn sketch_draw_input(&mut self, ui: &Ui, resp: &egui::Response, rect: Rect, pos: Option<Pos2>, mods: egui::Modifiers) -> Input {
@@ -784,7 +790,8 @@ impl App {
     pub fn sketch_edit_button(&mut self, ui: &mut Ui, g: usize, s: usize) {
         let editing = self.sk.edit.as_ref().is_some_and(|e| e.g == g && e.s == s);
         let tip = "この形の輪かくを、画面の中で点をうごかして なおします";
-        if style::pill(ui, if editing { "スケッチの編集をおわる" } else { "スケッチを編集" }, editing).on_hover_text(tip).clicked() {
+        if style::pill(ui, if editing { "スケッチの編集をおわる" } else { "スケッチを編集" }, editing).on_hover_text(tip).clicked()
+        {
             if editing {
                 self.sk.edit = None;
             } else {
@@ -1112,7 +1119,12 @@ impl App {
                 let col = if bad { style::CUT } else { color };
                 self.paint_poly(p, rect, f, &shown, closed, col, 1.7);
                 // the way back to the first point
-                if pen != Pen::Line && !closed && st.pts.len() >= 3 && let (Some(a), Some(b)) = (st.pts.last().and_then(|q| self.sketch_px(rect, f, *q)), st.pts.first().and_then(|q| self.sketch_px(rect, f, *q))) {
+                if pen != Pen::Line
+                    && !closed
+                    && st.pts.len() >= 3
+                    && let (Some(a), Some(b)) =
+                        (st.pts.last().and_then(|q| self.sketch_px(rect, f, *q)), st.pts.first().and_then(|q| self.sketch_px(rect, f, *q)))
+                {
                     p.line_segment([a, b], Stroke::new(1.0, color.gamma_multiply(0.35)));
                 }
                 for (i, q) in st.pts.iter().enumerate() {
@@ -1236,7 +1248,18 @@ impl App {
             let Some(c) = self.sketch_px(rect, &f, *q) else { continue };
             let hot = e.hover == Some(Hover::Point(i)) || e.drag.as_ref().is_some_and(|d| d.idx == i);
             let chosen = e.sel == Some(i);
-            point_dot(p, c, if hot { 7.0 } else if chosen { 6.0 } else { 4.5 }, hot || chosen);
+            point_dot(
+                p,
+                c,
+                if hot {
+                    7.0
+                } else if chosen {
+                    6.0
+                } else {
+                    4.5
+                },
+                hot || chosen,
+            );
             if chosen {
                 tag(p, c + vec2(12.0, 10.0), &format!("{}, {}", fmt(q[0]), fmt(q[1])));
             }
@@ -1433,7 +1456,8 @@ impl App {
             });
             if self.sk.loft_top == LoftTop::Scaled {
                 style::labeled_slider(ui, "上の大きさ", &mut self.sk.loft_scale, 0.1..=3.0, "上の輪かくの大きさ (下を1とした倍率)");
-            } else if style::pill(ui, if self.sk.profile2.is_empty() { "上の輪かくをかく" } else { "上の輪かくをかきなおす" }, false).clicked() {
+            } else if style::pill(ui, if self.sk.profile2.is_empty() { "上の輪かくをかく" } else { "上の輪かくをかきなおす" }, false).clicked()
+            {
                 self.sk.stage = Stage::LoftTop;
                 self.sk.profile2.clear();
                 self.sk.clear_drawing();
@@ -1443,8 +1467,13 @@ impl App {
             style::labeled_slider(ui, "ふとさ", &mut self.sk.sweep_scale, 0.2..=4.0, "輪かくの大きさの倍率");
             ui.horizontal(|ui| {
                 let have = !self.sk.path.is_empty();
-                ui.label(egui::RichText::new(if have { format!("線: {}点", self.sk.path.len()) } else { "線がまだありません".to_string() }).size(11.5).color(style::DIM));
-                if style::pill(ui, if have { "線をかきなおす" } else { "線をかく" }, false).on_hover_text("通り道をかく (Enterで終わり)").clicked() {
+                ui.label(
+                    egui::RichText::new(if have { format!("線: {}点", self.sk.path.len()) } else { "線がまだありません".to_string() })
+                        .size(11.5)
+                        .color(style::DIM),
+                );
+                if style::pill(ui, if have { "線をかきなおす" } else { "線をかく" }, false).on_hover_text("通り道をかく (Enterで終わり)").clicked()
+                {
                     self.sk.stage = Stage::SweepPath;
                     self.sk.clear_drawing();
                     self.sk.frame = self.sketch_plane();
@@ -1599,8 +1628,7 @@ mod tests {
 
     #[test]
     fn a_polygon_is_closed_by_clicking_the_first_point_or_enter() {
-        let mut st = State::default();
-        st.pen = Pen::Polygon;
+        let mut st = State { pen: Pen::Polygon, ..State::default() };
         click_all(&mut st, &[[0.0, 0.0], [20.0, 0.0], [20.0, 10.0]]);
         let p = profile_of(st.click([0.0, 10.0], false).or_else(|| st.click([0.0, 0.0], true)));
         // the fourth point was only added; clicking the first one closed it
@@ -1620,8 +1648,7 @@ mod tests {
 
     #[test]
     fn a_point_that_would_cross_the_outline_is_refused() {
-        let mut st = State::default();
-        st.pen = Pen::Polygon;
+        let mut st = State { pen: Pen::Polygon, ..State::default() };
         click_all(&mut st, &[[0.0, 0.0], [20.0, 0.0], [20.0, 20.0], [10.0, 20.0]]);
         assert!(st.would_cross([10.0, -10.0]));
         assert!(!st.would_cross([0.0, 20.0]));
@@ -1633,16 +1660,14 @@ mod tests {
         st.click([0.0, 20.0], false);
         assert_eq!(st.pts.len(), 5);
         // a bow tie can never be finished
-        let mut bow = State::default();
-        bow.pts = vec![[0.0, 0.0], [10.0, 10.0], [10.0, 0.0], [0.0, 15.0]];
+        let mut bow = State { pts: vec![[0.0, 0.0], [10.0, 10.0], [10.0, 0.0], [0.0, 15.0]], ..State::default() };
         assert!(bow.enter().is_none());
         assert_eq!(bow.msg, SketchError::SelfIntersect.message());
     }
 
     #[test]
     fn rectangles_and_circles_are_dragged_or_clicked_out() {
-        let mut st = State::default();
-        st.pen = Pen::Rect;
+        let mut st = State { pen: Pen::Rect, ..State::default() };
         st.press([5.0, 5.0]);
         assert!(st.dragging && st.anchor == Some([5.0, 5.0]));
         let p = profile_of(st.release([25.0, 15.0]));
@@ -1673,9 +1698,7 @@ mod tests {
 
     #[test]
     fn a_spline_is_smooth_within_the_limit_and_corners_can_be_chosen() {
-        let mut st = State::default();
-        st.pen = Pen::Spline;
-        st.smooth = true;
+        let mut st = State { pen: Pen::Spline, smooth: true, ..State::default() };
         click_all(&mut st, &[[0.0, 0.0], [30.0, 0.0], [30.0, 20.0], [0.0, 20.0]]);
         let p = profile_of(st.enter());
         assert!(p.len() > 8 && p.len() <= MAX_OUTLINE, "{} points", p.len());
@@ -1717,8 +1740,7 @@ mod tests {
 
     #[test]
     fn backspace_and_escape_step_back() {
-        let mut st = State::default();
-        st.pen = Pen::Polygon;
+        let mut st = State { pen: Pen::Polygon, ..State::default() };
         click_all(&mut st, &[[0.0, 0.0], [10.0, 0.0], [10.0, 10.0]]);
         st.back();
         assert_eq!(st.pts.len(), 2);
@@ -1863,7 +1885,10 @@ mod tests {
         assert!(app.sketch_make(&ctx));
         let Some(Pick::Shape(g, s)) = app.sel else { panic!("selected") };
         let sh = app.scene.shape(g, s).expect("there").clone();
-        let field = crate::sdf::Field::new(&Scene { groups: vec![crate::model::Group { shapes: vec![sh], ..crate::model::Group::new("g") }], ..Scene::default() });
+        let field = crate::sdf::Field::new(&Scene {
+            groups: vec![crate::model::Group { shapes: vec![sh], ..crate::model::Group::new("g") }],
+            ..Scene::default()
+        });
         assert!(field.distance([0.0, 0.0, 45.0]) < 0.0, "inside the block on top of the ball");
         assert!(field.distance([0.0, 0.0, 39.0]) > 0.0 && field.distance([0.0, 0.0, 51.0]) > 0.0);
         assert!(field.distance([4.0, 4.0, 41.0]) < 0.0 && field.distance([7.0, 0.0, 45.0]) > 0.0);
@@ -2029,7 +2054,11 @@ mod tests {
         app.sk.pen = Pen::Polygon;
         app.sk.click([0.0, 0.0], false);
         app.sk.click([10.0, 0.0], false);
-        let key = |k: egui::Key| ctx.input_mut(|i| i.events.push(egui::Event::Key { key: k, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE }));
+        let key = |k: egui::Key| {
+            ctx.input_mut(|i| {
+                i.events.push(egui::Event::Key { key: k, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE })
+            })
+        };
         key(egui::Key::Escape);
         app.sketch_keys(&ctx);
         assert!(app.sk.on && app.sk.pts.is_empty(), "the first Esc throws the points away");
