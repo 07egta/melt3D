@@ -74,8 +74,14 @@ fn shape_at(i: i32) -> Shape {
     s.extra = D(b + 12);
     s.gcol = D(b + 13);
     s.gpar = D(b + 14);
-    s.twist0 = D(b + 15);
-    s.twist1 = D(b + 16);
+    // Most shapes have no modifier: avoid two extra texture loads per
+    // distance evaluation while retaining a fixed-size scene record.
+    s.twist0 = vec4<f32>(0.0);
+    s.twist1 = vec4<f32>(0.0);
+    if (s.r0.w > 0.5) {
+        s.twist0 = D(b + 15);
+        s.twist1 = D(b + 16);
+    }
     return s;
 }
 
