@@ -70,6 +70,11 @@ pub struct App {
     pub path: Option<PathBuf>,
     pub dirty: bool,
     pending_file_action: Option<PendingFileAction>,
+    /// Native document parsing and saving run off the UI thread.
+    native_job: Option<crate::document_job::Job>,
+    queued_open: Option<PathBuf>,
+    /// A Save-and-continue decision only runs after a complete successful save.
+    after_save: Option<PendingFileAction>,
     close_approved: bool,
     status: (String, f64),
     pub renaming: Option<Pick>,
@@ -155,6 +160,9 @@ impl App {
             path: None,
             dirty: false,
             pending_file_action: None,
+            native_job: None,
+            queued_open: None,
+            after_save: None,
             close_approved: false,
             status: (String::new(), 0.0),
             renaming: None,
@@ -279,7 +287,8 @@ impl App {
     }
 
     fn request_file_action(&mut self, action: PendingFileAction) {
-        if self.pending_file_action.is_some() {
+        if self.pending_file_action.is_some() || self.native_job.is_some() || self.queued_open.is_some() || self.after_save.is_some() {
+            self.notice = Some("ファイル処理が終わってから次の操作を行ってください".into());
             return;
         }
         if self.has_unsaved_work() {
@@ -291,19 +300,18 @@ impl App {
     }
 
     fn apply_file_action(&mut self, action: PendingFileAction) {
-        let (scene, path, notes) = match action {
-            PendingFileAction::New(scene) => (scene, None, Vec::new()),
+        match action {
+            PendingFileAction::New(scene) => self.install_scene(scene, None, Vec::new()),
             PendingFileAction::Open(path) => {
-                match std::fs::read_to_string(&path).map_err(|e| e.to_string()).and_then(|t| Scene::from_json_notes(&t)) {
-                    Ok((scene, notes)) => (scene, Some(path), notes),
-                    Err(e) => {
-                        self.status = (format!("開けませんでした: {e}"), 0.0);
-                        return;
-                    }
-                }
+                // No file I/O or JSON parsing on the UI thread. The current design stays
+                // visible until the worker reports a fully validated new Scene.
+                self.queued_open = Some(path);
             }
-            PendingFileAction::Close => return,
-        };
+            PendingFileAction::Close => {}
+        }
+    }
+
+    fn install_scene(&mut self, scene: Scene, path: Option<PathBuf>, notes: Vec<String>) {
         self.scene = scene.clone();
         self.committed = scene;
         self.undo.clear();
@@ -324,7 +332,7 @@ impl App {
             PendingFileDecision::Discard => self.finish_pending_file_action(ctx, action),
             PendingFileDecision::Save => {
                 if self.try_save(ctx, false) {
-                    self.finish_pending_file_action(ctx, action);
+                    self.after_save = Some(action);
                 } else {
                     self.pending_file_action = Some(action);
                 }
@@ -342,12 +350,17 @@ impl App {
     }
 
     fn handle_close_request(&mut self, ctx: &egui::Context) {
-        if ctx.input(|i| i.viewport().close_requested()) && !self.close_approved && (self.has_unsaved_work() || self.pending_file_action.is_some()) {
-            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            if self.pending_file_action.is_none() {
-                self.pending_file_action = Some(PendingFileAction::Close);
+        if ctx.input(|i| i.viewport().close_requested()) && !self.close_approved {
+            if self.native_job.is_some() || self.queued_open.is_some() || self.after_save.is_some() {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                self.say(ctx, "ファイル処理中です。完了するか中止してから閉じてください");
+            } else if self.has_unsaved_work() || self.pending_file_action.is_some() {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                if self.pending_file_action.is_none() {
+                    self.pending_file_action = Some(PendingFileAction::Close);
+                }
+                self.capture = None;
             }
-            self.capture = None;
         }
     }
 
@@ -595,20 +608,24 @@ impl App {
     }
 
     fn try_save(&mut self, ctx: &egui::Context, ask: bool) -> bool {
+        if self.native_job.is_some() || self.queued_open.is_some() {
+            self.say(ctx, "ほかのファイル処理が終わってから保存してください");
+            return false;
+        }
         let path = match (&self.path, ask) {
             (Some(p), false) => Some(p.clone()),
             _ => rfd::FileDialog::new().add_filter("MELTCAD", &["meltcad"]).set_file_name("作品.meltcad").save_file(),
         };
         let Some(path) = path else { return false };
-        match std::fs::write(&path, self.scene.to_json()) {
-            Ok(()) => {
-                self.path = Some(path);
-                self.dirty = false;
-                self.say(ctx, "保存しました");
-                true
+        let rev = self.track_scene();
+        match crate::document_job::Job::save(ctx, path, self.scene.clone(), rev) {
+            Ok(job) => {
+                self.native_job = Some(job);
+                ctx.request_repaint();
+                true // started, NOT yet saved successfully
             }
             Err(e) => {
-                self.say(ctx, format!("保存できませんでした: {e}"));
+                self.say(ctx, format!("保存を始められませんでした: {e}"));
                 false
             }
         }
@@ -629,10 +646,107 @@ impl App {
         crate::export_dialog::open_check(ctx);
     }
 
+    /// Start and poll native file work without blocking a frame. Failed/cancelled results never
+    /// replace the current Scene; edits made while an open was pending also prevent replacement.
+    fn update_native_job(&mut self, ctx: &egui::Context) {
+        if self.native_job.is_none() && let Some(path) = self.queued_open.clone() {
+            let rev = self.track_scene();
+            match crate::document_job::Job::open(ctx, path, rev) {
+                Ok(job) => {
+                    self.queued_open = None;
+                    self.native_job = Some(job);
+                }
+                Err(e) if e == crate::work_budget::BUSY => {
+                    ctx.request_repaint_after(std::time::Duration::from_millis(80));
+                }
+                Err(e) => {
+                    self.queued_open = None;
+                    self.say(ctx, e);
+                }
+            }
+        }
+
+        let result = self.native_job.as_ref().and_then(|job| job.poll().map(|r| (job.kind, job.base_revision, job.cancel_elapsed(), r)));
+        if let Some((kind, base_revision, cancel_secs, result)) = result {
+            self.native_job = None;
+            if let Some(secs) = cancel_secs {
+                // Actual cancellation latency, not just the instant the button was clicked.
+                crate::gpu_log::log(&format!("document cancellation finished after {secs:.3} s"));
+            }
+            match (kind, result) {
+                (crate::document_job::Kind::Open, Ok(crate::document_job::Completed::Opened { scene, path, notes })) => {
+                    if self.track_scene() == base_revision {
+                        self.install_scene(scene, Some(path), notes);
+                        self.say(ctx, "読み込みました");
+                    } else {
+                        self.say(ctx, "読み込み中に作品が変わったため、読み込み結果は適用しませんでした");
+                    }
+                }
+                (crate::document_job::Kind::Save, Ok(crate::document_job::Completed::Saved { path })) => {
+                    self.path = Some(path);
+                    let same = self.track_scene() == base_revision;
+                    self.dirty = !same;
+                    self.say(ctx, if same { "保存しました" } else { "保存中に編集されたため、最新の変更は未保存です" });
+                    if let Some(next) = self.after_save.take() {
+                        if same {
+                            self.finish_pending_file_action(ctx, next);
+                        } else {
+                            self.pending_file_action = Some(next);
+                        }
+                    }
+                }
+                (_, Ok(_)) => self.say(ctx, "ファイル処理の結果が不正です"),
+                (_, Err(e)) => {
+                    if kind == crate::document_job::Kind::Save {
+                        self.pending_file_action = self.after_save.take();
+                    }
+                    self.say(ctx, if e == crate::export_mesh::CANCELLED { "やめました".into() } else { e });
+                }
+            }
+        }
+        if self.native_job.is_some() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(70));
+        }
+    }
+
+    fn native_job_card(&mut self, ctx: &egui::Context) {
+        if self.queued_open.is_some() {
+            egui::Area::new(egui::Id::new("native_file_queue")).anchor(egui::Align2::RIGHT_BOTTOM, [-18.0, -24.0]).show(ctx, |ui| {
+                style::card().show(ui, |ui| {
+                    ui.label("他の重い処理が終わるまで読み込みを待機中（メモリ保護）");
+                    if ui.button("読み込みをやめる").clicked() { self.queued_open = None; }
+                });
+            });
+            return;
+        }
+        let Some(job) = self.native_job.as_mut() else { return };
+        egui::Area::new(egui::Id::new("native_file_progress")).anchor(egui::Align2::RIGHT_BOTTOM, [-18.0, -24.0]).show(ctx, |ui| {
+            style::card().show(ui, |ui| {
+                ui.set_width(325.0);
+                ui.label(egui::RichText::new(match job.kind {
+                    crate::document_job::Kind::Open => "作品を読み込み中…",
+                    crate::document_job::Kind::Save => "作品を保存中…",
+                }).strong());
+                ui.label(job.phase_name());
+                ui.add(egui::ProgressBar::new(job.fraction()).show_percentage());
+                ui.horizontal(|ui| {
+                    ui.label(format!("{:.1}秒", job.elapsed()));
+                    if job.can_cancel() {
+                        if ui.button("中止").clicked() { let _ = job.cancel(); }
+                    } else if job.is_committing() {
+                        ui.label("元ファイルを守るため、この段階は中止できません");
+                    } else {
+                        ui.label("中止処理を待っています…");
+                    }
+                });
+            });
+        });
+    }
+
     // ----- shortcuts -----
 
     fn keys(&mut self, ctx: &egui::Context) {
-        if self.pending_file_action.is_some() || ctx.egui_wants_keyboard_input() {
+        if self.pending_file_action.is_some() || self.native_job.is_some() || self.queued_open.is_some() || ctx.egui_wants_keyboard_input() {
             return;
         }
         use egui::{Key, Modifiers};
@@ -1243,6 +1357,7 @@ impl App {
         let frame_began = std::time::Instant::now();
         self.perf.stats.begin(ctx.input(|i| i.time));
         self.fix_selection();
+        self.update_native_job(&ctx);
         self.handle_close_request(&ctx);
         if let Some(n) = self.notice.take() {
             self.say(&ctx, n);
@@ -1279,6 +1394,7 @@ impl App {
             self.bench.show(&ctx);
         }
         self.pending_file_dialog(&ctx);
+        self.native_job_card(&ctx);
         self.capture_step(&ctx);
         self.settle(&ctx);
         self.test_hooks(&ctx);
