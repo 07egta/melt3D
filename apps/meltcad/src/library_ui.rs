@@ -111,7 +111,15 @@ pub fn insert(app: &mut App, ctx: &egui::Context, item: &Item) -> bool {
     let (_, own_r) = crate::gpu::bounds(&item.scene(), None);
     let at = if r > 0.0 { [c[0] + r + own_r + 6.0, c[1]] } else { [0.0, 0.0] };
     app.scene.groups.push(item.placed(at));
-    app.sel = Some(Pick::Group(app.scene.groups.len() - 1));
+    let gi = app.scene.groups.len() - 1;
+    // A single parametric vase should open its size/wave controls immediately.
+    app.sel = if app.scene.groups[gi].shapes.len() == 1
+        && app.scene.groups[gi].shapes[0].vase.is_some()
+    {
+        Some(Pick::Shape(gi, 0))
+    } else {
+        Some(Pick::Group(gi))
+    };
     app.frame_view(false);
     app.say(ctx, format!("「{}」を入れました", item.name));
     true
