@@ -256,7 +256,12 @@ pub fn hint(sk: &State, tool: Tool, selected: bool, shapes: usize, op: Op, curve
                 if sk.make == Make::Loft && sk.loft_top == crate::sketch_ui::LoftTop::Drawn && sk.profile2.len() < 3 {
                     return Hint::warn("ロフトの上の輪かくがありません", "「上の輪かくをかく」で閉じた形を描く");
                 }
-                return Hint::normal(HintId::SketchReady, "輪かくができました。高さを決めて「押し出しを作る」", "クリック: 確定 / Esc: 描き直す");
+                return match sk.make {
+                    Make::Extrude => Hint::normal(HintId::SketchReady, "輪かくができました。高さを決めて押し出す", "「押し出しを作る」クリック / Esc: 描き直す"),
+                    Make::Revolve => Hint::normal(HintId::SketchReady, "輪かくを回転体にする", "「回転体を作る」クリック / Esc: 描き直す"),
+                    Make::Loft => Hint::normal(HintId::SketchReady, "上下の輪かくをつなぐ", "「ロフトを作る」クリック / Esc: 描き直す"),
+                    Make::Sweep => Hint::normal(HintId::SketchReady, "線に沿ってスイープする", "「スイープを作る」クリック / Esc: 描き直す"),
+                };
             }
             Stage::LoftTop => return Hint::normal(HintId::SketchLoft, "ロフトの上側の輪かくを描く", "左ドラッグまたはクリック / Enter: 確定 / Esc: 戻る"),
             Stage::SweepPath => return Hint::normal(HintId::SketchSweep, "スイープの線を2点以上描く", "左クリック: 点 / Enter: 確定 / Esc: 戻る"),
