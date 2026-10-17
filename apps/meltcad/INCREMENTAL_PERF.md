@@ -11,8 +11,11 @@ Boolean combine functions, export tolerance, meshing resolution, or the STL seri
   follow source changes; transforms, Boolean order and visibility are re-resolved.
 - GPU `ScenePack::reusing`: untouched shape payloads reuse packed values with
   updated polygon/path pool indices. Source-group bound/block metadata is shared
-  only for unchanged shapes and compatible melt settings. Curves with adaptive
-  subdivision and mesh volumes fall back to full packing.
+  only for unchanged shapes and compatible melt settings. Unchanged curves
+  reuse their path payload only when the pool prefix (and therefore adaptive
+  tessellation budget) is unchanged; otherwise they are repacked. Imported
+  mesh payloads reuse only when volume texture layout is identical; otherwise
+  they are repacked.
 - Only the **last** CPU field scene and GPU pack scene are cached; no growing
   history/LRU. Pointer edits create a new revision, and Undo/Redo advances it.
 - Dragging/geometry editing uses existing low-cost fast rendering and returns
