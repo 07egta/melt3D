@@ -2,7 +2,7 @@
 //! Every piece is a separate ordinary scene Group, with no baked mesh or new shader primitive.
 //! A small marker on the first shape preserves the preset's parameters across save/reload.
 
-use std::f32::consts::{PI, TAU};
+use std::f32::consts::TAU;
 
 use crate::model::{Group, Kind, Material, MAX_GROUPS, MAX_SHAPES, Op, Scene, Shape};
 
@@ -218,6 +218,11 @@ fn add_queen(g: &mut Group, m: Material, at: [f32; 2], h: f32, r: f32, s: Settin
         [0.0,0.77*h],[0.49*r,0.77*h],[0.76*r,0.87*h],
         [0.75*r,0.94*h],[0.59*r,0.94*h],[0.42*r,0.87*h],[0.0,0.87*h],
     ]);
+    // Connect the central finial to the cup floor; it must not float inside the crown.
+    let mut finial = Shape::new(Kind::Cylinder, [at[0],at[1],0.916*h], m);
+    finial.size[0] = (0.22*r).max(0.8);
+    finial.size[1] = 0.115*h;
+    push(g,finial,"王冠の中央の支柱");
     let beads = if s.design == Design::Minimal { 4 } else { 6 };
     let small = (0.030*h + 0.02*r*s.ornament).max(0.65);
     for i in 0..beads {
@@ -237,7 +242,12 @@ fn add_rook(g: &mut Group, m: Material, at: [f32; 2], h: f32, r: f32, s: Setting
         let a = TAU * (i as f32 + 0.5) / n as f32;
         let pos = [at[0]+a.cos()*0.59*r, at[1]+a.sin()*0.59*r, 0.929*h];
         if s.design == Design::Organic {
-            ball(g, m, "有機的な城壁", pos, (0.09*h).min(0.32*r));
+            // An upright pill merges into the rim for both wide and very slender pieces.
+            let rad = (0.22*r).min(0.045*h).max(0.7);
+            let mut post = Shape::new(Kind::Capsule, [pos[0],pos[1],0.915*h],m);
+            post.size[0] = rad;
+            post.size[1] = (0.13*h-2.0*rad).max(0.3);
+            push(g,post,"有機的な城壁");
         } else {
             block(g, m, "城壁の凸", pos, [0.49*r,0.49*r,(0.125+0.035*s.ornament)*h], r*0.04);
         }
@@ -280,7 +290,7 @@ fn add_knight(g: &mut Group, m: Material, at: [f32; 2], h: f32, r: f32, s: Setti
     for side in [-1.0_f32, 1.0] {
         let cheek = [at[0]-0.06*r, at[1]+side*0.42*r, 0.705*h];
         ball(g, m, "馬の頬", cheek, 0.40*r);
-        let eye = [at[0]+0.15*r, at[1]+side*0.67*r, 0.73*h];
+        let eye = [at[0]+0.04*r, at[1]+side*0.77*r, 0.72*h];
         let rad = (r*(0.08+0.065*s.ornament)).max(0.7);
         ball(g, m, "馬の目", eye, rad);
     }
