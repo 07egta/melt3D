@@ -900,6 +900,15 @@ impl App {
                     self.sketch_button(ui);
                     style::menu_button(ui, "…", false, |ui| {
                         ui.set_min_width(190.0);
+                        ui.label(egui::RichText::new("Organic Tube・うねうねチューブ").size(12.0).color(style::ACCENT));
+                        for preset in crate::organic_tube::Preset::ALL {
+                            if ui.button(format!("＋ {}", preset.label())).on_hover_text("あとから点・半径・断面を編集できます").clicked() {
+                                self.add_organic_tube(&ctx, preset);
+                                ui.close();
+                            }
+                        }
+                        ui.separator();
+                        ui.set_min_width(190.0);
                         ui.label(egui::RichText::new("ほかの形").size(12.0).color(style::DIM));
                         for k in Kind::MORE {
                             let r = ui.horizontal(|ui| {
