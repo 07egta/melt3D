@@ -186,6 +186,28 @@ mod tests {
     }
 
     #[test]
+    fn individual_chess_piece_duplicates_saves_and_undoes() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(true,None);
+        chess::insert_set(&mut app.scene,Settings::default(),[0.0,0.0]).unwrap();
+        ctx.run_ui(egui::RawInput::default(), |ui| app.settle(ui.ctx())).textures_delta.clear();
+        assert_eq!(app.scene.groups.len(),33);
+        app.sel = Some(Pick::Group(1));
+        let original = app.scene.groups[1].shapes[0].pos;
+        app.duplicate();
+        assert_eq!(app.scene.groups.len(),34);
+        let copied = &app.scene.groups[2];
+        assert!(chess::preset_of(copied).is_some());
+        assert_eq!(copied.shapes[0].pos[0],original[0]+8.0);
+        ctx.run_ui(egui::RawInput::default(), |ui| app.settle(ui.ctx())).textures_delta.clear();
+        app.undo();
+        assert_eq!(app.scene.groups.len(),33);
+        app.redo();
+        assert_eq!(app.scene.groups.len(),34);
+        assert_eq!(Scene::from_json(&app.scene.to_json()).unwrap(),app.scene);
+    }
+
+    #[test]
     fn rebuilding_does_not_modify_non_chess_groups() {
         let ctx = egui::Context::default();
         let mut app = App::new(true,None);
