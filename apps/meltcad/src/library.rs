@@ -57,7 +57,23 @@ const FILES: [&str; 15] = [
 /// All categories (parsed once). A damaged file is skipped, never a crash; a test checks they all parse.
 pub fn all() -> &'static [Category] {
     static LIB: OnceLock<Vec<Category>> = OnceLock::new();
-    LIB.get_or_init(|| FILES.iter().filter_map(|t| parse(t).ok()).filter(|c| !c.items.is_empty()).collect())
+    LIB.get_or_init(|| {
+        let mut categories: Vec<Category> = FILES.iter().filter_map(|t| parse(t).ok()).filter(|c| !c.items.is_empty()).collect();
+        // Generated once from the exact same parametric state users later edit.
+        // No baked mesh assets, no extra runtime file reads and no duplicate SDF engine.
+        let items = crate::organic_vase::Design::ALL.into_iter().map(|design| {
+            let mut group = Group::new(design.name());
+            group.blend = 0.0;
+            group.shapes.push(crate::organic_vase::new(design));
+            Item {
+                name: design.name().to_string(),
+                tags: vec!["organic vase".into(), "有機 花瓶".into(), "vase".into(), "3Dプリント".into()],
+                group,
+            }
+        }).collect();
+        categories.push(Category { name: "花瓶・Vase".into(), items });
+        categories
+    })
 }
 
 fn parse(text: &str) -> Result<Category, String> {
