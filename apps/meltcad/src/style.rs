@@ -163,6 +163,22 @@ pub fn icon_button(ui: &mut Ui, size: f32, tip: &str, on: bool, paint: impl FnOn
     resp.on_hover_text(tip)
 }
 
+/// A wide button: a small picture on the left and its name beside it (the left tool strip).
+pub fn wide_button(ui: &mut Ui, label: &str, tip: &str, on: bool, color: Option<Color32>, paint: impl FnOnce(&Painter, Rect, Color32)) -> Response {
+    let size = vec2(STRIP_W, 34.0);
+    let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
+    let shift = paint_button(ui, &resp, rect, 9.0, on);
+    let hot = ui.ctx().animate_value_with_time(resp.id.with("hot"), if resp.hovered() { 1.0 } else { 0.0 }, FAST);
+    let ink = if on { Color32::WHITE } else { mix(TEXT, Color32::WHITE, hot) };
+    let icon = Rect::from_center_size(rect.left_center() + vec2(18.0, 0.0), Vec2::splat(26.0)).translate(shift);
+    paint(ui.painter(), icon, color.map_or(ink, |c| if on { Color32::WHITE } else { c }));
+    ui.painter().text(rect.left_center() + vec2(38.0, 0.0) + shift, Align2::LEFT_CENTER, label, FontId::proportional(13.0), if on { Color32::WHITE } else { color.unwrap_or(ink) });
+    resp.on_hover_text(tip)
+}
+
+/// The width of the buttons in the left tool strip.
+pub const STRIP_W: f32 = 112.0;
+
 /// A button with text. `on` highlights it as the chosen one.
 pub fn pill(ui: &mut Ui, text: &str, on: bool) -> Response {
     text_button(ui, text, on, true, None)

@@ -589,7 +589,7 @@ impl App {
     /// The button in the tool strip.
     pub fn sketch_button(&mut self, ui: &mut Ui) {
         let on = self.sk.on;
-        if style::icon_button(ui, 34.0, "Sketch (draw on a plane, then Extrude, Revolve, Loft or Sweep)", on, glyph).clicked() {
+        if style::wide_button(ui, "Sketch", "Sketch (draw on a plane, then Extrude, Revolve, Loft or Sweep)", on, None, glyph).clicked() {
             self.set_sketch_tool(!on);
         }
     }

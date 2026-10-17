@@ -1334,7 +1334,8 @@ impl Callback {
         }
         // what the blit shows: A everywhere, and the finished rows of B on top when B is of this very state
         let b_current = pics.b.key == Some(key_b);
-        let reveal = if b_current { pics.bands.fraction() } else { 0.0 };
+        // (shown all at once when the whole sharp picture is done: a sweep from the top looked like a glitch)
+        let reveal = if b_current && pics.bands.complete() { 1.0 } else { 0.0 };
         let cap = [pics.capacity[0] as f32, pics.capacity[1] as f32];
         let share = |u: [u32; 2]| [u[0] as f32 / cap[0], u[1] as f32 / cap[1], 1.0 / cap[0], 1.0 / cap[1]];
         let (a, b) = (share(pics.a.used), share(pics.b.used));

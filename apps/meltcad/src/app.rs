@@ -1057,10 +1057,10 @@ impl App {
             style::strip().show(ui, |ui| {
                 ui.spacing_mut().item_spacing = egui::vec2(0.0, 4.0);
                 // a tall strip scrolls instead of running off a small window
-                egui::ScrollArea::vertical().max_height((rect.height() - 40.0).max(120.0)).auto_shrink([true, true]).show(ui, |ui| {
+                egui::ScrollArea::vertical().max_height((rect.height().min(ctx.content_rect().bottom() - rect.top()) - 56.0).max(120.0)).auto_shrink([true, true]).show(ui, |ui| {
                 ui.vertical_centered(|ui| {
                     for k in Kind::MAIN {
-                        let r = style::icon_button(ui, 38.0, k.label(), false, |p, r, ink| glyphs::kind(p, r, k, ink, Color32::from_white_alpha(18)));
+                        let r = style::wide_button(ui, k.label(), k.label(), false, None, |p, r, ink| glyphs::kind(p, r, k, ink, Color32::from_white_alpha(18)));
                         if r.clicked() {
                             self.add_shape(&ctx, k);
                         }
@@ -1068,7 +1068,7 @@ impl App {
                     self.curve_button(ui);
                     self.pipe_button(ui);
                     self.sketch_button(ui);
-                    style::menu_button(ui, "…", false, |ui| {
+                    style::menu_button(ui, "More shapes…", false, |ui| {
                         ui.set_min_width(190.0);
                         ui.label(egui::RichText::new("Other shapes").size(12.0).color(style::DIM));
                         for k in Kind::MORE {
@@ -1097,21 +1097,21 @@ impl App {
                         }
                     });
                     style::hsep(ui);
+                    ui.label(egui::RichText::new("Next shape…").size(11.0).color(style::DIM));
                     for op in [Op::Add, Op::Subtract, Op::Paint, Op::Intersect] {
                         let on = self.new_op == op;
-                        let col = if on { Color32::WHITE } else { style::op_color(op) };
-                        let tip = match op {
-                            Op::Add => "Next: Add (join)",
-                            Op::Subtract => "Next: Subtract (cut out)",
-                            Op::Paint => "Next: Paint (color only)",
-                            Op::Intersect => "Next: Intersect (keep overlap only)",
+                        let (name, tip) = match op {
+                            Op::Add => ("Add", "Join: the new shape is added to the model (Tab flips Add / Cut)"),
+                            Op::Subtract => ("Cut", "Cut: the new shape carves a hole out of the model"),
+                            Op::Paint => ("Paint", "Paint: the new shape only changes the colour where it touches"),
+                            Op::Intersect => ("Overlap", "Overlap: keep only the part where the new shape and the model meet"),
                         };
-                        if style::icon_button(ui, 38.0, tip, on, |p, r, _| glyphs::op(p, r, op, col)).clicked() {
+                        if style::wide_button(ui, name, tip, on, Some(style::op_color(op)), |p, r, ink| glyphs::op(p, r, op, ink)).clicked() {
                             self.new_op = op;
                         }
                     }
                     style::hsep(ui);
-                    if style::icon_button(ui, 38.0, "New group", false, glyphs::group).clicked() {
+                    if style::wide_button(ui, "New group", "New group", false, None, glyphs::group).clicked() {
                         self.add_group();
                     }
                 });

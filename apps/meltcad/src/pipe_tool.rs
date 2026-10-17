@@ -121,7 +121,7 @@ impl App {
     /// The top-bar toggle for the pipe tool.
     pub fn pipe_button(&mut self, ui: &mut Ui) {
         let on = self.pt.on;
-        if style::icon_button(ui, 34.0, "Pipe (drag across the view to trace a pipe)", on, glyph).clicked() {
+        if style::wide_button(ui, "Pipe", "Pipe (drag across the view to trace a pipe)", on, None, glyph).clicked() {
             self.set_pipe_tool(!on);
         }
     }

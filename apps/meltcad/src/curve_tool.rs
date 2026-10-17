@@ -668,7 +668,7 @@ impl App {
     /// The top-bar toggle for the "せん" tool.
     pub fn curve_button(&mut self, ui: &mut Ui) {
         let on = self.ct.drawing;
-        if style::icon_button(ui, 34.0, "Curve (click to place nodes, draw a line)", on, glyph).clicked() {
+        if style::wide_button(ui, "Curve", "Curve (click to place nodes, draw a line)", on, None, glyph).clicked() {
             if on {
                 self.finish_drawing();
             }
