@@ -163,27 +163,23 @@ pub fn icon_button(ui: &mut Ui, size: f32, tip: &str, on: bool, paint: impl FnOn
     resp.on_hover_text(tip)
 }
 
-/// A wide button: a small picture on the left and its name beside it (the left tool strip).
+/// A strip button: just the picture, 34 px square; the name is in the hover tip (the left tool strip).
 pub fn wide_button(ui: &mut Ui, label: &str, tip: &str, on: bool, color: Option<Color32>, paint: impl FnOnce(&Painter, Rect, Color32)) -> Response {
-    let size = vec2(STRIP_W, 34.0);
+    let size = Vec2::splat(STRIP_BTN);
     let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
     let shift = paint_button(ui, &resp, rect, 9.0, on);
     let hot = ui.ctx().animate_value_with_time(resp.id.with("hot"), if resp.hovered() { 1.0 } else { 0.0 }, FAST);
     let ink = if on { Color32::WHITE } else { mix(TEXT, Color32::WHITE, hot) };
-    let icon = Rect::from_center_size(rect.left_center() + vec2(18.0, 0.0), Vec2::splat(26.0)).translate(shift);
+    let icon = Rect::from_center_size(rect.center(), Vec2::splat(26.0)).translate(shift);
     paint(ui.painter(), icon, color.map_or(ink, |c| if on { Color32::WHITE } else { c }));
-    ui.painter().text(
-        rect.left_center() + vec2(38.0, 0.0) + shift,
-        Align2::LEFT_CENTER,
-        label,
-        FontId::proportional(13.0),
-        if on { Color32::WHITE } else { color.unwrap_or(ink) },
-    );
+    let tip = if tip == label || tip.is_empty() { label.to_string() } else { format!("{label} - {tip}") };
     resp.on_hover_text(tip)
 }
 
+/// Strip button size, and the strip's width (two columns).
+pub const STRIP_BTN: f32 = 34.0;
 /// The width of the buttons in the left tool strip.
-pub const STRIP_W: f32 = 112.0;
+pub const STRIP_W: f32 = STRIP_BTN * 2.0 + 4.0;
 
 /// A button with text. `on` highlights it as the chosen one.
 pub fn pill(ui: &mut Ui, text: &str, on: bool) -> Response {
@@ -378,6 +374,12 @@ pub fn strip() -> egui::Frame {
 }
 
 /// A thin horizontal divider between groups of buttons in a column.
+pub fn hsep_w(ui: &mut Ui, w: f32) {
+    let (rect, _) = ui.allocate_exact_size(vec2(w, 9.0), Sense::hover());
+    let y = rect.center().y;
+    ui.painter().line_segment([pos2(rect.left(), y), pos2(rect.right(), y)], Stroke::new(1.0, Color32::from_white_alpha(34)));
+}
+
 pub fn hsep(ui: &mut Ui) {
     let (rect, _) = ui.allocate_exact_size(vec2(26.0, 9.0), Sense::hover());
     let y = rect.center().y;

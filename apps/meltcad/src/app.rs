@@ -1075,7 +1075,9 @@ impl App {
                         .max_height((rect.height().min(ctx.content_rect().bottom() - rect.top()) - 56.0).max(120.0))
                         .auto_shrink([true, true])
                         .show(ui, |ui| {
-                            ui.vertical_centered(|ui| {
+                            ui.set_max_width(style::STRIP_W);
+                            ui.horizontal_wrapped(|ui| {
+                                ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
                                 for k in Kind::MAIN {
                                     let r = style::wide_button(ui, k.label(), k.label(), false, None, |p, r, ink| {
                                         glyphs::kind(p, r, k, ink, Color32::from_white_alpha(18))
@@ -1087,7 +1089,7 @@ impl App {
                                 self.curve_button(ui);
                                 self.pipe_button(ui);
                                 self.sketch_button(ui);
-                                style::menu_button(ui, "More shapes…", false, |ui| {
+                                style::menu_button(ui, "…", false, |ui| {
                                     ui.set_min_width(190.0);
                                     ui.label(egui::RichText::new("Other shapes").size(12.0).color(style::DIM));
                                     for k in Kind::MORE {
@@ -1115,8 +1117,9 @@ impl App {
                                         }
                                     }
                                 });
-                                style::hsep(ui);
-                                ui.label(egui::RichText::new("Next shape…").size(11.0).color(style::DIM));
+                                ui.end_row();
+                                style::hsep_w(ui, style::STRIP_W);
+                                ui.end_row();
                                 for op in [Op::Add, Op::Subtract, Op::Paint, Op::Intersect] {
                                     let on = self.new_op == op;
                                     let (name, tip) = match op {
@@ -1131,7 +1134,9 @@ impl App {
                                         self.new_op = op;
                                     }
                                 }
-                                style::hsep(ui);
+                                ui.end_row();
+                                style::hsep_w(ui, style::STRIP_W);
+                                ui.end_row();
                                 if style::wide_button(ui, "New group", "New group", false, None, glyphs::group).clicked() {
                                     self.add_group();
                                 }
