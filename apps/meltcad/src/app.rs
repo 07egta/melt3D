@@ -996,8 +996,9 @@ impl App {
     fn simple_tool_strip(&mut self, _ui: &mut Ui) {
         let ctx = _ui.ctx().clone();
         let rect = self.view_rect;
+        let mini = rect.width() < 260.0;
         let narrow = rect.width() < 430.0;
-        let tool_width = if narrow { 82.0 } else { 118.0 };
+        let tool_width = if mini { 44.0 } else if narrow { 82.0 } else { 118.0 };
         egui::Area::new(egui::Id::new("simple_tool_strip"))
             .order(egui::Order::Middle)
             .fixed_pos(rect.left_top() + egui::vec2(7.0, 9.0))
@@ -1010,14 +1011,30 @@ impl App {
                         .show(ui, |ui| {
                             ui.vertical(|ui| {
                                 ui.spacing_mut().item_spacing.y = 5.0;
-                                if !narrow { ui.label(RichText::new("形を作る").size(12.0).strong().color(style::DIM)); }
+                                if mini {
+                                    style::menu_button(ui, "＋", false, |ui| self.shape_category_menu(ui, &ctx));
+                                    if ui.add_sized([tool_width, 32.0], egui::Button::new("✎"))
+                                        .on_hover_text("スケッチを描く").clicked() {
+                                        self.set_sketch_tool(!self.sk.on);
+                                    }
+                                    style::menu_button(ui, "…", false, |ui| {
+                                        if ui.button("線を描く").clicked() { self.toggle_curve_tool(); ui.close(); }
+                                        if ui.button("パイプを描く").clicked() { self.set_pipe_tool(!self.pt.on); ui.close(); }
+                                        ui.separator();
+                                        for (op, name) in [(Op::Add, "＋ 足す"), (Op::Subtract, "－ 削る"), (Op::Paint, "色を塗る"), (Op::Intersect, "重なる部分だけ")] {
+                                            if ui.selectable_label(self.new_op == op, name).clicked() { self.new_op = op; ui.close(); }
+                                        }
+                                        if ui.button("グループを作る").clicked() { self.add_group(); ui.close(); }
+                                    });
+                                } else {
+                                    if !narrow { ui.label(RichText::new("形を作る").size(12.0).strong().color(style::DIM)); }
                                 for kind in [Kind::Box, Kind::Sphere, Kind::Cylinder] {
                                     if ui.add_sized([tool_width, 30.0], egui::Button::new(format!("＋ {}", kind.label())))
                                         .on_hover_text("クリックすると立体を追加します").clicked() {
                                         self.add_shape(&ctx, kind);
                                     }
                                 }
-                                style::menu_button(ui, "ほかの形 ▾", false, |ui| self.shape_category_menu(ui, &ctx));
+                                style::menu_button(ui, if narrow { "形 ▾" } else { "ほかの形 ▾" }, false, |ui| self.shape_category_menu(ui, &ctx));
                                 ui.separator();
                                 if ui.add_sized([tool_width, 32.0], egui::Button::new(if self.sk.on { "✓ スケッチ" } else { "スケッチ" }))
                                     .on_hover_text("平面に線を描き、押し出しなどで立体にする").clicked() {
@@ -1033,7 +1050,7 @@ impl App {
                                         self.set_pipe_tool(!self.pt.on);
                                     }
                                 } else {
-                                    style::menu_button(ui, "線・パイプ", false, |ui| {
+                                    style::menu_button(ui, "線・管", false, |ui| {
                                         if ui.button("線を描く").clicked() { self.toggle_curve_tool(); ui.close(); }
                                         if ui.button("パイプを描く").clicked() { self.set_pipe_tool(!self.pt.on); ui.close(); }
                                     });
@@ -1046,12 +1063,13 @@ impl App {
                                     if ui.add_sized([tool_width, 28.0], egui::Button::new(label).selected(self.new_op == op))
                                         .on_hover_text(tip).clicked() { self.new_op = op; }
                                 }
-                                style::menu_button(ui, "その他の操作", false, |ui| {
+                                style::menu_button(ui, if narrow { "その他" } else { "その他の操作" }, false, |ui| {
                                     for (op, label) in [(Op::Paint, "● 色を塗る"), (Op::Intersect, "◐ 重なりだけ残す")] {
                                         if ui.selectable_label(self.new_op == op, label).clicked() { self.new_op = op; ui.close(); }
                                     }
                                     if ui.button("グループを作る").clicked() { self.add_group(); ui.close(); }
                                 });
+                                }
                             });
                         });
                 });
