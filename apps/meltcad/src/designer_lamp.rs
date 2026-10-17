@@ -230,10 +230,15 @@ pub fn regenerate(g: &mut Group, mut next: LampParams) {
                 new.rot = old.rot;
                 new.scale = old.scale;
             }
-            new.name = old.name.clone();
+            if old_p.style == next.style || old.name != previous_base.shapes[i].name {
+                new.name = old.name.clone(); // keep custom names, update default name on style changes
+            }
             new.visible = old.visible;
             new.uid = old.uid;
         }
+    }
+    if g.name == previous_base.name {
+        g.name = refreshed.name.clone();
     }
     g.shapes = refreshed.shapes;
     g.lamp = Some(next);
@@ -424,6 +429,23 @@ mod tests {
         let restored = Scene::from_json(&scene.to_json()).unwrap();
         assert_eq!(restored.groups[0].lamp, g.lamp);
         assert_eq!(restored.groups[0].shapes, g.shapes);
+    }
+
+    #[test]
+    fn switching_style_updates_default_names_but_preserves_custom_names() {
+        let mut g = build(LampParams::for_style(LampStyle::Mushroom));
+        let mut spec = g.lamp.unwrap();
+        spec.style = LampStyle::Arch;
+        regenerate(&mut g, spec);
+        assert_eq!(g.name, "Designer Lamp - アーチ型");
+        assert_eq!(g.shapes[1].name, "支柱 / Arch arm");
+        g.name = "オリジナル照明".into();
+        g.shapes[1].name = "真鍮アーム".into();
+        spec.style = LampStyle::Globe;
+        regenerate(&mut g, spec);
+        assert_eq!(g.name, "オリジナル照明");
+        assert_eq!(g.shapes[1].name, "真鍮アーム");
+        assert_eq!(g.shapes[1].kind, Kind::Cylinder);
     }
 
     #[test]
