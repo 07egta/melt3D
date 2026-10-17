@@ -2,7 +2,12 @@
 //! command - and press Enter. It matches Japanese names and English / other common names.
 //! This is a child module of `app` so it can reach the app's private pieces.
 
-use egui::{Align2, Color32, Key, RichText, Vec2};
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
+use std::sync::OnceLock;
+
+use egui::{Key, RichText};
+use serde::{Deserialize, Serialize};
 
 use super::{App, ExportFormat, Tool};
 use crate::library;
@@ -166,44 +171,251 @@ pub fn entries() -> Vec<Entry> {
     v
 }
 
-/// How well `q` matches an entry: None = no match, lower is better.
+/// Existing labels and English/Japanese aliases above remain the single source of truth.
+/// Index their 1-3 character substrings once; on a query, score only the posting-list
+/// intersection rather than examining every shape and library item.
+fn gram_keys(text: &str, width: usize) -> Vec<String> {
+    let chars: Vec<char> = text.chars().collect();
+    chars.windows(width).map(|window| format!("{width}:{}", window.iter().collect::<String>())).collect()
+}
+
+fn action_key(action: Action) -> String {
+    // Stable across sessions, independent of the library's current display order.
+    format!("{action:?}")
+}
+
+#[derive(Default, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub(super) struct Prefs {
+    favorites: Vec<String>,
+    recent: Vec<String>,
+}
+
+impl Prefs {
+    const RECENT_LIMIT: usize = 16;
+    const FAVORITE_LIMIT: usize = 128;
+
+    fn path() -> Option<PathBuf> {
+        #[cfg(target_os = "windows")]
+        {
+            Some(PathBuf::from(std::env::var_os("APPDATA").or_else(|| std::env::var_os("LOCALAPPDATA"))?).join("YuraCAD").join("command_palette.json"))
+        }
+        #[cfg(target_os = "macos")]
+        {
+            Some(PathBuf::from(std::env::var_os("HOME")?).join("Library/Application Support/YuraCAD/command_palette.json"))
+        }
+        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+        {
+            let root = std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from)
+                .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))?;
+            Some(root.join("yuracad").join("command_palette.json"))
+        }
+    }
+
+    pub(super) fn load() -> Self {
+        if cfg!(test) { return Self::default(); }
+        let Some(path) = Self::path() else { return Self::default() };
+        std::fs::read_to_string(path).ok()
+            .and_then(|s| serde_json::from_str::<Self>(&s).ok())
+            .unwrap_or_default()
+            .sanitized()
+    }
+
+    fn sanitized(mut self) -> Self {
+        fn unique(v: &mut Vec<String>, limit: usize) {
+            let mut seen = HashSet::new();
+            v.retain(|s| seen.insert(s.clone()));
+            v.truncate(limit);
+        }
+        unique(&mut self.favorites, Self::FAVORITE_LIMIT);
+        unique(&mut self.recent, Self::RECENT_LIMIT);
+        self
+    }
+
+    fn save(&self) {
+        if cfg!(test) { return; }
+        let Some(path) = Self::path() else { return };
+        let Some(parent) = path.parent() else { return };
+        if std::fs::create_dir_all(parent).is_err() { return; }
+        if let Ok(data) = serde_json::to_vec_pretty(self) {
+            // Preferences are independent of user project files. Failed persistence must
+            // never interrupt modelling; an unreadable file simply loads defaults.
+            let _ = std::fs::write(path, data);
+        }
+    }
+
+    fn contains(&self, action: Action) -> bool {
+        self.favorites.contains(&action_key(action))
+    }
+
+    fn toggle(&mut self, action: Action) {
+        let key = action_key(action);
+        if let Some(i) = self.favorites.iter().position(|s| s == &key) {
+            self.favorites.remove(i);
+        } else if self.favorites.len() < Self::FAVORITE_LIMIT {
+            self.favorites.push(key);
+        }
+    }
+
+    fn record(&mut self, action: Action) {
+        let key = action_key(action);
+        self.recent.retain(|s| s != &key);
+        self.recent.insert(0, key);
+        self.recent.truncate(Self::RECENT_LIMIT);
+    }
+}
+
+struct Catalog {
+    entries: Vec<Entry>,
+    keys: Vec<String>,
+    by_key: HashMap<String, usize>,
+    postings: HashMap<String, Vec<usize>>,
+    /// Computed only once, rather than finding default commands on every open.
+    defaults: Vec<usize>,
+}
+
+impl Catalog {
+    fn new(entries: Vec<Entry>) -> Self {
+        let mut postings: HashMap<String, Vec<usize>> = HashMap::new();
+        let mut keys = Vec::with_capacity(entries.len());
+        let mut by_key = HashMap::with_capacity(entries.len());
+        for (i, e) in entries.iter().enumerate() {
+            let key = action_key(e.action);
+            by_key.insert(key.clone(), i);
+            keys.push(key);
+            // Keep label and aliases separate: do not create imaginary substrings
+            // crossing from the Japanese name into its English aliases.
+            for text in [e.label.to_lowercase(), e.words.to_lowercase()] {
+                for width in 1..=3 {
+                    for gram in gram_keys(&text, width) {
+                        let list = postings.entry(gram).or_default();
+                        if list.last() != Some(&i) { list.push(i); }
+                    }
+                }
+            }
+        }
+        let mut defaults = Vec::new();
+        for action in [
+            Action::AddShape(Kind::Box),
+            Action::AddShape(Kind::Sphere),
+            Action::Save,
+            Action::ShowAssets,
+            Action::ImportMesh,
+            Action::SetTool(Tool::Move),
+            Action::Undo,
+            Action::Export(ExportFormat::Stl),
+            Action::Help,
+        ] {
+            if let Some(&i) = by_key.get(&action_key(action)) { defaults.push(i); }
+        }
+        for (i, e) in entries.iter().enumerate() {
+            if e.tag != "ライブラリ" && !defaults.contains(&i) { defaults.push(i); }
+        }
+        Self { entries, keys, by_key, postings, defaults }
+    }
+
+    fn indexed_candidates(&self, words: &[String], width: usize) -> Vec<usize> {
+        let mut lists: Vec<&Vec<usize>> = Vec::new();
+        for word in words {
+            for gram in gram_keys(word, width.min(word.chars().count())) {
+                let Some(list) = self.postings.get(&gram) else { return Vec::new() };
+                lists.push(list);
+            }
+        }
+        lists.sort_by_key(|list| list.len());
+        let Some(first) = lists.first() else { return Vec::new() };
+        let mut ids = first.to_vec();
+        for list in lists.iter().skip(1) {
+            ids.retain(|i| list.binary_search(i).is_ok());
+            if ids.is_empty() { break; }
+        }
+        ids
+    }
+
+    fn candidates(&self, query: &str) -> Vec<usize> {
+        let tokens: Vec<String> = query.split_whitespace().map(str::to_owned).collect();
+        if tokens.is_empty() { return Vec::new(); }
+        // Each token uses its longest available 1, 2 or 3-character grams.
+        let mut lists: Vec<&Vec<usize>> = Vec::new();
+        for token in &tokens {
+            let n = token.chars().count().min(3);
+            for gram in gram_keys(token, n) {
+                let Some(list) = self.postings.get(&gram) else { return Vec::new() };
+                lists.push(list);
+            }
+        }
+        lists.sort_by_key(|v| v.len());
+        let Some(first) = lists.first() else { return Vec::new() };
+        let mut ids = first.to_vec();
+        for list in lists.iter().skip(1) {
+            ids.retain(|i| list.binary_search(i).is_ok());
+            if ids.is_empty() { break; }
+        }
+        ids
+    }
+
+    fn search(&self, query: &str, prefs: &Prefs, limit: usize) -> Vec<usize> {
+        if limit == 0 { return Vec::new(); }
+        let q = query.trim().to_lowercase();
+        if q.is_empty() {
+            let mut out = Vec::with_capacity(limit);
+            let mut seen = HashSet::new();
+            for key in prefs.favorites.iter().chain(prefs.recent.iter()) {
+                if let Some(&i) = self.by_key.get(key) {
+                    if seen.insert(i) { out.push(i); }
+                    if out.len() == limit { return out; }
+                }
+            }
+            for &i in &self.defaults {
+                if seen.insert(i) { out.push(i); }
+                if out.len() == limit { break; }
+            }
+            return out;
+        }
+        let mut candidates = self.candidates(&q);
+        let mut scored = self.rank_candidates(&candidates, &q, prefs);
+        // Retain the old initials / ordered-letters search without the old full scan:
+        // only try intersecting per-character postings if no substring matches.
+        if scored.is_empty() && !q.contains(char::is_whitespace) && q.chars().count() > 1 {
+            candidates = self.indexed_candidates(&[q.clone()], 1);
+            scored = self.rank_candidates(&candidates, &q, prefs);
+        }
+        scored.truncate(limit);
+        scored.into_iter().map(|(_, i)| i).collect()
+    }
+
+    fn rank_candidates(&self, ids: &[usize], q: &str, prefs: &Prefs) -> Vec<((u32, usize, usize, usize), usize)> {
+        let favorite: HashSet<&str> = prefs.favorites.iter().map(String::as_str).collect();
+        let recent: HashMap<&str, usize> = prefs.recent.iter().enumerate().map(|(i, s)| (s.as_str(), i)).collect();
+        let mut hits: Vec<_> = ids.iter().filter_map(|&i| {
+            let score = score(self.entries.get(i)?, q)?;
+            let key = self.keys[i].as_str();
+            Some(((score, usize::from(!favorite.contains(key)), recent.get(key).copied().unwrap_or(usize::MAX), i), i))
+        }).collect();
+        hits.sort_unstable_by_key(|(rank, _)| *rank);
+        hits
+    }
+}
+
+/// How well q matches an existing entry. Ranking is unchanged; only candidate
+/// generation is indexed. Lower rank is better.
 fn score(e: &Entry, q: &str) -> Option<u32> {
     let label = e.label.to_lowercase();
-    if label == q {
-        return Some(0);
-    }
-    if label.starts_with(q) {
-        return Some(1);
-    }
-    if label.contains(q) {
-        return Some(2);
-    }
-    if e.words.split_whitespace().any(|w| w == q) {
-        return Some(3);
-    }
-    if e.words.split_whitespace().any(|w| w.starts_with(q)) {
-        return Some(4);
-    }
-    if e.words.contains(q) {
-        return Some(5);
-    }
-    // letters in order ("ssp" finds "sphere ...")
+    if label == q { return Some(0); }
+    if label.starts_with(q) { return Some(1); }
+    if label.contains(q) { return Some(2); }
+    if e.words.split_whitespace().any(|w| w == q) { return Some(3); }
+    if e.words.split_whitespace().any(|w| w.starts_with(q)) { return Some(4); }
+    if e.words.contains(q) { return Some(5); }
     let mut it = label.chars().chain(std::iter::once(' ')).chain(e.words.chars());
-    if q.chars().all(|c| it.any(|x| x == c)) {
-        return Some(6);
-    }
+    if q.chars().all(|c| it.any(|x| x == c)) { return Some(6); }
     None
 }
 
-/// The entries that match, best first, at most `limit`. An empty query lists the commands people use most.
-pub fn search(all: &[Entry], query: &str, limit: usize) -> Vec<usize> {
-    let q = query.trim().to_lowercase();
-    if q.is_empty() {
-        return all.iter().enumerate().filter(|(_, e)| e.tag != "ライブラリ").map(|(i, _)| i).take(limit).collect();
-    }
-    let mut hits: Vec<(u32, usize)> = all.iter().enumerate().filter_map(|(i, e)| score(e, &q).map(|s| (s, i))).collect();
-    hits.sort_by_key(|(s, i)| (*s, *i));
-    hits.into_iter().map(|(_, i)| i).take(limit).collect()
+static CATALOG: OnceLock<Catalog> = OnceLock::new();
+
+fn catalog() -> &'static Catalog {
+    CATALOG.get_or_init(|| Catalog::new(entries()))
 }
 
 #[derive(Clone, Default)]
@@ -211,6 +423,8 @@ struct State {
     query: String,
     sel: usize,
     fresh: bool,
+    hits: Vec<usize>,
+    dirty: bool,
 }
 
 fn id() -> egui::Id {
@@ -218,11 +432,9 @@ fn id() -> egui::Id {
 }
 
 pub fn open(ctx: &egui::Context) {
-    ctx.data_mut(|m| m.insert_temp(id(), State { fresh: true, ..State::default() }));
+    ctx.data_mut(|m| m.insert_temp(id(), State { fresh: true, dirty: true, ..State::default() }));
 }
 
-#[allow(dead_code)]
-#[allow(dead_code)]
 pub fn is_open(ctx: &egui::Context) -> bool {
     ctx.data(|m| m.get_temp::<State>(id())).is_some()
 }
