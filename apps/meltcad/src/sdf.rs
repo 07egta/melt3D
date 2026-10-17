@@ -110,6 +110,9 @@ pub struct Field {
     pub amount: f32,
     pub drip: f32,
     pub ripple: f32,
+    /// Conservative ray step factor for non-isometric shape modifiers.
+    /// SDF evaluation itself is unscaled to preserve Boolean and mesh accuracy.
+    pub ray_step: f32,
 }
 
 impl Prepared {
@@ -176,13 +179,10 @@ impl Prepared {
     /// The distance to this one shape (negative inside).
     pub fn distance(&self, p: V3) -> f32 {
         let q = self.local(p);
-        let (q_original, step_safety) = match self.deformation {
-            Some(d) => (d.inverse(q, self.base_half), d.distance_safety(q, self.base_half)),
-            None => (q, 1.0),
-        };
-        // Correct only the SDF *step estimate*, not the zero isosurface:
-        // the exported mesh therefore retains the full twisted geometry.
-        let d = self.local_distance(q_original) * self.min_scale() * step_safety;
+        let original = self.deformation.map_or(q, |d| d.inverse(q, self.base_half));
+        // Preserve the shape's source SDF value for Boolean blending, culling
+        // and meshing. Twist requires smaller *ray steps*, not altered fields.
+        let d = self.local_distance(original) * self.min_scale();
         // hollow walls: the solid's skin of thickness `shell` (negative inside the wall)
         // (a curve hollows itself: its flat ends are cut after the hollowing, see curve::distance)
         if self.shell > 0.0 && self.kind != Kind::Curve { (d + self.shell * 0.5).abs() - self.shell * 0.5 } else { d }
@@ -384,7 +384,11 @@ impl Field {
             groups.push(FieldGroup { gi: rg.gi, op: g.op, blend: g.blend, src, insts: rg.insts, linked: rg.linked });
         }
         let m = scene.melt;
-        Field { groups, sources, mode: m.mode, amount: m.amount, drip: m.drip, ripple: m.ripple }
+        let ray_step = scene.groups.iter().flat_map(|g| &g.shapes)
+            .filter(|s| s.visible)
+            .filter_map(|s| s.deformation.map(|d| d.ray_step_safety(s.base_local_half())))
+            .fold(1.0_f32, f32::min);
+        Field { groups, sources, mode: m.mode, amount: m.amount, drip: m.drip, ripple: m.ripple, ray_step }
     }
 
     /// The same field with every skip switched off (for the tests that prove the skips are exact).
@@ -504,12 +508,13 @@ impl Field {
     /// The first hit along a ray, if any (sphere tracing), for picking.
     pub fn ray(&self, origin: V3, dir: V3, max: f32) -> Option<(f32, Sample)> {
         let mut t = 0.0;
-        for _ in 0..256 {
+        let max_steps = if self.ray_step < 0.999 { 512 } else { 256 };
+        for _ in 0..max_steps {
             let s = self.sample(add(origin, mul(dir, t)));
             if s.dist < 0.02 * (1.0 + t * 0.002) {
                 return Some((t, s));
             }
-            t += s.dist.max(0.01);
+            t += (s.dist * self.ray_step).max(0.005);
             if t > max {
                 return None;
             }
