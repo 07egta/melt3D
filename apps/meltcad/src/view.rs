@@ -241,10 +241,16 @@ impl App {
         let size = crate::perf::render_size(crate::perf::viewport_px(rect, ppp), scale, 16384);
         let shown_sel = if clean { None } else { self.sel };
         let shown_hover = if clean { None } else { self.hover };
-        let volumes = crate::gpu::VolumeSet::of(&self.scene);
-        let mut data = crate::gpu::pack_with(&self.scene, &self.cam, [size[0] as f32, size[1] as f32], shown_sel, shown_hover, self.srgb, &volumes);
-        crate::gpu::set_view_flags(&mut data, crate::perf::view_flags(self.srgb, fast, crate::perf::scene_has_glow(&self.scene)));
-        ui.painter().add(egui_wgpu::Callback::new_paint_callback(rect, crate::gpu::Callback { data: Arc::new(data), volumes: Arc::new(volumes), size }));
+        if crate::gpu_ui::use_gpu(&self.gpu.status.snapshot(), self.gpu.easy) {
+            let volumes = crate::gpu::VolumeSet::of(&self.scene);
+            let mut data = crate::gpu::pack_with(&self.scene, &self.cam, [size[0] as f32, size[1] as f32], shown_sel, shown_hover, self.srgb, &volumes);
+            crate::gpu::set_view_flags(&mut data, crate::perf::view_flags(self.srgb, fast, crate::perf::scene_has_glow(&self.scene)));
+            ui.painter().add(egui_wgpu::Callback::new_paint_callback(rect, crate::gpu::Callback { data: Arc::new(data), volumes: Arc::new(volumes), size, status: self.gpu.status.clone() }));
+        } else {
+            // the simple view: drawn on the CPU by a worker thread, never blocking the window
+            self.gpu.easy_view.update(ui.ctx(), &self.scene, &self.cam, crate::perf::viewport_px(rect, ppp), fast);
+            self.gpu.easy_view.paint(&ui.painter_at(rect), rect, self.scene.env.backdrop);
+        }
         self.perf.drawn.note(&self.scene, shown_sel, shown_hover, &self.cam, clean);
         let painter = ui.painter_at(rect);
 
@@ -252,6 +258,7 @@ impl App {
         if clean {
             return;
         }
+        self.gpu_cards(ui.ctx(), rect);
         if let Some(g) = &geom {
             let active = self.drag.as_ref().map(gizmo::Drag::handle).or(hover_handle);
             gizmo::draw(&painter, g, tool, active);

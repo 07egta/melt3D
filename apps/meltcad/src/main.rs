@@ -19,7 +19,12 @@ mod fonts;
 mod gizmo;
 mod glyphs;
 mod glyphs_more;
+mod backend;
+mod easy_view;
 mod gpu;
+mod gpu_log;
+mod gpu_status;
+mod gpu_ui;
 mod icon;
 #[cfg(test)]
 mod input_tests;
@@ -46,6 +51,8 @@ mod pattern;
 mod pattern_ui;
 mod png;
 mod sdf;
+#[cfg(test)]
+mod shader_portability;
 mod sdf_volume;
 mod sketch;
 mod sketch_ui;
@@ -55,12 +62,61 @@ mod svg;
 mod svg_dialog;
 mod view;
 
+/// Tell the person why the program cannot start (there is no console in a Windows release build).
+fn fatal(message: &str) {
+    gpu_log::log(&format!("FATAL: {message}"));
+    rfd::MessageDialog::new()
+        .set_level(rfd::MessageLevel::Error)
+        .set_title("MELTCAD")
+        .set_description(format!("{message}\n\nログ: {}", gpu_log::path().display()))
+        .set_buttons(rfd::MessageButtons::Ok)
+        .show();
+}
+
+/// The window has no graphics device. Start again with the next backend if there is one, else
+/// say so and stop (nothing can be drawn without a device, not even the buttons).
+fn no_graphics(choice: backend::Choice, plan: backend::Plan, tried: &[backend::Backend], reason: &str) -> ! {
+    gpu_log::log(&format!("no graphics device with {plan:?}: {reason}"));
+    if let backend::Plan::Only(b) = plan {
+        backend::remember(b, false);
+    }
+    let settings = backend::load();
+    if let Some(next) = backend::next_after_failure(choice, cfg!(target_os = "windows"), &settings, tried, plan) {
+        let mut all = tried.to_vec();
+        if let backend::Plan::Only(b) = plan {
+            all.push(b);
+        }
+        gpu_log::log(&format!("starting again with {next:?}"));
+        let r = backend::Relaunch { choice: None, tried: all, file: std::env::args_os().nth(1).map(std::path::PathBuf::from) };
+        if backend::relaunch(&r).is_ok() {
+            std::process::exit(0);
+        }
+    }
+    fatal(&format!("グラフィックスを始められませんでした。\n{reason}\nグラフィックスドライバーを新しくすると直ることがあります。"));
+    std::process::exit(1)
+}
+
 fn main() -> eframe::Result {
     let args: Vec<std::ffi::OsString> = std::env::args_os().collect();
     if cpu_render::cli(&args) {
         return Ok(());
     }
     perf::init();
+    let tried = backend::tried_now();
+    gpu_log::init(!tried.is_empty());
+    gpu_log::install_panic_hook();
+    gpu_log::install_logger();
+    let (choice, choice_error) = backend::choice_now();
+    if let Some(e) = choice_error {
+        gpu_log::log(&e);
+    }
+    let settings = backend::load();
+    gpu_log::log(&format!("settings {settings:?}, choice {choice:?}, tried {tried:?}"));
+    let Some(plan) = backend::plan(choice, cfg!(target_os = "windows"), &settings, &tried) else {
+        fatal("どの描画方式でも始められませんでした。");
+        return Ok(());
+    };
+    gpu_log::log(&format!("graphics plan {plan:?}"));
     // find and read the Japanese font while the window and the graphics card are being set up
     let font_job = fonts::FontJob::start();
     perf::mark("main");
@@ -70,9 +126,11 @@ fn main() -> eframe::Result {
             .with_min_inner_size([960.0, 600.0])
             .with_title("MELTCAD")
             .with_icon(icon::data()),
+        wgpu_options: backend::wgpu_configuration(plan),
         ..Default::default()
     };
-    eframe::run_native(
+    let tried_for_app = tried.clone();
+    let result = eframe::run_native(
         "MELTCAD",
         options,
         Box::new(move |cc| {
@@ -80,15 +138,21 @@ fn main() -> eframe::Result {
             fonts::install(&cc.egui_ctx, font_job.finish());
             perf::mark("fonts installed");
             style::apply(&cc.egui_ctx);
-            let mut srgb = true;
-            if let Some(rs) = cc.wgpu_render_state.as_ref() {
-                // the shader compiles on its own thread: the window shows first
-                gpu::install(rs, &cc.egui_ctx);
-                srgb = rs.target_format.is_srgb();
+            let rs = cc.wgpu_render_state.clone();
+            if rs.is_none() {
+                no_graphics(choice, plan, &tried_for_app, "グラフィックスのデバイス (wgpu) を作れませんでした。");
             }
-            let app = app::App::new(srgb, std::env::args_os().nth(1).map(std::path::PathBuf::from));
+            let srgb = rs.as_ref().is_none_or(|rs| rs.target_format.is_srgb());
+            let mut app = app::App::new(srgb, std::env::args_os().nth(1).map(std::path::PathBuf::from));
+            // the shader compiles on its own thread: the window shows first, with the simple view
+            app.attach_gpu(rs, &cc.egui_ctx, settings.easy);
             perf::mark("app created");
             Ok(Box::new(app))
         }),
-    )
+    );
+    if let Err(e) = &result {
+        gpu_log::log(&format!("eframe stopped with an error: {e}"));
+        no_graphics(choice, plan, &tried, &e.to_string());
+    }
+    result
 }

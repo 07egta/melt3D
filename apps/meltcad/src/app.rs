@@ -86,6 +86,8 @@ pub struct App {
     pub lib_query: String,
     /// A message from code that has no window context (shown in the status bar next frame).
     pub notice: Option<String>,
+    /// The graphics path (GPU picture or the simple CPU one) and its cards.
+    pub gpu: crate::gpu_ui::GpuUi,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -145,6 +147,7 @@ impl App {
             lib_cat: 0,
             lib_query: String::new(),
             notice: None,
+            gpu: Default::default(),
         };
         if let Some(p) = open {
             app.open_path(p);
@@ -703,7 +706,9 @@ impl App {
                                 ui.close();
                             }
                         });
-                        crate::perf::quality_menu(ui, &mut self.perf.quality);
+                        let mut quality = self.perf.quality;
+                        crate::perf::quality_menu(ui, &mut quality, |ui| self.gpu_menu_items(ui));
+                        self.perf.quality = quality;
                     });
                     // the file name in the middle of the bar
                     let name = self.path.as_ref().and_then(|p| p.file_stem()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "名前なし".into());
