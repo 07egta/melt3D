@@ -168,6 +168,12 @@ fn ask(ctx: &egui::Context, cat: usize, item: usize, model: &Item) -> bool {
     true
 }
 
+/// A failed render is terminal; an unavailable worker still uses the synchronous fallback.
+fn thumbnail_failed(ctx: &egui::Context, key: Key) -> bool {
+    let saved = ctx.data(|data| data.get_temp::<Option<Arc<Worker>>>(worker_id()));
+    saved.flatten().is_some_and(|worker| worker.queue.0.lock().unwrap_or_else(|e| e.into_inner()).failed.contains(&key))
+}
+
 /// Closing the tab cancels only not-yet-started work. In-flight and completed
 /// thumbnails finish normally and remain available for reopening the library.
 pub fn suspend(ctx: &egui::Context) {
@@ -260,12 +266,18 @@ fn cell(ui: &mut egui::Ui, key: Key, name: &str, height: f32, made_one: &mut boo
             *made_one = true;
             Some(make(ui.ctx(), key.0, key.1, model))
         });
+        let failed = texture.is_none() && thumbnail_failed(ui.ctx(), key);
         if let Some(texture) = texture {
             ui.painter().image(texture.id(), rect.shrink(4.0), egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)), Color32::WHITE);
         } else {
-            ui.painter().text(rect.center(), Align2::CENTER_CENTER, "…", egui::FontId::proportional(14.0), style::DIM);
+            ui.painter().text(rect.center(), Align2::CENTER_CENTER, if failed { "!" } else { "…" }, egui::FontId::proportional(14.0), style::DIM);
         }
-        let clicked = response.on_hover_text(format!("{name} をシーンに入れる")).clicked();
+        let hint = if failed {
+            format!("画像を作成できませんでした。\n{name} をシーンに入れる")
+        } else {
+            format!("{name} をシーンに入れる")
+        };
+        let clicked = response.on_hover_text(hint).clicked();
         ui.add(egui::Label::new(RichText::new(name).size(11.5)).wrap());
         clicked
     })
@@ -333,23 +345,28 @@ pub fn panel(app: &mut App, ui: &mut egui::Ui) {
     let row_height = row_height(ui, &results);
     let per_row = ((ui.available_width() / CELL).floor() as usize).max(1);
     let rows = hits.len().div_ceil(per_row);
-    egui::ScrollArea::vertical().auto_shrink([false, false]).show_rows(ui, row_height, rows, |ui, visible_rows| {
-        let visible = visible_indices(visible_rows.clone(), per_row, hits.len());
-        let keys: Vec<Key> = hits.get(visible).unwrap_or_default().iter().map(|(key, _)| *key).collect();
-        prioritize_visible(&ctx, &keys);
-        for row in visible_rows {
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 4.0;
-                for index in visible_indices(row..row + 1, per_row, hits.len()) {
-                    if let Some((key, name)) = hits.get(index)
-                        && cell(ui, *key, name, row_height, &mut made_one)
-                    {
-                        pick = Some(*key);
+    egui::ScrollArea::vertical().id_salt(("library_grid", app.lib_cat, !results.query.is_empty())).auto_shrink([false, false]).show_rows(
+        ui,
+        row_height,
+        rows,
+        |ui, visible_rows| {
+            let visible = visible_indices(visible_rows.clone(), per_row, hits.len());
+            let keys: Vec<Key> = hits.get(visible).unwrap_or_default().iter().map(|(key, _)| *key).collect();
+            prioritize_visible(&ctx, &keys);
+            for row in visible_rows {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 4.0;
+                    for index in visible_indices(row..row + 1, per_row, hits.len()) {
+                        if let Some((key, name)) = hits.get(index)
+                            && cell(ui, *key, name, row_height, &mut made_one)
+                        {
+                            pick = Some(*key);
+                        }
                     }
-                }
-            });
-        }
-    });
+                });
+            }
+        },
+    );
     if made_one {
         ctx.request_repaint();
     }
