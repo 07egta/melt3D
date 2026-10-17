@@ -17,6 +17,7 @@ mod export_formats;
 mod export_job;
 mod work_budget;
 mod atomic_files;
+mod document_job;
 mod export_mesh;
 mod fonts;
 mod gizmo;
