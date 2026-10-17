@@ -830,6 +830,11 @@ impl App {
             ui.label(egui::RichText::new("端の＋でのばす / 間の＋でふやす").size(10.5).color(style::DIM));
         });
         if is_curve {
+            // Populate the optional handle array on first inspection so a
+            // legacy shape can enter Smooth/Corner mode without any migration.
+            if sh.curve_handles.is_empty() && chosen.is_some() {
+                sh.curve_handles.resize(sh.path.len(), CurveHandles::default());
+            }
             align_handles(sh);
             if let Some(i) = chosen {
                 if let Some(h) = sh.curve_handles.get_mut(i) {
