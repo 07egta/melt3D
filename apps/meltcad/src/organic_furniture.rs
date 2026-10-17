@@ -346,7 +346,11 @@ pub fn inspector(app: &mut App, ui: &mut Ui, g: usize) {
 
     p.sanitize();
     if p != before {
-        if let Some(group) = app.scene.groups.get_mut(g)
+        let resulting_shapes = app.scene.shape_count()
+            .saturating_sub(before.part_count()).saturating_add(p.part_count());
+        if resulting_shapes > MAX_SHAPES {
+            app.notice = Some(format!("形は{MAX_SHAPES}個までです。ほかの形を減らしてください"));
+        } else if let Some(group) = app.scene.groups.get_mut(g)
             && let Err(e) = update_group(group, p)
         {
             app.notice = Some(e.to_string());
@@ -510,6 +514,20 @@ mod tests {
             let active: std::collections::HashSet<usize> = meshed.mesh.triangles.iter().flat_map(|t| t.iter().copied())
                 .map(|v| root(&mut parent, v as usize)).collect();
             assert_eq!(active.len(), 1, "{design:?}: disconnected exported shells");
+
+            // Real file encoders + importers; not only a mesh preview.
+            let surf = crate::export_formats::Surface {
+                mesh: meshed.mesh.clone(),
+                look: crate::export_formats::Look::uniform(crate::export_formats::Mat8 {
+                    rgb: [210, 160, 130], rough: 125, metal: 0,
+                }),
+            };
+            let bytes = crate::export_formats::threemf(&surf, "Organic Furniture", crate::export_formats::Units::Mm).unwrap();
+            let back = crate::import_3mf::read_3mf(&bytes).unwrap();
+            assert_eq!(back.triangles.len(), surf.mesh.triangles.len(), "3MF roundtrip {design:?}");
+            let glb = crate::export_formats::glb(&surf, "Organic Furniture").unwrap();
+            let back = crate::import_glb::read_glb(&glb).unwrap();
+            assert_eq!(back.triangles.len(), surf.mesh.triangles.len(), "GLB roundtrip {design:?}");
         }
     }
 }
