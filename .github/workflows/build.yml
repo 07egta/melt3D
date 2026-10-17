@@ -15,7 +15,8 @@ permissions:
 
 concurrency:
   group: build-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Pull-request runs may be cancelled. Never interrupt a running release promotion.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
@@ -25,16 +26,52 @@ jobs:
   windows:
     name: Windows app
     runs-on: windows-latest
-    timeout-minutes: 90
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo build --release -p meltcad --locked
-      - run: cargo build --release -p solidcraft --locked
+      - name: Build both Windows executables
+        run: cargo build --release --locked -p meltcad -p solidcraft
+      # These tests exercise scene creation, saving, and mesh export on a Windows runner.
+      # This is NOT an interactive Windows GUI acceptance test.
+      - name: Run MELTCAD regression tests on Windows
+        run: cargo test --release --locked -p meltcad
+      - name: Exercise the Windows EXE (headless scene open and PNG render)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dir = Join-Path $env:RUNNER_TEMP 'yuracad-headless'
+          New-Item -ItemType Directory -Path $dir -Force | Out-Null
+          # Same backward-compatible scene format covered by model.rs tests.
+          $fixture = '{"groups":[{"name":"smoke","op":"Add","blend":0,"visible":true,"shapes":[{"name":"sphere","kind":"Sphere","size":[20,1,1],"round":0,"pos":[0,0,20],"rot":[0,0,0],"scale":[1,1,1],"op":"Add","blend":6,"material":{"color":[1,0,0],"roughness":0.3,"metallic":1},"visible":true,"outline":[]}]}]}'
+          $scene = Join-Path $dir 'scene.yura'
+          $png = Join-Path $dir 'render.png'
+          [System.IO.File]::WriteAllText($scene, $fixture)
+          $exe = (Resolve-Path 'target/release/meltcad.exe').Path
+          $args = "--render `"$scene`" `"$png`" 96"
+          $process = Start-Process -FilePath $exe -ArgumentList $args -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "YURACAD.exe headless run exited $($process.ExitCode)" }
+          if (-not (Test-Path $png -PathType Leaf)) { throw 'Windows EXE did not write a PNG' }
+          $pngData = [System.IO.File]::ReadAllBytes($png)
+          if ($pngData.Length -lt 1000 -or $pngData[0] -ne 137 -or $pngData[1] -ne 80 -or $pngData[2] -ne 78 -or $pngData[3] -ne 71) {
+            throw 'Windows EXE PNG output is invalid'
+          }
+      - name: Verify both binaries exist and are distinct
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $melt = Get-Item 'target/release/meltcad.exe' -ErrorAction Stop
+          $classic = Get-Item 'target/release/solidcraft.exe' -ErrorAction Stop
+          if ($melt.Length -lt 1MB -or $classic.Length -lt 1MB) { throw 'A Windows EXE is unexpectedly small' }
+          if ((Get-FileHash $melt.FullName).Hash -eq (Get-FileHash $classic.FullName).Hash) {
+            throw 'MELTCAD and Classic executables must be different binaries'
+          }
       - uses: actions/upload-artifact@v4
         with:
           name: meltcad-windows
+          if-no-files-found: error
+          retention-days: 7
           path: |
             target/release/meltcad.exe
             target/release/solidcraft.exe
@@ -93,23 +130,73 @@ jobs:
     if: github.event_name == 'push' && github.ref_name == 'easy-layout-and-melt'
     needs: [windows, tests]
     runs-on: ubuntu-latest
+    # Serialize updates from successful workflows, rather than clobbering concurrently.
+    concurrency:
+      group: yuracad-rolling-release
+      cancel-in-progress: false
     permissions:
       contents: write
     steps:
-      - name: Download Windows executables from this run
-        uses: actions/download-artifact@v4
-        with:
-          name: meltcad-windows
-          path: dist
-      - name: Replace rolling YURACAD release assets
+      - name: Check for superseding changes on the working branch
+        id: current
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          branch_head="$(gh api "repos/${GITHUB_REPOSITORY}/branches/easy-layout-and-melt" --jq .commit.sha)"
+          if [ "$branch_head" = "$GITHUB_SHA" ]; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::Superseded workflow: branch moved to $branch_head. Keeping existing Release."
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Download executables from this successful run only
+        if: steps.current.outputs.publish == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: meltcad-windows
+          path: dist
+      - name: Validate binaries and prepare unambiguous release names
+        if: steps.current.outputs.publish == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
           test -s dist/meltcad.exe
           test -s dist/solidcraft.exe
+          python3 - <<'PY'
+          from pathlib import Path
+          from hashlib import sha256
+          paths = [Path("dist/meltcad.exe"), Path("dist/solidcraft.exe")]
+          for p in paths:
+              if p.stat().st_size < 1024 * 1024 or p.open("rb").read(2) != b"MZ":
+                  raise SystemExit(f"Not a valid-sized Windows PE executable: {p}")
+          if sha256(paths[0].read_bytes()).digest() == sha256(paths[1].read_bytes()).digest():
+              raise SystemExit("Expected two different Windows executables")
+          PY
           cp dist/meltcad.exe YURACAD.exe
           cp dist/solidcraft.exe YURACAD-Classic.exe
-          gh release view latest --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || gh release create latest --repo "$GITHUB_REPOSITORY" --prerelease --title "Latest build" --notes "Newest Windows builds: YURACAD.exe (blob modeller) and YURACAD-Classic.exe (CAD)"
-          gh release upload latest YURACAD.exe YURACAD-Classic.exe --repo "$GITHUB_REPOSITORY" --clobber
+          sha256sum YURACAD.exe YURACAD-Classic.exe > YURACAD-SHA256.txt
+          cat > release-notes.txt <<EOF
+          Windows x64 downloads built from easy-layout-and-melt at ${GITHUB_SHA}.
+
+          - YURACAD.exe: MELTCAD, the blob / sculpt-style modeller (.meltcad).
+          - YURACAD-Classic.exe: SolidCraft, the parametric CAD app (.solidcraft).
+
+          CI: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
+          SHA256 checksums: YURACAD-SHA256.txt
+
+          Windows native Rust tests and a headless EXE render are checked by CI.
+          Interactive launch, File > New, Save, and Export require separate real-Windows
+          verification using scripts/windows-manual-smoke.ps1; CI alone does not prove them.
+          EOF
+      - name: Replace rolling assets only after all required checks pass
+        if: steps.current.outputs.publish == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release view latest --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || gh release create latest --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease --title "Latest build" --notes-file release-notes.txt
+          gh release upload latest YURACAD.exe YURACAD-Classic.exe YURACAD-SHA256.txt --repo "$GITHUB_REPOSITORY" --clobber
+          gh release edit latest --repo "$GITHUB_REPOSITORY" --notes-file release-notes.txt
