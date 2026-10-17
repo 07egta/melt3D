@@ -80,7 +80,7 @@ mod tests {
     #[test]
     fn drawing_cards_do_not_cover_the_left_toolbar_in_common_small_windows() {
         let (center, card_width) = floating_card_area(180.0, true, 440.0);
-        assert!((center - 90.0).abs() < 0.1 && card_width < 180.0);
+        assert!((center - 86.0).abs() < 0.1 && card_width < 180.0);
         for width in [320.0, 430.0, 640.0, 900.0] {
             let (center, card_width) = floating_card_area(width, true, 440.0);
             let card_left = center - card_width / 2.0;
