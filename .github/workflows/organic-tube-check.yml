@@ -1,0 +1,33 @@
+name: Organic Tube validation
+
+on:
+  pull_request:
+    branches: [easy-layout-and-melt]
+    paths:
+      - "apps/meltcad/**"
+      - ".github/workflows/organic-tube-check.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    name: Organic Tube Windows tests and Release build
+    runs-on: windows-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Regression tests (including STL and 3MF)
+        run: cargo test --profile ci --locked -p meltcad
+      - name: High precision Organic Tube manifold export
+        run: cargo test --profile ci --locked -p meltcad organic_tube_high_precision_stl_is_watertight -- --ignored
+      - name: Windows Release build
+        run: cargo build --release --locked -p meltcad
+      - name: Keep test binary as an artifact, never publish a release
+        uses: actions/upload-artifact@v4
+        with:
+          name: organic-tube-windows-unverified
+          path: target/release/meltcad.exe
