@@ -389,6 +389,87 @@ fn model_path(zip: &Zip) -> Result<String, String> {
         .ok_or_else(|| "3MF の中にモデル（3D/3dmodel.model）が見つかりません".to_string())
 }
 
+/// Inspect base materials without affecting the safety-critical geometry reader.
+/// A single base colour maps exactly to the editor's sRGB. Multiple palette entries
+/// cannot be painted onto a single distance volume and are reported explicitly.
+pub(crate) fn appearance_3mf(bytes: &[u8]) -> crate::import_mesh::AppearanceInfo {
+    use crate::import_mesh::AppearanceInfo;
+    let mut out = AppearanceInfo::default();
+    let Ok(zip) = Zip::open(bytes) else { return out };
+    let Ok(path) = model_path(&zip) else { return out };
+    let Some(entry) = zip.find(&path) else { return out };
+    let Ok(xml) = zip.read(entry, MAX_MODEL_BYTES) else { return out };
+    let mut pos = 0;
+    let mut groups: HashMap<u32, Vec<crate::model::Material>> = HashMap::new();
+    let mut current_group: Option<u32> = None;
+    let mut object_default: HashMap<u32, (u32, usize)> = HashMap::new();
+    let mut palette_refs: Vec<(u32, usize)> = Vec::new();
+    let mut unsupported = false;
+    let mut textures = false;
+    while let Ok(Some(t)) = next_tag(&xml, &mut pos) {
+        if t.closing {
+            if t.name == b"basematerials" || t.name == b"colorgroup" { current_group = None; }
+            continue;
+        }
+        match t.name {
+            b"basematerials" | b"colorgroup" => {
+                current_group = t.attr("id").and_then(|s| s.parse::<u32>().ok());
+                if let Some(id) = current_group { groups.entry(id).or_default(); }
+                if t.self_closing { current_group = None; }
+            }
+            b"base" | b"color" if current_group.is_some() => {
+                let value = t.attr("displaycolor").or_else(|| t.attr("color"));
+                if let Some(m) = value.and_then(crate::materials::from_3mf_hex) {
+                    if let Some(g) = current_group.and_then(|id| groups.get_mut(&id)) {
+                        if g.len() < 65536 { g.push(m); } else { unsupported = true; }
+                    }
+                } else { unsupported = true; }
+            }
+            b"object" => {
+                if let (Some(id), Some(pid), Some(idx)) = (
+                    t.attr("id").and_then(|s| s.parse::<u32>().ok()),
+                    t.attr("pid").and_then(|s| s.parse::<u32>().ok()),
+                    t.attr("pindex").and_then(|s| s.parse::<usize>().ok()),
+                ) {
+                    object_default.insert(id, (pid, idx));
+                    palette_refs.push((pid, idx));
+                }
+            }
+            b"triangle" => {
+                if let Some(pid) = t.attr("pid").and_then(|s| s.parse::<u32>().ok()) {
+                    let p1 = t.attr("p1").and_then(|s| s.parse::<usize>().ok()).unwrap_or(0);
+                    palette_refs.push((pid, p1));
+                    for key in ["p2", "p3"] {
+                        if let Some(index) = t.attr(key).and_then(|s| s.parse::<usize>().ok()) {
+                            palette_refs.push((pid, index));
+                        }
+                    }
+                }
+            }
+            b"texture2d" | b"texture2dgroup" => textures = true,
+            b"compositematerials" | b"multiproperties" => unsupported = true,
+            _ => {}
+        }
+    }
+    // Resources may be written after objects, so resolve the palette once parsing is complete.
+    // Object defaults are used by triangles with no per-face override.
+    let mut distinct: Vec<crate::model::Material> = Vec::new();
+    for (pid, idx) in palette_refs {
+        if let Some(m) = groups.get(&pid).and_then(|v| v.get(idx)).copied() {
+            if !distinct.contains(&m) { distinct.push(m); }
+        } else { unsupported = true; }
+        if distinct.len() > 1 { out.varies = true; }
+    }
+    // Some files define exactly one base material without attaching it to the object.
+    if distinct.is_empty() && groups.len() == 1 {
+        if let Some(one) = groups.values().next().and_then(|a| (a.len() == 1).then(|| a[0])) { distinct.push(one); }
+    }
+    out.material = distinct.first().copied();
+    if unsupported { out.notes.push("3MF に未対応または不正な色・材質指定があります。一部の外観は保持されません".into()); }
+    if textures { out.notes.push("3MF の画像テクスチャは読み込めません".into()); }
+    out
+}
+
 /// Read a 3MF file: every build item (or, without a build section, every object) becomes part of
 /// one mesh, in millimetres.
 pub fn read_3mf(bytes: &[u8]) -> Result<ImportedMesh, String> {
