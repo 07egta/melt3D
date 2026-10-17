@@ -1,15 +1,21 @@
 name: Build
 
 # Windows app (.exe), the web app, and the main tests. Run by hand from the Actions tab
-# ("Run workflow") or by every push to main. The upstream project's release, store and Pages
-# workflows are parked in .github/upstream-workflows/ so they do not run (and use up minutes) here.
+# ("Run workflow"), on pushes to main / easy-layout-and-melt, or on PRs into the working
+# branch. Upstream release, store and Pages workflows are parked to save Actions minutes.
 on:
   push:
     branches: [main, easy-layout-and-melt]
+  pull_request:
+    branches: [easy-layout-and-melt]
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
@@ -32,18 +38,6 @@ jobs:
           path: |
             target/release/meltcad.exe
             target/release/solidcraft.exe
-      # A rolling "latest" release holds the newest exe, named YURACAD.exe, so it can be fetched
-      # with one plain download.
-      - name: Publish YURACAD.exe to the latest release
-        if: github.ref_name == 'easy-layout-and-melt'
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          cp target/release/meltcad.exe YURACAD.exe
-          cp target/release/solidcraft.exe YURACAD-Classic.exe
-          gh release view latest >/dev/null 2>&1 || gh release create latest --prerelease --title "Latest build" --notes "Newest Windows builds: YURACAD.exe (blob modeller) and YURACAD-Classic.exe (CAD)"
-          gh release upload latest YURACAD.exe YURACAD-Classic.exe --clobber
 
   web:
     name: Web app
@@ -91,3 +85,31 @@ jobs:
           grep -hE "^test .* FAILED|panicked at|^error(\[|:)" test1.log test2.log test3.log | head -30 | while read -r line; do echo "::error::$line"; done
           grep -hE "test result" test1.log test2.log test3.log | while read -r line; do echo "::notice::$line"; done
           exit $((s1 + s2 + s3))
+
+  # Never replace the download with a build that failed tests, and never publish
+  # from a pull request or a branch other than the YURACAD working branch.
+  publish:
+    name: Publish tested YURACAD Windows release
+    if: github.event_name == 'push' && github.ref_name == 'easy-layout-and-melt'
+    needs: [windows, tests]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download Windows executables from this run
+        uses: actions/download-artifact@v4
+        with:
+          name: meltcad-windows
+          path: dist
+      - name: Replace rolling YURACAD release assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test -s dist/meltcad.exe
+          test -s dist/solidcraft.exe
+          cp dist/meltcad.exe YURACAD.exe
+          cp dist/solidcraft.exe YURACAD-Classic.exe
+          gh release view latest --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || gh release create latest --repo "$GITHUB_REPOSITORY" --prerelease --title "Latest build" --notes "Newest Windows builds: YURACAD.exe (blob modeller) and YURACAD-Classic.exe (CAD)"
+          gh release upload latest YURACAD.exe YURACAD-Classic.exe --repo "$GITHUB_REPOSITORY" --clobber
