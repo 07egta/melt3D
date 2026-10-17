@@ -796,6 +796,10 @@ impl App {
     /// The frame and outline being edited, or None when the shape is gone (the editing then ends).
     fn edit_target(&mut self) -> Option<(Frame, Vec<[f32; 2]>)> {
         let e = self.sk.edit.as_ref()?;
+        if self.scene.is_locked(Pick::Shape(e.g, e.s)) {
+            self.sk.edit = None;
+            return None;
+        }
         let found = self.scene.shape(e.g, e.s).filter(|sh| sketch::editable(sh)).and_then(|sh| {
             let f = sketch::edit_frame(sh, e.which)?;
             Some((f, sketch::outline_of(sh, e.which).clone()))
