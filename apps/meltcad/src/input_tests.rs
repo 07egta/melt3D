@@ -30,7 +30,10 @@ impl Rig {
 
     fn frame(&mut self, events: Vec<Event>) {
         self.time += 0.016;
-        let mut all = vec![Event::ModifiersChanged(self.mods)];
+        let mut all = Vec::new();
+        if self.mods != egui::Modifiers::NONE {
+            all.push(Event::ModifiersChanged(self.mods));
+        }
         all.extend(events);
         let input = RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, self.size)), events: all, time: Some(self.time), ..Default::default() };
         let app = &mut self.app;
@@ -261,8 +264,11 @@ fn sketch_double_click_finishes_line_without_duplicate_endpoint() {
     let a = r.on_plane([-30.0, -20.0]);
     let b = r.on_plane([25.0, 12.0]);
     r.click(a);
+    eprintln!("DBG a {a:?} pts {:?}", r.app.sk.pts);
     r.click(b);
+    eprintln!("DBG b {b:?} pts {:?}", r.app.sk.pts);
     r.click(b);
+    eprintln!("DBG b2 pts {:?} path {:?} stage {:?} dim {:?}", r.app.sk.pts, r.app.sk.path, r.app.sk.stage, r.app.sk.dimension.is_some());
     assert_eq!(r.app.sk.stage, Stage::Draw, "an open line stays in the sketch tool");
     assert_eq!(r.app.sk.path.len(), 2, "the second click at the endpoint must not add another node");
     assert!(r.app.sk.pts.is_empty());
@@ -380,7 +386,9 @@ fn sketch_card_consumes_pointer_input_without_drawing_beneath_it() {
     let mut r = Rig::new();
     r.sketch(Pen::Polygon);
     let selected = r.app.sel;
-    let card = pos2(r.app.view_rect.center().x, r.app.view_rect.top() + 25.0);
+    // the very top edge of the card: padding only, so no button under it can fire
+    let top = r.ctx.memory(|m| m.area_rect(egui::Id::new("sketch_card"))).map_or(r.app.view_rect.top() + 12.0, |a| a.top());
+    let card = pos2(r.app.view_rect.center().x, top + 3.0);
     r.click(card);
     assert!(r.app.sk.pts.is_empty(), "card header must not place a sketch point");
     assert_eq!(r.app.sel, selected);

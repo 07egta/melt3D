@@ -981,6 +981,7 @@ impl App {
                 }
             }
         }
+        eprintln!("DBGI clicked {} dbl {} hovered {} mouse {:?} cursor {:?} pos {:?}", resp.clicked_by(egui::PointerButton::Primary), resp.double_clicked_by(egui::PointerButton::Primary), resp.hovered(), mouse, self.sk.cursor, pos);
         if resp.clicked_by(egui::PointerButton::Primary)
             && let (Some(m), Some(q)) = (mouse, self.sk.cursor)
         {
@@ -2017,8 +2018,12 @@ impl App {
                 });
             }
             hint(ui, pen_hint(pen, stage));
-            hint(ui, "端点・中点・交点・原点にスナップ　Shift = 10mm　Ctrl = 0.1mm　Backspaceで1つもどる　Escでやりなおし");
-            if style::pill(ui, "角度スナップ 15°", self.sk.angle_snap).clicked() { self.sk.angle_snap = !self.sk.angle_snap; }
+            // one short row: the long help sits in a tooltip so the card stays out of the way
+            ui.horizontal(|ui| {
+                if style::pill(ui, "角度スナップ 15°", self.sk.angle_snap).clicked() { self.sk.angle_snap = !self.sk.angle_snap; }
+                ui.label(egui::RichText::new("ⓘ ヒント").size(11.0).color(style::DIM)).on_hover_text(
+                    "端点・中点・交点・原点にスナップ\nShift = 10mm　Ctrl = 0.1mm\nBackspaceで1つもどる　Escでやりなおし\nTabで最後の点・線分の寸法を入力");
+            });
         }
         self.dimension_card(ui);
         if stage == Stage::Draw && !self.sk.path.is_empty() {
@@ -2116,9 +2121,6 @@ impl App {
     /// Inline numeric fields; their edits change the visible sketch immediately.
     fn dimension_card(&mut self, ui: &mut Ui) {
         let Some(d) = self.sk.dimension.as_mut() else {
-            if !self.sk.pts.is_empty() {
-                hint(ui, "Tabで最後の点・線分の寸法を入力");
-            }
             return;
         };
         if !d.editing {
