@@ -611,6 +611,133 @@ mod tests {
         Scene { groups: vec![g], melt: Default::default(), env: Default::default(), saved: Vec::new() }
     }
 
+    /// Exact 10/100/300-shape scenes with group Boolean dependencies and some thin shells.
+    fn cache_test_scene(count: usize) -> Scene {
+        let mut scene = Scene::default();
+        scene.groups.clear();
+        for gi in 0..count.div_ceil(10) {
+            let mut group = Group::new(format!("cache {gi}"));
+            group.op = if gi > 0 && gi % 4 == 0 { Op::Subtract } else { Op::Add };
+            group.blend = 1.0;
+            for si in 0..10 {
+                let i = gi * 10 + si;
+                if i >= count { break; }
+                let kind = match i % 5 {
+                    0 => Kind::Sphere,
+                    1 => Kind::Box,
+                    2 => Kind::Extrude,
+                    3 => Kind::Curve,
+                    _ => Kind::Cylinder,
+                };
+                let mut sh = Shape::new(kind, [(i % 20) as f32 * 24.0, (i / 20) as f32 * 24.0, 10.0], Material::default());
+                if i % 3 == 0 { sh.shell = 0.8; }
+                if i % 7 == 0 && si != 0 { sh.op = Op::Subtract; }
+                if kind == Kind::Curve {
+                    sh.path = vec![[0.0, 0.0, 0.0, 2.0], [8.0, 0.0, 0.0, 2.0], [15.0, 8.0, 0.0, 2.0]];
+                }
+                group.shapes.push(sh);
+            }
+            scene.groups.push(group);
+        }
+        scene
+    }
+
+    fn same_field_samples(a: &Field, b: &Field) {
+        for x in [-15.0, 0.0, 12.0, 45.0, 96.0, 230.0] {
+            for z in [0.0, 9.6, 10.0, 14.0, 22.0] {
+                let p = [x, 0.0, z];
+                let left = a.sample(p);
+                let right = b.sample(p);
+                assert_eq!(left.dist.to_bits(), right.dist.to_bits(), "distance at {p:?}");
+                assert_eq!(left.color, right.color, "material at {p:?}");
+                assert_eq!(left.nearest, right.nearest, "pick at {p:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn incremental_field_rebuilds_only_changed_geometry_and_never_stales_on_undo() {
+        for n in [10, 100, 300] {
+            let original = cache_test_scene(n);
+            let before = Field::new(&original);
+            assert_eq!(before.prepared_built, n);
+            let mut changed = original.clone();
+            changed.groups[0].shapes[0].pos[0] += 1.75;
+            let after = Field::reusing(&changed, Some((&before, &original)));
+            assert_eq!(after.prepared_built, 1, "{n} shapes");
+            assert_eq!(after.prepared_reused, n - 1, "{n} shapes");
+            if n > 10 {
+                assert!(Arc::ptr_eq(&before.sources[1], &after.sources[1]),
+                    "unchanged source group must be shared");
+            }
+            assert!(Arc::ptr_eq(&before.sources[0].shapes[1], &after.sources[0].shapes[1]));
+            same_field_samples(&after, &Field::new(&changed));
+
+            // Undo returns exactly to the old SDF, not the modified prepared shape.
+            let undone = Field::reusing(&original, Some((&after, &changed)));
+            assert_eq!(undone.prepared_built, 1);
+            same_field_samples(&undone, &before);
+        }
+    }
+
+    #[test]
+    fn melt_material_visibility_and_group_link_dependencies_invalidate_safely() {
+        let original = cache_test_scene(20);
+        let old = Field::new(&original);
+        let mut changed = original.clone();
+        changed.melt.amount = 0.25;
+        changed.melt.mode = BlendMode::Gooey;
+        let melt = Field::reusing(&changed, Some((&old, &original)));
+        assert_eq!(melt.prepared_built, 0, "melt does not alter individual shape preparation");
+        assert!(!Arc::ptr_eq(&old.sources[0], &melt.sources[0]),
+            "blend-dependent acceleration bounds must be rebuilt");
+        same_field_samples(&melt, &Field::new(&changed));
+
+        let prev = changed.clone();
+        changed.groups[0].shapes[1].material.color = [0.1, 0.9, 0.4];
+        changed.groups[1].shapes[2].visible = false;
+        changed.groups[1].op = Op::Intersect;
+        let edited = Field::reusing(&changed, Some((&melt, &prev)));
+        assert_eq!(edited.prepared_built, 1);
+        same_field_samples(&edited, &Field::new(&changed));
+    }
+
+    /// Run explicitly with: cargo test -p meltcad incremental_field_timing_10_100_300 -- --ignored --nocapture
+    /// Both versions rebuild the Boolean graph on each edit; only the incremental one keeps
+    /// unchanged prepared geometry. Never interpret these as GPU frame timings.
+    #[test]
+    #[ignore]
+    fn incremental_field_timing_10_100_300() {
+        use std::time::{Duration, Instant};
+        for n in [10, 100, 300] {
+            let mut scene = cache_test_scene(n);
+            let mut previous = Field::new(&scene);
+            let mut old_ms = Duration::ZERO;
+            let mut new_ms = Duration::ZERO;
+            const REPEATS: usize = 30;
+            for k in 0..REPEATS {
+                let mut edited = scene.clone();
+                let si = k % n;
+                edited.groups[si / 10].shapes[si % 10].pos[0] += 0.4;
+                let started = Instant::now();
+                let cold = Field::new(&edited);
+                old_ms += started.elapsed();
+                let started = Instant::now();
+                let incremental = Field::reusing(&edited, Some((&previous, &scene)));
+                new_ms += started.elapsed();
+                assert_eq!(incremental.prepared_built, 1);
+                same_field_samples(&cold, &incremental);
+                std::hint::black_box(&cold);
+                scene = edited;
+                previous = incremental;
+            }
+            eprintln!("SDF field {:>3} shapes: cold {:.3}ms/edit, incremental {:.3}ms/edit, speedup {:.2}x ({} edits)",
+                n, old_ms.as_secs_f64()*1000.0/REPEATS as f64,
+                new_ms.as_secs_f64()*1000.0/REPEATS as f64,
+                old_ms.as_secs_f64()/new_ms.as_secs_f64().max(1e-12), REPEATS);
+        }
+    }
+
     #[test]
     fn the_primitives_measure_their_exact_surfaces() {
         let m = Material::default();
