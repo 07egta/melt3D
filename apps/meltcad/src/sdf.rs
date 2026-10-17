@@ -2,6 +2,8 @@
 //! shader (`shader.wgsl`) implements the same formulas; this copy picks shapes with the mouse and
 //! builds the mesh for export.
 
+use std::sync::Arc;
+
 use crate::corner;
 use crate::model::{BlendMode, Kind, Material, Op, Scene, Shape};
 
@@ -75,7 +77,10 @@ pub struct Prepared {
 /// linked copies, is prepared once).
 #[derive(Clone, Debug)]
 pub struct PreparedGroup {
-    pub shapes: Vec<Prepared>,
+    /// Prepared objects are shared across unchanged revisions; no outline/path copies per drag.
+    pub shapes: Vec<Arc<Prepared>>,
+    /// Source group index, including when the group has no visible shapes.
+    pub source_group: usize,
     /// The scene (group, shape) of each prepared shape.
     pub origin: Vec<(usize, usize)>,
     /// A bounding sphere of each shape, and the blocks and sphere of the whole group (accel.rs):
@@ -101,7 +106,10 @@ pub struct FieldGroup {
 #[derive(Clone, Debug)]
 pub struct Field {
     pub groups: Vec<FieldGroup>,
-    pub sources: Vec<PreparedGroup>,
+    pub sources: Vec<Arc<PreparedGroup>>,
+    /// Work counters for deterministic incremental-update tests and the profiler.
+    pub prepared_built: usize,
+    pub prepared_reused: usize,
     pub mode: BlendMode,
     pub amount: f32,
     pub drip: f32,
@@ -343,37 +351,76 @@ pub struct Sample {
 
 impl Field {
     pub fn new(scene: &Scene) -> Field {
+        Self::reusing(scene, None)
+    }
+
+    /// Rebuild the Boolean/pattern dependency graph, retaining expensive prepared shapes and
+    /// acceleration data only when the source inputs are EXACTLY unchanged. The previous scene
+    /// is compared by value: unlike a hash, this cannot accidentally reuse a stale result.
+    /// Group operations/linked transforms are always resolved anew; only their source geometry
+    /// can be shared. At most one previous scene and field are retained by the caller.
+    pub fn reusing(scene: &Scene, previous: Option<(&Field, &Scene)>) -> Field {
         let mut groups = Vec::new();
-        let mut sources: Vec<PreparedGroup> = Vec::new();
+        let mut sources: Vec<Arc<PreparedGroup>> = Vec::new();
         let mut made: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+        let old_sources: std::collections::HashMap<usize, &Arc<PreparedGroup>> = previous
+            .map(|(field, _)| field.sources.iter().map(|p| (p.source_group, p)).collect())
+            .unwrap_or_default();
+        let mut prepared_built = 0;
+        let mut prepared_reused = 0;
         for rg in crate::pattern::resolve(scene) {
             let (Some(g), Some(srcg)) = (scene.groups.get(rg.gi), scene.groups.get(rg.src)) else { continue };
             let src = *made.entry(rg.src).or_insert_with(|| {
+                let older = old_sources.get(&rg.src).copied();
+                let prior_group = previous.and_then(|(_, old)| old.groups.get(rg.src));
+                let same_melt = previous.is_some_and(|(_, old)| {
+                    old.melt.mode == scene.melt.mode && old.melt.amount == scene.melt.amount
+                });
+                if let (Some(old), Some(prior)) = (older, prior_group)
+                    && same_melt && prior.shapes == srcg.shapes
+                {
+                    prepared_reused += old.shapes.len();
+                    sources.push(Arc::clone(old));
+                    return sources.len() - 1;
+                }
+                let old_shapes: std::collections::HashMap<usize, &Arc<Prepared>> =
+                    older.map(|old| old.origin.iter().enumerate()
+                        .filter_map(|(i, &(_, si))| old.shapes.get(i).map(|p| (si, p)))
+                        .collect()).unwrap_or_default();
                 let mut shapes = Vec::new();
                 let mut origin = Vec::new();
                 let mut members: Vec<&Shape> = Vec::new();
                 for (si, s) in srcg.shapes.iter().enumerate() {
-                    if s.visible {
-                        shapes.push(Prepared::new(s));
-                        origin.push((rg.src, si));
-                        members.push(s);
-                    }
+                    if !s.visible { continue; }
+                    let same = prior_group.and_then(|old| old.shapes.get(si))
+                        .is_some_and(|old| old == s);
+                    let prep = if same {
+                        old_shapes.get(&si).map(|p| Arc::clone(p))
+                    } else {
+                        None
+                    };
+                    if prep.is_some() { prepared_reused += 1; }
+                    else { prepared_built += 1; }
+                    shapes.push(prep.unwrap_or_else(|| Arc::new(Prepared::new(s))));
+                    origin.push((rg.src, si));
+                    members.push(s);
                 }
                 let info = crate::accel::group_info(&members, &scene.melt);
                 let bounds = members.iter().map(|s| crate::accel::shape_bound(s)).collect();
-                sources.push(PreparedGroup { shapes, origin, bounds, info });
+                sources.push(Arc::new(PreparedGroup { source_group: rg.src, shapes, origin, bounds, info }));
                 sources.len() - 1
             });
             groups.push(FieldGroup { gi: rg.gi, op: g.op, blend: g.blend, src, insts: rg.insts, linked: rg.linked });
         }
         let m = scene.melt;
-        Field { groups, sources, mode: m.mode, amount: m.amount, drip: m.drip, ripple: m.ripple }
+        Field { groups, sources, mode: m.mode, amount: m.amount, drip: m.drip, ripple: m.ripple, prepared_built, prepared_reused }
     }
 
     /// The same field with every skip switched off (for the tests that prove the skips are exact).
     #[cfg(test)]
     pub fn without_culling(mut self) -> Field {
         for g in &mut self.sources {
+            let g = Arc::make_mut(g);
             g.bounds = vec![crate::accel::Bound { c: [0.0; 3], r: 1.0e9 }; g.shapes.len()];
             g.info.bound = crate::accel::Bound { c: [0.0; 3], r: 1.0e9 };
             g.info.blocks = vec![crate::accel::Block { bound: g.info.bound, kmax: 0.0, skippable: false, first: 0, count: g.shapes.len() }];
