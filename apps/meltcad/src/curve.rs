@@ -156,6 +156,11 @@ pub fn resample_max(path: &[[f32; 4]], smooth: f32, closed: bool, max_points: us
         }
     }
     out.push(if closed { nodes[0] } else { nodes[n - 1] });
+    // A resampled closed loop must have exactly coincident endpoints. Catmull
+    // evaluation at t=0 can differ from the stored node by a rounding ULP.
+    if closed && !out.is_empty() {
+        out[0] = nodes[0];
+    }
     out.truncate(max_points);
     out
 }
