@@ -5,6 +5,8 @@ Run: MELTCAD_BIN=... python3 tools_b.py   (writes tools_b.json and renders previ
 import math
 
 from lib import *
+import json
+from pathlib import Path
 
 FILE = "tools_b.json"
 CAT = "くらしのもの"
@@ -354,5 +356,32 @@ def build_items():
 
 if __name__ == "__main__":
     items = build_items()
+    # Shared, fixed appliance catalogue: JSON is the source of truth for detailed SDF parts.
+    appliances = json.loads((Path(__file__).parent / "appliances.json").read_text(encoding="utf-8"))
+    assert appliances["category"] == CAT
+    existing = {obj["name"] for obj in items}
+    assert len(appliances["items"]) == 10
+    for appliance in appliances["items"]:
+        assert appliance["name"] not in existing, appliance["name"]
+        assert len(appliance["shapes"]) <= 24, appliance["name"]
+        items.append(item(appliance["name"], appliance["tags"],
+                          group(appliance["name"], [shape(
+                              part["kind"], part["name"], pos=part["pos"], size=part["size"],
+                              rot=part.get("rot", (0, 0, 0)),
+                              round=part.get("round", 0.0),
+                              blend=part.get("blend", 0.0),
+                              color=part["color"],
+                              roughness=part.get("roughness", 0.5),
+                              metallic=part.get("metallic", 0.0),
+                              glow=part.get("glow", 0.0),
+                              glass=part.get("glass", 0.0),
+                              coat=part.get("coat", 0.0),
+                              op=part.get("op", "Add"),
+                              outline=part.get("outline"),
+                              path=part.get("path"),
+                              params=part.get("params"),
+                          ) for part in appliance["shapes"]])))
+        existing.add(appliance["name"])
     write_category(FILE, CAT, items)
-    preview(items, outdir="/tmp/lib_preview_toolsb")
+    if os.environ.get("MELTCAD_BIN"):
+        preview(items, outdir="/tmp/lib_preview_toolsb")
