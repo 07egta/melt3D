@@ -193,7 +193,11 @@ fn font_bytes(path: &str) -> Result<Vec<u8>, String> {
 
 fn outlined(face: &Face<'_>, id: GlyphId) -> Result<Artwork, String> {
     let mut pen = SvgPen::default();
-    let _ = face.outline_glyph(id, &mut pen);
+    // ttf-parser may produce partial segments before rejecting a malformed glyph.
+    // Require an actual successful outline result, not just some pen commands.
+    if face.outline_glyph(id, &mut pen).is_none() {
+        return Err("フォントの文字輪郭を安全に読み込めませんでした".into());
+    }
     if pen.count == 0 {
         return Err("この文字には閉じた輪郭がありません".into());
     }
