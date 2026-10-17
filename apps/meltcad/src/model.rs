@@ -560,11 +560,14 @@ pub struct Group {
     /// Where a linked copy stands (move, turn, scale about the source's middle).
     #[serde(default, skip_serializing_if = "Xform::is_identity")]
     pub xform: Xform,
+    /// Editable native Designer Lamp parameters; old projects omit this optional field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lamp: Option<crate::designer_lamp::LampParams>,
 }
 
 impl Group {
     pub fn new(name: impl Into<String>) -> Group {
-        Group { name: name.into(), op: Op::Add, blend: 0.0, visible: true, shapes: Vec::new(), uid: 0, pattern: None, instance_of: None, xform: Xform::default() }
+        Group { name: name.into(), op: Op::Add, blend: 0.0, visible: true, shapes: Vec::new(), uid: 0, pattern: None, instance_of: None, xform: Xform::default(), lamp: None }
     }
 }
 
@@ -862,6 +865,9 @@ impl Scene {
             }
             g.shapes.truncate(left);
             left -= g.shapes.len();
+            if let Some(lamp) = &mut g.lamp {
+                lamp.sanitize();
+            }
             for s in &mut g.shapes {
                 for v in &mut s.size {
                     fix(v, 0.01, 2000.0, 10.0);
