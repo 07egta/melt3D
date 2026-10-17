@@ -358,6 +358,11 @@ impl App {
                 0.0..=80.0,
                 "このグループ全体が、前のグループとどのくらい溶けるか (グープ)",
             );
+            // Keep group-level chair parameters beside the native group properties.
+            // User-added shapes remain independent and are not re-meshed here.
+            if gr.designer_chair.is_some() && !gr.is_linked() {
+                crate::designer_chair::controls(ui, gr);
+            }
         }
         ui.horizontal(|ui| {
             if style::pill_enabled(ui, "↑ 前へ", false, g > 0).clicked() {
