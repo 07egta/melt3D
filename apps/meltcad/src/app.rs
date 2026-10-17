@@ -1161,7 +1161,8 @@ impl App {
             crate::export_dialog::update(self, &ctx);
             self.palette_ui(&ctx);
             if std::mem::take(&mut self.perf.bench_requested) {
-                self.bench.start(&ctx);
+                let backends = self.current_backend().map(|b| b.to_wgpu());
+                self.bench.start(&ctx, backends);
             }
             self.bench.show(&ctx);
         }
