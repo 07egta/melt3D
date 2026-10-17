@@ -472,6 +472,9 @@ impl App {
             Action::Duplicate if !selected => Some("先に形かグループを選択してください"),
             Action::Duplicate if self.scene.shape_count() >= MAX_SHAPES => Some("形の最大数に達しています"),
             Action::Duplicate if matches!(self.sel, Some(Pick::Group(_))) && self.scene.groups.len() >= MAX_GROUPS => Some("グループの最大数に達しています"),
+            Action::Duplicate if matches!(self.sel, Some(Pick::Group(g)) if self.scene.groups.get(g).is_some_and(|group| self.scene.shape_count() + group.shapes.len() > MAX_SHAPES)) => {
+                Some("グループ全体を複製すると形の上限を超えます")
+            },
             Action::MirrorCopy if !matches!(self.sel, Some(Pick::Shape(_, _))) => Some("左右コピーは形を1つ選択してください"),
             Action::MirrorCopy if self.scene.shape_count() >= MAX_SHAPES => Some("形の最大数に達しています"),
             Action::AddShape(_) if self.scene.shape_count() >= MAX_SHAPES => Some("形の最大数に達しています"),
@@ -489,7 +492,10 @@ impl App {
             Action::Pattern(PatternKind::Path) if !self.scene.groups.iter().any(|g| g.shapes.iter().any(|s| crate::pattern::shape_polyline(s).is_some())) => {
                 Some("パスに使う線や輪郭がありません")
             }
-            Action::Pattern(PatternKind::Geometry) if !self.scene.groups.iter().any(|g| !g.shapes.is_empty()) => {
+            Action::Pattern(PatternKind::Geometry) if !self.scene.groups.iter().enumerate().any(|(gi, g)| {
+                g.shapes.iter().any(|s| crate::pattern::shape_polyline(s).is_some())
+                    || (Some(gi) != group && !g.shapes.is_empty())
+            }) => {
                 Some("点を参照する形がありません")
             }
             Action::MirrorAxis(_) if group.and_then(|g| self.scene.groups.get(g)).and_then(|g| g.pattern.as_ref()).is_some_and(|p| !matches!(p, Pattern::Mirror { .. })) => {
@@ -828,6 +834,10 @@ mod tests {
         let second = ctx.data(|m| m.get_temp::<State>(id())).unwrap();
         assert_eq!(second.sel, 1, "down moves only palette selection");
         assert_eq!(app.tool, Tool::Select, "down did not operate a viewport shortcut");
+        frame(&ctx, &mut app, vec![key(Key::ArrowUp, egui::Modifiers::NONE)]);
+        assert_eq!(ctx.data(|m| m.get_temp::<State>(id())).unwrap().sel, 0, "up moves palette selection");
+        frame(&ctx, &mut app, vec![key(Key::ArrowDown, egui::Modifiers::NONE)]);
+        let second = ctx.data(|m| m.get_temp::<State>(id())).unwrap();
         let action = catalog().entries[second.hits[second.sel]].action;
         assert!(matches!(action, Action::SetTool(_)));
         frame(&ctx, &mut app, vec![key(Key::Enter, egui::Modifiers::NONE)]);
@@ -838,6 +848,9 @@ mod tests {
         assert_eq!(app.palette_prefs.recent.first(), Some(&action_key(action)));
         frame(&ctx, &mut app, vec![key(Key::K, egui::Modifiers::COMMAND)]);
         assert!(is_open(&ctx));
+        frame(&ctx, &mut app, vec![key(Key::F, egui::Modifiers::ALT)]);
+        let favorite_action = catalog().entries[ctx.data(|m| m.get_temp::<State>(id())).unwrap().hits[0]].action;
+        assert!(app.palette_prefs.contains(favorite_action), "Alt+F registers a favorite without executing");
         frame(&ctx, &mut app, vec![key(Key::Escape, egui::Modifiers::NONE)]);
         assert!(!is_open(&ctx));
     }
