@@ -151,19 +151,9 @@ fn with_the_pipe_tool_still_on_a_press_on_a_node_moves_the_node_instead_of_traci
 #[test]
 fn escape_during_handle_drag_restores_the_shape_and_clears_drag() {
     let mut r = Rig::new();
-    r.app.tool = crate::gizmo::Tool::Move;
+    r.app.tool = crate::gizmo::Tool::Scale;
     let start = r.app.scene.clone();
-    let g = crate::gizmo::build(&r.app.cam, r.app.view_rect, &r.app.scene, r.app.sel, r.app.tool).expect("gizmo");
-    let c = r.app.cam.project(r.app.view_rect, [0.0, 0.0, 20.0]).expect("centre");
-    let mut handle = None;
-    for dx in 12..72 {
-        let p = c + vec2(dx as f32, 0.0);
-        if crate::gizmo::hit(&g, r.app.tool, p).is_some() {
-            handle = Some(p);
-            break;
-        }
-    }
-    let from = handle.expect("visible move handle");
+    let from = r.app.cam.project(r.app.view_rect, [0.0, 0.0, 20.0]).expect("centre");
     r.mv(from);
     r.button(from, true);
     r.mv(from + vec2(90.0, 60.0));
