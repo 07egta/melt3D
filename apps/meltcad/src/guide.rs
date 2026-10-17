@@ -103,7 +103,7 @@ pub struct Guide {
 
 impl Guide {
     fn from_preferences(mut prefs: Preferences, opening_file: bool) -> (Self, bool) {
-        let first = !prefs.intro_seen && !opening_file;
+        let first = !prefs.intro_seen && !prefs.completed_practice && !opening_file;
         if first {
             prefs.intro_seen = true;
         }
@@ -414,6 +414,10 @@ mod tests {
         assert!(shown && first.panel_open && first.prefs.intro_seen);
         let (again, shown) = Guide::from_preferences(first.prefs, false);
         assert!(!shown && !again.panel_open);
+        let (completed, shown) = Guide::from_preferences(
+            Preferences { completed_practice: true, ..Default::default() }, false,
+        );
+        assert!(!shown && !completed.panel_open, "completion always suppresses forced tours");
         let (opening, shown) = Guide::from_preferences(Preferences::default(), true);
         assert!(!shown && !opening.panel_open);
         let (later, shown) = Guide::from_preferences(opening.prefs, false);
