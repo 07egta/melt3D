@@ -197,6 +197,7 @@ impl ScenePack {
             block_n += info.blocks.len();
         }
         let mut group_n = 0usize;
+        let mut item_n = 0usize;
         for rg in &resolved {
             let (Some(g), Some(p)) = (scene.groups.get(rg.gi), packed.get(&rg.src)) else { continue };
             if group_n >= MAX_GROUPS {
@@ -216,7 +217,9 @@ impl ScenePack {
                 inst_n += 1;
             }
             push(&mut groups, [p.first_block as f32, p.n_blocks as f32, g.op.sign(), g.blend]);
-            push(&mut groups, [first_inst as f32, (inst_n - first_inst) as f32, 0.0, 0.0]);
+            // (the third number is this group's first item: every instance, or the group itself, is one item the march can leave out)
+            push(&mut groups, [first_inst as f32, (inst_n - first_inst) as f32, item_n as f32, 0.0]);
+            item_n += (inst_n - first_inst).max(1);
             push(&mut groups, [p.sphere.c[0], p.sphere.c[1], p.sphere.c[2], p.sphere.r]);
             group_n += 1;
         }
@@ -372,15 +375,19 @@ fn pack_shape(s: &crate::model::Shape, out: &mut Vec<f32>, poly: &mut Vec<f32>, 
 }
 
 /// A curve's smoothed points go into the path list behind two header entries (the low and high
-/// corner of a box around the tube). Returns (first point, count); (0, 0) when there is no room.
+/// corner of a box around the tube), and are followed by one bounding sphere (centre, radius with
+/// the tube's thickness) for every `curve::GROUP_SEGMENTS` segments: the shader looks at those
+/// first and measures only the groups that can hold the nearest piece. Returns (first point,
+/// count); (0, 0) when there is no room.
 fn pack_curve(s: &crate::model::Shape, path: &mut Vec<f32>) -> (usize, usize) {
     let used = path.len() / 4;
     let room = PATH_V4.saturating_sub(used + 2);
+    let need = |n: usize| n + n.saturating_sub(1).div_ceil(crate::curve::GROUP_SEGMENTS);
     let mut pts = crate::curve::build(&s.path, &s.params);
-    if pts.len() > room {
-        pts = crate::curve::build_max(&s.path, &s.params, room);
+    if need(pts.len()) > room {
+        pts = crate::curve::build_max(&s.path, &s.params, (room * crate::curve::GROUP_SEGMENTS / (crate::curve::GROUP_SEGMENTS + 1)).max(4));
     }
-    if pts.len() < 2 || pts.len() > room {
+    if pts.len() < 2 || need(pts.len()) > room {
         return (0, 0);
     }
     let (lo, hi) = crate::curve::bounds(&pts);
@@ -389,6 +396,9 @@ fn pack_curve(s: &crate::model::Shape, path: &mut Vec<f32>) -> (usize, usize) {
     let st = used + 2;
     for pt in &pts {
         push(path, *pt);
+    }
+    for g in crate::curve::group_spheres(&pts) {
+        push(path, g);
     }
     (st, pts.len())
 }
@@ -1341,6 +1351,11 @@ pub(crate) mod offscreen {
 
     impl Offscreen {
         pub fn open() -> Result<Offscreen, String> {
+            Offscreen::open_with(None)
+        }
+
+        /// `open`, with the scene shader's source given (the tests count work with an instrumented copy).
+        pub fn open_with(source: Option<&str>) -> Result<Offscreen, String> {
             let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
             if let Some(b) = wgpu::Backends::from_env() {
                 desc.backends = b;
@@ -1365,7 +1380,10 @@ pub(crate) mod offscreen {
             }))
             .map_err(|e| format!("グラフィックスのデバイスを作れません: {e}"))?;
             let t = std::time::Instant::now();
-            let res = try_build(&device, &queue, wgpu::TextureFormat::Rgba8Unorm)?;
+            let res = match source {
+                Some(src) => try_build_from(&device, &queue, wgpu::TextureFormat::Rgba8Unorm, src)?,
+                None => try_build(&device, &queue, wgpu::TextureFormat::Rgba8Unorm)?,
+            };
             let compile_secs = t.elapsed().as_secs_f64();
             let driver = if info.driver_info.is_empty() { info.driver.clone() } else { format!("{} {}", info.driver, info.driver_info) };
             Ok(Offscreen {
@@ -1720,7 +1738,7 @@ mod curve_tests {
             let ext = f.shape(i, 12);
             let (start, count) = (ext[0] as usize, ext[1] as usize);
             if count > 0 {
-                assert!(start + count <= PATH_V4, "curve {i} runs past the list");
+                assert!(start + count + (count - 1).div_ceil(crate::curve::GROUP_SEGMENTS) <= PATH_V4, "curve {i} runs past the list");
                 used = used.max(start + count);
                 drawn += 1;
             }

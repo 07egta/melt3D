@@ -34,6 +34,11 @@ fn round_cone(p: vec3<f32>, a: vec3<f32>, ra: f32, b: vec3<f32>, rb: f32) -> f32
     return (sqrt(x2 * a2 * il2) + y * rr) * il2 - ra;
 }
 
+// Segments per bounding sphere (curve::GROUP_SEGMENTS). The spheres follow the points in the path
+// list: path_pt(ext.x + ext.y + g) is the sphere (centre, radius with the tube's thickness) of the
+// segments g * 8 .. g * 8 + 7.
+const CURVE_GROUP: i32 = 8;
+
 fn curve_dist(s: Shape, q: vec3<f32>) -> f32 {
     let st = i32(s.ext.x + 0.5);
     let n = min(i32(s.ext.y + 0.5), 96);
@@ -45,12 +50,34 @@ fn curve_dist(s: Shape, q: vec3<f32>) -> f32 {
     let db = length(ob);
     let reach = 2.0 + s.misc.y * G.melt.y * 6.0;
     if (db > reach) { return db; }
+    // The nearest piece is found among the groups of segments, not among all of them: the spheres
+    // bound the distance from both sides (every group has a tube point inside its sphere, and lies
+    // inside it), so only the groups that can hold something nearer than what is known are measured.
+    let ng = (n - 1 + CURVE_GROUP - 1) / CURVE_GROUP;
+    let gb = st + n;
+    var ub = 1.0e6;
+    var lbmin = 1.0e6;
+    for (var g = 0; g < ng; g = g + 1) {
+        let sp = path_pt(gb + g);
+        let dc = length(q - sp.xyz);
+        ub = min(ub, dc + sp.w);
+        lbmin = min(lbmin, dc - sp.w);
+    }
+    // (a lower bound, as the box above is: nothing of the tube is nearer)
+    if (lbmin > reach) { return max(db, lbmin); }
     var d = 1.0e6;
-    var a = path_pt(st);
-    for (var i = 1; i < n; i = i + 1) {
-        let b = path_pt(st + i);
-        d = min(d, round_cone(q, a.xyz, a.w, b.xyz, b.w));
-        a = b;
+    for (var g = 0; g < ng; g = g + 1) {
+        let sp = path_pt(gb + g);
+        if (length(q - sp.xyz) - sp.w > min(d, ub)) { continue; }
+        let i0 = g * CURVE_GROUP;
+        var a = path_pt(st + i0);
+        for (var k = 1; k <= CURVE_GROUP; k = k + 1) {
+            let i = i0 + k;
+            if (i >= n) { break; }
+            let b = path_pt(st + i);
+            d = min(d, round_cone(q, a.xyz, a.w, b.xyz, b.w));
+            a = b;
+        }
     }
     // a shell hollows the tube first (shape_dist leaves curves alone), then flat ends cut it open
     let wall = s.extra.x / max(s.pos.w, 1.0e-6);
