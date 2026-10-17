@@ -346,4 +346,21 @@ mod tests {
         sc.groups[0].shapes.push(stain);
         let _ = std::fs::write(out, sc.to_json());
     }
+    #[test]
+    fn file_colour_conversions_and_scene_serialization() {
+        let red = from_3mf_hex("#FF0000").unwrap();
+        assert_eq!(red.color, [1.0, 0.0, 0.0]);
+        assert!(from_3mf_hex("#XYZ").is_none());
+        let transparent = from_3mf_hex("#0033FF80").unwrap();
+        assert!((transparent.glass - 127.0 / 255.0).abs() < 1e-6);
+        let gltf = from_gltf_pbr([0.5, 0.0, 1.0, 1.0], 0.2, 0.8).unwrap();
+        assert!((gltf.color[0] - 0.73536).abs() < 0.001);
+        assert!((gltf.roughness - 0.2).abs() < 1e-6);
+        assert!((gltf.metallic - 0.8).abs() < 1e-6);
+        let mut scene = crate::model::Scene::default();
+        scene.groups[0].shapes.push(crate::model::Shape::new(crate::model::Kind::Box, [0.0; 3], gltf));
+        let loaded = crate::model::Scene::from_json(&scene.to_json()).unwrap();
+        assert_eq!(loaded.groups[0].shapes.last().unwrap().material, gltf);
+    }
+
 }
