@@ -68,100 +68,100 @@ pub struct Entry {
 /// English and common names of a shape kind.
 fn kind_words(k: Kind) -> &'static str {
     match k {
-        Kind::Sphere => "sphere ball たま きゅう まる",
-        Kind::Box => "box cube はこ しかく",
-        Kind::Cylinder => "cylinder tube えんちゅう つつ",
-        Kind::Torus => "torus donut ring どーなつ わ",
-        Kind::Cone => "cone えんすい",
-        Kind::Extrude => "extrude おしだし sketch スケッチ",
-        Kind::Prism3 => "prism triangle さんかくちゅう",
-        Kind::PrismN => "prism polygon hexagon たかくちゅう",
-        Kind::Octa => "octahedron はちめんたい",
-        Kind::Tetra => "tetrahedron よんめんたい",
-        Kind::Pyramid => "pyramid ぴらみっど",
-        Kind::Capsule => "capsule pill かぷせる",
-        Kind::Hemi => "hemisphere dome はんきゅう",
-        Kind::Tube => "pipe tube ぱいぷ",
+        Kind::Sphere => "sphere ball たま きゅう まる 球",
+        Kind::Box => "box cube はこ しかく 箱",
+        Kind::Cylinder => "cylinder tube えんちゅう つつ 円柱",
+        Kind::Torus => "torus donut ring どーなつ わ ドーナツ",
+        Kind::Cone => "cone えんすい 円すい",
+        Kind::Extrude => "extrude おしだし sketch スケッチ 押し出し",
+        Kind::Prism3 => "prism triangle さんかくちゅう 三角柱",
+        Kind::PrismN => "prism polygon hexagon たかくちゅう 多角柱",
+        Kind::Octa => "octahedron はちめんたい 正八面体",
+        Kind::Tetra => "tetrahedron よんめんたい 正四面体",
+        Kind::Pyramid => "pyramid ぴらみっど ピラミッド",
+        Kind::Capsule => "capsule pill かぷせる カプセル",
+        Kind::Hemi => "hemisphere dome はんきゅう 半球",
+        Kind::Tube => "pipe tube ぱいぷ パイプ",
         Kind::Wedge => "wedge ramp くさび",
-        Kind::Star => "star ほし",
-        Kind::Revolve => "revolve lathe かいてんたい",
-        Kind::Loft => "loft ろふと",
-        Kind::Curve => "curve line tube せん かーぶ",
-        Kind::Sweep => "sweep すいーぷ",
-        Kind::Mesh => "mesh stl obj import めっしゅ",
+        Kind::Star => "star ほし 星柱",
+        Kind::Revolve => "revolve lathe かいてんたい 回転体",
+        Kind::Loft => "loft ろふと ロフト",
+        Kind::Curve => "curve line tube せん かーぶ 線",
+        Kind::Sweep => "sweep すいーぷ スイープ",
+        Kind::Mesh => "mesh stl obj import めっしゅ メッシュ",
     }
 }
 
 fn cmd(label: &str, words: &str, action: Action) -> Entry {
-    Entry { label: label.to_string(), tag: "コマンド", words: words.to_lowercase(), action }
+    Entry { label: label.to_string(), tag: "Command", words: words.to_lowercase(), action }
 }
 
 /// Everything the palette can run: shapes, every library model, and the commands.
 pub fn entries() -> Vec<Entry> {
     let mut v = Vec::new();
     for k in Kind::ALL {
-        v.push(Entry { label: format!("{}を足す", k.label()), tag: "形", words: format!("{} {}", k.label(), kind_words(k)).to_lowercase(), action: Action::AddShape(k) });
+        v.push(Entry { label: format!("Add {}", k.label()), tag: "Shape", words: format!("{} {}", k.label(), kind_words(k)).to_lowercase(), action: Action::AddShape(k) });
     }
     for (ci, c) in library::all().iter().enumerate() {
         for (ii, it) in c.items.iter().enumerate() {
             v.push(Entry {
                 label: it.name.clone(),
-                tag: "ライブラリ",
+                tag: "Library",
                 words: format!("{} {}", c.name, it.tags.join(" ")).to_lowercase(),
                 action: Action::Insert(ci, ii),
             });
         }
     }
     v.extend([
-        cmd("グループを作る", "group new まとめる", Action::AddGroup),
-        cmd("元に戻す", "undo もどす", Action::Undo),
-        cmd("やり直し", "redo", Action::Redo),
-        cmd("コピー", "copy", Action::Copy),
-        cmd("切り取り", "cut", Action::Cut),
-        cmd("貼りつけ", "paste はりつけ", Action::Paste),
-        cmd("複製", "duplicate clone ふくせい", Action::Duplicate),
-        cmd("左右コピー", "mirror symmetric みらー", Action::MirrorCopy),
-        cmd("削除", "delete remove けす さくじょ", Action::Delete),
-        cmd("ならべてコピー", "array pattern repeat はいれつ", Action::Array),
-        cmd("パターン: 矩形状（たて・よこ・高さにならべる）", "pattern rectangular grid くけいじょう", Action::Pattern(PatternKind::Rect)),
-        cmd("パターン: 円形状（ぐるっとならべる）", "pattern circular polar circle えんけいじょう", Action::Pattern(PatternKind::Circular)),
-        cmd("パターン: パス上（線にそってならべる）", "pattern path along curve ぱすじょう", Action::Pattern(PatternKind::Path)),
-        cmd("パターン: ジオメトリ（点ごとにおく）", "pattern geometry points vertices じおめとり", Action::Pattern(PatternKind::Geometry)),
-        cmd("ミラー X（左右にうつす）", "mirror symmetry live x みらー さゆう", Action::MirrorAxis(0)),
-        cmd("ミラー Y（前後にうつす）", "mirror symmetry live y みらー ぜんご", Action::MirrorAxis(1)),
-        cmd("ミラー Z（上下にうつす）", "mirror symmetry live z みらー じょうげ", Action::MirrorAxis(2)),
-        cmd("パターンをやめる", "pattern remove clear off やめる", Action::ClearPattern),
-        cmd("インスタンスを作る（リンクコピー）", "instance linked copy いんすたんす りんく", Action::MakeInstance),
-        cmd("新しく作る", "new あたらしく", Action::NewScene),
-        cmd("開く", "open load ひらく", Action::Open),
-        cmd("保存", "save ほぞん", Action::Save),
-        cmd("名前をつけて保存", "save as なまえ", Action::SaveAs),
-        cmd("STLで書き出す", "export stl print 3dぷりんと かきだし", Action::Export(ExportFormat::Stl)),
-        cmd("3MFで書き出す", "export 3mf slicer すらいさー", Action::Export(ExportFormat::ThreeMf)),
-        cmd("OBJで書き出す", "export obj", Action::Export(ExportFormat::Obj)),
-        cmd("画像(PNG)で書き出す", "export png image screenshot がぞう", Action::ExportPng),
-        cmd("プリントチェック", "print check volume size 体積 おおきさ", Action::PrintCheck),
-        cmd("SVGを読み込む", "svg import いんぽーと", Action::ImportSvg),
-        cmd("メッシュを読み込む", "mesh stl obj 3mf ply glb import めっしゅ よみこむ とりこむ 取り込み", Action::ImportMesh),
-        cmd("全体を見る", "frame all home ぜんたい", Action::FrameAll),
-        cmd("えらんだものを見る", "frame focus selection みる", Action::FrameSelection),
-        cmd("遠近 / 平行を切りかえ", "perspective orthographic ortho えんきん へいこう", Action::TogglePerspective),
-        cmd("足す ⇄ 削る を切りかえ", "flip boolean subtract add tab", Action::FlipOp),
-        cmd("つぎは「足す」", "add union", Action::SetOp(Op::Add)),
-        cmd("つぎは「削る」", "subtract difference cut けずる", Action::SetOp(Op::Subtract)),
-        cmd("つぎは「ぬる」", "paint stain ぬる", Action::SetOp(Op::Paint)),
-        cmd("つぎは「重ねる」", "intersect かさねる", Action::SetOp(Op::Intersect)),
-        cmd("道具: 選ぶ", "tool select q", Action::SetTool(Tool::Select)),
-        cmd("道具: ぜんぶ", "tool all gizmo a", Action::SetTool(Tool::All)),
-        cmd("道具: 動かす", "tool move translate w", Action::SetTool(Tool::Move)),
-        cmd("道具: 回す", "tool rotate e", Action::SetTool(Tool::Rotate)),
-        cmd("道具: 大きさ", "tool scale r", Action::SetTool(Tool::Scale)),
-        cmd("正面から見る", "view front 1 しょうめん", Action::ViewFront),
-        cmd("右から見る", "view right 3 みぎ", Action::ViewRight),
-        cmd("真上から見る", "view top 7 うえ", Action::ViewTop),
-        cmd("ライブラリを開く", "library assets らいぶらり あせっと", Action::ShowAssets),
-        cmd("シーン一覧を開く", "outliner scene しーん あうとらいなー", Action::ShowOutliner),
-        cmd("操作のしかた", "help keys keyboard へるぷ ?", Action::Help),
+        cmd("Group", "group new まとめる グループを作る", Action::AddGroup),
+        cmd("Undo", "undo もどす 元に戻す", Action::Undo),
+        cmd("Redo", "redo やり直し", Action::Redo),
+        cmd("Copy", "copy コピー", Action::Copy),
+        cmd("Cut", "cut 切り取り", Action::Cut),
+        cmd("Paste", "paste はりつけ 貼りつけ", Action::Paste),
+        cmd("Duplicate", "duplicate clone ふくせい 複製", Action::Duplicate),
+        cmd("Mirror Copy", "mirror symmetric みらー 左右コピー", Action::MirrorCopy),
+        cmd("Delete", "delete remove けす さくじょ 削除", Action::Delete),
+        cmd("Array", "array pattern repeat はいれつ ならべてコピー", Action::Array),
+        cmd("Pattern: Rectangular", "pattern rectangular grid くけいじょう パターン 矩形状 ならべる", Action::Pattern(PatternKind::Rect)),
+        cmd("Pattern: Circular", "pattern circular polar circle えんけいじょう パターン 円形状 ぐるっと", Action::Pattern(PatternKind::Circular)),
+        cmd("Pattern: Along Path", "pattern path along curve ぱすじょう パターン パス上 線にそって", Action::Pattern(PatternKind::Path)),
+        cmd("Pattern: Points", "pattern geometry points vertices じおめとり パターン ジオメトリ 点ごと", Action::Pattern(PatternKind::Geometry)),
+        cmd("Mirror X", "mirror symmetry live x みらー さゆう ミラー 左右にうつす", Action::MirrorAxis(0)),
+        cmd("Mirror Y", "mirror symmetry live y みらー ぜんご ミラー 前後にうつす", Action::MirrorAxis(1)),
+        cmd("Mirror Z", "mirror symmetry live z みらー じょうげ ミラー 上下にうつす", Action::MirrorAxis(2)),
+        cmd("Clear Pattern", "pattern remove clear off やめる パターンをやめる", Action::ClearPattern),
+        cmd("Make Instance", "instance linked copy いんすたんす りんく インスタンス リンクコピー", Action::MakeInstance),
+        cmd("New Scene", "new あたらしく 新しく作る", Action::NewScene),
+        cmd("Open", "open load ひらく 開く", Action::Open),
+        cmd("Save", "save ほぞん 保存", Action::Save),
+        cmd("Save As", "save as なまえ 名前をつけて保存", Action::SaveAs),
+        cmd("Export STL", "export stl print 3dぷりんと かきだし STLで書き出す", Action::Export(ExportFormat::Stl)),
+        cmd("Export 3MF", "export 3mf slicer すらいさー 3MFで書き出す", Action::Export(ExportFormat::ThreeMf)),
+        cmd("Export OBJ", "export obj OBJで書き出す", Action::Export(ExportFormat::Obj)),
+        cmd("Export PNG", "export png image screenshot がぞう 画像で書き出す", Action::ExportPng),
+        cmd("Print Check", "print check volume size 体積 おおきさ プリントチェック", Action::PrintCheck),
+        cmd("Import SVG", "svg import いんぽーと SVGを読み込む", Action::ImportSvg),
+        cmd("Import Mesh", "mesh stl obj 3mf ply glb import めっしゅ よみこむ とりこむ 取り込み メッシュを読み込む", Action::ImportMesh),
+        cmd("Frame All", "frame all home ぜんたい 全体を見る", Action::FrameAll),
+        cmd("Frame Selection", "frame focus selection みる えらんだものを見る", Action::FrameSelection),
+        cmd("Toggle Perspective / Ortho", "perspective orthographic ortho えんきん へいこう 遠近 平行を切りかえ", Action::TogglePerspective),
+        cmd("Toggle Add / Subtract", "flip boolean subtract add tab 足す 削る を切りかえ", Action::FlipOp),
+        cmd("Next: Add", "add union つぎは足す", Action::SetOp(Op::Add)),
+        cmd("Next: Subtract", "subtract difference cut けずる つぎは削る", Action::SetOp(Op::Subtract)),
+        cmd("Next: Paint", "paint stain ぬる つぎはぬる", Action::SetOp(Op::Paint)),
+        cmd("Next: Intersect", "intersect かさねる つぎは重ねる", Action::SetOp(Op::Intersect)),
+        cmd("Tool: Select", "tool select q えらぶ 道具 選ぶ", Action::SetTool(Tool::Select)),
+        cmd("Tool: All", "tool all gizmo a ぜんぶ 道具 ぜんぶ", Action::SetTool(Tool::All)),
+        cmd("Tool: Move", "tool move translate w うごかす 道具 動かす", Action::SetTool(Tool::Move)),
+        cmd("Tool: Rotate", "tool rotate e まわす 道具 回す", Action::SetTool(Tool::Rotate)),
+        cmd("Tool: Scale", "tool scale r おおきさ 道具 大きさ", Action::SetTool(Tool::Scale)),
+        cmd("View Front", "view front 1 しょうめん 正面から見る", Action::ViewFront),
+        cmd("View Right", "view right 3 みぎ 右から見る", Action::ViewRight),
+        cmd("View Top", "view top 7 うえ 真上から見る", Action::ViewTop),
+        cmd("Show Library", "library assets らいぶらり あせっと ライブラリを開く", Action::ShowAssets),
+        cmd("Show Outliner", "outliner scene しーん あうとらいなー シーン一覧を開く", Action::ShowOutliner),
+        cmd("Keyboard Shortcuts", "help keys keyboard へるぷ ? 操作のしかた", Action::Help),
     ]);
     v
 }
@@ -199,7 +199,7 @@ fn score(e: &Entry, q: &str) -> Option<u32> {
 pub fn search(all: &[Entry], query: &str, limit: usize) -> Vec<usize> {
     let q = query.trim().to_lowercase();
     if q.is_empty() {
-        return all.iter().enumerate().filter(|(_, e)| e.tag != "ライブラリ").map(|(i, _)| i).take(limit).collect();
+        return all.iter().enumerate().filter(|(_, e)| e.tag != "Library").map(|(i, _)| i).take(limit).collect();
     }
     let mut hits: Vec<(u32, usize)> = all.iter().enumerate().filter_map(|(i, e)| score(e, &q).map(|s| (s, i))).collect();
     hits.sort_by_key(|(s, i)| (*s, *i));
@@ -304,14 +304,14 @@ impl App {
         egui::Area::new(egui::Id::new("palette_area")).order(egui::Order::Tooltip).pivot(Align2::CENTER_TOP).fixed_pos(egui::pos2(rect.center().x, rect.top() + 70.0)).show(ctx, |ui| {
             style::card().show(ui, |ui| {
                 ui.set_width(460.0);
-                let r = ui.add(egui::TextEdit::singleline(&mut st.query).hint_text("さがす（形・ライブラリ・コマンド　English もOK）").desired_width(f32::INFINITY).font(egui::FontId::proportional(15.0)));
+                let r = ui.add(egui::TextEdit::singleline(&mut st.query).hint_text("Search shapes, library, commands (Japanese also works)").desired_width(f32::INFINITY).font(egui::FontId::proportional(15.0)));
                 if st.fresh {
                     r.request_focus();
                     st.fresh = false;
                 }
                 ui.add_space(4.0);
                 if hits.is_empty() {
-                    ui.label(RichText::new("見つかりませんでした").color(style::DIM));
+                    ui.label(RichText::new("No results").color(style::DIM));
                 }
                 for (n, &i) in hits.iter().enumerate() {
                     let Some(e) = all.get(i) else { continue };
@@ -396,7 +396,7 @@ mod tests {
         let all = entries();
         let hits = search(&all, "コピー", 20);
         let labels: Vec<&str> = hits.iter().filter_map(|i| all.get(*i)).map(|e| e.label.as_str()).collect();
-        assert_eq!(labels.first(), Some(&"コピー"), "{labels:?}");
+        assert_eq!(labels.first(), Some(&"Copy"), "{labels:?}");
     }
 
     #[test]

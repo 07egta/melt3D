@@ -12,12 +12,12 @@ use crate::{glyphs, style};
 
 /// (label, mode, amount, drip, ripple)
 const MELT_PRESETS: [(&str, BlendMode, f32, f32, f32); 6] = [
-    ("かたい", BlendMode::Smooth, 0.0, 0.0, 1.0),
-    ("やわらか", BlendMode::Smooth, 1.0, 0.0, 1.0),
-    ("ぷりぷり", BlendMode::Round, 1.6, 0.0, 1.0),
-    ("チーズ", BlendMode::Gooey, 1.0, 8.0, 1.0),
-    ("はちみつ", BlendMode::Gooey, 1.5, 16.0, 0.7),
-    ("とろとろ", BlendMode::Gooey, 2.4, 28.0, 1.0),
+    ("Firm", BlendMode::Smooth, 0.0, 0.0, 1.0),
+    ("Soft", BlendMode::Smooth, 1.0, 0.0, 1.0),
+    ("Bouncy", BlendMode::Round, 1.6, 0.0, 1.0),
+    ("Cheese", BlendMode::Gooey, 1.0, 8.0, 1.0),
+    ("Honey", BlendMode::Gooey, 1.5, 16.0, 0.7),
+    ("Runny", BlendMode::Gooey, 2.4, 28.0, 1.0),
 ];
 
 const BACKDROPS: [[f32; 3]; 10] = [
@@ -41,7 +41,7 @@ impl App {
             .frame(egui::Frame::new().fill(style::PANEL).inner_margin(egui::Margin::symmetric(14, 12)))
             .show(ui, |ui| {
                 style::panel_sheen(ui, ui.max_rect().expand2(vec2(14.0, 12.0)), style::PANEL, style::Edge::Left);
-                let tabs = [(Tab::Shape, "形"), (Tab::Material, "ざいしつ"), (Tab::Melt, "メルト"), (Tab::Room, "ライト・背景")];
+                let tabs = [(Tab::Shape, "Shape"), (Tab::Material, "Material"), (Tab::Melt, "Melt"), (Tab::Room, "Light")];
                 let items: Vec<(&str, &str)> = tabs.iter().map(|t| (t.1, "")).collect();
                 let sel = tabs.iter().position(|t| t.0 == self.tab);
                 if let Some(i) = style::segmented(ui, "side_tabs", &items, sel, true)
@@ -62,27 +62,27 @@ impl App {
     /// The menu on a right click in the viewport.
     pub fn context_menu(&mut self, ui: &mut Ui) {
         if self.sel.is_none() {
-            ui.label(RichText::new("何も選ばれていません").color(style::DIM));
+            ui.label(RichText::new("Nothing selected").color(style::DIM));
             return;
         }
-        if ui.button("複製　Ctrl+D").clicked() {
+        if ui.button("Duplicate  Ctrl+D").clicked() {
             self.duplicate();
             ui.close();
         }
-        if ui.button("＋ ⇄ −　Tab").clicked() {
+        if ui.button("Add ⇄ Subtract  Tab").clicked() {
             self.flip_op();
             ui.close();
         }
-        if ui.button("ここを見る　F").clicked() {
+        if ui.button("Focus  F").clicked() {
             self.frame_view(true);
             ui.close();
         }
-        if ui.button("名前を変える").clicked() {
+        if ui.button("Rename").clicked() {
             self.renaming = self.sel;
             ui.close();
         }
         ui.separator();
-        if ui.button(RichText::new("削除　Delete").color(style::CUT)).clicked() {
+        if ui.button(RichText::new("Delete  Del").color(style::CUT)).clicked() {
             self.delete_selected();
             ui.close();
         }
@@ -102,8 +102,8 @@ impl App {
                     let g = &self.scene.groups[gi];
                     let n = resolved.iter().find(|r| r.gi == gi).map_or(0, |r| r.insts.len().max(1));
                     match (g.is_linked(), g.pattern.is_some()) {
-                        (true, true) => format!("リンク ×{n}"),
-                        (true, false) => "リンク".to_string(),
+                        (true, true) => format!("Linked ×{n}"),
+                        (true, false) => "Linked".to_string(),
                         (false, true) => format!("×{n}"),
                         _ => String::new(),
                     }
@@ -112,16 +112,29 @@ impl App {
         } else {
             Vec::new()
         };
+        // a folded group hides everything nested in it
+        let mut hidden_below: Option<u8> = None;
         for gi in 0..ngroups {
+            let depth = self.scene.groups[gi].depth;
+            if let Some(d) = hidden_below {
+                if depth > d {
+                    continue;
+                }
+                hidden_below = None;
+            }
+            let indent_px = f32::from(depth) * 14.0;
             let folded = self.folded.contains(&gi);
-            let sel = self.sel == Some(Pick::Group(gi));
+            if folded {
+                hidden_below = Some(depth);
+            }
+            let sel = self.picks().contains(&Pick::Group(gi));
             let (name, op, visible, nshapes) = {
                 let g = &self.scene.groups[gi];
                 (g.name.clone(), g.op, g.visible, g.shapes.len())
             };
             let id = ui.id().with(("g", gi));
             let badge = badges.get(gi).cloned().unwrap_or_default();
-            let row = self.row(ui, id, sel, 0.0, name, Pick::Group(gi), op, visible, glyphs::group, !folded, true, &badge);
+            let row = self.row(ui, id, sel, indent_px, name, Pick::Group(gi), op, visible, glyphs::group, !folded, true, &badge);
             if row.chevron {
                 if folded {
                     self.folded.remove(&gi);
@@ -130,7 +143,11 @@ impl App {
                 }
             }
             if row.select {
-                self.sel = Some(Pick::Group(gi));
+                if ui.input(|i| i.modifiers.shift) {
+                    self.toggle_pick(Pick::Group(gi));
+                } else {
+                    self.sel = Some(Pick::Group(gi));
+                }
             }
             if row.drag_started {
                 self.layer_drag = Some(Pick::Group(gi));
@@ -145,13 +162,13 @@ impl App {
                 for si in 0..nshapes {
                     let Some(s) = self.scene.shape(gi, si) else { continue };
                     let (name, op, visible, material) = (s.name.clone(), s.op, s.visible, s.material);
-                    let sel = self.sel == Some(Pick::Shape(gi, si));
+                    let sel = self.picks().contains(&Pick::Shape(gi, si));
                     let id = ui.id().with(("s", gi, si));
                     let row = self.row(
                         ui,
                         id,
                         sel,
-                        18.0,
+                        18.0 + indent_px,
                         name,
                         Pick::Shape(gi, si),
                         op,
@@ -162,7 +179,11 @@ impl App {
                         "",
                     );
                     if row.select {
-                        self.sel = Some(Pick::Shape(gi, si));
+                        if ui.input(|i| i.modifiers.shift) {
+                            self.toggle_pick(Pick::Shape(gi, si));
+                        } else {
+                            self.sel = Some(Pick::Shape(gi, si));
+                        }
                     }
                     if row.drag_started {
                         self.layer_drag = Some(Pick::Shape(gi, si));
@@ -181,7 +202,7 @@ impl App {
             }
         }
         if ngroups == 0 {
-            ui.label(RichText::new("上の形をクリックして足そう").color(style::DIM).size(12.0));
+            ui.label(RichText::new("Click a shape above to add one").color(style::DIM).size(12.0));
         }
         self.layer_drop(ui);
     }
@@ -305,22 +326,28 @@ impl App {
             Some(Pick::Shape(g, s)) if self.scene.shape(g, s).is_some() => self.shape_inspector(ui, g, s),
             Some(Pick::Group(g)) if g < self.scene.groups.len() => self.group_inspector(ui, g),
             _ => {
-                style::title(ui, "えらんだもの");
-                ui.label(RichText::new("画面の形か、左のシーンをクリック").color(style::DIM).size(12.0));
+                style::title(ui, "Selection");
+                ui.label(RichText::new("Click a shape in the view or the scene list").color(style::DIM).size(12.0));
             }
         }
     }
 
     fn actions(&mut self, ui: &mut Ui) {
+        if self.picks().len() > 1 {
+            ui.label(RichText::new(format!("{} selected (Shift + click adds or removes)", self.picks().len())).size(12.0).color(style::ACCENT));
+            if style::pill(ui, "Group them (Ctrl+G)", false).on_hover_text("Put the selected shapes in one new group so they melt together").clicked() {
+                self.group_selected();
+            }
+        }
         ui.horizontal(|ui| {
-            if style::icon_button(ui, 34.0, "複製 (Ctrl+D)", false, glyphs::dup).clicked() {
+            if style::icon_button(ui, 34.0, "Duplicate (Ctrl+D)", false, glyphs::dup).clicked() {
                 self.duplicate();
             }
-            if style::icon_button(ui, 34.0, "削除 (Delete)", false, glyphs::trash).clicked() {
+            if style::icon_button(ui, 34.0, "Delete (Del)", false, glyphs::trash).clicked() {
                 self.delete_selected();
             }
             if matches!(self.sel, Some(Pick::Shape(..)))
-                && style::pill(ui, "左右コピー", false).on_hover_text("反対がわにコピー (耳・目・うでに)").clicked()
+                && style::pill(ui, "Mirror copy", false).on_hover_text("Copy to the opposite side (ears, eyes, arms)").clicked()
             {
                 self.mirror_copy();
             }
@@ -329,10 +356,10 @@ impl App {
 
     fn op_pills(ui: &mut Ui, op: &mut Op) {
         let ops = [
-            (Op::Add, "＋ 足す", "形をくっつける"),
-            (Op::Subtract, "− 削る", "くり抜く"),
-            (Op::Paint, "● ぬる", "形は変えずに、色・ざいしつだけぬる"),
-            (Op::Intersect, "◐ 重ねる", "前の形と かさなる ところだけ のこす"),
+            (Op::Add, "＋ Add", "Join this shape with the others"),
+            (Op::Subtract, "− Subtract", "Cut a hole with this shape"),
+            (Op::Paint, "● Paint", "Change only the color and material, not the shape"),
+            (Op::Intersect, "◐ Overlap", "Keep only the part that overlaps the shape before"),
         ];
         let items: Vec<(&str, &str)> = ops.iter().map(|o| (o.1, o.2)).collect();
         let sel = ops.iter().position(|o| o.0 == *op);
@@ -344,42 +371,86 @@ impl App {
     }
 
     fn group_inspector(&mut self, ui: &mut Ui, g: usize) {
-        style::title(ui, "グループ");
-        let n = self.scene.groups.len();
-        let mut swap = None;
+        style::title(ui, "Group");
+        let parent = self.scene.parent_of(g).and_then(|p| self.scene.groups.get(p)).map(|p| p.name.clone());
         {
+            let id = egui::Id::new(("group_melt_memory", g));
             let gr = &mut self.scene.groups[g];
             ui.text_edit_singleline(&mut gr.name);
             Self::op_pills(ui, &mut gr.op);
-            style::labeled_slider(
-                ui,
-                "前の組と\nとけあう",
-                &mut gr.blend,
-                0.0..=80.0,
-                "このグループ全体が、前のグループとどのくらい溶けるか (グープ)",
-            );
-        }
-        ui.horizontal(|ui| {
-            if style::pill_enabled(ui, "↑ 前へ", false, g > 0).clicked() {
-                swap = Some((g, g - 1));
+            // Melt on / off, and how much: off keeps the group a hard shape next to the others
+            let mut on = gr.blend > 0.0;
+            let was = on;
+            if style::pill(ui, if on { "Melt: on" } else { "Melt: off" }, on)
+                .on_hover_text("Off: this group stays a sharp, separate shape. On: it melts into what is next to it")
+                .clicked()
+            {
+                on = !on;
             }
-            if style::pill_enabled(ui, "↓ 後ろへ", false, g + 1 < n).clicked() {
-                swap = Some((g, g + 1));
+            if on != was {
+                if on {
+                    gr.blend = ui.ctx().data(|d| d.get_temp::<f32>(id)).unwrap_or(12.0).max(1.0);
+                } else {
+                    ui.ctx().data_mut(|d| d.insert_temp(id, gr.blend));
+                    gr.blend = 0.0;
+                }
+            }
+            if gr.blend > 0.0 {
+                let into = parent.as_deref().map_or("the scene".to_string(), |p| format!("group “{p}”"));
+                style::labeled_slider(
+                    ui,
+                    "Melt amount",
+                    &mut gr.blend,
+                    0.0..=80.0,
+                    &format!("How much this whole group melts into the groups before it inside {into}"),
+                );
+            }
+        }
+        // what it melts with: the shapes inside it melt together, and the groups at the same level melt with each other
+        let into = parent.clone().map_or("Scene".to_string(), |p| p);
+        let partners: Vec<String> = (0..self.scene.groups.len())
+            .filter(|&i| i != g && self.scene.groups[i].depth == self.scene.groups[g].depth && self.scene.parent_of(i) == self.scene.parent_of(g))
+            .map(|i| self.scene.groups[i].name.clone())
+            .collect();
+        ui.label(
+            RichText::new(format!("Melts with: {} (inside {into})", if partners.is_empty() { "nothing else".to_string() } else { partners.join(", ") }))
+                .size(12.0)
+                .color(style::DIM),
+        );
+        let mut reselect = None;
+        ui.horizontal_wrapped(|ui| {
+            if style::pill_enabled(ui, "↑", false, self.scene.prev_sibling(g).is_some()).on_hover_text("Move up").clicked() {
+                reselect = self.scene.shift_group(g, false);
+            }
+            if style::pill_enabled(ui, "↓", false, self.scene.next_sibling(g).is_some()).on_hover_text("Move down").clicked() {
+                reselect = self.scene.shift_group(g, true);
+            }
+            if style::pill_enabled(ui, "→ Into group above", false, g > 0).on_hover_text("Put this group inside the group above it, so they melt as one").clicked()
+                && self.scene.indent_group(g)
+            {
+                reselect = Some(g);
+            }
+            if style::pill_enabled(ui, "← Out", false, parent.is_some()).on_hover_text("Take this group out of its parent group").clicked() {
+                reselect = self.scene.outdent_group(g);
+            }
+            if style::pill(ui, "Wrap in new group", false).on_hover_text("Make a new parent group around this one").clicked() {
+                let name = format!("Group {}", self.scene.groups.len() + 1);
+                reselect = self.scene.wrap_in_group(g, name);
             }
         });
-        if let Some((a, b)) = swap {
-            self.scene.groups.swap(a, b);
-            self.sel = Some(Pick::Group(b));
+        if let Some(i) = reselect {
+            self.sel = Some(Pick::Group(i));
+            self.folded.clear();
         }
         self.pattern_section(ui, g);
         self.actions(ui);
         let linked = self.scene.groups.get(g).is_some_and(crate::model::Group::is_linked);
-        let hint = if linked { "リンクコピーの位置・回転・大きさは、上のらんで変えます" } else { "グループごと動かす・回す・大きさを変えられます" };
+        let hint = if linked { "Linked copy: set position, rotation and scale above" } else { "Move, rotate and scale the whole group" };
         ui.label(RichText::new(hint).size(12.0).color(style::DIM));
     }
 
     fn shape_inspector(&mut self, ui: &mut Ui, g: usize, s: usize) {
-        style::title(ui, "形");
+        style::title(ui, "Shape");
         let ngroups = self.scene.groups.len();
         let nshapes = self.scene.groups[g].shapes.len();
         let mut move_to: Option<usize> = None;
@@ -396,7 +467,7 @@ impl App {
             } else {
                 // change what kind of shape this is, keeping where it sits
                 ui.horizontal_wrapped(|ui| {
-                    ui.label(RichText::new("入れかえ").color(style::DIM).size(12.0));
+                    ui.label(RichText::new("Kind").color(style::DIM).size(12.0));
                     ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
                     for k in Kind::ALL {
                         let on = sh.kind == k;
@@ -422,9 +493,9 @@ impl App {
                     }
                 });
             }
-            style::xyz(ui, "位置", &mut sh.pos, 0.5, -5000.0..=5000.0, "");
-            style::xyz(ui, "回転", &mut sh.rot, 1.0, -3600.0..=3600.0, "°");
-            style::xyz(ui, "大きさ", &mut sh.scale, 0.01, 0.01..=100.0, "×");
+            style::xyz(ui, "Position", &mut sh.pos, 0.5, -5000.0..=5000.0, "");
+            style::xyz(ui, "Rotation", &mut sh.rot, 1.0, -3600.0..=3600.0, "°");
+            style::xyz(ui, "Scale", &mut sh.scale, 0.01, 0.01..=100.0, "×");
             let labels = sh.kind.size_labels();
             ui.horizontal_wrapped(|ui| {
                 for (i, l) in labels.iter().enumerate() {
@@ -443,20 +514,37 @@ impl App {
                 }
             });
             if sh.kind.can_round() {
-                style::labeled_slider(ui, "丸み", &mut sh.round, 0.0..=ROUND_MAX, "角やふちの丸さ (mm)。大きすぎても、形がこわれない所でとまります");
-                let styles = [("丸", "角を丸くする (フィレット)"), ("面取り", "角をななめに平らに切り落とす (チャンファー)")];
+                style::labeled_slider(ui, "Round", &mut sh.round, 0.0..=ROUND_MAX, "Corner and edge radius (mm). Stops before the shape breaks");
+                let styles = [("Fillet", "Round off the corners"), ("Chamfer", "Cut the corners flat at an angle")];
                 let now = Corner::ALL.iter().position(|c| *c == sh.corner);
                 if let Some(i) = style::segmented(ui, "corner_style", &styles, now, true) {
                     sh.corner = Corner::ALL.get(i).copied().unwrap_or_default();
                 }
             }
-            style::labeled_slider(ui, "とけあい", &mut sh.blend, 0.0..=80.0, "この形が、まわりとどのくらい溶けてくっつくか (グープ)");
-            style::labeled_slider(ui, "ちゅうぐう\nシェル", &mut sh.shell, 0.0..=40.0, "中をくり抜いて、かべの あつさ(mm)だけ のこす。0 = つまっている");
+            {
+                let on = sh.blend > 0.0;
+                let id = egui::Id::new(("shape_melt_memory", g, s));
+                if style::pill(ui, if on { "Melt: on" } else { "Melt: off" }, on)
+                    .on_hover_text("Off: this shape stays sharp. On: it melts into the other shapes of its group")
+                    .clicked()
+                {
+                    if on {
+                        ui.ctx().data_mut(|d| d.insert_temp(id, sh.blend));
+                        sh.blend = 0.0;
+                    } else {
+                        sh.blend = ui.ctx().data(|d| d.get_temp::<f32>(id)).unwrap_or(6.0).max(1.0);
+                    }
+                }
+                if sh.blend > 0.0 {
+                    style::labeled_slider(ui, "Melt amount", &mut sh.blend, 0.0..=80.0, "How much this shape melts into the other shapes of its group");
+                }
+            }
+            style::labeled_slider(ui, "Shell", &mut sh.shell, 0.0..=40.0, "Hollow out the inside, leaving walls this thick (mm). 0 = solid");
             // melt just one face: the rest keeps its exact size
             {
                 let fm = &mut sh.face_melt;
-                ui.label(RichText::new("この面だけ溶かす").color(style::DIM).size(12.0));
-                let mut items: Vec<(&str, &str)> = vec![("なし", "ぜんぶ そのまま (寸法どおり)")];
+                ui.label(RichText::new("Melt one face").color(style::DIM).size(12.0));
+                let mut items: Vec<(&str, &str)> = vec![("None", "Whole shape keeps its exact size")];
                 items.extend(crate::model::FaceMelt::FACES.iter().copied());
                 let now = Some(usize::from(fm.face.min(6)));
                 if let Some(i) = style::segmented(ui, "face_melt_face", &items, now, true) {
@@ -471,8 +559,8 @@ impl App {
                     }
                 }
                 if fm.face > 0 {
-                    style::labeled_slider(ui, "ふくらみ", &mut fm.amount, -30.0..=30.0, "その面だけ ふくらむ(+) / へこむ(-) 量 (mm)。ほかの面の寸法はかわらない");
-                    style::labeled_slider(ui, "とける深さ", &mut fm.reach, 2.0..=60.0, "面から どこまで溶けるか (mm)");
+                    style::labeled_slider(ui, "Swell", &mut fm.amount, -30.0..=30.0, "How far this face swells out (+) or sinks in (-), in mm; other faces keep their size");
+                    style::labeled_slider(ui, "Depth", &mut fm.reach, 2.0..=60.0, "How far the melt reaches from the face, in mm");
                 }
             }
             if sh.kind.uses_outline() {
@@ -492,14 +580,14 @@ impl App {
         }
         ui.add_space(4.0);
         ui.horizontal(|ui| {
-            if style::pill_enabled(ui, "↑", false, s > 0).on_hover_text("ひとつ前へ").clicked() {
+            if style::pill_enabled(ui, "↑", false, s > 0).on_hover_text("Move up one").clicked() {
                 reorder = Some(s - 1);
             }
-            if style::pill_enabled(ui, "↓", false, s + 1 < nshapes).on_hover_text("ひとつ後ろへ").clicked() {
+            if style::pill_enabled(ui, "↓", false, s + 1 < nshapes).on_hover_text("Move down one").clicked() {
                 reorder = Some(s + 1);
             }
             if ngroups > 1 {
-                egui::ComboBox::from_id_salt("move_to").selected_text("グループを移す").show_ui(ui, |ui| {
+                egui::ComboBox::from_id_salt("move_to").selected_text("Move to group").show_ui(ui, |ui| {
                     for (i, gr) in self.scene.groups.iter().enumerate() {
                         if i != g && ui.selectable_label(false, &gr.name).clicked() {
                             move_to = Some(i);
@@ -525,7 +613,7 @@ impl App {
     // ----- materials -----
 
     fn material_tab(&mut self, ui: &mut Ui) {
-        let mut tg = targets(&self.scene, self.sel);
+        let mut tg = self.sel_targets();
         if self.mat_group
             && let Some(Pick::Shape(g, _)) = self.sel
             && let Some(gr) = self.scene.groups.get(g)
@@ -533,8 +621,8 @@ impl App {
             tg = (0..gr.shapes.len()).map(|s| (g, s)).collect();
         }
         let Some(&(g0, s0)) = tg.first() else {
-            style::title(ui, "ざいしつ");
-            ui.label(RichText::new("形を選ぶと、ここでざいしつを選べます").color(style::DIM).size(12.0));
+            style::title(ui, "Material");
+            ui.label(RichText::new("Select a shape to choose its material here").color(style::DIM).size(12.0));
             return;
         };
         let Some(first) = self.scene.shape(g0, s0).map(|s| s.material) else { return };
@@ -550,16 +638,16 @@ impl App {
             style::gfx::shadow(&ui.painter_at(rect), Rect::from_center_size(rect.center() + vec2(0.0, 24.0), vec2(36.0, 4.0)), 2.0, &[(0, 10, 0, 90)]);
             materials::swatch(&ui.painter_at(rect), rect.center(), 28.0, &m);
             ui.vertical(|ui| {
-                ui.label(RichText::new(current.unwrap_or("オリジナル")).strong().size(14.0));
+                ui.label(RichText::new(current.unwrap_or("Custom")).strong().size(14.0));
                 ui.horizontal(|ui| {
                     let save_reason = if self.scene.saved.contains(&m) {
-                        Some("この材質は、すでに「★マイ」に保存されています")
+                        Some("Already saved under ★ My")
                     } else if self.scene.saved.len() >= MAX_SAVED {
-                        Some("保存できる数の上限です。右クリックで保存した材質を消してください")
+                        Some("Save limit reached. Right-click a saved material to remove it")
                     } else {
                         None
                     };
-                    let save = style::pill_enabled(ui, "★ ほぞん", false, save_reason.is_none());
+                    let save = style::pill_enabled(ui, "★ Save", false, save_reason.is_none());
                     if let Some(reason) = save_reason {
                         save.on_hover_text(reason);
                     } else if save.clicked() {
@@ -568,7 +656,7 @@ impl App {
                     }
                 });
                 if matches!(self.sel, Some(Pick::Shape(..))) {
-                    style::checkbox(ui, &mut self.mat_group, RichText::new("グループ全部に").size(12.5));
+                    style::checkbox(ui, &mut self.mat_group, RichText::new("Apply to whole group").size(12.5));
                 }
             });
         });
@@ -582,7 +670,7 @@ impl App {
                     self.mat_cat = Some(c);
                 }
             }
-            if style::pill(ui, "★マイ", self.mat_cat.is_none()).clicked() {
+            if style::pill(ui, "★ My", self.mat_cat.is_none()).clicked() {
                 self.mat_cat = None;
             }
         });
@@ -610,10 +698,10 @@ impl App {
                 }
                 None => {
                     if self.scene.saved.is_empty() {
-                        ui.label(RichText::new("「★ ほぞん」でここにためられます").size(12.0).color(style::DIM));
+                        ui.label(RichText::new("Use ★ Save to keep materials here").size(12.0).color(style::DIM));
                     }
                     for (i, sm) in self.scene.saved.iter().enumerate() {
-                        let r = cell(ui, "クリックで使う / 右クリックで消す", sm, *sm == m);
+                        let r = cell(ui, "Click to use / right-click to remove", sm, *sm == m);
                         if r.clicked() {
                             chosen = Some(*sm);
                         }
@@ -632,21 +720,21 @@ impl App {
         }
 
         // fine tuning
-        style::title(ui, "くわしく");
+        style::title(ui, "Details");
         ui.horizontal(|ui| {
-            style::row_label(ui, "いろ");
+            style::row_label(ui, "Color");
             style::color_edit(ui, &mut m.color);
         });
         let mut gloss = 1.0 - m.roughness;
-        if style::labeled_slider(ui, "つや", &mut gloss, 0.0..=1.0, "つるつる ⇄ ざらざら") {
+        if style::labeled_slider(ui, "Gloss", &mut gloss, 0.0..=1.0, "Smooth ⇄ Rough") {
             m.roughness = 1.0 - gloss;
         }
-        style::labeled_slider(ui, "金属", &mut m.metallic, 0.0..=1.0, "プラスチック ⇄ 金属");
-        style::labeled_slider(ui, "とうめい", &mut m.glass, 0.0..=1.0, "ガラスのように光を曲げて透ける");
-        style::labeled_slider(ui, "ひかる", &mut m.glow, 0.0..=4.0, "自分で光る (ランプ・ネオン)");
-        style::labeled_slider(ui, "にじいろ", &mut m.iridescence, 0.0..=1.0, "見る角度で虹色に変わる (シャボン玉・タマムシ)");
-        style::labeled_slider(ui, "コート", &mut m.coat, 0.0..=1.0, "ピカピカのクリア層 (車のペンキ・キャンディ)");
-        style::labeled_slider(ui, "すけ感", &mut m.translucency, 0.0..=1.0, "光がしみこむ (ワックス・ゼリー・こおり)");
+        style::labeled_slider(ui, "Metallic", &mut m.metallic, 0.0..=1.0, "Plastic ⇄ Metal");
+        style::labeled_slider(ui, "Transparent", &mut m.glass, 0.0..=1.0, "Bends light like glass and lets you see through");
+        style::labeled_slider(ui, "Glow", &mut m.glow, 0.0..=4.0, "Emits its own light (lamp, neon)");
+        style::labeled_slider(ui, "Iridescent", &mut m.iridescence, 0.0..=1.0, "Shifts rainbow colors with the viewing angle (soap bubble, beetle)");
+        style::labeled_slider(ui, "Coat", &mut m.coat, 0.0..=1.0, "Glossy clear layer (car paint, candy)");
+        style::labeled_slider(ui, "Translucency", &mut m.translucency, 0.0..=1.0, "Light soaks in (wax, jelly, ice)");
         gradient_controls(ui, &mut m);
 
         if m != first {
@@ -662,7 +750,7 @@ impl App {
     // ----- the room: lights and backdrop -----
 
     fn room_panel(&mut self, ui: &mut Ui) {
-        style::title(ui, "雰囲気");
+        style::title(ui, "Look");
         let looks = crate::model::Environment::looks();
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
@@ -673,7 +761,7 @@ impl App {
             }
         });
         let e = &mut self.scene.env;
-        style::title(ui, "背景");
+        style::title(ui, "Backdrop");
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = vec2(5.0, 5.0);
             for c in BACKDROPS {
@@ -701,42 +789,42 @@ impl App {
             style::color_edit(ui, &mut e.backdrop);
         });
         ui.horizontal(|ui| {
-            style::switch(ui, &mut e.grid, "グリッド");
-            style::switch(ui, &mut e.floor, "ゆか(影)");
+            style::switch(ui, &mut e.grid, "Grid");
+            style::switch(ui, &mut e.floor, "Floor shadow");
         });
-        style::labeled_slider(ui, "明るさ", &mut e.exposure, 0.3..=3.0, "写真の明るさ (露出)");
-        style::labeled_slider(ui, "影のこさ", &mut e.shadow, 0.0..=1.0, "");
-        style::labeled_slider(ui, "まわりの光", &mut e.ambient, 0.0..=2.0, "影の部分の明るさ・空の映りこみ");
-        style::title(ui, "空 (金属やガラスに映る)");
+        style::labeled_slider(ui, "Exposure", &mut e.exposure, 0.3..=3.0, "Brightness, like camera exposure");
+        style::labeled_slider(ui, "Shadow strength", &mut e.shadow, 0.0..=1.0, "");
+        style::labeled_slider(ui, "Ambient", &mut e.ambient, 0.0..=2.0, "Brightness of shadows and sky reflections");
+        style::title(ui, "Sky (reflected in metal and glass)");
         ui.horizontal(|ui| {
-            for (label, c) in [("上", &mut e.sky_top), ("地平線", &mut e.sky_horizon), ("下", &mut e.sky_bottom)] {
+            for (label, c) in [("Top", &mut e.sky_top), ("Horizon", &mut e.sky_horizon), ("Bottom", &mut e.sky_bottom)] {
                 ui.label(RichText::new(label).size(12.0).color(style::DIM));
                 style::color_edit(ui, c);
             }
         });
-        style::title(ui, "ライト");
+        style::title(ui, "Light");
         let mut remove = None;
         let n = e.lights.len();
         for (i, l) in e.lights.iter_mut().enumerate() {
             ui.horizontal(|ui| {
-                ui.label(RichText::new(format!("ライト {}", i + 1)).size(12.5).strong());
+                ui.label(RichText::new(format!("Light {}", i + 1)).size(12.5).strong());
                 style::color_edit(ui, &mut l.color);
-                if n > 1 && ui.small_button("消す").on_hover_text("このライトを消す").clicked() {
+                if n > 1 && ui.small_button("Remove").on_hover_text("Remove this light").clicked() {
                     remove = Some(i);
                 }
             });
-            style::labeled_slider(ui, "むき", &mut l.yaw, -180.0..=180.0, "ぐるっと回す (度)");
-            style::labeled_slider(ui, "たかさ", &mut l.pitch, 0.0..=89.0, "ひくい ⇄ 真上 (度)");
-            style::labeled_slider(ui, "つよさ", &mut l.power, 0.0..=3.0, "");
+            style::labeled_slider(ui, "Direction", &mut l.yaw, -180.0..=180.0, "Turn around (degrees)");
+            style::labeled_slider(ui, "Elevation", &mut l.pitch, 0.0..=89.0, "Low ⇄ Overhead (degrees)");
+            style::labeled_slider(ui, "Power", &mut l.power, 0.0..=3.0, "");
             if i == 0 {
-                ui.label(RichText::new("ライト1だけが影を落とします").size(12.0).color(style::DIM));
+                ui.label(RichText::new("Only Light 1 casts shadows").size(12.0).color(style::DIM));
             }
             ui.add_space(2.0);
         }
         if let Some(i) = remove {
             e.lights.remove(i);
         }
-        if e.lights.len() < MAX_LIGHTS && style::pill(ui, "＋ ライトを足す", false).clicked() {
+        if e.lights.len() < MAX_LIGHTS && style::pill(ui, "+ Add light", false).clicked() {
             e.lights.push(Light { yaw: -60.0, pitch: 35.0, power: 0.6, color: [1.0, 1.0, 1.0] });
         }
     }
@@ -760,14 +848,14 @@ impl App {
         style::title(
             ui,
             match (revolve, loft, top) {
-                (true, _, _) => "断面（はんぶん）",
-                (_, true, false) => "下の輪かく",
-                (_, true, true) => "上の輪かく",
-                _ => "スケッチ（輪かく）",
+                (true, _, _) => "Profile (half)",
+                (_, true, false) => "Bottom outline",
+                (_, true, true) => "Top outline",
+                _ => "Sketch (outline)",
             },
         );
         if revolve {
-            ui.label(RichText::new("よこ = ま中のじくからの きょり、たて = 高さ。じくで ぐるっと回します").size(11.0).color(style::DIM));
+            ui.label(RichText::new("X = distance from the center axis, Y = height. Revolves around the axis").size(11.0).color(style::DIM));
         }
         let side = ui.available_width().min(240.0);
         let (rect, _) = ui.allocate_exact_size(vec2(side, side), Sense::hover());
@@ -815,7 +903,7 @@ impl App {
             if r.secondary_clicked() || r.double_clicked() {
                 remove = Some(i);
             }
-            r.on_hover_text("ドラッグで動かす / ダブルクリックで消す");
+            r.on_hover_text("Drag to move / double-click to remove");
         }
         // a click on an edge adds a corner
         let bg = ui.interact(rect, ui.id().with(("sk", g, s, top)), Sense::click());
@@ -851,13 +939,13 @@ impl App {
         {
             ol.remove(i);
         }
-        ui.label(RichText::new(format!("線をクリックで角を足す　{}/{}個", ol.len(), MAX_OUTLINE)).size(12.0).color(style::DIM));
+        ui.label(RichText::new(format!("Click an edge to add a corner  {}/{}", ol.len(), MAX_OUTLINE)).size(12.0).color(style::DIM));
         ui.horizontal_wrapped(|ui| {
             let shapes: [(&str, Vec<[f32; 2]>); 5] = [
-                ("四角", vec![[-15.0, -15.0], [15.0, -15.0], [15.0, 15.0], [-15.0, 15.0]]),
-                ("三角", vec![[-17.0, -12.0], [17.0, -12.0], [0.0, 18.0]]),
+                ("Square", vec![[-15.0, -15.0], [15.0, -15.0], [15.0, 15.0], [-15.0, 15.0]]),
+                ("Triangle", vec![[-17.0, -12.0], [17.0, -12.0], [0.0, 18.0]]),
                 (
-                    "六角",
+                    "Hexagon",
                     (0..6)
                         .map(|i| {
                             let a = i as f32 * std::f32::consts::PI / 3.0;
@@ -866,7 +954,7 @@ impl App {
                         .collect(),
                 ),
                 (
-                    "星",
+                    "Star",
                     (0..10)
                         .map(|i| {
                             let a = i as f32 * std::f32::consts::PI / 5.0 + std::f32::consts::FRAC_PI_2;
@@ -876,7 +964,7 @@ impl App {
                         .collect(),
                 ),
                 (
-                    "十字",
+                    "Cross",
                     vec![
                         [-6.0, -18.0],
                         [6.0, -18.0],
@@ -895,10 +983,10 @@ impl App {
             ];
             let shapes: Vec<(&str, Vec<[f32; 2]>)> = if revolve {
                 vec![
-                    ("つぼ", Kind::Revolve.default_outline()),
-                    ("コップ", vec![[0.0, -20.0], [14.0, -20.0], [18.0, 20.0], [16.0, 20.0], [12.0, -17.0], [0.0, -17.0]]),
-                    ("こま", vec![[0.0, -22.0], [4.0, -16.0], [20.0, 0.0], [20.0, 6.0], [6.0, 8.0], [5.0, 22.0], [0.0, 22.0]]),
-                    ("四角(円柱)", vec![[0.0, -20.0], [15.0, -20.0], [15.0, 20.0], [0.0, 20.0]]),
+                    ("Vase", Kind::Revolve.default_outline()),
+                    ("Cup", vec![[0.0, -20.0], [14.0, -20.0], [18.0, 20.0], [16.0, 20.0], [12.0, -17.0], [0.0, -17.0]]),
+                    ("Top", vec![[0.0, -22.0], [4.0, -16.0], [20.0, 0.0], [20.0, 6.0], [6.0, 8.0], [5.0, 22.0], [0.0, 22.0]]),
+                    ("Square cylinder", vec![[0.0, -20.0], [15.0, -20.0], [15.0, 20.0], [0.0, 20.0]]),
                 ]
             } else {
                 shapes.into_iter().collect()
@@ -914,7 +1002,7 @@ impl App {
     // ----- melting -----
 
     pub fn melt_panel(&mut self, ui: &mut Ui) {
-        style::title(ui, "メルト（とけあい）");
+        style::title(ui, "Melt");
         let m: &mut Melt = &mut self.scene.melt;
         ui.horizontal_wrapped(|ui| {
             for (name, mode, amount, drip, ripple) in MELT_PRESETS {
@@ -933,13 +1021,13 @@ impl App {
             m.mode = *b;
         }
         for (label, value, range, tip) in [
-            ("とけぐあい", &mut m.amount, 0.0..=4.0, "全部の形のとけあいを一度に強く・弱く"),
-            ("たれ", &mut m.drip, 0.0..=40.0, "下にたれるように溶ける"),
-            ("たれの細かさ", &mut m.ripple, 0.3..=4.0, "たれの間かく"),
+            ("Amount", &mut m.amount, 0.0..=4.0, "Melt strength for all shapes at once"),
+            ("Drip", &mut m.drip, 0.0..=40.0, "Melts downward, like dripping"),
+            ("Drip spacing", &mut m.ripple, 0.3..=4.0, "Spacing of the drips"),
         ] {
             style::labeled_slider(ui, label, value, range, tip);
         }
-        ui.label(RichText::new("形ごとの とけあい は「形」の中で決められます").size(12.0).color(style::DIM));
+        ui.label(RichText::new("Melt per shape is set in the Shape tab").size(12.0).color(style::DIM));
     }
 }
 
@@ -988,35 +1076,35 @@ fn melt_preview(ui: &mut Ui, m: &Melt) {
             }
         }
     }
-    p.text(rect.left_bottom() + vec2(8.0, -6.0), Align2::LEFT_BOTTOM, "プレビュー", FontId::proportional(10.0), Color32::from_white_alpha(70));
+    p.text(rect.left_bottom() + vec2(8.0, -6.0), Align2::LEFT_BOTTOM, "Preview", FontId::proportional(10.0), Color32::from_white_alpha(70));
 }
 
 /// The gradient part of the material tab: a switch, the second colour, the direction and the blend.
 fn gradient_controls(ui: &mut Ui, m: &mut Material) {
-    style::title(ui, "グラデーション");
+    style::title(ui, "Gradient");
     let mut on = m.has_gradient();
-    if style::switch(ui, &mut on, "グラデーション").on_hover_text("2つの色が、なめらかにかわる").changed() {
+    if style::switch(ui, &mut on, "Gradient").on_hover_text("The two colors blend smoothly").changed() {
         m.gradient = if on { 1.0 } else { 0.0 };
     }
     if !on {
         return;
     }
     ui.horizontal(|ui| {
-        style::row_label(ui, "2つ目の色");
+        style::row_label(ui, "Second color");
         style::color_edit(ui, &mut m.color2);
     });
-    let dirs = [("左右", "X: ひだり → みぎ"), ("前後", "Y: まえ → うしろ"), ("上下", "Z: した → うえ")];
+    let dirs = [("Left-Right", "X: left → right"), ("Front-Back", "Y: front → back"), ("Up-Down", "Z: bottom → top")];
     if let Some(i) = style::segmented(ui, "grad_axis", &dirs, Some(usize::from(m.grad_axis.min(2))), true) {
         m.grad_axis = i as u8;
     }
     ui.horizontal(|ui| {
-        style::switch(ui, &mut m.grad_flip, "反転").on_hover_text("色の向きをぎゃくにする");
-        style::switch(ui, &mut m.grad_local, "形にそう").on_hover_text("入れると、形を回したり のばしたりしても、色が形についてくる");
+        style::switch(ui, &mut m.grad_flip, "Flip").on_hover_text("Reverse the color direction");
+        style::switch(ui, &mut m.grad_local, "Follow shape").on_hover_text("On: the color stays on the shape when you rotate or stretch it");
     });
-    style::labeled_slider(ui, "とけぐあい", &mut m.grad_soft, 0.0..=1.0, "0 = くっきり2色 ⇄ 1 = ゆっくり とける");
-    style::labeled_slider(ui, "つよさ", &mut m.gradient, 0.05..=1.0, "おわりの色が どのくらい出るか");
-    style::labeled_slider(ui, "ここから", &mut m.grad_from, 0.0..=1.0, "形のどこから色がかわりはじめるか (0 = はし)");
-    style::labeled_slider(ui, "ここまで", &mut m.grad_to, 0.0..=1.0, "形のどこで色がかわりおわるか (1 = はんたいのはし)");
+    style::labeled_slider(ui, "Softness", &mut m.grad_soft, 0.0..=1.0, "0 = sharp two colors ⇄ 1 = slow blend");
+    style::labeled_slider(ui, "Strength", &mut m.gradient, 0.05..=1.0, "How much of the end color shows");
+    style::labeled_slider(ui, "From", &mut m.grad_from, 0.0..=1.0, "Where the color starts to change (0 = edge)");
+    style::labeled_slider(ui, "To", &mut m.grad_to, 0.0..=1.0, "Where the color finishes changing (1 = opposite edge)");
 }
 
 

@@ -99,9 +99,9 @@ impl Dimensions {
 
     pub fn labels(&self) -> [&'static str; 2] {
         match self.target {
-            Target::Rectangle { .. } => ["幅", "高さ"],
-            Target::Circle { .. } => ["半径", "直径"],
-            Target::Segment { .. } => ["長さ", "角度"],
+            Target::Rectangle { .. } => ["Width", "Height"],
+            Target::Circle { .. } => ["Radius", "Diameter"],
+            Target::Segment { .. } => ["Length", "Angle"],
             Target::Point { .. } => ["X", "Y"],
         }
     }
@@ -139,15 +139,15 @@ impl Dimensions {
     }
 
     fn parse(&self, index: usize) -> Result<f32, String> {
-        let Some(value) = self.fields.get(index) else { return Err("入力欄が見つかりません".into()) };
+        let Some(value) = self.fields.get(index) else { return Err("Input field not found".into()) };
         if value.len() > 32 {
-            return Err("数値は32文字以内で入力してください".into());
+            return Err("Enter a number of 32 characters or fewer".into());
         }
         let Ok(n) = value.trim().parse::<f32>() else {
-            return Err("有効な数値を入力してください".into());
+            return Err("Enter a valid number".into());
         };
         if !n.is_finite() {
-            return Err("有限の数値を入力してください".into());
+            return Err("Enter a finite number".into());
         }
         Ok(n)
     }
@@ -160,11 +160,11 @@ impl Dimensions {
                 Target::Rectangle { anchor, edge } => {
                     let (w, h) = (self.parse(0)?, self.parse(1)?);
                     if w <= sketch::MIN_SIDE || h <= sketch::MIN_SIDE {
-                        return Err("幅と高さは0.5mmより大きくしてください".into());
+                        return Err("Width and height must be greater than 0.5 mm".into());
                     }
                     let b = [anchor[0] + sign(edge[0] - anchor[0]) * w, anchor[1] + sign(edge[1] - anchor[1]) * h];
                     if !finite_point(anchor) || !finite_point(b) {
-                        return Err("座標がスケッチ範囲の外です".into());
+                        return Err("Coordinate is outside the sketch area".into());
                     }
                     let p = sketch::rect_profile(anchor, b).map_err(sketch::SketchError::message)?;
                     Ok((Some(p), None, None))
@@ -173,19 +173,19 @@ impl Dimensions {
                     let input = self.parse(changed.min(1))?;
                     let radius = if changed == 0 { input } else { input / 2.0 };
                     if radius <= sketch::MIN_SIDE {
-                        return Err("半径は0.5mmより大きくしてください".into());
+                        return Err("Radius must be greater than 0.5 mm".into());
                     }
                     let old = (edge[0] - center[0]).hypot(edge[1] - center[1]);
                     if old < sketch::MIN_SIDE {
-                        return Err("円の向きを決定できません".into());
+                        return Err("Can't determine circle orientation".into());
                     }
                     let b = [center[0] + (edge[0] - center[0]) * radius / old, center[1] + (edge[1] - center[1]) * radius / old];
                     if !finite_point(center) || !finite_point(b) {
-                        return Err("座標がスケッチ範囲の外です".into());
+                        return Err("Coordinate is outside the sketch area".into());
                     }
                     let p = sketch::circle_profile(center, b).map_err(sketch::SketchError::message)?;
                     if !p.iter().copied().all(finite_point) {
-                        return Err("円がスケッチ範囲の外です".into());
+                        return Err("Circle is outside the sketch area".into());
                     }
                     let other = if changed == 0 { number(radius * 2.0) } else { number(radius) };
                     Ok((Some(p), None, Some(other)))
@@ -194,26 +194,26 @@ impl Dimensions {
                     let length = self.parse(0)?;
                     let angle = self.parse(1)?;
                     if length <= sketch::MIN_SIDE || angle.abs() > 36000.0 {
-                        return Err("長さは0.5mmより大きく、角度は±36000°以内にしてください".into());
+                        return Err("Length must be greater than 0.5 mm and angle within ±36000°".into());
                     }
                     let rad = angle.to_radians();
                     let b = [start[0] + length * rad.cos(), start[1] + length * rad.sin()];
                     if !finite_point(b) || points.get(index).is_none() {
-                        return Err("点がスケッチ範囲の外です".into());
+                        return Err("Point is outside the sketch area".into());
                     }
                     Ok((None, Some((index, b)), None))
                 }
                 Target::Point { index } => {
                     let b = [self.parse(0)?, self.parse(1)?];
                     if !finite_point(b) || points.get(index).is_none() {
-                        return Err("X・Yは±2000mm以内にしてください".into());
+                        return Err("X and Y must be within ±2000 mm".into());
                     }
                     if let Some(previous) = index.checked_sub(1).and_then(|i| points.get(i)) {
                         if (previous[0] - b[0]).hypot(previous[1] - b[1]) < 1e-3 {
-                            return Err("直前の点とは別の位置にしてください".into());
+                            return Err("Place it apart from the previous point".into());
                         }
                         if prevent_cross && index >= 2 && sketch::crosses_polyline(&points[..index], *previous, b, false) {
-                            return Err("この点では輪郭が交差します".into());
+                            return Err("The outline crosses at this point".into());
                         }
                     }
                     Ok((None, Some((index, b)), None))

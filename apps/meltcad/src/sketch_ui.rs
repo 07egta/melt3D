@@ -57,24 +57,24 @@ impl PlaneSel {
     ];
     pub fn label(self) -> &'static str {
         match self {
-            PlaneSel::Floor => "XY（床）",
-            PlaneSel::Front => "XZ（正面）",
-            PlaneSel::Side => "YZ（横）",
-            PlaneSel::OnShape => "えらんだ形の上",
-            PlaneSel::Height => "高さを指定",
-            PlaneSel::Camera => "カメラに平行",
-            PlaneSel::Custom => "自由面",
+            PlaneSel::Floor => "XY (Floor)",
+            PlaneSel::Front => "XZ (Front)",
+            PlaneSel::Side => "YZ (Side)",
+            PlaneSel::OnShape => "On selected shape",
+            PlaneSel::Height => "Set height",
+            PlaneSel::Camera => "Parallel to camera",
+            PlaneSel::Custom => "Custom plane",
         }
     }
     pub fn tip(self) -> &'static str {
         match self {
-            PlaneSel::Floor => "床 (XY) の上にかく。真上から見ます",
-            PlaneSel::Front => "正面 (XZ) にかく。手前に向かって押し出します",
-            PlaneSel::Side => "横 (YZ) にかく。右がわに向かって押し出します",
-            PlaneSel::OnShape => "えらんでいる形のてっぺんの高さで、水平な面にかく",
-            PlaneSel::Height => "Z 座標を指定した水平な XY 平面でかく",
-            PlaneSel::Camera => "現在のカメラの向きに平行な平面を、注視点を通して固定する。もう一度押すと取り直します",
-            PlaneSel::Custom => "位置 XYZ と回転 XYZ を数値で指定する自由な平面。ほかの面から戻っても設定を保持します",
+            PlaneSel::Floor => "Sketch on the floor (XY). View from above",
+            PlaneSel::Front => "Sketch on the front (XZ). Extrudes toward you",
+            PlaneSel::Side => "Sketch on the side (YZ). Extrudes toward the right",
+            PlaneSel::OnShape => "Sketch on a horizontal plane at the top of the selected shape",
+            PlaneSel::Height => "Sketch on a horizontal XY plane at a set Z height",
+            PlaneSel::Camera => "Fixes a plane parallel to the current camera view through the camera target. Click again to re-take it",
+            PlaneSel::Custom => "Custom plane set by position XYZ and rotation XYZ. Settings are kept when returning from other planes",
         }
     }
 }
@@ -94,20 +94,20 @@ impl Pen {
     pub const ALL: [Pen; 5] = [Pen::Polygon, Pen::Rect, Pen::Circle, Pen::Spline, Pen::Line];
     pub fn label(self) -> &'static str {
         match self {
-            Pen::Polygon => "ポリゴン",
-            Pen::Rect => "四角",
-            Pen::Circle => "円",
-            Pen::Spline => "スプライン",
-            Pen::Line => "線",
+            Pen::Polygon => "Polygon",
+            Pen::Rect => "Rectangle",
+            Pen::Circle => "Circle",
+            Pen::Spline => "Spline",
+            Pen::Line => "Line",
         }
     }
     pub fn tip(self) -> &'static str {
         match self {
-            Pen::Polygon => "クリックで角をうって、多角形をかく",
-            Pen::Rect => "ドラッグ (または2回クリック) で、四角をかく",
-            Pen::Circle => "まん中から外へドラッグして、円をかく",
-            Pen::Spline => "クリックした点を通る、なめらかな輪かくをかく",
-            Pen::Line => "スイープの通り道になる、ひらいた線をかく",
+            Pen::Polygon => "Click to place corners, then close the polygon",
+            Pen::Rect => "Drag (or click twice) to draw a rectangle",
+            Pen::Circle => "Drag from the center outward to draw a circle",
+            Pen::Spline => "Draw a smooth closed curve through the clicked points",
+            Pen::Line => "Draw an open line to use as a sweep path",
         }
     }
 }
@@ -125,10 +125,10 @@ impl Make {
     pub const ALL: [Make; 4] = [Make::Extrude, Make::Revolve, Make::Loft, Make::Sweep];
     pub fn label(self) -> &'static str {
         match self {
-            Make::Extrude => "押し出し",
-            Make::Revolve => "回転体",
-            Make::Loft => "ロフト",
-            Make::Sweep => "スイープ",
+            Make::Extrude => "Extrude",
+            Make::Revolve => "Revolve",
+            Make::Loft => "Loft",
+            Make::Sweep => "Sweep",
         }
     }
     fn kind(self) -> Kind {
@@ -210,7 +210,7 @@ pub enum EditOp { Trim, Offset, Fillet }
 
 impl EditOp {
     pub fn label(self) -> &'static str {
-        match self { Self::Trim => "トリム", Self::Offset => "オフセット", Self::Fillet => "フィレット" }
+        match self { Self::Trim => "Trim", Self::Offset => "Offset", Self::Fillet => "Fillet" }
     }
 }
 
@@ -371,7 +371,7 @@ impl State {
             return;
         }
         if self.pts.len() >= limit {
-            self.msg = format!("点は{limit}こまでです");
+            self.msg = format!("Up to {limit} points");
             return;
         }
         if self.corners()
@@ -379,7 +379,7 @@ impl State {
             && self.pts.len() >= 2
             && sketch::crosses_polyline(&self.pts, last, p, false)
         {
-            self.msg = "そこへ線をひくと交差します。ほかの場所をクリックしてください".to_string();
+            self.msg = "A line there would cross another. Click a different spot".to_string();
             return;
         }
         self.msg.clear();
@@ -589,7 +589,7 @@ impl App {
     /// The button in the tool strip.
     pub fn sketch_button(&mut self, ui: &mut Ui) {
         let on = self.sk.on;
-        if style::icon_button(ui, 34.0, "スケッチ (平面に絵をかいて、押し出し・回転体・ロフト・スイープにする)", on, glyph).clicked() {
+        if style::icon_button(ui, 34.0, "Sketch (draw on a plane, then Extrude, Revolve, Loft or Sweep)", on, glyph).clicked() {
             self.set_sketch_tool(!on);
         }
     }
@@ -640,7 +640,7 @@ impl App {
         if plane == PlaneSel::Camera {
             let (right, up, _) = self.cam.basis();
             let Some(frame) = Frame::from_axes(self.cam.target, right, up) else {
-                self.sk.msg = "カメラの向きから平面を作れません。視点を調整してください".to_string();
+                self.sk.msg = "Can't make a plane from the camera view. Adjust the view".to_string();
                 return;
             };
             self.sk.camera_frame = frame;
@@ -650,7 +650,7 @@ impl App {
         self.sk.clear_drawing();
         self.sk.frame = self.sketch_plane();
         self.sk.msg = if interrupted {
-            "平面の切り替えで描画途中の点を消しました。完成した輪かくや立体は変わりません".to_string()
+            "Changing plane cleared unfinished points. Finished outlines and solids are unchanged".to_string()
         } else {
             String::new()
         };
@@ -679,7 +679,7 @@ impl App {
     /// moving/turning the plane moves the entire uncommitted sketch with it.
     pub fn sketch_edit_custom_plane(&mut self, origin: V3, angles: V3) -> bool {
         let Some(frame) = Frame::oriented(origin, angles) else {
-            self.sk.msg = "平面の位置または角度が正しくありません".to_string();
+            self.sk.msg = "Plane position or angle is invalid".to_string();
             return false;
         };
         self.sk.custom_frame = frame;
@@ -833,7 +833,7 @@ impl App {
                     self.sk.make = Make::Sweep;
                     self.sk.frame = self.sk.pframe;
                 } else {
-                    self.sk.msg = format!("線を{}点でおぼえました。輪かくをかいて「スイープ」で使えます", self.sk.path.len());
+                    self.sk.msg = format!("Path saved with {} points. Draw an outline and use Sweep", self.sk.path.len());
                 }
             }
         }
@@ -842,11 +842,11 @@ impl App {
     /// Make the shape the card is set to. True when it was made.
     pub fn sketch_make(&mut self, ctx: &egui::Context) -> bool {
         if self.scene.shape_count().saturating_add(1 + self.sk.holes.len()) > MAX_SHAPES {
-            self.sk.msg = format!("形は{MAX_SHAPES}個までです");
+            self.sk.msg = format!("Up to {MAX_SHAPES} shapes");
             return false;
         }
         if !self.sk.holes.is_empty() && self.sk.make != Make::Extrude {
-            self.sk.msg = "穴のあるスケッチは押し出し専用です".to_string();
+            self.sk.msg = "Sketches with holes can only be extruded".to_string();
             return false;
         }
         if let Err(e) = sketch::validate_holes(&self.sk.profile, &self.sk.holes) {
@@ -854,7 +854,7 @@ impl App {
             return false;
         }
         if !self.sk.holes.is_empty() && self.scene.groups.len() >= crate::model::MAX_GROUPS {
-            self.sk.msg = "グループ数の上限です".to_string();
+            self.sk.msg = "Group limit reached".to_string();
             return false;
         }
         let st = &self.sk;
@@ -879,7 +879,7 @@ impl App {
         };
         let make = self.sk.make;
         let Some(g) = (if self.sk.holes.is_empty() { self.target_group() } else {
-            let mut group = crate::model::Group::new("穴あき押し出し");
+            let mut group = crate::model::Group::new("Extrude with holes");
             group.sketch_holes = true;
             self.scene.groups.push(group);
             Some(self.scene.groups.len() - 1)
@@ -896,12 +896,12 @@ impl App {
         let mut cutouts = Vec::new();
         for (i, contour) in self.sk.holes.iter().enumerate() {
             let Ok(hole) = sketch::extrude(&self.sk.pframe, contour, self.sk.height, self.sk.flip) else {
-                self.sk.msg = "穴の押し出しに失敗しました".to_string();
+                self.sk.msg = "Failed to extrude holes".to_string();
                 return false;
             };
             let mut cutter = Shape::new(Kind::Extrude, hole.pos, sh.material);
             sketch::apply(&hole, &mut cutter);
-            cutter.name = format!("穴 {}", i + 1);
+            cutter.name = format!("Hole {}", i + 1);
             cutter.op = Op::Subtract;
             cutter.blend = 0.0;
             cutouts.push(cutter);
@@ -913,7 +913,7 @@ impl App {
         self.sel = Some(Pick::Shape(g, idx));
         self.sk.reset();
         self.sk.frame = self.sketch_plane();
-        self.say(ctx, format!("{}を作りました（「スケッチを編集」で輪かくをなおせます）", make.label()));
+        self.say(ctx, format!("Created {} (use Edit Sketch to change the outline)", make.label()));
         true
     }
 
@@ -1124,8 +1124,8 @@ impl App {
     /// The button in the shape panel: edit this shape's outline (or stop).
     pub fn sketch_edit_button(&mut self, ui: &mut Ui, g: usize, s: usize) {
         let editing = self.sk.edit.as_ref().is_some_and(|e| e.g == g && e.s == s);
-        let tip = "この形の輪かくを、画面の中で点をうごかして なおします";
-        if style::pill(ui, if editing { "スケッチの編集をおわる" } else { "スケッチを編集" }, editing).on_hover_text(tip).clicked() {
+        let tip = "Edit this shape's outline by moving its points in the viewport";
+        if style::pill(ui, if editing { "Finish Editing" } else { "Edit Sketch" }, editing).on_hover_text(tip).clicked() {
             if editing {
                 self.edit_release();
                 self.sk.edit = None;
@@ -1222,7 +1222,7 @@ impl App {
                     self.sk.pframe = frame;
                     self.sk.frame = frame;
                     self.sk.stage = Stage::Ready;
-                    self.sk.msg = "オフセット輪郭を作りました。立体化するか Esc で破棄できます".to_owned();
+                    self.sk.msg = "Offset outline created. Make it solid or press Esc to discard".to_owned();
                 } else if let Some((outline, _)) = self.edit_outline_mut() {
                     *outline = points;
                     self.sk.msg.clear();
@@ -1307,7 +1307,7 @@ impl App {
                 }
             }
             Some(Err(err)) => self.sk.msg = err,
-            None => self.sk.msg = "編集する形が見つかりません".to_string(),
+            None => self.sk.msg = "Shape to edit not found".to_string(),
         }
     }
 
@@ -1356,7 +1356,7 @@ impl App {
                     e.edge_sel = Some(i);
                 }
                 if !added {
-                    self.sk.msg = format!("点は{MAX_OUTLINE}こまでです");
+                    self.sk.msg = format!("Up to {MAX_OUTLINE} points");
                 }
             }
             None => {
@@ -1710,7 +1710,7 @@ impl App {
                         let text = if pen == Pen::Rect {
                             format!("{} × {} mm", fmt((a[0] - c[0]).abs()), fmt((a[1] - c[1]).abs()))
                         } else {
-                            format!("半径 {} mm", fmt((a[0] - c[0]).hypot(a[1] - c[1])))
+                            format!("Radius {} mm", fmt((a[0] - c[0]).hypot(a[1] - c[1])))
                         };
                         tag(p, pc + vec2(14.0, 12.0), &text);
                     }
@@ -1853,15 +1853,15 @@ impl App {
         let mut done = false;
         let loft = self.sk.edit.as_ref().and_then(|e| self.scene.shape(e.g, e.s)).is_some_and(|s| s.kind == Kind::Loft);
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("スケッチを編集").strong().color(style::ACCENT));
-            if style::pill(ui, "おわり", false).on_hover_text("編集を終える (Enter / Esc)").clicked() {
+            ui.label(egui::RichText::new("Edit Sketch").strong().color(style::ACCENT));
+            if style::pill(ui, "Done", false).on_hover_text("Finish editing (Enter / Esc)").clicked() {
                 done = true;
             }
         });
         if loft {
             let cur = self.sk.edit.as_ref().map(|e| e.which);
             ui.horizontal(|ui| {
-                for (w, label) in [(Which::Main, "下の輪かく"), (Which::Top, "上の輪かく")] {
+                for (w, label) in [(Which::Main, "Bottom outline"), (Which::Top, "Top outline")] {
                     if style::pill(ui, label, cur == Some(w)).clicked()
                         && let Some(e) = self.sk.edit.as_mut()
                     {
@@ -1879,7 +1879,7 @@ impl App {
             });
         }
         ui.horizontal_wrapped(|ui| {
-            ui.label("編集:");
+            ui.label("Edit:");
             for op in [EditOp::Trim, EditOp::Offset, EditOp::Fillet] {
                 if style::pill(ui, op.label(), self.sk.edit_op == Some(op)).clicked() {
                     self.sk.edit_op = if self.sk.edit_op == Some(op) { None } else { Some(op) };
@@ -1891,26 +1891,26 @@ impl App {
         if let Some(op) = self.sk.edit_op {
             if op != EditOp::Trim {
                 ui.horizontal(|ui| {
-                    ui.label(if op == EditOp::Offset { "距離 (mm、負数は内側)" } else { "半径 (mm)" });
+                    ui.label(if op == EditOp::Offset { "Distance (mm, negative = inward)" } else { "Radius (mm)" });
                     ui.add(egui::DragValue::new(&mut self.sk.edit_value).speed(0.1));
                 });
             }
             hint(ui, match op {
-                EditOp::Trim => "削除する短い辺をクリック。隣の辺を延長し、閉じた輪郭を維持します",
-                EditOp::Offset => "距離を指定すると緑色の輪郭がプレビューされます。元の立体は残ります",
-                EditOp::Fillet => "丸める頂点をクリック。緑色の円弧を確認してください",
+                EditOp::Trim => "Click a short edge to remove. Neighbor edges extend to keep the outline closed",
+                EditOp::Offset => "A green preview shows the offset. The original solid is kept",
+                EditOp::Fillet => "Click a vertex to round. Check the green arc",
             });
             if let Some(Err(err)) = self.edit_preview() { hint(ui, err.message()); }
             ui.horizontal(|ui| {
-                if style::pill_enabled(ui, "適用", false, self.edit_preview().is_some_and(|p| p.is_ok())).clicked() {
+                if style::pill_enabled(ui, "Apply", false, self.edit_preview().is_some_and(|p| p.is_ok())).clicked() {
                     self.edit_commit_operation();
                 }
-                if style::pill(ui, "キャンセル", false).clicked() { self.sk.edit_op = None; self.sk.edit_index = None; }
+                if style::pill(ui, "Cancel", false).clicked() { self.sk.edit_op = None; self.sk.edit_index = None; }
             });
         }
         let n = self.sk.edit.as_ref().and_then(|e| self.scene.shape(e.g, e.s).map(|s| sketch::outline_of(s, e.which).len())).unwrap_or(0);
-        hint(ui, &format!("点をドラッグして動かす　線をクリックで点をふやす　点をクリックして Delete で消す　右クリックでおわり　{n}/{MAX_OUTLINE}こ"));
-        hint(ui, "1mmきざみ　Shift = 10mm　Ctrl = 0.1mm　Shift+線クリックで長さ指定　Alt+ドラッグで見る向きを回す");
+        hint(ui, &format!("Drag point: move  ·  Click line: add point  ·  Click point, Delete: remove  ·  Right-click: done  ·  {n}/{MAX_OUTLINE} points"));
+        hint(ui, "1 mm steps  ·  Shift = 10 mm  ·  Ctrl = 0.1 mm  ·  Shift+click line: set length  ·  Alt+drag: orbit");
         // Values are transient UI inputs. Geometry is changed only after a validated edit.
         let current = self.sk.edit.as_ref().and_then(|e| self.scene.shape(e.g, e.s).map(|s| (sketch::outline_of(s, e.which).clone(), e.sel, e.edge_sel)));
         if let Some((outline, selected, edge)) = current {
@@ -1918,7 +1918,7 @@ impl App {
                 let mut x = outline[i][0];
                 let mut y = outline[i][1];
                 ui.horizontal(|ui| {
-                    ui.label("点 X / Y (mm)");
+                    ui.label("Point X / Y (mm)");
                     let changed_x = ui.add(egui::DragValue::new(&mut x).speed(0.1).max_decimals(3)).changed();
                     let changed_y = ui.add(egui::DragValue::new(&mut y).speed(0.1).max_decimals(3)).changed();
                     if changed_x || changed_y {
@@ -1930,7 +1930,7 @@ impl App {
                 let mut w = size[0];
                 let mut h = size[1];
                 ui.horizontal(|ui| {
-                    ui.label("幅 / 高さ (mm)");
+                    ui.label("Width / Height (mm)");
                     let cw = ui.add(egui::DragValue::new(&mut w).speed(0.1).range(0.5..=2000.0).max_decimals(3)).changed();
                     let ch = ui.add(egui::DragValue::new(&mut h).speed(0.1).range(0.5..=2000.0).max_decimals(3)).changed();
                     if cw || ch {
@@ -1940,7 +1940,7 @@ impl App {
             } else if let Some(diameter) = sketch::circle_diameter(&outline) {
                 let mut d = diameter;
                 ui.horizontal(|ui| {
-                    ui.label("直径 (mm)");
+                    ui.label("Diameter (mm)");
                     if ui.add(egui::DragValue::new(&mut d).speed(0.1).range(1.0..=2000.0).max_decimals(3)).changed() {
                         self.precision_circle(d);
                     }
@@ -1951,7 +1951,7 @@ impl App {
                 let q = outline[(i + 1) % outline.len()];
                 let mut length = (q[0] - p[0]).hypot(q[1] - p[1]);
                 ui.horizontal(|ui| {
-                    ui.label("線分の長さ (mm)");
+                    ui.label("Segment length (mm)");
                     if ui.add(egui::DragValue::new(&mut length).speed(0.1).range(0.5..=2000.0).max_decimals(3)).changed() {
                         self.precision_edge_length(i, length);
                     }
@@ -1973,30 +1973,30 @@ impl App {
         let mut off = false;
         let stage = self.sk.stage;
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("スケッチ").strong().color(style::ACCENT));
+            ui.label(egui::RichText::new("Sketch").strong().color(style::ACCENT));
             let sub = match stage {
-                Stage::Draw => "平面に絵をかく",
-                Stage::Ready => "できた輪かくを、立体にします",
-                Stage::LoftTop => "ロフトの上の輪かくをかく",
-                Stage::SweepPath => "スイープの通り道 (線) をかく",
-                Stage::Hole => "穴の輪かくを描く",
+                Stage::Draw => "Draw on a plane",
+                Stage::Ready => "Make the outline into a solid",
+                Stage::LoftTop => "Draw the loft's top outline",
+                Stage::SweepPath => "Draw the sweep path (line)",
+                Stage::Hole => "Draw the hole outline",
             };
             ui.label(egui::RichText::new(sub).size(11.0).color(style::DIM));
-            if style::pill(ui, "やめる", false).on_hover_text("スケッチを終える (Esc)").clicked() {
+            if style::pill(ui, "Exit", false).on_hover_text("Exit sketch (Esc)").clicked() {
                 off = true;
             }
         });
         // the plane
         let plane_free = matches!(stage, Stage::Draw | Stage::SweepPath);
         ui.horizontal_wrapped(|ui| {
-            ui.label(egui::RichText::new("面").size(11.0).color(style::DIM));
+            ui.label(egui::RichText::new("Plane").size(11.0).color(style::DIM));
             for pl in PlaneSel::ALL {
                 let usable = plane_free && (pl != PlaneSel::OnShape || self.sel.is_some());
                 if style::pill_enabled(ui, pl.label(), self.sk.plane == pl, usable).on_hover_text(pl.tip()).clicked() {
                     self.sketch_set_plane(pl);
                 }
             }
-            if plane_free && style::pill(ui, "見る", false).on_hover_text("この面を正面から見る").clicked() {
+            if plane_free && style::pill(ui, "View", false).on_hover_text("View this plane head-on").clicked() {
                 let f = self.sk.frame;
                 self.sketch_fly(&f);
             }
@@ -2007,7 +2007,7 @@ impl App {
         // the pens
         if matches!(stage, Stage::Draw | Stage::LoftTop | Stage::Hole) {
             ui.horizontal_wrapped(|ui| {
-                ui.label(egui::RichText::new("道具").size(11.0).color(style::DIM));
+                ui.label(egui::RichText::new("Tool").size(11.0).color(style::DIM));
                 for pen in Pen::ALL {
                     let usable = !((stage == Stage::LoftTop || stage == Stage::Hole) && pen == Pen::Line);
                     if style::pill_enabled(ui, pen.label(), self.sk.pen == pen, usable).on_hover_text(pen.tip()).clicked() {
@@ -2021,11 +2021,11 @@ impl App {
             let pen = self.sk.active_pen();
             if matches!(pen, Pen::Spline | Pen::Line) {
                 ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("かたち").size(11.0).color(style::DIM));
-                    if style::pill(ui, "なめらか", self.sk.smooth).on_hover_text("点を通る、なめらかな曲線").clicked() {
+                    ui.label(egui::RichText::new("Shape").size(11.0).color(style::DIM));
+                    if style::pill(ui, "Smooth", self.sk.smooth).on_hover_text("Smooth curve through the points").clicked() {
                         self.sk.smooth = true;
                     }
-                    if style::pill(ui, "かくばる", !self.sk.smooth).on_hover_text("点と点をまっすぐつなぐ").clicked() {
+                    if style::pill(ui, "Sharp", !self.sk.smooth).on_hover_text("Straight lines between points").clicked() {
                         self.sk.smooth = false;
                     }
                 });
@@ -2033,25 +2033,25 @@ impl App {
             hint(ui, pen_hint(pen, stage));
             // one short row: the long help sits in a tooltip so the card stays out of the way
             ui.horizontal(|ui| {
-                if style::pill(ui, "角度スナップ 15°", self.sk.angle_snap).clicked() { self.sk.angle_snap = !self.sk.angle_snap; }
-                ui.label(egui::RichText::new("ⓘ ヒント").size(11.0).color(style::DIM)).on_hover_text(
-                    "端点・中点・交点・原点にスナップ\nShift = 10mm　Ctrl = 0.1mm\nBackspaceで1つもどる　Escでやりなおし\nTabで最後の点・線分の寸法を入力");
+                if style::pill(ui, "Angle snap 15°", self.sk.angle_snap).clicked() { self.sk.angle_snap = !self.sk.angle_snap; }
+                ui.label(egui::RichText::new("ⓘ Hints").size(11.0).color(style::DIM)).on_hover_text(
+                    "Snaps to endpoints, midpoints, intersections, origin\nShift = 10 mm  ·  Ctrl = 0.1 mm\nBackspace: undo last point  ·  Esc: restart\nTab: enter length of last point or segment");
             });
         }
         self.dimension_card(ui);
         if stage == Stage::Draw && !self.sk.path.is_empty() {
-            hint(ui, &format!("おぼえている線: {}点（スイープで使えます）", self.sk.path.len()));
+            hint(ui, &format!("Saved path: {} points (usable with Sweep)", self.sk.path.len()));
         }
         if stage == Stage::Ready {
             ui.horizontal_wrapped(|ui| {
-                hint(ui, &format!("穴: {} / {}", self.sk.holes.len(), sketch::MAX_HOLES));
-                if style::pill_enabled(ui, "＋ 穴を描く", false, self.sk.holes.len() < sketch::MAX_HOLES).clicked() {
+                hint(ui, &format!("Holes: {} / {}", self.sk.holes.len(), sketch::MAX_HOLES));
+                if style::pill_enabled(ui, "+ Draw hole", false, self.sk.holes.len() < sketch::MAX_HOLES).clicked() {
                     self.sk.make = Make::Extrude;
                     if self.sk.pen == Pen::Line { self.sk.pen = Pen::Polygon; }
                     self.sk.stage = Stage::Hole;
                     self.sk.clear_drawing();
                 }
-                if !self.sk.holes.is_empty() && style::pill(ui, "最後の穴を戻す", false).clicked() {
+                if !self.sk.holes.is_empty() && style::pill(ui, "Remove last hole", false).clicked() {
                     self.sk.holes.pop();
                     self.sk.msg.clear();
                 }
@@ -2071,7 +2071,7 @@ impl App {
         match self.sk.plane {
             PlaneSel::Height => {
                 ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("水平面の高さ Z").size(11.0).color(style::DIM));
+                    ui.label(egui::RichText::new("Horizontal plane height Z").size(11.0).color(style::DIM));
                     let mut z = self.sk.level_z;
                     if ui.add(egui::DragValue::new(&mut z).speed(0.25).range(-5000.0..=5000.0).suffix(" mm")).changed() {
                         self.sketch_set_level(z);
@@ -2082,7 +2082,7 @@ impl App {
                 let mut point = self.sk.custom_frame.origin;
                 let mut point_changed = false;
                 ui.horizontal_wrapped(|ui| {
-                    ui.label(egui::RichText::new("通る点").size(11.0).color(style::DIM));
+                    ui.label(egui::RichText::new("Through point").size(11.0).color(style::DIM));
                     for (axis, label) in ["X", "Y", "Z"].iter().enumerate() {
                         ui.label(*label);
                         point_changed |= ui.add(egui::DragValue::new(&mut point[axis]).speed(0.25).range(-5000.0..=5000.0).suffix(" mm")).changed();
@@ -2094,7 +2094,7 @@ impl App {
                 let mut angles = self.sk.custom_angles;
                 let mut angle_changed = false;
                 ui.horizontal_wrapped(|ui| {
-                    ui.label(egui::RichText::new("回転").size(11.0).color(style::DIM));
+                    ui.label(egui::RichText::new("Rotation").size(11.0).color(style::DIM));
                     for (axis, label) in ["X", "Y", "Z"].iter().enumerate() {
                         ui.label(*label);
                         angle_changed |= ui.add(egui::DragValue::new(&mut angles[axis]).speed(0.25).range(-360.0..=360.0).suffix("°")).changed();
@@ -2104,28 +2104,28 @@ impl App {
                     self.sketch_edit_custom_plane(self.sk.custom_frame.origin, angles);
                 }
                 ui.horizontal_wrapped(|ui| {
-                    if style::pill(ui, "カメラの注視点", false).on_hover_text("この面の向きを保ち、カメラの注視点を通す").clicked() {
+                    if style::pill(ui, "Camera target", false).on_hover_text("Keep this plane's orientation, pass through the camera target").clicked() {
                         self.sketch_edit_custom_plane(self.cam.target, self.sk.custom_angles);
                     }
                     let chosen = crate::view::targets(&self.scene, self.sel)
                         .into_iter().find_map(|(g, s)| self.scene.shape(g, s).map(|sh| sh.pos));
-                    if style::pill_enabled(ui, "選択形状の中心", false, chosen.is_some())
-                        .on_hover_text("この面の向きを保ち、選択した形の中心を通す").clicked()
+                    if style::pill_enabled(ui, "Selected shape center", false, chosen.is_some())
+                        .on_hover_text("Keep this plane's orientation, pass through the selected shape's center").clicked()
                         && let Some(origin) = chosen
                     {
                         self.sketch_edit_custom_plane(origin, self.sk.custom_angles);
                     }
                 });
-                hint(ui, "位置・角度の変更中も2D座標を維持し、描画中のスケッチ全体が平面と一緒に移動します");
+                hint(ui, "2D coordinates are kept while changing position or angle; the whole sketch moves with the plane");
             }
             _ => {
-                if style::pill(ui, "この面を自由面にコピー", false)
-                    .on_hover_text("今の平面を複製し、XYZ移動・回転ができる自由面にする").clicked()
+                if style::pill(ui, "Copy this plane to custom plane", false)
+                    .on_hover_text("Duplicate the current plane as a custom plane that can be moved and rotated").clicked()
                 {
                     self.sketch_copy_plane_to_custom();
                 }
                 if self.sk.plane == PlaneSel::Camera {
-                    hint(ui, "カメラを回してもこの面は固定されます。「カメラに平行」をもう一度押すと新しい向きにできます");
+                    hint(ui, "This plane stays fixed when the camera orbits. Press Parallel to camera again for a new orientation");
                 }
             }
         }
@@ -2137,7 +2137,7 @@ impl App {
             return;
         };
         if !d.editing {
-            if style::pill(ui, "寸法を再入力 (Tab)", false).clicked() {
+            if style::pill(ui, "Re-enter dimensions (Tab)", false).clicked() {
                 d.begin_again();
             }
             return;
@@ -2172,7 +2172,7 @@ impl App {
         if let Some(error) = &d.error {
             ui.colored_label(style::CUT, error);
         }
-        hint(ui, "Tab: 次の入力欄  /  Enter: 確定  /  Esc: 取消");
+        hint(ui, "Tab: next field  ·  Enter: confirm  ·  Esc: cancel");
     }
 
     /// The part of the card that asks what to make.
@@ -2180,15 +2180,15 @@ impl App {
         let vertical = self.sk.pframe.is_vertical();
         ui.separator();
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("つくる").size(11.0).color(style::DIM));
+            ui.label(egui::RichText::new("Create").size(11.0).color(style::DIM));
             for m in Make::ALL {
                 let usable = (m != Make::Revolve || vertical) && (self.sk.holes.is_empty() || m == Make::Extrude);
                 let tip = match m {
-                    Make::Extrude => "輪かくをまっすぐ押し出して、柱にする",
-                    Make::Revolve if vertical => "輪かくを、たてのじく (中心の線) のまわりに回して、つぼのような形にする",
-                    Make::Revolve => "回転体は「正面」か「横」の面でかいたときに使えます",
-                    Make::Loft => "下の輪かくから上の輪かくへ、なめらかにつなぐ",
-                    Make::Sweep => "輪かくを、かいた線にそって引っぱる",
+                    Make::Extrude => "Extrude the outline straight into a prism",
+                    Make::Revolve if vertical => "Revolve the outline around the vertical center axis to make a vase-like shape",
+                    Make::Revolve => "Revolve works on sketches drawn on the Front or Side plane",
+                    Make::Loft => "Blend smoothly from the bottom outline to the top outline",
+                    Make::Sweep => "Pull the outline along the drawn path",
                 };
                 if style::pill_enabled(ui, m.label(), self.sk.make == m, usable).on_hover_text(tip).clicked() {
                     self.sk.make = m;
@@ -2198,20 +2198,20 @@ impl App {
         });
         let make = self.sk.make;
         if matches!(make, Make::Extrude | Make::Loft) {
-            style::labeled_slider(ui, "高さ", &mut self.sk.height, 0.5..=300.0, "押し出す高さ (mm)");
+            style::labeled_slider(ui, "Height", &mut self.sk.height, 0.5..=300.0, "Extrude height (mm)");
             ui.horizontal(|ui| {
-                if style::pill(ui, "うらがわへ", self.sk.flip).on_hover_text("面の反対がわへ伸ばす").clicked() {
+                if style::pill(ui, "Flip", self.sk.flip).on_hover_text("Extrude to the opposite side of the plane").clicked() {
                     self.sk.flip = !self.sk.flip;
                 }
             });
         }
         if make == Make::Loft {
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("上の輪かく").size(11.0).color(style::DIM));
-                if style::pill(ui, "コピーを拡大・縮小", self.sk.loft_top == LoftTop::Scaled).clicked() {
+                ui.label(egui::RichText::new("Top outline").size(11.0).color(style::DIM));
+                if style::pill(ui, "Scaled copy", self.sk.loft_top == LoftTop::Scaled).clicked() {
                     self.sk.loft_top = LoftTop::Scaled;
                 }
-                if style::pill(ui, "もう1つかく", self.sk.loft_top == LoftTop::Drawn).clicked() {
+                if style::pill(ui, "Draw another", self.sk.loft_top == LoftTop::Drawn).clicked() {
                     self.sk.loft_top = LoftTop::Drawn;
                     if self.sk.profile2.is_empty() {
                         self.sk.stage = Stage::LoftTop;
@@ -2220,19 +2220,19 @@ impl App {
                 }
             });
             if self.sk.loft_top == LoftTop::Scaled {
-                style::labeled_slider(ui, "上の大きさ", &mut self.sk.loft_scale, 0.1..=3.0, "上の輪かくの大きさ (下を1とした倍率)");
-            } else if style::pill(ui, if self.sk.profile2.is_empty() { "上の輪かくをかく" } else { "上の輪かくをかきなおす" }, false).clicked() {
+                style::labeled_slider(ui, "Top scale", &mut self.sk.loft_scale, 0.1..=3.0, "Top outline size (ratio, bottom = 1)");
+            } else if style::pill(ui, if self.sk.profile2.is_empty() { "Draw top outline" } else { "Redraw top outline" }, false).clicked() {
                 self.sk.stage = Stage::LoftTop;
                 self.sk.profile2.clear();
                 self.sk.clear_drawing();
             }
         }
         if make == Make::Sweep {
-            style::labeled_slider(ui, "ふとさ", &mut self.sk.sweep_scale, 0.2..=4.0, "輪かくの大きさの倍率");
+            style::labeled_slider(ui, "Thickness", &mut self.sk.sweep_scale, 0.2..=4.0, "Outline size scale");
             ui.horizontal(|ui| {
                 let have = !self.sk.path.is_empty();
-                ui.label(egui::RichText::new(if have { format!("線: {}点", self.sk.path.len()) } else { "線がまだありません".to_string() }).size(11.5).color(style::DIM));
-                if style::pill(ui, if have { "線をかきなおす" } else { "線をかく" }, false).on_hover_text("通り道をかく (Enterで終わり)").clicked() {
+                ui.label(egui::RichText::new(if have { format!("Path: {} points", self.sk.path.len()) } else { "No path yet".to_string() }).size(11.5).color(style::DIM));
+                if style::pill(ui, if have { "Redraw path" } else { "Draw path" }, false).on_hover_text("Draw the path (Enter to finish)").clicked() {
                     self.sk.stage = Stage::SweepPath;
                     self.sk.clear_drawing();
                     self.sk.frame = self.sketch_plane();
@@ -2247,13 +2247,13 @@ impl App {
                 Make::Loft => self.sk.loft_top == LoftTop::Scaled || !self.sk.profile2.is_empty(),
                 _ => true,
             };
-            let b = egui::Button::new(egui::RichText::new(format!("{}を作る", make.label())).strong().color(Color32::WHITE))
+            let b = egui::Button::new(egui::RichText::new(format!("Make {}", make.label())).strong().color(Color32::WHITE))
                 .fill(style::ACCENT_SOFT)
                 .stroke(Stroke::new(1.0, style::ACCENT));
             if ui.add_enabled(ready, b).clicked() {
                 self.sketch_make(ctx);
             }
-            if style::pill(ui, "かきなおす", false).on_hover_text("輪かくをすてて、もう一度かく (Esc)").clicked() {
+            if style::pill(ui, "Redo", false).on_hover_text("Discard the outline and draw again (Esc)").clicked() {
                 self.sk.reset();
             }
         });
@@ -2266,13 +2266,13 @@ fn hint(ui: &mut Ui, text: &str) {
 
 fn pen_hint(pen: Pen, stage: Stage) -> &'static str {
     match (pen, stage) {
-        (_, Stage::LoftTop) if pen != Pen::Line => "ロフトの上の輪かくをかきます (下の輪かくはうすく見えています)",
-        (Pen::Polygon, _) => "左クリックで角をうつ　右クリック / さいしょの点 / Enterでとじる",
-        (Pen::Rect, _) => "ドラッグ (または2回クリック) で、向かい合う2つの角をきめる",
-        (Pen::Circle, _) => "まん中から外へドラッグ (または2回クリック) で半径をきめる",
-        (Pen::Spline, _) => "左クリックした点を通る、なめらかな輪かく　右クリック / さいしょの点 / Enterでとじる",
-        (Pen::Line, Stage::SweepPath) => "スイープの通り道をかきます　左クリックで点　右クリック / Enterでおわり",
-        (Pen::Line, _) => "左クリックで点をうつ　右クリック / Enterでおわり (スイープの通り道になります)",
+        (_, Stage::LoftTop) if pen != Pen::Line => "Drawing the loft's top outline (bottom outline shown faintly)",
+        (Pen::Polygon, _) => "Left-click: place corner  ·  Right-click / first point / Enter: close",
+        (Pen::Rect, _) => "Drag (or click twice) to set opposite corners",
+        (Pen::Circle, _) => "Drag from center outward (or click twice) to set radius",
+        (Pen::Spline, _) => "Left-click: smooth curve through points  ·  Right-click / first point / Enter: close",
+        (Pen::Line, Stage::SweepPath) => "Drawing sweep path  ·  Left-click: point  ·  Right-click / Enter: finish",
+        (Pen::Line, _) => "Left-click: place point  ·  Right-click / Enter: finish (becomes sweep path)",
     }
 }
 
@@ -2778,7 +2778,7 @@ mod tests {
         assert!((after_world[2] - before_world[2] - 13.0).abs() < 1e-4);
         app.sketch_set_plane(PlaneSel::Floor);
         assert!(app.sk.pts.is_empty(), "switching presets discards only the unfinished gesture");
-        assert!(app.sk.msg.contains("描画途中"));
+        assert!(app.sk.msg.contains("unfinished"));
         app.sketch_set_plane(PlaneSel::Custom);
         assert_eq!(app.sk.frame, saved_frame, "custom plane is reselectable");
         assert!(!app.sketch_edit_custom_plane([f32::NAN, 0.0, 0.0], angles));

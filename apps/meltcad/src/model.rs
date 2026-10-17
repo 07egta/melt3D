@@ -83,27 +83,27 @@ impl Kind {
     pub const CAD: [Kind; 4] = [Kind::Revolve, Kind::Loft, Kind::Curve, Kind::Sweep];
     pub fn label(self) -> &'static str {
         match self {
-            Kind::Sphere => "球",
-            Kind::Box => "箱",
-            Kind::Cylinder => "円柱",
-            Kind::Torus => "ドーナツ",
-            Kind::Cone => "円すい",
-            Kind::Extrude => "押し出し",
-            Kind::Prism3 => "三角柱",
-            Kind::PrismN => "多角柱",
-            Kind::Octa => "正八面体",
-            Kind::Tetra => "正四面体",
-            Kind::Pyramid => "ピラミッド",
-            Kind::Capsule => "カプセル",
-            Kind::Hemi => "半球",
-            Kind::Tube => "パイプ",
-            Kind::Wedge => "くさび",
-            Kind::Star => "星柱",
-            Kind::Revolve => "回転体",
-            Kind::Loft => "ロフト",
-            Kind::Curve => "線",
-            Kind::Sweep => "スイープ",
-            Kind::Mesh => "メッシュ",
+            Kind::Sphere => "Sphere",
+            Kind::Box => "Box",
+            Kind::Cylinder => "Cylinder",
+            Kind::Torus => "Torus",
+            Kind::Cone => "Cone",
+            Kind::Extrude => "Extrude",
+            Kind::Prism3 => "Prism",
+            Kind::PrismN => "Polygon Prism",
+            Kind::Octa => "Octahedron",
+            Kind::Tetra => "Tetrahedron",
+            Kind::Pyramid => "Pyramid",
+            Kind::Capsule => "Capsule",
+            Kind::Hemi => "Hemisphere",
+            Kind::Tube => "Pipe",
+            Kind::Wedge => "Wedge",
+            Kind::Star => "Star Prism",
+            Kind::Revolve => "Revolve",
+            Kind::Loft => "Loft",
+            Kind::Curve => "Curve",
+            Kind::Sweep => "Sweep",
+            Kind::Mesh => "Mesh",
         }
     }
     pub fn id(self) -> f32 {
@@ -468,7 +468,7 @@ pub struct FaceMelt {
 
 impl FaceMelt {
     pub const FACES: [(&'static str, &'static str); 6] =
-        [("右", "+x の面"), ("左", "-x の面"), ("奥", "+y の面"), ("手前", "-y の面"), ("上", "+z の面"), ("下", "-z の面")];
+        [("+X", "+x face"), ("-X", "-x face"), ("+Y", "+y face"), ("-Y", "-y face"), ("+Z", "+z face"), ("-Z", "-z face")];
     pub fn is_off(&self) -> bool {
         self.face == 0 || self.face > 6 || !self.amount.is_finite() || self.amount == 0.0
     }
@@ -654,6 +654,13 @@ impl Kind {
     }
 }
 
+fn is_zero_u8(v: &u8) -> bool {
+    *v == 0
+}
+
+/// The deepest a group can be nested.
+pub const MAX_DEPTH: u8 = 3;
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Group {
     pub name: String,
@@ -662,6 +669,9 @@ pub struct Group {
     pub blend: f32,
     pub visible: bool,
     pub shapes: Vec<Shape>,
+    /// How deep the group sits in the outline: it is part of the nearest group above it with a smaller depth.
+    #[serde(default, skip_serializing_if = "is_zero_u8")]
+    pub depth: u8,
     /// This group represents one extrusion with independent subtractive sketch holes.
     #[serde(default)]
     pub sketch_holes: bool,
@@ -681,7 +691,7 @@ pub struct Group {
 
 impl Group {
     pub fn new(name: impl Into<String>) -> Group {
-        Group { name: name.into(), op: Op::Add, blend: 0.0, visible: true, shapes: Vec::new(), sketch_holes: false, uid: 0, pattern: None, instance_of: None, xform: Xform::default() }
+        Group { name: name.into(), op: Op::Add, blend: 0.0, visible: true, shapes: Vec::new(), depth: 0, sketch_holes: false, uid: 0, pattern: None, instance_of: None, xform: Xform::default() }
     }
 }
 
@@ -700,9 +710,9 @@ impl BlendMode {
     pub const ALL: [BlendMode; 3] = [BlendMode::Smooth, BlendMode::Round, BlendMode::Gooey];
     pub fn label(self) -> &'static str {
         match self {
-            BlendMode::Smooth => "なめらか",
-            BlendMode::Round => "まるく",
-            BlendMode::Gooey => "どろっと",
+            BlendMode::Smooth => "Smooth",
+            BlendMode::Round => "Round",
+            BlendMode::Gooey => "Gooey",
         }
     }
     pub fn id(self) -> f32 {
@@ -948,6 +958,152 @@ impl Scene {
         let notes = s.sanitize_notes();
         Ok((s, notes))
     }
+    // ----- nested groups: `Group::depth` makes the flat list an outline -----
+
+    /// Make the depths a valid outline: the first group is at the top, and no group sits more
+    /// than one level below the one before it.
+    pub fn normalize_depths(&mut self) {
+        let mut prev: i32 = -1;
+        for g in &mut self.groups {
+            let d = i32::from(g.depth).min(prev + 1).min(i32::from(MAX_DEPTH));
+            g.depth = d.max(0) as u8;
+            prev = i32::from(g.depth);
+        }
+    }
+
+    /// The groups from `g` on that belong to it (itself and everything nested in it): `g..end`.
+    pub fn subtree_end(&self, g: usize) -> usize {
+        let Some(top) = self.groups.get(g) else { return g };
+        let mut e = g + 1;
+        while self.groups.get(e).is_some_and(|n| n.depth > top.depth) {
+            e += 1;
+        }
+        e
+    }
+
+    /// The group `g` sits in, if any.
+    pub fn parent_of(&self, g: usize) -> Option<usize> {
+        let d = self.groups.get(g)?.depth;
+        if d == 0 {
+            return None;
+        }
+        (0..g).rev().find(|&i| self.groups[i].depth < d)
+    }
+
+    /// Put `g` (with what is nested in it) into the group just above it.
+    pub fn indent_group(&mut self, g: usize) -> bool {
+        let e = self.subtree_end(g);
+        let Some(top) = self.groups.get(g) else { return false };
+        let above = match g.checked_sub(1).and_then(|i| self.groups.get(i)) {
+            Some(a) => a.depth,
+            None => return false,
+        };
+        let deepest = self.groups[g..e].iter().map(|x| x.depth).max().unwrap_or(0);
+        if top.depth > above || deepest >= MAX_DEPTH {
+            return false;
+        }
+        for x in &mut self.groups[g..e] {
+            x.depth += 1;
+        }
+        true
+    }
+
+    /// Take `g` (with what is nested in it) out of its group: it lands right after that group.
+    /// Returns the new index.
+    pub fn outdent_group(&mut self, g: usize) -> Option<usize> {
+        let p = self.parent_of(g)?;
+        let (e, pe) = (self.subtree_end(g), self.subtree_end(p));
+        let mut block: Vec<Group> = self.groups.drain(g..e).collect();
+        for x in &mut block {
+            x.depth -= 1;
+        }
+        let at = pe - (e - g);
+        for (i, x) in block.into_iter().enumerate() {
+            self.groups.insert(at + i, x);
+        }
+        Some(at)
+    }
+
+    /// The first group before `g` at the same level (inside the same group), if any.
+    pub fn prev_sibling(&self, g: usize) -> Option<usize> {
+        let d = self.groups.get(g)?.depth;
+        for i in (0..g).rev() {
+            let x = self.groups[i].depth;
+            if x == d {
+                return Some(i);
+            }
+            if x < d {
+                return None;
+            }
+        }
+        None
+    }
+
+    /// The group right after `g`'s subtree, if it is at the same level.
+    pub fn next_sibling(&self, g: usize) -> Option<usize> {
+        let e = self.subtree_end(g);
+        (self.groups.get(e)?.depth == self.groups.get(g)?.depth).then_some(e)
+    }
+
+    /// Move `g` (with what is in it) up or down one place among its siblings. Returns where it is now.
+    pub fn shift_group(&mut self, g: usize, down: bool) -> Option<usize> {
+        let d = self.groups.get(g)?.depth;
+        let size = self.subtree_end(g) - g;
+        if down {
+            let ns = self.next_sibling(g)?;
+            let ne = self.subtree_end(ns);
+            Some(self.move_subtree(g, ne - size, d))
+        } else {
+            let ps = self.prev_sibling(g)?;
+            Some(self.move_subtree(g, ps, d))
+        }
+    }
+
+    /// Wrap `g` (with what is in it) in a new, empty group that takes its place. Returns the new group's index.
+    pub fn wrap_in_group(&mut self, g: usize, name: String) -> Option<usize> {
+        if g >= self.groups.len() || self.groups.len() >= MAX_GROUPS || self.groups[g..self.subtree_end(g)].iter().any(|x| x.depth >= MAX_DEPTH) {
+            return None;
+        }
+        let e = self.subtree_end(g);
+        let mut parent = Group::new(name);
+        parent.depth = self.groups[g].depth;
+        for x in &mut self.groups[g..e] {
+            x.depth += 1;
+        }
+        self.groups.insert(g, parent);
+        Some(g)
+    }
+
+    /// Remove `g`; what was nested in it moves up one level.
+    pub fn remove_group(&mut self, g: usize) {
+        if g >= self.groups.len() {
+            return;
+        }
+        let e = self.subtree_end(g);
+        for x in &mut self.groups[g + 1..e] {
+            x.depth = x.depth.saturating_sub(1);
+        }
+        self.groups.remove(g);
+        self.normalize_depths();
+    }
+
+    /// Move `g` and everything nested in it so that it starts at index `to` of the list as it is
+    /// without them; it takes the depth `depth`. Returns where it starts now.
+    pub fn move_subtree(&mut self, g: usize, to: usize, depth: u8) -> usize {
+        let e = self.subtree_end(g);
+        let base = i32::from(self.groups[g].depth);
+        let mut block: Vec<Group> = self.groups.drain(g..e).collect();
+        for x in &mut block {
+            x.depth = (i32::from(x.depth) - base + i32::from(depth)).clamp(0, i32::from(MAX_DEPTH)) as u8;
+        }
+        let at = to.min(self.groups.len());
+        for (i, x) in block.into_iter().enumerate() {
+            self.groups.insert(at + i, x);
+        }
+        self.normalize_depths();
+        at
+    }
+
     /// Clamp every number to a range the renderer and the mesher cope with.
     pub fn sanitize(&mut self) {
         let _ = self.sanitize_notes();
@@ -961,6 +1117,7 @@ impl Scene {
         let mut vol_shapes = 0usize;
         let mut vol_nodes = 0usize;
         let mut vol_seen: Vec<usize> = Vec::new();
+        self.normalize_depths();
         fix(&mut self.melt.amount, 0.0, 10.0, 1.0);
         fix(&mut self.melt.drip, 0.0, 40.0, 0.0);
         fix(&mut self.melt.ripple, 0.3, 4.0, 1.0);

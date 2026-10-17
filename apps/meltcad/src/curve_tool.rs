@@ -622,7 +622,7 @@ impl App {
             _ => match self.scene.groups.len().checked_sub(1) {
                 Some(g) => g,
                 None => {
-                    self.scene.groups.push(Group::new("グループ 1"));
+                    self.scene.groups.push(Group::new("Group 1"));
                     0
                 }
             },
@@ -668,7 +668,7 @@ impl App {
     /// The top-bar toggle for the "せん" tool.
     pub fn curve_button(&mut self, ui: &mut Ui) {
         let on = self.ct.drawing;
-        if style::icon_button(ui, 34.0, "せん (クリックで点をうって、線をひく)", on, glyph).clicked() {
+        if style::icon_button(ui, 34.0, "Curve (click to place nodes, draw a line)", on, glyph).clicked() {
             if on {
                 self.finish_drawing();
             }
@@ -694,17 +694,17 @@ impl App {
             .show(ctx, |ui| {
                 style::card().show(ui, |ui| {
                     ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("せん").strong().color(style::ACCENT));
-                        style::labeled_slider(ui, "ふとさ", &mut self.ct.draw_radius, 0.5..=40.0, "あたらしい点の太さ (半径 mm)");
-                        if style::pill(ui, "おわり", false).on_hover_text("この線を終える (右クリック / Enter)").clicked() {
+                        ui.label(egui::RichText::new("Curve").strong().color(style::ACCENT));
+                        style::labeled_slider(ui, "Thickness", &mut self.ct.draw_radius, 0.5..=40.0, "Radius of new nodes (mm)");
+                        if style::pill(ui, "Done", false).on_hover_text("Finish this curve (right-click / Enter)").clicked() {
                             self.finish_drawing();
                         }
-                        if style::pill(ui, "やめる", false).on_hover_text("せんツールを切る (Esc)").clicked() {
+                        if style::pill(ui, "Cancel", false).on_hover_text("Turn off the curve tool (Esc)").clicked() {
                             self.finish_drawing();
                             self.ct.drawing = false;
                         }
                     });
-                    ui.label(egui::RichText::new("左クリックで点をふやす　右クリック / Enterでおわり　Backspaceで1つもどる").size(11.0).color(style::DIM));
+                    ui.label(egui::RichText::new("Left-click: add node   Right-click / Enter: done   Backspace: undo one node").size(11.0).color(style::DIM));
                 });
             });
     }
@@ -823,12 +823,12 @@ impl App {
         let chosen = self.chosen_node(g, s);
         let Some(sh) = self.scene.shape_mut(g, s) else { return };
         let is_curve = sh.kind == Kind::Curve;
-        style::title(ui, if is_curve { "線のふし" } else { "道のふし" });
+        style::title(ui, if is_curve { "Curve nodes" } else { "Path nodes" });
         ui.horizontal(|ui| {
-            if style::pill(ui, "ふしをいじる", self.ct.edit_nodes).on_hover_text("画面で、ふしをドラッグして動かす").clicked() {
+            if style::pill(ui, "Edit nodes", self.ct.edit_nodes).on_hover_text("Drag nodes on screen to move them").clicked() {
                 self.ct.edit_nodes = !self.ct.edit_nodes;
             }
-            ui.label(egui::RichText::new("端の＋でのばす / 間の＋でふやす").size(10.5).color(style::DIM));
+            ui.label(egui::RichText::new("Drag the + at an end to extend, the + between nodes to add").size(10.5).color(style::DIM));
         });
         if is_curve {
             // Populate the optional handle array on first inspection so a
@@ -840,8 +840,8 @@ impl App {
             if let Some(i) = chosen {
                 if let Some(h) = sh.curve_handles.get_mut(i) {
                     ui.horizontal(|ui| {
-                        ui.label("接線");
-                        for (mode,label) in [(CurveNodeMode::Auto,"自動"),(CurveNodeMode::Smooth,"滑らか"),(CurveNodeMode::Corner,"角")] {
+                        ui.label("Tangent");
+                        for (mode,label) in [(CurveNodeMode::Auto,"Auto"),(CurveNodeMode::Smooth,"Smooth"),(CurveNodeMode::Corner,"Corner")] {
                             if ui.selectable_label(h.mode == mode,label).clicked() {
                                 if h.mode == CurveNodeMode::Auto && mode != CurveNodeMode::Auto {
                                     let direction = if i>0 && i+1<sh.path.len() {
@@ -858,14 +858,14 @@ impl App {
                     });
                 }
             }
-            style::labeled_slider(ui, "なめらか", &mut sh.params[1], 0.0..=1.0, "0 = カクカク / 1 = なめらか");
+            style::labeled_slider(ui, "Smoothness", &mut sh.params[1], 0.0..=1.0, "0 = sharp / 1 = smooth");
             ui.horizontal(|ui| {
                 let mut closed = sh.params[0] > 0.5;
-                if ui.checkbox(&mut closed, "輪にする").on_hover_text("さいごとさいしょをつなぐ").changed() {
+                if ui.checkbox(&mut closed, "Closed loop").on_hover_text("Join the last and first node").changed() {
                     sh.params[0] = if closed { 1.0 } else { 0.0 };
                 }
                 let mut flat = sh.params[2] > 0.5;
-                if ui.checkbox(&mut flat, "はしを平らに").on_hover_text("両はしを丸くしないで、すぱっと切る").changed() {
+                if ui.checkbox(&mut flat, "Flat ends").on_hover_text("Cut both ends square instead of rounding").changed() {
                     sh.params[2] = if flat { 1.0 } else { 0.0 };
                 }
             });
@@ -873,10 +873,10 @@ impl App {
                 sh.params[3] = 1.0;
             }
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("ぜんたいの太さ").color(style::DIM).size(12.0));
+                ui.label(egui::RichText::new("Overall thickness").color(style::DIM).size(12.0));
                 ui.add(egui::DragValue::new(&mut sh.params[3]).speed(0.01).range(0.1..=5.0).suffix(" ×").max_decimals(2));
             });
-            if style::pill(ui, "ぜんぶのふしを同じ太さに", false).on_hover_text("えらんだふし(なければ先頭)の太さにそろえる").clicked() {
+            if style::pill(ui, "Make all nodes the same thickness", false).on_hover_text("Match the selected node's thickness (or the first)").clicked() {
                 let r = sh.path.get(chosen.unwrap_or(0)).map(|p| p[3]).unwrap_or(5.0);
                 set_all_radii(&mut sh.path, r);
             }
@@ -887,11 +887,11 @@ impl App {
         egui::ScrollArea::vertical().id_salt("curve_nodes").max_height(170.0).show(ui, |ui| {
             for (i, node) in sh.path.iter_mut().enumerate() {
                 ui.horizontal(|ui| {
-                    if ui.selectable_label(chosen == Some(i), format!("ふし {}", i + 1)).clicked() {
+                    if ui.selectable_label(chosen == Some(i), format!("Node {}", i + 1)).clicked() {
                         pick = Some(i);
                     }
-                    ui.add(egui::DragValue::new(&mut node[3]).speed(0.1).range(0.1..=500.0).prefix(if is_curve { "太さ " } else { "倍 " }).max_decimals(1));
-                    if ui.add_enabled(n > 2, egui::Button::new("×").small()).on_hover_text("このふしを消す").clicked() {
+                    ui.add(egui::DragValue::new(&mut node[3]).speed(0.1).range(0.1..=500.0).prefix(if is_curve { "thickness " } else { "x " }).max_decimals(1));
+                    if ui.add_enabled(n > 2, egui::Button::new("×").small()).on_hover_text("Delete this node").clicked() {
                         del = Some(i);
                     }
                 });
@@ -901,13 +901,13 @@ impl App {
             && let Some(node) = sh.path.get_mut(i)
         {
             let mut v = [node[0], node[1], node[2]];
-            if style::xyz(ui, "ふし", &mut v, 0.5, -5000.0..=5000.0, "") {
+            if style::xyz(ui, "Node", &mut v, 0.5, -5000.0..=5000.0, "") {
                 node[0] = v[0];
                 node[1] = v[1];
                 node[2] = v[2];
             }
         }
-        if ui.add_enabled(n < MAX_PATH, egui::Button::new("＋ ふしを足す")).on_hover_text("さいごにふやす").clicked() {
+        if ui.add_enabled(n < MAX_PATH, egui::Button::new("+ Add node")).on_hover_text("Add at the end").clicked() {
             let (a, b) = (sh.path.get(n.wrapping_sub(1)).copied(), sh.path.get(n.wrapping_sub(2)).copied());
             if let (Some(a), Some(b)) = (a, b) {
                 let d = sub([a[0], a[1], a[2]], [b[0], b[1], b[2]]);

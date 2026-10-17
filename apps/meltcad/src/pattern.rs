@@ -615,8 +615,17 @@ pub fn link_source(scene: &Scene, gi: usize) -> Option<usize> {
 pub fn resolve(scene: &Scene) -> Vec<RGroup> {
     let mut left = MAX_INSTANCES;
     let mut out = Vec::new();
+    // (hiding a group hides everything nested in it)
+    let mut hidden_below: Option<u8> = None;
     for (gi, g) in scene.groups.iter().enumerate() {
+        if let Some(d) = hidden_below {
+            if g.depth > d {
+                continue;
+            }
+            hidden_below = None;
+        }
         if !g.visible {
+            hidden_below = Some(g.depth);
             continue;
         }
         let linked = g.instance_of.is_some();

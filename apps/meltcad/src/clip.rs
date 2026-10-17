@@ -101,10 +101,13 @@ fn add_group(app: &mut App, mut group: Group, offset: bool) -> Result<String, St
         shifted(&mut group.shapes, STEP);
     }
     let at = match app.sel {
-        Some(Pick::Shape(g, _)) | Some(Pick::Group(g)) => (g + 1).min(app.scene.groups.len()),
+        Some(Pick::Shape(g, _)) | Some(Pick::Group(g)) => app.scene.subtree_end(g).min(app.scene.groups.len()),
         None => app.scene.groups.len(),
     };
+    let mut group = group;
+    group.depth = 0;
     app.scene.groups.insert(at, group);
+    app.scene.normalize_depths();
     app.sel = Some(Pick::Group(at));
     Ok("貼りつけました".into())
 }

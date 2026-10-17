@@ -150,7 +150,15 @@ pub fn prepare(scene: &Scene, sel: Option<Pick>, scope: Scope, ignore_paint: boo
         for g in &mut s.groups {
             g.shapes.retain(|sh| sh.op != Op::Paint);
         }
-        s.groups.retain(|g| g.op != Op::Paint && (!g.shapes.is_empty() || g.is_linked()));
+        // (an empty group stays when other groups are nested in it: it is their container)
+        let holds: Vec<bool> = (0..s.groups.len()).map(|i| s.groups.get(i + 1).is_some_and(|n| n.depth > s.groups[i].depth)).collect();
+        let mut i = 0;
+        s.groups.retain(|g| {
+            let keep = g.op != Op::Paint && (!g.shapes.is_empty() || g.is_linked() || holds.get(i).copied().unwrap_or(false));
+            i += 1;
+            keep
+        });
+        s.normalize_depths();
     }
     Ok(s)
 }

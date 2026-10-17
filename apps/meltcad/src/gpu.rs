@@ -223,7 +223,8 @@ impl ScenePack {
             }
             push(&mut groups, [p.first_block as f32, p.n_blocks as f32, g.op.sign(), g.blend]);
             // (the third number is this group's first item: every instance, or the group itself, is one item the march can leave out)
-            push(&mut groups, [first_inst as f32, (inst_n - first_inst) as f32, item_n as f32, 0.0]);
+            let nested_below = scene.groups.get(rg.gi + 1).is_some_and(|n| n.depth > g.depth);
+            push(&mut groups, [first_inst as f32, (inst_n - first_inst) as f32, item_n as f32, f32::from(g.depth) + if nested_below { 0.5 } else { 0.0 }]);
             item_n += (inst_n - first_inst).max(1);
             push(&mut groups, [p.sphere.c[0], p.sphere.c[1], p.sphere.c[2], p.sphere.r]);
             group_n += 1;

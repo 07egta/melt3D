@@ -51,9 +51,9 @@ impl Plane {
 
     pub fn label(self) -> &'static str {
         match self {
-            Plane::Floor => "ゆか",
-            Plane::Front => "まえ",
-            Plane::Side => "よこ",
+            Plane::Floor => "Floor",
+            Plane::Front => "Front",
+            Plane::Side => "Side",
         }
     }
 }
