@@ -28,7 +28,17 @@ const MAX_AXIS_CELLS: f64 = 1_000_000.0;
 
 /// A signed distance: negative inside, a lower bound of the distance to the surface.
 pub trait Sdf: Sync {
+    /// Exact field value for mesh vertices, Hermite root finding and normals.
     fn dist(&self, p: [f32; 3]) -> f32;
+
+    /// A safe estimate for deciding whether a whole octree cell can be skipped.
+    /// Most SDFs are 1-Lipschitz and can use the exact value. Inverse-mapped
+    /// deformations preserve the zero surface but may have Lipschitz > 1,
+    /// so the caller may return a smaller magnitude to avoid pruning a surface.
+    /// `radius` is the world-space radius of the enclosing octree cell.
+    fn pruning_distance(&self, p: [f32; 3], _radius: f32) -> f32 {
+        self.dist(p)
+    }
 }
 
 impl<F> Sdf for F
@@ -548,7 +558,8 @@ pub fn mesh_sparse(sdf: &dyn Sdf, lo: V, hi: V, cell: f64, threads: usize, prog:
                         (nd[2] as usize * side_blocks * B) as i64 + (side_cells as i64) / 2,
                     ];
                     st.1 += 1;
-                    let d = clean(sdf.dist(grid.pos32(c)), h);
+                    let cell_radius = (side_cells * h * 0.866_025_4) as f32;
+                    let d = clean(sdf.pruning_distance(grid.pos32(c), cell_radius), h);
                     if near(d, side_cells, h) {
                         st.0.push(*nd);
                     }
