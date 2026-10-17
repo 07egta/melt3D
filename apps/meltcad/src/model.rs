@@ -10,6 +10,10 @@ fn is_zero(v: &u32) -> bool {
     *v == 0
 }
 
+fn is_false(v: &bool) -> bool {
+    !*v
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Kind {
     Sphere,
@@ -376,6 +380,9 @@ pub struct Shape {
     pub blend: f32,
     pub material: Material,
     pub visible: bool,
+    /// Prevent accidental model edits; visibility and unlocking remain available.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub locked: bool,
     /// Corners of an `Extrude` outline, in the shape's own XY plane.
     pub outline: Vec<[f32; 2]>,
     /// Kind-specific extra numbers (`Kind::param_labels`).
@@ -442,6 +449,7 @@ impl Shape {
             blend: 6.0,
             material,
             visible: true,
+            locked: false,
             outline: kind.default_outline(),
             params: kind.default_params(),
             path: kind.default_path(),
@@ -547,6 +555,9 @@ pub struct Group {
     /// How far the whole group melts into the groups before it, in mm.
     pub blend: f32,
     pub visible: bool,
+    /// A locked group also protects all its children from edits.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub locked: bool,
     pub shapes: Vec<Shape>,
     /// A number linked copies and patterns find this group by (0 = none; see `Scene::ensure_group_uid`).
     #[serde(default, skip_serializing_if = "is_zero")]
@@ -564,7 +575,7 @@ pub struct Group {
 
 impl Group {
     pub fn new(name: impl Into<String>) -> Group {
-        Group { name: name.into(), op: Op::Add, blend: 0.0, visible: true, shapes: Vec::new(), uid: 0, pattern: None, instance_of: None, xform: Xform::default() }
+        Group { name: name.into(), op: Op::Add, blend: 0.0, visible: true, locked: false, shapes: Vec::new(), uid: 0, pattern: None, instance_of: None, xform: Xform::default() }
     }
 }
 
@@ -791,13 +802,32 @@ impl Default for Scene {
 }
 
 /// Which thing is picked: a shape (group, index) or a whole group.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Pick {
     Shape(usize, usize),
     Group(usize),
 }
 
 impl Scene {
+    /// Effective lock includes the parent group. Never infer a missing index is editable.
+    pub fn is_locked(&self, pick: Pick) -> bool {
+        match pick {
+            Pick::Group(g) => self.groups.get(g).is_none_or(|group| group.locked),
+            Pick::Shape(g, s) => self.groups.get(g).is_none_or(|group| {
+                group.locked || group.shapes.get(s).is_none_or(|shape| shape.locked)
+            }),
+        }
+    }
+
+    pub fn is_visible(&self, pick: Pick) -> bool {
+        match pick {
+            Pick::Group(g) => self.groups.get(g).is_some_and(|group| group.visible),
+            Pick::Shape(g, s) => self.groups.get(g).is_some_and(|group| {
+                group.visible && group.shapes.get(s).is_some_and(|shape| shape.visible)
+            }),
+        }
+    }
+
     pub fn shape(&self, g: usize, s: usize) -> Option<&Shape> {
         self.groups.get(g)?.shapes.get(s)
     }
@@ -952,6 +982,28 @@ pub const MAX_SHAPES: usize = 512;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn outliner_locks_default_to_unlocked_and_round_trip() {
+        let old = Scene::default();
+        let original_json = old.to_json();
+        assert!(!original_json.contains("\"locked\""), "unlocked projects keep their existing JSON format");
+        let restored = Scene::from_json(&original_json).expect("legacy file opens");
+        assert_eq!(restored, old);
+        assert!(!restored.is_locked(Pick::Shape(0, 0)));
+
+        let mut saved = old;
+        saved.groups[0].shapes[0].locked = true;
+        assert!(saved.is_locked(Pick::Shape(0, 0)));
+        assert!(!saved.is_locked(Pick::Group(0)));
+        let reopened = Scene::from_json(&saved.to_json()).expect("new file opens");
+        assert!(reopened.is_locked(Pick::Shape(0, 0)));
+        saved.groups[0].shapes[0].locked = false;
+        saved.groups[0].locked = true;
+        assert!(saved.is_locked(Pick::Shape(0, 0)), "parent lock propagates");
+        assert_eq!(Scene::from_json(&saved.to_json()).expect("saved"), saved);
+        assert!(!saved.is_visible(Pick::Shape(99, 0)));
+    }
 
     #[test]
     fn a_scene_round_trips_and_hostile_numbers_are_made_safe() {
