@@ -50,6 +50,7 @@ mod curve;
 mod curve_tool;
 mod pipe_tool;
 mod model;
+mod recovery;
 mod perf;
 mod prims;
 mod panels;

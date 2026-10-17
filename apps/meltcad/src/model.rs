@@ -808,9 +808,14 @@ impl Scene {
         self.groups.iter().map(|g| g.shapes.len()).sum()
     }
     pub fn to_json(&self) -> String {
-        // (a volume used by several shapes is written once: see mesh.rs)
+        self.try_to_json().unwrap_or_default()
+    }
+    /// Serialization must report errors to disk writers (never save an empty design).
+    pub fn try_to_json(&self) -> Result<String, String> {
         let _guard = crate::mesh::SaveGuard::begin();
-        serde_json::to_string_pretty(self).unwrap_or_default()
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| serde_json::to_string_pretty(self)))
+            .map_err(|_| "作品のシリアライズに失敗しました".to_owned())?
+            .map_err(|e| e.to_string())
     }
     /// A scene from JSON, with every number made safe (a damaged or hostile file never panics).
     pub fn from_json(text: &str) -> Result<Scene, String> {
