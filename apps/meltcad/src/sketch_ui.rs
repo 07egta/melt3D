@@ -1258,13 +1258,14 @@ impl App {
             return;
         }
         let rect = self.view_rect;
+        let (card_center, card_width) = crate::ui_layout::floating_card_area(rect.width(), self.beginner_ui, 440.0);
         egui::Area::new(egui::Id::new("sketch_card"))
             .order(egui::Order::Middle)
             .pivot(Align2::CENTER_TOP)
-            .fixed_pos(pos2(rect.center().x, rect.top() + 12.0))
+            .fixed_pos(pos2(rect.left() + card_center, rect.top() + 12.0))
             .show(ctx, |ui| {
                 style::card().show(ui, |ui| {
-                    ui.set_max_width(440.0);
+                    ui.set_max_width(card_width);
                     if self.sk.edit.is_some() {
                         self.edit_card(ui);
                     } else {

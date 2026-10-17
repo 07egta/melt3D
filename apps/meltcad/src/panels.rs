@@ -8,7 +8,7 @@ use crate::materials::{self, Category};
 use crate::model::{BlendMode, Corner, Kind, Light, MAX_LIGHTS, MAX_OUTLINE, MAX_SAVED, Material, Melt, Op, Pick, ROUND_MAX};
 use crate::sdf;
 use crate::view::targets;
-use crate::{glyphs, style};
+use crate::{glyphs, style, ui_layout};
 
 /// (label, mode, amount, drip, ripple)
 const MELT_PRESETS: [(&str, BlendMode, f32, f32, f32); 6] = [
@@ -35,8 +35,9 @@ const BACKDROPS: [[f32; 3]; 10] = [
 
 impl App {
     pub fn side(&mut self, ui: &mut Ui) {
+        let panel_width = ui_layout::dock_width(ui.available_width(), if self.beginner_ui { ui_layout::SIMPLE_INSPECTOR } else { ui_layout::CLASSIC_INSPECTOR });
         egui::Panel::right("side")
-            .exact_size(312.0)
+            .exact_size(panel_width)
             .resizable(false)
             .frame(egui::Frame::new().fill(style::PANEL).inner_margin(egui::Margin::symmetric(14, 12)))
             .show(ui, |ui| {
@@ -44,7 +45,14 @@ impl App {
                 let tabs = [(Tab::Shape, "形"), (Tab::Material, "ざいしつ"), (Tab::Melt, "メルト"), (Tab::Room, "ライト・背景")];
                 let items: Vec<(&str, &str)> = tabs.iter().map(|t| (t.1, "")).collect();
                 let sel = tabs.iter().position(|t| t.0 == self.tab);
-                if let Some(i) = style::segmented(ui, "side_tabs", &items, sel, true)
+                if self.beginner_ui || panel_width < 290.0 {
+                    egui::ComboBox::from_id_salt("side_tabs_compact")
+                        .selected_text(tabs.iter().find(|t| t.0 == self.tab).map_or("形", |t| t.1))
+                        .width(ui.available_width())
+                        .show_ui(ui, |ui| {
+                            for (tab, label) in tabs { ui.selectable_value(&mut self.tab, tab, label); }
+                        });
+                } else if let Some(i) = style::segmented(ui, "side_tabs", &items, sel, true)
                     && let Some(t) = tabs.get(i)
                 {
                     self.tab = t.0;
@@ -312,19 +320,24 @@ impl App {
     }
 
     fn actions(&mut self, ui: &mut Ui) {
-        ui.horizontal(|ui| {
-            if style::icon_button(ui, 34.0, "複製 (Ctrl+D)", false, glyphs::dup).clicked() {
-                self.duplicate();
-            }
-            if style::icon_button(ui, 34.0, "削除 (Delete)", false, glyphs::trash).clicked() {
-                self.delete_selected();
-            }
-            if matches!(self.sel, Some(Pick::Shape(..)))
-                && style::pill(ui, "左右コピー", false).on_hover_text("反対がわにコピー (耳・目・うでに)").clicked()
-            {
-                self.mirror_copy();
-            }
-        });
+        if self.beginner_ui {
+            ui.horizontal_wrapped(|ui| {
+                if ui.button("複製").on_hover_text("同じ形をもう1つ作る (Ctrl+D)").clicked() { self.duplicate(); }
+                if ui.button("削除").on_hover_text("選んだ形を消す (Delete)").clicked() { self.delete_selected(); }
+                if matches!(self.sel, Some(Pick::Shape(..))) && ui.button("左右コピー").on_hover_text("反対側に鏡写しの形を作る").clicked() {
+                    self.mirror_copy();
+                }
+            });
+        } else {
+            ui.horizontal(|ui| {
+                if style::icon_button(ui, 34.0, "複製 (Ctrl+D)", false, glyphs::dup).clicked() { self.duplicate(); }
+                if style::icon_button(ui, 34.0, "削除 (Delete)", false, glyphs::trash).clicked() { self.delete_selected(); }
+                if matches!(self.sel, Some(Pick::Shape(..)))
+                    && style::pill(ui, "左右コピー", false).on_hover_text("反対がわにコピー (耳・目・うでに)").clicked() {
+                    self.mirror_copy();
+                }
+            });
+        }
     }
 
     fn op_pills(ui: &mut Ui, op: &mut Op) {
@@ -371,15 +384,61 @@ impl App {
             self.scene.groups.swap(a, b);
             self.sel = Some(Pick::Group(b));
         }
-        self.pattern_section(ui, g);
+        if self.beginner_ui {
+            ui.collapsing("詳細: パターン・くり返し", |ui| self.pattern_section(ui, g));
+        } else {
+            self.pattern_section(ui, g);
+        }
         self.actions(ui);
         let linked = self.scene.groups.get(g).is_some_and(crate::model::Group::is_linked);
         let hint = if linked { "リンクコピーの位置・回転・大きさは、上のらんで変えます" } else { "グループごと動かす・回す・大きさを変えられます" };
         ui.label(RichText::new(hint).size(12.0).color(style::DIM));
     }
 
+    fn kind_picker(ui: &mut Ui, sh: &mut crate::model::Shape) {
+        ui.horizontal_wrapped(|ui| {
+            ui.label(RichText::new("入れかえ").color(style::DIM).size(12.0));
+            ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
+            for k in Kind::ALL {
+                let on = sh.kind == k;
+                if style::icon_button(ui, 32.0, k.label(), on, |p, r, ink| glyphs::kind(p, r, k, ink, Color32::from_white_alpha(18))).clicked() && !on {
+                    if sh.name == sh.kind.label() { sh.name = k.label().to_string(); }
+                    sh.kind = k;
+                    sh.size = k.default_size();
+                    sh.params = k.default_params();
+                    if k.uses_path() && sh.path.len() < 2 { sh.path = k.default_path(); }
+                    if k.uses_outline2() && sh.outline2.len() < 3 { sh.outline2 = k.default_outline2(); }
+                    if matches!(k, Kind::Revolve | Kind::Sweep) { sh.outline = k.default_outline(); }
+                }
+            }
+        });
+    }
+
+    fn advanced_shape_controls(ui: &mut Ui, sh: &mut crate::model::Shape) {
+        style::xyz(ui, "回転", &mut sh.rot, 1.0, -3600.0..=3600.0, "°");
+        ui.horizontal_wrapped(|ui| {
+            for (i, l) in sh.kind.param_labels().iter().enumerate() {
+                if !l.is_empty() {
+                    ui.label(RichText::new(*l).color(style::DIM).size(12.0));
+                    style::field(ui, egui::DragValue::new(&mut sh.params[i]).speed(0.1).max_decimals(2));
+                }
+            }
+        });
+        if sh.kind.can_round() {
+            style::labeled_slider(ui, "丸み", &mut sh.round, 0.0..=ROUND_MAX, "角やふちの丸さ (mm)。大きすぎても、形がこわれない所でとまります");
+            let styles = [("丸", "角を丸くする (フィレット)"), ("面取り", "角をななめに平らに切り落とす (チャンファー)")];
+            let now = Corner::ALL.iter().position(|c| *c == sh.corner);
+            if let Some(i) = style::segmented(ui, "corner_style", &styles, now, true) {
+                sh.corner = Corner::ALL.get(i).copied().unwrap_or_default();
+            }
+        }
+        style::labeled_slider(ui, "とけあい", &mut sh.blend, 0.0..=80.0, "この形が、まわりとどのくらい溶けてくっつくか (グープ)");
+        style::labeled_slider(ui, "ちゅうぐう\nシェル", &mut sh.shell, 0.0..=40.0, "中をくり抜いて、かべの あつさ(mm)だけ のこす。0 = つまっている");
+    }
+
     fn shape_inspector(&mut self, ui: &mut Ui, g: usize, s: usize) {
         style::title(ui, "形");
+        let beginner = self.beginner_ui;
         let ngroups = self.scene.groups.len();
         let nshapes = self.scene.groups[g].shapes.len();
         let mut move_to: Option<usize> = None;
@@ -389,41 +448,29 @@ impl App {
         {
             let Some(sh) = self.scene.shape_mut(g, s) else { return };
             ui.text_edit_singleline(&mut sh.name);
-            Self::op_pills(ui, &mut sh.op);
-            if sh.kind == Kind::Mesh {
-                // an imported mesh cannot become a primitive by a click: it shows where it came from instead
-                crate::mesh_dialog::inspector(ui, sh);
-            } else {
-                // change what kind of shape this is, keeping where it sits
+            if beginner {
                 ui.horizontal_wrapped(|ui| {
-                    ui.label(RichText::new("入れかえ").color(style::DIM).size(12.0));
-                    ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
-                    for k in Kind::ALL {
-                        let on = sh.kind == k;
-                        if style::icon_button(ui, 32.0, k.label(), on, |p, r, ink| glyphs::kind(p, r, k, ink, Color32::from_white_alpha(18))).clicked()
-                            && !on
-                        {
-                            if sh.name == sh.kind.label() {
-                                sh.name = k.label().to_string();
-                            }
-                            sh.kind = k;
-                            sh.size = k.default_size();
-                            sh.params = k.default_params();
-                            if k.uses_path() && sh.path.len() < 2 {
-                                sh.path = k.default_path();
-                            }
-                            if k.uses_outline2() && sh.outline2.len() < 3 {
-                                sh.outline2 = k.default_outline2();
-                            }
-                            if matches!(k, Kind::Revolve | Kind::Sweep) {
-                                sh.outline = k.default_outline();
-                            }
-                        }
+                    ui.label(RichText::new("この形の役割").color(style::DIM).size(12.0));
+                    for (op, text, hint) in [(Op::Add, "＋ 足す", "ほかの形とくっつける"), (Op::Subtract, "－ 削る", "穴をあける")] {
+                        if ui.selectable_label(sh.op == op, text).on_hover_text(hint).clicked() { sh.op = op; }
                     }
+                    ui.menu_button("その他", |ui| {
+                        for (op, text) in [(Op::Paint, "色を塗る"), (Op::Intersect, "重なる部分だけ")] {
+                            if ui.selectable_label(sh.op == op, text).clicked() { sh.op = op; ui.close(); }
+                        }
+                    });
                 });
+            } else {
+                Self::op_pills(ui, &mut sh.op);
+            }
+            if sh.kind == Kind::Mesh {
+                crate::mesh_dialog::inspector(ui, sh);
+            } else if beginner {
+                ui.collapsing("詳細: 別の形に入れ替える", |ui| Self::kind_picker(ui, sh));
+            } else {
+                Self::kind_picker(ui, sh);
             }
             style::xyz(ui, "位置", &mut sh.pos, 0.5, -5000.0..=5000.0, "");
-            style::xyz(ui, "回転", &mut sh.rot, 1.0, -3600.0..=3600.0, "°");
             style::xyz(ui, "大きさ", &mut sh.scale, 0.01, 0.01..=100.0, "×");
             let labels = sh.kind.size_labels();
             ui.horizontal_wrapped(|ui| {
@@ -434,24 +481,11 @@ impl App {
                     }
                 }
             });
-            ui.horizontal_wrapped(|ui| {
-                for (i, l) in sh.kind.param_labels().iter().enumerate() {
-                    if !l.is_empty() {
-                        ui.label(RichText::new(*l).color(style::DIM).size(12.0));
-                        style::field(ui, egui::DragValue::new(&mut sh.params[i]).speed(0.1).max_decimals(2));
-                    }
-                }
-            });
-            if sh.kind.can_round() {
-                style::labeled_slider(ui, "丸み", &mut sh.round, 0.0..=ROUND_MAX, "角やふちの丸さ (mm)。大きすぎても、形がこわれない所でとまります");
-                let styles = [("丸", "角を丸くする (フィレット)"), ("面取り", "角をななめに平らに切り落とす (チャンファー)")];
-                let now = Corner::ALL.iter().position(|c| *c == sh.corner);
-                if let Some(i) = style::segmented(ui, "corner_style", &styles, now, true) {
-                    sh.corner = Corner::ALL.get(i).copied().unwrap_or_default();
-                }
+            if beginner {
+                ui.collapsing("詳細: 回転・丸み・中空・数値パラメータ", |ui| Self::advanced_shape_controls(ui, sh));
+            } else {
+                Self::advanced_shape_controls(ui, sh);
             }
-            style::labeled_slider(ui, "とけあい", &mut sh.blend, 0.0..=80.0, "この形が、まわりとどのくらい溶けてくっつくか (グープ)");
-            style::labeled_slider(ui, "ちゅうぐう\nシェル", &mut sh.shell, 0.0..=40.0, "中をくり抜いて、かべの あつさ(mm)だけ のこす。0 = つまっている");
             if sh.kind.uses_outline() {
                 outline_changed = true;
                 top_changed = sh.kind.uses_outline2();
@@ -468,23 +502,30 @@ impl App {
             self.curve_inspector(ui, g, s);
         }
         ui.add_space(4.0);
-        ui.horizontal(|ui| {
+        let order_ui = |ui: &mut Ui, reorder: &mut Option<usize>, move_to: &mut Option<usize>| {
+            ui.horizontal(|ui| {
             if style::pill_enabled(ui, "↑", false, s > 0).on_hover_text("ひとつ前へ").clicked() {
-                reorder = Some(s - 1);
+                *reorder = Some(s - 1);
             }
             if style::pill_enabled(ui, "↓", false, s + 1 < nshapes).on_hover_text("ひとつ後ろへ").clicked() {
-                reorder = Some(s + 1);
+                *reorder = Some(s + 1);
             }
             if ngroups > 1 {
                 egui::ComboBox::from_id_salt("move_to").selected_text("グループを移す").show_ui(ui, |ui| {
                     for (i, gr) in self.scene.groups.iter().enumerate() {
                         if i != g && ui.selectable_label(false, &gr.name).clicked() {
-                            move_to = Some(i);
+                            *move_to = Some(i);
                         }
                     }
                 });
             }
         });
+        };
+        if beginner {
+            ui.collapsing("詳細: 並び替え・グループへ移す", |ui| order_ui(ui, &mut reorder, &mut move_to));
+        } else {
+            order_ui(ui, &mut reorder, &mut move_to);
+        }
         if let Some(t) = reorder {
             self.scene.groups[g].shapes.swap(s, t);
             self.sel = Some(Pick::Shape(g, t));
@@ -502,6 +543,7 @@ impl App {
     // ----- materials -----
 
     fn material_tab(&mut self, ui: &mut Ui) {
+        let beginner = self.beginner_ui;
         let mut tg = targets(&self.scene, self.sel);
         if self.mat_group
             && let Some(Pick::Shape(g, _)) = self.sel
@@ -566,6 +608,9 @@ impl App {
         ui.add_space(2.0);
 
         // the balls to pick from
+        if beginner {
+            ui.label(RichText::new("丸い色見本をクリックして材質を選びます").size(11.0).color(style::DIM));
+        }
         let mut remove: Option<usize> = None;
         let mut chosen: Option<Material> = None;
         ui.horizontal_wrapped(|ui| {
@@ -608,8 +653,9 @@ impl App {
             m = c;
         }
 
+        if beginner {
+            ui.collapsing("詳細: 色・つや・金属・透明・グラデーション", |ui| {
         // fine tuning
-        style::title(ui, "くわしく");
         ui.horizontal(|ui| {
             style::row_label(ui, "いろ");
             style::color_edit(ui, &mut m.color);
@@ -626,6 +672,30 @@ impl App {
         style::labeled_slider(ui, "すけ感", &mut m.translucency, 0.0..=1.0, "光がしみこむ (ワックス・ゼリー・こおり)");
         gradient_controls(ui, &mut m);
 
+
+            });
+        } else {
+            style::title(ui, "くわしく");
+        // fine tuning
+        ui.horizontal(|ui| {
+            style::row_label(ui, "いろ");
+            style::color_edit(ui, &mut m.color);
+        });
+        let mut gloss = 1.0 - m.roughness;
+        if style::labeled_slider(ui, "つや", &mut gloss, 0.0..=1.0, "つるつる ⇄ ざらざら") {
+            m.roughness = 1.0 - gloss;
+        }
+        style::labeled_slider(ui, "金属", &mut m.metallic, 0.0..=1.0, "プラスチック ⇄ 金属");
+        style::labeled_slider(ui, "とうめい", &mut m.glass, 0.0..=1.0, "ガラスのように光を曲げて透ける");
+        style::labeled_slider(ui, "ひかる", &mut m.glow, 0.0..=4.0, "自分で光る (ランプ・ネオン)");
+        style::labeled_slider(ui, "にじいろ", &mut m.iridescence, 0.0..=1.0, "見る角度で虹色に変わる (シャボン玉・タマムシ)");
+        style::labeled_slider(ui, "コート", &mut m.coat, 0.0..=1.0, "ピカピカのクリア層 (車のペンキ・キャンディ)");
+        style::labeled_slider(ui, "すけ感", &mut m.translucency, 0.0..=1.0, "光がしみこむ (ワックス・ゼリー・こおり)");
+        gradient_controls(ui, &mut m);
+
+
+        }
+
         if m != first {
             m.sanitize();
             for (g, s) in tg {
@@ -639,6 +709,7 @@ impl App {
     // ----- the room: lights and backdrop -----
 
     fn room_panel(&mut self, ui: &mut Ui) {
+        let beginner = self.beginner_ui;
         style::title(ui, "雰囲気");
         let looks = crate::model::Environment::looks();
         ui.horizontal_wrapped(|ui| {
@@ -682,6 +753,8 @@ impl App {
             style::switch(ui, &mut e.floor, "ゆか(影)");
         });
         style::labeled_slider(ui, "明るさ", &mut e.exposure, 0.3..=3.0, "写真の明るさ (露出)");
+        if beginner {
+            ui.collapsing("詳細: 影・空・ライトの設定", |ui| {
         style::labeled_slider(ui, "影のこさ", &mut e.shadow, 0.0..=1.0, "");
         style::labeled_slider(ui, "まわりの光", &mut e.ambient, 0.0..=2.0, "影の部分の明るさ・空の映りこみ");
         style::title(ui, "空 (金属やガラスに映る)");
@@ -715,6 +788,43 @@ impl App {
         }
         if e.lights.len() < MAX_LIGHTS && style::pill(ui, "＋ ライトを足す", false).clicked() {
             e.lights.push(Light { yaw: -60.0, pitch: 35.0, power: 0.6, color: [1.0, 1.0, 1.0] });
+        }
+            });
+        } else {
+        style::labeled_slider(ui, "影のこさ", &mut e.shadow, 0.0..=1.0, "");
+        style::labeled_slider(ui, "まわりの光", &mut e.ambient, 0.0..=2.0, "影の部分の明るさ・空の映りこみ");
+        style::title(ui, "空 (金属やガラスに映る)");
+        ui.horizontal(|ui| {
+            for (label, c) in [("上", &mut e.sky_top), ("地平線", &mut e.sky_horizon), ("下", &mut e.sky_bottom)] {
+                ui.label(RichText::new(label).size(12.0).color(style::DIM));
+                style::color_edit(ui, c);
+            }
+        });
+        style::title(ui, "ライト");
+        let mut remove = None;
+        let n = e.lights.len();
+        for (i, l) in e.lights.iter_mut().enumerate() {
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(format!("ライト {}", i + 1)).size(12.5).strong());
+                style::color_edit(ui, &mut l.color);
+                if n > 1 && ui.small_button("消す").on_hover_text("このライトを消す").clicked() {
+                    remove = Some(i);
+                }
+            });
+            style::labeled_slider(ui, "むき", &mut l.yaw, -180.0..=180.0, "ぐるっと回す (度)");
+            style::labeled_slider(ui, "たかさ", &mut l.pitch, 0.0..=89.0, "ひくい ⇄ 真上 (度)");
+            style::labeled_slider(ui, "つよさ", &mut l.power, 0.0..=3.0, "");
+            if i == 0 {
+                ui.label(RichText::new("ライト1だけが影を落とします").size(12.0).color(style::DIM));
+            }
+            ui.add_space(2.0);
+        }
+        if let Some(i) = remove {
+            e.lights.remove(i);
+        }
+        if e.lights.len() < MAX_LIGHTS && style::pill(ui, "＋ ライトを足す", false).clicked() {
+            e.lights.push(Light { yaw: -60.0, pitch: 35.0, power: 0.6, color: [1.0, 1.0, 1.0] });
+        }
         }
     }
 
