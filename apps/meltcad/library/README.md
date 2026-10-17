@@ -53,3 +53,16 @@ Only edit your own `gen/<file>.py` and `<file>.json`.
 - A small part melted into a neighbour of a different colour takes a mixed colour: keep details
   (hair, eyes, buttons) at blend 0.5-1.5.
 - The headless preview ignores `Paint`, the app does not. Colour with real shapes when in doubt.
+
+## 家電10種類（2026-10-17）
+
+`gen/appliances.json` is the authoritative compact catalogue for the ten common appliances.
+`gen/tools_b.py` appends these originals to the existing 17 everyday items when regenerating
+`tools_b.json`. Never edit only the generated JSON or regeneration will lose appliances.
+They are fixed SDF groups (no special editor); the existing library code handles thumbnail,
+insertion and save/OBJ/3MF export. The new names distinguish TV/fridge/lamp from older furniture.
+
+Validation: `python3 tools_b.py` (rendering requires MELTCAD_BIN), then
+`cargo test -p meltcad home_appliances_are_unique_searchable_and_save_round_trip`.
+Export and visual rendering must also be tested with a runnable MeltCAD binary; static validation
+alone does not establish actual OBJ/3MF or thumbnail success.
