@@ -10,7 +10,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use ttf_parser::{Face, GlyphId, OutlineBuilder};
 
-use crate::model::{Group, MAX_GROUPS, MAX_SHAPES, Material, Op, Pick, Scene, Shape};
+use crate::model::{Group, MAX_GROUPS, MAX_SHAPES, Op, Pick, Scene};
 use crate::sdf::{self, V3};
 use crate::svg::{self, Artwork, BuildOpts};
 
