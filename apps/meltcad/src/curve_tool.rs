@@ -594,19 +594,24 @@ impl App {
         self.ct.node = None;
     }
 
+    /// Shared activation path for the toolbar and command palette.
+    pub fn set_curve_tool(&mut self, on: bool) {
+        if self.ct.drawing && !on {
+            self.finish_drawing();
+        }
+        self.ct.drawing = on;
+        self.ct.draw_shape = None;
+        if on {
+            self.set_pipe_tool(false);
+            self.sketch_off();
+        }
+    }
+
     /// The top-bar toggle for the "せん" tool.
     pub fn curve_button(&mut self, ui: &mut Ui) {
         let on = self.ct.drawing;
         if style::icon_button(ui, 34.0, "せん (クリックで点をうって、線をひく)", on, glyph).clicked() {
-            if on {
-                self.finish_drawing();
-            }
-            self.ct.drawing = !on;
-            self.ct.draw_shape = None;
-            if self.ct.drawing {
-                self.set_pipe_tool(false);
-                self.sketch_off();
-            }
+            self.set_curve_tool(!on);
         }
     }
 
