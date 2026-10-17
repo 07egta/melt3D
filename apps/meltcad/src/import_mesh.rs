@@ -35,6 +35,14 @@ pub struct ImportedMesh {
     pub triangles: Vec<[u32; 3]>,
 }
 
+/// Appearance information kept separate from geometry so the existing SDF baker is unchanged.
+#[derive(Clone, Debug, Default)]
+pub struct AppearanceInfo {
+    pub material: Option<crate::model::Material>,
+    pub varies: bool,
+    pub notes: Vec<String>,
+}
+
 /// The file formats we can read.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MeshFormat {
