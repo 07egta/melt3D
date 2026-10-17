@@ -30,9 +30,12 @@ fn make(ctx: &egui::Context, cat: usize, i: usize, item: &Item) -> TextureHandle
 
 /// Pictures of the models are drawn on a thread of their own (each one is a small ray march on the
 /// processor): the card never waits for them, it shows "…" until a picture arrives.
+/// Finished pictures: (category, item, RGBA pixels).
+type Done = std::sync::Arc<std::sync::Mutex<Vec<(usize, usize, Vec<u8>)>>>;
+
 struct Worker {
     tx: std::sync::Mutex<std::sync::mpsc::Sender<Job>>,
-    done: std::sync::Arc<std::sync::Mutex<Vec<(usize, usize, Vec<u8>)>>>,
+    done: Done,
     asked: std::sync::Mutex<std::collections::HashSet<(usize, usize)>>,
 }
 
@@ -47,7 +50,7 @@ fn worker() -> Option<&'static Worker> {
     static W: std::sync::OnceLock<Option<Worker>> = std::sync::OnceLock::new();
     W.get_or_init(|| {
         let (tx, rx) = std::sync::mpsc::channel::<Job>();
-        let done: std::sync::Arc<std::sync::Mutex<Vec<(usize, usize, Vec<u8>)>>> = Default::default();
+        let done: Done = Default::default();
         let out = done.clone();
         std::thread::Builder::new()
             .name("meltcad-thumbs".into())

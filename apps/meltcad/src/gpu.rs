@@ -997,6 +997,8 @@ pub struct Callback {
     pub scale_still: f32,
     /// How much to sharpen a picture that is scaled up (0..1).
     pub sharpen: f32,
+    /// Draw the sharp picture in one go, at once (a picture of the viewport is being taken).
+    pub whole: bool,
     /// The time between the last two frames (ms), 0 when not known (for pacing the bands without timestamps).
     pub frame_ms: f32,
     /// Where an error of ours while drawing is reported.
@@ -1226,6 +1228,16 @@ impl egui_wgpu::CallbackTrait for Callback {
         // for the picture, a texture it cannot make) fails the graphics path with a message
         // instead of panicking the window
         let (_, errors) = scoped(device, "描画の準備 (prepare)", || self.prepare_frame(device, queue, encoder, res));
+        if !errors.is_empty() && res.timer.is_some() {
+            // (the timing of passes is a convenience: before giving the whole graphics path up, try without it)
+            crate::gpu_log::log(&format!("drawing failed, trying without the timing of passes:\n{}", errors.join("\n")));
+            res.timer = None;
+            res.pics = None;
+            res.pool = None;
+            res.pool_id = 0;
+            self.ctx.request_repaint();
+            return Vec::new();
+        }
         if !errors.is_empty() {
             let text = errors.join("\n");
             crate::gpu_log::log(&format!("drawing failed:\n{text}"));
@@ -1292,7 +1304,7 @@ impl Callback {
                 pics.a.used = size_a;
             }
         } else if pics.b.key != Some(key_b) || !pics.bands.complete() {
-            if !same_scene(pics.a.key) {
+            if !same_scene(pics.a.key) && !self.whole {
                 // the cheap picture of this very state first: it is what is shown while the sharp one builds
                 scene_pass(res, queue, encoder, &pics.a.view, &self.globals, &PassSpec { size: size_a, rows: None, clear: true, fast: true, kind: crate::gpu_timing::Kind::Moving, scale: lin(size_a) });
                 pics.a.key = Some(key_a);
@@ -1307,7 +1319,7 @@ impl Callback {
                 if res.timer.is_none() {
                     res.pacer.observe_frame(self.frame_ms);
                 }
-                let rows = res.pacer.rows(size_b[1]);
+                let rows = if self.whole { size_b[1] } else { res.pacer.rows(size_b[1]) };
                 if let Some((first, n)) = pics.bands.next(rows) {
                     let spec = PassSpec { size: size_b, rows: Some((first, n)), clear: first == 0, fast: false, kind: crate::gpu_timing::Kind::Band, scale: lin(size_b) };
                     scene_pass(res, queue, encoder, &pics.b.view, &self.globals, &spec);
