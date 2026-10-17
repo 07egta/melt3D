@@ -157,6 +157,24 @@ mod tests {
     }
 
     #[test]
+    fn procedural_chair_presets_are_registered_in_the_regular_library() {
+        let categories = all();
+        let chairs = categories.iter().filter(|c| c.name == "Designer Chair").collect::<Vec<_>>();
+        assert_eq!(chairs.len(), 1);
+        assert_eq!(chairs[0].items.len(), 3);
+        for item in &chairs[0].items {
+            assert!(item.matches("DESIGNER CHAIR") && item.matches("いす"));
+            assert!(item.fits(0, 0));
+            let g = item.placed([100.0, 50.0]);
+            assert!(g.designer_chair.is_some());
+            assert!(g.shapes.iter().any(|s| s.name == "座面"));
+            assert!(g.shapes.iter().any(|s| s.name == "背もたれ"));
+            let back = Scene::from_json(&item.scene().to_json()).unwrap();
+            assert_eq!(back.groups[0], item.group);
+        }
+    }
+
+    #[test]
     fn placing_moves_the_middle_and_keeps_the_height() {
         let c = parse(FILES[0]).unwrap_or(Category { name: String::new(), items: Vec::new() });
         for it in c.items.iter().take(3) {
