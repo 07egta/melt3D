@@ -266,7 +266,7 @@ fn glyph_group(art: &Artwork, ch: char, index: usize, settings: &Settings, cente
             }
         }
         let hole = sh.op == Op::Subtract;
-        if hole && settings.puff_mm > 0.0 && hole_clearance(&sh.outline) <= settings.puff_mm + 0.15 {
+        if hole && hole_clearance(&sh.outline) <= settings.puff_mm + settings.corner_mm * 0.5 + 0.15 {
             return Err(format!("「{ch}」の穴がつぶれます。ふくらみを小さくしてください"));
         }
         sh.pos[2] = settings.thickness_mm * 0.5 + settings.puff_mm;
