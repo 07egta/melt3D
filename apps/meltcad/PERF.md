@@ -233,3 +233,7 @@ remained was the thumbnails (now off the main thread).
   real iGPU (`--bench` is the harness) before it is worth the extra code.
 * The shape records could be packed more densely (5 instead of about 9 vec4 per distance evaluation).
 * The hover highlight changes the picture, so a hover change redraws the scene; as an id buffer it would be free.
+* On a fast GPU the moving picture could keep its full effects: when the measured cost of a whole sharp picture (the bands
+  give ms per row) is below about 5 ms, draw it in one pass instead of the cheap picture. Not done: it needs a real GPU to tune.
+* Testing the window: `MELTCAD_HUD=1` starts with the HUD on; with `MELTCAD_TEST_DIR=dir` the files `dir/hud` (toggle the HUD)
+  and `dir/bench` (open the speed test window) are taken like `snap` and `png`; `dir/where` writes where the HUD is to `dir/where.txt`.
