@@ -335,6 +335,54 @@ fn stats(v: &[f32]) -> (f32, f32, f32) {
     (sum / v.len() as f32, v.iter().cloned().fold(f32::MAX, f32::min), v.iter().cloned().fold(0.0_f32, f32::max))
 }
 
+/// Compare the static full-quality scene to its interactive fast preview.
+/// The low-resolution picture is bilinearly reconstructed at up to 64x64
+/// evenly spaced samples. The actual UI also applies optional sharpening:
+/// these numbers are reproducible proxies, NOT display screenshots.
+fn preview_diff(full: &[u8], full_size: [u32; 2], small: &[u8], small_size: [u32; 2]) -> Option<(f32, f32)> {
+    let [w, h] = full_size;
+    let [sw, sh] = small_size;
+    if w == 0 || h == 0 || sw == 0 || sh == 0
+        || full.len() != w as usize * h as usize * 4
+        || small.len() != sw as usize * sh as usize * 4 {
+        return None;
+    }
+    let get = |img: &[u8], width: u32, x: u32, y: u32, k: usize| -> f32 {
+        img[((y * width + x) * 4) as usize + k] as f32
+    };
+    let nx = w.min(64);
+    let ny = h.min(64);
+    let mut errors = Vec::with_capacity(nx as usize * ny as usize);
+    for iy in 0..ny {
+        let y = (((iy as f32 + 0.5) * h as f32 / ny as f32) - 0.5)
+            .round().clamp(0.0, (h - 1) as f32) as u32;
+        let sy = ((y as f32 + 0.5) * sh as f32 / h as f32 - 0.5).clamp(0.0, (sh - 1) as f32);
+        let y0 = sy.floor() as u32;
+        let y1 = (y0 + 1).min(sh - 1);
+        let fy = sy - y0 as f32;
+        for ix in 0..nx {
+            let x = (((ix as f32 + 0.5) * w as f32 / nx as f32) - 0.5)
+                .round().clamp(0.0, (w - 1) as f32) as u32;
+            let sx = ((x as f32 + 0.5) * sw as f32 / w as f32 - 0.5).clamp(0.0, (sw - 1) as f32);
+            let x0 = sx.floor() as u32;
+            let x1 = (x0 + 1).min(sw - 1);
+            let fx = sx - x0 as f32;
+            let mut err = 0.0;
+            for channel in 0..3 {
+                let a = get(small, sw, x0, y0, channel);
+                let b = get(small, sw, x1, y0, channel);
+                let c = get(small, sw, x0, y1, channel);
+                let d = get(small, sw, x1, y1, channel);
+                let sample = (a + (b - a) * fx) * (1.0 - fy) + (c + (d - c) * fx) * fy;
+                err += (sample - get(full, w, x, y, channel)).abs();
+            }
+            errors.push(err / 3.0);
+        }
+    }
+    let mean = errors.iter().sum::<f32>() / errors.len() as f32;
+    Some((mean, percentile95(&errors)))
+}
+
 /// Run the test. `sizes`: window sizes; `frames`: frames per row; `progress` is told what is being
 /// drawn; `stop` (checked between rows) ends it early with what is done so far.
 pub fn run(sizes: &[[u32; 2]], frames: usize, scenes: &[BenchScene], progress: &mut dyn FnMut(&str), stop: &dyn Fn() -> bool, backends: Option<egui_wgpu::wgpu::Backends>) -> Result<Report, String> {
@@ -370,6 +418,10 @@ pub fn run_with(sizes: &[[u32; 2]], frames: usize, scenes: &[BenchScene], progre
         for &size in sizes {
             let pic = gpu.picture(size);
             let mut globals = pack.globals(&bs.scene, &cam, [pic.size[0] as f32, pic.size[1] as f32], None, None, false);
+            // Limit screenshot readback to the normal pipe and the 300-shape
+            // scene at the first requested resolution; it is never timed.
+            let compare_image = size == sizes[0] && (bs.name == "pipe" || bs.name == "shapes300");
+            let mut full_reference = None;
             for mode in [Mode::Full, Mode::Fast] {
                 if stop() {
                     report.notes.push("stopped early".to_string());
@@ -392,6 +444,26 @@ pub fn run_with(sizes: &[[u32; 2]], frames: usize, scenes: &[BenchScene], progre
                 let (avg, min, max) = stats(used);
                 let (wall_avg, _, _) = stats(&wall_ms);
                 report.rows.push(Row { scene: bs.name.to_string(), shapes: bs.scene.shape_count(), size, mode, frames, avg_ms: avg, p95_ms: percentile95(used), min_ms: min, max_ms: max, source, wall_avg_ms: wall_avg, wall_p95_ms: percentile95(&wall_ms) });
+                if compare_image && mode == Mode::Full {
+                    full_reference = Some(gpu.read(&pic));
+                }
+                if compare_image && mode == Mode::Fast {
+                    let preview_size = crate::perf::render_size(size, expected_scale(avg), 8192);
+                    let low = gpu.picture(preview_size);
+                    let _ = gpu.frame(&low, &globals, true);
+                    if let Some(reference) = full_reference.as_ref()
+                        && let Some((mae_rgb, p95_rgb)) = preview_diff(reference, size, &gpu.read(&low), preview_size)
+                    {
+                        report.preview_quality.push(PreviewQuality {
+                            scene: bs.name.to_string(),
+                            shapes: bs.scene.shape_count(),
+                            full_size: size,
+                            preview_size,
+                            mae_rgb,
+                            p95_rgb,
+                        });
+                    }
+                }
             }
         }
     }
@@ -740,6 +812,26 @@ mod tests {
     fn the_output_goes_somewhere_writable() {
         let p = default_output();
         assert!(p.file_name().is_some_and(|n| n == "meltcad-bench.txt"));
+    }
+
+    #[test]
+    fn preview_error_is_zero_for_same_constant_picture() {
+        let whole = vec![80u8, 150, 220, 255].repeat(16 * 12);
+        let small = vec![80u8, 150, 220, 255].repeat(4 * 3);
+        let diff = preview_diff(&whole, [16, 12], &small, [4, 3]);
+        assert_eq!(diff, Some((0.0, 0.0)));
+        assert!(preview_diff(&whole, [16, 12], &[], [4, 3]).is_none());
+        let black = vec![0u8, 0, 0, 255].repeat(4 * 3);
+        let (mae, p95) = preview_diff(&whole, [16, 12], &black, [4, 3]).unwrap();
+        assert!((mae - 150.0).abs() < 1e-4);
+        assert!((p95 - 150.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn p95_is_a_real_percentile_not_the_maximum() {
+        let ms: Vec<f32> = (1..=100).map(|n| n as f32).collect();
+        assert_eq!(percentile95(&ms), 95.0);
+        assert_eq!(percentile95(&[]), 0.0);
     }
 
     #[test]
