@@ -174,7 +174,11 @@ impl App {
             ct: Default::default(),
             pt: Default::default(),
             sk: Default::default(),
-            perf: crate::perf::Perf { sharpen: crate::perf::DEFAULT_SHARPEN, hud: std::env::var_os("MELTCAD_HUD").is_some_and(|v| v != "0"), ..Default::default() },
+            perf: crate::perf::Perf {
+                sharpen: crate::perf::DEFAULT_SHARPEN,
+                hud: std::env::var_os("MELTCAD_HUD").is_some_and(|v| v != "0"),
+                ..Default::default()
+            },
             clipboard: None,
             lib_open: false,
             lib_cat: 0,
@@ -199,7 +203,9 @@ impl App {
             return f.clone();
         }
         self.field_builds.set(self.field_builds.get() + 1);
-        let f = std::rc::Rc::new(Field::new(&self.scene));
+        // Retain exact unchanged prepared shapes; only changed inputs are copied.
+        // No additional full Scene snapshot is needed for this interactive cache.
+        let f = std::rc::Rc::new(Field::reusing(&self.scene, cache.as_ref().map(|(_, field)| field.as_ref())));
         *cache = Some((self.scene_rev, f.clone()));
         f
     }
@@ -259,6 +265,7 @@ impl App {
             self.redo.push(std::mem::replace(&mut self.scene, prev.clone()));
             self.committed = prev;
             self.fix_selection();
+            self.committed_rev = self.track_scene();
         }
     }
 
@@ -267,6 +274,7 @@ impl App {
             self.undo.push(std::mem::replace(&mut self.scene, next.clone()));
             self.committed = next;
             self.fix_selection();
+            self.committed_rev = self.track_scene();
         }
     }
 
@@ -306,6 +314,11 @@ impl App {
         };
         self.scene = scene.clone();
         self.committed = scene;
+        // A different document must release its prepared geometry and fallback picture.
+        self.field_cache.get_mut().take();
+        self.perf.pack.clear();
+        self.gpu.easy_view.invalidate();
+        self.committed_rev = self.track_scene();
         self.undo.clear();
         self.redo.clear();
         self.sel = if self.scene.shape(0, 0).is_some() { Some(Pick::Shape(0, 0)) } else { None };
@@ -631,11 +644,15 @@ impl App {
 
     // ----- shortcuts -----
 
-    fn keys(&mut self, ctx: &egui::Context) {
+    pub(crate) fn keys(&mut self, ctx: &egui::Context) {
         if self.pending_file_action.is_some() || ctx.egui_wants_keyboard_input() {
             return;
         }
         use egui::{Key, Modifiers};
+        // Cancel only the active gesture; do not drop the selection or commit its preview.
+        if self.drag.is_some() && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) && self.cancel_gizmo_drag() {
+            return;
+        }
         self.sketch_keys(ctx);
         self.curve_keys(ctx);
         self.clipboard_events(ctx);
@@ -817,7 +834,8 @@ impl App {
                                 ui.close();
                             }
                         });
-                        if ui.button("インスタンスを作る").on_hover_text("リンクコピー：元を直すと、コピーも変わります").clicked() {
+                        if ui.button("インスタンスを作る").on_hover_text("リンクコピー：元を直すと、コピーも変わります").clicked()
+                        {
                             self.make_instance(&ctx);
                             ui.close();
                         }
@@ -870,10 +888,17 @@ impl App {
                         self.perf.bench_requested |= menu.bench;
                     });
                     // the file name in the middle of the bar
-                    let name = self.path.as_ref().and_then(|p| p.file_stem()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "名前なし".into());
+                    let name =
+                        self.path.as_ref().and_then(|p| p.file_stem()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "名前なし".into());
                     let label = format!("{}{}", name, if self.dirty { " ●" } else { "" });
                     let cx = bar.center().x.clamp(left_end + 60.0, (right_start - 220.0).max(left_end + 60.0));
-                    ui.painter().text(egui::pos2(cx, bar.center().y), egui::Align2::CENTER_CENTER, label, egui::FontId::proportional(13.0), style::DIM);
+                    ui.painter().text(
+                        egui::pos2(cx, bar.center().y),
+                        egui::Align2::CENTER_CENTER,
+                        label,
+                        egui::FontId::proportional(13.0),
+                        style::DIM,
+                    );
                 });
             },
         );
@@ -883,82 +908,93 @@ impl App {
     fn tool_strip(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
         let rect = self.view_rect;
-        egui::Area::new(egui::Id::new("tool_strip")).order(egui::Order::Middle).fixed_pos(rect.left_top() + egui::vec2(12.0, 12.0)).show(&ctx, |ui| {
-            style::strip().show(ui, |ui| {
-                ui.spacing_mut().item_spacing = egui::vec2(0.0, 4.0);
-                // a tall strip scrolls instead of running off a small window
-                egui::ScrollArea::vertical().max_height((rect.height() - 40.0).max(120.0)).auto_shrink([true, true]).show(ui, |ui| {
-                ui.vertical_centered(|ui| {
-                    for k in Kind::MAIN {
-                        let r = style::icon_button(ui, 38.0, k.label(), false, |p, r, ink| glyphs::kind(p, r, k, ink, Color32::from_white_alpha(18)));
-                        if r.clicked() {
-                            self.add_shape(&ctx, k);
-                        }
-                    }
-                    self.curve_button(ui);
-                    self.pipe_button(ui);
-                    self.sketch_button(ui);
-                    style::menu_button(ui, "…", false, |ui| {
-                        ui.set_min_width(190.0);
-                        ui.label(egui::RichText::new("ほかの形").size(12.0).color(style::DIM));
-                        for k in Kind::MORE {
-                            let r = ui.horizontal(|ui| {
-                                let (rc, _) = ui.allocate_exact_size(egui::vec2(24.0, 24.0), egui::Sense::hover());
-                                glyphs::kind(ui.painter(), rc, k, ui.visuals().text_color(), Color32::from_white_alpha(18));
-                                ui.selectable_label(false, k.label())
-                            });
-                            if r.inner.clicked() {
-                                self.add_shape(&ctx, k);
-                                ui.close();
+        egui::Area::new(egui::Id::new("tool_strip")).order(egui::Order::Middle).fixed_pos(rect.left_top() + egui::vec2(12.0, 12.0)).show(
+            &ctx,
+            |ui| {
+                style::strip().show(ui, |ui| {
+                    ui.spacing_mut().item_spacing = egui::vec2(0.0, 4.0);
+                    // a tall strip scrolls instead of running off a small window
+                    egui::ScrollArea::vertical().max_height((rect.height() - 40.0).max(120.0)).auto_shrink([true, true]).show(ui, |ui| {
+                        ui.vertical_centered(|ui| {
+                            for k in Kind::MAIN {
+                                let r = style::icon_button(ui, 38.0, k.label(), false, |p, r, ink| {
+                                    glyphs::kind(p, r, k, ink, Color32::from_white_alpha(18))
+                                });
+                                if r.clicked() {
+                                    self.add_shape(&ctx, k);
+                                }
                             }
-                        }
-                        ui.separator();
-                        ui.label(egui::RichText::new("CADの機能").size(12.0).color(style::DIM));
-                        for k in Kind::CAD {
-                            let r = ui.horizontal(|ui| {
-                                let (rc, _) = ui.allocate_exact_size(egui::vec2(24.0, 24.0), egui::Sense::hover());
-                                glyphs::kind(ui.painter(), rc, k, ui.visuals().text_color(), Color32::from_white_alpha(18));
-                                ui.selectable_label(false, k.label())
+                            self.curve_button(ui);
+                            self.pipe_button(ui);
+                            self.sketch_button(ui);
+                            style::menu_button(ui, "…", false, |ui| {
+                                ui.set_min_width(190.0);
+                                ui.label(egui::RichText::new("ほかの形").size(12.0).color(style::DIM));
+                                for k in Kind::MORE {
+                                    let r = ui.horizontal(|ui| {
+                                        let (rc, _) = ui.allocate_exact_size(egui::vec2(24.0, 24.0), egui::Sense::hover());
+                                        glyphs::kind(ui.painter(), rc, k, ui.visuals().text_color(), Color32::from_white_alpha(18));
+                                        ui.selectable_label(false, k.label())
+                                    });
+                                    if r.inner.clicked() {
+                                        self.add_shape(&ctx, k);
+                                        ui.close();
+                                    }
+                                }
+                                ui.separator();
+                                ui.label(egui::RichText::new("CADの機能").size(12.0).color(style::DIM));
+                                for k in Kind::CAD {
+                                    let r = ui.horizontal(|ui| {
+                                        let (rc, _) = ui.allocate_exact_size(egui::vec2(24.0, 24.0), egui::Sense::hover());
+                                        glyphs::kind(ui.painter(), rc, k, ui.visuals().text_color(), Color32::from_white_alpha(18));
+                                        ui.selectable_label(false, k.label())
+                                    });
+                                    if r.inner.clicked() {
+                                        self.add_shape(&ctx, k);
+                                        ui.close();
+                                    }
+                                }
                             });
-                            if r.inner.clicked() {
-                                self.add_shape(&ctx, k);
-                                ui.close();
+                            style::hsep(ui);
+                            for op in [Op::Add, Op::Subtract, Op::Paint, Op::Intersect] {
+                                let on = self.new_op == op;
+                                let col = if on { Color32::WHITE } else { style::op_color(op) };
+                                let tip = match op {
+                                    Op::Add => "つぎは「足す」(くっつく)",
+                                    Op::Subtract => "つぎは「削る」(くり抜く)",
+                                    Op::Paint => "つぎは「ぬる」(形は変えずに色だけ)",
+                                    Op::Intersect => "つぎは「重ねる」(前の形とかさなる所だけのこす)",
+                                };
+                                if style::icon_button(ui, 38.0, tip, on, |p, r, _| glyphs::op(p, r, op, col)).clicked() {
+                                    self.new_op = op;
+                                }
                             }
-                        }
+                            style::hsep(ui);
+                            if style::icon_button(ui, 38.0, "グループを作る", false, glyphs::group).clicked() {
+                                self.add_group();
+                            }
+                        });
                     });
-                    style::hsep(ui);
-                    for op in [Op::Add, Op::Subtract, Op::Paint, Op::Intersect] {
-                        let on = self.new_op == op;
-                        let col = if on { Color32::WHITE } else { style::op_color(op) };
-                        let tip = match op {
-                            Op::Add => "つぎは「足す」(くっつく)",
-                            Op::Subtract => "つぎは「削る」(くり抜く)",
-                            Op::Paint => "つぎは「ぬる」(形は変えずに色だけ)",
-                            Op::Intersect => "つぎは「重ねる」(前の形とかさなる所だけのこす)",
-                        };
-                        if style::icon_button(ui, 38.0, tip, on, |p, r, _| glyphs::op(p, r, op, col)).clicked() {
-                            self.new_op = op;
-                        }
-                    }
-                    style::hsep(ui);
-                    if style::icon_button(ui, 38.0, "グループを作る", false, glyphs::group).clicked() {
-                        self.add_group();
-                    }
                 });
-                });
-            });
-        });
+            },
+        );
     }
 
     /// The docked panel on the left: the scene list (outliner) and the ready-made models (assets).
     fn left_dock(&mut self, ui: &mut Ui) {
-        egui::Panel::left("dock").exact_size(272.0).resizable(false).frame(egui::Frame::new().fill(style::PANEL_DARK).inner_margin(egui::Margin::symmetric(10, 10))).show(
-            ui,
-            |ui| {
+        egui::Panel::left("dock")
+            .exact_size(272.0)
+            .resizable(false)
+            .frame(egui::Frame::new().fill(style::PANEL_DARK).inner_margin(egui::Margin::symmetric(10, 10)))
+            .show(ui, |ui| {
                 style::panel_sheen(ui, ui.max_rect().expand2(egui::vec2(10.0, 10.0)), style::PANEL_DARK, style::Edge::Left);
                 let tabs = [("シーン", ""), ("ライブラリ", "")];
                 if let Some(i) = style::segmented(ui, "dock_tabs", &tabs, Some(usize::from(self.lib_open)), true) {
+                    let was_open = self.lib_open;
                     self.lib_open = i == 1;
+                    if was_open && !self.lib_open {
+                        crate::library_ui::suspend(ui.ctx());
+                    }
                 }
                 ui.add_space(6.0);
                 if self.lib_open {
@@ -977,8 +1013,7 @@ impl App {
                         self.layers(ui);
                     });
                 }
-            },
-        );
+            });
     }
 
     /// Tools and view buttons floating at the bottom middle.
@@ -1189,7 +1224,10 @@ impl App {
         if dir.join("where").exists() {
             // where the overlay is (written to `dir/where.txt` every frame while the file `where` exists)
             let r = ctx.memory(|m| m.area_rect(egui::Id::new("frame_hud")));
-            let _ = std::fs::write(dir.join("where.txt"), format!("hud {} area {r:?} view {:?} ppp {}\n", self.perf.hud, self.view_rect, ctx.pixels_per_point()));
+            let _ = std::fs::write(
+                dir.join("where.txt"),
+                format!("hud {} area {r:?} view {:?} ppp {}\n", self.perf.hud, self.view_rect, ctx.pixels_per_point()),
+            );
         }
         if dir.join("bench").exists() && std::fs::remove_file(dir.join("bench")).is_ok() {
             self.perf.bench_requested = true;
@@ -1335,13 +1373,15 @@ mod tests {
         assert_eq!(app.sel, Some(Pick::Shape(0, 0)));
         assert!(app.sk.pts.is_empty() && app.sk.anchor.is_none());
 
-        ctx.input_mut(|i| i.events.push(egui::Event::Key {
-            key: egui::Key::Delete,
-            physical_key: None,
-            pressed: true,
-            repeat: false,
-            modifiers: egui::Modifiers::NONE,
-        }));
+        ctx.input_mut(|i| {
+            i.events.push(egui::Event::Key {
+                key: egui::Key::Delete,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            })
+        });
         app.keys(&ctx);
 
         assert_eq!(app.scene.shape_count(), 0, "Delete should remove the selected shape when no sketch points are pending");
@@ -1355,13 +1395,15 @@ mod tests {
         app.sk.click([0.0, 0.0], false);
         assert_eq!(app.sk.pts.len(), 1);
 
-        ctx.input_mut(|i| i.events.push(egui::Event::Key {
-            key: egui::Key::Backspace,
-            physical_key: None,
-            pressed: true,
-            repeat: false,
-            modifiers: egui::Modifiers::NONE,
-        }));
+        ctx.input_mut(|i| {
+            i.events.push(egui::Event::Key {
+                key: egui::Key::Backspace,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            })
+        });
         app.keys(&ctx);
 
         assert!(app.sk.pts.is_empty());
@@ -1376,13 +1418,15 @@ mod tests {
         app.sk.click([0.0, 0.0], false);
         assert_eq!(app.sk.pts.len(), 1);
 
-        ctx.input_mut(|i| i.events.push(egui::Event::Key {
-            key: egui::Key::Delete,
-            physical_key: None,
-            pressed: true,
-            repeat: false,
-            modifiers: egui::Modifiers::NONE,
-        }));
+        ctx.input_mut(|i| {
+            i.events.push(egui::Event::Key {
+                key: egui::Key::Delete,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            })
+        });
         app.keys(&ctx);
 
         assert!(app.sk.pts.is_empty());
@@ -1398,13 +1442,15 @@ mod tests {
         app.sk.click([0.0, 0.0], false);
         assert_eq!(app.sk.anchor, Some([0.0, 0.0]));
 
-        ctx.input_mut(|i| i.events.push(egui::Event::Key {
-            key: egui::Key::Delete,
-            physical_key: None,
-            pressed: true,
-            repeat: false,
-            modifiers: egui::Modifiers::NONE,
-        }));
+        ctx.input_mut(|i| {
+            i.events.push(egui::Event::Key {
+                key: egui::Key::Delete,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            })
+        });
         app.keys(&ctx);
 
         assert!(app.sk.anchor.is_none());
@@ -1426,13 +1472,15 @@ mod tests {
         assert!(app.sk.edit.as_ref().is_some_and(|edit| edit.sel.is_none()));
         let before = app.scene.shape_count();
 
-        ctx.input_mut(|i| i.events.push(egui::Event::Key {
-            key: egui::Key::Delete,
-            physical_key: None,
-            pressed: true,
-            repeat: false,
-            modifiers: egui::Modifiers::NONE,
-        }));
+        ctx.input_mut(|i| {
+            i.events.push(egui::Event::Key {
+                key: egui::Key::Delete,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            })
+        });
         app.keys(&ctx);
 
         assert_eq!(app.scene.shape_count(), before, "Delete without a chosen outline point must not remove the solid");
@@ -1542,13 +1590,15 @@ mod tests {
         std::fs::write(&path, Scene::default().to_json()).expect("other file");
 
         app.open_path(path.clone());
-        ctx.input_mut(|i| i.events.push(egui::Event::Key {
-            key: egui::Key::Delete,
-            physical_key: None,
-            pressed: true,
-            repeat: false,
-            modifiers: egui::Modifiers::NONE,
-        }));
+        ctx.input_mut(|i| {
+            i.events.push(egui::Event::Key {
+                key: egui::Key::Delete,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            })
+        });
         app.keys(&ctx);
 
         assert!(matches!(app.pending_file_action, Some(PendingFileAction::New(_))), "the first decision stays pending");

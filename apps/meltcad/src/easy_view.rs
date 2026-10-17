@@ -7,9 +7,9 @@
 //! simple lighting (the lights of the room, a rough soft shadow, a little shine). The window never
 //! waits for it: a newer request makes the worker drop the older one.
 
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
-use std::sync::Arc;
 
 use crate::camera::Camera;
 use crate::model::{Environment, Scene};
@@ -113,7 +113,8 @@ fn grid(col: V3, gp: V3, footprint: f32, fade: f32, below: bool) -> V3 {
     let gs = 10.0_f32;
     let w = (footprint * 1.5).max(1e-4);
     let line_of = |scale: f32| {
-        let a = [((gp[0] / scale - 0.5).rem_euclid(1.0) - 0.5).abs() / (w / scale), ((gp[1] / scale - 0.5).rem_euclid(1.0) - 0.5).abs() / (w / scale)];
+        let a =
+            [((gp[0] / scale - 0.5).rem_euclid(1.0) - 0.5).abs() / (w / scale), ((gp[1] / scale - 0.5).rem_euclid(1.0) - 0.5).abs() / (w / scale)];
         1.0 - a[0].min(a[1]).min(1.0)
     };
     let line = line_of(gs);
@@ -311,7 +312,7 @@ pub fn render(scene: &Scene, cam: &Camera, size: [usize; 2], fine: bool, threads
 
 struct Job {
     id: u64,
-    scene: Scene,
+    scene: Arc<Scene>,
     cam: Camera,
     sizes: Vec<[usize; 2]>,
 }
@@ -379,7 +380,7 @@ fn spawn_worker(ctx: Option<egui::Context>) -> Option<Worker> {
 /// What a request was made from.
 #[derive(Clone, Debug, PartialEq)]
 struct Key {
-    scene: Scene,
+    scene: Arc<Scene>,
     cam: [f32; 7],
     view: [u32; 2],
     moving: bool,
@@ -398,6 +399,18 @@ pub struct EasyView {
 }
 
 impl EasyView {
+    /// Drop the old document snapshot and image; an in-flight worker sees the
+    /// changed id and cancels before publishing another obsolete picture.
+    pub fn invalidate(&mut self) {
+        if let Some(worker) = &self.worker {
+            worker.latest.store(u64::MAX, Ordering::Relaxed);
+            while worker.rx.try_recv().is_ok() {}
+        }
+        self.requested = None;
+        self.texture = None;
+        self.settled = false;
+    }
+
     /// Make sure the picture shows `scene` through `cam` at `view_px`; call every frame.
     pub fn update(&mut self, ctx: &egui::Context, scene: &Scene, cam: &Camera, view_px: [u32; 2], moving: bool) {
         if self.worker.is_none() && !self.failed {
@@ -416,10 +429,15 @@ impl EasyView {
                 self.settled = frame.last;
             }
         }
-        let key = Key { scene: scene.clone_if_changed(self.requested.as_ref().map(|(_, k)| &k.scene)), cam: crate::perf::cam_key(cam), view: view_px, moving };
-        if self.requested.as_ref().is_some_and(|(_, k)| *k == key) {
+        let cam_key = crate::perf::cam_key(cam);
+        // Compare borrowed data before allocating. Camera/viewport changes reuse
+        // the immutable scene snapshot too; only an actual edit clones a Scene.
+        let same_scene = self.requested.as_ref().filter(|(_, key)| key.scene.as_ref() == scene);
+        if same_scene.is_some_and(|(_, key)| key.cam == cam_key && key.view == view_px && key.moving == moving) {
             return;
         }
+        let snapshot = same_scene.map_or_else(|| Arc::new(scene.clone()), |(_, key)| Arc::clone(&key.scene));
+        let key = Key { scene: snapshot, cam: cam_key, view: view_px, moving };
         self.next_id += 1;
         let id = self.next_id;
         worker.latest.store(id, Ordering::Relaxed);
@@ -446,25 +464,57 @@ impl EasyView {
     }
 }
 
-/// `Scene` has no cheap "same as" check apart from `==`; this keeps the old copy when equal so
-/// that the common frame (nothing changed) clones nothing.
-trait CloneIfChanged {
-    fn clone_if_changed(&self, old: Option<&Scene>) -> Scene;
-}
-
-impl CloneIfChanged for Scene {
-    fn clone_if_changed(&self, old: Option<&Scene>) -> Scene {
-        match old {
-            Some(o) if o == self => o.clone(),
-            _ => self.clone(),
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::model::{Kind, Material, Shape};
+
+    /// A CPU scheduling benchmark with no renderer thread or GPU. Keep this
+    /// exact fixture/loop in baseline and candidate when comparing measurements.
+    #[test]
+    #[ignore]
+    fn benchmark_easy_view_snapshot_updates() {
+        let ctx = egui::Context::default();
+        let (tx, jobs) = channel();
+        let (_frames, rx) = channel();
+        let mut view = EasyView { worker: Some(Worker { tx, rx, latest: Arc::new(AtomicU64::new(0)) }), ..EasyView::default() };
+        let mut scene = Scene::default();
+        let template = scene.groups[0].shapes[0].clone();
+        scene.groups[0].shapes = (0..300)
+            .map(|index| {
+                let mut shape = template.clone();
+                shape.name = format!("snapshot benchmark shape {index}");
+                shape.pos[0] = (index % 20) as f32 * 15.0;
+                shape.pos[1] = (index / 20) as f32 * 15.0;
+                shape
+            })
+            .collect();
+        let mut cam = Camera::default();
+        view.update(&ctx, &scene, &cam, [800, 600], true);
+        drop(jobs.try_recv().expect("initial request"));
+        const ITERATIONS: usize = 2_000;
+        let start = std::time::Instant::now();
+        for _ in 0..ITERATIONS {
+            view.update(&ctx, std::hint::black_box(&scene), &cam, [800, 600], true);
+            std::hint::black_box(&view);
+        }
+        let idle_us = start.elapsed().as_secs_f64() * 1e6 / ITERATIONS as f64;
+        assert!(jobs.try_recv().is_err());
+        let start = std::time::Instant::now();
+        for _ in 0..ITERATIONS {
+            cam.orbit(1.0, 0.0);
+            view.update(&ctx, std::hint::black_box(&scene), &cam, [800, 600], true);
+            drop(std::hint::black_box(jobs.try_recv().expect("camera request")));
+        }
+        let camera_us = start.elapsed().as_secs_f64() * 1e6 / ITERATIONS as f64;
+        println!(
+            "EASY_VIEW_BENCH {}",
+            serde_json::json!({
+                "shape_count": scene.shape_count(), "iterations": ITERATIONS,
+                "idle_us_per_update": idle_us, "camera_us_per_update": camera_us
+            })
+        );
+    }
 
     fn never() -> bool {
         false
@@ -613,13 +663,41 @@ mod tests {
     }
 
     #[test]
-    fn the_key_clone_reuses_an_equal_scene() {
-        let a = Scene::default();
-        let b = a.clone_if_changed(Some(&a));
-        assert_eq!(a, b);
-        let mut c = a.clone();
-        c.env.exposure = 2.0;
-        assert_ne!(c.clone_if_changed(Some(&a)), a);
-        assert_eq!(c.clone_if_changed(None), c);
+    fn unchanged_and_camera_only_updates_do_not_copy_the_scene() {
+        let ctx = egui::Context::default();
+        let (tx, jobs) = channel();
+        let (_frames, rx) = channel();
+        let mut view = EasyView { worker: Some(Worker { tx, rx, latest: Arc::new(AtomicU64::new(0)) }), ..EasyView::default() };
+        let mut scene = Scene::default();
+        let mut cam = Camera::default();
+        view.update(&ctx, &scene, &cam, [120, 90], false);
+        let first = jobs.try_recv().expect("first render requested");
+        for _ in 0..20 {
+            view.update(&ctx, &scene, &cam, [120, 90], false);
+        }
+        assert!(jobs.try_recv().is_err(), "unchanged frames submit no work");
+        assert!(Arc::ptr_eq(&first.scene, &view.requested.as_ref().expect("snapshot").1.scene));
+
+        cam.orbit(30.0, 0.0);
+        view.update(&ctx, &scene, &cam, [120, 90], false);
+        let camera = jobs.try_recv().expect("camera render requested");
+        assert!(Arc::ptr_eq(&first.scene, &camera.scene), "camera motion shares the snapshot");
+        view.update(&ctx, &scene, &cam, [240, 180], true);
+        let resized = jobs.try_recv().expect("viewport render requested");
+        assert!(Arc::ptr_eq(&first.scene, &resized.scene));
+        assert_ne!(resized.sizes, camera.sizes);
+
+        scene.env.exposure = 2.0;
+        view.update(&ctx, &scene, &cam, [240, 180], true);
+        let edited = jobs.try_recv().expect("edited scene render requested");
+        assert!(!Arc::ptr_eq(&first.scene, &edited.scene), "edits get their own immutable snapshot");
+        assert_eq!(edited.scene.as_ref(), &scene);
+        assert_eq!(first.scene.env.exposure, Scene::default().env.exposure);
+        view.invalidate();
+        assert!(view.requested.is_none());
+        assert!(view.texture.is_none());
+        assert_eq!(view.worker.as_ref().expect("worker").latest.load(Ordering::Relaxed), u64::MAX);
+        view.update(&ctx, &scene, &cam, [240, 180], true);
+        assert!(jobs.try_recv().is_ok(), "document replacement can reuse the worker");
     }
 }

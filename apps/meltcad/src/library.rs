@@ -31,33 +31,63 @@ pub struct Item {
 }
 
 pub struct Category {
+    #[allow(dead_code, reason = "Preserve parsed category metadata for bulk callers; the UI uses the generated catalog.")]
     pub name: String,
     pub items: Vec<Item>,
 }
 
-/// The files, in the order of the tabs.
-const FILES: [&str; 15] = [
-    include_str!("../library/people.json"),
-    include_str!("../library/hands.json"),
-    include_str!("../library/animals.json"),
-    include_str!("../library/tools_a.json"),
-    include_str!("../library/tools_b.json"),
-    include_str!("../library/furniture.json"),
-    include_str!("../library/food.json"),
-    include_str!("../library/vehicles.json"),
-    include_str!("../library/buildings.json"),
-    include_str!("../library/nature.json"),
-    include_str!("../library/print.json"),
-    include_str!("../library/pip.json"),
-    include_str!("../library/realistic.json"),
-    include_str!("../library/toon.json"),
-    include_str!("../library/town.json"),
-];
+/// Names and normalized search terms generated from the same JSON as the models.
+/// The catalog contains no Group/Shape allocations and is immediately available.
+pub struct ItemIndex {
+    pub name: &'static str,
+    pub tags: &'static [&'static str],
+    lower_name: &'static str,
+    lower_tags: &'static [&'static str],
+}
 
-/// All categories (parsed once). A damaged file is skipped, never a crash; a test checks they all parse.
-pub fn all() -> &'static [Category] {
-    static LIB: OnceLock<Vec<Category>> = OnceLock::new();
-    LIB.get_or_init(|| FILES.iter().filter_map(|t| parse(t).ok()).filter(|c| !c.items.is_empty()).collect())
+impl ItemIndex {
+    /// Same name-or-individual-tag substring semantics as Item::matches.
+    pub fn matches(&self, normalized_query: &str) -> bool {
+        normalized_query.is_empty() || self.lower_name.contains(normalized_query) || self.lower_tags.iter().any(|tag| tag.contains(normalized_query))
+    }
+}
+
+pub struct CategoryIndex {
+    pub name: &'static str,
+    pub items: &'static [ItemIndex],
+}
+
+// Both arrays are generated together, preserving exact category and model order.
+include!(concat!(env!("OUT_DIR"), "/library_catalog.rs"));
+
+#[cfg(test)]
+#[allow(dead_code)]
+#[path = "../build.rs"]
+mod build_script;
+
+static CATEGORIES: [OnceLock<Result<Category, String>>; FILES.len()] = [const { OnceLock::new() }; FILES.len()];
+
+pub fn catalog() -> &'static [CategoryIndex] {
+    &CATALOG
+}
+
+/// Parse and sanitize only the requested category. A click always has its model
+/// before insertion: no worker failure or loading race can consume the action.
+pub fn category(index: usize) -> Option<&'static Category> {
+    let slot = CATEGORIES.get(index)?;
+    let source = FILES.get(index)?;
+    slot.get_or_init(|| parse(source)).as_ref().ok()
+}
+
+pub fn item(category_index: usize, item_index: usize) -> Option<&'static Item> {
+    category(category_index)?.items.get(item_index)
+}
+
+/// Legacy bulk callers share exactly the same category allocations as the UI.
+/// A damaged file is skipped, never a crash; tests check all bundled files parse.
+pub fn all() -> &'static [&'static Category] {
+    static LIB: OnceLock<Vec<&'static Category>> = OnceLock::new();
+    LIB.get_or_init(|| (0..FILES.len()).filter_map(category).filter(|c| !c.items.is_empty()).collect())
 }
 
 fn parse(text: &str) -> Result<Category, String> {
@@ -78,6 +108,7 @@ fn parse(text: &str) -> Result<Category, String> {
 
 impl Item {
     /// Does the search text match the name or a tag (case-insensitive)?
+    #[allow(dead_code)] // Compatibility and independent metadata-index parity checks.
     pub fn matches(&self, q: &str) -> bool {
         let q = q.trim().to_lowercase();
         q.is_empty() || self.name.to_lowercase().contains(&q) || self.tags.iter().any(|t| t.to_lowercase().contains(&q))
@@ -115,6 +146,99 @@ impl Item {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Run in a fresh process with only this ignored test selected. Times cover
+    /// metadata/model preparation, not a rendered frame or operating-system I/O.
+    #[test]
+    #[ignore]
+    fn benchmark_library_initial_access() {
+        let start = std::time::Instant::now();
+        let metadata = std::hint::black_box(catalog());
+        let metadata_ns = start.elapsed().as_nanos();
+        let start = std::time::Instant::now();
+        let first = std::hint::black_box(category(0).expect("first category"));
+        let first_category_us = start.elapsed().as_secs_f64() * 1e6;
+        let start = std::time::Instant::now();
+        let bulk = std::hint::black_box(all());
+        let remaining_categories_us = start.elapsed().as_secs_f64() * 1e6;
+        println!(
+            "LIBRARY_BENCH {}",
+            serde_json::json!({
+                "metadata_ns": metadata_ns,
+                "first_category_us": first_category_us,
+                "remaining_categories_us": remaining_categories_us,
+                "category_count": metadata.len(),
+                "first_category_items": first.items.len(),
+                "item_count": bulk.iter().map(|c| c.items.len()).sum::<usize>()
+            })
+        );
+    }
+
+    #[test]
+    fn compact_embedded_library_preserves_every_json_value() {
+        let names = [
+            "people",
+            "hands",
+            "animals",
+            "tools_a",
+            "tools_b",
+            "furniture",
+            "food",
+            "vehicles",
+            "buildings",
+            "nature",
+            "print",
+            "pip",
+            "realistic",
+            "toon",
+            "town",
+        ];
+        assert_eq!(names.len(), FILES.len());
+        for (name, embedded) in names.iter().zip(FILES) {
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("library").join(format!("{name}.json"));
+            let source = std::fs::read_to_string(path).expect("source JSON");
+            let before: serde_json::Value = serde_json::from_str(&source).expect("source valid");
+            let after: serde_json::Value = serde_json::from_str(embedded).expect("embedded valid");
+            assert_eq!(after, before, "all geometry/material data preserved: {name}");
+            assert!(embedded.len() <= source.len());
+        }
+    }
+
+    #[test]
+    fn metadata_catalog_preserves_labels_order_tags_and_search() {
+        assert_eq!(catalog().len(), FILES.len());
+        for (index, metadata) in catalog().iter().enumerate() {
+            let models = category(index).expect("valid category");
+            assert_eq!(metadata.name, models.name);
+            assert_eq!(metadata.items.len(), models.items.len());
+            for (meta, model) in metadata.items.iter().zip(&models.items) {
+                assert_eq!(meta.name, model.name);
+                assert!(meta.tags.iter().copied().eq(model.tags.iter().map(String::as_str)));
+                let mut queries = vec![String::new(), " e ".into(), "  犬  ".into(), model.name.to_uppercase()];
+                queries.extend(model.tags.iter().map(|tag| format!("  {}  ", tag.to_uppercase())));
+                for query in queries {
+                    assert_eq!(meta.matches(&query.trim().to_lowercase()), model.matches(&query), "{} / {query}", meta.name);
+                }
+            }
+        }
+        let meta = ItemIndex { name: "red", tags: &["blue"], lower_name: "red", lower_tags: &["blue"] };
+        assert!(!meta.matches("red blue"), "search must not join separate name/tag fields");
+    }
+
+    #[test]
+    fn bulk_and_single_item_access_share_category_allocations() {
+        let bulk = all();
+        assert_eq!(bulk.len(), FILES.len());
+        for (index, from_bulk) in bulk.iter().enumerate() {
+            let single = category(index).expect("valid category");
+            assert!(std::ptr::eq(*from_bulk, single), "no duplicate parsed category cache");
+            for (item_index, model) in single.items.iter().enumerate() {
+                assert!(std::ptr::eq(item(index, item_index).expect("model"), model));
+            }
+        }
+        assert!(category(usize::MAX).is_none());
+        assert!(item(0, usize::MAX).is_none());
+    }
 
     #[test]
     fn every_library_file_parses_and_every_item_fits_a_scene() {

@@ -415,6 +415,15 @@ impl State {
         }
     }
 
+    /// Abandon a rectangle/circle drag lost outside the viewport.
+    /// Do not leave a stale two-click anchor behind.
+    pub fn cancel_drag(&mut self) {
+        self.dragging = false;
+        self.anchor = None;
+        self.cursor = None;
+        self.mouse = None;
+    }
+
     /// The button came up at `p` after a drag.
     pub fn release(&mut self, p: [f32; 2]) -> Option<Finished> {
         if !self.dragging {
@@ -432,7 +441,10 @@ impl State {
     /// Enter (or a double click): close the outline / end the line.
     pub fn enter(&mut self) -> Option<Finished> {
         match self.active_pen() {
-            Pen::Rect | Pen::Circle => None,
+            Pen::Rect | Pen::Circle => match (self.anchor, self.cursor) {
+                (Some(a), Some(b)) if !same(a, b) => self.finish_shape(a, b),
+                _ => None,
+            },
             _ if self.pts.is_empty() => None,
             _ => self.finish_points(),
         }
@@ -476,7 +488,8 @@ impl State {
 
 // ------------------------------------------------------------------ the App side: turning it on, the plane, the camera
 
-const COLORS: [[f32; 3]; 6] = [[0.93, 0.56, 0.45], [0.60, 0.72, 0.98], [0.62, 0.90, 0.74], [0.96, 0.80, 0.45], [0.76, 0.66, 0.96], [0.96, 0.66, 0.82]];
+const COLORS: [[f32; 3]; 6] =
+    [[0.93, 0.56, 0.45], [0.60, 0.72, 0.98], [0.62, 0.90, 0.74], [0.96, 0.80, 0.45], [0.76, 0.66, 0.96], [0.96, 0.66, 0.82]];
 
 impl App {
     /// Is the sketch tool on, or an outline being edited? (The gizmo and the node editing stay out of the way.)
@@ -511,7 +524,8 @@ impl App {
     /// The button in the tool strip.
     pub fn sketch_button(&mut self, ui: &mut Ui) {
         let on = self.sk.on;
-        if style::icon_button(ui, 34.0, "スケッチ (平面に絵をかいて、押し出し・回転体・ロフト・スイープにする)", on, glyph).clicked() {
+        if style::icon_button(ui, 34.0, "スケッチ (平面に絵をかいて、押し出し・回転体・ロフト・スイープにする)", on, glyph).clicked()
+        {
             self.set_sketch_tool(!on);
         }
     }
@@ -663,7 +677,11 @@ impl App {
         if !self.sketch_active() {
             return None;
         }
-        Some(if self.sk.edit.is_some() { self.sketch_edit_input(ui, resp, rect, pos, mods) } else { self.sketch_draw_input(ui, resp, rect, pos, mods) })
+        Some(if self.sk.edit.is_some() {
+            self.sketch_edit_input(ui, resp, rect, pos, mods)
+        } else {
+            self.sketch_draw_input(ui, resp, rect, pos, mods)
+        })
     }
 
     fn sketch_draw_input(&mut self, ui: &Ui, resp: &egui::Response, rect: Rect, pos: Option<Pos2>, mods: egui::Modifiers) -> Input {
@@ -677,6 +695,13 @@ impl App {
         let frame = self.sk.frame;
         let step = step_for(mods);
         let mouse = pos.filter(|p| resp.hovered() && !over_gnomon(*p));
+        // Losing the pointer during a shape gesture cancels it, rather than
+        // reusing its first corner on the next click.
+        // egui retains interact_pos for the PointerGone frame. A released touch may
+        // still finish at that position; only a gesture that is still held is lost.
+        if self.sk.dragging && ui.input(|i| i.pointer.primary_down() && !i.pointer.has_pointer()) {
+            self.sk.cancel_drag();
+        }
         self.sk.mouse = mouse;
         self.sk.cursor = mouse.and_then(|p| self.sketch_cursor(rect, p, step, &frame));
         out.over = self.sk.cursor.is_some();
@@ -703,7 +728,7 @@ impl App {
                 if !primary_down || resp.drag_stopped() {
                     match self.sk.cursor {
                         Some(q) => done = self.sk.release(q),
-                        None => self.sk.dragging = false,
+                        None => self.sk.cancel_drag(),
                     }
                 }
             }
@@ -716,12 +741,25 @@ impl App {
             done = done.or_else(|| self.sk.click(q, close));
             out.taken = true;
         }
-        if resp.double_clicked_by(egui::PointerButton::Primary) && mouse.is_some() {
+        // A quick first point followed by a double-click at the endpoint can
+        // be reported as a triple-click by egui. Both finish the same gesture.
+        if (resp.double_clicked_by(egui::PointerButton::Primary) || resp.triple_clicked_by(egui::PointerButton::Primary)) && mouse.is_some() {
             done = done.or_else(|| self.sk.enter());
             out.taken = true;
         }
         if let Some(d) = done {
             self.sketch_done(d);
+        }
+        // Every primary sketch gesture belongs to the sketch, including drags
+        // which have not produced a point. Never fall through to object picking.
+        if !mods.alt
+            && (resp.drag_started_by(egui::PointerButton::Primary)
+                || resp.dragged_by(egui::PointerButton::Primary)
+                || resp.drag_stopped_by(egui::PointerButton::Primary)
+                || resp.clicked_by(egui::PointerButton::Primary)
+                || resp.double_clicked_by(egui::PointerButton::Primary))
+        {
+            out.taken = true;
         }
         out
     }
@@ -741,6 +779,10 @@ impl App {
         let enter = hit(Key::Enter);
         let esc = hit(Key::Escape);
         if self.sk.edit.is_some() {
+            if esc && self.sk.edit.as_ref().is_some_and(|e| e.drag.is_some()) {
+                self.edit_cancel_drag();
+                return;
+            }
             if del {
                 self.sketch_edit_delete();
             }
@@ -784,7 +826,8 @@ impl App {
     pub fn sketch_edit_button(&mut self, ui: &mut Ui, g: usize, s: usize) {
         let editing = self.sk.edit.as_ref().is_some_and(|e| e.g == g && e.s == s);
         let tip = "この形の輪かくを、画面の中で点をうごかして なおします";
-        if style::pill(ui, if editing { "スケッチの編集をおわる" } else { "スケッチを編集" }, editing).on_hover_text(tip).clicked() {
+        if style::pill(ui, if editing { "スケッチの編集をおわる" } else { "スケッチを編集" }, editing).on_hover_text(tip).clicked()
+        {
             if editing {
                 self.sk.edit = None;
             } else {
@@ -875,6 +918,15 @@ impl App {
         }
     }
 
+    /// Escape during a node drag restores the exact original outline.
+    pub fn edit_cancel_drag(&mut self) {
+        let Some(d) = self.sk.edit.as_mut().and_then(|e| e.drag.take()) else { return };
+        if let Some((ol, _)) = self.edit_outline_mut() {
+            *ol = d.before;
+        }
+        self.sk.msg.clear();
+    }
+
     /// The button came up: keep the new outline unless it now crosses itself.
     pub fn edit_release(&mut self) {
         let Some(d) = self.sk.edit.as_mut().and_then(|e| e.drag.take()) else { return };
@@ -942,8 +994,9 @@ impl App {
             out.over = true;
             out.taken = true;
             out.busy = true;
-            match (primary_down, ui.input(|i| i.pointer.interact_pos())) {
-                (true, Some(p)) => self.edit_drag(rect, p, step),
+            match (primary_down, ui.input(|i| i.pointer.latest_pos())) {
+                (true, Some(p)) if rect.contains(p) => self.edit_drag(rect, p, step),
+                (true, _) => self.edit_cancel_drag(),
                 _ => self.edit_release(),
             }
             return out;
@@ -1112,7 +1165,12 @@ impl App {
                 let col = if bad { style::CUT } else { color };
                 self.paint_poly(p, rect, f, &shown, closed, col, 1.7);
                 // the way back to the first point
-                if pen != Pen::Line && !closed && st.pts.len() >= 3 && let (Some(a), Some(b)) = (st.pts.last().and_then(|q| self.sketch_px(rect, f, *q)), st.pts.first().and_then(|q| self.sketch_px(rect, f, *q))) {
+                if pen != Pen::Line
+                    && !closed
+                    && st.pts.len() >= 3
+                    && let (Some(a), Some(b)) =
+                        (st.pts.last().and_then(|q| self.sketch_px(rect, f, *q)), st.pts.first().and_then(|q| self.sketch_px(rect, f, *q)))
+                {
                     p.line_segment([a, b], Stroke::new(1.0, color.gamma_multiply(0.35)));
                 }
                 for (i, q) in st.pts.iter().enumerate() {
@@ -1236,7 +1294,18 @@ impl App {
             let Some(c) = self.sketch_px(rect, &f, *q) else { continue };
             let hot = e.hover == Some(Hover::Point(i)) || e.drag.as_ref().is_some_and(|d| d.idx == i);
             let chosen = e.sel == Some(i);
-            point_dot(p, c, if hot { 7.0 } else if chosen { 6.0 } else { 4.5 }, hot || chosen);
+            point_dot(
+                p,
+                c,
+                if hot {
+                    7.0
+                } else if chosen {
+                    6.0
+                } else {
+                    4.5
+                },
+                hot || chosen,
+            );
             if chosen {
                 tag(p, c + vec2(12.0, 10.0), &format!("{}, {}", fmt(q[0]), fmt(q[1])));
             }
@@ -1433,7 +1502,8 @@ impl App {
             });
             if self.sk.loft_top == LoftTop::Scaled {
                 style::labeled_slider(ui, "上の大きさ", &mut self.sk.loft_scale, 0.1..=3.0, "上の輪かくの大きさ (下を1とした倍率)");
-            } else if style::pill(ui, if self.sk.profile2.is_empty() { "上の輪かくをかく" } else { "上の輪かくをかきなおす" }, false).clicked() {
+            } else if style::pill(ui, if self.sk.profile2.is_empty() { "上の輪かくをかく" } else { "上の輪かくをかきなおす" }, false).clicked()
+            {
                 self.sk.stage = Stage::LoftTop;
                 self.sk.profile2.clear();
                 self.sk.clear_drawing();
@@ -1443,8 +1513,13 @@ impl App {
             style::labeled_slider(ui, "ふとさ", &mut self.sk.sweep_scale, 0.2..=4.0, "輪かくの大きさの倍率");
             ui.horizontal(|ui| {
                 let have = !self.sk.path.is_empty();
-                ui.label(egui::RichText::new(if have { format!("線: {}点", self.sk.path.len()) } else { "線がまだありません".to_string() }).size(11.5).color(style::DIM));
-                if style::pill(ui, if have { "線をかきなおす" } else { "線をかく" }, false).on_hover_text("通り道をかく (Enterで終わり)").clicked() {
+                ui.label(
+                    egui::RichText::new(if have { format!("線: {}点", self.sk.path.len()) } else { "線がまだありません".to_string() })
+                        .size(11.5)
+                        .color(style::DIM),
+                );
+                if style::pill(ui, if have { "線をかきなおす" } else { "線をかく" }, false).on_hover_text("通り道をかく (Enterで終わり)").clicked()
+                {
                     self.sk.stage = Stage::SweepPath;
                     self.sk.clear_drawing();
                     self.sk.frame = self.sketch_plane();
@@ -1863,7 +1938,10 @@ mod tests {
         assert!(app.sketch_make(&ctx));
         let Some(Pick::Shape(g, s)) = app.sel else { panic!("selected") };
         let sh = app.scene.shape(g, s).expect("there").clone();
-        let field = crate::sdf::Field::new(&Scene { groups: vec![crate::model::Group { shapes: vec![sh], ..crate::model::Group::new("g") }], ..Scene::default() });
+        let field = crate::sdf::Field::new(&Scene {
+            groups: vec![crate::model::Group { shapes: vec![sh], ..crate::model::Group::new("g") }],
+            ..Scene::default()
+        });
         assert!(field.distance([0.0, 0.0, 45.0]) < 0.0, "inside the block on top of the ball");
         assert!(field.distance([0.0, 0.0, 39.0]) > 0.0 && field.distance([0.0, 0.0, 51.0]) > 0.0);
         assert!(field.distance([4.0, 4.0, 41.0]) < 0.0 && field.distance([7.0, 0.0, 45.0]) > 0.0);
@@ -2029,7 +2107,11 @@ mod tests {
         app.sk.pen = Pen::Polygon;
         app.sk.click([0.0, 0.0], false);
         app.sk.click([10.0, 0.0], false);
-        let key = |k: egui::Key| ctx.input_mut(|i| i.events.push(egui::Event::Key { key: k, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE }));
+        let key = |k: egui::Key| {
+            ctx.input_mut(|i| {
+                i.events.push(egui::Event::Key { key: k, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE })
+            })
+        };
         key(egui::Key::Escape);
         app.sketch_keys(&ctx);
         assert!(app.sk.on && app.sk.pts.is_empty(), "the first Esc throws the points away");
