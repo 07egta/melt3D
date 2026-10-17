@@ -324,7 +324,7 @@ fn finish(app: &mut App, ctx: &egui::Context, b: &BakeJob, baked: &Baked) -> boo
     }
     let st = b.settings;
     let pos = mesh_import::place(baked, st.floor, st.centre, [app.cam.target[0], app.cam.target[1]]);
-    let clay = Material::plain([0.80, 0.80, 0.83], 0.5, 0.0);
+    let clay = b.loaded.imported.appearance.unwrap_or_else(|| Material::plain([0.80, 0.80, 0.83], 0.5, 0.0));
     let mut shape = mesh_import::shape_of(baked, &b.loaded.stem, &b.loaded.file_name, pos, clay);
     if let Some(path) = b.path.as_ref() {
         shape.mesh_source = Some(MeshSource { path: path.to_string_lossy().into_owned(), y_up: b.settings.up.is_y(b.loaded.imported.format), mesh_hash: mesh_import::mesh_hash(&b.loaded.imported.mesh) });
