@@ -278,7 +278,12 @@ pub fn section_cone(q: V3, a: V3, ra: f32, b: V3, rb: f32, aspect: f32, squircle
     let tangent = norm(delta);
     // A local cross-section orthogonal to the span; choosing a fallback
     // prevents a singular basis at vertical tangents.
-    let reference = if tangent[2].abs() > 0.95 { [0.0, 1.0, 0.0] } else { [0.0, 0.0, 1.0] };
+    // Blend the frame's reference axis instead of snapping it at near-
+    // vertical tangents. A hard axis switch creates a visible half-twist
+    // in oval/rounded-square sections even though the SDF stays finite.
+    let w = ((tangent[2].abs() - 0.80) / 0.18).clamp(0.0, 1.0);
+    let w = w * w * (3.0 - 2.0 * w);
+    let reference = [0.0, w, 1.0 - w];
     let side = norm(cross(reference, tangent));
     let up = cross(tangent, side);
     let v = sub(q, a);
