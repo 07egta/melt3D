@@ -64,14 +64,15 @@ pub enum Quality {
 }
 
 impl Quality {
-    pub const ALL: [Quality; 4] = [Quality::Auto, Quality::Light, Quality::Normal, Quality::Fine];
+    /// Three prominent choices; the previous Normal variant stays for source compatibility.
+    pub const ALL: [Quality; 3] = [Quality::Auto, Quality::Fine, Quality::Light];
 
     pub fn label(self) -> &'static str {
         match self {
-            Quality::Light => "かるい",
+            Quality::Light => "軽量",
             Quality::Normal => "ふつう",
-            Quality::Fine => "きれい",
-            Quality::Auto => "じどう",
+            Quality::Fine => "高品質",
+            Quality::Auto => "自動",
         }
     }
 
@@ -79,8 +80,8 @@ impl Quality {
         match self {
             Quality::Light => "いちばん軽い (画面の半分の細かさ)",
             Quality::Normal => "ほどほど (4分の3の細かさ)",
-            Quality::Fine => "いつもフルの細かさ",
-            Quality::Auto => "止まっているときはきれい、動かすときは速さに合わせて軽くする",
+            Quality::Fine => "いつも100%の描画解像度 (操作中の軽い陰影処理は維持)",
+            Quality::Auto => "操作中だけGPU負荷に合わせて解像度を調整し、停止後は100%に戻す",
         }
     }
 
@@ -104,7 +105,7 @@ impl Quality {
             (Quality::Light, _) => 0.5,
             (Quality::Normal, _) => 0.75,
             (Quality::Fine, false) => 1.0,
-            (Quality::Fine, true) => 0.85,
+            (Quality::Fine, true) => 1.0,
             (Quality::Auto, false) => 1.0,
             (Quality::Auto, true) => 0.5,
         }
@@ -382,6 +383,10 @@ pub struct Perf {
     pub last_cam: [f32; 7],
     /// Picks the render scale while things move.
     pub scale: crate::adapt::ScaleController,
+    /// Avoid resampling to a different size every frame while dragging.
+    pub preview_scale: crate::adapt::PreviewScale,
+    pub preview_quality: Option<Quality>,
+    pub preview_viewport: [u32; 2],
     /// Frame times (for the HUD).
     pub stats: crate::hud::FrameStats,
     /// Show the frame-time HUD (F3).
@@ -451,6 +456,8 @@ mod tests {
         assert_eq!(Quality::Light.scale(false), 0.5);
         assert_eq!(Quality::Normal.scale(true), 0.75);
         assert_eq!(Quality::Fine.scale(false), 1.0);
+        assert_eq!(Quality::Fine.scale(true), 1.0);
+        assert_eq!(Quality::ALL, [Quality::Auto, Quality::Fine, Quality::Light]);
         assert_eq!(Quality::Auto.scale(false), 1.0);
         assert_eq!(Quality::Auto.scale(true), 0.5);
         for q in Quality::ALL {
