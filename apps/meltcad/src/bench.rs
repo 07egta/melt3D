@@ -110,6 +110,26 @@ pub fn library_scene(shapes: usize) -> Scene {
     sc
 }
 
+/// Deterministic exactly-300-shape file for comparing Windows memory footprints.
+/// This does not rely on the model library, whose contents may change between builds.
+pub fn memory_fixture_scene() -> Scene {
+    let mut scene = Scene::default();
+    scene.groups.clear();
+    for g in 0..12 {
+        let mut group = Group::new(format!("memory benchmark {g}"));
+        for s in 0..25 {
+            let i = g * 25 + s;
+            let pos = [((i % 20) as f32 - 9.5) * 17.0, ((i / 20) as f32 - 7.0) * 17.0, 12.0];
+            let mut shape = Shape::new(Kind::Sphere, pos, Material::default());
+            shape.size[0] = 6.0;
+            group.shapes.push(shape);
+        }
+        scene.groups.push(group);
+    }
+    tidy_env(&mut scene);
+    scene
+}
+
 /// The scenes of the test, in the order of the table.
 pub fn scenes() -> Vec<BenchScene> {
     let lib = |n: usize| {
@@ -423,6 +443,18 @@ pub fn parse_args(args: &[std::ffi::OsString]) -> Option<Args> {
 
 /// Handle `--bench`: returns true when the arguments were a benchmark request (the program then ends).
 pub fn cli(args: &[std::ffi::OsString]) -> bool {
+    // Offline fixture writer: requires no graphics device and changes no user data.
+    if args.get(1).and_then(|a| a.to_str()) == Some("--memory-fixture") {
+        let Some(path) = args.get(2) else {
+            eprintln!("usage: meltcad --memory-fixture PATH.meltcad");
+            std::process::exit(2);
+        };
+        if let Err(e) = std::fs::write(path, memory_fixture_scene().to_json()) {
+            eprintln!("could not create memory fixture: {e}");
+            std::process::exit(2);
+        }
+        return true;
+    }
     let Some(a) = parse_args(args) else { return false };
     let sizes: &[[u32; 2]] = if a.quick { &SIZES[..1] } else { &SIZES };
     let frames = if a.quick { a.frames.min(3) } else { a.frames };
@@ -1125,5 +1157,22 @@ mod tests {
             ppm.extend(px.chunks(4).flat_map(|p| [p[0], p[1], p[2]]));
             let _ = std::fs::write(dir.join(format!("{}.ppm", bs.name)), ppm);
         }
+    }
+}
+
+
+#[cfg(test)]
+mod memory_fixture_tests {
+    use super::*;
+
+    #[test]
+    fn memory_fixture_is_exactly_300_shapes_and_roundtrips() {
+        let source = memory_fixture_scene();
+        assert_eq!(source.shape_count(), 300);
+        assert_eq!(source.groups.len(), 12);
+        let (loaded, notes) = Scene::from_json_notes(&source.to_json()).expect("valid benchmark scene");
+        assert!(notes.is_empty(), "benchmark must not depend on sanitizing invalid geometry: {notes:?}");
+        assert_eq!(loaded.shape_count(), 300);
+        assert_eq!(loaded.groups.len(), source.groups.len());
     }
 }
