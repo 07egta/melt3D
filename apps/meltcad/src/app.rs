@@ -756,6 +756,10 @@ impl App {
                             crate::svg_dialog::open(&ctx);
                             ui.close();
                         }
+                        if ui.button("Chess Set（チェスの駒）…").clicked() {
+                            crate::chess_dialog::open(&ctx, self);
+                            ui.close();
+                        }
                         if ui.button("メッシュを読み込む…").on_hover_text("STL・OBJ・3MF・PLY・GLB").clicked() {
                             crate::mesh_dialog::open(&ctx);
                             ui.close();
@@ -1268,6 +1272,7 @@ impl App {
             self.sketch_card(&ctx);
             self.keys_card(ui);
             crate::svg_dialog::update(self, &ctx);
+            crate::chess_dialog::update(self, &ctx);
             crate::mesh_dialog::update(self, &ctx);
             crate::array::update(self, &ctx);
             crate::export_dialog::update(self, &ctx);
