@@ -60,6 +60,8 @@ pub struct Prepared {
     pub outline2: Vec<[f32; 2]>,
     /// Wall thickness of the hollowed-out shape (0 = solid).
     pub shell: f32,
+    pub face_melt: Option<(usize, f32, f32, f32)>,
+    pub half: V3,
     /// The corners are cut flat (a chamfer) instead of rounded.
     pub chamfer: bool,
     /// Winding (+1 / -1) and the largest safe rounding of the profile (revolve, sweep, extrude).
@@ -137,6 +139,8 @@ impl Prepared {
             path: if s.kind == Kind::Curve { crate::curve::build_shape(s) } else { s.path.clone() },
             outline2: s.outline2.clone(),
             shell: if s.shell.is_finite() { s.shell.max(0.0) } else { 0.0 },
+            face_melt: s.face_melt.parts(),
+            half: s.local_half(),
             poly_orient,
             poly_limit,
             grad_half,
@@ -165,7 +169,12 @@ impl Prepared {
     }
     /// The distance to this one shape (negative inside).
     pub fn distance(&self, p: V3) -> f32 {
-        let d = self.local_distance(self.local(p)) * self.min_scale();
+        let q = self.local(p);
+        let mut d = self.local_distance(q);
+        if let Some((ax, sg, amount, reach)) = self.face_melt {
+            d = face_melt_distance(d, q, ax, sg, amount, reach, self.half[ax]);
+        }
+        let d = d * self.min_scale();
         // hollow walls: the solid's skin of thickness `shell` (negative inside the wall)
         // (a curve hollows itself: its flat ends are cut after the hollowing, see curve::distance)
         if self.shell > 0.0 && self.kind != Kind::Curve { (d + self.shell * 0.5).abs() - self.shell * 0.5 } else { d }
@@ -315,6 +324,23 @@ pub fn drip_safety(drip: f32, ripple: f32) -> f32 {
     }
     let slope = drip * 1.32 * DRIP_FREQ * ripple;
     1.0 / (1.0 + slope * slope).sqrt()
+}
+
+/// A melt on one face: the surface swells or sinks in a drippy pattern close to that face and is
+/// untouched away from it. (Mirrored in shader.wgsl `face_melt`.)
+pub fn face_melt_distance(d: f32, q: V3, ax: usize, sg: f32, amount: f32, reach: f32, half: f32) -> f32 {
+    let t = sg * q[ax] - half;
+    let k = 1.0 / reach;
+    let w = (1.0 - t.abs() * k).clamp(0.0, 1.0);
+    if w <= 0.0 {
+        return d;
+    }
+    let w = w * w * (3.0 - 2.0 * w);
+    let (u, v) = (q[(ax + 1) % 3], q[(ax + 2) % 3]);
+    let f = 6.2832 / (reach * 1.6);
+    let wave = 0.5 + 0.5 * (u * f + (v * f * 1.3).sin()).sin() * (v * f * 0.8 + (u * f * 0.6).cos()).cos();
+    let slope = amount.abs() * (1.6 * k + 1.32 * f);
+    (d - amount * w * wave) / (1.0 + slope * slope).sqrt()
 }
 
 pub fn warp(p: V3, drip: f32, ripple: f32) -> V3 {

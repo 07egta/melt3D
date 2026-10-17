@@ -734,35 +734,6 @@ impl App {
         if hit(plain, Key::Delete) || hit(plain, Key::Backspace) {
             self.delete_selected();
         }
-        // H hides what is selected, Alt+H shows everything again
-        if hit(plain, Key::H) {
-            match self.sel {
-                Some(Pick::Group(g)) => {
-                    if let Some(x) = self.scene.groups.get_mut(g) {
-                        x.visible = !x.visible;
-                    }
-                }
-                Some(Pick::Shape(g, s)) => {
-                    if let Some(x) = self.scene.groups.get_mut(g).and_then(|x| x.shapes.get_mut(s)) {
-                        x.visible = !x.visible;
-                    }
-                }
-                None => {}
-            }
-        }
-        if hit(Modifiers::ALT, Key::H) {
-            for g in &mut self.scene.groups {
-                g.visible = true;
-                for s in &mut g.shapes {
-                    s.visible = true;
-                }
-            }
-        }
-        for (k, t) in [(Key::Q, Tool::Select), (Key::A, Tool::All), (Key::G, Tool::Move), (Key::R, Tool::Rotate), (Key::S, Tool::Scale)] {
-            if hit(plain, k) {
-                self.tool = t;
-            }
-        }
         if hit(plain, Key::F3) {
             self.perf.hud = !self.perf.hud;
         }
@@ -1076,47 +1047,6 @@ impl App {
         );
     }
 
-    /// Tools and view buttons floating at the bottom middle.
-    fn tool_pill(&mut self, ui: &mut Ui) {
-        let ctx = ui.ctx().clone();
-        let rect = self.view_rect;
-        egui::Area::new(egui::Id::new("tool_pill"))
-            .order(egui::Order::Middle)
-            .pivot(egui::Align2::CENTER_BOTTOM)
-            .fixed_pos(egui::pos2(rect.center().x, rect.bottom() - 16.0))
-            .show(&ctx, |ui| {
-                style::card().show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = 8.0;
-                        let tools = [
-                            (Tool::Select, "選ぶ", "選ぶだけ (Q)"),
-                            (Tool::All, "ぜんぶ", "動かす・回す・大きさ ぜんぶ (A)"),
-                            (Tool::Move, "動かす", "動かす (G)"),
-                            (Tool::Rotate, "回す", "回す (R)"),
-                            (Tool::Scale, "大きさ", "大きさ (S)"),
-                        ];
-                        let items: Vec<(&str, &str)> = tools.iter().map(|t| (t.1, t.2)).collect();
-                        let sel = tools.iter().position(|t| t.0 == self.tool);
-                        if let Some(i) = style::segmented(ui, "tool_pill_tools", &items, sel, false)
-                            && let Some(t) = tools.get(i)
-                        {
-                            self.tool = t.0;
-                        }
-                        style::vsep(ui);
-                        if style::pill(ui, if self.cam.ortho { "平行" } else { "遠近" }, false).on_hover_text("遠近 / 平行 (5)").clicked() {
-                            self.cam.ortho = !self.cam.ortho;
-                        }
-                        if style::pill(ui, "全体", false).on_hover_text("全体を見る (Home)").clicked() {
-                            self.frame_view(false);
-                        }
-                        if style::pill(ui, "?", self.show_keys).on_hover_text("操作のしかた").clicked() {
-                            self.show_keys = !self.show_keys;
-                        }
-                    });
-                });
-            });
-    }
-
     /// A card listing the mouse and keys.
     fn keys_card(&mut self, ui: &mut Ui) {
         if !self.show_keys {
@@ -1127,7 +1057,7 @@ impl App {
         egui::Area::new(egui::Id::new("keys_card"))
             .order(egui::Order::Foreground)
             .pivot(egui::Align2::RIGHT_BOTTOM)
-            .fixed_pos(rect.right_bottom() - egui::vec2(16.0, 72.0))
+            .fixed_pos(rect.right_bottom() - egui::vec2(16.0, 16.0))
             .show(&ctx, |ui| {
                 style::card().show(ui, |ui| {
                     ui.set_width(300.0);
@@ -1145,8 +1075,7 @@ impl App {
                         ("Shift+F / Home", "選んだもの / 全体を見る"),
                         ("1 3 7 (Ctrlで反対)", "正面 / 右 / 上から"),
                         ("5", "遠近 ⇄ 平行"),
-                        ("Q A G R S", "選ぶ / ぜんぶ / 動かす / 回す / 大きさ"),
-                        ("H / Alt+H", "隠す ⇄ 出す / ぜんぶ出す"),
+                                                ("H / Alt+H", "隠す ⇄ 出す / ぜんぶ出す"),
                         ("Tab", "足す ⇄ 削る"),
                         ("Ctrl + ドラッグ", "1mm・15度ずつ"),
                         ("矢印キー", "1mm動かす (Shiftで10mm)"),
@@ -1364,7 +1293,6 @@ impl App {
         });
         if self.capture.is_none() {
             self.tool_strip(ui);
-            self.tool_pill(ui);
             self.draw_card(&ctx);
             self.pipe_card(&ctx);
             self.sketch_card(&ctx);

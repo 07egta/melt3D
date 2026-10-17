@@ -452,6 +452,29 @@ impl App {
             }
             style::labeled_slider(ui, "とけあい", &mut sh.blend, 0.0..=80.0, "この形が、まわりとどのくらい溶けてくっつくか (グープ)");
             style::labeled_slider(ui, "ちゅうぐう\nシェル", &mut sh.shell, 0.0..=40.0, "中をくり抜いて、かべの あつさ(mm)だけ のこす。0 = つまっている");
+            // melt just one face: the rest keeps its exact size
+            {
+                let fm = &mut sh.face_melt;
+                ui.label(RichText::new("この面だけ溶かす").color(style::DIM).size(12.0));
+                let mut items: Vec<(&str, &str)> = vec![("なし", "ぜんぶ そのまま (寸法どおり)")];
+                items.extend(crate::model::FaceMelt::FACES.iter().copied());
+                let now = Some(usize::from(fm.face.min(6)));
+                if let Some(i) = style::segmented(ui, "face_melt_face", &items, now, true) {
+                    fm.face = i.min(6) as u8;
+                    if fm.face > 0 {
+                        if fm.amount == 0.0 {
+                            fm.amount = 4.0;
+                        }
+                        if fm.reach < 1.0 {
+                            fm.reach = 12.0;
+                        }
+                    }
+                }
+                if fm.face > 0 {
+                    style::labeled_slider(ui, "ふくらみ", &mut fm.amount, -30.0..=30.0, "その面だけ ふくらむ(+) / へこむ(-) 量 (mm)。ほかの面の寸法はかわらない");
+                    style::labeled_slider(ui, "とける深さ", &mut fm.reach, 2.0..=60.0, "面から どこまで溶けるか (mm)");
+                }
+            }
             if sh.kind.uses_outline() {
                 outline_changed = true;
                 top_changed = sh.kind.uses_outline2();
