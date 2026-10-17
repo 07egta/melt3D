@@ -50,6 +50,7 @@ mod curve;
 mod curve_tool;
 mod pipe_tool;
 mod model;
+mod organic_blob;
 mod perf;
 mod prims;
 mod panels;
