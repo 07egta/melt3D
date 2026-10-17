@@ -786,7 +786,20 @@ mod tests {
         let candidates = big.candidates(q);
         assert_eq!(candidates.len(), 1);
         assert_eq!(big.search(q, &Prefs::default(), 9).len(), 1);
+        assert_eq!(big.search("generic", &Prefs::default(), 9).len(), 9, "broad queries still have a bounded top-k result");
         assert!(big.candidates("不明な機能").is_empty());
+        // Record observed p95 without a brittle wall-clock pass/fail threshold.
+        // The structural assertion above guarantees narrow posting-list lookup.
+        let prefs = Prefs::default();
+        let mut micros = Vec::with_capacity(250);
+        for _ in 0..250 {
+            let started = std::time::Instant::now();
+            let found = big.search(q, &prefs, 9);
+            assert_eq!(found.len(), 1);
+            micros.push(started.elapsed().as_micros());
+        }
+        micros.sort_unstable();
+        eprintln!("command palette: 8,000 entries, query={q}, p95={} us", micros[micros.len() * 95 / 100]);
     }
 
     #[test]
