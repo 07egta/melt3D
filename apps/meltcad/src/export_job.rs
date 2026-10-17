@@ -1080,6 +1080,47 @@ mod tests {
     }
 
     #[test]
+    fn household_furniture_writes_readable_obj_and_3mf_meshes() {
+        use crate::export_formats::tests::unzip;
+        let cat = crate::library::all().iter().find(|cat| cat.name == "かぐ").expect("furniture category");
+        let names = [
+            "ダイニングチェア", "スツール", "ダイニングテーブル", "ローテーブル",
+            "3人掛けソファ", "シングルベッド", "本棚", "勉強机", "タンス", "オフィスチェア",
+        ];
+        for name in names {
+            let item = cat.items.iter().find(|item| item.name == name).expect("missing furniture item");
+            // A coarse preview-like tessellation keeps test time bounded; both formats share one mesh.
+            let mut opts = Options {
+                format: Format::Obj,
+                tolerance: 3.0,
+                colour: false,
+                lighten: Lighten::Flat,
+                ..Options::default()
+            };
+            let built = build(&item.scene(), None, &opts, &Progress::new())
+                .unwrap_or_else(|err| panic!("{name}: mesh failed: {err}"));
+            assert!(built.closed, "{name}: open mesh");
+            assert!(built.tris > 12 && built.tris < 300_000, "{name}: {} triangles", built.tris);
+            let path = std::path::Path::new("furniture.obj");
+            let files = serialize(&built, &opts, path).expect("OBJ serialization");
+            let obj = files.iter().find(|(path, _)| path.extension().is_some_and(|ext| ext == "obj"))
+                .expect("OBJ file");
+            let text = std::str::from_utf8(&obj.1).expect("OBJ must be UTF-8");
+            assert_eq!(text.lines().filter(|l| l.starts_with("f ")).count(), built.tris, "{name}: OBJ faces");
+            assert!(text.contains("\nv "), "{name}: OBJ vertices");
+            opts.format = Format::ThreeMf;
+            let files = serialize(&built, &opts, std::path::Path::new("furniture.3mf"))
+                .expect("3MF serialization");
+            assert_eq!(files.len(), 1, "{name}: 3MF file count");
+            let unpacked = unzip(&files[0].1);
+            let xml = unpacked.iter().find(|(path, _)| path == "3D/3dmodel.model")
+                .expect("3MF must contain the model part");
+            let text = std::str::from_utf8(&xml.1).expect("3MF XML must be UTF-8");
+            assert!(text.contains("<vertices>") && text.contains("<triangles>"), "{name}: 3MF geometry");
+        }
+    }
+
+    #[test]
     fn the_worker_reports_progress_and_can_be_cancelled() {
         let dir = std::env::temp_dir().join(format!("yura_export_c_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();

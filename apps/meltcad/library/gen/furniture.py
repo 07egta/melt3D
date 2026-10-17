@@ -52,110 +52,171 @@ def ball(name, x, y, z, r, color, **kw):
 
 items = []
 
-# ---- いす: wooden chair with a red seat cushion and tall back posts ------------------------
-items.append(item("いす", ["chair", "椅子", "furniture"], group("いす", [
-    bx("座", -18, 18, -18, 18, 22, 26, WOOD, round=1.2, blend=1.0),
-    cy("前左脚", -16, -16, 0, 23, 2.2, WOOD, blend=1.0),
-    cy("前右脚", 16, -16, 0, 23, 2.2, WOOD, blend=1.0),
-    cy("後左脚", -16, 14, 0, 64, 2.2, WOOD, blend=1.0),
-    cy("後右脚", 16, 14, 0, 64, 2.2, WOOD, blend=1.0),
-    bx("背上の板", -16, 16, 10, 16, 52, 60, WOOD, round=1.0, blend=0.8),
-    bx("背中の板", -16, 16, 10, 16, 34, 40, WOOD, round=1.0, blend=0.8),
-    bx("前のよこ木", -16, 16, -17, -15, 6, 9, WOOD, blend=0.8),
-    bx("クッション", -16, 16, -16, 10, 26, 29, RED, round=2.5, blend=1.0),
+# ---- Household everyday furniture (shared 1:15 miniature proportions) -----------------
+# ダイニングチェア / 9 primitives
+items.append(item("ダイニングチェア", ["いす","椅子","chair","dining chair","食卓","furniture"], group("ダイニングチェア", [
+    bx("木製座枠", -15, 15, -16, 15, 27, 29, WOOD_LIGHT, round=0.8),
+    cy("前左脚", -12, -12, 0, 28, 1.9, WOOD),
+    cy("前右脚", 12, -12, 0, 28, 1.9, WOOD),
+    cy("後左脚", -12, 12, 0, 56, 1.9, WOOD),
+    cy("後右脚", 12, 12, 0, 56, 1.9, WOOD),
+    bx("背もたれ上段", -13, 13, 10.5, 14.5, 49, 55, WOOD_LIGHT, round=1),
+    bx("背もたれ中段", -13, 13, 10.5, 14.5, 38, 43, WOOD_LIGHT, round=1),
+    bx("座面クッション", -13.5, 13.5, -14, 11, 29, 31.5, CREAM, round=1, blend=0.8),
+    bx("前脚補強材", -11.5, 11.5, -12, -10.5, 8, 10, WOOD, round=0.2),
 ])))
 
-# ---- ソファ: teal three-seat sofa with arms, back cushions and feet ----------------------
-items.append(item("ソファ", ["sofa", "couch", "furniture"], group("ソファ", [
-    bx("ベース", -35, 35, -15, 15, 6, 18, TEAL, round=4, blend=0.5),
-    bx("背", -35, 35, 9, 16, 16, 46, TEAL, round=4, blend=2.0),
-    bx("ひじ左", -35, -27, -15, 15, 6, 28, TEAL, round=3, blend=2.0),
-    bx("ひじ右", 27, 35, -15, 15, 6, 28, TEAL, round=3, blend=2.0),
-    bx("座面左", -27, -1, -14, 6, 18, 26, TEAL_LT, round=3, blend=1.5),
-    bx("座面右", 1, 27, -14, 6, 18, 26, TEAL_LT, round=3, blend=1.5),
-    bx("まくら左", -26, -8, 2, 10, 26, 42, ORANGE, round=3, blend=1.5),
-    bx("まくら右", 8, 26, 2, 10, 26, 42, YELLOW, round=3, blend=1.5),
-    cy("足左前", -31, -11, 0, 6, 2.2, WOOD_DARK, blend=0.0),
-    cy("足右前", 31, -11, 0, 6, 2.2, WOOD_DARK, blend=0.0),
-    cy("足左後", -31, 11, 0, 6, 2.2, WOOD_DARK, blend=0.0),
-    cy("足右後", 31, 11, 0, 6, 2.2, WOOD_DARK, blend=0.0),
+# スツール / 8 primitives
+items.append(item("スツール", ["stool","chair","腰掛け","丸椅子","furniture"], group("スツール", [
+    cy("木の座面", 0, 0, 28.5, 31.5, 14, WOOD_LIGHT, round=1),
+    cy("座面クッション", 0, 0, 31, 33, 13.5, LEATHER, round=1, blend=0.5),
+    cy("脚左前", -9.5, -9.5, 0, 29.5, 1.8, WOOD),
+    cy("脚右前", 9.5, -9.5, 0, 29.5, 1.8, WOOD),
+    cy("脚左後", -9.5, 9.5, 0, 29.5, 1.8, WOOD),
+    cy("脚右後", 9.5, 9.5, 0, 29.5, 1.8, WOOD),
+    bx("前後の足置き", -10, 10, -1, 1, 9, 11, WOOD, round=0.2),
+    bx("左右の補強", -1, 1, -10, 10, 9, 11, WOOD, round=0.2),
 ])))
 
-# ---- テーブル: square table with four legs and a lower shelf -----------------------------
-items.append(item("テーブル", ["table", "desk", "furniture"], group("テーブル", [
-    bx("天板", -36, 36, -24, 24, 56, 60, WOOD_LIGHT, round=1.5, blend=1.0),
-    bx("棚板", -31, 31, -19, 19, 14, 17, WOOD, round=0.8, blend=1.0),
-    cy("脚左前", -31, -19, 0, 57, 2.6, WOOD, blend=1.0),
-    cy("脚右前", 31, -19, 0, 57, 2.6, WOOD, blend=1.0),
-    cy("脚左後", -31, 19, 0, 57, 2.6, WOOD, blend=1.0),
-    cy("脚右後", 31, 19, 0, 57, 2.6, WOOD, blend=1.0),
+# ダイニングテーブル / 9 primitives
+items.append(item("ダイニングテーブル", ["テーブル","table","dining table","食卓","furniture"], group("ダイニングテーブル", [
+    bx("木目の天板", -50, 50, -26, 26, 47, 50, WOOD_LIGHT, round=1.2, blend=0.5),
+    bx("前幕板", -44, 44, -22, -19, 40, 47.5, WOOD, round=0.3),
+    bx("後幕板", -44, 44, 19, 22, 40, 47.5, WOOD, round=0.3),
+    bx("左幕板", -46, -43, -19, 19, 40, 47.5, WOOD, round=0.3),
+    bx("右幕板", 43, 46, -19, 19, 40, 47.5, WOOD, round=0.3),
+    bx("前左脚", -46, -42, -22, -18, 0, 47.5, WOOD, round=0.35),
+    bx("前右脚", 42, 46, -22, -18, 0, 47.5, WOOD, round=0.35),
+    bx("後左脚", -46, -42, 18, 22, 0, 47.5, WOOD, round=0.35),
+    bx("後右脚", 42, 46, 18, 22, 0, 47.5, WOOD, round=0.35),
 ])))
 
-# ---- ベッド: bed frame, mattress, headboard, blanket and a pillow (head at +Y) -------------
-items.append(item("ベッド", ["bed", "pillow", "寝具", "furniture"], group("ベッド", [
-    bx("フレーム", -25, 25, -38, 38, 4, 14, WOOD, round=1.0, blend=0.5),
-    bx("足板", -25, 25, -38, -34, 4, 16, WOOD, round=1.0, blend=0.5),
-    bx("ヘッドボード", -25, 25, 32, 38, 4, 36, WOOD, round=1.5, blend=0.5),
-    bx("マットレス", -23, 23, -34, 32, 14, 24, WHITE, round=3, blend=1.0),
-    bx("まくら", -15, 15, 20, 31, 24, 31, WHITE, round=3, blend=1.5),
-    bx("ふとん", -23, 23, -34, 10, 24, 28, RED, round=2, blend=1.5),
-    cy("脚前左", -23, -35, 0, 4, 2.5, WOOD_DARK, blend=0.0),
-    cy("脚前右", 23, -35, 0, 4, 2.5, WOOD_DARK, blend=0.0),
-    cy("脚後左", -23, 35, 0, 4, 2.5, WOOD_DARK, blend=0.0),
-    cy("脚後右", 23, 35, 0, 4, 2.5, WOOD_DARK, blend=0.0),
+# ローテーブル / 6 primitives
+items.append(item("ローテーブル", ["low table","coffee table","リビング","ちゃぶ台","furniture"], group("ローテーブル", [
+    bx("低い天板", -38, 38, -22, 22, 24, 27, WOOD_LIGHT, round=1.5, blend=0.6),
+    bx("下段の棚", -32, 32, -18, 18, 11, 13, WOOD, round=0.5),
+    bx("前左脚", -33, -29, -18, -14, 0, 25, WOOD_DARK, round=0.35),
+    bx("前右脚", 29, 33, -18, -14, 0, 25, WOOD_DARK, round=0.35),
+    bx("後左脚", -33, -29, 14, 18, 0, 25, WOOD_DARK, round=0.35),
+    bx("後右脚", 29, 33, 14, 18, 0, 25, WOOD_DARK, round=0.35),
 ])))
 
-# ---- ほんだな: open bookcase with two shelves, a back panel and books --------------------
-shelf = []
-shelf += [
-    bx("左板", -25, -22, -10, 10, 0, 72, WOOD_LIGHT, round=0.5, blend=0.0),
-    bx("右板", 22, 25, -10, 10, 0, 72, WOOD_LIGHT, round=0.5, blend=0.0),
-    bx("上板", -25, 25, -10, 10, 69, 72, WOOD_LIGHT, round=0.5, blend=0.0),
-    bx("下板", -25, 25, -10, 10, 0, 3, WOOD, round=0.5, blend=0.0),
-    bx("たな1", -22, 22, -10, 10, 24, 26.5, WOOD_LIGHT, blend=0.0),
-    bx("たな2", -22, 22, -10, 10, 48, 50.5, WOOD_LIGHT, blend=0.0),
-    bx("裏板", -22, 22, 8, 10, 3, 69, WOOD_PALE, blend=0.0),
-]
-# books: (width, height, colour) placed left to right on each shelf gap
-gaps = [
-    (3.0, [(4.5, 17, RED), (3.8, 14, BLUE), (5.0, 16, YELLOW), (4.2, 12, GREEN)]),
-    (26.5, [(4.0, 16, TEAL), (5.2, 13, ORANGE), (3.6, 15, RED), (4.8, 11, BLUE)]),
-    (50.5, [(4.4, 15, GREEN), (3.4, 17, YELLOW), (5.0, 12, RED), (4.0, 14, TEAL)]),
-]
-for n, (floor, books) in enumerate(gaps):
-    x = -20.5
-    for k, (w, h, c) in enumerate(books):
-        shelf.append(bx(f"本{n}-{k}", x, x + w, -8, 6, floor, floor + h, c, blend=0.0))
-        x += w + 0.4
-items.append(item("ほんだな", ["bookshelf", "bookcase", "本棚", "furniture"], group("ほんだな", shelf)))
+# 3人掛けソファ / 14 primitives
+items.append(item("3人掛けソファ", ["ソファ","sofa","couch","three seater","三人掛け","furniture"], group("3人掛けソファ", [
+    bx("ソファの土台", -60, 60, -24, 24, 8, 25, TEAL, round=3, blend=1),
+    bx("高めの背もたれ", -60, 60, 12, 25, 21, 55, TEAL, round=3, blend=0.8),
+    bx("左ひじ掛け", -60, -52, -24, 24, 9, 37, TEAL, round=2.8, blend=0.9),
+    bx("右ひじ掛け", 52, 60, -24, 24, 9, 37, TEAL, round=2.8, blend=0.9),
+    bx("座面クッション左", -51, -18, -22, 8, 25, 31, TEAL_LT, round=2, blend=0.3),
+    bx("座面クッション中央", -16.5, 16.5, -22, 8, 25, 31, TEAL_LT, round=2, blend=0.3),
+    bx("座面クッション右", 18, 51, -22, 8, 25, 31, TEAL_LT, round=2, blend=0.3),
+    bx("背クッション左", -50, -18, 7, 16, 30, 49, CREAM, round=2, blend=0.2),
+    bx("背クッション中央", -16, 16, 7, 16, 30, 49, CREAM, round=2, blend=0.2),
+    bx("背クッション右", 18, 50, 7, 16, 30, 49, CREAM, round=2, blend=0.2),
+    cy("前左脚", -55, -19, 0, 8.5, 2.4, WOOD_DARK),
+    cy("前右脚", 55, -19, 0, 8.5, 2.4, WOOD_DARK),
+    cy("後左脚", -55, 19, 0, 8.5, 2.4, WOOD_DARK),
+    cy("後右脚", 55, 19, 0, 8.5, 2.4, WOOD_DARK),
+])))
 
-# ---- たんす: chest of four drawers with brass pulls and feet ------------------------------
-chest = [
-    bx("本体", -26, 26, -16, 16, 5, 66, WOOD, round=1.2, blend=0.5),
-    bx("天板", -28, 28, -18, 18, 66, 69, WOOD_DARK, round=1.5, blend=0.5),
-    cy("足左前", -23, -13, 0, 6, 2.5, WOOD_DARK, blend=0.5),
-    cy("足右前", 23, -13, 0, 6, 2.5, WOOD_DARK, blend=0.5),
-    cy("足左後", -23, 13, 0, 6, 2.5, WOOD_DARK, blend=0.5),
-    cy("足右後", 23, 13, 0, 6, 2.5, WOOD_DARK, blend=0.5),
-]
-for k in range(4):
-    z0 = 6 + k * 14.5
-    z1 = z0 + 13.5
-    chest.append(bx(f"引き出し{k}", -24, 24, -17.2, -16, z0, z1, WOOD_LIGHT, round=0.6, blend=0.0))
-    chest.append(bx(f"取っ手{k}", -6, 6, -18.9, -17.0, (z0 + z1) / 2 - 1.1, (z0 + z1) / 2 + 1.1,
-                    BRASS, round=0.8, blend=0.0, metallic=0.9, roughness=0.25))
-items.append(item("たんす", ["chest", "drawers", "箪笥", "furniture"], group("たんす", chest)))
+# シングルベッド / 13 primitives
+items.append(item("シングルベッド", ["ベッド","bed","single bed","寝具","sleep","furniture"], group("シングルベッド", [
+    bx("ベッドフレーム", -33, 33, -65, 65, 9, 21, WOOD, round=1),
+    bx("左サイドフレーム", -33, -30, -65, 65, 10, 24, WOOD_DARK, round=0.5),
+    bx("右サイドフレーム", 30, 33, -65, 65, 10, 24, WOOD_DARK, round=0.5),
+    bx("ヘッドボード", -33, 33, 60, 65, 9, 65, WOOD_LIGHT, round=1.2),
+    bx("フットボード", -33, 33, -65, -62, 9, 27, WOOD_LIGHT, round=0.7),
+    bx("マットレス", -30, 30, -60, 57, 21, 31, WHITE, round=2.5, blend=0.6),
+    bx("掛け布団", -29, 29, -58, 21, 31, 34, BLUE, round=1.5, blend=0.5),
+    bx("枕左", -27, -2, 37, 54, 31, 37, CREAM, round=2.2, blend=0.5),
+    bx("枕右", 2, 27, 37, 54, 31, 37, CREAM, round=2.2, blend=0.5),
+    cy("足元左脚", -28, -59, 0, 10, 3, WOOD_DARK),
+    cy("足元右脚", 28, -59, 0, 10, 3, WOOD_DARK),
+    cy("頭側左脚", -28, 58, 0, 10, 3, WOOD_DARK),
+    cy("頭側右脚", 28, 58, 0, 10, 3, WOOD_DARK),
+])))
 
-# ---- スツール: round seat, four legs and a ring stretcher ---------------------------------
-stool = [
-    shape("Cylinder", "座面", pos=(0, 0, 54.5), size=(14, 5, 1), round=2.0, color=LEATHER,
-          roughness=0.7, blend=0.5),
-    shape("Torus", "ぼう", pos=(0, 0, 14), size=(10, 1.4, 1), color=WOOD, roughness=0.5, blend=0.5),
-]
-for k, ang in enumerate((45, 135, 225, 315)):
-    a = math.radians(ang)
-    stool.append(cy(f"脚{k}", 10 * math.cos(a), 10 * math.sin(a), 0, 56, 1.8, WOOD, blend=1.0))
-items.append(item("スツール", ["stool", "chair", "腰掛け", "furniture"], group("スツール", stool)))
+# 本棚 / 20 primitives
+items.append(item("本棚", ["ほんだな","bookshelf","bookcase","書棚","furniture"], group("本棚", [
+    bx("左側板", -30, -27, -12, 12, 0, 120, WOOD_LIGHT, round=0.4),
+    bx("右側板", 27, 30, -12, 12, 0, 120, WOOD_LIGHT, round=0.4),
+    bx("天板", -30, 30, -12, 12, 117, 120, WOOD_LIGHT, round=0.4),
+    bx("底板", -30, 30, -12, 12, 0, 3, WOOD_DARK, round=0.4),
+    bx("下段棚板", -27, 27, -12, 12, 29, 31, WOOD_LIGHT, round=0.2),
+    bx("中段棚板", -27, 27, -12, 12, 58, 60, WOOD_LIGHT, round=0.2),
+    bx("上段棚板", -27, 27, -12, 12, 87, 89, WOOD_LIGHT, round=0.2),
+    bx("裏板", -27, 27, 10, 12, 3, 117, WOOD_PALE),
+    bx("本1", -25, -14.5, -9, 7, 3, 24, BLUE, round=0.3),
+    bx("本2", -12.5, -2, -9, 7, 3, 19, GREEN, round=0.3),
+    bx("本3", 0, 10.5, -9, 7, 3, 22, CREAM, round=0.3),
+    bx("本4", 12.5, 23, -9, 7, 3, 25, RED, round=0.3),
+    bx("本5", -25, -14.5, -9, 7, 31, 50, WOOD_DARK, round=0.3),
+    bx("本6", -12.5, -2, -9, 7, 31, 46, TEAL, round=0.3),
+    bx("本7", 0, 10.5, -9, 7, 31, 53, YELLOW, round=0.3),
+    bx("本8", 12.5, 23, -9, 7, 31, 48, ORANGE, round=0.3),
+    bx("本9", -25, -14.5, -9, 7, 60, 80, BLUE, round=0.3),
+    bx("本10", -12.5, -2, -9, 7, 60, 83, GREEN, round=0.3),
+    bx("本11", 0, 10.5, -9, 7, 60, 78, RED, round=0.3),
+    bx("本12", 12.5, 23, -9, 7, 60, 76, CREAM, round=0.3),
+])))
+
+# 勉強机 / 11 primitives
+items.append(item("勉強机", ["study desk","writing desk","学習机","つくえ","desk","furniture"], group("勉強机", [
+    bx("広い天板", -40, 40, -21, 21, 47, 50, WOOD_LIGHT, round=0.8),
+    bx("前左脚", -37, -33, -19, -15, 0, 48, WOOD, round=0.3),
+    bx("前右脚", 33, 37, -19, -15, 0, 48, WOOD, round=0.3),
+    bx("後左脚", -37, -33, 15, 19, 0, 48, WOOD, round=0.3),
+    bx("後右脚", 33, 37, 15, 19, 0, 48, WOOD, round=0.3),
+    bx("背面補強", -34, 34, 18, 20, 36, 47, WOOD, round=0.3),
+    bx("引出し収納箱", 15, 37, -18, 18, 17, 45, WOOD_PALE, round=0.4),
+    bx("上の引出し", 16.2, 36, -19.5, -18, 35, 43.3, WOOD_LIGHT, round=0.3),
+    bx("下の引出し", 16.2, 36, -19.5, -18, 25, 33.3, WOOD_LIGHT, round=0.3),
+    bx("上の取っ手", 23, 30, -21, -19.4, 38.4, 40, BRASS, round=0.4, metallic=0.7, roughness=0.3),
+    bx("下の取っ手", 23, 30, -21, -19.4, 28.4, 30, BRASS, round=0.4, metallic=0.7, roughness=0.3),
+])))
+
+# タンス / 14 primitives
+items.append(item("タンス", ["たんす","箪笥","chest of drawers","drawer","収納","furniture"], group("タンス", [
+    bx("木製収納本体", -29, 29, -15, 15, 5, 70, WOOD, round=0.8),
+    bx("天板", -30, 30, -16, 16, 70, 73, WOOD_DARK, round=0.8),
+    cy("脚1", -25, -11, 0, 5.5, 2.3, WOOD_DARK),
+    cy("脚2", 25, -11, 0, 5.5, 2.3, WOOD_DARK),
+    cy("脚3", -25, 11, 0, 5.5, 2.3, WOOD_DARK),
+    cy("脚4", 25, 11, 0, 5.5, 2.3, WOOD_DARK),
+    bx("引出し1", -27, 27, -16.7, -14.8, 7, 20.6, WOOD_LIGHT, round=0.5),
+    bx("取っ手1", -6, 6, -18.4, -16.5, 12.7, 14.9, BRASS, round=0.6, roughness=0.3, metallic=0.8),
+    bx("引出し2", -27, 27, -16.7, -14.8, 22.2, 35.8, WOOD_LIGHT, round=0.5),
+    bx("取っ手2", -6, 6, -18.4, -16.5, 27.9, 30.1, BRASS, round=0.6, roughness=0.3, metallic=0.8),
+    bx("引出し3", -27, 27, -16.7, -14.8, 37.4, 51, WOOD_LIGHT, round=0.5),
+    bx("取っ手3", -6, 6, -18.4, -16.5, 43.1, 45.3, BRASS, round=0.6, roughness=0.3, metallic=0.8),
+    bx("引出し4", -27, 27, -16.7, -14.8, 52.599999999999994, 66.19999999999999, WOOD_LIGHT, round=0.5),
+    bx("取っ手4", -6, 6, -18.4, -16.5, 58.3, 60.49999999999999, BRASS, round=0.6, roughness=0.3, metallic=0.8),
+])))
+
+# オフィスチェア / 21 primitives
+items.append(item("オフィスチェア", ["office chair","desk chair","事務椅子","回転椅子","キャスター","furniture"], group("オフィスチェア", [
+    bx("座面のフレーム", -20, 20, -17, 16, 29, 33, DARK, round=2, blend=0.5),
+    bx("厚手の座面クッション", -19, 19, -16, 15, 33, 36, BLUE, round=2, blend=0.4),
+    bx("背もたれ本体", -19, 19, 12, 19, 37, 74, DARK, round=2, blend=0.5),
+    bx("背クッション", -16, 16, 10.5, 13.5, 43, 70, BLUE, round=2, blend=0.3),
+    bx("背を支える板", -3, 3, 12, 19, 30, 44, METAL, round=0.6),
+    bx("左ひじ掛け", -22, -17, -11, 13, 43, 45.5, DARK, round=1.5),
+    bx("右ひじ掛け", 17, 22, -11, 13, 43, 45.5, DARK, round=1.5),
+    bx("左ひじの支柱", -21, -18, 8, 11, 33, 44, METAL, round=0.3),
+    bx("右ひじの支柱", 18, 21, 8, 11, 33, 44, METAL, round=0.3),
+    cy("昇降支柱", 0, 0, 6, 30, 2.8, METAL, metallic=0.75, roughness=0.3),
+    cy("脚の中央", 0, 0, 4.8, 10, 5, DARK, round=0.8),
+    bx("五本脚1", 1.8000000000000007, 19.8, -1.5, 1.5, 3.9, 7.1, DARK, round=1, rot=(0, 0, 0)),
+    bx("五本脚2", -5.662616460750567, 12.337383539249434, 8.771410375987658, 11.771410375987658, 3.9, 7.1, DARK, round=1, rot=(0, 0, 72)),
+    bx("五本脚3", -17.737383539249432, 0.2626164607505679, 4.848080724758711, 7.848080724758711, 3.9, 7.1, DARK, round=1, rot=(0, 0, 144)),
+    bx("五本脚4", -17.737383539249436, 0.2626164607505661, -7.848080724758709, -4.848080724758709, 3.9, 7.1, DARK, round=1, rot=(0, 0, 216)),
+    bx("五本脚5", -5.66261646075057, 12.33738353924943, -11.77141037598766, -8.77141037598766, 3.9, 7.1, DARK, round=1, rot=(0, 0, 288)),
+    ball("キャスター1", 20, 0, 2.2, 2.2, DARK, roughness=0.4),
+    ball("キャスター2", 6.180339887498949, 19.02113032590307, 2.2, 2.2, DARK, roughness=0.4),
+    ball("キャスター3", -16.180339887498945, 11.755705045849465, 2.2, 2.2, DARK, roughness=0.4),
+    ball("キャスター4", -16.180339887498953, -11.75570504584946, 2.2, 2.2, DARK, roughness=0.4),
+    ball("キャスター5", 6.180339887498945, -19.021130325903073, 2.2, 2.2, DARK, roughness=0.4),
+])))
 
 # ---- ランプ: floor lamp with a glowing bulb inside a translucent shade -------------------
 items.append(item("ランプ", ["lamp", "light", "灯", "glow", "furniture"], group("ランプ", [
@@ -212,10 +273,16 @@ items.append(item("まど", ["window", "窓", "glass", "ガラス", "furniture"]
 ])))
 
 
+
+
+# A single miniature scale (about 1:15) is used across the ten everyday objects.
+# Older generic names stay searchable through tags; no near-duplicate is registered.
 if __name__ == "__main__":
-    assert len(items) == 12, len(items)
+    assert len(items) == 15, len(items)
+    assert len({it["name"] for it in items}) == 15
     for it in items:
         n = len(it["group"]["shapes"])
-        assert 4 <= n <= 22, (it["name"], n)
+        assert 4 <= n <= 24, (it["name"], n)
     write_category("furniture.json", "かぐ", items)
-    preview(items, outdir="/tmp/lib_preview_furn")
+    if os.environ.get("MELTCAD_BIN") and os.path.isfile(os.environ["MELTCAD_BIN"]):
+        preview(items, outdir="/tmp/lib_preview_furn")
