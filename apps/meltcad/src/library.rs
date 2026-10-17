@@ -36,6 +36,8 @@ pub struct Item {
 }
 
 pub struct Category {
+    /// Bundled category name, kept for benchmark/test callers of all().
+    #[allow(dead_code)]
     pub name: String,
     pub items: Vec<Item>,
 }
@@ -254,6 +256,7 @@ fn parse(text: &str) -> Result<Category, String> {
 
 impl Item {
     /// Does the search text match the name or a tag (case-insensitive)?
+    #[allow(dead_code)] // Older callers can still perform an Item search directly.
     pub fn matches(&self, q: &str) -> bool {
         let q = q.trim().to_lowercase();
         q.is_empty() || self.name.to_lowercase().contains(&q) || self.tags.iter().any(|t| t.to_lowercase().contains(&q))
