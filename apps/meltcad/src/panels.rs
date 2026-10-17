@@ -371,6 +371,7 @@ impl App {
             self.scene.groups.swap(a, b);
             self.sel = Some(Pick::Group(b));
         }
+        crate::organic_furniture::inspector(self, ui, g);
         self.pattern_section(ui, g);
         self.actions(ui);
         let linked = self.scene.groups.get(g).is_some_and(crate::model::Group::is_linked);
@@ -380,6 +381,15 @@ impl App {
 
     fn shape_inspector(&mut self, ui: &mut Ui, g: usize, s: usize) {
         style::title(ui, "形");
+        // A click on any seat or leg selects one ordinary SDF shape. Give it an
+        // obvious route back to the shared parametric controls on the parent group.
+        if self.scene.groups.get(g).and_then(|gr| gr.organic_furniture).is_some() {
+            if style::pill(ui, "有機家具の設定を開く", false).clicked() {
+                self.sel = Some(Pick::Group(g));
+                return;
+            }
+            ui.label(RichText::new("このパーツは家具プリセットの一部です。設定を変更すると配置を作り直します。").size(11.0).color(style::DIM));
+        }
         let ngroups = self.scene.groups.len();
         let nshapes = self.scene.groups[g].shapes.len();
         let mut move_to: Option<usize> = None;
