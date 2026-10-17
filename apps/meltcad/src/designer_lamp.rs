@@ -433,6 +433,37 @@ mod tests {
     }
 
     #[test]
+    fn exported_shade_mesh_is_nonempty_and_watertight() {
+        let group = build(LampParams::default());
+        let shade = &group.shapes[0];
+        let field = Prepared::new(shade);
+        let (lo, hi) = bounds(shade);
+        let lower: [f64; 3] = lo.map(|n| f64::from(n - 2.0));
+        let upper: [f64; 3] = hi.map(|n| f64::from(n + 2.0));
+        let progress = crate::export_mesh::Progress::new();
+        let mesh = crate::export_mesh::mesh_sparse(
+            &|point: [f32; 3]| field.distance(point),
+            lower, upper, 0.9, 1, &progress.slice(0.0, 1.0),
+        ).expect("mesh an actual hollow shade");
+        assert!(!mesh.mesh.triangles.is_empty(), "no geometry in export");
+        assert!(mesh.stats.complete, "mesher could not close the surface");
+        assert!(solidcraft_geom::melt::is_watertight(&mesh.mesh), "mesh must have no open boundaries");
+    }
+
+    #[test]
+    fn lamp_parameter_card_renders_in_headless_egui() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        app.scene.groups = vec![build(LampParams::default())];
+        app.sel = Some(Pick::Group(0));
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            assert!(!app.designer_lamp_inspector(ui, 0));
+        });
+        assert!(!out.shapes.is_empty());
+        out.textures_delta.clear();
+    }
+
+    #[test]
     fn malformed_params_are_sanitized_and_bad_split_is_atomic() {
         let mut p = LampParams::default();
         p.thickness = f32::NAN;
