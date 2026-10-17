@@ -131,6 +131,9 @@ pub struct ScenePack {
     pub vols: Arc<VolumeSet>,
     /// Does any visible shape glow (the shader must march with materials)?
     pub glow: bool,
+    /// Does any visible group or shape keep only an overlap (`Op::Intersect`)? Then what is far
+    /// from a ray still decides where it stops, and the march may not leave anything out.
+    pub overlaps: bool,
     /// Instances in the list (a plain group counts none).
     pub instances: usize,
     /// Shapes in the list and groups to draw.
@@ -155,6 +158,7 @@ impl ScenePack {
         let mut poly: Vec<f32> = Vec::new();
         let mut path: Vec<f32> = Vec::new();
         let mut shape_n = 0usize;
+        let mut packed_overlap = false;
         let mut block_n = 0usize;
         let mut inst_n = 0usize;
         let mut slots: Vec<(usize, usize, usize)> = Vec::new();
@@ -179,6 +183,7 @@ impl ScenePack {
                     continue;
                 }
                 pack_shape(s, &mut shapes, &mut poly, &mut path, &vols);
+                packed_overlap |= s.op == crate::model::Op::Intersect;
                 members.push(s);
                 slots.push((gi, si, shape_n));
                 shape_n += 1;
@@ -245,6 +250,8 @@ impl ScenePack {
             list: Arc::new(list),
             vols: Arc::new(vols),
             glow: crate::perf::scene_has_glow(scene),
+            overlaps: resolved.iter().filter_map(|r| scene.groups.get(r.gi)).any(|g| g.op == crate::model::Op::Intersect)
+                || packed_overlap,
             instances: inst_n,
             shape_n,
             group_n,
@@ -292,7 +299,7 @@ impl ScenePack {
         }
         put(&mut u, 6, [self.group_n as f32, self.shape_n as f32, sel_first, sel_count]);
         put(&mut u, V4_OFFS, self.offs);
-        put(&mut u, V4_OFFS2, [self.offs2[0], self.offs2[1], 0.0, 0.0]);
+        put(&mut u, V4_OFFS2, [self.offs2[0], self.offs2[1], if self.overlaps { 1.0 } else { 0.0 }, 0.0]);
         let (bc, br) = bounds_of(scene, selected, &self.resolved);
         put(&mut u, V4_BOUND, [bc[0], bc[1], bc[2], br]);
         put(&mut u, V4_HOVER, [hover_first, hover_count, 0.0, 0.0]);
