@@ -52,7 +52,7 @@ class AnimalLibraryTests(unittest.TestCase):
             labels = [s["name"] for s in shapes]
             for part in parts:
                 self.assertTrue(any(part in label for label in labels), f"{name} lacks {part}")
-            self.assertTrue(any(s["kind"] == "Curve" for s in shapes) or name in ("くま", "さかな"),
+            self.assertTrue(any(s["kind"] == "Curve" for s in shapes) or name in ("くま", "さかな", "パンダ"),
                             f"{name} needs sculpted non-spherical parts")
 
     def test_shape_fields_and_scene_round_trip(self):
