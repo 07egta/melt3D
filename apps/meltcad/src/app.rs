@@ -913,6 +913,14 @@ impl App {
                             }
                         }
                         ui.separator();
+                        ui.label(egui::RichText::new("Organic Furniture｜有機家具").size(12.0).color(style::DIM));
+                        for design in crate::organic_furniture::Design::ALL {
+                            if ui.button(design.label()).on_hover_text("一体化した家具を作る。右側で高さ・幅・脚を変更できます").clicked() {
+                                crate::organic_furniture::insert(self, &ctx, design);
+                                ui.close();
+                            }
+                        }
+                        ui.separator();
                         ui.label(egui::RichText::new("CADの機能").size(12.0).color(style::DIM));
                         for k in Kind::CAD {
                             let r = ui.horizontal(|ui| {
