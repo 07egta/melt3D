@@ -65,7 +65,7 @@ pub enum Quality {
     Normal,
     /// Full size always.
     Fine,
-    /// Full size when still, half size while moving.
+    /// Full size when still; while moving, the size that keeps the frame rate (see `adapt::ScaleController`).
     #[default]
     Auto,
 }
@@ -87,11 +87,25 @@ impl Quality {
             Quality::Light => "いちばん軽い (画面の半分の細かさ)",
             Quality::Normal => "ほどほど (4分の3の細かさ)",
             Quality::Fine => "いつもフルの細かさ",
-            Quality::Auto => "止まっているときはきれい、動かすときは軽くする",
+            Quality::Auto => "止まっているときはきれい、動かすときは速さに合わせて軽くする",
         }
     }
 
-    /// The share of the viewport's pixels along each side that is actually drawn.
+    /// The share of the viewport's pixels along each side that is drawn once things are still.
+    pub fn still_scale(self) -> f32 {
+        self.scale(false)
+    }
+
+    /// The share drawn while moving when the choice fixes it (`None`: the controller decides).
+    pub fn moving_scale(self) -> Option<f32> {
+        match self {
+            Quality::Auto => None,
+            other => Some(other.scale(true)),
+        }
+    }
+
+    /// The share of the viewport's pixels along each side that is actually drawn. For `Auto`
+    /// while moving this is only the starting guess: the controller picks the real value.
     pub fn scale(self, moving: bool) -> f32 {
         match (self, moving) {
             (Quality::Light, _) => 0.5,
@@ -318,10 +332,11 @@ pub fn sphere_of(scene: &Scene, shapes: &[(usize, usize)]) -> [f32; 4] {
 
 /// What the last viewport picture was made from. The window repaints only when something
 /// happens, so anything that changes after the picture was made (a floating panel edits the
-/// scene, say) must ask for one more frame: that is what `stale` finds out.
+/// scene, say) must ask for one more frame: that is what `stale` finds out. The scene is
+/// represented by its revision number (`App::track_scene`), so nothing is cloned or compared here.
 #[derive(Default, Debug)]
 pub struct Drawn {
-    scene: Scene,
+    rev: u64,
     sel: Option<crate::model::Pick>,
     hover: Option<crate::model::Pick>,
     cam: [f32; 7],
@@ -335,8 +350,8 @@ const MAX_STALE_RUN: u32 = 3;
 
 impl Drawn {
     /// Remember what the picture just made shows.
-    pub fn note(&mut self, scene: &Scene, sel: Option<crate::model::Pick>, hover: Option<crate::model::Pick>, cam: &Camera, clean: bool) {
-        self.scene.clone_from(scene);
+    pub fn note(&mut self, rev: u64, sel: Option<crate::model::Pick>, hover: Option<crate::model::Pick>, cam: &Camera, clean: bool) {
+        self.rev = rev;
         self.sel = sel;
         self.hover = hover;
         self.cam = cam_key(cam);
@@ -344,22 +359,54 @@ impl Drawn {
     }
 
     /// Has the scene changed since the picture (while looking at it, the person edited it)?
-    pub fn scene_changed(&self, scene: &Scene) -> bool {
-        self.scene != *scene
+    pub fn scene_changed(&self, rev: u64) -> bool {
+        self.rev != rev
     }
 
     /// Does the picture differ from what is now on the screen's model? Asks for another frame at
     /// most `MAX_STALE_RUN` times in a row.
-    pub fn wants_another_frame(&mut self, scene: &Scene, sel: Option<crate::model::Pick>, hover: Option<crate::model::Pick>, cam: &Camera, clean: bool) -> bool {
+    pub fn wants_another_frame(&mut self, rev: u64, sel: Option<crate::model::Pick>, hover: Option<crate::model::Pick>, cam: &Camera, clean: bool) -> bool {
         let shown_sel = if clean { None } else { sel };
         let shown_hover = if clean { None } else { hover };
-        let stale = self.scene != *scene || self.sel != shown_sel || self.hover != shown_hover || self.cam != cam_key(cam) || self.clean != clean;
+        let stale = self.rev != rev || self.sel != shown_sel || self.hover != shown_hover || self.cam != cam_key(cam) || self.clean != clean;
         if !stale {
             self.stale_run = 0;
             return false;
         }
         self.stale_run += 1;
         self.stale_run <= MAX_STALE_RUN
+    }
+}
+
+/// The scene list packed for the shader, kept while the scene is unchanged: a frame that only
+/// moves the camera packs nothing.
+#[derive(Default)]
+pub struct PackCache {
+    rev: Option<u64>,
+    pack: Option<std::sync::Arc<crate::gpu::ScenePack>>,
+    /// How many times the scene was packed (for tests and the HUD).
+    pub packs: u64,
+}
+
+impl PackCache {
+    /// The pack of `scene` (revision `rev`): the cached one, or a new one.
+    pub fn get(&mut self, scene: &Scene, rev: u64) -> std::sync::Arc<crate::gpu::ScenePack> {
+        if let (Some(r), Some(p)) = (self.rev, self.pack.as_ref())
+            && r == rev
+        {
+            return p.clone();
+        }
+        let p = std::sync::Arc::new(crate::gpu::ScenePack::new(scene, crate::gpu::VolumeSet::of(scene)));
+        self.rev = Some(rev);
+        self.pack = Some(p.clone());
+        self.packs += 1;
+        p
+    }
+}
+
+impl std::fmt::Debug for PackCache {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "PackCache({} packs)", self.packs)
     }
 }
 
@@ -372,14 +419,47 @@ pub struct Perf {
     /// The window title that was last sent (sending it again wakes the event loop).
     pub last_title: String,
     pub last_cam: [f32; 7],
+    /// Picks the render scale while things move.
+    pub scale: crate::adapt::ScaleController,
+    /// Frame times (for the HUD).
+    pub stats: crate::hud::FrameStats,
+    /// Show the frame-time HUD (F3).
+    pub hud: bool,
+    /// What the graphics side reports (timings, how much of the sharp picture is done).
+    pub feedback: crate::gpu::Feedback,
+    pub pack: PackCache,
+    /// When the frame started (for the processor time of the frame) and when the one before did.
+    pub frame_start: Option<std::time::Instant>,
+    /// The scale the last moving picture was asked for, and whether it was a moving picture.
+    pub last_scale: f32,
+    pub last_fast: bool,
+    /// A benchmark is requested from the menu.
+    pub bench_requested: bool,
+    /// Sharpen picture that is scaled up (0 = off).
+    pub sharpen: f32,
+}
+
+/// What the 'がしつ' menu shows and changes (copied out of `Perf` while the menu is drawn).
+#[derive(Clone, Copy, Debug)]
+pub struct MenuState {
+    pub quality: Quality,
+    pub hud: bool,
+    /// Set when "速さをはかる" was clicked.
+    pub bench: bool,
 }
 
 /// The 'がしつ' menu of the top bar.
 /// `extra` adds entries below the quality choices (the graphics path's: simple view, backend, log).
-pub fn quality_menu(ui: &mut egui::Ui, quality: &mut Quality, extra: impl FnOnce(&mut egui::Ui)) {
-    ui.menu_button(egui::RichText::new(format!("がしつ　{}", quality.label())).size(13.0), |ui| {
+pub fn quality_menu(ui: &mut egui::Ui, menu: &mut MenuState, extra: impl FnOnce(&mut egui::Ui)) {
+    ui.menu_button(egui::RichText::new(format!("がしつ　{}", menu.quality.label())).size(13.0), |ui| {
         for q in Quality::ALL {
-            ui.selectable_value(quality, q, q.label()).on_hover_text(q.hint());
+            ui.selectable_value(&mut menu.quality, q, q.label()).on_hover_text(q.hint());
+        }
+        ui.separator();
+        ui.checkbox(&mut menu.hud, "フレーム時間を表示　F3").on_hover_text("1秒あたりの枚数・CPU と GPU の時間・描画の倍率を絵の上に出します");
+        if ui.button("速さをはかる…").on_hover_text("いくつかのシーンを描いて、この機械での速さを表にします").clicked() {
+            menu.bench = true;
+            ui.close();
         }
         extra(ui);
     });
@@ -491,36 +571,46 @@ mod tests {
     #[test]
     fn a_change_after_the_picture_asks_for_one_more_frame() {
         use crate::model::Pick;
-        let mut scene = Scene::default();
         let cam = Camera::default();
         let mut d = Drawn::default();
-        d.note(&scene, Some(Pick::Shape(0, 0)), None, &cam, false);
-        assert!(!d.wants_another_frame(&scene, Some(Pick::Shape(0, 0)), None, &cam, false));
-        assert!(d.wants_another_frame(&scene, None, None, &cam, false), "selection changed");
-        d.note(&scene, None, None, &cam, false);
-        assert!(!d.wants_another_frame(&scene, None, None, &cam, false), "caught up");
-        if let Some(sh) = scene.shape_mut(0, 0) {
-            sh.pos[0] += 1.0;
-        }
-        assert!(d.scene_changed(&scene));
-        assert!(d.wants_another_frame(&scene, None, None, &cam, false), "scene edited later in the frame");
+        d.note(1, Some(Pick::Shape(0, 0)), None, &cam, false);
+        assert!(!d.wants_another_frame(1, Some(Pick::Shape(0, 0)), None, &cam, false));
+        assert!(d.wants_another_frame(1, None, None, &cam, false), "selection changed");
+        d.note(1, None, None, &cam, false);
+        assert!(!d.wants_another_frame(1, None, None, &cam, false), "caught up");
+        // the scene was edited (its revision moved) later in the frame
+        assert!(d.scene_changed(2));
+        assert!(d.wants_another_frame(2, None, None, &cam, false), "scene edited later in the frame");
         // a picture without overlays: the selection is not shown
-        d.note(&scene, None, None, &cam, true);
-        assert!(!d.wants_another_frame(&scene, Some(Pick::Shape(0, 0)), Some(Pick::Shape(0, 0)), &cam, true));
-        assert!(d.wants_another_frame(&scene, Some(Pick::Shape(0, 0)), None, &cam, false), "overlays are back");
+        d.note(2, None, None, &cam, true);
+        assert!(!d.wants_another_frame(2, Some(Pick::Shape(0, 0)), Some(Pick::Shape(0, 0)), &cam, true));
+        assert!(d.wants_another_frame(2, Some(Pick::Shape(0, 0)), None, &cam, false), "overlays are back");
     }
 
     #[test]
     fn a_scene_that_never_equals_itself_cannot_loop_forever() {
-        let mut scene = Scene::default();
-        if let Some(sh) = scene.shape_mut(0, 0) {
-            sh.pos[0] = f32::NAN;
-        }
+        // (its revision moves at every look: a scene holding NaN is never equal to its copy)
         let cam = Camera::default();
         let mut d = Drawn::default();
-        d.note(&scene, None, None, &cam, false);
-        let asks = (0..10).filter(|_| d.wants_another_frame(&scene, None, None, &cam, false)).count();
+        d.note(1, None, None, &cam, false);
+        let asks = (0..10).filter(|k| d.wants_another_frame(2 + *k as u64, None, None, &cam, false)).count();
         assert_eq!(asks, MAX_STALE_RUN as usize);
+    }
+
+    #[test]
+    fn the_pack_is_made_again_only_when_the_scene_changed() {
+        let mut scene = Scene::default();
+        let mut c = PackCache::default();
+        let a = c.get(&scene, 1);
+        let b = c.get(&scene, 1);
+        assert!(std::sync::Arc::ptr_eq(&a, &b));
+        assert_eq!(c.packs, 1);
+        if let Some(sh) = scene.shape_mut(0, 0) {
+            sh.pos[0] += 3.0;
+        }
+        let d = c.get(&scene, 2);
+        assert!(!std::sync::Arc::ptr_eq(&a, &d) && d.id != a.id);
+        assert_eq!(c.packs, 2);
     }
 
     /// The shader skips a shape when it is `reach` further than the rest. That is exact only if

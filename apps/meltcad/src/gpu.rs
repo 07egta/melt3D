@@ -19,6 +19,7 @@ use crate::sdf::Prepared;
 /// vec4 in a float texture (`ROW` vec4 per row), read with `textureLoad`: there is no size limit
 /// from the 64 KB uniform buffer, and it works on every backend (a storage buffer is not allowed
 /// by the limits egui-wgpu asks for on OpenGL). The list is as long as the scene needs.
+const V4_VIEW: usize = 4;
 const V4_BOUND: usize = 7;
 const V4_HOVER: usize = 8;
 const V4_SELSPH: usize = 9;
@@ -110,140 +111,203 @@ pub fn pack(scene: &Scene, cam: &Camera, size: [f32; 2], selected: Option<Pick>,
 
 /// `pack`, with the volumes' places in the volume texture given (`VolumeSet::of(scene)`).
 pub fn pack_with(scene: &Scene, cam: &Camera, size: [f32; 2], selected: Option<Pick>, hover: Option<Pick>, srgb: bool, vols: &VolumeSet) -> Vec<f32> {
-    let mut u = vec![0.0_f32; GLOBAL_V4 * 4];
-    let (right, up, fwd) = cam.basis();
-    let eye = cam.eye();
-    put(&mut u, 0, [eye[0], eye[1], eye[2], 0.0]);
-    put(&mut u, 1, [right[0], right[1], right[2], 0.0]);
-    put(&mut u, 2, [up[0], up[1], up[2], 0.0]);
-    put(&mut u, 3, [fwd[0], fwd[1], fwd[2], if cam.ortho { 0.0 } else { TAN_HALF_FOV }]);
-    put(&mut u, 4, [size[0], size[1], cam.half_height(), if srgb { 1.0 } else { 0.0 }]);
-    let m = scene.melt;
-    put(&mut u, 5, [m.mode.id(), m.amount, m.drip, m.ripple]);
+    let sp = ScenePack::new(scene, vols.clone());
+    let mut u = sp.globals(scene, cam, size, selected, hover, srgb).to_vec();
+    u.extend_from_slice(&sp.list);
+    u
+}
 
-    // the lists
-    let resolved = crate::pattern::resolve(scene);
-    let mut groups: Vec<f32> = Vec::new();
-    let mut blocks: Vec<f32> = Vec::new();
-    let mut insts: Vec<f32> = Vec::new();
-    let mut shapes: Vec<f32> = Vec::new();
-    let mut poly: Vec<f32> = Vec::new();
-    let mut path: Vec<f32> = Vec::new();
-    let mut shape_n = 0usize;
-    let mut block_n = 0usize;
-    let mut inst_n = 0usize;
-    let mut sel_first = -1.0_f32;
-    let mut sel_count = 0.0_f32;
-    let mut hover_first = -1.0_f32;
-    let mut hover_count = 0.0_f32;
-    // every group whose shapes are drawn (itself, or as the source of a linked copy) is packed once
-    let mut srcs: Vec<usize> = resolved.iter().map(|r| r.src).collect();
-    srcs.sort_unstable();
-    srcs.dedup();
-    /// Where a source group's blocks went: its first block, the number of blocks, its sphere.
-    struct Packed {
-        first_block: usize,
-        n_blocks: usize,
-        sphere: crate::accel::Bound,
-    }
-    let mut packed: std::collections::HashMap<usize, Packed> = std::collections::HashMap::new();
-    for gi in srcs {
-        let Some(g) = scene.groups.get(gi) else { continue };
-        let first = shape_n;
-        let mut members: Vec<&crate::model::Shape> = Vec::new();
-        for (si, s) in g.shapes.iter().enumerate() {
-            if !s.visible || shape_n >= MAX_SHAPES {
+static PACK_IDS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+/// The scene as the shader reads it: the long list (groups, blocks, instances, shapes, outline
+/// points, path nodes) and what is needed to name things in it. It depends on the scene alone, not
+/// on the camera, the selection or the picture size, so a frame that only moves the camera reuses
+/// it (and the graphics card keeps the list it already has: see `id`).
+#[derive(Debug)]
+pub struct ScenePack {
+    /// A number that is new for every pack: the graphics side uploads the list when it changes.
+    pub id: u64,
+    pub list: Arc<Vec<f32>>,
+    pub vols: Arc<VolumeSet>,
+    /// Does any visible shape glow (the shader must march with materials)?
+    pub glow: bool,
+    /// Instances in the list (a plain group counts none).
+    pub instances: usize,
+    /// Shapes in the list and groups to draw.
+    pub shape_n: usize,
+    pub group_n: usize,
+    offs: [f32; 4],
+    offs2: [f32; 2],
+    resolved: Vec<crate::pattern::RGroup>,
+    /// (group, shape, number in the list) of every packed shape.
+    slots: Vec<(usize, usize, usize)>,
+    /// (group, first packed shape, count) of every group whose shapes were packed.
+    ranges: Vec<(usize, usize, usize)>,
+}
+
+impl ScenePack {
+    pub fn new(scene: &Scene, vols: VolumeSet) -> ScenePack {
+        let resolved = crate::pattern::resolve(scene);
+        let mut groups: Vec<f32> = Vec::new();
+        let mut blocks: Vec<f32> = Vec::new();
+        let mut insts: Vec<f32> = Vec::new();
+        let mut shapes: Vec<f32> = Vec::new();
+        let mut poly: Vec<f32> = Vec::new();
+        let mut path: Vec<f32> = Vec::new();
+        let mut shape_n = 0usize;
+        let mut block_n = 0usize;
+        let mut inst_n = 0usize;
+        let mut slots: Vec<(usize, usize, usize)> = Vec::new();
+        let mut ranges: Vec<(usize, usize, usize)> = Vec::new();
+        // every group whose shapes are drawn (itself, or as the source of a linked copy) is packed once
+        let mut srcs: Vec<usize> = resolved.iter().map(|r| r.src).collect();
+        srcs.sort_unstable();
+        srcs.dedup();
+        /// Where a source group's blocks went: its first block, the number of blocks, its sphere.
+        struct Packed {
+            first_block: usize,
+            n_blocks: usize,
+            sphere: crate::accel::Bound,
+        }
+        let mut packed: std::collections::HashMap<usize, Packed> = std::collections::HashMap::new();
+        for gi in srcs {
+            let Some(g) = scene.groups.get(gi) else { continue };
+            let first = shape_n;
+            let mut members: Vec<&crate::model::Shape> = Vec::new();
+            for (si, s) in g.shapes.iter().enumerate() {
+                if !s.visible || shape_n >= MAX_SHAPES {
+                    continue;
+                }
+                pack_shape(s, &mut shapes, &mut poly, &mut path, &vols);
+                members.push(s);
+                slots.push((gi, si, shape_n));
+                shape_n += 1;
+            }
+            let count = shape_n - first;
+            ranges.push((gi, first, count));
+            if count == 0 {
                 continue;
             }
-            pack_shape(s, &mut shapes, &mut poly, &mut path, vols);
-            members.push(s);
-            if hover == Some(Pick::Shape(gi, si)) {
-                hover_first = shape_n as f32;
-                hover_count = 1.0;
+            let info = crate::accel::group_info(&members, &scene.melt);
+            for b in &info.blocks {
+                push(&mut blocks, [b.bound.c[0], b.bound.c[1], b.bound.c[2], b.bound.r]);
+                push(&mut blocks, [b.kmax, if b.skippable { 0.0 } else { 1.0 }, (first + b.first) as f32, b.count as f32]);
             }
-            if selected == Some(Pick::Shape(gi, si)) {
-                sel_first = shape_n as f32;
-                sel_count = 1.0;
-            }
-            shape_n += 1;
+            packed.insert(gi, Packed { first_block: block_n, n_blocks: info.blocks.len(), sphere: info.bound });
+            block_n += info.blocks.len();
         }
-        let count = shape_n - first;
-        if selected == Some(Pick::Group(gi)) && count > 0 {
-            sel_first = first as f32;
-            sel_count = count as f32;
-        }
-        if count == 0 {
-            continue;
-        }
-        let info = crate::accel::group_info(&members, &scene.melt);
-        for b in &info.blocks {
-            push(&mut blocks, [b.bound.c[0], b.bound.c[1], b.bound.c[2], b.bound.r]);
-            push(&mut blocks, [b.kmax, if b.skippable { 0.0 } else { 1.0 }, (first + b.first) as f32, b.count as f32]);
-        }
-        packed.insert(gi, Packed { first_block: block_n, n_blocks: info.blocks.len(), sphere: info.bound });
-        block_n += info.blocks.len();
-    }
-    let mut group_n = 0usize;
-    for rg in &resolved {
-        let (Some(g), Some(p)) = (scene.groups.get(rg.gi), packed.get(&rg.src)) else { continue };
-        if group_n >= MAX_GROUPS {
-            break;
-        }
-        let first_inst = inst_n;
-        for i in &rg.insts {
-            if inst_n >= crate::pattern::MAX_INSTANCES + MAX_GROUPS {
+        let mut group_n = 0usize;
+        for rg in &resolved {
+            let (Some(g), Some(p)) = (scene.groups.get(rg.gi), packed.get(&rg.src)) else { continue };
+            if group_n >= MAX_GROUPS {
                 break;
             }
-            let rows = i.back_rows();
-            for r in rows {
-                push(&mut insts, r);
+            let first_inst = inst_n;
+            for i in &rg.insts {
+                if inst_n >= crate::pattern::MAX_INSTANCES + MAX_GROUPS {
+                    break;
+                }
+                let rows = i.back_rows();
+                for r in rows {
+                    push(&mut insts, r);
+                }
+                let c = i.bound(p.sphere).c;
+                push(&mut insts, [c[0], c[1], c[2], i.s]);
+                inst_n += 1;
             }
-            let c = i.bound(p.sphere).c;
-            push(&mut insts, [c[0], c[1], c[2], i.s]);
-            inst_n += 1;
+            push(&mut groups, [p.first_block as f32, p.n_blocks as f32, g.op.sign(), g.blend]);
+            push(&mut groups, [first_inst as f32, (inst_n - first_inst) as f32, 0.0, 0.0]);
+            push(&mut groups, [p.sphere.c[0], p.sphere.c[1], p.sphere.c[2], p.sphere.r]);
+            group_n += 1;
         }
-        push(&mut groups, [p.first_block as f32, p.n_blocks as f32, g.op.sign(), g.blend]);
-        push(&mut groups, [first_inst as f32, (inst_n - first_inst) as f32, 0.0, 0.0]);
-        push(&mut groups, [p.sphere.c[0], p.sphere.c[1], p.sphere.c[2], p.sphere.r]);
-        group_n += 1;
+        // the sections follow each other: groups, blocks, instances, shapes, outline points, path nodes
+        let v4 = |l: &Vec<f32>| l.len() / 4;
+        let block_base = v4(&groups);
+        let inst_base = block_base + v4(&blocks);
+        let shape_base = inst_base + v4(&insts);
+        while poly.len() % 4 != 0 {
+            poly.push(0.0);
+        }
+        let poly_base = shape_base + v4(&shapes);
+        let path_base = poly_base + v4(&poly);
+        let mut list = groups;
+        list.reserve(blocks.len() + insts.len() + shapes.len() + poly.len() + path.len());
+        list.extend_from_slice(&blocks);
+        list.extend_from_slice(&insts);
+        list.extend_from_slice(&shapes);
+        list.extend_from_slice(&poly);
+        list.extend_from_slice(&path);
+        ScenePack {
+            id: PACK_IDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            list: Arc::new(list),
+            vols: Arc::new(vols),
+            glow: crate::perf::scene_has_glow(scene),
+            instances: inst_n,
+            shape_n,
+            group_n,
+            offs: [0.0, block_base as f32, inst_base as f32, shape_base as f32],
+            offs2: [poly_base as f32, path_base as f32],
+            resolved,
+            slots,
+            ranges,
+        }
     }
-    // the sections follow each other: groups, blocks, instances, shapes, outline points, path nodes
-    let v4 = |l: &Vec<f32>| l.len() / 4;
-    let block_base = v4(&groups);
-    let inst_base = block_base + v4(&blocks);
-    let shape_base = inst_base + v4(&insts);
-    while poly.len() % 4 != 0 {
-        poly.push(0.0);
+
+    /// The packed number of a shape (hidden shapes have none).
+    fn slot_of(&self, gi: usize, si: usize) -> Option<usize> {
+        self.slots.iter().find(|(g, s, _)| *g == gi && *s == si).map(|(_, _, n)| *n)
     }
-    let poly_base = shape_base + v4(&shapes);
-    let path_base = poly_base + v4(&poly);
-    put(&mut u, 6, [group_n as f32, shape_n as f32, sel_first, sel_count]);
-    put(&mut u, V4_OFFS, [0.0, block_base as f32, inst_base as f32, shape_base as f32]);
-    put(&mut u, V4_OFFS2, [poly_base as f32, path_base as f32, 0.0, 0.0]);
-    let (bc, br) = bounds_of(scene, selected, &resolved);
-    put(&mut u, V4_BOUND, [bc[0], bc[1], bc[2], br]);
-    put(&mut u, V4_HOVER, [hover_first, hover_count, 0.0, 0.0]);
-    put(&mut u, V4_SELSPH, crate::perf::sphere_of(scene, &crate::view::targets(scene, selected)));
-    let e = &scene.env;
-    let flags = (if e.grid { 1.0 } else { 0.0 }) + (if e.floor { 2.0 } else { 0.0 });
-    put(&mut u, V4_ENV, [e.exposure, e.ambient, e.shadow, flags]);
-    put(&mut u, V4_ENV + 1, [e.backdrop[0], e.backdrop[1], e.backdrop[2], e.lights.len() as f32]);
-    put(&mut u, V4_ENV + 2, [e.sky_top[0], e.sky_top[1], e.sky_top[2], 0.0]);
-    put(&mut u, V4_ENV + 3, [e.sky_horizon[0], e.sky_horizon[1], e.sky_horizon[2], 0.0]);
-    put(&mut u, V4_ENV + 4, [e.sky_bottom[0], e.sky_bottom[1], e.sky_bottom[2], 0.0]);
-    for (i, l) in e.lights.iter().enumerate().take(crate::model::MAX_LIGHTS) {
-        let d = l.dir();
-        put(&mut u, V4_ENV + 5 + i * 2, [d[0], d[1], d[2], l.power]);
-        put(&mut u, V4_ENV + 6 + i * 2, [l.color[0], l.color[1], l.color[2], 0.0]);
+
+    /// The per-frame numbers (`GLOBAL_V4` vec4): camera, light, counts, where the lists start, the
+    /// selection. `scene` must be the one this pack was made from.
+    pub fn globals(&self, scene: &Scene, cam: &Camera, size: [f32; 2], selected: Option<Pick>, hover: Option<Pick>, srgb: bool) -> [f32; GLOBAL_V4 * 4] {
+        let mut u = [0.0_f32; GLOBAL_V4 * 4];
+        let (right, up, fwd) = cam.basis();
+        let eye = cam.eye();
+        put(&mut u, 0, [eye[0], eye[1], eye[2], 0.0]);
+        put(&mut u, 1, [right[0], right[1], right[2], 0.0]);
+        put(&mut u, 2, [up[0], up[1], up[2], 0.0]);
+        put(&mut u, 3, [fwd[0], fwd[1], fwd[2], if cam.ortho { 0.0 } else { TAN_HALF_FOV }]);
+        put(&mut u, 4, [size[0], size[1], cam.half_height(), if srgb { 1.0 } else { 0.0 }]);
+        let m = scene.melt;
+        put(&mut u, 5, [m.mode.id(), m.amount, m.drip, m.ripple]);
+        let (mut sel_first, mut sel_count, mut hover_first, mut hover_count) = (-1.0_f32, 0.0_f32, -1.0_f32, 0.0_f32);
+        let find = |p: Option<Pick>| -> Option<(f32, f32)> {
+            match p? {
+                Pick::Shape(g, s) => self.slot_of(g, s).map(|n| (n as f32, 1.0)),
+                Pick::Group(g) => self.ranges.iter().find(|(gi, _, c)| *gi == g && *c > 0).map(|(_, f, c)| (*f as f32, *c as f32)),
+            }
+        };
+        if let Some((f, c)) = find(selected) {
+            (sel_first, sel_count) = (f, c);
+        }
+        // (the hover names one shape only)
+        if let Some(Pick::Shape(g, s)) = hover
+            && let Some(n) = self.slot_of(g, s)
+        {
+            (hover_first, hover_count) = (n as f32, 1.0);
+        }
+        put(&mut u, 6, [self.group_n as f32, self.shape_n as f32, sel_first, sel_count]);
+        put(&mut u, V4_OFFS, self.offs);
+        put(&mut u, V4_OFFS2, [self.offs2[0], self.offs2[1], 0.0, 0.0]);
+        let (bc, br) = bounds_of(scene, selected, &self.resolved);
+        put(&mut u, V4_BOUND, [bc[0], bc[1], bc[2], br]);
+        put(&mut u, V4_HOVER, [hover_first, hover_count, 0.0, 0.0]);
+        put(&mut u, V4_SELSPH, crate::perf::sphere_of(scene, &crate::view::targets(scene, selected)));
+        let e = &scene.env;
+        let flags = (if e.grid { 1.0 } else { 0.0 }) + (if e.floor { 2.0 } else { 0.0 });
+        put(&mut u, V4_ENV, [e.exposure, e.ambient, e.shadow, flags]);
+        put(&mut u, V4_ENV + 1, [e.backdrop[0], e.backdrop[1], e.backdrop[2], e.lights.len() as f32]);
+        put(&mut u, V4_ENV + 2, [e.sky_top[0], e.sky_top[1], e.sky_top[2], 0.0]);
+        put(&mut u, V4_ENV + 3, [e.sky_horizon[0], e.sky_horizon[1], e.sky_horizon[2], 0.0]);
+        put(&mut u, V4_ENV + 4, [e.sky_bottom[0], e.sky_bottom[1], e.sky_bottom[2], 0.0]);
+        for (i, l) in e.lights.iter().enumerate().take(crate::model::MAX_LIGHTS) {
+            let d = l.dir();
+            put(&mut u, V4_ENV + 5 + i * 2, [d[0], d[1], d[2], l.power]);
+            put(&mut u, V4_ENV + 6 + i * 2, [l.color[0], l.color[1], l.color[2], 0.0]);
+        }
+        u
     }
-    u.reserve(groups.len() + blocks.len() + insts.len() + shapes.len() + poly.len() + path.len());
-    u.extend_from_slice(&groups);
-    u.extend_from_slice(&blocks);
-    u.extend_from_slice(&insts);
-    u.extend_from_slice(&shapes);
-    u.extend_from_slice(&poly);
-    u.extend_from_slice(&path);
-    u
 }
 
 /// One shape's 16 vec4 (a bounding sphere, then `struct Shape`); its outline points and path nodes
@@ -400,32 +464,66 @@ struct VolTex {
 }
 
 pub(crate) struct Resources {
-    /// Draws the scene (into `target`).
+    /// Draws the scene (into a picture).
     pipeline: wgpu::RenderPipeline,
     buffer: wgpu::Buffer,
     scene_layout: wgpu::BindGroupLayout,
     /// The scene list; made (and made taller) when a scene needs it.
     pool: Option<Pool>,
+    /// What the pool holds now: the pack it came from, and a copy of its numbers (so that a
+    /// small change uploads only the rows that differ).
+    pool_id: u64,
+    pool_copy: Vec<f32>,
     /// The imported meshes' distances (a 1-row dummy when there are none).
     vol: VolTex,
-    /// Copies `target` into egui's picture.
+    /// Copies the pictures into egui's frame.
     blit: wgpu::RenderPipeline,
     blit_layout: wgpu::BindGroupLayout,
+    blit_params: wgpu::Buffer,
     linear: wgpu::Sampler,
-    nearest: wgpu::Sampler,
     format: wgpu::TextureFormat,
-    /// The finished picture of the scene. It stays until the scene changes, so a repaint that
-    /// is only about the panels costs one textured triangle, not a ray march.
-    target: Option<Target>,
-    cache: crate::perf::FrameCache,
+    /// The two pictures of the scene (see `Pics`). They stay until the scene changes, so a repaint
+    /// that is only about the panels costs one textured triangle, not a ray march.
+    pics: Option<Pics>,
+    /// Times the scene passes on the graphics card (None where the device cannot).
+    timer: Option<crate::gpu_timing::Timer>,
+    /// How many rows of the sharp picture to draw in a frame.
+    pacer: crate::adapt::BandPacer,
+    /// Frame counter (for the frame cache and tests).
+    frames: u64,
+    /// The volume layout generation: bumped whenever the volume texture changes.
+    vol_gen: u64,
 }
 
-struct Target {
-    view: wgpu::TextureView,
+/// What a picture was made from. A picture is current when the key of the frame equals it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct PicKey {
+    /// Hash of the per-frame numbers (camera, selection, light...) without the picture size and the fast flag.
+    globals: u64,
+    list: u64,
+    vol_gen: u64,
+    /// The size drawn, in pixels.
     size: [u32; 2],
-    /// Smooth copy (the picture is smaller than the viewport) and exact copy (same size).
-    linear: wgpu::BindGroup,
-    nearest: wgpu::BindGroup,
+}
+
+/// A picture the scene is drawn into: a texture as large as the window's viewport, of which the
+/// top left `used` part is drawn (so that changing the render scale does not make a new texture).
+struct Pic {
+    view: wgpu::TextureView,
+    key: Option<PicKey>,
+    used: [u32; 2],
+}
+
+/// The cheap picture A, drawn in one pass while things move; the sharp picture B, drawn band by
+/// band (a few rows in each frame) when the scene is still, so that no frame has to pay for the
+/// whole thing; and the bind group the blit reads both through.
+struct Pics {
+    a: Pic,
+    b: Pic,
+    /// Rows of B that are finished (the key says for which picture).
+    bands: crate::adapt::Bands,
+    capacity: [u32; 2],
+    bind: wgpu::BindGroup,
 }
 
 /// The shader is one program in several files: the core, the extra solids, the CAD features.
@@ -441,6 +539,8 @@ pub fn shader_source() -> String {
 }
 
 const BLIT_SOURCE: &str = include_str!("blit.wgsl");
+/// The blit's parameters: three vec4.
+const BLIT_PARAM_BYTES: usize = 48;
 
 /// Run `f` with every kind of wgpu error caught instead of panicking (the default handler of an
 /// error nobody asked for is a panic, and on the compile thread a panic is silent). Returns what
@@ -519,12 +619,12 @@ fn triangle_pipeline(device: &wgpu::Device, label: &str, layout: &wgpu::Pipeline
 
 /// Build the pipelines (this is the slow part of start-up: the driver compiles the shader).
 /// Any error from the driver comes back as text; none of them panics.
-fn try_build(device: &wgpu::Device, format: wgpu::TextureFormat) -> Result<Resources, String> {
-    try_build_from(device, format, &shader_source())
+fn try_build(device: &wgpu::Device, queue: &wgpu::Queue, format: wgpu::TextureFormat) -> Result<Resources, String> {
+    try_build_from(device, queue, format, &shader_source())
 }
 
 /// `try_build` with the scene shader's source given (so that tests can hand it a broken one).
-pub(crate) fn try_build_from(device: &wgpu::Device, format: wgpu::TextureFormat, source: &str) -> Result<Resources, String> {
+pub(crate) fn try_build_from(device: &wgpu::Device, queue: &wgpu::Queue, format: wgpu::TextureFormat, source: &str) -> Result<Resources, String> {
     let module = step(device, "シェーダーを読む (create_shader_module)", || {
         device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("meltcad"), source: wgpu::ShaderSource::Wgsl(source.into()) })
     })?;
@@ -565,17 +665,24 @@ pub(crate) fn try_build_from(device: &wgpu::Device, format: wgpu::TextureFormat,
         })
     })?;
 
-    // the copy of the finished picture into egui's frame
+    // the copy of the finished pictures into egui's frame
     let (blit_layout, blit) = step(device, "blit pipeline", || {
         let blit_module = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("meltcad blit"), source: wgpu::ShaderSource::Wgsl(BLIT_SOURCE.into()) });
         let blit_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("meltcad blit"),
             entries: &[
                 texture_entry(0, wgpu::ShaderStages::FRAGMENT, true),
+                texture_entry(1, wgpu::ShaderStages::FRAGMENT, true),
                 wgpu::BindGroupLayoutEntry {
-                    binding: 1,
+                    binding: 2,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None },
                     count: None,
                 },
             ],
@@ -584,7 +691,14 @@ pub(crate) fn try_build_from(device: &wgpu::Device, format: wgpu::TextureFormat,
         let blit = triangle_pipeline(device, "meltcad blit", &blit_pl, &blit_module, format);
         (blit_layout, blit)
     })?;
-    let sampler = |filter| device.create_sampler(&wgpu::SamplerDescriptor { label: Some("meltcad"), mag_filter: filter, min_filter: filter, ..Default::default() });
+    let blit_params = step(device, "blit parameters", || {
+        device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("meltcad blit"),
+            contents: &[0u8; BLIT_PARAM_BYTES],
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        })
+    })?;
+    let linear = device.create_sampler(&wgpu::SamplerDescriptor { label: Some("meltcad"), mag_filter: wgpu::FilterMode::Linear, min_filter: wgpu::FilterMode::Linear, ..Default::default() });
     // (the one-row volume texture: Rgba16Float must be bindable)
     let vol = step(device, "volume texture", || VolTex::new(device, 1))?;
     Ok(Resources {
@@ -592,21 +706,26 @@ pub(crate) fn try_build_from(device: &wgpu::Device, format: wgpu::TextureFormat,
         buffer,
         scene_layout: bgl,
         pool: None,
+        pool_id: 0,
+        pool_copy: Vec::new(),
         vol,
         blit,
         blit_layout,
-        linear: sampler(wgpu::FilterMode::Linear),
-        nearest: sampler(wgpu::FilterMode::Nearest),
+        blit_params,
+        linear,
         format,
-        target: None,
-        cache: crate::perf::FrameCache::default(),
+        pics: None,
+        timer: crate::gpu_timing::Timer::new(device, queue),
+        pacer: crate::adapt::BandPacer::default(),
+        frames: 0,
+        vol_gen: 1,
     })
 }
 
 /// `try_build` for the headless tests, which have nothing better to do with an error than stop.
 #[cfg(test)]
-fn build(device: &wgpu::Device, format: wgpu::TextureFormat) -> Resources {
-    try_build(device, format).unwrap_or_else(|e| panic!("{e}"))
+fn build(device: &wgpu::Device, queue: &wgpu::Queue, format: wgpu::TextureFormat) -> Resources {
+    try_build(device, queue, format).unwrap_or_else(|e| panic!("{e}"))
 }
 
 /// Make the device report its errors to the status and the log instead of panicking.
@@ -627,6 +746,7 @@ pub fn install(rs: &egui_wgpu::RenderState, ctx: &egui::Context, status: &GpuSta
     let device = rs.device.clone();
     let format = rs.target_format;
     let renderer = rs.renderer.clone();
+    let queue = rs.queue.clone();
     let ctx = ctx.clone();
     let st = status.clone();
     let info = rs.adapter.get_info();
@@ -638,7 +758,7 @@ pub fn install(rs: &egui_wgpu::RenderState, ctx: &egui::Context, status: &GpuSta
     let job = Arc::new(move || {
         let t = std::time::Instant::now();
         crate::gpu_log::log("shader compile: start");
-        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| try_build(&device, format)));
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| try_build(&device, &queue, format)));
         let secs = t.elapsed().as_secs_f64();
         let backend = crate::backend::Backend::from_wgpu(info.backend);
         match outcome {
@@ -756,9 +876,9 @@ impl VolTex {
 
 /// Make the volume texture hold exactly `set`: only volumes that are new or moved are uploaded
 /// (a frame that only moves a mesh uploads nothing). The picture must be drawn again afterwards.
-fn ensure_volumes(res: &mut Resources, device: &wgpu::Device, queue: &wgpu::Queue, set: &VolumeSet) {
+fn ensure_volumes(res: &mut Resources, device: &wgpu::Device, queue: &wgpu::Queue, set: &VolumeSet) -> bool {
     if res.vol.resident.same_as(set) {
-        return;
+        return false;
     }
     let rows = set.rows().next_power_of_two().min(VOL_H as u32);
     let fresh = rows != res.vol.rows;
@@ -781,14 +901,175 @@ fn ensure_volumes(res: &mut Resources, device: &wgpu::Device, queue: &wgpu::Queu
         res.vol.write_texels(queue, base / 4, &bytes);
     }
     res.vol.resident = set.clone();
-    res.cache.invalidate();
+    res.vol_gen += 1;
+    true
 }
 
-impl Target {
-    fn new(device: &wgpu::Device, res: &Resources, size: [u32; 2]) -> Target {
+/// What the graphics side tells the app: the timings of finished passes, and how the pictures stand.
+#[derive(Clone, Default, Debug)]
+pub struct Feedback(Arc<std::sync::Mutex<FeedbackInner>>);
+
+#[derive(Default, Debug)]
+struct FeedbackInner {
+    passes: Vec<crate::gpu_timing::TimedPass>,
+    state: FeedbackState,
+}
+
+/// How the pictures stand after the last frame the graphics side prepared.
+#[derive(Clone, Copy, Default, Debug, PartialEq)]
+pub struct FeedbackState {
+    /// The device can time passes.
+    pub timing: bool,
+    /// Share of the sharp picture that is finished (1 = all, 0 = none).
+    pub sharp: f32,
+    /// The size drawn for the cheap picture, in pixels.
+    pub moving_px: [u32; 2],
+    /// Rows the sharp picture is drawn per frame now.
+    pub band_rows: u32,
+    /// Frames the graphics side has prepared.
+    pub frames: u64,
+}
+
+impl Feedback {
+    fn lock(&self) -> std::sync::MutexGuard<'_, FeedbackInner> {
+        self.0.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// The timings that finished since the last call.
+    pub fn take_passes(&self) -> Vec<crate::gpu_timing::TimedPass> {
+        std::mem::take(&mut self.lock().passes)
+    }
+
+    pub fn state(&self) -> FeedbackState {
+        self.lock().state
+    }
+
+    fn push(&self, passes: Vec<crate::gpu_timing::TimedPass>, state: FeedbackState) {
+        let mut g = self.lock();
+        g.passes.extend(passes);
+        // (nobody listening: do not grow without end)
+        let excess = g.passes.len().saturating_sub(256);
+        if excess > 0 {
+            g.passes.drain(..excess);
+        }
+        g.state = state;
+    }
+}
+
+/// One frame of the viewport, as an egui paint callback.
+pub struct Callback {
+    /// The per-frame numbers (`ScenePack::globals`).
+    pub globals: [f32; GLOBAL_V4 * 4],
+    /// The scene list and the imported meshes (the same pack is reused while the scene is unchanged).
+    pub pack: Arc<ScenePack>,
+    /// The viewport's size in pixels.
+    pub viewport: [u32; 2],
+    /// The view is moving: draw the cheap picture.
+    pub fast: bool,
+    /// Share of the viewport's pixels along each side to draw for the cheap picture, and for the sharp one.
+    pub scale_moving: f32,
+    pub scale_still: f32,
+    /// How much to sharpen a picture that is scaled up (0..1).
+    pub sharpen: f32,
+    /// The time between the last two frames (ms), 0 when not known (for pacing the bands without timestamps).
+    pub frame_ms: f32,
+    /// Where an error of ours while drawing is reported.
+    pub status: GpuStatus,
+    pub feedback: Feedback,
+    /// Asks for the next frame while the sharp picture is still being drawn.
+    pub ctx: egui::Context,
+}
+
+/// Hash of the per-frame numbers that decide what a picture shows: everything except the size of
+/// the picture and the fast flag, which the pass patches in.
+fn globals_key(globals: &[f32]) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for (i, v) in globals.iter().enumerate() {
+        if i == V4_VIEW * 4 || i == V4_VIEW * 4 + 1 || i == V4_VIEW * 4 + 3 {
+            continue;
+        }
+        h ^= u64::from(v.to_bits());
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    h
+}
+
+/// Make the scene-list texture tall enough for `list` (a scene list from `ScenePack`).
+fn ensure_pool(res: &mut Resources, device: &wgpu::Device, list_len: usize) {
+    let used_rows = (list_len / 4).div_ceil(ROW).max(1) as u32;
+    if res.pool.as_ref().is_none_or(|p| p.rows < used_rows) {
+        res.pool = Some(Pool::new(device, &res.buffer, &res.scene_layout, &res.vol.view, used_rows));
+        res.pool_id = 0;
+        res.pool_copy.clear();
+        invalidate_pics(res);
+    }
+}
+
+fn invalidate_pics(res: &mut Resources) {
+    if let Some(p) = res.pics.as_mut() {
+        p.a.key = None;
+        p.b.key = None;
+        p.bands = crate::adapt::Bands::default();
+    }
+}
+
+/// Put the scene list into the pool texture, the rows that differ from what is there.
+fn upload_list(res: &mut Resources, queue: &wgpu::Queue, list: &[f32], id: u64) {
+    if res.pool_id == id {
+        return;
+    }
+    let Some(pool) = res.pool.as_ref() else { return };
+    let rows = ((list.len() / 4).div_ceil(ROW).max(1) as u32).min(pool.rows) as usize;
+    let row_len = ROW * 4;
+    if res.pool_copy.len() < rows * row_len {
+        res.pool_copy.resize(rows * row_len, 0.0);
+    }
+    let new_row = |r: usize| -> &[f32] {
+        let from = (r * row_len).min(list.len());
+        let to = ((r + 1) * row_len).min(list.len());
+        list.get(from..to).unwrap_or(&[])
+    };
+    // does row r of the new list equal what the texture holds (a short row counts as zero-padded)?
+    let same = |copy: &[f32], r: usize| -> bool {
+        let old = copy.get(r * row_len..(r + 1) * row_len).unwrap_or(&[]);
+        let new = new_row(r);
+        old.iter().enumerate().all(|(i, o)| o.to_bits() == new.get(i).copied().unwrap_or(0.0).to_bits())
+    };
+    let first = (0..rows).find(|&r| !same(&res.pool_copy, r));
+    let last = (0..rows).rev().find(|&r| !same(&res.pool_copy, r));
+    if let (Some(first), Some(last)) = (first, last) {
+        let n = last - first + 1;
+        let mut texels: Vec<u8> = Vec::with_capacity(n * row_len * 4);
+        for r in first..=last {
+            let row = new_row(r);
+            for i in 0..row_len {
+                texels.extend_from_slice(&row.get(i).copied().unwrap_or(0.0).to_le_bytes());
+            }
+            if let Some(dst) = res.pool_copy.get_mut(r * row_len..(r + 1) * row_len) {
+                for (i, d) in dst.iter_mut().enumerate() {
+                    *d = row.get(i).copied().unwrap_or(0.0);
+                }
+            }
+        }
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo { texture: &pool.texture, mip_level: 0, origin: wgpu::Origin3d { x: 0, y: first as u32, z: 0 }, aspect: wgpu::TextureAspect::All },
+            &texels,
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(ROW as u32 * 16), rows_per_image: Some(n as u32) },
+            wgpu::Extent3d { width: ROW as u32, height: n as u32, depth_or_array_layers: 1 },
+        );
+    }
+    res.pool_id = id;
+}
+
+/// The two pictures for a viewport of `capacity` pixels (made again only when the viewport changes size).
+fn ensure_pics(res: &mut Resources, device: &wgpu::Device, capacity: [u32; 2]) {
+    if res.pics.as_ref().is_some_and(|p| p.capacity == capacity) {
+        return;
+    }
+    let make = || {
         let tex = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("meltcad picture"),
-            size: wgpu::Extent3d { width: size[0], height: size[1], depth_or_array_layers: 1 },
+            size: wgpu::Extent3d { width: capacity[0], height: capacity[1], depth_or_array_layers: 1 },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -796,82 +1077,109 @@ impl Target {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
-        let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
-        let group = |sampler: &wgpu::Sampler| {
-            device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("meltcad blit"),
-                layout: &res.blit_layout,
-                entries: &[
-                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) },
-                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(sampler) },
-                ],
-            })
-        };
-        Target { linear: group(&res.linear), nearest: group(&res.nearest), view, size }
+        Pic { view: tex.create_view(&wgpu::TextureViewDescriptor::default()), key: None, used: [0, 0] }
+    };
+    let (a, b) = (make(), make());
+    let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("meltcad blit"),
+        layout: &res.blit_layout,
+        entries: &[
+            wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&a.view) },
+            wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&b.view) },
+            wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&res.linear) },
+            wgpu::BindGroupEntry { binding: 3, resource: res.blit_params.as_entire_binding() },
+        ],
+    });
+    res.pics = Some(Pics { a, b, bands: crate::adapt::Bands::default(), capacity, bind });
+}
+
+/// Where and how one scene pass draws.
+struct PassSpec {
+    /// The picture's size in pixels (the shader's view of the window).
+    size: [u32; 2],
+    /// Only these rows (first, count) are shaded; the picture is kept elsewhere (`Load`).
+    rows: Option<(u32, u32)>,
+    /// Clear the picture first.
+    clear: bool,
+    fast: bool,
+    kind: crate::gpu_timing::Kind,
+    /// Linear size relative to the window, for the timing record.
+    scale: f32,
+}
+
+/// The globals with the picture size and the fast flag of this pass written in.
+fn patched(globals: &[f32], size: [u32; 2], fast: bool) -> Vec<f32> {
+    let mut g = globals.to_vec();
+    if let Some(v) = g.get_mut(V4_VIEW * 4) {
+        *v = size[0] as f32;
     }
-}
-
-/// One frame of the viewport, as an egui paint callback.
-pub struct Callback {
-    pub data: Arc<Vec<f32>>,
-    /// The imported meshes the frame refers to (`VolumeSet::of`, as given to `pack_with`).
-    pub volumes: Arc<VolumeSet>,
-    /// The size of the picture to draw, in pixels (the viewport's size times the quality scale).
-    pub size: [u32; 2],
-    /// Where an error of ours while drawing is reported.
-    pub status: GpuStatus,
-}
-
-/// Make the scene-list texture tall enough for `data` (a frame from `pack`).
-fn ensure_pool(res: &mut Resources, device: &wgpu::Device, data: &[f32]) {
-    let list_len = data.len().saturating_sub(GLOBAL_V4 * 4);
-    let used_rows = (list_len / 4).div_ceil(ROW).max(1) as u32;
-    if res.pool.as_ref().is_none_or(|p| p.rows < used_rows) {
-        res.pool = Some(Pool::new(device, &res.buffer, &res.scene_layout, &res.vol.view, used_rows));
-        res.cache.invalidate();
+    if let Some(v) = g.get_mut(V4_VIEW * 4 + 1) {
+        *v = size[1] as f32;
     }
+    if let Some(v) = g.get_mut(V4_VIEW * 4 + 3) {
+        let flags = (*v + 0.5) as u32 & !crate::perf::FLAG_FAST;
+        *v = (flags | if fast { crate::perf::FLAG_FAST } else { 0 }) as f32;
+    }
+    g
 }
 
-/// Upload a frame (globals into the uniform buffer, the scene list into the texture) and draw it
-/// into `view`. `ensure_pool` must have been called for `data`.
-fn draw(res: &Resources, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView, data: &[f32]) {
-    let Some(pool) = res.pool.as_ref() else { return };
+/// Draw the scene into `view` (the globals go into the uniform buffer; the list must be in the pool).
+fn scene_pass(res: &mut Resources, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView, globals: &[f32], spec: &PassSpec) {
+    let g = patched(globals, spec.size, spec.fast);
     let mut bytes = Vec::with_capacity(GLOBAL_BYTES);
-    for v in data.iter().take(GLOBAL_V4 * 4) {
+    for v in g.iter().take(GLOBAL_V4 * 4) {
         bytes.extend_from_slice(&v.to_le_bytes());
     }
     bytes.resize(GLOBAL_BYTES, 0);
     queue.write_buffer(&res.buffer, 0, &bytes);
-    // whole rows of the list (the last one padded with zeros)
-    let list = data.get(GLOBAL_V4 * 4..).unwrap_or(&[]);
-    let rows = ((list.len() / 4).div_ceil(ROW).max(1) as u32).min(pool.rows);
-    let mut texels: Vec<u8> = Vec::with_capacity(rows as usize * ROW * 16);
-    for v in list.iter().take(rows as usize * ROW * 4) {
-        texels.extend_from_slice(&v.to_le_bytes());
+    let (pixels, nrows) = match spec.rows {
+        Some((_, n)) => (u64::from(spec.size[0]) * u64::from(n), n),
+        None => (u64::from(spec.size[0]) * u64::from(spec.size[1]), spec.size[1]),
+    };
+    let claim = res.timer.as_mut().and_then(|t| t.claim(spec.kind, pixels, nrows, spec.scale));
+    {
+        let Some(pool) = res.pool.as_ref() else {
+            if let (Some(t), Some(c)) = (res.timer.as_mut(), claim) {
+                t.cancel(c);
+            }
+            return;
+        };
+        let writes = res.timer.as_ref().zip(claim.as_ref()).map(|(t, c)| t.writes(c));
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("meltcad scene"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations { load: if spec.clear { wgpu::LoadOp::Clear(wgpu::Color::BLACK) } else { wgpu::LoadOp::Load }, store: wgpu::StoreOp::Store },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: writes,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        pass.set_pipeline(&res.pipeline);
+        pass.set_bind_group(0, &pool.bind, &[]);
+        pass.set_viewport(0.0, 0.0, spec.size[0] as f32, spec.size[1] as f32, 0.0, 1.0);
+        if let Some((first, n)) = spec.rows {
+            pass.set_scissor_rect(0, first, spec.size[0], n);
+        }
+        pass.draw(0..3, 0..1);
     }
-    texels.resize(rows as usize * ROW * 16, 0);
-    queue.write_texture(
-        wgpu::TexelCopyTextureInfo { texture: &pool.texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
-        &texels,
-        wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(ROW as u32 * 16), rows_per_image: Some(rows) },
-        wgpu::Extent3d { width: ROW as u32, height: rows, depth_or_array_layers: 1 },
-    );
-    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-        label: Some("meltcad scene"),
-        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-            view,
-            depth_slice: None,
-            resolve_target: None,
-            ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store },
-        })],
-        depth_stencil_attachment: None,
-        timestamp_writes: None,
-        occlusion_query_set: None,
-        multiview_mask: None,
-    });
-    pass.set_pipeline(&res.pipeline);
-    pass.set_bind_group(0, &pool.bind, &[]);
-    pass.draw(0..3, 0..1);
+    if let (Some(t), Some(c)) = (res.timer.as_mut(), claim) {
+        t.finish(encoder, c);
+    }
+}
+
+/// Draw a whole frame (`pack` layout: globals then list) into `view` at the size the globals say.
+/// For tests and the benchmark, which own their pictures and wait for the result themselves.
+pub(crate) fn draw(res: &mut Resources, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView, data: &[f32]) {
+    let (globals, list) = data.split_at((GLOBAL_V4 * 4).min(data.len()));
+    let id = PACK_IDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    upload_list(res, queue, list, id);
+    let size = [globals.get(V4_VIEW * 4).copied().unwrap_or(1.0) as u32, globals.get(V4_VIEW * 4 + 1).copied().unwrap_or(1.0) as u32];
+    let fast = globals.get(V4_VIEW * 4 + 3).is_some_and(|f| (*f + 0.5) as u32 & crate::perf::FLAG_FAST != 0);
+    scene_pass(res, queue, encoder, view, globals, &PassSpec { size, rows: None, clear: true, fast, kind: crate::gpu_timing::Kind::Whole, scale: 1.0 });
 }
 
 impl egui_wgpu::CallbackTrait for Callback {
@@ -890,48 +1198,252 @@ impl egui_wgpu::CallbackTrait for Callback {
         // our own resources are made inside an error scope: a refusal from the driver (no memory
         // for the picture, a texture it cannot make) fails the graphics path with a message
         // instead of panicking the window
-        let (_, errors) = scoped(device, "描画の準備 (prepare)", || {
-            let size = crate::perf::render_size(self.size, 1.0, device.limits().max_texture_dimension_2d);
-            if res.target.as_ref().is_none_or(|t| t.size != size) {
-                res.target = Some(Target::new(device, res, size));
-                res.cache.invalidate();
-            }
-            ensure_volumes(res, device, queue, &self.volumes);
-            ensure_pool(res, device, &self.data);
-            // nothing changed since the picture was drawn: keep it
-            if !res.cache.needs_render(&self.data, size) {
-                return;
-            }
-            let Some(target) = res.target.as_ref() else { return };
-            draw(res, queue, encoder, &target.view, &self.data);
-            static FIRST: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-            crate::perf::mark_once(&FIRST, "first scene picture queued");
-            crate::perf::mark_interval("scene picture queued");
-        });
+        let (_, errors) = scoped(device, "描画の準備 (prepare)", || self.prepare_frame(device, queue, encoder, res));
         if !errors.is_empty() {
             let text = errors.join("\n");
             crate::gpu_log::log(&format!("drawing failed:\n{text}"));
             self.status.fail_now(text);
             // (the next picture is made from scratch if the person retries)
-            res.target = None;
+            res.pics = None;
             res.pool = None;
-            res.cache.invalidate();
+            res.pool_id = 0;
         }
         Vec::new()
     }
 
     fn paint(&self, info: egui::PaintCallbackInfo, pass: &mut wgpu::RenderPass<'static>, resources: &egui_wgpu::CallbackResources) {
         let Some(res) = resources.get::<Resources>() else { return };
-        let Some(target) = res.target.as_ref() else { return };
+        let Some(pics) = res.pics.as_ref() else { return };
         let vp = info.viewport_in_pixels();
         if vp.width_px <= 0 || vp.height_px <= 0 {
             return;
         }
         pass.set_viewport(vp.left_px as f32, vp.top_px as f32, vp.width_px as f32, vp.height_px as f32, 0.0, 1.0);
         pass.set_pipeline(&res.blit);
-        let exact = target.size == [vp.width_px as u32, vp.height_px as u32];
-        pass.set_bind_group(0, if exact { &target.nearest } else { &target.linear }, &[]);
+        pass.set_bind_group(0, &pics.bind, &[]);
         pass.draw(0..3, 0..1);
+    }
+}
+
+impl Callback {
+    /// Everything `prepare` does inside its error scope: make what is missing, then draw the one
+    /// pass this frame needs (if any).
+    fn prepare_frame(&self, device: &wgpu::Device, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder, res: &mut Resources) {
+        res.frames += 1;
+        let max_dim = device.limits().max_texture_dimension_2d;
+        let vp = [self.viewport[0].clamp(1, max_dim), self.viewport[1].clamp(1, max_dim)];
+        // timings of passes that finished (they are two or three frames old)
+        let mut passes = Vec::new();
+        if let Some(t) = res.timer.as_mut() {
+            t.begin_frame(device);
+            passes = t.take();
+            for p in &passes {
+                if p.kind == crate::gpu_timing::Kind::Band {
+                    res.pacer.observe_gpu(p.rows, p.ms);
+                }
+            }
+        }
+        ensure_pics(res, device, vp);
+        ensure_volumes(res, device, queue, &self.pack.vols);
+        ensure_pool(res, device, self.pack.list.len());
+        upload_list(res, queue, &self.pack.list, self.pack.id);
+
+        let gkey = globals_key(&self.globals);
+        let size_a = crate::perf::render_size(vp, self.scale_moving, max_dim);
+        let size_b = crate::perf::render_size(vp, self.scale_still, max_dim);
+        let key_a = PicKey { globals: gkey, list: self.pack.id, vol_gen: res.vol_gen, size: size_a };
+        let key_b = PicKey { size: size_b, ..key_a };
+        // (taken out of `res` while the passes borrow the rest of it)
+        let Some(mut pics) = res.pics.take() else { return };
+        let same_scene = |k: Option<PicKey>| k.is_some_and(|k| k.globals == key_a.globals && k.list == key_a.list && k.vol_gen == key_a.vol_gen);
+        let mut again = false;
+        let lin = |size: [u32; 2]| size[0] as f32 / vp[0] as f32;
+        if self.fast {
+            if pics.a.key != Some(key_a) {
+                scene_pass(res, queue, encoder, &pics.a.view, &self.globals, &PassSpec { size: size_a, rows: None, clear: true, fast: true, kind: crate::gpu_timing::Kind::Moving, scale: lin(size_a) });
+                pics.a.key = Some(key_a);
+                pics.a.used = size_a;
+            }
+        } else if pics.b.key != Some(key_b) || !pics.bands.complete() {
+            if !same_scene(pics.a.key) {
+                // the cheap picture of this very state first: it is what is shown while the sharp one builds
+                scene_pass(res, queue, encoder, &pics.a.view, &self.globals, &PassSpec { size: size_a, rows: None, clear: true, fast: true, kind: crate::gpu_timing::Kind::Moving, scale: lin(size_a) });
+                pics.a.key = Some(key_a);
+                pics.a.used = size_a;
+                again = true;
+            } else {
+                if pics.b.key != Some(key_b) {
+                    pics.b.key = Some(key_b);
+                    pics.b.used = size_b;
+                    pics.bands = crate::adapt::Bands::new(size_b[1]);
+                }
+                if res.timer.is_none() {
+                    res.pacer.observe_frame(self.frame_ms);
+                }
+                let rows = res.pacer.rows(size_b[1]);
+                if let Some((first, n)) = pics.bands.next(rows) {
+                    let spec = PassSpec { size: size_b, rows: Some((first, n)), clear: first == 0, fast: false, kind: crate::gpu_timing::Kind::Band, scale: lin(size_b) };
+                    scene_pass(res, queue, encoder, &pics.b.view, &self.globals, &spec);
+                    pics.bands.advance(n);
+                }
+                again = !pics.bands.complete();
+            }
+        }
+        // what the blit shows: A everywhere, and the finished rows of B on top when B is of this very state
+        let b_current = pics.b.key == Some(key_b);
+        let reveal = if b_current { pics.bands.fraction() } else { 0.0 };
+        let cap = [pics.capacity[0] as f32, pics.capacity[1] as f32];
+        let share = |u: [u32; 2]| [u[0] as f32 / cap[0], u[1] as f32 / cap[1], 1.0 / cap[0], 1.0 / cap[1]];
+        let (a, b) = (share(pics.a.used), share(pics.b.used));
+        let params: [f32; 12] = [a[0], a[1], a[2], a[3], b[0], b[1], b[2], b[3], reveal, self.sharpen.clamp(0.0, 1.0), 0.0, 0.0];
+        let mut bytes = Vec::with_capacity(BLIT_PARAM_BYTES);
+        for v in params {
+            bytes.extend_from_slice(&v.to_le_bytes());
+        }
+        queue.write_buffer(&res.blit_params, 0, &bytes);
+        let sharp_done = if b_current { pics.bands.fraction() } else { 0.0 };
+        res.pics = Some(pics);
+        let band_rows = res.pacer.rows(size_b[1]);
+        self.feedback.push(passes, FeedbackState { timing: res.timer.is_some(), sharp: sharp_done, moving_px: size_a, band_rows, frames: res.frames });
+        if again {
+            self.ctx.request_repaint();
+        }
+        static FIRST: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        crate::perf::mark_once(&FIRST, "first scene picture queued");
+    }
+}
+
+/// Drawing without a window: for the speed test (`bench.rs`). It opens its own device (with
+/// timestamp queries when the adapter has them), builds the same pipelines as the window and
+/// draws scenes into textures it owns, waiting for the card after each frame.
+pub(crate) mod offscreen {
+    use super::*;
+
+    pub struct Offscreen {
+        pub device: wgpu::Device,
+        pub queue: wgpu::Queue,
+        res: Resources,
+        /// "Vulkan / Intel(R) Arc(TM) 140V Graphics (driver ...)".
+        pub adapter: String,
+        pub backend: String,
+        /// Seconds the shader took to compile.
+        pub compile_secs: f64,
+        /// The adapter can time passes.
+        pub timing: bool,
+        pub software: bool,
+    }
+
+    pub struct Picture {
+        texture: wgpu::Texture,
+        view: wgpu::TextureView,
+        pub size: [u32; 2],
+    }
+
+    impl Offscreen {
+        pub fn open() -> Result<Offscreen, String> {
+            let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
+            if let Some(b) = wgpu::Backends::from_env() {
+                desc.backends = b;
+            }
+            let instance = wgpu::Instance::new(desc);
+            let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::HighPerformance,
+                force_fallback_adapter: false,
+                compatible_surface: None,
+                ..Default::default()
+            }))
+            .map_err(|e| format!("グラフィックスのアダプターが見つかりません: {e}"))?;
+            let info = adapter.get_info();
+            let gl = info.backend == wgpu::Backend::Gl;
+            let base = if gl { wgpu::Limits::downlevel_webgl2_defaults() } else { wgpu::Limits::default() };
+            let timing_feature = adapter.features() & wgpu::Features::TIMESTAMP_QUERY;
+            let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+                label: Some("meltcad bench"),
+                required_features: timing_feature,
+                required_limits: wgpu::Limits { max_texture_dimension_2d: adapter.limits().max_texture_dimension_2d.min(8192), ..base },
+                ..Default::default()
+            }))
+            .map_err(|e| format!("グラフィックスのデバイスを作れません: {e}"))?;
+            let t = std::time::Instant::now();
+            let res = try_build(&device, &queue, wgpu::TextureFormat::Rgba8Unorm)?;
+            let compile_secs = t.elapsed().as_secs_f64();
+            let driver = if info.driver_info.is_empty() { info.driver.clone() } else { format!("{} {}", info.driver, info.driver_info) };
+            Ok(Offscreen {
+                timing: res.timer.is_some(),
+                device,
+                queue,
+                res,
+                adapter: format!("{}{}", info.name, if driver.trim().is_empty() { String::new() } else { format!(" (driver {})", driver.trim()) }),
+                backend: format!("{:?}", info.backend),
+                compile_secs,
+                software: info.device_type == wgpu::DeviceType::Cpu,
+            })
+        }
+
+        pub fn picture(&self, size: [u32; 2]) -> Picture {
+            let size = [size[0].clamp(1, 8192), size[1].clamp(1, 8192)];
+            let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("bench picture"),
+                size: wgpu::Extent3d { width: size[0], height: size[1], depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            });
+            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+            Picture { texture, view, size }
+        }
+
+        /// Put a scene's list (and meshes) on the card.
+        pub fn load(&mut self, pack: &ScenePack) {
+            ensure_volumes(&mut self.res, &self.device, &self.queue, &pack.vols);
+            ensure_pool(&mut self.res, &self.device, pack.list.len());
+            upload_list(&mut self.res, &self.queue, &pack.list, pack.id);
+        }
+
+        /// Draw one frame and wait for it: (seconds from submit to done, GPU milliseconds of the pass
+        /// when the card can time it).
+        pub fn frame(&mut self, pic: &Picture, globals: &[f32], fast: bool) -> (f64, Option<f32>) {
+            let spec = PassSpec { size: pic.size, rows: None, clear: true, fast, kind: crate::gpu_timing::Kind::Whole, scale: 1.0 };
+            let mut enc = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("bench") });
+            scene_pass(&mut self.res, &self.queue, &mut enc, &pic.view, globals, &spec);
+            let t0 = std::time::Instant::now();
+            self.queue.submit([enc.finish()]);
+            let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
+            let wall = t0.elapsed().as_secs_f64();
+            let gpu = self.res.timer.as_mut().and_then(|t| t.flush_blocking(&self.device).last().map(|p| p.ms));
+            (wall, gpu)
+        }
+
+        /// The picture's pixels (RGBA8), for a look at what was drawn.
+        pub fn read(&self, pic: &Picture) -> Vec<u8> {
+            let (w, h) = (pic.size[0], pic.size[1]);
+            let bpr = (w * 4).next_multiple_of(256);
+            let out = self.device.create_buffer(&wgpu::BufferDescriptor { label: Some("readback"), size: u64::from(bpr) * u64::from(h), usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false });
+            let mut enc = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+            enc.copy_texture_to_buffer(
+                wgpu::TexelCopyTextureInfo { texture: &pic.texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+                wgpu::TexelCopyBufferInfo { buffer: &out, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(bpr), rows_per_image: Some(h) } },
+                wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            );
+            self.queue.submit([enc.finish()]);
+            let slice = out.slice(..);
+            slice.map_async(wgpu::MapMode::Read, |_| {});
+            let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
+            let mut px = Vec::with_capacity((w * h * 4) as usize);
+            if let Ok(mapped) = slice.get_mapped_range() {
+                for y in 0..h {
+                    let row = (y * bpr) as usize;
+                    if let Some(r) = mapped.get(row..row + (w * 4) as usize) {
+                        px.extend_from_slice(r);
+                    }
+                }
+            }
+            out.unmap();
+            px
+        }
     }
 }
 
@@ -1326,7 +1838,7 @@ pub(crate) mod headless {
     /// `downlevel`: ask for the limits egui-wgpu asks for on OpenGL (no storage buffers, 16 KB uniforms).
     pub fn open(downlevel: bool) -> Option<Gpu> {
         let (device, queue, info) = open_device(downlevel)?;
-        let res = build(&device, wgpu::TextureFormat::Rgba8Unorm);
+        let res = build(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
         Some(Gpu { device, queue, res, info })
     }
 
@@ -1370,11 +1882,11 @@ pub(crate) mod headless {
             });
             let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
             ensure_volumes(&mut self.res, &self.device, &self.queue, vols);
-            ensure_pool(&mut self.res, &self.device, data);
+            ensure_pool(&mut self.res, &self.device, data.len().saturating_sub(GLOBAL_V4 * 4));
             let bpr = (size[0] * 4).next_multiple_of(256);
             let out = self.device.create_buffer(&wgpu::BufferDescriptor { label: Some("readback"), size: (bpr * size[1]) as u64, usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false });
             let mut enc = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-            draw(&self.res, &self.queue, &mut enc, &view, data);
+            draw(&mut self.res, &self.queue, &mut enc, &view, data);
             enc.copy_texture_to_buffer(
                 wgpu::TexelCopyTextureInfo { texture: &tex, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
                 wgpu::TexelCopyBufferInfo { buffer: &out, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(bpr), rows_per_image: Some(size[1]) } },
@@ -1407,23 +1919,7 @@ mod headless_tests {
 
     /// About `shapes` shapes: library models (cycling through every category) on a grid.
     pub(crate) fn library_scene(shapes: usize) -> Scene {
-        let items: Vec<&crate::library::Item> = crate::library::all().iter().flat_map(|c| c.items.iter()).collect();
-        let mut sc = Scene::default();
-        sc.groups.clear();
-        let mut i = 0usize;
-        while sc.shape_count() < shapes && sc.groups.len() < MAX_GROUPS {
-            let it = items[(i * 7) % items.len()];
-            if !it.fits(sc.groups.len(), sc.shape_count()) {
-                break;
-            }
-            let side = ((shapes as f32 / 12.0).sqrt().ceil() as usize).max(1);
-            let at = [((i % side) as f32 - side as f32 / 2.0) * 90.0, ((i / side) as f32 - side as f32 / 2.0) * 90.0];
-            let mut g: Group = it.placed(at);
-            g.name = format!("{} {i}", it.name);
-            sc.groups.push(g);
-            i += 1;
-        }
-        sc
+        crate::bench::library_scene(shapes)
     }
 
     fn view_of(sc: &Scene) -> Camera {
@@ -1438,22 +1934,22 @@ mod headless_tests {
     /// Needs an adapter (the software one is fine); skips itself without.
     #[test]
     fn a_shader_the_driver_refuses_is_an_error_not_a_panic() {
-        let Some((device, _queue, info)) = headless::open_device(false) else {
+        let Some((device, queue, info)) = headless::open_device(false) else {
             eprintln!("no adapter: skipped");
             return;
         };
         eprintln!("{info}");
         let format = wgpu::TextureFormat::Rgba8Unorm;
         // 1: not even WGSL
-        let e = try_build_from(&device, format, "this is not wgsl at all").err().unwrap_or_default();
+        let e = try_build_from(&device, &queue, format, "this is not wgsl at all").err().unwrap_or_default();
         assert!(!e.is_empty(), "a parse error is an Err");
         eprintln!("--- parse error text:\n{e}");
         // 2: valid WGSL but no entry points called vs / fs: the pipeline is refused
-        let e = try_build_from(&device, format, "@compute @workgroup_size(1) fn main() {}").err().unwrap_or_default();
+        let e = try_build_from(&device, &queue, format, "@compute @workgroup_size(1) fn main() {}").err().unwrap_or_default();
         assert!(!e.is_empty(), "a pipeline the driver refuses is an Err");
         eprintln!("--- pipeline error text:\n{e}");
         // 3: the device keeps working afterwards
-        let ok = try_build_from(&device, format, include_str!("blit.wgsl"));
+        let ok = try_build_from(&device, &queue, format, include_str!("blit.wgsl"));
         // (the blit shader has no scene bindings: its layout does not match, so this is an Err too, but a clean one)
         let _ = ok;
     }
