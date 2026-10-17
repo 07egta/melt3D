@@ -98,7 +98,7 @@ impl VaseParams {
         self.mouth_diameter = safe(self.mouth_diameter, 49.0, 12.0, self.diameter);
         self.base_diameter = safe(self.base_diameter, 54.0, 14.0, self.diameter);
         // A wall cannot exceed the mouth radius and must leave a hollow interior.
-        let max_wall = (0.45 * self.mouth_diameter.min(self.base_diameter)).min(16.0);
+        let max_wall = (0.5 * self.mouth_diameter.min(self.base_diameter) - 2.5).min(16.0);
         self.wall = safe(self.wall, 2.4, 0.4, max_wall.max(0.4));
         self.side_wave = safe(self.side_wave, 0.16, 0.0, 1.0);
         self.waist = safe(self.waist, 0.2, 0.0, 1.0);
@@ -238,6 +238,68 @@ pub fn new(design: Design) -> Shape {
     shape
 }
 
+
+/// The inspector edits the parametric source rather than directly mutating a dense
+/// vertex mesh. Changes regenerate at most 63 profile points; viewport quality
+/// adapts independently and final STL export always samples the full SDF.
+pub fn inspector(ui: &mut egui::Ui, shape: &mut Shape) {
+    let Some(old) = shape.vase else { return };
+    let mut value = old;
+    ui.separator();
+    ui.label(egui::RichText::new("Organic Vase｜有機的な花瓶").strong().size(14.0));
+    ui.horizontal_wrapped(|ui| {
+        ui.label(egui::RichText::new("形のサンプル").small());
+        for design in Design::ALL {
+            let name = match design {
+                Design::Flow => "Flow",
+                Design::Ripple => "Ripple",
+                Design::Pebble => "Pebble",
+            };
+            if ui.button(name).on_hover_text(design.name()).clicked() {
+                value = design.params();
+            }
+        }
+    });
+    egui::Grid::new("organic_vase_mm").num_columns(2).spacing([8.0, 4.0]).show(ui, |ui| {
+        let mut field = |label: &str, v: &mut f32, max: f32| {
+            ui.label(label);
+            ui.add(egui::DragValue::new(v).speed(0.4).range(0.4..=max).suffix(" mm").max_decimals(2));
+            ui.end_row();
+        };
+        field("高さ", &mut value.height, 380.0);
+        field("最大直径", &mut value.diameter, 240.0);
+        field("口径", &mut value.mouth_diameter, 240.0);
+        field("底の幅", &mut value.base_diameter, 240.0);
+        field("壁厚", &mut value.wall, 16.0);
+        field("波の高さ", &mut value.wave_strength, 6.0);
+    });
+    ui.add(egui::Slider::new(&mut value.side_wave, 0.0..=1.0).text("側面のうねり"));
+    ui.add(egui::Slider::new(&mut value.waist, 0.0..=1.0).text("くびれ"));
+    ui.add(egui::Slider::new(&mut value.roundness, 0.0..=1.0).text("丸み"));
+    ui.add(egui::Slider::new(&mut value.waves, 0..=16).text("円周の波の数"));
+
+    if value != old {
+        // Keep the vase standing on the same floor while its height changes.
+        let base_z = shape.pos[2] - old.height * 0.5;
+        value.sanitize();
+        shape.vase = Some(value);
+        shape.pos[2] = base_z + value.height * 0.5;
+        apply(shape);
+    }
+    let v = shape.vase.unwrap_or(value);
+    let minimum = v.estimated_min_wall();
+    if minimum < FDM_WALL_WARNING_MM {
+        ui.colored_label(
+            egui::Color32::from_rgb(237, 174, 78),
+            format!("⚠ 推定最小肉厚 {:.2} mm（0.8 mm未満）", minimum),
+        );
+        ui.small("壁厚を増やすか、波・くびれを弱めてください。スライサーでも確認してください。");
+    } else {
+        ui.label(format!("推定最小肉厚 {:.2} mm", minimum));
+    }
+    ui.small("底は閉じて中は空洞です。実際の印刷可否はノズル径・スライサー設定で確認してください。");
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -333,7 +395,8 @@ mod tests {
     #[test]
     #[ignore]
     fn organic_vase_stl_is_watertight() {
-        use crate::export_job::{self, Options, Progress};
+        use crate::export_job::{self, Options};
+        use crate::export_mesh::Progress;
         use crate::export_formats::Format;
         for design in Design::ALL {
             let mut sh = new(design);
