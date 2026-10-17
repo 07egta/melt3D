@@ -4,6 +4,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::mesh::SharedVolume;
+use crate::ripple::Ripple;
 use crate::pattern::{Pattern, Xform};
 
 fn is_zero(v: &u32) -> bool {
@@ -361,6 +362,8 @@ impl Material {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Shape {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ripple: Option<Ripple>,
     pub name: String,
     pub kind: Kind,
     pub size: [f32; 3],
@@ -431,6 +434,7 @@ pub const MAX_PATH: usize = 48;
 impl Shape {
     pub fn new(kind: Kind, pos: [f32; 3], material: Material) -> Shape {
         Shape {
+            ripple: None,
             name: kind.label().to_string(),
             kind,
             size: kind.default_size(),
@@ -878,6 +882,7 @@ impl Scene {
                     fix(v, 0.01, 100.0, 1.0);
                 }
                 s.material.sanitize();
+                if let Some(r) = &mut s.ripple { r.sanitize(); }
                 s.outline.truncate(MAX_OUTLINE);
                 for p in &mut s.outline {
                     fix(&mut p[0], -2000.0, 2000.0, 0.0);

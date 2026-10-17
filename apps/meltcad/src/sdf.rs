@@ -45,6 +45,8 @@ pub fn rotation(rot: V3) -> [V3; 3] {
 #[derive(Clone, Debug)]
 pub struct Prepared {
     pub kind: Kind,
+    pub ripple: Option<crate::ripple::Ripple>,
+    pub half: V3,
     pub size: V3,
     pub round: f32,
     pub pos: V3,
@@ -123,6 +125,8 @@ impl Prepared {
         let grad_half = if s.material.has_gradient() { gradient_half(s, &r) } else { 0.0 };
         Prepared {
             kind: s.kind,
+            ripple: s.ripple,
+            half: s.local_half(),
             size: s.size,
             round,
             chamfer: s.corner == crate::model::Corner::Chamfer,
@@ -165,7 +169,9 @@ impl Prepared {
     }
     /// The distance to this one shape (negative inside).
     pub fn distance(&self, p: V3) -> f32 {
-        let d = self.local_distance(self.local(p)) * self.min_scale();
+        let q = self.local(p);
+        let mut d = self.local_distance(q) * self.min_scale();
+        if let Some(r) = self.ripple { d = r.adjust(d, q, self.half, self.min_scale()); }
         // hollow walls: the solid's skin of thickness `shell` (negative inside the wall)
         // (a curve hollows itself: its flat ends are cut after the hollowing, see curve::distance)
         if self.shell > 0.0 && self.kind != Kind::Curve { (d + self.shell * 0.5).abs() - self.shell * 0.5 } else { d }
