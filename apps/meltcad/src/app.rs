@@ -1622,6 +1622,49 @@ mod tests {
     }
 
     #[test]
+    fn cancelling_or_failing_native_open_leaves_live_scene_unchanged() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        let before = app.scene.clone();
+        let dir = std::env::temp_dir().join(format!("yura_doc_cancel_app_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let invalid = dir.join("invalid.yura");
+        std::fs::write(&invalid, b"{invalid JSON").expect("fixture");
+        app.open_path(invalid);
+        pump_native(&mut app, &ctx);
+        assert_eq!(app.scene, before, "failure must never replace a design");
+
+        let valid = dir.join("valid.yura");
+        std::fs::write(&valid, Scene::default().to_json()).expect("fixture");
+        app.open_path(valid);
+        app.update_native_job(&ctx);
+        let job = app.native_job.as_mut().expect("started load");
+        assert!(job.cancel(), "the load is cancellable");
+        pump_native(&mut app, &ctx);
+        assert_eq!(app.scene, before, "cancelled results must never replace a design");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_heavy_worker_blocks_parallel_loading_without_blocking_the_ui() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        let dir = std::env::temp_dir().join(format!("yura_budget_open_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("valid.yura");
+        std::fs::write(&path, Scene::default().to_json()).expect("fixture");
+        let permit = crate::work_budget::try_acquire(&ctx).expect("other heavy job");
+        app.open_path(path.clone());
+        app.update_native_job(&ctx);
+        assert!(app.native_job.is_none() && app.queued_open.is_some(), "read is queued instead of allocating another large job");
+        assert!(app.scene.shape_count() > 0, "the existing model remains usable");
+        drop(permit);
+        pump_native(&mut app, &ctx);
+        assert_eq!(app.path.as_ref(), Some(&path));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn closing_with_unsaved_work_asks_before_exiting() {
         let ctx = egui::Context::default();
         let mut app = App::new(true, None);
