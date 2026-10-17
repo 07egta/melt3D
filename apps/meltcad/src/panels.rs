@@ -7,6 +7,7 @@ use crate::app::{App, Tab};
 use crate::materials::{self, Category};
 use crate::model::{BlendMode, Corner, Kind, Light, MAX_LIGHTS, MAX_OUTLINE, MAX_SAVED, Material, Melt, Op, Pick, ROUND_MAX};
 use crate::sdf;
+use crate::ripple::{Ripple, RippleMode};
 use crate::view::targets;
 use crate::{glyphs, style};
 
@@ -452,6 +453,28 @@ impl App {
             }
             style::labeled_slider(ui, "とけあい", &mut sh.blend, 0.0..=80.0, "この形が、まわりとどのくらい溶けてくっつくか (グープ)");
             style::labeled_slider(ui, "ちゅうぐう\nシェル", &mut sh.shell, 0.0..=40.0, "中をくり抜いて、かべの あつさ(mm)だけ のこす。0 = つまっている");
+            ui.separator();
+            ui.collapsing("Ripple（波打つ表面）", |ui| {
+                let mut enabled = sh.ripple.is_some();
+                if ui.checkbox(&mut enabled, "Rippleを使う").changed() {
+                    sh.ripple = if enabled { Some(Ripple::default()) } else { None };
+                }
+                if let Some(r) = sh.ripple.as_mut() {
+                    ui.horizontal_wrapped(|ui| {
+                        if ui.selectable_label(r.mode == RippleMode::Concentric, "同心円").clicked() { r.mode = RippleMode::Concentric; }
+                        if ui.selectable_label(r.mode == RippleMode::Linear, "直線").clicked() { r.mode = RippleMode::Linear; }
+                        if ui.selectable_label(r.mode == RippleMode::Random, "ランダム").clicked() { r.mode = RippleMode::Random; }
+                    });
+                    style::labeled_slider(ui, "波の高さ", &mut r.height, 0.0..=20.0, "振幅（mm）");
+                    style::labeled_slider(ui, "波の間隔", &mut r.spacing, 0.5..=100.0, "波長（mm）");
+                    ui.add(egui::Slider::new(&mut r.count, 1..=32).text("波の数"));
+                    style::labeled_slider(ui, "方向", &mut r.direction, 0.0..=360.0, "直線・ランダム波の方向（°）");
+                    style::labeled_slider(ui, "端の減衰", &mut r.edge_fade, 0.05..=1.0, "波の範囲の端で滑らかに消える割合");
+                    ui.checkbox(&mut r.preserve_outline, "外形を維持（表面を内側へ彫る）");
+                    ui.add(egui::Slider::new(&mut r.detail, 1..=4).text("表面の細かさ"));
+                    ui.label(RichText::new("操作中は軽量プレビュー、書き出しは指定精度のメッシュを使用します").size(11.0).color(style::DIM));
+                }
+            });
             if sh.kind.uses_outline() {
                 outline_changed = true;
                 top_changed = sh.kind.uses_outline2();
