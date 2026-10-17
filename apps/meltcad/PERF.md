@@ -237,3 +237,77 @@ remained was the thumbnails (now off the main thread).
   give ms per row) is below about 5 ms, draw it in one pass instead of the cheap picture. Not done: it needs a real GPU to tune.
 * Testing the window: `MELTCAD_HUD=1` starts with the HUD on; with `MELTCAD_TEST_DIR=dir` the files `dir/hud` (toggle the HUD)
   and `dir/bench` (open the speed test window) are taken like `snap` and `png`; `dir/where` writes where the HUD is to `dir/where.txt`.
+
+
+## Adaptive preview quality hardening (2026-10-17; draft, not yet compiled)
+
+This patch **extends** the existing adaptive renderer instead of creating another rendering
+pipeline. The pre-existing GPU timestamp / frame-interval `ScaleController`, scene-list cache,
+ray candidate filtering, fixed-capacity textures, banded sharp pass and upscale shader remain.
+
+- The menu offers three primary presets: **自動** (adaptive, sharp at rest), **高品質**
+  (1.0x pixel resolution even while dragging), **軽量** (0.5x both moving and still).
+  The old `Normal` enum remains available in source for compatibility.
+- Auto mode uses 0.05-scale quantization, a deadband and upward/downward hysteresis.
+  Major viewport-size or quality-mode changes reset the cost estimate. Camera activity still
+  uses the existing 150 ms settle window; the static scene is completed at 1.0x after interaction.
+- The existing A/B banded upscaler feathers the final ~10 completed rows. Bilinear samples
+  of the higher-quality image are clamped to finished rows, never undefined rows.
+- Fast-mode candidate filtering can omit an **entire additive group** only when its
+  conservative bounding sphere *including blend reach* projects to a diameter below
+  0.5 render pixels. It is disabled whenever any selection/hover is active, for
+  sculpting drips, non-additive groups, and static/high-quality rendering. This does
+  **not** replace exact mesh or SDF computation and does not run during export.
+- The F3 HUD now shows **actual window frame-interval p95** and, when GPU timestamp
+  queries work, the p95 cost of scene GPU passes. GPU pass time is not GPU-percent
+  utilization.
+- The existing offscreen speed test now records p95 GPU pass time (or wall wait
+  if timestamp queries are unavailable), wall-wait p95 and samples the
+  **pipe** (one curved shape; ordinary editing) and **shapes300** benchmark scenes.
+  Image error compares full-size full-shading reference pixels against an estimated
+  adaptive-size fast pass bilinearly reconstructed at 64x64 sample positions.
+  It reports RGB mean absolute error and RGB p95 on the 0..255 scale. This
+  approximates preview differences; it does **not** measure a displayed screenshot,
+  selection-overlay visual quality or the final 5-tap sharpening shader.
+
+### Comparison protocol and unmeasured results
+
+Run the **same source revision and scene** with the same viewport, Windows display
+scaling, GPU backend, battery/AC status and driver. The in-window F3 readout must be
+recorded while continuously orbiting for at least 120 presented frames; idle periods
+must not be counted as FPS=0. Use the GPU speed test separately to measure GPU
+scene-pass p95 (rather than pretending its reciprocal is the UI frame rate). On Windows,
+an external GPU profiler or Windows Task Manager can report GPU utilization %, but
+the YuraCAD renderer itself reports GPU **milliseconds**, not %.
+
+For this patch (measurements were **not** made on Intel Arc 140V):
+
+| scenario | UI FPS before | UI FPS after | UI p95 ms before/after | GPU pass p95 ms before/after | GPU utilization % before/after | RGB MAE / p95 |
+|---|---|---|---|---|---|---|
+| ordinary pipe scene | unmeasured | unmeasured | unmeasured | unmeasured | unmeasured | unmeasured |
+| approx. 300 shapes | unmeasured | unmeasured | unmeasured | unmeasured | unmeasured | unmeasured |
+
+All numbers in prior sections of this document belong to earlier experiments; do
+**not** use historical llvmpipe numbers or theoretical `1000 / GPU ms` as
+new Arc 140V results. Current A/B test data and screenshots have not been generated
+in this session.
+
+Suggested commands (in the repo; run each on both old and new branches to
+compare GPU pass average, replacing 12-frame p95 with enough frames on the new
+benchmark code, and use F3 for the actual UI frame interval):
+
+```powershell
+cargo fmt --check
+cargo test -p meltcad --locked
+cargo test -p meltcad --release --locked the_blit_shader_translates_everywhere_too
+cargo run --release -p meltcad -- --bench adaptive-preview.txt --frames 30
+```
+
+Manual Windows checks: orbit/zoom and stop on a selected thin tube, small distant
+shapes, hover, and a 300-shape scene; compare the three quality modes, look for
+shimmering edges, sudden resolution jumps, seams across sharp-band transitions,
+the speed HUD and any changes to silhouettes. Compare saved scene JSON and
+STL/3MF exports before and after: no data format or export code was modified.
+The subpixel-group preview optimization must be disabled if any visible omissions,
+wrong boolean interactions or severe flicker occur. Release is blocked until
+compiler/tests, image checks and Windows/Arc measurements pass.
