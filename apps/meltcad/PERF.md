@@ -259,7 +259,7 @@ Open/New/Close action. Any edit arriving after a save snapshot leaves the
 project dirty and requires another unsaved-work confirmation. A cancelled or
 failed load never replaces the previous scene. The worker's memory permit is
 released **on thread exit**, not when a dialog is hidden, to prevent
-multiple giant SDF jobs from running at once.
+multiple giant SDF jobs from running at once. The in-app GPU benchmark also holds this budget to avoid large concurrent texture allocations.
 
 The final file replacement is a very short **non-cancellable** stage.
 There is a reason printed on the progress card, and `Job::cancel` uses an
