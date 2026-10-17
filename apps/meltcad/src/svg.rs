@@ -510,7 +510,7 @@ struct Tag<'a> {
     selfclose: bool,
 }
 
-impl Tag<'_> {
+impl<'a> Tag<'a> {
     /// The value of a property: the `style` attribute wins over the plain attribute.
     fn prop(&self, key: &str) -> Option<&str> {
         if let Some((_, st)) = self.attrs.iter().find(|(k, _)| *k == "style") {
@@ -524,7 +524,7 @@ impl Tag<'_> {
         }
         self.attrs.iter().find(|(k, _)| *k == key).map(|(_, v)| v.trim())
     }
-    fn attr(&self, key: &str) -> Option<&str> {
+    fn attr(&self, key: &str) -> Option<&'a str> {
         self.attrs.iter().find(|(k, _)| *k == key).map(|(_, v)| *v)
     }
     fn len(&self, key: &str) -> Option<f64> {

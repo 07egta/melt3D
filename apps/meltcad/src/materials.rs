@@ -152,7 +152,7 @@ pub(crate) fn from_gltf_pbr(rgba: [f32; 4], roughness: f32, metallic: f32) -> Op
         let v = v.clamp(0.0, 1.0);
         if v <= 0.0031308 { 12.92 * v } else { 1.055 * v.powf(1.0 / 2.4) - 0.055 }
     };
-    let mut m = Material::plain(rgba[..3].try_into().ok()?.map(linear_to_srgb), roughness.clamp(0.0, 1.0), metallic.clamp(0.0, 1.0));
+    let mut m = Material::plain(<[f32; 3]>::try_from(&rgba[..3]).ok()?.map(linear_to_srgb), roughness.clamp(0.0, 1.0), metallic.clamp(0.0, 1.0));
     m.glass = 1.0 - rgba[3].clamp(0.0, 1.0);
     Some(m)
 }

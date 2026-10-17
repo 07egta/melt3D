@@ -349,7 +349,7 @@ impl Ui {
             });
         self.open = opened;
         if start {
-            let rect = ctx.screen_rect();
+            let rect = ctx.content_rect();
             let ppp = ctx.pixels_per_point();
             let condition = Conditions {
                 build_id: self.build_id.clone(), machine: self.machine.clone(),

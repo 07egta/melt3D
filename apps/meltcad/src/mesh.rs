@@ -317,7 +317,7 @@ pub fn can_add<'a>(scene: &'a crate::model::Scene, extra: impl IntoIterator<Item
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::model::{Kind, Material, Scene, Shape};
 
