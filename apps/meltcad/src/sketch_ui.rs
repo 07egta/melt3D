@@ -920,43 +920,51 @@ impl App {
         }
     }
 
-    /// The button came up: keep the new outline unless it now crosses itself.
+    /// A drag is a single transaction. Reject a change if any of the associated
+    /// through-hole contours leaves the outer profile or intersects another hole.
     pub fn edit_release(&mut self) {
         let Some(d) = self.sk.edit.as_mut().and_then(|e| e.drag.take()) else { return };
+        let before = d.before;
         let Some((ol, _)) = self.edit_outline_mut() else { return };
-        if sketch::is_simple(&d.before) && !sketch::is_simple(ol) {
-            *ol = d.before;
+        let changed = *ol != before;
+        if sketch::validate_profile(ol).is_err() {
+            *ol = before;
             self.sk.msg = SketchError::SelfIntersect.message();
-        } else {
+            return;
+        }
+        if let Err(err) = self.check_edited_hole_group() {
+            if let Some((ol, _)) = self.edit_outline_mut() {
+                *ol = before;
+            }
+            self.sk.msg = err.message();
+        } else if changed {
             self.sk.msg.clear();
         }
-        // A shape from a hole group cannot be edited into contact with its neighbours.
-        self.validate_edited_hole_group();
     }
 
-    fn validate_edited_hole_group(&mut self) {
-        let Some(edit) = self.sk.edit.as_ref() else { return };
-        let (g, si) = (edit.g, edit.s);
-        let Some(group) = self.scene.groups.get(g) else { return };
-        if group.name != "穴あき押し出し" || group.shapes.is_empty() { return; }
-        // Every cutter and the outer extrusion share the same transform convention.
-        let Some(outer) = group.shapes.first() else { return };
-        let Some(ef) = sketch::edit_frame(outer, Which::Main) else { return };
-        let to_plane = |sh: &Shape| -> Vec<[f32; 2]> {
-            let Some(frame) = sketch::edit_frame(sh, Which::Main) else { return Vec::new() };
-            sh.outline.iter().map(|pt| ef.from_world(frame.to_world(*pt))).collect()
-        };
-        let op = to_plane(outer);
-        let holes: Vec<Vec<[f32; 2]>> = group.shapes.iter().skip(1).map(to_plane).collect();
-        let invalid = group.shapes.iter().any(|sh| sh.kind != Kind::Extrude || sh.size[0] != outer.size[0] || sh.rot != outer.rot || sh.scale != outer.scale)
-            || sketch::validate_holes(&op, &holes).is_err();
-        if invalid {
-            // At edit release, a drag's pre-drag outline has already been consumed. Undo only
-            // the current point move through the editor's saved geometry instead of persisting
-            // invalid contours; a separate snapshot is captured at drag start below.
-            self.sk.msg = "穴と外周が交差・接触、または位置がずれています。Undoで戻してください".to_string();
-            let _ = si;
+    fn check_edited_hole_group(&self) -> Result<(), SketchError> {
+        let Some(e) = self.sk.edit.as_ref() else { return Ok(()) };
+        let Some(group) = self.scene.groups.get(e.g) else { return Ok(()) };
+        if group.name != "穴あき押し出し" { return Ok(()) };
+        let Some(outer) = group.shapes.first() else { return Ok(()) };
+        let Some(of) = sketch::edit_frame(outer, Which::Main) else { return Err(SketchError::HoleMisaligned) };
+        let mut holes = Vec::new();
+        for sh in &group.shapes {
+            if sh.kind != Kind::Extrude || sh.size[0] != outer.size[0]
+                || sh.rot != outer.rot || sh.scale != outer.scale {
+                return Err(SketchError::HoleMisaligned);
+            }
         }
+        for sh in group.shapes.iter().skip(1) {
+            if sh.op != Op::Subtract { return Err(SketchError::HoleMisaligned); }
+            let Some(hf) = sketch::edit_frame(sh, Which::Main) else { return Err(SketchError::HoleMisaligned) };
+            if crate::sdf::dot(of.normal(), hf.normal()) < 0.9999
+                || crate::sdf::dot(crate::sdf::sub(hf.origin, of.origin), of.normal()).abs() > 0.01 {
+                return Err(SketchError::HoleMisaligned);
+            }
+            holes.push(sh.outline.iter().map(|p| of.from_world(hf.to_world(*p))).collect());
+        }
+        sketch::validate_holes(&outer.outline, &holes).map(|_| ())
     }
 
     /// A click without a drag: choose a point, add one on a line, or choose nothing.
