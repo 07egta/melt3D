@@ -166,11 +166,13 @@ pub struct Row {
     pub mode: Mode,
     pub frames: usize,
     pub avg_ms: f32,
+    pub p95_ms: f32,
     pub min_ms: f32,
     pub max_ms: f32,
     pub source: Source,
     /// The wall-clock average too (it includes the submit and the wait).
     pub wall_avg_ms: f32,
+    pub wall_p95_ms: f32,
 }
 
 impl Row {
@@ -190,9 +192,25 @@ pub struct Report {
     pub compile_secs: f64,
     pub frames: usize,
     pub rows: Vec<Row>,
+    /// Fast adaptive preview versus fully shaded picture (bilinear approximation).
+    pub preview_quality: Vec<PreviewQuality>,
     /// (scene, ms to pack the scene and its per-frame numbers on the processor)
     pub pack_ms: Vec<(String, f32)>,
     pub notes: Vec<String>,
+}
+
+/// A small deterministic screenshot-quality sample, calculated after timed
+/// GPU work and not included in frame timings.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PreviewQuality {
+    pub scene: String,
+    pub shapes: usize,
+    pub full_size: [u32; 2],
+    pub preview_size: [u32; 2],
+    /// Mean absolute RGB channel error (0..255).
+    pub mae_rgb: f32,
+    /// 95th percentile of each sampled pixel's mean absolute RGB error.
+    pub p95_rgb: f32,
 }
 
 /// "2026-10-17 12:34 UTC" from seconds since 1970 (no calendar crate: days to a civil date by the usual algorithm).
@@ -254,7 +272,7 @@ pub fn format_table(r: &Report) -> String {
         out.push_str(&format!("cpu pack  : {} ms per frame that changes the scene\n", list.join(", ")));
     }
     out.push('\n');
-    out.push_str(&format!("{:<10} {:>6}  {:<10} {:<5} {:>8} {:>8} {:>8} {:>7} {:>8}\n", "scene", "shapes", "size", "mode", "avg ms", "min", "max", "fps", "wall ms"));
+    out.push_str(&format!("{:<10} {:>6}  {:<10} {:<5} {:>8} {:>8} {:>8} {:>8} {:>7} {:>8}\n", "scene", "shapes", "size", "mode", "avg ms", "p95 ms", "min", "max", "fps*", "wall ms"));
     let mut last_scene = String::new();
     for row in &r.rows {
         if !last_scene.is_empty() && last_scene != row.scene {
@@ -262,17 +280,29 @@ pub fn format_table(r: &Report) -> String {
         }
         last_scene = row.scene.clone();
         out.push_str(&format!(
-            "{:<10} {:>6}  {:<10} {:<5} {:>8} {:>8} {:>8} {:>7.1} {:>8}\n",
+            "{:<10} {:>6}  {:<10} {:<5} {:>8} {:>8} {:>8} {:>8} {:>7.1} {:>8}\n",
             row.scene,
             row.shapes,
             format!("{}x{}", row.size[0], row.size[1]),
             row.mode.label(),
             ms_text(row.avg_ms),
+            ms_text(row.p95_ms),
             ms_text(row.min_ms),
             ms_text(row.max_ms),
             row.fps(),
             ms_text(row.wall_avg_ms)
         ));
+    }
+    out.push_str("\n* fps is 1000 / scene-pass average ms, a GPU-only throughput estimate, NOT measured window FPS.\n");
+    out.push_str("GPU load is reported as scene-pass GPU ms (or explicitly wall ms), not a GPU-utilization percentage.\n");
+    if !r.preview_quality.is_empty() {
+        out.push_str("\nPreview image difference (static full vs fast adaptive; bilinear upscale approximation, no UI sharpening):\n");
+        out.push_str("scene       shapes       viewport      preview      RGB MAE /255   RGB p95 /255\n");
+        for p in &r.preview_quality {
+            out.push_str(&format!("{:<10} {:>6}  {:>10}  {:>10} {:>13.2} {:>14.2}\n",
+                p.scene, p.shapes, format!("{}x{}", p.full_size[0], p.full_size[1]),
+                format!("{}x{}", p.preview_size[0], p.preview_size[1]), p.mae_rgb, p.p95_rgb));
+        }
     }
     // what this means for the window
     let big = SIZES.iter().max_by_key(|s| s[0]).copied().unwrap_or([2560, 1440]);
@@ -290,6 +320,13 @@ pub fn format_table(r: &Report) -> String {
 }
 
 /// Mean, least and greatest of a list of milliseconds.
+fn percentile95(v: &[f32]) -> f32 {
+    if v.is_empty() { return 0.0; }
+    let mut s = v.to_vec();
+    s.sort_by(|a, b| a.total_cmp(b));
+    s[((s.len() as f32 * 0.95).ceil() as usize).saturating_sub(1)]
+}
+
 fn stats(v: &[f32]) -> (f32, f32, f32) {
     if v.is_empty() {
         return (0.0, 0.0, 0.0);
@@ -354,7 +391,7 @@ pub fn run_with(sizes: &[[u32; 2]], frames: usize, scenes: &[BenchScene], progre
                 let (source, used) = if gpu_ms.len() == wall_ms.len() && !gpu_ms.is_empty() { (Source::Gpu, &gpu_ms) } else { (Source::Wall, &wall_ms) };
                 let (avg, min, max) = stats(used);
                 let (wall_avg, _, _) = stats(&wall_ms);
-                report.rows.push(Row { scene: bs.name.to_string(), shapes: bs.scene.shape_count(), size, mode, frames, avg_ms: avg, min_ms: min, max_ms: max, source, wall_avg_ms: wall_avg });
+                report.rows.push(Row { scene: bs.name.to_string(), shapes: bs.scene.shape_count(), size, mode, frames, avg_ms: avg, p95_ms: percentile95(used), min_ms: min, max_ms: max, source, wall_avg_ms: wall_avg, wall_p95_ms: percentile95(&wall_ms) });
             }
         }
     }
