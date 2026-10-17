@@ -133,7 +133,7 @@ impl PreviewScale {
             self.initialized = true;
             self.shown = wanted;
             self.last_change = now;
-        } else if wanted < self.shown - 0.04
+        } else if wanted < self.shown - 0.075
             && (now - self.last_change >= SHRINK_WAIT || wanted < self.shown - 0.14)
         {
             // Preserve the existing controller's 25% maximum drop per update.
