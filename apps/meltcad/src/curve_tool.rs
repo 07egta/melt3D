@@ -594,19 +594,22 @@ impl App {
         self.ct.node = None;
     }
 
+    /// The curve tool switches the same way from icons and labeled beginner buttons.
+    pub fn toggle_curve_tool(&mut self) {
+        let on = self.ct.drawing;
+        if on { self.finish_drawing(); }
+        self.ct.drawing = !on;
+        self.ct.draw_shape = None;
+        if self.ct.drawing {
+            self.set_pipe_tool(false);
+            self.sketch_off();
+        }
+    }
+
     /// The top-bar toggle for the "せん" tool.
     pub fn curve_button(&mut self, ui: &mut Ui) {
-        let on = self.ct.drawing;
-        if style::icon_button(ui, 34.0, "せん (クリックで点をうって、線をひく)", on, glyph).clicked() {
-            if on {
-                self.finish_drawing();
-            }
-            self.ct.drawing = !on;
-            self.ct.draw_shape = None;
-            if self.ct.drawing {
-                self.set_pipe_tool(false);
-                self.sketch_off();
-            }
+        if style::icon_button(ui, 34.0, "せん (クリックで点をうって、線をひく)", self.ct.drawing, glyph).clicked() {
+            self.toggle_curve_tool();
         }
     }
 
