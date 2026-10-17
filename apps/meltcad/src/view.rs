@@ -124,6 +124,8 @@ impl App {
             }
         }
 
+        self.perf.activity.hover_changed(now, previous_hover, self.hover);
+
         // Camera: middle-drag turns, right-drag slides, the wheel zooms toward the mouse
         let mut moved_camera = false;
         if resp.dragged_by(PointerButton::Middle) || (resp.dragged_by(PointerButton::Primary) && mods.alt && self.drag.is_none() && !ct.busy) {
