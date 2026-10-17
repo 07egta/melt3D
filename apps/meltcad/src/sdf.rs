@@ -582,6 +582,56 @@ mod tests {
     }
 
     #[test]
+    fn twist_inverse_has_the_same_zero_surface_on_cpu_for_each_axis() {
+        use crate::deform::{Axis, Deformation, Twist};
+        for axis in Axis::ALL {
+            let mut sh = Shape::new(Kind::Box, [3.0, 5.0, 12.0], Material::default());
+            sh.size = [30.0, 18.0, 40.0];
+            sh.blend = 0.0;
+            let half = sh.base_local_half();
+            let mut q = [4.0, 3.0, 6.0];
+            // Put the test point on the original box's positive axial face
+            // or positive side, depending on the twist axis.
+            q[axis.transverse().0] = half[axis.transverse().0];
+            let twist = Twist { axis, degrees: 180.0, ..Twist::default() };
+            let new_local = twist.forward(q, half);
+            let xyz = [0,1,2].map(|k| sh.pos[k] + new_local[k]);
+            sh.deformation = Some(Deformation::Twist(twist));
+            let sdf = Prepared::new(&sh);
+            assert!(sdf.distance(xyz).abs() < 1e-3, "{axis:?}: warped boundary {xyz:?} at {}", sdf.distance(xyz));
+            assert!(sdf.distance(sh.pos) < 0.0, "centre remains inside");
+            assert!(sdf.distance([sh.pos[0] + 200.0, sh.pos[1], sh.pos[2]]) > 0.0, "far away remains outside");
+        }
+    }
+
+    #[test]
+    fn twist_is_non_destructive_and_closed_at_both_ends() {
+        use crate::deform::{Deformation, Twist};
+        let mut sh = Shape::new(Kind::Box, [0.0; 3], Material::default());
+        sh.size = [24.0, 14.0, 30.0];
+        let original = Prepared::new(&sh);
+        let twist = Twist::preset(360.0);
+        let half = sh.base_local_half();
+        sh.deformation = Some(Deformation::Twist(twist));
+        let changed = Prepared::new(&sh);
+        for (p, expected_inside) in [([0.0, 0.0, -14.0], true), ([0.0, 0.0, 14.0], true),
+                                     ([0.0, 0.0, -16.0], false), ([0.0, 0.0, 16.0], false)] {
+            assert_eq!(changed.distance(p) < 0.0, expected_inside, "{p:?}");
+        }
+        for z in [-15.0, -9.0, 0.0, 9.0, 15.0] {
+            let source_corner = [12.0, 7.0, z];
+            let warped = twist.forward(source_corner, half);
+            assert!(changed.distance(warped).abs() < 0.001, "{z}: {:?}", warped);
+        }
+        // Resetting the modifier yields *exactly* the original field.
+        sh.deformation = None;
+        let restored = Prepared::new(&sh);
+        for p in [[0.0, 0.0, 0.0], [16.0, 0.0, 0.0], [4.0, -10.0, 13.0]] {
+            assert!((original.distance(p) - restored.distance(p)).abs() < 1e-6);
+        }
+    }
+
+    #[test]
     fn the_primitives_measure_their_exact_surfaces() {
         let m = Material::default();
         let f = |k: Kind, p: V3| {
