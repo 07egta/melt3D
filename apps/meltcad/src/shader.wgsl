@@ -612,7 +612,10 @@ fn find_candidates(ro: vec3<f32>, rd: vec3<f32>, t0: f32, t1: f32, slack: f32) {
                     if (op > -0.5 && op < 0.5) { continue; }   // a stain changes no distance
                     let reach = rm * misc.y * amount + slack;
                     if (op < 1.5 && seg_sphere(o, d, dd, t0, t1, D(rec)) * scl >= reach) { continue; }
-                    if (op < 1.5 && i32(D(rec + 5).w + 0.5) == 18 && curve_far(rec, o, d, t0, t1, scl, reach)) { continue; }
+                    // This quick segment reject tests the source curve's path.
+                    // A twisted curve must NOT be rejected by its unwarped
+                    // segment spheres; the full shape sphere above is safe.
+                    if (op < 1.5 && D(rec + 1).w < 0.5 && i32(D(rec + 5).w + 0.5) == 18 && curve_far(rec, o, d, t0, t1, scl, reach)) { continue; }
                     if (ncs < MAXC) {
                         cs[ncs] = (key << 9u) | u32(first + si);
                         ncs = ncs + 1;
