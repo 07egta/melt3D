@@ -102,6 +102,21 @@ pub struct Guide {
 }
 
 impl Guide {
+    fn from_preferences(mut prefs: Preferences, opening_file: bool) -> (Self, bool) {
+        let first = !prefs.intro_seen && !opening_file;
+        if first {
+            prefs.intro_seen = true;
+        }
+        (Self {
+            prefs,
+            panel_open: first,
+            practice: Practice::Off,
+            actions: 0,
+            started: None,
+            elapsed_seconds: None,
+        }, first)
+    }
+
     pub fn load(opening_file: bool) -> Self {
         // Unit tests must not write to a real user's per-machine settings.
         if cfg!(test) {
@@ -110,18 +125,13 @@ impl Guide {
                 actions: 0, started: None, elapsed_seconds: None,
             };
         }
-        let mut prefs = preferences_path().map_or_else(Preferences::default, |path| Preferences::read(&path));
-        let first = !prefs.intro_seen && !opening_file;
+        let prefs = preferences_path().map_or_else(Preferences::default, |path| Preferences::read(&path));
+        let (guide, first) = Self::from_preferences(prefs, opening_file);
         // Once shown, never force the introduction again, even after an abrupt exit.
         if first {
-            prefs.intro_seen = true;
-            if let Some(path) = preferences_path() {
-                if let Err(e) = prefs.write(&path) {
-                    crate::gpu_log::log(&format!("guide preferences: {e}"));
-                }
-            }
+            guide.persist();
         }
-        Self { prefs, panel_open: first, practice: Practice::Off, actions: 0, started: None, elapsed_seconds: None }
+        guide
     }
 
     fn persist(&self) {
@@ -397,6 +407,18 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn welcome_is_one_time_and_a_file_open_does_not_interrupt() {
+        let (first, shown) = Guide::from_preferences(Preferences::default(), false);
+        assert!(shown && first.panel_open && first.prefs.intro_seen);
+        let (again, shown) = Guide::from_preferences(first.prefs, false);
+        assert!(!shown && !again.panel_open);
+        let (opening, shown) = Guide::from_preferences(Preferences::default(), true);
+        assert!(!shown && !opening.panel_open);
+        let (later, shown) = Guide::from_preferences(opening.prefs, false);
+        assert!(shown && later.panel_open);
+    }
 
     #[test]
     fn preferences_are_forward_compatible_and_hints_are_independent() {
