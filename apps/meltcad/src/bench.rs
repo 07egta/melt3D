@@ -512,10 +512,6 @@ impl Job {
         }
     }
 
-    pub fn running(&self) -> bool {
-        self.lock().running
-    }
-
     /// The window with the progress or the table.
     pub fn show(&mut self, ctx: &egui::Context) {
         if !self.open {
@@ -755,6 +751,21 @@ mod tests {
                 "    return vec4<f32>(encode(col), 1.0);\n}",
                 "    return vec4<f32>(f32(n_fetch & 255u) / 255.0, f32((n_fetch >> 8u) & 255u) / 255.0, f32(min(n_eval, 255u)) / 255.0, 1.0);\n}",
             )
+    }
+
+    /// Writes the benchmark scenes as files the window can open:
+    /// `MELTCAD_BENCH_OUT=/tmp/scenes cargo test -p meltcad --release dump_bench_scenes -- --ignored`
+    #[test]
+    #[ignore]
+    fn dump_bench_scenes() {
+        let Some(dir) = std::env::var_os("MELTCAD_BENCH_OUT").map(std::path::PathBuf::from) else {
+            eprintln!("set MELTCAD_BENCH_OUT");
+            return;
+        };
+        let _ = std::fs::create_dir_all(&dir);
+        for s in scenes() {
+            let _ = std::fs::write(dir.join(format!("{}.meltcad", s.name)), s.scene.to_json());
+        }
     }
 
     /// Reads of the scene list and distance evaluations per pixel, for every scene, full and fast.

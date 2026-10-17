@@ -545,6 +545,15 @@ struct Pics {
 
 /// The shader is one program in several files: the core, the extra solids, the CAD features.
 pub fn shader_source() -> String {
+    // (tests and the benchmark can compare against another version of the files: `MELTCAD_SHADER_DIR=dir`)
+    #[cfg(test)]
+    if let Some(dir) = std::env::var_os("MELTCAD_SHADER_DIR") {
+        let files = ["shader.wgsl", "shader_prims.wgsl", "shader_cad.wgsl", "shader_curve.wgsl", "shader_corner.wgsl", "shader_mesh.wgsl"];
+        let parts: Vec<String> = files.iter().filter_map(|f| std::fs::read_to_string(std::path::Path::new(&dir).join(f)).ok()).collect();
+        if parts.len() == files.len() {
+            return parts.join("\n");
+        }
+    }
     [
         include_str!("shader.wgsl"),
         include_str!("shader_prims.wgsl"),
@@ -1190,6 +1199,7 @@ fn scene_pass(res: &mut Resources, queue: &wgpu::Queue, encoder: &mut wgpu::Comm
 
 /// Draw a whole frame (`pack` layout: globals then list) into `view` at the size the globals say.
 /// For tests and the benchmark, which own their pictures and wait for the result themselves.
+#[cfg(test)]
 pub(crate) fn draw(res: &mut Resources, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView, data: &[f32]) {
     let (globals, list) = data.split_at((GLOBAL_V4 * 4).min(data.len()));
     let id = PACK_IDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -1351,12 +1361,14 @@ pub(crate) mod offscreen {
     }
 
     pub struct Picture {
+        #[cfg_attr(not(test), allow(dead_code))]
         texture: wgpu::Texture,
         view: wgpu::TextureView,
         pub size: [u32; 2],
     }
 
     impl Offscreen {
+        #[cfg_attr(not(test), allow(dead_code))]
         pub fn open() -> Result<Offscreen, String> {
             Offscreen::open_with(None)
         }
@@ -1443,6 +1455,7 @@ pub(crate) mod offscreen {
         }
 
         /// The picture's pixels (RGBA8), for a look at what was drawn.
+        #[cfg_attr(not(test), allow(dead_code))]
         pub fn read(&self, pic: &Picture) -> Vec<u8> {
             let (w, h) = (pic.size[0], pic.size[1]);
             let bpr = (w * 4).next_multiple_of(256);
