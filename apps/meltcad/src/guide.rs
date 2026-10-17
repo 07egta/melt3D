@@ -444,6 +444,41 @@ mod tests {
     }
 
     #[test]
+    fn guided_flow_operates_real_app_sketch_and_extrusion_without_replacing_other_work() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        app.guide.begin();
+        app.guide.clicked_new();
+        let mut blank = Scene::default();
+        for group in &mut blank.groups {
+            group.shapes.clear();
+        }
+        app.new_scene(blank);
+        assert_eq!(app.guide.practice, Practice::StartSketch);
+        assert_eq!(app.scene.shape_count(), 0);
+        app.set_sketch_tool(true);
+        assert_eq!(app.guide.practice, Practice::DrawRectangle);
+        assert_eq!(app.sk.pen, Pen::Rect, "guide uses the existing rectangle pen");
+        app.guide.rectangle_gesture();
+        app.sk.press([0.0, 0.0]);
+        let finished = app.sk.release([30.0, 20.0]).expect("valid rectangle gesture");
+        app.sketch_done(finished);
+        assert_eq!(app.guide.practice, Practice::Extrude);
+        assert!(app.sketch_make(&ctx));
+        assert_eq!(app.guide.practice, Practice::Complete);
+        assert_eq!(app.guide.actions, 5);
+        assert!(app.guide.prefs.completed_practice);
+        assert_eq!(app.scene.shape_count(), 1);
+        let sh = app.scene.shape(0, 0).expect("extruded box");
+        assert_eq!(sh.kind, crate::model::Kind::Extrude);
+        assert_eq!(sh.size[0], 20.0);
+        assert_eq!(sh.outline.len(), 4);
+        // Native scene modifications, not a fake demonstration.
+        let distance = crate::sdf::Field::new(&app.scene).distance([15.0, 10.0, 10.0]);
+        assert!(distance < 0.0, "the box is a real printable solid: {distance}");
+    }
+
+    #[test]
     fn contextual_hints_have_recovery_steps_for_unavailable_commands() {
         let mut sk = State::default();
         let missing = hint(&sk, Tool::Move, false, 2, Op::Add, false, false);
@@ -462,16 +497,19 @@ mod tests {
     #[test]
     fn guide_panel_tessellation_has_no_external_assets_or_animation() {
         let ctx = egui::Context::default();
-        // This is a CPU-only smoke/measurement hook, not GPU frame time.
-        let mut measurements = Vec::new();
-        for step in [Practice::Off, Practice::DrawRectangle, Practice::Extrude] {
-            let mut micros = Vec::new();
-            let mut triangles = 0usize;
-            for _ in 0..30 {
+        // CPU-only headless benchmark; GPU timing must be measured with F3 on Windows.
+        fn sample(ctx: &egui::Context, step: Option<Practice>) -> (u128, usize) {
+            let mut times = Vec::new();
+            let mut triangles = 0;
+            for i in 0..100 {
                 let start = Instant::now();
                 ctx.begin_pass(egui::RawInput::default());
-                egui::CentralPanel::default().show(&ctx, |ui| {
-                    let _ = content(ui, step, 4, None);
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    if let Some(step) = step {
+                        let _ = content(ui, step, 3, None);
+                    } else {
+                        ui.label("YuraCAD");
+                    }
                 });
                 let out = ctx.end_pass();
                 let tess = ctx.tessellate(out.shapes, 1.0);
@@ -479,12 +517,15 @@ mod tests {
                     egui::epaint::Primitive::Mesh(mesh) => mesh.indices.len() / 3,
                     _ => 0,
                 }).sum();
-                micros.push(start.elapsed().as_micros());
+                if i >= 20 { times.push(start.elapsed().as_micros()); }
             }
-            micros.sort_unstable();
-            measurements.push((step, micros[28], triangles));
+            times.sort_unstable();
+            (times[75], triangles) // measured p95 of 80 warm samples
         }
-        println!("guide CPU render p95 (microseconds), triangles: {measurements:?}");
-        assert!(measurements.iter().all(|(_, _, triangles)| *triangles > 0));
+        let base = sample(&ctx, None);
+        let intro = sample(&ctx, Some(Practice::Off));
+        let draw = sample(&ctx, Some(Practice::DrawRectangle));
+        println!("CPU headless p95 µs and triangles: base={base:?} intro={intro:?} drawing={draw:?}");
+        assert!(base.1 > 0 && intro.1 > base.1 && draw.1 > base.1);
     }
 }
