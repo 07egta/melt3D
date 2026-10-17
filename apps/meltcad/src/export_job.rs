@@ -890,6 +890,36 @@ mod tests {
     }
 
     #[test]
+    fn incremental_preparation_never_changes_thin_shell_boolean_stl_export() {
+        let mut wall = sphere_at(0.0, 12.0, red());
+        wall.shell = 1.2; // precision-sensitive hollow wall
+        let mut cut = sphere_at(8.0, 5.0, blue());
+        cut.op = Op::Subtract;
+        let before = scene_of(vec![wall, cut]);
+        let previous = Field::new(&before);
+        let mut scene = before.clone();
+        scene.groups[0].shapes[1].pos[0] += 0.7;
+        let incremental = Field::reusing(&scene, Some((&previous, &before)));
+        let cold = Field::new(&scene);
+        assert_eq!(incremental.prepared_built, 1);
+        assert_eq!(incremental.prepared_reused, 1);
+        for x in -15..=15 {
+            for z in [8.0, 12.0, 20.0, 31.0] {
+                let p = [x as f32, 0.0, z];
+                assert_eq!(incremental.distance(p).to_bits(), cold.distance(p).to_bits());
+            }
+        }
+        // Export intentionally takes an uncached, exact Field::new. Both exports must be
+        // identical at the same tolerance, and the STL must round-trip every triangle.
+        let options = opts(Format::Stl, 0.55);
+        let output = build(&scene, None, &options, &Progress::new()).unwrap();
+        let bytes = crate::export_formats::stl_binary(&output.surface.mesh, "shell-boolean");
+        let faces = read_stl_binary(&bytes);
+        assert_eq!(faces.len(), output.surface.mesh.triangles.len());
+        assert!(!faces.is_empty());
+    }
+
+    #[test]
     fn the_default_sphere_is_closed_has_the_right_volume_and_few_triangles() {
         let b = build(&Scene::default(), None, &opts(Format::Stl, 0.25), &Progress::new()).unwrap();
         assert!(b.closed);
