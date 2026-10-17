@@ -781,7 +781,10 @@ impl App {
             // Stop all global shortcuts, including the numeric view keys.
             return true;
         }
-        if hit(Key::Tab) && self.sk.edit.is_none() {
+        if self.sk.edit.is_none()
+            && (self.sk.dimension.is_some() || !self.sk.pts.is_empty())
+            && hit(Key::Tab)
+        {
             if let Some(d) = self.sk.dimension.as_mut() {
                 d.begin_again();
             } else if let Some(d) = Dimensions::for_last_point(&self.sk.pts, self.sk.active_pen()) {
