@@ -151,6 +151,7 @@ pub enum Stage {
     LoftTop,
     /// Drawing the sweep's path.
     SweepPath,
+    Hole,
 }
 
 /// How the loft's top profile is found.
@@ -245,6 +246,8 @@ pub struct State {
     pub pframe: Frame,
     /// The loft's drawn top profile.
     pub profile2: Vec<[f32; 2]>,
+    pub holes: Vec<Vec<[f32; 2]>>,
+
     /// The last line drawn, in the world (kept for sweeps).
     pub path: Vec<V3>,
     pub make: Make,
@@ -283,6 +286,7 @@ impl Default for State {
             profile: Vec::new(),
             pframe: Frame::floor(),
             profile2: Vec::new(),
+            holes: Vec::new(),
             path: Vec::new(),
             make: Make::Extrude,
             height: 20.0,
@@ -335,6 +339,7 @@ impl State {
         self.stage = Stage::Draw;
         self.profile.clear();
         self.profile2.clear();
+        self.holes.clear();
         self.loft_top = LoftTop::Scaled;
         self.msg.clear();
     }
@@ -510,7 +515,7 @@ impl State {
                 self.msg.clear();
                 false
             }
-            Stage::LoftTop | Stage::SweepPath => {
+            Stage::LoftTop | Stage::SweepPath | Stage::Hole => {
                 self.stage = Stage::Ready;
                 self.msg.clear();
                 false
@@ -715,6 +720,16 @@ impl App {
     pub fn sketch_done(&mut self, done: Finished) {
         match done {
             Finished::Profile(p) => {
+                if self.sk.stage == Stage::Hole {
+                    let mut candidate = self.sk.holes.clone();
+                    candidate.push(p);
+                    match sketch::validate_holes(&self.sk.profile, &candidate) {
+                        Ok(h) => { self.sk.holes = h; self.sk.msg.clear(); }
+                        Err(e) => self.sk.msg = e.message(),
+                    }
+                    self.sk.stage = Stage::Ready;
+                    return;
+                }
                 if self.sk.stage == Stage::LoftTop {
                     self.sk.profile2 = p;
                     self.sk.loft_top = LoftTop::Drawn;
@@ -723,6 +738,7 @@ impl App {
                     self.sk.profile = p;
                     self.sk.pframe = self.sk.frame;
                     self.sk.profile2.clear();
+                    self.sk.holes.clear();
                     self.sk.loft_top = LoftTop::Scaled;
                     if self.sk.make == Make::Revolve && !self.sk.pframe.is_vertical() {
                         self.sk.make = Make::Extrude;
@@ -746,8 +762,20 @@ impl App {
 
     /// Make the shape the card is set to. True when it was made.
     pub fn sketch_make(&mut self, ctx: &egui::Context) -> bool {
-        if self.scene.shape_count() >= MAX_SHAPES {
+        if self.scene.shape_count().saturating_add(1 + self.sk.holes.len()) > MAX_SHAPES {
             self.sk.msg = format!("形は{MAX_SHAPES}個までです");
+            return false;
+        }
+        if !self.sk.holes.is_empty() && self.sk.make != Make::Extrude {
+            self.sk.msg = "穴のあるスケッチは押し出し専用です".to_string();
+            return false;
+        }
+        if let Err(e) = sketch::validate_holes(&self.sk.profile, &self.sk.holes) {
+            self.sk.msg = e.message();
+            return false;
+        }
+        if !self.sk.holes.is_empty() && self.scene.groups.len() >= crate::model::MAX_GROUPS {
+            self.sk.msg = "グループ数の上限です".to_string();
             return false;
         }
         let st = &self.sk;
@@ -771,7 +799,12 @@ impl App {
             }
         };
         let make = self.sk.make;
-        let Some(g) = self.target_group() else { return false };
+        let Some(g) = (if self.sk.holes.is_empty() { self.target_group() } else {
+            let mut group = crate::model::Group::new("穴あき押し出し");
+            group.sketch_holes = true;
+            self.scene.groups.push(group);
+            Some(self.scene.groups.len() - 1)
+        }) else { return false };
         let mut color = COLORS[self.scene.shape_count() % COLORS.len()];
         if self.new_op == Op::Subtract {
             color = [0.9, 0.35, 0.4];
@@ -779,10 +812,24 @@ impl App {
         let mut sh = Shape::new(make.kind(), built.pos, Material { color, ..Material::default() });
         sketch::apply(&built, &mut sh);
         sh.name = make.label().to_string();
-        sh.op = self.new_op;
-        sh.blend = 2.0;
+        sh.op = if self.sk.holes.is_empty() { self.new_op } else { Op::Add };
+        sh.blend = if self.sk.holes.is_empty() { 2.0 } else { 0.0 };
+        let mut cutouts = Vec::new();
+        for (i, contour) in self.sk.holes.iter().enumerate() {
+            let Ok(hole) = sketch::extrude(&self.sk.pframe, contour, self.sk.height, self.sk.flip) else {
+                self.sk.msg = "穴の押し出しに失敗しました".to_string();
+                return false;
+            };
+            let mut cutter = Shape::new(Kind::Extrude, hole.pos, sh.material);
+            sketch::apply(&hole, &mut cutter);
+            cutter.name = format!("穴 {}", i + 1);
+            cutter.op = Op::Subtract;
+            cutter.blend = 0.0;
+            cutouts.push(cutter);
+        }
         let Some(group) = self.scene.groups.get_mut(g) else { return false };
         group.shapes.push(sh);
+        group.shapes.extend(cutouts);
         let idx = group.shapes.len() - 1;
         self.sel = Some(Pick::Shape(g, idx));
         self.sk.reset();
@@ -805,7 +852,7 @@ impl App {
         let mut out = Input::default();
         let over_gnomon = |p: Pos2| (p - pos2(rect.right() - 62.0, rect.top() + 62.0)).length() < GNOMON_PX;
         match self.sk.stage {
-            Stage::Ready | Stage::LoftTop => self.sk.frame = self.sk.pframe,
+            Stage::Ready | Stage::LoftTop | Stage::Hole => self.sk.frame = self.sk.pframe,
             _ if self.sk.pts.is_empty() && self.sk.anchor.is_none() => self.sk.frame = self.sketch_plane(),
             _ => {}
         }
@@ -1083,7 +1130,9 @@ impl App {
         true
     }
 
-    /// On release, validate the draft and atomically replace the solid's outline.
+    /// On release, validate the draft and atomically replace the solid's outline. A drag is a
+    /// single transaction: it is also rejected if any through-hole contour of the same group
+    /// would leave the outer profile or touch another hole.
     pub fn edit_release(&mut self) {
         let Some((g, s, which, d)) = self.sk.edit.as_mut().and_then(|e| e.drag.take().map(|d| (e.g, e.s, e.which, d))) else { return };
         let revolved = self.scene.shape(g, s).is_some_and(|sh| sh.kind == Kind::Revolve);
@@ -1092,12 +1141,49 @@ impl App {
             self.sk.msg = err.message();
             return;
         }
-        let result = self.scene.shape_mut(g, s).map(|sh| sh.set_sketch_outline(which == Which::Top, d.candidate));
+        let before = d.before;
+        let top = which == Which::Top;
+        let result = self.scene.shape_mut(g, s).map(|sh| sh.set_sketch_outline(top, d.candidate));
         match result {
-            Some(Ok(_)) => self.sk.msg.clear(),
+            Some(Ok(_)) => {
+                if let Err(err) = self.check_edited_hole_group() {
+                    // a hole would be crossed: put the old outline back
+                    if let Some(sh) = self.scene.shape_mut(g, s) {
+                        if top { sh.outline2 = before } else { sh.outline = before }
+                    }
+                    self.sk.msg = err.message();
+                } else {
+                    self.sk.msg.clear();
+                }
+            }
             Some(Err(err)) => self.sk.msg = err,
             None => self.sk.msg = "編集する形が見つかりません".to_string(),
         }
+    }
+
+    fn check_edited_hole_group(&self) -> Result<(), SketchError> {
+        let Some(e) = self.sk.edit.as_ref() else { return Ok(()) };
+        let Some(group) = self.scene.groups.get(e.g) else { return Ok(()) };
+        if !group.sketch_holes { return Ok(()) };
+        let Some(outer) = group.shapes.first() else { return Ok(()) };
+        let Some(of) = sketch::edit_frame(outer, Which::Main) else { return Err(SketchError::HoleMisaligned) };
+        let mut holes = Vec::new();
+        for sh in &group.shapes {
+            if sh.kind != Kind::Extrude || sh.size[0] != outer.size[0]
+                || sh.rot != outer.rot || sh.scale != outer.scale {
+                return Err(SketchError::HoleMisaligned);
+            }
+        }
+        for sh in group.shapes.iter().skip(1) {
+            if sh.op != Op::Subtract { return Err(SketchError::HoleMisaligned); }
+            let Some(hf) = sketch::edit_frame(sh, Which::Main) else { return Err(SketchError::HoleMisaligned) };
+            if crate::sdf::dot(of.normal(), hf.normal()) < 0.9999
+                || crate::sdf::dot(crate::sdf::sub(hf.origin, of.origin), of.normal()).abs() > 0.01 {
+                return Err(SketchError::HoleMisaligned);
+            }
+            holes.push(sh.outline.iter().map(|p| of.from_world(hf.to_world(*p))).collect());
+        }
+        sketch::validate_holes(&outer.outline, &holes).map(|_| ())
     }
 
     /// A click without a drag: choose a point, add one on a line, or choose nothing.
@@ -1280,8 +1366,9 @@ impl App {
         let st = &self.sk;
         match st.stage {
             Stage::Ready => self.paint_ready(p, rect),
-            Stage::LoftTop | Stage::SweepPath => {
+            Stage::LoftTop | Stage::SweepPath | Stage::Hole => {
                 self.paint_outline(p, rect, &st.pframe, &st.profile, Color32::from_white_alpha(110), 1.3);
+                for h in &st.holes { self.paint_outline(p, rect, &st.pframe, h, style::CUT, 1.6); }
                 self.paint_saved_path(p, rect);
                 self.paint_draft(p, rect);
             }
@@ -1454,6 +1541,7 @@ impl App {
         let f = &st.pframe;
         let ghost = style::ACCENT.gamma_multiply(0.55);
         self.paint_outline(p, rect, f, &st.profile, style::ACCENT, 2.0);
+        for h in &st.holes { self.paint_outline(p, rect, f, h, style::CUT, 2.0); }
         let n = f.normal();
         let up = |h: f32| crate::sdf::mul(n, if st.flip { -h } else { h });
         let h = if st.height.is_finite() { st.height.clamp(0.1, 2000.0) } else { 10.0 };
@@ -1475,6 +1563,11 @@ impl App {
                 let top: Vec<V3> = st.profile.iter().map(|q| crate::sdf::add(f.to_world(*q), up(h))).collect();
                 self.paint_world_poly(p, rect, &top, true, ghost, 1.3);
                 rails(&st.profile, &st.profile, up(h));
+                for hole in &st.holes {
+                    let top: Vec<V3> = hole.iter().map(|q| crate::sdf::add(f.to_world(*q), up(h))).collect();
+                    self.paint_world_poly(p, rect, &top, true, style::CUT.gamma_multiply(0.6), 1.3);
+                    rails(hole, hole, up(h));
+                }
             }
             Make::Loft => {
                 let top2 = match st.loft_top {
@@ -1693,6 +1786,7 @@ impl App {
                 Stage::Ready => "できた輪かくを、立体にします",
                 Stage::LoftTop => "ロフトの上の輪かくをかく",
                 Stage::SweepPath => "スイープの通り道 (線) をかく",
+                Stage::Hole => "穴の輪かくを描く",
             };
             ui.label(egui::RichText::new(sub).size(11.0).color(style::DIM));
             if style::pill(ui, "やめる", false).on_hover_text("スケッチを終える (Esc)").clicked() {
@@ -1718,11 +1812,11 @@ impl App {
             self.sketch_plane_settings(ui);
         }
         // the pens
-        if matches!(stage, Stage::Draw | Stage::LoftTop) {
+        if matches!(stage, Stage::Draw | Stage::LoftTop | Stage::Hole) {
             ui.horizontal_wrapped(|ui| {
                 ui.label(egui::RichText::new("道具").size(11.0).color(style::DIM));
                 for pen in Pen::ALL {
-                    let usable = !(stage == Stage::LoftTop && pen == Pen::Line);
+                    let usable = !((stage == Stage::LoftTop || stage == Stage::Hole) && pen == Pen::Line);
                     if style::pill_enabled(ui, pen.label(), self.sk.pen == pen, usable).on_hover_text(pen.tip()).clicked() {
                         self.sk.pen = pen;
                         self.sk.clear_drawing();
@@ -1730,7 +1824,7 @@ impl App {
                 }
             });
         }
-        if matches!(stage, Stage::Draw | Stage::LoftTop | Stage::SweepPath) {
+        if matches!(stage, Stage::Draw | Stage::LoftTop | Stage::SweepPath | Stage::Hole) {
             let pen = self.sk.active_pen();
             if matches!(pen, Pen::Spline | Pen::Line) {
                 ui.horizontal(|ui| {
@@ -1750,6 +1844,19 @@ impl App {
             hint(ui, &format!("おぼえている線: {}点（スイープで使えます）", self.sk.path.len()));
         }
         if stage == Stage::Ready {
+            ui.horizontal_wrapped(|ui| {
+                hint(ui, &format!("穴: {} / {}", self.sk.holes.len(), sketch::MAX_HOLES));
+                if style::pill_enabled(ui, "＋ 穴を描く", false, self.sk.holes.len() < sketch::MAX_HOLES).clicked() {
+                    self.sk.make = Make::Extrude;
+                    if self.sk.pen == Pen::Line { self.sk.pen = Pen::Polygon; }
+                    self.sk.stage = Stage::Hole;
+                    self.sk.clear_drawing();
+                }
+                if !self.sk.holes.is_empty() && style::pill(ui, "最後の穴を戻す", false).clicked() {
+                    self.sk.holes.pop();
+                    self.sk.msg.clear();
+                }
+            });
             self.make_card(ui, ctx);
         }
         if !self.sk.msg.is_empty() {
@@ -1832,7 +1939,7 @@ impl App {
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new("つくる").size(11.0).color(style::DIM));
             for m in Make::ALL {
-                let usable = m != Make::Revolve || vertical;
+                let usable = (m != Make::Revolve || vertical) && (self.sk.holes.is_empty() || m == Make::Extrude);
                 let tip = match m {
                     Make::Extrude => "輪かくをまっすぐ押し出して、柱にする",
                     Make::Revolve if vertical => "輪かくを、たてのじく (中心の線) のまわりに回して、つぼのような形にする",
@@ -2202,6 +2309,88 @@ mod tests {
         st.click([1.0, 1.0], false);
         st.back();
         assert!(st.anchor.is_none());
+    }
+
+    #[test]
+    fn multiple_holes_create_a_boolean_group_and_survive_file_roundtrip() {
+        let ctx = egui::Context::default();
+        let mut app = app();
+        app.scene.groups.clear();
+        app.set_sketch_tool(true);
+        app.sketch_done(Finished::Profile(sketch::rect([-24.0, -20.0], [24.0, 20.0])));
+        app.sk.stage = Stage::Hole;
+        app.sketch_done(Finished::Profile(sketch::circle([-11.0, 0.0], 5.0, sketch::CIRCLE_POINTS)));
+        app.sk.stage = Stage::Hole;
+        app.sketch_done(Finished::Profile(sketch::rect([8.0, -6.0], [16.0, 6.0])));
+        assert_eq!(app.sk.holes.len(), 2);
+        app.sk.height = 8.0;
+        app.sk.make = Make::Extrude;
+        assert!(app.sketch_make(&ctx), "{}", app.sk.msg);
+        assert_eq!(app.scene.groups.len(), 1);
+        let g = &app.scene.groups[0];
+        assert_eq!(g.shapes.len(), 3);
+        assert!(g.sketch_holes);
+        assert_eq!(g.shapes[0].op, Op::Add);
+        assert!(g.shapes[1..].iter().all(|s| s.op == Op::Subtract && s.blend == 0.0));
+        let field = crate::sdf::Field::new(&app.scene);
+        assert!(field.distance([0.0, 0.0, 4.0]) < 0.0);
+        assert!(field.distance([-11.0, 0.0, 4.0]) > 0.0);
+        assert!(field.distance([12.0, 0.0, 4.0]) > 0.0);
+        let back = crate::model::Scene::from_json(&app.scene.to_json()).expect("saved scene");
+        assert_eq!(back.groups[0].shapes.len(), 3);
+        assert!(crate::sdf::Field::new(&back).distance([12.0, 0.0, 4.0]) > 0.0);
+    }
+
+    #[test]
+    fn concentric_eccentric_rectangular_multiple_holes_export_as_watertight_stl() {
+        use crate::export_formats::Format;
+        use crate::export_job::{self, Options, Scope};
+        use crate::export_mesh::Progress;
+        use solidcraft_geom::melt;
+        let ctx = egui::Context::default();
+        let mut app = app();
+        app.scene.groups.clear();
+        let mut scenarios: Vec<Vec<Vec<[f32; 2]>>> = vec![
+            vec![sketch::circle([0.0, 0.0], 8.0, sketch::CIRCLE_POINTS)],
+            vec![sketch::circle([8.0, 0.0], 6.0, sketch::CIRCLE_POINTS)],
+            vec![sketch::rect([-10.0, -6.0], [10.0, 6.0])],
+            vec![
+                sketch::circle([-11.0, 0.0], 5.0, sketch::CIRCLE_POINTS),
+                sketch::rect([8.0, -6.0], [16.0, 6.0]),
+            ],
+        ];
+        for (i, holes) in scenarios.drain(..).enumerate() {
+            app.scene.groups.clear();
+            app.sk.reset();
+            app.sk.on = true;
+            app.sketch_done(Finished::Profile(sketch::rect([-25.0, -20.0], [25.0, 20.0])));
+            app.sk.holes = holes.clone();
+            app.sk.make = Make::Extrude;
+            app.sk.height = 8.0;
+            assert!(app.sketch_make(&ctx), "scenario {i}: {}", app.sk.msg);
+            let options = Options { format: Format::Stl, tolerance: 0.45, scope: Scope::Visible, ..Options::default() };
+            let built = export_job::build(&app.scene, None, &options, &Progress::new()).expect("export mesh");
+            assert!(built.closed, "scenario {i}");
+            assert!(melt::is_watertight(&built.surface.mesh), "scenario {i}");
+            let area = 50.0 * 40.0 - holes.iter().map(|h| sketch::signed_area(h).abs()).sum::<f32>();
+            let expected = f64::from(area * 8.0);
+            let measured = melt::volume(&built.surface.mesh).abs();
+            assert!((measured / expected - 1.0).abs() < 0.04, "scenario {i}: {measured} vs {expected}");
+            let bytes = export_job::serialize(&built, &options, std::path::Path::new("test-holes.stl")).expect("STL serialization");
+            assert_eq!(bytes.len(), 1);
+            assert!(bytes[0].1.len() > 84, "non-empty binary STL scenario {i}");
+        }
+    }
+
+    #[test]
+    fn touching_hole_is_refused_in_sketch_card() {
+        let mut app = app();
+        app.set_sketch_tool(true);
+        app.sketch_done(Finished::Profile(sketch::rect([-20.0, -20.0], [20.0, 20.0])));
+        app.sk.stage = Stage::Hole;
+        app.sketch_done(Finished::Profile(sketch::rect([20.0, -5.0], [25.0, 5.0])));
+        assert!(app.sk.holes.is_empty());
+        assert!(!app.sk.msg.is_empty());
     }
 
     /// Draw a profile on the floor and make every kind of solid of it, through the same calls the card uses.
