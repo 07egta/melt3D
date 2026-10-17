@@ -764,7 +764,7 @@ impl App {
 
     /// Start editing the outline of shape (g, s) in the viewport.
     pub fn sketch_edit_begin(&mut self, g: usize, s: usize) {
-        let ok = self.scene.shape(g, s).is_some_and(sketch::editable);
+        let ok = !self.scene.is_locked(Pick::Shape(g, s)) && self.scene.shape(g, s).is_some_and(sketch::editable);
         if !ok {
             return;
         }
