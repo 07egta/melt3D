@@ -18,6 +18,7 @@ mod export_job;
 mod export_mesh;
 mod fonts;
 mod gizmo;
+mod guide;
 mod glyphs;
 mod glyphs_more;
 mod backend;
