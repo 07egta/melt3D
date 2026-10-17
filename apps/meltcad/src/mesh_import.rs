@@ -498,4 +498,43 @@ pub(crate) mod tests {
         assert!(checked > 300, "{checked}");
         eprintln!("end to end: {checked} points, worst difference {worst:.3} mm, cell {cell:.3} mm, volume {} nodes", baked.volume.nodes());
     }
+    #[test]
+    fn rebake_reduces_cell_width_and_records_surface_residuals() {
+        let mesh = sphere_mesh(5.0, 16, 32);
+        let ctrl = BakeControl::new();
+        let size = [20.0, 10.0, 10.0];
+        let started = std::time::Instant::now();
+        let low = rebake(&mesh, false, size, 24, &ctrl).unwrap();
+        let low_secs = started.elapsed().as_secs_f64();
+        let started = std::time::Instant::now();
+        let high = rebake(&mesh, false, size, 48, &ctrl).unwrap();
+        let high_secs = started.elapsed().as_secs_f64();
+        assert!(high.volume.cell < low.volume.cell);
+        assert_eq!(high.size, size);
+        let e0 = surface_residual(&mesh, false, size, &low.volume);
+        let e1 = surface_residual(&mesh, false, size, &high.volume);
+        assert!(e0.2 > 0 && e1.2 > 0);
+        assert!(e0.0.is_finite() && e1.0.is_finite());
+        eprintln!("rebake centroid residual mean/max low {:.4}/{:.4}mm {:.3}s; high {:.4}/{:.4}mm {:.3}s", e0.0, e0.1, low_secs, e1.0, e1.1, high_secs);
+    }
+
+    #[test]
+    fn rebake_cancel_keeps_the_caller_in_control() {
+        use std::sync::atomic::Ordering;
+        let mesh = box_mesh([-5.0; 3], [5.0; 3]);
+        let ctrl = BakeControl::new();
+        ctrl.cancel.store(true, Ordering::Relaxed);
+        let result = rebake(&mesh, false, [10.0; 3], 64, &ctrl);
+        assert_eq!(result.unwrap_err(), crate::sdf_volume::ERR_CANCEL);
+    }
+
+    #[test]
+    fn cleaned_mesh_fingerprint_is_deterministic_and_detects_changes() {
+        let mut mesh = box_mesh([-1.0; 3], [1.0; 3]);
+        let before = mesh_hash(&mesh);
+        assert_eq!(before, mesh_hash(&mesh));
+        mesh.positions[0][0] += 0.1;
+        assert_ne!(before, mesh_hash(&mesh));
+    }
+
 }
