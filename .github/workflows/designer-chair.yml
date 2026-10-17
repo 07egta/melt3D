@@ -1,0 +1,38 @@
+name: Designer Chair Tests
+
+on:
+  pull_request:
+    branches: [easy-layout-and-melt]
+    paths:
+      - "apps/meltcad/src/designer_chair.rs"
+      - "apps/meltcad/src/model.rs"
+      - "apps/meltcad/src/library.rs"
+      - "apps/meltcad/src/library_ui.rs"
+      - "apps/meltcad/src/panels.rs"
+      - "apps/meltcad/src/main.rs"
+      - "apps/meltcad/library/README.md"
+      - ".github/workflows/designer-chair.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  chair:
+    name: Parametric chairs, thumbnail, scene and exports
+    runs-on: ubuntu-latest
+    timeout-minutes: 85
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Linux egui prerequisites
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libx11-dev mesa-vulkan-drivers
+      - name: Check MeltCAD compiles
+        run: cargo check --locked -p meltcad
+      - name: Check every procedural model and native OBJ/3MF export
+        run: cargo test --profile ci --locked -p meltcad designer_chair::tests -- --nocapture
+      - name: Check existing model library and thumbnails
+        run: cargo test --profile ci --locked -p meltcad library::tests -- --nocapture
+      - name: Check existing 3MF/OBJ exporters
+        run: cargo test --profile ci --locked -p meltcad export_job::tests -- --nocapture
