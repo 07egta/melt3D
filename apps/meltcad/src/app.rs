@@ -294,7 +294,7 @@ impl App {
     }
 
     fn apply_file_action(&mut self, action: PendingFileAction) {
-        let was_new = matches!(action, PendingFileAction::New(_));
+        let was_new = matches!(&action, PendingFileAction::New(_));
         let (scene, path, notes) = match action {
             PendingFileAction::New(scene) => (scene, None, Vec::new()),
             PendingFileAction::Open(path) => {
@@ -1126,7 +1126,9 @@ impl App {
                     let severity = error || (note.is_empty() && info.warning);
                     let ink = if severity { style::CUT } else { style::DIM };
                     let text = egui::RichText::new(message).size(12.0).color(ink);
-                    ui.add(egui::Label::new(text).truncate()).on_hover_text(info.controls);
+                    let room = (ui.available_width() - if ui.available_width() < 740.0 { 170.0 } else { 330.0 }).max(100.0);
+                    ui.add_sized([room, 18.0], egui::Label::new(text).truncate())
+                        .on_hover_text(format!("{}　｜　{}", info.action, info.controls));
                     if !error && note.is_empty() && !info.warning && !hidden
                         && let Some(id) = info.id
                         && ui.small_button("×").on_hover_text("この種類の案内だけ非表示（あとで復元できます）").clicked()
