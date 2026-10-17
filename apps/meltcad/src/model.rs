@@ -359,6 +359,18 @@ impl Material {
     }
 }
 
+/// Optional pointer to the original imported mesh. The vertices are not embedded in the scene:
+/// a missing/moved source file must be selected again before re-baking.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MeshSource {
+    pub path: String,
+    /// Whether the original mesh was converted from Y-up to Z-up at import.
+    pub y_up: bool,
+    /// Fingerprint of cleaned vertices/triangles; zero denotes an older unknown source.
+    #[serde(default)]
+    pub mesh_hash: u64,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Shape {
     pub name: String,
@@ -403,6 +415,9 @@ pub struct Shape {
     /// Where an imported mesh came from (its file name), shown in the inspector.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub source: String,
+    /// Optional source reference, absent in all legacy .meltcad files.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mesh_source: Option<MeshSource>,
 }
 
 /// The style of a shape's cut edges: what `Shape::round` makes of them.
@@ -451,7 +466,15 @@ impl Shape {
             uid: 0,
             volume: None,
             source: String::new(),
+            mesh_source: None,
         }
+    }
+
+    /// Grid widths in actual model millimetres after nonuniform scaling.
+    /// A stored SDF has one cell size; on screen it may have three different pitches.
+    pub fn mesh_cell_mm(&self) -> Option<[f32; 3]> {
+        let v = self.volume.as_ref()?;
+        (self.kind == Kind::Mesh).then(|| [0, 1, 2].map(|a| v.cell * self.scale[a].abs()))
     }
 
     /// An imported mesh: `volume` is its baked distances, `model_size` its size in mm.
@@ -910,6 +933,10 @@ impl Scene {
                 }
                 if s.kind != Kind::Mesh {
                     s.volume = None;
+                    s.mesh_source = None;
+                }
+                if s.mesh_source.as_ref().is_some_and(|src| src.path.is_empty() || src.path.len() > 4096) {
+                    s.mesh_source = None;
                 }
             }
             // a mesh whose data is gone or damaged cannot be drawn: it goes, with a note; so do
@@ -1117,4 +1144,18 @@ mod tests {
         assert!(Kind::Box.can_round() && Kind::Cone.can_round() && Kind::Sweep.can_round());
         assert!(!Kind::Sphere.can_round() && !Kind::Curve.can_round());
     }
+    #[test]
+    fn mesh_source_is_optional_for_legacy_files_and_roundtrips_when_present() {
+        let mut sh = Shape::new(Kind::Mesh, [0.0; 3], Material::default());
+        let old_text = serde_json::to_string(&sh).unwrap();
+        let old: Shape = serde_json::from_str(&old_text).unwrap();
+        assert!(old.mesh_source.is_none());
+        sh.mesh_source = Some(MeshSource { path: "original.stl".into(), y_up: true, mesh_hash: 12345 });
+        let again: Shape = serde_json::from_str(&serde_json::to_string(&sh).unwrap()).unwrap();
+        assert_eq!(again.mesh_source, sh.mesh_source);
+        sh.scale = [2.0, 3.0, 4.0];
+        sh.volume = Some(crate::mesh::SharedVolume::new(crate::mesh::tests::ball_volume(8)));
+        assert_eq!(sh.mesh_cell_mm(), Some([2.0, 3.0, 4.0]));
+    }
+
 }
