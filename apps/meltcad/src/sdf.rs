@@ -610,6 +610,33 @@ mod tests {
     }
 
     #[test]
+    fn picking_ray_hits_twist_and_boolean_field_is_unscaled() {
+        use crate::deform::{Deformation, Twist};
+        let mut sh = Shape::new(Kind::Box, [0.0; 3], Material::default());
+        sh.size = [30.0, 12.0, 40.0];
+        sh.blend = 0.0;
+        let source = sh.clone();
+        sh.deformation = Some(Deformation::Twist(Twist::preset(180.0)));
+        let field = Field::new(&scene_of(vec![sh]));
+        assert!(field.ray_step < 1.0 && field.ray_step > 0.0);
+        let hit = field.ray([0.0, 0.0, 80.0], [0.0, 0.0, -1.0], 150.0);
+        assert!(hit.is_some(), "ray must hit the top of the twisted solid");
+        let (travel, _) = hit.unwrap();
+        assert!((travel - 60.0).abs() < 1.0, "top cap still at Z=20: ray travelled {travel}");
+        // A rotationally symmetric source produces an identical scalar field
+        // after a Z-axis Twist (zero-isosurface AND values).
+        let mut round = Shape::new(Kind::Cylinder, [0.0; 3], Material::default());
+        let circle = Prepared::new(&round);
+        round.deformation = Some(Deformation::Twist(Twist::preset(360.0)));
+        let turned = Prepared::new(&round);
+        for q in [[0.0, 0.0, 0.0], [10.0, 6.0, 2.0], [25.0, 5.0, 3.0]] {
+            assert!((turned.distance(q) - circle.distance(q)).abs() < 1e-4,
+                "twisting a circular cross section does not alter its SDF");
+        }
+        assert!(Prepared::new(&source).distance([0.0, 0.0, 0.0]) < 0.0);
+    }
+
+    #[test]
     fn twist_is_non_destructive_and_closed_at_both_ends() {
         use crate::deform::{Deformation, Twist};
         let mut sh = Shape::new(Kind::Box, [0.0; 3], Material::default());
