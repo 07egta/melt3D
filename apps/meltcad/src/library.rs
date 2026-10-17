@@ -57,7 +57,23 @@ const FILES: [&str; 15] = [
 /// All categories (parsed once). A damaged file is skipped, never a crash; a test checks they all parse.
 pub fn all() -> &'static [Category] {
     static LIB: OnceLock<Vec<Category>> = OnceLock::new();
-    LIB.get_or_init(|| FILES.iter().filter_map(|t| parse(t).ok()).filter(|c| !c.items.is_empty()).collect())
+    LIB.get_or_init(|| {
+        let mut categories: Vec<Category> = FILES
+            .iter().filter_map(|t| parse(t).ok()).filter(|c| !c.items.is_empty())
+            .collect();
+        // Procedural, re-editable presets use the same Item / thumbnail / insert
+        // pathway as static JSON models. The Rust builder is their single source.
+        let chairs = crate::designer_chair::presets();
+        if !chairs.is_empty() {
+            let furniture_index = categories.iter().position(|c| c.name == "かぐ");
+            let insert_at = furniture_index.map_or(categories.len(), |i| i + 1);
+            categories.insert(insert_at, Category {
+                name: "Designer Chair".to_string(),
+                items: chairs,
+            });
+        }
+        categories
+    })
 }
 
 fn parse(text: &str) -> Result<Category, String> {
