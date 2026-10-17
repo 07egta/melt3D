@@ -7,7 +7,8 @@ param(
     [string]$OutputCsv = ".\yuracad-footprint.csv",
     [ValidateRange(2,120)][int]$WarmupSeconds = 12,
     [ValidateRange(2,30)][int]$SampleSeconds = 5,
-    [switch]$RunGpuBench
+    [switch]$RunGpuBench,
+    [switch]$BaselineHasResetHook
 )
 $ErrorActionPreference = 'Stop'
 $before = (Resolve-Path -LiteralPath $BeforeReleaseExe).ProviderPath
@@ -71,7 +72,9 @@ function Test-Window($tag, $exe, $model) {
             StartupToWindowMs=$startupMs; WorkingSetMiB=$sample.WS
             PrivateMiB=$sample.Private; PeakWSMiB=$sample.Peak
         }
-        if ($model) {
+        # Unmodified baseline binaries do not have the new same-PID reset hook.
+        # Never misreport a missing acknowledgement as a memory measurement.
+        if ($model -and ($tag -eq 'after-release' -or $BaselineHasResetHook)) {
             $ack = Join-Path $ctrl 'reset_scene.done'
             New-Item -ItemType File -Force -Path (Join-Path $ctrl 'reset_scene') | Out-Null
             $until = (Get-Date).AddSeconds(20)
@@ -141,6 +144,9 @@ try {
     Write-Host "Measurement CSV: $csv"
     Write-Host 'Startup ends at the first window, not the first finished GPU frame.'
     Write-Host 'WorkingSet/Private measure process RAM, not dedicated GPU VRAM.'
+    if (-not $BaselineHasResetHook) {
+        Write-Warning 'Baseline after-close RAM not measured: old EXE lacks reset_scene. Candidate same-PID after-close RAM is measured.'
+    }
 } finally {
     [Environment]::SetEnvironmentVariable('MELTCAD_TEST_DIR',$oldDir,'Process')
     [Environment]::SetEnvironmentVariable('MELTCAD_BENCH_QUIET',$oldQuiet,'Process')
