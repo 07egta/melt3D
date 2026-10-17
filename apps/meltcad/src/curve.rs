@@ -13,6 +13,8 @@ use crate::sdf::{Prepared, V3, dot, len, mul, norm, sub};
 
 /// Most points one curve gives to the GPU.
 pub const MAX_POINTS: usize = 96;
+/// Segments per bounding sphere that the GPU copy looks at before measuring them (`shader_curve.wgsl`).
+pub const GROUP_SEGMENTS: usize = 8;
 const MAX_STEPS: usize = 8;
 const COORD_LIMIT: f32 = 1.0e4;
 const R_MIN: f32 = 0.01;
@@ -174,6 +176,27 @@ pub fn bounds(points: &[[f32; 4]]) -> (V3, V3) {
     }
     let g = rmax + 0.01;
     ([lo[0] - g, lo[1] - g, lo[2] - g], [hi[0] + g, hi[1] + g, hi[2] + g])
+}
+
+/// One bounding sphere (centre, radius) for every `GROUP_SEGMENTS` segments of the resampled
+/// points, thick enough to hold the tube there: every round cone of the group lies inside it, so
+/// the distance to the group is at least the distance to its sphere, and the tube has a point
+/// inside each sphere (the distance is at most the distance to the centre plus the radius).
+pub fn group_spheres(points: &[[f32; 4]]) -> Vec<[f32; 4]> {
+    let segs = points.len().saturating_sub(1);
+    (0..segs.div_ceil(GROUP_SEGMENTS))
+        .map(|g| {
+            let from = g * GROUP_SEGMENTS;
+            let to = (from + GROUP_SEGMENTS).min(points.len() - 1);
+            let part = points.get(from..=to).unwrap_or(&[]);
+            let (lo, hi) = part.iter().fold(([f32::MAX; 3], [f32::MIN; 3]), |(lo, hi), p| {
+                ([lo[0].min(p[0]), lo[1].min(p[1]), lo[2].min(p[2])], [hi[0].max(p[0]), hi[1].max(p[1]), hi[2].max(p[2])])
+            });
+            let c = [(lo[0] + hi[0]) * 0.5, (lo[1] + hi[1]) * 0.5, (lo[2] + hi[2]) * 0.5];
+            let r = part.iter().map(|p| len(sub([p[0], p[1], p[2]], c)) + p[3]).fold(0.0_f32, f32::max);
+            [c[0], c[1], c[2], r * 1.0005 + 0.005]
+        })
+        .collect()
 }
 
 /// Half the size of the box around the curve (centred on the shape), at least 1 mm.
@@ -374,6 +397,46 @@ mod tests {
         assert!((tube(&pts, [45.0, 0.0, 0.0], false)).abs() < 1e-4);
         assert!((tube(&pts, [45.0, 0.0, 0.0], true) - 5.0).abs() < 1e-4);
         assert!((tube(&pts, [20.0, 0.0, 0.0], true) + 5.0).abs() < 1e-4);
+    }
+
+    /// The grouped search the shader does (look at the spheres, measure only groups that can hold
+    /// something nearer than what is known) gives exactly the distance of the plain loop over all
+    /// the segments. This is that search on the CPU, on random tubes and random points.
+    #[test]
+    fn the_grouped_search_equals_the_plain_loop() {
+        let mut seed = 99;
+        for round in 0..40 {
+            let n = 2 + (lcg(&mut seed) * 40.0) as usize;
+            let nodes: Vec<[f32; 4]> = (0..n).map(|_| [lcg(&mut seed) * 120.0 - 60.0, lcg(&mut seed) * 120.0 - 60.0, lcg(&mut seed) * 60.0, 0.5 + lcg(&mut seed) * 6.0]).collect();
+            let pts = build(&nodes, &[0.0, 1.0, 0.0, 1.0]);
+            let spheres = group_spheres(&pts);
+            assert_eq!(spheres.len(), (pts.len() - 1).div_ceil(GROUP_SEGMENTS));
+            for _ in 0..60 {
+                let q = [lcg(&mut seed) * 200.0 - 100.0, lcg(&mut seed) * 200.0 - 100.0, lcg(&mut seed) * 120.0 - 30.0];
+                let want = tube(&pts, q, false);
+                // the grouped search
+                let ub = spheres.iter().map(|s| len(sub(q, [s[0], s[1], s[2]])) + s[3]).fold(f32::MAX, f32::min);
+                let lbmin = spheres.iter().map(|s| len(sub(q, [s[0], s[1], s[2]])) - s[3]).fold(f32::MAX, f32::min);
+                assert!(want <= ub + 1e-3, "round {round}: the upper bound {ub} is below the distance {want}");
+                assert!(want >= lbmin - 1e-3, "round {round}: the lower bound {lbmin} is above the distance {want}");
+                let mut d = 1.0e6_f32;
+                for (g, s) in spheres.iter().enumerate() {
+                    if len(sub(q, [s[0], s[1], s[2]])) - s[3] > d.min(ub) {
+                        continue;
+                    }
+                    let from = g * GROUP_SEGMENTS;
+                    for k in 0..GROUP_SEGMENTS {
+                        let i = from + k;
+                        if i + 1 >= pts.len() {
+                            break;
+                        }
+                        let (a, b) = (pts[i], pts[i + 1]);
+                        d = d.min(round_cone(q, [a[0], a[1], a[2]], a[3], [b[0], b[1], b[2]], b[3]));
+                    }
+                }
+                assert!((d - want).abs() < 1e-4, "round {round}: grouped {d} vs plain {want}");
+            }
+        }
     }
 
     #[test]

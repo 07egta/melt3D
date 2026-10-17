@@ -42,8 +42,18 @@ pub struct App {
     pub drag: Option<Drag>,
     pub srgb: bool,
     pub last_view_height: f32,
-    field: Field,
-    field_scene: Scene,
+    /// The scene as of the last `track_scene` and its revision number: a change is found once per
+    /// frame by comparing, and everything else (the picture, the field, the undo step) asks the
+    /// number instead of comparing whole scenes again.
+    tracked: Scene,
+    scene_rev: u64,
+    /// The revision `committed` is current for, and the one `dedupe_uids` last ran for.
+    committed_rev: u64,
+    deduped_rev: u64,
+    /// The field for picking, made when picking needs it and the scene has changed since.
+    field_cache: std::cell::RefCell<Option<(u64, std::rc::Rc<Field>)>>,
+    /// How many times the field was built (tests and the HUD look at it).
+    pub(crate) field_builds: std::cell::Cell<u64>,
     pub path: Option<PathBuf>,
     pub dirty: bool,
     status: (String, f64),
@@ -88,6 +98,8 @@ pub struct App {
     pub notice: Option<String>,
     /// The graphics path (GPU picture or the simple CPU one) and its cards.
     pub gpu: crate::gpu_ui::GpuUi,
+    /// The speed test window ("速さをはかる…").
+    pub bench: crate::bench::Job,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -109,8 +121,12 @@ impl App {
         let scene = Scene::default();
         let mut app = App {
             committed: scene.clone(),
-            field: Field::new(&scene),
-            field_scene: scene.clone(),
+            tracked: scene.clone(),
+            scene_rev: 1,
+            committed_rev: 1,
+            deduped_rev: 0,
+            field_cache: std::cell::RefCell::new(None),
+            field_builds: std::cell::Cell::new(0),
             scene,
             undo: Vec::new(),
             redo: Vec::new(),
@@ -141,13 +157,14 @@ impl App {
             ct: Default::default(),
             pt: Default::default(),
             sk: Default::default(),
-            perf: crate::perf::Perf::default(),
+            perf: crate::perf::Perf { sharpen: crate::perf::DEFAULT_SHARPEN, hud: std::env::var_os("MELTCAD_HUD").is_some_and(|v| v != "0"), ..Default::default() },
             clipboard: None,
             lib_open: false,
             lib_cat: 0,
             lib_query: String::new(),
             notice: None,
             gpu: Default::default(),
+            bench: Default::default(),
         };
         if let Some(p) = open {
             app.open_path(p);
@@ -155,8 +172,29 @@ impl App {
         app
     }
 
-    pub fn field(&self) -> &Field {
-        &self.field
+    /// The field for picking. It is built when asked for, and again only after the scene changed
+    /// (a drag or a camera move that picks nothing never builds it).
+    pub fn field(&self) -> std::rc::Rc<Field> {
+        let mut cache = self.field_cache.borrow_mut();
+        if let Some((rev, f)) = cache.as_ref()
+            && *rev == self.scene_rev
+        {
+            return f.clone();
+        }
+        self.field_builds.set(self.field_builds.get() + 1);
+        let f = std::rc::Rc::new(Field::new(&self.scene));
+        *cache = Some((self.scene_rev, f.clone()));
+        f
+    }
+
+    /// Notice a change of the scene: compares with the copy kept from the last look, and when it
+    /// differs bumps the revision number. Returns the number.
+    pub(crate) fn track_scene(&mut self) -> u64 {
+        if self.scene != self.tracked {
+            self.tracked.clone_from(&self.scene);
+            self.scene_rev += 1;
+        }
+        self.scene_rev
     }
 
     pub fn say(&mut self, ctx: &egui::Context, text: impl Into<String>) {
@@ -167,19 +205,24 @@ impl App {
 
     /// Undo steps are made here: a change counts as finished once the mouse is up.
     pub(crate) fn settle(&mut self, ctx: &egui::Context) {
+        let mut rev = self.track_scene();
         // a copied shape or group carries its original's number: only the first keeps it
-        self.scene.dedupe_uids();
-        if self.scene != self.committed && !ctx.input(|i| i.pointer.any_down()) {
-            self.undo.push(std::mem::replace(&mut self.committed, self.scene.clone()));
-            if self.undo.len() > UNDO_LIMIT {
-                self.undo.remove(0);
-            }
-            self.redo.clear();
-            self.dirty = true;
+        if self.deduped_rev != rev {
+            self.scene.dedupe_uids();
+            rev = self.track_scene();
+            self.deduped_rev = rev;
         }
-        if self.scene != self.field_scene {
-            self.field = Field::new(&self.scene);
-            self.field_scene = self.scene.clone();
+        if self.committed_rev != rev && !ctx.input(|i| i.pointer.any_down()) {
+            // (compared exactly once per change: a drag that ends where it began is no edit)
+            if self.scene != self.committed {
+                self.undo.push(std::mem::replace(&mut self.committed, self.scene.clone()));
+                if self.undo.len() > UNDO_LIMIT {
+                    self.undo.remove(0);
+                }
+                self.redo.clear();
+                self.dirty = true;
+            }
+            self.committed_rev = rev;
         }
     }
 
@@ -513,6 +556,9 @@ impl App {
                 self.tool = t;
             }
         }
+        if hit(plain, Key::F3) {
+            self.perf.hud = !self.perf.hud;
+        }
         if hit(plain, Key::Questionmark) || hit(plain, Key::F1) {
             self.show_keys = !self.show_keys;
         }
@@ -706,9 +752,11 @@ impl App {
                                 ui.close();
                             }
                         });
-                        let mut quality = self.perf.quality;
-                        crate::perf::quality_menu(ui, &mut quality, |ui| self.gpu_menu_items(ui));
-                        self.perf.quality = quality;
+                        let mut menu = crate::perf::MenuState { quality: self.perf.quality, hud: self.perf.hud, bench: false };
+                        crate::perf::quality_menu(ui, &mut menu, |ui| self.gpu_menu_items(ui));
+                        self.perf.quality = menu.quality;
+                        self.perf.hud = menu.hud;
+                        self.perf.bench_requested |= menu.bench;
                     });
                     // the file name in the middle of the bar
                     let name = self.path.as_ref().and_then(|p| p.file_stem()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "名前なし".into());
@@ -1023,6 +1071,18 @@ impl App {
         if dir.join("png").exists() && std::fs::remove_file(dir.join("png")).is_ok() {
             self.capture = Some(Capture { path: dir.join("out.png"), frames: 0 });
         }
+        // `hud` shows or hides the frame-time overlay, `bench` starts the speed test window
+        if dir.join("hud").exists() && std::fs::remove_file(dir.join("hud")).is_ok() {
+            self.perf.hud = !self.perf.hud;
+        }
+        if dir.join("where").exists() {
+            // where the overlay is (written to `dir/where.txt` every frame while the file `where` exists)
+            let r = ctx.memory(|m| m.area_rect(egui::Id::new("frame_hud")));
+            let _ = std::fs::write(dir.join("where.txt"), format!("hud {} area {r:?} view {:?} ppp {}\n", self.perf.hud, self.view_rect, ctx.pixels_per_point()));
+        }
+        if dir.join("bench").exists() && std::fs::remove_file(dir.join("bench")).is_ok() {
+            self.perf.bench_requested = true;
+        }
         // `lib` opens the library card; `insert` puts the first people-model and a few more into the scene
         if dir.join("lib").exists() && std::fs::remove_file(dir.join("lib")).is_ok() {
             self.lib_open = true;
@@ -1059,9 +1119,18 @@ impl App {
 
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
+        self.frame_body(ui);
+    }
+}
+
+impl App {
+    /// One frame of the window (what `eframe::App::ui` does; a method of its own so that tests can run it).
+    pub(crate) fn frame_body(&mut self, ui: &mut Ui) {
         static FIRST: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
         crate::perf::mark_once(&FIRST, "first ui frame");
         let ctx = ui.ctx().clone();
+        let frame_began = std::time::Instant::now();
+        self.perf.stats.begin(ctx.input(|i| i.time));
         self.fix_selection();
         if let Some(n) = self.notice.take() {
             self.say(&ctx, n);
@@ -1091,6 +1160,11 @@ impl eframe::App for App {
             crate::array::update(self, &ctx);
             crate::export_dialog::update(self, &ctx);
             self.palette_ui(&ctx);
+            if std::mem::take(&mut self.perf.bench_requested) {
+                let backends = self.current_backend().map(|b| b.to_wgpu());
+                self.bench.start(&ctx, backends);
+            }
+            self.bench.show(&ctx);
         }
         self.capture_step(&ctx);
         self.settle(&ctx);
@@ -1108,9 +1182,11 @@ impl eframe::App for App {
         }
         // something edited the scene after the viewport picture was made: draw once more
         let clean = self.capture.is_some();
-        if self.perf.drawn.wants_another_frame(&self.scene, self.sel, self.hover, &self.cam, clean) {
+        let rev = self.track_scene();
+        if self.perf.drawn.wants_another_frame(rev, self.sel, self.hover, &self.cam, clean) {
             ctx.request_repaint();
         }
+        self.perf.stats.end(frame_began.elapsed().as_secs_f32() * 1000.0);
     }
 }
 
