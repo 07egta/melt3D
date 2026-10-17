@@ -994,7 +994,7 @@ mod tests {
         let mut shape = Shape::new(Kind::Extrude, [0.0; 3], Material::default());
         crate::sketch::apply(&built, &mut shape);
         let original = shape.clone();
-        let probe = [15.0, 5.0, 5.0];
+        let probe = [13.0, 7.0, 5.0];
         assert!(Prepared::new(&shape).distance(probe) > 0.0);
 
         let mut crossing = shape.outline.clone();
