@@ -73,26 +73,26 @@ impl Kind {
     pub const CAD: [Kind; 4] = [Kind::Revolve, Kind::Loft, Kind::Curve, Kind::Sweep];
     pub fn label(self) -> &'static str {
         match self {
-            Kind::Sphere => "球",
-            Kind::Box => "箱",
-            Kind::Cylinder => "円柱",
-            Kind::Torus => "ドーナツ",
-            Kind::Cone => "円すい",
-            Kind::Extrude => "押し出し",
-            Kind::Prism3 => "三角柱",
-            Kind::PrismN => "多角柱",
-            Kind::Octa => "正八面体",
-            Kind::Tetra => "正四面体",
-            Kind::Pyramid => "ピラミッド",
-            Kind::Capsule => "カプセル",
-            Kind::Hemi => "半球",
-            Kind::Tube => "パイプ",
-            Kind::Wedge => "くさび",
-            Kind::Star => "星柱",
-            Kind::Revolve => "回転体",
-            Kind::Loft => "ロフト",
-            Kind::Curve => "線",
-            Kind::Sweep => "スイープ",
+            Kind::Sphere => "Sphere",
+            Kind::Box => "Box",
+            Kind::Cylinder => "Cylinder",
+            Kind::Torus => "Donut",
+            Kind::Cone => "Cone",
+            Kind::Extrude => "Extrude",
+            Kind::Prism3 => "Triangular prism",
+            Kind::PrismN => "Polygon prism",
+            Kind::Octa => "Octahedron",
+            Kind::Tetra => "Tetrahedron",
+            Kind::Pyramid => "Pyramid",
+            Kind::Capsule => "Capsule",
+            Kind::Hemi => "Hemisphere",
+            Kind::Tube => "Pipe",
+            Kind::Wedge => "Wedge",
+            Kind::Star => "Star prism",
+            Kind::Revolve => "Revolve",
+            Kind::Loft => "Loft",
+            Kind::Curve => "Curve",
+            Kind::Sweep => "Sweep",
         }
     }
     pub fn id(self) -> f32 {
@@ -134,20 +134,20 @@ impl Kind {
     /// What the size numbers mean, for the inspector.
     pub fn size_labels(self) -> [&'static str; 3] {
         match self {
-            Kind::Sphere => ["半径", "", ""],
-            Kind::Box => ["幅", "奥行", "高さ"],
-            Kind::Cylinder => ["半径", "高さ", ""],
-            Kind::Torus => ["大半径", "小半径", ""],
-            Kind::Cone => ["半径", "高さ", ""],
-            Kind::Extrude => ["高さ", "", ""],
-            Kind::Prism3 | Kind::PrismN | Kind::Star => ["外半径", "高さ", ""],
-            Kind::Octa | Kind::Tetra | Kind::Hemi => ["半径", "", ""],
-            Kind::Pyramid => ["底の半径", "高さ", ""],
-            Kind::Capsule => ["半径", "長さ", ""],
-            Kind::Tube => ["外半径", "肉厚", "高さ"],
-            Kind::Wedge => ["幅", "奥行", "高さ"],
+            Kind::Sphere => ["Radius", "", ""],
+            Kind::Box => ["Width", "Depth", "Height"],
+            Kind::Cylinder => ["Radius", "Height", ""],
+            Kind::Torus => ["Major radius", "Minor radius", ""],
+            Kind::Cone => ["Radius", "Height", ""],
+            Kind::Extrude => ["Height", "", ""],
+            Kind::Prism3 | Kind::PrismN | Kind::Star => ["Outer radius", "Height", ""],
+            Kind::Octa | Kind::Tetra | Kind::Hemi => ["Radius", "", ""],
+            Kind::Pyramid => ["Base radius", "Height", ""],
+            Kind::Capsule => ["Radius", "Length", ""],
+            Kind::Tube => ["Outer radius", "Wall", "Height"],
+            Kind::Wedge => ["Width", "Depth", "Height"],
             Kind::Revolve => ["", "", ""],
-            Kind::Loft => ["高さ", "", ""],
+            Kind::Loft => ["Height", "", ""],
             Kind::Curve => ["", "", ""],
             Kind::Sweep => ["", "", ""],
         }
@@ -179,10 +179,10 @@ impl Kind {
     /// Labels of the four extra numbers (`Shape::params`); empty = unused.
     pub fn param_labels(self) -> [&'static str; 4] {
         match self {
-            Kind::PrismN => ["辺の数", "", "", ""],
-            Kind::Pyramid => ["辺の数", "", "", ""],
-            Kind::Star => ["とがり数", "内側の比", "", ""],
-            Kind::Revolve => ["回す角度", "", "", ""],
+            Kind::PrismN => ["Sides", "", "", ""],
+            Kind::Pyramid => ["Sides", "", "", ""],
+            Kind::Star => ["Points", "Inner ratio", "", ""],
+            Kind::Revolve => ["Angle", "", "", ""],
             _ => ["", "", "", ""],
         }
     }
@@ -440,9 +440,9 @@ impl BlendMode {
     pub const ALL: [BlendMode; 3] = [BlendMode::Smooth, BlendMode::Round, BlendMode::Gooey];
     pub fn label(self) -> &'static str {
         match self {
-            BlendMode::Smooth => "なめらか",
-            BlendMode::Round => "まるく",
-            BlendMode::Gooey => "どろっと",
+            BlendMode::Smooth => "Smooth",
+            BlendMode::Round => "Round",
+            BlendMode::Gooey => "Gooey",
         }
     }
     pub fn id(self) -> f32 {
@@ -524,9 +524,9 @@ impl Environment {
         let l = |yaw, pitch, power, color| Light { yaw, pitch, power, color };
         let base = Environment::studio();
         vec![
-            ("スタジオ", base.clone()),
+            ("Studio", base.clone()),
             (
-                "ひるま",
+                "Daytime",
                 Environment {
                     sky_top: [0.45, 0.65, 0.95],
                     sky_horizon: [0.80, 0.88, 0.97],
@@ -537,7 +537,7 @@ impl Environment {
                 },
             ),
             (
-                "ゆうやけ",
+                "Sunset",
                 Environment {
                     sky_top: [0.35, 0.28, 0.55],
                     sky_horizon: [1.0, 0.55, 0.32],
@@ -549,7 +549,7 @@ impl Environment {
                 },
             ),
             (
-                "よる",
+                "Night",
                 Environment {
                     sky_top: [0.06, 0.08, 0.20],
                     sky_horizon: [0.14, 0.18, 0.38],
@@ -561,7 +561,7 @@ impl Environment {
                 },
             ),
             (
-                "キャンディ",
+                "Candy",
                 Environment {
                     sky_top: [1.0, 0.82, 0.92],
                     sky_horizon: [1.0, 0.93, 0.80],
@@ -572,7 +572,7 @@ impl Environment {
                 },
             ),
             (
-                "しろ",
+                "White",
                 Environment {
                     sky_top: [0.97, 0.97, 0.98],
                     sky_horizon: [0.93, 0.93, 0.94],
@@ -641,7 +641,7 @@ pub const MAX_SAVED: usize = 24;
 
 impl Default for Scene {
     fn default() -> Self {
-        let mut g = Group::new("グループ 1");
+        let mut g = Group::new("Group 1");
         g.shapes.push(Shape::new(Kind::Sphere, [0.0, 0.0, 20.0], Material::default()));
         Scene { groups: vec![g], melt: Melt::default(), env: Environment::default(), saved: Vec::new() }
     }

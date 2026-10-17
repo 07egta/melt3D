@@ -558,11 +558,11 @@ impl App {
 /// The handle's direction on the floor for the status line.
 pub fn hint(tool: Tool) -> &'static str {
     match tool {
-        Tool::Select => "クリックで選ぶ",
-        Tool::All => "矢印=動かす　四角=平面で動かす　曲がった矢印=回す　真ん中・角=大きさ",
-        Tool::Move => "矢印で動かす (Ctrlで1mmずつ)",
-        Tool::Rotate => "輪っかで回す (Ctrlで15度ずつ)",
-        Tool::Scale => "四角・角・真ん中で大きさを変える",
+        Tool::Select => "Click to select",
+        Tool::All => "Arrow = move  Square = move on plane  Curved arrow = rotate  Centre/corner = scale",
+        Tool::Move => "Drag arrow to move (Ctrl = 1mm steps)",
+        Tool::Rotate => "Drag ring to rotate (Ctrl = 15° steps)",
+        Tool::Scale => "Square, corner or centre to scale",
     }
 }
 
