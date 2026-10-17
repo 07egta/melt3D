@@ -141,6 +141,43 @@ mod tests {
     }
 
     #[test]
+    fn household_furniture_is_complete_and_survives_scene_save_load() {
+        let cat = parse(include_str!("../library/furniture.json")).expect("furniture category should load");
+        assert_eq!(cat.name, "かぐ");
+        assert_eq!(cat.items.len(), 15, "seven updated models, three new ones, five untouched ones");
+        let names = [
+            "ダイニングチェア", "スツール", "ダイニングテーブル", "ローテーブル",
+            "3人掛けソファ", "シングルベッド", "本棚", "勉強机", "タンス", "オフィスチェア",
+        ];
+        for name in names {
+            let it = cat.items.iter().find(|it| it.name == name).expect("missing household model");
+            assert!((5..=24).contains(&it.group.shapes.len()), "{name}: shape budget");
+            assert!(it.fits(0, 0), "{name}: one-click placement would fail");
+            assert!(it.group.shapes.iter().all(|s| s.kind != crate::model::Kind::Mesh),
+                    "{name}: uses existing editable primitives instead of heavy baked meshes");
+            let saved = it.scene().to_json();
+            let reloaded = Scene::from_json(&saved).expect("scene must reload");
+            assert_eq!(reloaded.groups.len(), 1, "{name}");
+            assert_eq!(reloaded.groups[0].name, name);
+            assert_eq!(reloaded.groups[0].shapes.len(), it.group.shapes.len(), "{name}");
+            let placed = it.placed([120.0, -80.0]);
+            assert_eq!(placed.shapes.len(), it.group.shapes.len(), "{name}");
+            let sx = placed.shapes.iter().map(|s| s.pos[0]).sum::<f32>() / placed.shapes.len() as f32;
+            let sy = placed.shapes.iter().map(|s| s.pos[1]).sum::<f32>() / placed.shapes.len() as f32;
+            assert!((sx - 120.0).abs() < 0.01 && (sy + 80.0).abs() < 0.01, "{name}: placement");
+        }
+        // Previous searches still find their upgraded replacements.
+        for (old, current) in [
+            ("いす", "ダイニングチェア"), ("テーブル", "ダイニングテーブル"),
+            ("ソファ", "3人掛けソファ"), ("ベッド", "シングルベッド"),
+            ("ほんだな", "本棚"), ("たんす", "タンス"),
+        ] {
+            let it = cat.items.iter().find(|it| it.name == current).expect("missing updated item");
+            assert!(it.matches(old), "{old} should still search {current}");
+        }
+    }
+
+    #[test]
     fn placing_moves_the_middle_and_keeps_the_height() {
         let c = parse(FILES[0]).unwrap_or(Category { name: String::new(), items: Vec::new() });
         for it in c.items.iter().take(3) {

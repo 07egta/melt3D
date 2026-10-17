@@ -53,3 +53,20 @@ Only edit your own `gen/<file>.py` and `<file>.json`.
 - A small part melted into a neighbour of a different colour takes a mixed colour: keep details
   (hair, eyes, buttons) at blend 0.5-1.5.
 - The headless preview ignores `Paint`, the app does not. Colour with real shapes when in doubt.
+
+
+## Everyday furniture (10 essentials)
+
+The `かぐ` category includes ten ordinary home models built from the existing
+`Box`, `Cylinder` and `Sphere` primitives. All ten have consistent approximate
+**1:15-scale** proportions and at most 24 lightweight editable shapes per model.
+The seven existing near-equivalents were **replaced/renamed**, not duplicated; their
+previous Japanese names remain search tags. Three new entries are ローテーブル,
+勉強机 and オフィスチェア. The five unrelated original entries remain.
+
+Regenerate with `cd apps/meltcad/library/gen && python3 furniture.py`;
+set `MELTCAD_BIN` to a working application binary to also render four-angle
+preview sheets. No extra dialog or thumbnail assets are required: the model
+library automatically creates thumbnails and inserts an editable group on click.
+Run `cargo test -p meltcad household_furniture` for model bounds, placement,
+scene JSON roundtrip, and coarse OBJ/3MF geometry export and archive checks.
