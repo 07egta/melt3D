@@ -154,6 +154,60 @@ pub struct Baked {
     pub stats: BakeStats,
 }
 
+pub fn mesh_hash(mesh: &ImportedMesh) -> u64 {
+    let mut h = 0xcbf2_9ce4_8422_2325u64;
+    for p in &mesh.positions {
+        for v in p {
+            for b in v.to_bits().to_le_bytes() { h = (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3); }
+        }
+    }
+    for t in &mesh.triangles {
+        for v in t {
+            for b in v.to_le_bytes() { h = (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3); }
+        }
+    }
+    h
+}
+
+/// Re-bake at the exact final size, preserving anisotropic scale as geometry.
+pub fn rebake(mesh: &ImportedMesh, y_up: bool, final_size: [f32; 3], res: u32, ctl: &BakeControl) -> Result<Baked, String> {
+    let mut m = mesh.clone();
+    if y_up { m.y_up_to_z_up(); }
+    let (lo, hi) = m.bounds().ok_or_else(|| import_mesh::NO_SHAPE.to_string())?;
+    let c = [0, 1, 2].map(|a| 0.5 * (lo[a] + hi[a]));
+    let orig = m.size();
+    if final_size.iter().any(|x| !x.is_finite() || *x <= 0.0) || orig.iter().any(|x| *x <= 0.0) {
+        return Err("寸法が不正です".into());
+    }
+    let factors = [0, 1, 2].map(|a| final_size[a] / orig[a]);
+    for p in &mut m.positions {
+        for a in 0..3 { p[a] = (p[a] - c[a]) * factors[a]; }
+    }
+    let (volume, stats) = bake_with(&m, &BakeOptions { res, ..BakeOptions::default() }, ctl)?;
+    Ok(Baked { volume: SharedVolume::new(volume), size: final_size, file_centre: [0.0; 3], stats })
+}
+
+/// Surface-centroid SDF residual (mean, maximum, number sampled), not Hausdorff error.
+pub fn surface_residual(mesh: &ImportedMesh, y_up: bool, final_size: [f32; 3], volume: &Volume) -> (f32, f32, usize) {
+    let mut m = mesh.clone();
+    if y_up { m.y_up_to_z_up(); }
+    let Some((lo, hi)) = m.bounds() else { return (0.0, 0.0, 0) };
+    let sz = m.size();
+    if sz.iter().any(|x| *x <= 0.0) { return (0.0, 0.0, 0); }
+    let c = [0, 1, 2].map(|a| (lo[a] + hi[a]) * 0.5);
+    let mut total = 0.0f64;
+    let mut worst = 0.0f32;
+    let mut n = 0usize;
+    let stride = (m.triangles.len() / 2048).max(1);
+    for tri in m.triangles.iter().step_by(stride) {
+        let (Some(a), Some(b), Some(d)) = (m.positions.get(tri[0] as usize), m.positions.get(tri[1] as usize), m.positions.get(tri[2] as usize)) else { continue };
+        let p = [0, 1, 2].map(|i| ((a[i] + b[i] + d[i]) / 3.0 - c[i]) * final_size[i] / sz[i]);
+        let residual = volume.distance(p).abs();
+        if residual.is_finite() { total += f64::from(residual); worst = worst.max(residual); n += 1; }
+    }
+    (if n > 0 { (total / n as f64) as f32 } else { 0.0 }, worst, n)
+}
+
 /// Turn, centre, scale and bake. Cancelling through `ctl` gives `Err("中止しました")`.
 pub fn bake(mesh: &ImportedMesh, format: MeshFormat, st: &Settings, ctl: &BakeControl) -> Result<Baked, String> {
     let st = st.sanitized();
@@ -444,4 +498,43 @@ pub(crate) mod tests {
         assert!(checked > 300, "{checked}");
         eprintln!("end to end: {checked} points, worst difference {worst:.3} mm, cell {cell:.3} mm, volume {} nodes", baked.volume.nodes());
     }
+    #[test]
+    fn rebake_reduces_cell_width_and_records_surface_residuals() {
+        let mesh = sphere_mesh(5.0, 16, 32);
+        let ctrl = BakeControl::new();
+        let size = [20.0, 10.0, 10.0];
+        let started = std::time::Instant::now();
+        let low = rebake(&mesh, false, size, 24, &ctrl).unwrap();
+        let low_secs = started.elapsed().as_secs_f64();
+        let started = std::time::Instant::now();
+        let high = rebake(&mesh, false, size, 48, &ctrl).unwrap();
+        let high_secs = started.elapsed().as_secs_f64();
+        assert!(high.volume.cell < low.volume.cell);
+        assert_eq!(high.size, size);
+        let e0 = surface_residual(&mesh, false, size, &low.volume);
+        let e1 = surface_residual(&mesh, false, size, &high.volume);
+        assert!(e0.2 > 0 && e1.2 > 0);
+        assert!(e0.0.is_finite() && e1.0.is_finite());
+        eprintln!("rebake centroid residual mean/max low {:.4}/{:.4}mm {:.3}s; high {:.4}/{:.4}mm {:.3}s", e0.0, e0.1, low_secs, e1.0, e1.1, high_secs);
+    }
+
+    #[test]
+    fn rebake_cancel_keeps_the_caller_in_control() {
+        use std::sync::atomic::Ordering;
+        let mesh = box_mesh([-5.0; 3], [5.0; 3]);
+        let ctrl = BakeControl::new();
+        ctrl.cancel.store(true, Ordering::Relaxed);
+        let result = rebake(&mesh, false, [10.0; 3], 64, &ctrl);
+        assert_eq!(result.unwrap_err(), crate::sdf_volume::ERR_CANCEL);
+    }
+
+    #[test]
+    fn cleaned_mesh_fingerprint_is_deterministic_and_detects_changes() {
+        let mut mesh = box_mesh([-1.0; 3], [1.0; 3]);
+        let before = mesh_hash(&mesh);
+        assert_eq!(before, mesh_hash(&mesh));
+        mesh.positions[0][0] += 0.1;
+        assert_ne!(before, mesh_hash(&mesh));
+    }
+
 }
