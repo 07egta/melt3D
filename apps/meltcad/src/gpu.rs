@@ -372,7 +372,9 @@ fn reuse_shape_pack(
         if !enabled { return Some(&[]); }
         let (first, count) = (data[start_slot] as usize, data[count_slot] as usize);
         if count != count_expected { return None; }
-        old.list.get(poly_base.checked_add(first.checked_mul(2)?)?..poly_base.checked_add(first.checked_mul(2)?)?.checked_add(count.checked_mul(2)?)?)
+        let at = poly_base.checked_add(first.checked_mul(2)?)?;
+        let end = at.checked_add(count.checked_mul(2)?)?;
+        old.list.get(at..end)
     };
     let Some(outline) = grab_poly(7*4+2, 7*4+3, shape.kind.uses_outline(), shape.outline.len()) else { return false };
     let Some(outline2) = grab_poly(12*4+2, 12*4+3, shape.kind.uses_outline2(), shape.outline2.len()) else { return false };
