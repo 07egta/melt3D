@@ -14,6 +14,10 @@ pub const CIRCLE_POINTS: usize = 32;
 pub const MIN_SIDE: f32 = 0.5;
 /// The smallest area a profile may have (mm²).
 pub const MIN_AREA: f32 = 0.5;
+/// Maximum number of independent through-holes in one sketch extrusion.
+pub const MAX_HOLES: usize = 12;
+/// Reject near-contact contours rather than generating zero-thickness walls (mm).
+const MIN_CONTOUR_GAP: f32 = 0.05;
 /// Samples per spline segment, at most.
 const MAX_PER_SEGMENT: usize = 16;
 
@@ -27,6 +31,11 @@ pub enum SketchError {
     TooManyPoints,
     TooSmall,
     SelfIntersect,
+    HoleOutside,
+    HoleOverlap,
+    ContoursTouch,
+    TooManyHoles,
+    HoleMisaligned,
     /// A revolve profile reaches to the left of the axis.
     LeftOfAxis,
     /// A revolve needs a standing (vertical) plane.
@@ -43,6 +52,11 @@ impl SketchError {
             SketchError::TooManyPoints => format!("点が多すぎます（{MAX_OUTLINE}こまで）"),
             SketchError::TooSmall => "せますぎます（ほぼ線です）。もっと広くかいてください".to_string(),
             SketchError::SelfIntersect => "線が交差しています。交わらないように かきなおしてください".to_string(),
+            SketchError::HoleOutside => "穴の輪かくは、外側の輪かくの内側にかいてください".to_string(),
+            SketchError::HoleOverlap => "穴どうしが重なっています。穴を離してください（穴の中に穴も作れません）".to_string(),
+            SketchError::ContoursTouch => "輪かくが交差・接触しています。外周と穴、穴どうしを0.05mm以上離してください".to_string(),
+            SketchError::TooManyHoles => format!("穴は{MAX_HOLES}こまでです"),
+            SketchError::HoleMisaligned => "穴と外周の高さ・向きが合っていません。同じ平面と押し出し高さにしてください".to_string(),
             SketchError::LeftOfAxis => "中心の線（じく）より左にはみ出しています。右がわにかいてください".to_string(),
             SketchError::NeedsVerticalPlane => "回転体は「正面」か「横」の面でかいてください".to_string(),
             SketchError::PathTooShort => "線が短すぎます。2点以上、はなしてうってください".to_string(),
@@ -450,6 +464,67 @@ pub fn validate_profile(pts: &[[f32; 2]]) -> Result<Vec<[f32; 2]>, SketchError> 
     }
     ensure_ccw(&mut p);
     Ok(p)
+}
+
+/// Square of the distance from a point to a finite line segment.
+fn point_segment_dist2(p: [f32; 2], a: [f32; 2], b: [f32; 2]) -> f32 {
+    let dx = b[0] - a[0];
+    let dy = b[1] - a[1];
+    let len2 = dx * dx + dy * dy;
+    let t = (((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / len2.max(1e-12)).clamp(0.0, 1.0);
+    let x = p[0] - (a[0] + t * dx);
+    let y = p[1] - (a[1] + t * dy);
+    x * x + y * y
+}
+
+/// Do two closed loops cross, touch, or come dangerously close to one another?
+fn contours_touch(a: &[[f32; 2]], b: &[[f32; 2]]) -> bool {
+    let gap2 = MIN_CONTOUR_GAP * MIN_CONTOUR_GAP;
+    for i in 0..a.len() {
+        let (a0, a1) = (a[i], a[(i + 1) % a.len()]);
+        for j in 0..b.len() {
+            let (b0, b1) = (b[j], b[(j + 1) % b.len()]);
+            if segments_meet(a0, a1, b0, b1)
+                || point_segment_dist2(a0, b0, b1) < gap2
+                || point_segment_dist2(a1, b0, b1) < gap2
+                || point_segment_dist2(b0, a0, a1) < gap2
+                || point_segment_dist2(b1, a0, a1) < gap2
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Validate an outer profile plus zero or more independent holes. Every hole must be strictly
+/// inside the outer loop; overlaps, nested holes and tangent edges are rejected. Unlike a
+/// triangulator this only validates 2D topology: existing SDF Boolean subtraction makes the solid.
+pub fn validate_holes(outer: &[[f32; 2]], holes: &[Vec<[f32; 2]>]) -> Result<Vec<Vec<[f32; 2]>>, SketchError> {
+    let outer = validate_profile(outer)?;
+    if holes.len() > MAX_HOLES {
+        return Err(SketchError::TooManyHoles);
+    }
+    let mut accepted: Vec<Vec<[f32; 2]>> = Vec::with_capacity(holes.len());
+    for hole in holes {
+        let h = validate_profile(hole)?;
+        if contours_touch(&outer, &h) {
+            return Err(SketchError::ContoursTouch);
+        }
+        if crate::sdf::polygon(&outer, h[0]) >= -MIN_CONTOUR_GAP {
+            return Err(SketchError::HoleOutside);
+        }
+        for prev in &accepted {
+            if contours_touch(prev, &h) {
+                return Err(SketchError::ContoursTouch);
+            }
+            if crate::sdf::polygon(prev, h[0]) < 0.0 || crate::sdf::polygon(&h, prev[0]) < 0.0 {
+                return Err(SketchError::HoleOverlap);
+            }
+        }
+        accepted.push(h);
+    }
+    Ok(accepted)
 }
 
 /// Do all the points lie (almost) on one straight line?
@@ -897,7 +972,44 @@ mod tests {
     }
 
     #[test]
-    fn crossing_outlines_are_found() {
+    fn holes_accept_concentric_eccentric_rectangular_and_separate_profiles() {
+        let outer = rect([-30.0, -30.0], [30.0, 30.0]);
+        let centre = circle([0.0, 0.0], 10.0, CIRCLE_POINTS);
+        let offset = circle([12.0, 0.0], 5.0, CIRCLE_POINTS);
+        let rectangular = rect([-25.0, -4.0], [-16.0, 4.0]);
+        assert_eq!(validate_holes(&outer, &[centre.clone()]).unwrap().len(), 1);
+        assert_eq!(validate_holes(&outer, &[offset.clone()]).unwrap().len(), 1);
+        assert_eq!(validate_holes(&outer, &[rectangular.clone()]).unwrap().len(), 1);
+        assert_eq!(validate_holes(&outer, &[centre, offset, rectangular]).unwrap().len(), 3);
+    }
+
+    #[test]
+    fn holes_reject_contact_crossing_nesting_overlap_and_outside() {
+        let outer = rect([-20.0, -20.0], [20.0, 20.0]);
+        assert_eq!(validate_holes(&outer, &[rect([20.0, -2.0], [24.0, 2.0])]), Err(SketchError::ContoursTouch));
+        assert_eq!(validate_holes(&outer, &[rect([19.0, -2.0], [24.0, 2.0])]), Err(SketchError::ContoursTouch));
+        assert_eq!(validate_holes(&outer, &[rect([25.0, -2.0], [30.0, 2.0])]), Err(SketchError::HoleOutside));
+        assert_eq!(
+            validate_holes(&outer, &[rect([-10.0, -10.0], [10.0, 10.0]), rect([-2.0, -2.0], [2.0, 2.0])]),
+            Err(SketchError::HoleOverlap),
+        );
+        assert_eq!(
+            validate_holes(&outer, &[rect([-8.0, -8.0], [2.0, 2.0]), rect([2.0, -5.0], [8.0, 5.0])]),
+            Err(SketchError::ContoursTouch),
+        );
+        assert_eq!(
+            validate_holes(&outer, &[rect([-8.0, -8.0], [2.0, 2.0]), rect([0.0, -5.0], [8.0, 5.0])]),
+            Err(SketchError::ContoursTouch),
+        );
+        assert_eq!(validate_holes(&outer, &[rect([-10.0, -3.0], [-9.98, 3.0])]), Err(SketchError::TooSmall));
+        assert_eq!(
+            validate_holes(&outer, &vec![rect([-1.0, -1.0], [1.0, 1.0]); MAX_HOLES + 1]),
+            Err(SketchError::TooManyHoles),
+        );
+    }
+
+    #[test]
+        fn crossing_outlines_are_found() {
         // a bow tie
         let bow = vec![[0.0, 0.0], [10.0, 10.0], [10.0, 0.0], [0.0, 10.0]];
         assert!(!is_simple(&bow));
