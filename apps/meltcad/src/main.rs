@@ -49,6 +49,8 @@ mod pattern;
 mod pattern_ui;
 mod png;
 mod sdf;
+#[cfg(test)]
+mod shader_portability;
 mod sdf_volume;
 mod sketch;
 mod sketch_ui;
