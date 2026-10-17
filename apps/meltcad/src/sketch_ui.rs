@@ -1490,7 +1490,10 @@ impl App {
             let disabled_reason = match make {
                 Make::Sweep if !ready => "スイープには2点以上の通り道が必要です。「線をかく」から追加してください",
                 Make::Loft if !ready => "上側の閉じた輪かくがありません。「上の輪かくをかく」を選んでください",
-                _ => "高さを決めたら押し出しを確定できます",
+                Make::Extrude => "高さを決めたら押し出しを確定できます",
+                Make::Revolve => "輪かくを軸のまわりに回転させます",
+                Make::Loft => "下側と上側の輪かくをつなぎます",
+                Make::Sweep => "描いた通り道に沿って押し出します",
             };
             if ui.add_enabled(ready, b).on_hover_text(disabled_reason).clicked() {
                 self.sketch_make(ctx);
