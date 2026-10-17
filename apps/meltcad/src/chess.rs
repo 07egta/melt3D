@@ -340,7 +340,8 @@ fn board(s: Settings, at: [f32; 2]) -> Group {
     block(&mut g, cream, "盤面・土台", [at[0],at[1],-3.0], [w,w,4.0], 0.6);
     for rank in 0..8 {
         for file in 0..8 {
-            if (rank+file) % 2 == 0 { continue; }
+            // a1 is dark and h1 is light; queens stand on their own colour.
+            if (rank+file) % 2 != 0 { continue; }
             let x = at[0] + (file as f32-3.5)*pitch;
             let y = at[1] + (rank as f32-3.5)*pitch;
             block(&mut g, dark, "濃いマス", [x,y,-0.85], [pitch-0.12,pitch-0.12,0.40], 0.0);
@@ -455,6 +456,13 @@ mod tests {
         let groups = full_set(s,[0.0,0.0]);
         assert_eq!(groups.len(),33);
         assert_eq!(groups[0].shapes.len(),33);
+        let p = square_pitch(s);
+        let dark_a1 = [-3.5*p,-3.5*p];
+        let light_d1 = [-0.5*p,-3.5*p];
+        assert!(groups[0].shapes.iter().skip(1).any(|sh| (sh.pos[0]-dark_a1[0]).abs() < 0.001
+            && (sh.pos[1]-dark_a1[1]).abs() < 0.001),"a1 must be dark");
+        assert!(!groups[0].shapes.iter().skip(1).any(|sh| (sh.pos[0]-light_d1[0]).abs() < 0.001
+            && (sh.pos[1]-light_d1[1]).abs() < 0.001),"d1 must be light");
         let mut seen = std::collections::HashSet::new();
         let mut kinds = std::collections::HashMap::new();
         for g in groups.iter().skip(1) {
