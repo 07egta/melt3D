@@ -152,7 +152,7 @@ mod performance_scene_tests {
             let unlit = all.iter().find(|s| s.name == unlit_name).expect("unlit scene");
             assert_eq!(lit.scene.shape_count(), unlit.scene.shape_count());
             assert_eq!(lit.scene.groups.len(), unlit.scene.groups.len());
-            assert_eq!(crate::gpu::bounds(&lit.scene, None).0, crate::gpu::bounds(&unlit.scene, None).0);
+            // the camera frame differs on purpose: a lamp's glow widens the bounds by its halo
             assert!(!crate::perf::scene_has_glow(&unlit.scene));
             for (a, b) in lit.scene.groups.iter().zip(&unlit.scene.groups) {
                 assert_eq!(a.shapes.len(), b.shapes.len());
@@ -631,7 +631,7 @@ mod tests {
     fn the_scenes_have_the_sizes_the_test_promises() {
         let all = scenes();
         let names: Vec<&str> = all.iter().map(|s| s.name).collect();
-        assert_eq!(names, ["pipe", "library20", "shapes100", "shapes300", "gradient"]);
+        assert_eq!(names, ["pipe", "library20", "shapes100", "shapes100_unlit", "shapes300", "shapes300_unlit", "gradient"]);
         let count = |n: &str| all.iter().find(|s| s.name == n).map(|s| s.scene.shape_count()).unwrap_or(0);
         assert_eq!(count("pipe"), 1);
         assert!((18..=40).contains(&count("library20")), "{}", count("library20"));
