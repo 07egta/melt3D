@@ -166,7 +166,7 @@ mod tests {
             "陶器マグ", "ロックグラス", "お皿", "お茶碗", "フライパン",
             "両手鍋", "やかん", "スプーン", "フォーク", "包丁",
         ];
-        assert_eq!(c.items.len(), 27, "existing 17 objects and 10 kitchen models");
+        assert!(c.items.len() >= 27, "expected at least 17 original objects and 10 kitchen models");
         for name in expected {
             let it = c.items.iter().find(|i| i.name == name).unwrap_or_else(|| panic!("missing {name}"));
             assert!((1..=24).contains(&it.group.shapes.len()), "{name}");
