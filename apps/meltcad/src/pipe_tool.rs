@@ -1,5 +1,5 @@
 //! The "パイプ" tool: press and drag across the viewport to trace a line; on release it becomes ONE
-//! `Kind::Curve` shape, a smooth hollow pipe (or a solid rod) that follows what was traced.
+//! `Kind::Curve` shape, a smooth solid connector (or an optional hollow pipe) that follows the stroke.
 //!
 //! The maths (projection onto the model's skin or a plane, simplifying, smoothing) is in
 //! `stroke.rs`; this file is the glue to the mouse, the keys, the little card and the icon. Editing
@@ -35,7 +35,7 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Self {
-        Config { radius: 4.0, wall: 1.2, closed: false, open_ends: true, color: [0.76, 0.80, 0.88] }
+        Config { radius: 4.0, wall: 0.0, closed: false, open_ends: false, color: [0.76, 0.80, 0.88] }
     }
 }
 
@@ -61,6 +61,10 @@ pub struct State {
     pub plane: Plane,
     /// The stroke being traced (world points); empty when not tracing.
     pub stroke: Vec<V3>,
+    /// Whether each accepted sample hit the model rather than the working plane.
+    pub stroke_skin: Vec<bool>,
+    /// Plane positions of accepted samples, used to bound a bridge between model hits.
+    pub stroke_plane: Vec<V3>,
     pub tracing: bool,
     /// The last cursor position that was sampled (the next move is filled in from here).
     pub last_screen: Option<Pos2>,
@@ -72,7 +76,7 @@ pub struct State {
 
 impl Default for State {
     fn default() -> Self {
-        State { on: false, cfg: Config::default(), plane: Plane::Floor, stroke: Vec::new(), tracing: false, last_screen: None, hover: None, last: None }
+        State { on: false, cfg: Config::default(), plane: Plane::Floor, stroke: Vec::new(), stroke_skin: Vec::new(), stroke_plane: Vec::new(), tracing: false, last_screen: None, hover: None, last: None }
     }
 }
 
@@ -107,6 +111,8 @@ impl App {
         }
         self.pt.on = on;
         self.pt.stroke.clear();
+        self.pt.stroke_skin.clear();
+        self.pt.stroke_plane.clear();
         self.pt.tracing = false;
         self.pt.last_screen = None;
         self.pt.hover = None;
@@ -131,13 +137,19 @@ impl App {
         let from = self.pt.last_screen.unwrap_or(p);
         let dist = (p - from).length();
         let n = if dist.is_finite() { ((dist / SAMPLE_PX).ceil() as usize).clamp(1, MAX_SPLIT) } else { 1 };
+        let field = self.field();
         for k in 1..=n {
             if self.pt.stroke.len() >= MAX_STROKE {
                 break;
             }
             let q = from + (p - from) * (k as f32 / n as f32);
-            if let Some(w) = self.pipe_point(rect, q) {
+            let (o, d) = self.cam.ray_at(rect, q);
+            let skin = stroke::surface_point(&field, o, d, self.pt.cfg.radius);
+            let plane = stroke::plane_point(o, d, self.pt.plane, self.pt.cfg.radius);
+            if let Some(w) = skin.or(plane) {
                 self.pt.stroke.push(w);
+                self.pt.stroke_skin.push(skin.is_some());
+                self.pt.stroke_plane.push(plane.unwrap_or(w));
             }
         }
         self.pt.last_screen = Some(p);
@@ -147,7 +159,10 @@ impl App {
     pub fn pipe_finish(&mut self) -> bool {
         self.pt.tracing = false;
         self.pt.last_screen = None;
-        let raw = std::mem::take(&mut self.pt.stroke);
+        let mut raw = std::mem::take(&mut self.pt.stroke);
+        stroke::bridge_surface_gaps(&mut raw, &self.pt.stroke_skin, &self.pt.stroke_plane, self.pt.cfg.radius);
+        self.pt.stroke_skin.clear();
+        self.pt.stroke_plane.clear();
         self.pipe_from_stroke(&raw)
     }
 
@@ -156,6 +171,8 @@ impl App {
         self.pt.tracing = false;
         self.pt.last_screen = None;
         self.pt.stroke.clear();
+        self.pt.stroke_skin.clear();
+        self.pt.stroke_plane.clear();
     }
 
     /// The tolerance and minimum length for a stroke at this zoom and radius.
@@ -250,6 +267,8 @@ impl App {
                 }
             }
             self.pt.stroke.clear();
+            self.pt.stroke_skin.clear();
+            self.pt.stroke_plane.clear();
             self.pt.last_screen = None;
             self.pt.tracing = true;
             self.pt.hover = None;
@@ -431,7 +450,7 @@ mod tests {
     }
 
     #[test]
-    fn a_traced_stroke_becomes_one_hollow_pipe() {
+    fn a_traced_stroke_becomes_one_solid_pipe() {
         let mut app = app_with_view();
         let before = app.scene.shape_count();
         let raw: Vec<V3> = (0..120).map(|i| [i as f32, 20.0 * (i as f32 * 0.08).sin(), 4.0]).collect();
@@ -443,8 +462,8 @@ mod tests {
         assert_eq!(sh.kind, Kind::Curve);
         assert!(sh.path.len() >= 3 && sh.path.len() <= PIPE_NODES, "{} nodes", sh.path.len());
         assert!(sh.path.iter().all(|n| n[3] == 4.0), "radius 4");
-        assert!((sh.shell - 1.2).abs() < 1e-6, "hollow, wall 1.2");
-        assert_eq!(sh.params[2], 1.0, "open ends by default");
+        assert_eq!(sh.shell, 0.0, "solid by default");
+        assert_eq!(sh.params[2], 0.0, "round ends by default");
         assert_eq!(sh.params[0], 0.0);
         // the nodes lie where the stroke was
         let w0 = curve_tool::to_world(sh, [sh.path[0][0], sh.path[0][1], sh.path[0][2]]);
@@ -453,6 +472,24 @@ mod tests {
         let json = app.scene.to_json();
         let back = crate::model::Scene::from_json(&json).expect("loads");
         assert_eq!(back.shape(g, s).map(|x| x.path.len()), Some(sh.path.len()));
+    }
+
+    #[test]
+    fn a_new_pipe_has_a_solid_core_and_round_ends() {
+        let mut app = app_with_view();
+        let raw: Vec<V3> = (0..60).map(|i| [i as f32, 0.0, 4.0]).collect();
+        assert!(app.pipe_from_stroke(&raw));
+        let Some((g, s)) = app.pt.last else { panic!("made") };
+        let pipe = app.scene.shape(g, s).expect("pipe").clone();
+        let field = crate::sdf::Field::new(&crate::model::Scene {
+            groups: vec![crate::model::Group { shapes: vec![pipe], ..crate::model::Group::new("g") }],
+            melt: Default::default(),
+            env: Default::default(),
+            saved: Vec::new(),
+        });
+        assert!(field.distance([30.0, 0.0, 4.0]) < -3.9, "the centre of the connector is solid");
+        assert!(field.distance([-2.0, 0.0, 4.0]) < -1.9, "the first end is rounded");
+        assert!(field.distance([61.0, 0.0, 4.0]) < -1.9, "the last end is rounded");
     }
 
     #[test]
@@ -597,7 +634,7 @@ mod tests {
         assert!(app.pipe_from_stroke(&raw));
         for _ in 0..3 {
             let input = egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1380.0, 860.0))), ..Default::default() };
-            let out = ctx.run_ui(input, |ui| {
+            let mut out = ctx.run_ui(input, |ui| {
                 app.pipe_card(ui.ctx());
                 let mut stripped = false;
                 egui::Area::new(egui::Id::new("t")).show(ui.ctx(), |ui| {
@@ -607,6 +644,8 @@ mod tests {
                 assert!(stripped);
             });
             assert!(!out.shapes.is_empty());
+            // This headless test has no painter to consume texture uploads.
+            out.textures_delta.clear();
         }
         // with the tool off and the pipe not selected there is no card
         app.set_pipe_tool(false);

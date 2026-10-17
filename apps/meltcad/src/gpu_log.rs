@@ -354,7 +354,9 @@ mod tests {
 
     #[test]
     fn the_wgpu_version_in_the_log_is_the_one_in_cargo_lock() {
-        let lock = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Cargo.lock")).expect("Cargo.lock");
+        let lock = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Cargo.lock"))
+            .expect("Cargo.lock")
+            .replace("\r\n", "\n");
         let needle = format!("name = \"wgpu\"\nversion = \"{WGPU_VERSION}\"");
         assert!(lock.contains(&needle), "update WGPU_VERSION in gpu_log.rs");
     }

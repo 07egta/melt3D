@@ -254,7 +254,6 @@ impl App {
             Action::MakeInstance => self.make_instance(ctx),
             Action::NewScene => {
                 self.new_scene(crate::model::Scene::default());
-                self.path = None;
             }
             Action::Open => self.open_dialog(ctx),
             Action::Save => self.save(ctx, false),
