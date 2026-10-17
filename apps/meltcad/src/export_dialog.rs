@@ -82,7 +82,7 @@ impl<T: Clone + Send + 'static> Task<T> {
 struct Dlg {
     opts: Options,
     /// What the estimate and the check were made for.
-    snap: Option<(Scene, Option<Pick>, Scope, bool)>,
+    snap: Option<(u64, Option<Pick>, Scope, bool)>,
     est: Task<Estimate>,
     check: Task<PrintCheck>,
     /// The check should start by itself on the next frame.
@@ -343,8 +343,10 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
     running_card(app, ctx);
     let Some(mut d) = ctx.data_mut(|m| m.remove_temp::<Dlg>(id())).filter(|d| d.open) else { return };
     // the estimate and the check are about the scene as it is now
-    let key = (app.scene.clone(), app.sel, d.opts.scope, d.opts.ignore_paint);
-    let stale = d.snap.as_ref().is_none_or(|s| s.0 != key.0 || s.1 != key.1 || s.2 != key.2 || s.3 != key.3);
+    // App already tracks scene edits by revision: cloning/comparing a large mesh-bearing
+    // Scene on every repaint duplicates megabytes and stalls the UI unnecessarily.
+    let key = (app.track_scene(), app.sel, d.opts.scope, d.opts.ignore_paint);
+    let stale = d.snap != Some(key);
     if stale {
         d.snap = Some(key);
         d.check.reset();
@@ -355,6 +357,14 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
         d.run_check = false;
         let (scene, sel, o) = (app.scene.clone(), app.sel, d.opts.clone());
         d.check.start(ctx, move |p| export_job::print_check(&scene, sel, &o, p));
+    }
+    if let Some(Err(e)) = d.est.result()
+        && e == crate::work_budget::BUSY
+    {
+        // A previous cancelled worker may still own the permit. Retry *later* instead
+        // of holding a second large scene snapshot or discarding the estimate forever.
+        d.snap = None;
+        ctx.request_repaint_after(std::time::Duration::from_millis(150));
     }
     if d.est.running() || d.check.running() {
         ctx.request_repaint_after(std::time::Duration::from_millis(100));
