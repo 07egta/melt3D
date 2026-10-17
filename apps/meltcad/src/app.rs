@@ -1423,6 +1423,15 @@ impl App {
 mod tests {
     use super::*;
 
+    fn pump_native(app: &mut App, ctx: &egui::Context) {
+        for _ in 0..600 {
+            app.update_native_job(ctx);
+            if app.native_job.is_none() && app.queued_open.is_none() { return; }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        panic!("native document worker did not finish");
+    }
+
     #[test]
     fn adding_undoing_and_deleting_shapes() {
         let ctx = egui::Context::default();
@@ -1587,6 +1596,8 @@ mod tests {
         assert_eq!(app.scene.shape_count(), 2, "Open must leave the edited work in place until a choice is made");
         assert!(app.pending_file_action.is_some());
         app.resolve_pending_file_action(&ctx, PendingFileDecision::Discard);
+        assert_eq!(app.scene.shape_count(), 2, "keep current scene until parsing finishes");
+        pump_native(&mut app, &ctx);
         assert_eq!(app.scene.shape_count(), 1);
         assert_eq!(app.path.as_ref(), Some(&path));
         assert!(!app.dirty);
@@ -1603,10 +1614,11 @@ mod tests {
         app.new_scene(Scene::default());
 
         app.resolve_pending_file_action(&ctx, PendingFileDecision::Save);
+        pump_native(&mut app, &ctx);
 
         assert_eq!(app.scene.shape_count(), 2);
         assert!(app.dirty);
-        assert!(app.pending_file_action.is_some());
+        assert!(app.pending_file_action.is_some(), "failed save must not discard the pending action");
     }
 
     #[test]
@@ -1634,11 +1646,13 @@ mod tests {
         std::fs::write(&path, Scene::default().to_json()).expect("initial file");
         let ctx = egui::Context::default();
         let mut app = App::new(true, Some(path.clone()));
+        pump_native(&mut app, &ctx);
         app.add_shape(&ctx, Kind::Box);
         app.settle(&ctx);
 
         app.open_path(path.clone());
         app.resolve_pending_file_action(&ctx, PendingFileDecision::Save);
+        pump_native(&mut app, &ctx);
 
         assert_eq!(app.scene.shape_count(), 2, "the just-saved edit must still be on screen");
         let disk = std::fs::read_to_string(&path).expect("saved file");
