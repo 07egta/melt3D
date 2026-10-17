@@ -529,7 +529,13 @@ mod tests {
             let mut triangles = 0;
             for i in 0..100 {
                 let start = Instant::now();
-                ctx.begin_pass(egui::RawInput::default());
+                let input = egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO, egui::vec2(960.0, 540.0),
+                    )),
+                    ..Default::default()
+                };
+                ctx.begin_pass(input);
                 egui::CentralPanel::default().show(ctx, |ui| {
                     if let Some(step) = step {
                         let _ = content(ui, step, 3, None);
