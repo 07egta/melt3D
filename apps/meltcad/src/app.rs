@@ -1055,6 +1055,11 @@ impl App {
     /// The tools down the left side of the viewport: the shapes to add, the curve, the operation, groups.
     fn tool_strip(&mut self, ui: &mut Ui) {
         if self.beginner_ui {
+            // A very narrow viewport cannot fit the drawing card beside the tools.
+            // Its card has its own Finish / Cancel controls; preserve a clear workspace.
+            if self.view_rect.width() < 260.0 && (self.sketch_active() || self.ct.drawing || self.pt.on) {
+                return;
+            }
             self.simple_tool_strip(ui);
             return;
         }
@@ -1187,7 +1192,23 @@ impl App {
                             (Tool::Rotate, "回す", "回す (E)"),
                             (Tool::Scale, "大きさ", "大きさ (R)"),
                         ];
-                        if compact_tools {
+                        if rect.width() < 250.0 {
+                            style::menu_button(ui, "道具・表示 ▾", false, |ui| {
+                                for (tool, name, hint) in tools {
+                                    if ui.selectable_label(self.tool == tool, name).on_hover_text(hint).clicked() {
+                                        self.tool = tool;
+                                        ui.close();
+                                    }
+                                }
+                                ui.separator();
+                                if ui.button("全体を見る").clicked() { self.frame_view(false); ui.close(); }
+                                if ui.button("操作のしかた").clicked() { self.show_keys = true; ui.close(); }
+                                if ui.button(if self.cam.ortho { "遠近" } else { "平行" }).clicked() {
+                                    self.cam.ortho = !self.cam.ortho;
+                                    ui.close();
+                                }
+                            });
+                        } else if compact_tools {
                             let label = tools.iter().find(|t| t.0 == self.tool).map_or("選ぶ", |t| t.1);
                             style::menu_button(ui, &format!("道具: {label} ▾"), false, |ui| {
                                 for (tool, name, hint) in tools {
@@ -1215,11 +1236,13 @@ impl App {
                                 self.cam.ortho = !self.cam.ortho;
                             }
                         }
-                        if style::pill(ui, "全体", false).on_hover_text("全体を見る (Home)").clicked() {
-                            self.frame_view(false);
-                        }
-                        if style::pill(ui, "?", self.show_keys).on_hover_text("操作のしかた").clicked() {
-                            self.show_keys = !self.show_keys;
+                        if rect.width() >= 250.0 {
+                            if style::pill(ui, "全体", false).on_hover_text("全体を見る (Home)").clicked() {
+                                self.frame_view(false);
+                            }
+                            if style::pill(ui, "?", self.show_keys).on_hover_text("操作のしかた").clicked() {
+                                self.show_keys = !self.show_keys;
+                            }
                         }
                     });
                 });
