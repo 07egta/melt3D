@@ -59,30 +59,50 @@ impl App {
             });
     }
 
-    /// The menu on a right click in the viewport.
+    /// The viewport's context menu. Destructive actions are deliberately separated
+    /// from visibility/locking: clicking an eye can never delete an object.
     pub fn context_menu(&mut self, ui: &mut Ui) {
-        if self.sel.is_none() {
+        let Some(pick) = self.sel else {
             ui.label(RichText::new("何も選ばれていません").color(style::DIM));
             return;
-        }
-        if ui.button("複製　Ctrl+D").clicked() {
-            self.duplicate();
+        };
+        let locked = self.scene.is_locked(pick);
+        if ui.button("ここを画面中央に表示").clicked() {
+            self.focus_tree_item(pick);
             ui.close();
         }
-        if ui.button("＋ ⇄ −　Tab").clicked() {
-            self.flip_op();
+        if ui.button("名前を変える　F2").clicked() {
+            self.begin_tree_rename(pick);
             ui.close();
         }
-        if ui.button("ここを見る　F").clicked() {
-            self.frame_view(true);
+        let visible = self.scene.is_visible(pick);
+        if ui.button(if visible { "目を閉じる（非表示）" } else { "目を開く（表示）" }).clicked() {
+            self.toggle_item_visibility(pick);
             ui.close();
         }
-        if ui.button("名前を変える").clicked() {
-            self.renaming = self.sel;
+        let local_locked = match pick {
+            Pick::Group(g) => self.scene.groups.get(g).is_some_and(|gr| gr.locked),
+            Pick::Shape(g, s) => self.scene.shape(g, s).is_some_and(|sh| sh.locked),
+        };
+        if ui.button(if local_locked { "鍵を外す" } else { "ロックする" }).clicked() {
+            self.toggle_item_lock(pick);
             ui.close();
         }
         ui.separator();
-        if ui.button(RichText::new("削除　Delete").color(style::CUT)).clicked() {
+        if ui.add_enabled(!locked && self.extra_selected.is_empty(), egui::Button::new("複製　Ctrl+D")).clicked() {
+            self.duplicate();
+            ui.close();
+        }
+        if ui.add_enabled(!locked && self.extra_selected.is_empty(), egui::Button::new("＋ ⇄ −　Tab")).clicked() {
+            self.flip_op();
+            ui.close();
+        }
+        if self.selected_picks().len() >= 2 && ui.button("選択をグループ化").clicked() {
+            self.group_selection();
+            ui.close();
+        }
+        ui.separator();
+        if ui.add_enabled(!locked, egui::Button::new(RichText::new("削除　Delete（Undoで戻せます）").color(style::CUT))).clicked() {
             self.delete_selected();
             ui.close();
         }
