@@ -2150,6 +2150,68 @@ mod tests {
         assert_eq!(app.sk.stage, Stage::Ready);
     }
 
+
+    #[test]
+    fn live_dimensions_survive_save_reload_and_one_undo_redo() {
+        let ctx = egui::Context::default();
+        let mut app = app();
+        app.set_sketch_tool(true);
+        app.sk.pen = Pen::Rect;
+        let a = [8.0, 12.0];
+        let b = [28.0, 22.0];
+        let raw = profile_of(app.sk.click(a, false).or_else(|| app.sk.click(b, false)));
+        app.sketch_done(Finished::Profile(raw.clone()));
+        app.sk.dimension = Dimensions::for_shape(Pen::Rect, a, b, &raw, false);
+        let Some(d) = app.sk.dimension.as_mut() else { panic!("editor missing") };
+        d.fields = ["100".into(), "50".into()];
+        d.update(&mut app.sk.pts, &mut app.sk.profile, 1, false);
+        assert!(d.error.is_none(), "{:?}", d.error);
+        assert!(d.accept(&app.sk.pts, &app.sk.profile));
+        assert_eq!(sketch::bbox(&app.sk.profile), Some(([8.0, 12.0], [108.0, 62.0])));
+        assert!(app.sketch_make(&ctx));
+        app.settle(&ctx);
+        let Some(Pick::Shape(g, si)) = app.sel else { panic!("shape not selected") };
+        let saved = app.scene.to_json();
+        let reloaded = Scene::from_json(&saved).expect("valid saved scene");
+        let original_outline = app.scene.shape(g, si).map(|s| s.outline.clone()).expect("new shape");
+        assert_eq!(reloaded.shape(g, si).map(|s| &s.outline), Some(&original_outline));
+        app.undo();
+        assert_eq!(app.scene.shape_count(), 1, "one Enter plus make: one scene edit");
+        app.redo();
+        assert_eq!(app.scene.shape(g, si).map(|s| &s.outline), Some(&original_outline));
+    }
+
+    #[test]
+    fn tab_enters_point_dimensions_without_global_view_shortcut() {
+        let ctx = egui::Context::default();
+        let mut app = app();
+        app.set_sketch_tool(true);
+        app.sk.pen = Pen::Line;
+        app.sk.click([0.0, 0.0], false);
+        app.sk.click([10.0, 0.0], false);
+        let key = |k: egui::Key| ctx.input_mut(|i| i.events.push(egui::Event::Key {
+            key: k, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE,
+        }));
+        key(egui::Key::Tab);
+        app.keys(&ctx);
+        assert!(app.sk.dimension.as_ref().is_some_and(|d| d.editing));
+        assert_eq!(app.sk.dimension.as_ref().map(|d| d.selected), Some(0));
+        ctx.input_mut(|i| i.events.clear());
+        key(egui::Key::Tab);
+        app.keys(&ctx);
+        assert_eq!(app.sk.dimension.as_ref().map(|d| d.selected), Some(1));
+        let cam = app.cam;
+        ctx.input_mut(|i| i.events.clear());
+        key(egui::Key::Num1);
+        app.keys(&ctx);
+        assert_eq!(app.cam, cam, "number keys must not switch views while entering dimensions");
+        ctx.input_mut(|i| i.events.clear());
+        key(egui::Key::Escape);
+        app.keys(&ctx);
+        assert!(app.sk.on && app.sk.dimension.as_ref().is_some_and(|d| !d.editing));
+        assert_eq!(app.sk.pts, vec![[0.0, 0.0], [10.0, 0.0]]);
+    }
+
     #[test]
     fn the_card_the_painting_and_the_icon_work_without_a_graphics_card() {
         let ctx = egui::Context::default();
