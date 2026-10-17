@@ -1182,6 +1182,22 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
     }
     var shadow_raw = 1.0;
     if (sh_steps > 0) { shadow_raw = soft_shadow(sh_ro, key, 300.0, sh_steps); }
+    // the same for the occlusion (full quality only), at one call site
+    var ao_p = vec3<f32>(0.0);
+    var ao_n = vec3<f32>(0.0, 0.0, 1.0);
+    var ao_do = false;
+    if (!fast) {
+        if (floor_vis && floor_on) {
+            ao_p = ro + rd * t_ground;
+            ao_do = true;
+        } else if (surf_vis) {
+            ao_p = ro + rd * t;
+            ao_n = n_hit;
+            ao_do = true;
+        }
+    }
+    var ao_raw = 1.0;
+    if (ao_do) { ao_raw = ambient_occ(ao_p, ao_n); }
 
     // ground
     if (floor_vis) {
@@ -1211,8 +1227,7 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
                 }
             } else {
                 col = col * mix(1.0, mix(0.55, 1.0, shadow_raw), shadow_k);
-                let ao = ambient_occ(gp, vec3<f32>(0.0, 0.0, 1.0));
-                col = col * mix(1.0, mix(0.6, 1.0, ao), shadow_k);
+                col = col * mix(1.0, mix(0.6, 1.0, ao_raw), shadow_k);
             }
         }
     }
@@ -1226,8 +1241,7 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
         let alb = lin(h.col);
         let ndv = max(dot(n, v), 0.0);
         let fres = pow(1.0 - ndv, 5.0);
-        var ao = 1.0;
-        if (!fast) { ao = ambient_occ(p, n); }
+        let ao = ao_raw;
         let f0 = mix(vec3<f32>(0.04), alb, metal);
         var F = f0 + (vec3<f32>(1.0) - f0) * fres;
         // the rainbow sheen of soap and beetle shells
