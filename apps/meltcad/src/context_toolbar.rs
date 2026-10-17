@@ -165,9 +165,9 @@ impl App {
             if let Some(sh) = self.scene.shape(g, s) {
                 if crate::sketch::editable(sh) {
                     return if sh.kind == Kind::Extrude {
-                        vec![Action::EditSketch, Action::ExtrudeSettings, Action::Move, Action::Duplicate, Action::Delete]
+                        vec![Action::EditSketch, Action::ExtrudeSettings, Action::Move, Action::Rotate, Action::Scale, Action::Duplicate, Action::Delete]
                     } else {
-                        vec![Action::EditSketch, Action::Move, Action::Rotate, Action::Duplicate, Action::Delete]
+                        vec![Action::EditSketch, Action::Move, Action::Rotate, Action::Scale, Action::Duplicate, Action::Delete]
                     };
                 }
             }
@@ -369,7 +369,9 @@ impl App {
         if self.sk.on && self.sk.stage != Stage::Ready { return; }
         let rect = self.view_rect;
         if rect.width() < 180.0 || rect.height() < 120.0 { return; }
-        let layout = layout_for(rect.width());
+        let actions = self.toolbar_actions();
+        // Seven sketch-solid actions would overlap the tool strip on a narrow viewport.
+        let layout = if actions.len() > 5 && rect.width() < 550.0 { Layout::Menu } else { layout_for(rect.width()) };
         let (pivot, anchor) = match layout {
             Layout::Full => (Align2::CENTER_TOP, pos2(rect.center().x, rect.top() + 12.0)),
             Layout::Compact | Layout::Menu => (Align2::RIGHT_TOP, pos2(rect.right() - 12.0, rect.top() + 12.0)),
