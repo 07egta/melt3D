@@ -60,6 +60,11 @@ impl Rig {
 fn organic_tube_control_point_drags_through_real_egui_pointer_events() {
     let mut r = Rig::new();
     r.app.add_organic_tube(&r.ctx, crate::organic_tube::Preset::Wave);
+    // The application animates frame_view over time; the viewport-only test
+    // rig does not run frame_body/step_fly, so take the camera goal directly.
+    if let Some(goal) = r.app.fly.take() {
+        r.app.cam = goal;
+    }
     r.frame(vec![]);
     let Some(Pick::Shape(g, s)) = r.app.sel else { panic!("Organic Tube selected") };
     let before = r.app.scene.shape(g, s).expect("tube").path[3];
