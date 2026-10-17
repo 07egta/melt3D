@@ -560,11 +560,14 @@ pub struct Group {
     /// Where a linked copy stands (move, turn, scale about the source's middle).
     #[serde(default, skip_serializing_if = "Xform::is_identity")]
     pub xform: Xform,
+    /// Re-editable gravity-melt preset settings; old project files omit this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub melt_preset: Option<crate::melt_preset::Settings>,
 }
 
 impl Group {
     pub fn new(name: impl Into<String>) -> Group {
-        Group { name: name.into(), op: Op::Add, blend: 0.0, visible: true, shapes: Vec::new(), uid: 0, pattern: None, instance_of: None, xform: Xform::default() }
+        Group { name: name.into(), op: Op::Add, blend: 0.0, visible: true, shapes: Vec::new(), uid: 0, pattern: None, instance_of: None, xform: Xform::default(), melt_preset: None }
     }
 }
 
@@ -856,6 +859,9 @@ impl Scene {
                 p.sanitize();
             }
             g.xform.sanitize();
+            if let Some(preset) = &mut g.melt_preset {
+                preset.sanitize();
+            }
             if g.instance_of.is_some() {
                 // a linked copy shows its source's shapes, not its own
                 g.shapes.clear();

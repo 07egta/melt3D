@@ -372,6 +372,11 @@ impl App {
             self.sel = Some(Pick::Group(b));
         }
         self.pattern_section(ui, g);
+        if let Some(settings) = self.scene.groups.get(g).and_then(|group| group.melt_preset.clone())
+            && ui.button("Meltの形を再編集…").on_hover_text("本数や垂れ方を変更。手動で動かした液だれは再生成されます").clicked()
+        {
+            crate::melt_preset::open_edit(ui.ctx(), g, settings);
+        }
         self.actions(ui);
         let linked = self.scene.groups.get(g).is_some_and(crate::model::Group::is_linked);
         let hint = if linked { "リンクコピーの位置・回転・大きさは、上のらんで変えます" } else { "グループごと動かす・回す・大きさを変えられます" };
@@ -380,6 +385,11 @@ impl App {
 
     fn shape_inspector(&mut self, ui: &mut Ui, g: usize, s: usize) {
         style::title(ui, "形");
+        if let Some(settings) = self.scene.groups.get(g).and_then(|group| group.melt_preset.clone())
+            && ui.button("このMeltプリセットを再編集…").clicked()
+        {
+            crate::melt_preset::open_edit(ui.ctx(), g, settings);
+        }
         let ngroups = self.scene.groups.len();
         let nshapes = self.scene.groups[g].shapes.len();
         let mut move_to: Option<usize> = None;
@@ -892,6 +902,10 @@ impl App {
 
     pub fn melt_panel(&mut self, ui: &mut Ui) {
         style::title(ui, "メルト（とけあい）");
+        if ui.button("＋ Melt（とろける形状）を追加").on_hover_text("球体や箱から水飴のような垂れを作成。形も後から編集可能").clicked() {
+            crate::melt_preset::open(ui.ctx());
+        }
+        ui.add_space(6.0);
         let m: &mut Melt = &mut self.scene.melt;
         ui.horizontal_wrapped(|ui| {
             for (name, mode, amount, drip, ripple) in MELT_PRESETS {
