@@ -180,7 +180,12 @@ pub fn panel(app: &mut App, ui: &mut egui::Ui) {
                                 ui.painter().text(r.center(), Align2::CENTER_CENTER, "…", egui::FontId::proportional(14.0), style::DIM);
                             }
                         }
-                        if resp.on_hover_text(format!("{} をシーンに入れる", it.name)).clicked() {
+                        let tip = if it.group.designer_chair.is_some() {
+                            format!("{} を入れる。配置後にグループを選んで寸法・脚の本数を調整できます", it.name)
+                        } else {
+                            format!("{} をシーンに入れる", it.name)
+                        };
+                        if resp.on_hover_text(tip).clicked() {
                             pick = Some((ci, ii));
                         }
                         ui.label(RichText::new(&it.name).size(11.5));
