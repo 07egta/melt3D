@@ -974,8 +974,8 @@ mod tests {
     #[test]
     fn holes_accept_concentric_eccentric_rectangular_and_separate_profiles() {
         let outer = rect([-30.0, -30.0], [30.0, 30.0]);
-        let centre = circle([0.0, 0.0], 10.0, CIRCLE_POINTS);
-        let offset = circle([12.0, 0.0], 5.0, CIRCLE_POINTS);
+        let centre = circle([0.0, 0.0], 6.0, CIRCLE_POINTS);
+        let offset = circle([16.0, 0.0], 3.0, CIRCLE_POINTS);
         let rectangular = rect([-25.0, -4.0], [-16.0, 4.0]);
         assert_eq!(validate_holes(&outer, &[centre.clone()]).unwrap().len(), 1);
         assert_eq!(validate_holes(&outer, &[offset.clone()]).unwrap().len(), 1);
