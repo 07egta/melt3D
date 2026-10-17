@@ -24,9 +24,9 @@ use crate::style;
 /// Pixels within which a click on the first point closes the outline.
 const CLOSE_PX: f32 = 11.0;
 /// Pixels within which the mouse is on a point of an outline being edited.
-const POINT_PX: f32 = 10.0;
+const POINT_PX: f32 = 12.0;
 /// Pixels within which the mouse is on a line of an outline being edited.
-const EDGE_PX: f32 = 7.0;
+const EDGE_PX: f32 = 9.0;
 /// Where the viewport's view cube is (clicks there are not ours).
 const GNOMON_PX: f32 = 58.0;
 
@@ -865,6 +865,9 @@ impl App {
 
     /// The dragged point follows the mouse.
     pub fn edit_drag(&mut self, rect: Rect, m: Pos2, step: f32) {
+        // Dragging outside the viewport should retain the active gesture, not jump to
+        // an arbitrarily distant plane intersection.
+        let m = pos2(m.x.clamp(rect.left(), rect.right()), m.y.clamp(rect.top(), rect.bottom()));
         let Some((f, _)) = self.edit_target() else { return };
         let Some(idx) = self.sk.edit.as_ref().and_then(|e| e.drag.as_ref()).map(|d| d.idx) else { return };
         let Some(q) = self.sketch_cursor(rect, m, step, &f) else { return };
@@ -951,6 +954,9 @@ impl App {
         let over_gnomon = |p: Pos2| (p - pos2(rect.right() - 62.0, rect.top() + 62.0)).length() < GNOMON_PX;
         let mouse = pos.filter(|p| resp.hovered() && !over_gnomon(*p) && !mods.alt);
         let hover = mouse.and_then(|m| self.edit_hit(rect, m));
+        if hover.is_some() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
         if let Some(e) = self.sk.edit.as_mut() {
             e.hover = hover;
         }
