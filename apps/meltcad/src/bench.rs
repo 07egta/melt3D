@@ -449,7 +449,7 @@ pub fn cli(args: &[std::ffi::OsString]) -> bool {
             eprintln!("usage: meltcad --memory-fixture PATH.meltcad");
             std::process::exit(2);
         };
-        if let Err(e) = std::fs::write(path, memory_fixture_scene().to_json()) {
+        if let Err(e) = std::fs::write(std::path::Path::new(path), memory_fixture_scene().to_json()) {
             eprintln!("could not create memory fixture: {e}");
             std::process::exit(2);
         }
