@@ -78,6 +78,12 @@ one-thumbnail-per-frame fallback is retained if worker creation fails.
 EasyView compares borrowed input before copying it and shares the scene snapshot
 across camera-only requests. Document replacement invalidates that snapshot.
 
+A later review of PR #51 contributed three small UI improvements: category/search
+scroll positions have separate identities, failed thumbnails show an explicit
+failure indicator and explanation, and the palette reports model-read failure.
+Thumbnail failure does not disable model insertion. An unavailable worker still
+uses the synchronous fallback; full labels and font startup remain unchanged.
+
 ### Repair input and export usability
 
 - Esc restores an active gizmo gesture without adding an Undo entry. Ordinary
@@ -104,6 +110,9 @@ across camera-only requests. Document replacement invalidates that snapshot.
 
 Measurements below are for specific operations. Preparation timings are not
 GPU frame rates, and embedded JSON bytes are not the whole executable size.
+The timing tables predate the final two-file library feedback follow-up described
+above. Those timing benchmarks were not rerun for the display-only changes; the
+full test suite and normal release build/render checks were rerun afterward.
 
 ### Library and EasyView
 
@@ -202,10 +211,12 @@ or Windows distribution files.
 | Executable | Size | SHA-256 |
 | --- | ---: | --- |
 | Baseline | 101,067,656 bytes | `5febf46ccad9e1da28caebdc488b3d5737d5be481814f83d7d78fa5c3ec1311a` |
-| Candidate | 99,934,824 bytes | `8bf86cfdcc7357fc27b7bd5d6a02f81780c2d3577861d23afdee70d987b06c48` |
+| Final candidate, including library feedback | 99,944,440 bytes | `5791a536892a61816b1662b4bdd5f2b3635f9a5254f9c8bc8041994ac521f391` |
 
-The executable is **1,132,832 bytes (1.120865%) smaller**. Its `.rodata` section
-decreases from 5,333,848 to 3,858,776 bytes. Both builds succeed with the same seven
+The executable is **1,123,216 bytes (1.111351%) smaller**. Its `.rodata` section
+decreases from 5,333,848 to 3,858,904 bytes. The earlier candidate before library
+feedback was 99,934,824 bytes; the small UI follow-up adds 9,616 bytes. Both builds
+succeed with the same seven
 existing warnings. Build duration is not compared because dependency artifacts
 were reused. All 1,449 baseline files remained unchanged before and after the
 build; candidate production source files also remained unchanged during the build.
@@ -239,7 +250,7 @@ chain is kept alive.
 | --- | --- |
 | Exact original baseline, all Melt3D tests | 485 passed / 0 failed / 28 ignored |
 | Exact original PR #22 alone on the baseline | 487 passed / 0 failed / 28 ignored |
-| Final candidate, all Melt3D tests | **541 passed / 0 failed / 35 ignored**, 7.00 s after final lint edits |
+| Final candidate, all Melt3D tests | **541 passed / 0 failed / 35 ignored**, 8.03 s after the final library feedback changes; the preceding run after lint edits also passed |
 | Normal candidate app build, CI profile | Passed; actual Japanese UI launched and inspected |
 | Normal release application, both versions | Both builds and direct CLI renders pass; output PNGs and all decoded pixels are identical |
 | Targeted real-input regressions | Esc, lost pointer, one-gesture Undo/Redo, Delete, XYZ navigation during sketch, rapid endpoints, same-frame/deferred hover and rotated scale handles passed in the full suite |
@@ -249,10 +260,11 @@ chain is kept alive.
 | `cargo xtask ci` | Blocked at existing formatting failures in 34 untouched files; exact baseline has 46 |
 | Melt3D clippy, all targets, `-D warnings` | Fails on existing diagnostics in both versions; **no new diagnostic source spans** after fixes |
 
-The final clippy comparison records 53 distinct baseline diagnostic source spans
-and 52 candidate spans (42 versus 41 distinct file/message categories). The
-comparison includes the primary source text so line-number shifts cannot hide a
-new instance of an existing warning. Examples of remaining baseline issues are
+The final clippy comparison records 42 baseline versus 41 candidate distinct
+file/message categories. It compares normalized primary source text and counts
+distinct diagnostic locations, so shifts in line numbers do not hide an extra
+instance of an existing warning. There are no new instances after the library
+feedback follow-up. Examples of remaining baseline issues are
 unused glyph imports, unused older geometry helpers and existing style lints.
 The normal test/build jobs tolerate those warnings; `cargo xtask ci` requires
 strict lint/format cleanliness. This report does not call that aggregate gate
@@ -331,6 +343,16 @@ below received detailed code/behaviour review.
 | #31 | Do not adopt unchanged: tiny-shape omission and removed quality choices conflict with feature/quality preservation. |
 | #18 | Do not merge unchanged: recovery files from another live process can be treated as abandoned and deleted; sequential recovery prompts can replace an unsaved recovered scene. |
 | #29 | Do not merge unchanged: queued Open records its edit baseline too late, so intervening edits can be overwritten; renaming the old save away creates a crash gap; the one-worker budget can drop an automatic print check. |
+| #51 | Review the later integration separately. Adopt scroll-state separation and explicit thumbnail/palette failure feedback. Do not adopt hover-induced lower quality, lost first model clicks, font/thumbnail fallback removal or unconditional full-cache clearing. |
+
+PR #51 was reviewed at `24953fb73c00f85f3461ded36fe37919653885e9` after the
+original inventory. Its Windows measurements belong to that different source;
+they are not Windows validation for this candidate. A three-way source comparison
+found that its per-revision Field/Pack clearing in `app.rs` can merge without a
+textual conflict while defeating this candidate's incremental reuse. Font startup
+changes can also merge without a conflict. Keep these integration decisions
+explicit instead of accepting all nonconflicting hunks. The detailed findings
+are recorded in [the PR review](https://github.com/07egta/melt3D/pull/51#pullrequestreview-5557864052).
 
 ## CI and release status
 

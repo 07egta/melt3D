@@ -242,6 +242,8 @@ impl App {
             Action::Insert(c, i) => {
                 if let Some(item) = library::item(c, i) {
                     crate::library_ui::insert(self, ctx, item);
+                } else {
+                    self.say(ctx, "このモデルを読み込めませんでした");
                 }
             }
             Action::Undo => self.undo(),
