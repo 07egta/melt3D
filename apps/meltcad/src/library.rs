@@ -170,6 +170,22 @@ mod tests {
     }
 
     #[test]
+    fn parametric_organic_vases_appear_in_the_library_and_stay_editable() {
+        let cat = all().iter().find(|c| c.name == "花瓶・Vase").expect("vase category");
+        assert_eq!(cat.items.len(), 3);
+        for item in &cat.items {
+            assert!(item.matches("organic vase"));
+            assert!(item.fits(0, 0));
+            let mut scene = item.scene();
+            assert_eq!(scene.groups[0].shapes.len(), 1, "no Boolean primitive stacks");
+            assert!(scene.groups[0].shapes[0].vase.is_some(), "preset remains parametric");
+            let before = scene.clone();
+            scene.sanitize();
+            assert_eq!(scene, before);
+        }
+    }
+
+    #[test]
     fn search_matches_names_and_tags() {
         let it = Item { name: "いぬ".into(), tags: vec!["Dog".into()], group: Group::new("x") };
         assert!(it.matches("") && it.matches("いぬ") && it.matches("dog") && !it.matches("ねこ"));
