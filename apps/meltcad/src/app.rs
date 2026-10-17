@@ -700,6 +700,14 @@ impl App {
             return;
         }
         use egui::{Key, Modifiers};
+        // Cancel only an active gizmo gesture (keeping Esc for everything else); do not drop the
+        // selection or commit its preview.
+        if self.drag.is_some()
+            && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+            && self.cancel_gizmo_drag()
+        {
+            return;
+        }
         if self.sketch_keys(ctx) {
             return;
         }

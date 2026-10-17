@@ -493,6 +493,25 @@ impl App {
         }
     }
 
+    /// Cancel a gizmo gesture without generating an undo step.
+    pub(crate) fn cancel_gizmo_drag(&mut self) -> bool {
+        let Some(d) = self.drag.take() else { return false };
+        if let Some((gi, xform)) = d.link
+            && let Some(group) = self.scene.groups.get_mut(gi)
+        {
+            group.xform = xform;
+        }
+        for (gi, si, pos, rot, scale) in d.from {
+            if let Some(shape) = self.scene.shape_mut(gi, si) {
+                shape.pos = pos;
+                shape.rot = rot;
+                shape.scale = scale;
+            }
+        }
+        self.orbiting = false;
+        true
+    }
+
     pub fn apply_drag(&mut self, d: &mut Drag, mouse: Pos2, snap: bool) {
         let delta = mouse - d.start;
         let group = matches!(self.sel, Some(Pick::Group(_)));
