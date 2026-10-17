@@ -371,6 +371,9 @@ impl App {
             self.scene.groups.swap(a, b);
             self.sel = Some(Pick::Group(b));
         }
+        if self.designer_lamp_inspector(ui, g) {
+            return;
+        }
         self.pattern_section(ui, g);
         self.actions(ui);
         let linked = self.scene.groups.get(g).is_some_and(crate::model::Group::is_linked);
@@ -380,6 +383,9 @@ impl App {
 
     fn shape_inspector(&mut self, ui: &mut Ui, g: usize, s: usize) {
         style::title(ui, "形");
+        if self.designer_lamp_inspector(ui, g) {
+            return;
+        }
         let ngroups = self.scene.groups.len();
         let nshapes = self.scene.groups[g].shapes.len();
         let mut move_to: Option<usize> = None;
