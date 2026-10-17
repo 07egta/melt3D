@@ -162,8 +162,8 @@ impl VaseParams {
     /// Sampled estimate of the narrowest NORMAL wall thickness. A radial distance
     /// alone would overestimate steep/wavy regions. This is a warning, not a
     /// certified geometric minimum or a substitute for slicer inspection.
-    pub fn estimated_min_wall(&self) -> f32 {
-        let mut min_wall = self.wall.min(self.wall * 1.25);
+    pub fn wall_report(&self) -> ThicknessReport {
+        let mut report = ThicknessReport { minimum_mm: self.wall, height_mm: 0.0 };
         for i in 2..=62 {
             let t = i as f32 / 64.0;
             let delta = 0.0005;
@@ -173,11 +173,25 @@ impl VaseParams {
             let az_slope = self.wave_strength * (self.waves as f32) * envelope
                 / (self.radius(t) - self.wall).max(4.0);
             let z_slope = self.wave_strength * (16.0 / self.height);
-            min_wall = min_wall.min(self.wall / (1.0 + slope_z.powi(2)
-                + az_slope.powi(2) + z_slope.powi(2)).sqrt());
+            let thickness = self.wall / (1.0 + slope_z.powi(2)
+                + az_slope.powi(2) + z_slope.powi(2)).sqrt();
+            if thickness < report.minimum_mm {
+                report = ThicknessReport { minimum_mm: thickness, height_mm: t * self.height };
+            }
         }
-        min_wall
+        report
     }
+
+    pub fn estimated_min_wall(&self) -> f32 {
+        self.wall_report().minimum_mm
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ThicknessReport {
+    pub minimum_mm: f32,
+    /// Where the thinnest sampled section occurs, measured from the vase's bottom.
+    pub height_mm: f32,
 }
 
 /// The exact same envelope is used for the CPU and GPU SDF radial warp.
@@ -289,16 +303,17 @@ pub fn inspector(ui: &mut egui::Ui, shape: &mut Shape) {
     let v = shape.vase.unwrap_or(value);
     // Non-uniform object scaling can only reduce physical wall thickness:
     // the smallest scale is a conservative lower bound for print warnings.
-    let minimum = v.estimated_min_wall()
+    let thickness = v.wall_report();
+    let minimum = thickness.minimum_mm
         * shape.scale.into_iter().fold(f32::INFINITY, f32::min).max(0.01);
     if minimum < FDM_WALL_WARNING_MM {
         ui.colored_label(
             egui::Color32::from_rgb(237, 174, 78),
-            format!("⚠ 推定最小肉厚 {:.2} mm（0.8 mm未満）", minimum),
+            format!("⚠ 推定最小肉厚 {:.2} mm（底から約 {:.0} mm、0.8 mm未満）", minimum, thickness.height_mm),
         );
         ui.small("壁厚を増やすか、波・くびれを弱めてください。スライサーでも確認してください。");
     } else {
-        ui.label(format!("推定最小肉厚 {:.2} mm", minimum));
+        ui.label(format!("推定最小肉厚 {:.2} mm（底から約 {:.0} mm）", minimum, thickness.height_mm));
     }
     ui.small("底は閉じて中は空洞です。実際の印刷可否はノズル径・スライサー設定で確認してください。");
 }
