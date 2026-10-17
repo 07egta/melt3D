@@ -12,7 +12,7 @@
    "group": {
     "name": "りんご",
     "op": "Add",
-    "blend": 0.0,
+    "blend": 0,
     "visible": true,
     "shapes": [
      {
@@ -23,7 +23,7 @@
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        0,
        0,
@@ -48,12 +48,12 @@
         0.12
        ],
        "roughness": 0.3,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
        "coat": 0.6,
-       "translucency": 0.0
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -82,7 +82,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "くぼみ上",
@@ -92,7 +92,7 @@
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        0,
        0,
@@ -117,12 +117,12 @@
         0.5
        ],
        "roughness": 0.5,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -151,7 +151,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "くぼみ下",
@@ -161,7 +161,7 @@
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        0,
        0,
@@ -186,12 +186,12 @@
         0.5
        ],
        "roughness": 0.5,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -220,7 +220,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "へた",
@@ -230,7 +230,7 @@
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        0,
        0,
@@ -255,12 +255,12 @@
         0.12
        ],
        "roughness": 0.5,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -292,7 +292,7 @@
         0,
         0,
         36,
-        2.0
+        2
        ],
        [
         0.5,
@@ -314,7 +314,7 @@
        ]
       ],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "は",
@@ -324,7 +324,7 @@
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        8,
        0,
@@ -349,12 +349,12 @@
         0.2
        ],
        "roughness": 0.5,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
        "coat": 0.3,
-       "translucency": 0.0
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -383,7 +383,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      }
     ]
    }
@@ -399,7 +399,7 @@
    "group": {
     "name": "バナナ",
     "op": "Add",
-    "blend": 0.0,
+    "blend": 0,
     "visible": true,
     "shapes": [
      {
@@ -410,7 +410,7 @@
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        0,
        0,
@@ -430,17 +430,17 @@
       "blend": 1,
       "material": {
        "color": [
-        1.0,
+        1,
         0.85,
         0.2
        ],
        "roughness": 0.35,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
        "coat": 0.3,
-       "translucency": 0.0
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -487,10 +487,10 @@
         6.6
        ],
        [
-        0.0,
-        4.0,
-        7.0,
-        7.0
+        0,
+        4,
+        7,
+        7
        ],
        [
         10.506577808748212,
@@ -512,7 +512,7 @@
        ]
       ],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "はし0",
@@ -522,7 +522,7 @@
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        -27.85116950582572,
        -10.498401164064429,
@@ -547,12 +547,12 @@
         0.08
        ],
        "roughness": 0.5,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -581,7 +581,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "はし1",
@@ -591,7 +591,7 @@
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        27.85116950582572,
        -10.498401164064429,
@@ -616,12 +616,12 @@
         0.08
        ],
        "roughness": 0.5,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -650,7 +650,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      }
     ]
    }
@@ -666,7 +666,7 @@
    "group": {
     "name": "いちご",
     "op": "Add",
-    "blend": 0.0,
+    "blend": 0,
     "visible": true,
     "shapes": [
      {
@@ -677,7 +677,7 @@
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        0,
        0,
@@ -702,12 +702,12 @@
         0.14
        ],
        "roughness": 0.45,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
        "coat": 0.3,
-       "translucency": 0.0
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -748,7 +748,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "へた",
@@ -758,7 +758,7 @@
        2.5,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        0,
        0,
@@ -783,12 +783,12 @@
         0.15
        ],
        "roughness": 0.5,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -817,7 +817,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "くき",
@@ -827,7 +827,7 @@
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        0,
        0,
@@ -852,12 +852,12 @@
         0.2
        ],
        "roughness": 0.5,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -895,7 +895,7 @@
         2,
         0,
         40,
-        1.0
+        1
        ],
        [
         5,
@@ -905,7 +905,7 @@
        ]
       ],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "つぶ",
@@ -915,7 +915,7 @@
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        5.235365066354934e-16,
        -8.549999999999999,
@@ -935,17 +935,17 @@
       "blend": 0.3,
       "material": {
        "color": [
-        1.0,
+        1,
         0.9,
         0.4
        ],
        "roughness": 0.4,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -974,7 +974,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "つぶ",
@@ -984,7 +984,7 @@
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        7.40451720235695,
        4.274999999999999,
@@ -1004,17 +1004,17 @@
       "blend": 0.3,
       "material": {
        "color": [
-        1.0,
+        1,
         0.9,
         0.4
        ],
        "roughness": 0.4,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -1043,7 +1043,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "つぶ",
@@ -1053,7 +1053,7 @@
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        -7.40451720235695,
        4.274999999999999,
@@ -1073,17 +1073,17 @@
       "blend": 0.3,
       "material": {
        "color": [
-        1.0,
+        1,
         0.9,
         0.4
        ],
        "roughness": 0.4,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -1112,7 +1112,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "つぶ",
@@ -1122,7 +1122,7 @@
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        6.270000000000001,
        -10.859958563456859,
@@ -1142,17 +1142,17 @@
       "blend": 0.3,
       "material": {
        "color": [
-        1.0,
+        1,
         0.9,
         0.4
        ],
        "roughness": 0.4,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -1181,7 +1181,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "つぶ",
@@ -1191,7 +1191,7 @@
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        10.85995856345686,
        6.269999999999999,
@@ -1211,17 +1211,17 @@
       "blend": 0.3,
       "material": {
        "color": [
-        1.0,
+        1,
         0.9,
         0.4
        ],
        "roughness": 0.4,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -1250,7 +1250,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "つぶ",
@@ -1260,7 +1260,7 @@
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        -6.269999999999997,
        10.85995856345686,
@@ -1280,17 +1280,17 @@
       "blend": 0.3,
       "material": {
        "color": [
-        1.0,
+        1,
         0.9,
         0.4
        ],
        "roughness": 0.4,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -1319,7 +1319,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "つぶ",
@@ -1329,7 +1329,7 @@
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        -10.859958563456859,
        -6.270000000000001,
@@ -1349,17 +1349,17 @@
       "blend": 0.3,
       "material": {
        "color": [
-        1.0,
+        1,
         0.9,
         0.4
        ],
        "roughness": 0.4,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -1388,7 +1388,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "つぶ",
@@ -1398,7 +1398,7 @@
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        3.9340494855583152,
        -14.682072559593838,
@@ -1418,17 +1418,17 @@
       "blend": 0.3,
       "material": {
        "color": [
-        1.0,
+        1,
         0.9,
         0.4
        ],
        "roughness": 0.4,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -1457,7 +1457,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "つぶ",
@@ -1467,7 +1467,7 @@
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        14.682072559593838,
        3.9340494855583152,
@@ -1487,17 +1487,17 @@
       "blend": 0.3,
       "material": {
        "color": [
-        1.0,
+        1,
         0.9,
         0.4
        ],
        "roughness": 0.4,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -1526,7 +1526,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "つぶ",
@@ -1536,7 +1536,7 @@
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        -3.9340494855583166,
        14.682072559593838,
@@ -1556,17 +1556,17 @@
       "blend": 0.3,
       "material": {
        "color": [
-        1.0,
+        1,
         0.9,
         0.4
        ],
        "roughness": 0.4,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -1595,7 +1595,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "つぶ",
@@ -1605,7 +1605,7 @@
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        -14.682072559593838,
        -3.9340494855583157,
@@ -1625,17 +1625,17 @@
       "blend": 0.3,
       "material": {
        "color": [
-        1.0,
+        1,
         0.9,
         0.4
        ],
        "roughness": 0.4,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -1664,7 +1664,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "つぶ",
@@ -1674,7 +1674,7 @@
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        10.160240562174204,
        -10.160240562174202,
@@ -1694,17 +1694,17 @@
       "blend": 0.3,
       "material": {
        "color": [
-        1.0,
+        1,
         0.9,
         0.4
        ],
        "roughness": 0.4,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -1733,7 +1733,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "つぶ",
@@ -1743,7 +1743,7 @@
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        3.7189061543168447,
        13.879146716491048,
@@ -1763,17 +1763,17 @@
       "blend": 0.3,
       "material": {
        "color": [
-        1.0,
+        1,
         0.9,
         0.4
        ],
        "roughness": 0.4,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -1802,7 +1802,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "つぶ",
@@ -1812,7 +1812,7 @@
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        -13.879146716491048,
        -3.718906154316845,
@@ -1832,17 +1832,17 @@
       "blend": 0.3,
       "material": {
        "color": [
-        1.0,
+        1,
         0.9,
         0.4
        ],
        "roughness": 0.4,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -1871,7 +1871,1031 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
+     }
+    ]
+   }
+  },
+  {
+   "name": "食パン",
+   "tags": [
+    "sliced bread",
+    "shokupan",
+    "toast",
+    "食パン",
+    "bread",
+    "食ぱん"
+   ],
+   "group": {
+    "name": "食パン",
+    "op": "Add",
+    "blend": 0,
+    "visible": true,
+    "shapes": [
+     {
+      "name": "こんがりしたみみ",
+      "kind": "Extrude",
+      "size": [
+       12,
+       1,
+       1
+      ],
+      "round": 0,
+      "pos": [
+       0,
+       0,
+       0
+      ],
+      "rot": [
+       90,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 1,
+      "material": {
+       "color": [
+        0.72,
+        0.38,
+        0.13
+       ],
+       "roughness": 0.72,
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -23,
+        0
+       ],
+       [
+        23,
+        0
+       ],
+       [
+        25,
+        2
+       ],
+       [
+        25,
+        37
+       ],
+       [
+        23,
+        44
+       ],
+       [
+        18,
+        50
+       ],
+       [
+        10,
+        53
+       ],
+       [
+        -10,
+        53
+       ],
+       [
+        -18,
+        50
+       ],
+       [
+        -23,
+        44
+       ],
+       [
+        -25,
+        37
+       ],
+       [
+        -25,
+        2
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0
+     },
+     {
+      "name": "ふわふわのなか（おもて）",
+      "kind": "Extrude",
+      "size": [
+       1.8,
+       1,
+       1
+      ],
+      "round": 0,
+      "pos": [
+       0,
+       -6.1,
+       0
+      ],
+      "rot": [
+       90,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.55,
+      "material": {
+       "color": [
+        1,
+        0.94,
+        0.78
+       ],
+       "roughness": 0.83,
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -20,
+        3
+       ],
+       [
+        20,
+        3
+       ],
+       [
+        21.5,
+        5
+       ],
+       [
+        21.5,
+        36
+       ],
+       [
+        19,
+        42
+       ],
+       [
+        15,
+        46
+       ],
+       [
+        8,
+        49
+       ],
+       [
+        -8,
+        49
+       ],
+       [
+        -15,
+        46
+       ],
+       [
+        -19,
+        42
+       ],
+       [
+        -21.5,
+        36
+       ],
+       [
+        -21.5,
+        5
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0
+     },
+     {
+      "name": "ふわふわのなか（うら）",
+      "kind": "Extrude",
+      "size": [
+       1.8,
+       1,
+       1
+      ],
+      "round": 0,
+      "pos": [
+       0,
+       6.1,
+       0
+      ],
+      "rot": [
+       90,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.55,
+      "material": {
+       "color": [
+        1,
+        0.94,
+        0.78
+       ],
+       "roughness": 0.83,
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -20,
+        3
+       ],
+       [
+        20,
+        3
+       ],
+       [
+        21.5,
+        5
+       ],
+       [
+        21.5,
+        36
+       ],
+       [
+        19,
+        42
+       ],
+       [
+        15,
+        46
+       ],
+       [
+        8,
+        49
+       ],
+       [
+        -8,
+        49
+       ],
+       [
+        -15,
+        46
+       ],
+       [
+        -19,
+        42
+       ],
+       [
+        -21.5,
+        36
+       ],
+       [
+        -21.5,
+        5
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0
+     }
+    ]
+   }
+  },
+  {
+   "name": "クロワッサン",
+   "tags": [
+    "croissant",
+    "pastry",
+    "bread",
+    "クロワッサン",
+    "bakery"
+   ],
+   "group": {
+    "name": "クロワッサン",
+    "op": "Add",
+    "blend": 0,
+    "visible": true,
+    "shapes": [
+     {
+      "name": "みかづきの生地",
+      "kind": "Curve",
+      "size": [
+       1,
+       1,
+       1
+      ],
+      "round": 0,
+      "pos": [
+       0,
+       0,
+       0
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 2.4,
+      "material": {
+       "color": [
+        0.87,
+        0.49,
+        0.19
+       ],
+       "roughness": 0.65,
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0.8,
+       0,
+       1
+      ],
+      "path": [
+       [
+        -36,
+        -12,
+        4,
+        2
+       ],
+       [
+        -30,
+        -5,
+        6,
+        4.2
+       ],
+       [
+        -22,
+        3,
+        8.5,
+        7.2
+       ],
+       [
+        -12,
+        9,
+        11,
+        9.3
+       ],
+       [
+        0,
+        12,
+        11.5,
+        10.5
+       ],
+       [
+        12,
+        9,
+        11,
+        9.3
+       ],
+       [
+        22,
+        3,
+        8.5,
+        7.2
+       ],
+       [
+        30,
+        -5,
+        6,
+        4.2
+       ],
+       [
+        36,
+        -12,
+        4,
+        2
+       ]
+      ],
+      "outline2": [],
+      "shell": 0
+     },
+     {
+      "name": "やきめのそう1",
+      "kind": "Curve",
+      "size": [
+       1,
+       1,
+       1
+      ],
+      "round": 0,
+      "pos": [
+       0,
+       0,
+       0
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.65,
+      "material": {
+       "color": [
+        0.95,
+        0.62,
+        0.28
+       ],
+       "roughness": 0.7,
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0.75,
+       0,
+       1
+      ],
+      "path": [
+       [
+        -22.5,
+        -5.1,
+        8.1,
+        1.35
+       ],
+       [
+        -22.701,
+        -4.2828,
+        11.15,
+        1.35
+       ],
+       [
+        -23.25,
+        -2.05,
+        13.3828,
+        1.35
+       ],
+       [
+        -24,
+        1,
+        14.2,
+        1.35
+       ],
+       [
+        -24.75,
+        4.05,
+        13.3828,
+        1.35
+       ],
+       [
+        -25.299,
+        6.2828,
+        11.15,
+        1.35
+       ],
+       [
+        -25.5,
+        7.1,
+        8.1,
+        1.35
+       ]
+      ],
+      "outline2": [],
+      "shell": 0
+     },
+     {
+      "name": "やきめのそう2",
+      "kind": "Curve",
+      "size": [
+       1,
+       1,
+       1
+      ],
+      "round": 0,
+      "pos": [
+       0,
+       0,
+       0
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.65,
+      "material": {
+       "color": [
+        0.72,
+        0.37,
+        0.13
+       ],
+       "roughness": 0.7,
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0.75,
+       0,
+       1
+      ],
+      "path": [
+       [
+        -10.5,
+        0.2,
+        11,
+        1.35
+       ],
+       [
+        -10.701,
+        1.379,
+        15.4,
+        1.35
+       ],
+       [
+        -11.25,
+        4.6,
+        18.621,
+        1.35
+       ],
+       [
+        -12,
+        9,
+        19.8,
+        1.35
+       ],
+       [
+        -12.75,
+        13.4,
+        18.621,
+        1.35
+       ],
+       [
+        -13.299,
+        16.621,
+        15.4,
+        1.35
+       ],
+       [
+        -13.5,
+        17.8,
+        11,
+        1.35
+       ]
+      ],
+      "outline2": [],
+      "shell": 0
+     },
+     {
+      "name": "やきめのそう3",
+      "kind": "Curve",
+      "size": [
+       1,
+       1,
+       1
+      ],
+      "round": 0,
+      "pos": [
+       0,
+       0,
+       0
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.65,
+      "material": {
+       "color": [
+        0.95,
+        0.62,
+        0.28
+       ],
+       "roughness": 0.7,
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0.75,
+       0,
+       1
+      ],
+      "path": [
+       [
+        1.5,
+        2.3,
+        11.5,
+        1.35
+       ],
+       [
+        1.299,
+        3.5996,
+        16.35,
+        1.35
+       ],
+       [
+        0.75,
+        7.15,
+        19.9004,
+        1.35
+       ],
+       [
+        0,
+        12,
+        21.2,
+        1.35
+       ],
+       [
+        -0.75,
+        16.85,
+        19.9004,
+        1.35
+       ],
+       [
+        -1.299,
+        20.4004,
+        16.35,
+        1.35
+       ],
+       [
+        -1.5,
+        21.7,
+        11.5,
+        1.35
+       ]
+      ],
+      "outline2": [],
+      "shell": 0
+     },
+     {
+      "name": "やきめのそう4",
+      "kind": "Curve",
+      "size": [
+       1,
+       1,
+       1
+      ],
+      "round": 0,
+      "pos": [
+       0,
+       0,
+       0
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.65,
+      "material": {
+       "color": [
+        0.72,
+        0.37,
+        0.13
+       ],
+       "roughness": 0.7,
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0.75,
+       0,
+       1
+      ],
+      "path": [
+       [
+        13.5,
+        0.2,
+        11,
+        1.35
+       ],
+       [
+        13.299,
+        1.379,
+        15.4,
+        1.35
+       ],
+       [
+        12.75,
+        4.6,
+        18.621,
+        1.35
+       ],
+       [
+        12,
+        9,
+        19.8,
+        1.35
+       ],
+       [
+        11.25,
+        13.4,
+        18.621,
+        1.35
+       ],
+       [
+        10.701,
+        16.621,
+        15.4,
+        1.35
+       ],
+       [
+        10.5,
+        17.8,
+        11,
+        1.35
+       ]
+      ],
+      "outline2": [],
+      "shell": 0
+     },
+     {
+      "name": "やきめのそう5",
+      "kind": "Curve",
+      "size": [
+       1,
+       1,
+       1
+      ],
+      "round": 0,
+      "pos": [
+       0,
+       0,
+       0
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.65,
+      "material": {
+       "color": [
+        0.95,
+        0.62,
+        0.28
+       ],
+       "roughness": 0.7,
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0.75,
+       0,
+       1
+      ],
+      "path": [
+       [
+        25.5,
+        -5.1,
+        8.1,
+        1.35
+       ],
+       [
+        25.299,
+        -4.2828,
+        11.15,
+        1.35
+       ],
+       [
+        24.75,
+        -2.05,
+        13.3828,
+        1.35
+       ],
+       [
+        24,
+        1,
+        14.2,
+        1.35
+       ],
+       [
+        23.25,
+        4.05,
+        13.3828,
+        1.35
+       ],
+       [
+        22.701,
+        6.2828,
+        11.15,
+        1.35
+       ],
+       [
+        22.5,
+        7.1,
+        8.1,
+        1.35
+       ]
+      ],
+      "outline2": [],
+      "shell": 0
      }
     ]
    }
@@ -1888,7 +2912,7 @@
    "group": {
     "name": "おにぎり",
     "op": "Add",
-    "blend": 0.0,
+    "blend": 0,
     "visible": true,
     "shapes": [
      {
@@ -1924,18 +2948,18 @@
         0.95
        ],
        "roughness": 0.6,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
        [
-        -28.0,
-        9.0
+        -28,
+        9
        ],
        [
         -26.794,
@@ -1946,12 +2970,12 @@
         1.206
        ],
        [
-        -19.0,
-        0.0
+        -19,
+        0
        ],
        [
-        19.0,
-        0.0
+        19,
+        0
        ],
        [
         23.5,
@@ -1962,8 +2986,8 @@
         4.5
        ],
        [
-        28.0,
-        9.0
+        28,
+        9
        ],
        [
         26.794,
@@ -1978,8 +3002,8 @@
         37.794
        ],
        [
-        0.0,
-        39.0
+        0,
+        39
        ],
        [
         -4.5,
@@ -2002,7 +3026,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "のり前",
@@ -2012,7 +3036,7 @@
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        0,
        -11.6,
@@ -2037,18 +3061,18 @@
         0.07
        ],
        "roughness": 0.6,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
        [
-        -28.0,
-        9.0
+        -28,
+        9
        ],
        [
         -26.794,
@@ -2059,12 +3083,12 @@
         1.206
        ],
        [
-        -19.0,
-        0.0
+        -19,
+        0
        ],
        [
-        19.0,
-        0.0
+        19,
+        0
        ],
        [
         23.5,
@@ -2075,8 +3099,8 @@
         4.5
        ],
        [
-        28.0,
-        9.0
+        28,
+        9
        ],
        [
         26.794,
@@ -2103,7 +3127,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "のり後",
@@ -2113,7 +3137,7 @@
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        0,
        11.6,
@@ -2138,18 +3162,18 @@
         0.07
        ],
        "roughness": 0.6,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
        [
-        -28.0,
-        9.0
+        -28,
+        9
        ],
        [
         -26.794,
@@ -2160,12 +3184,12 @@
         1.206
        ],
        [
-        -19.0,
-        0.0
+        -19,
+        0
        ],
        [
-        19.0,
-        0.0
+        19,
+        0
        ],
        [
         23.5,
@@ -2176,8 +3200,8 @@
         4.5
        ],
        [
-        28.0,
-        9.0
+        28,
+        9
        ],
        [
         26.794,
@@ -2204,7 +3228,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      }
     ]
    }
@@ -2220,7 +3244,7 @@
    "group": {
     "name": "ドーナツ",
     "op": "Add",
-    "blend": 0.0,
+    "blend": 0,
     "visible": true,
     "shapes": [
      {
@@ -2231,7 +3255,7 @@
        8,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        0,
        0,
@@ -2256,12 +3280,12 @@
         0.32
        ],
        "roughness": 0.7,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -2290,7 +3314,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "アイシング",
@@ -2300,7 +3324,7 @@
        8.5,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        0,
        0,
@@ -2320,17 +3344,17 @@
       "blend": 2,
       "material": {
        "color": [
-        1.0,
+        1,
         0.45,
         0.7
        ],
        "roughness": 0.25,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
        "coat": 0.5,
-       "translucency": 0.0
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -2359,7 +3383,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "すぷりんくる",
@@ -2369,7 +3393,7 @@
        4,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        21.665770566268577,
        3.820259908672467,
@@ -2378,7 +3402,7 @@
       "rot": [
        90,
        0,
-       100.0
+       100
       ],
       "scale": [
        1,
@@ -2391,15 +3415,15 @@
        "color": [
         0.3,
         0.8,
-        1.0
+        1
        ],
        "roughness": 0.4,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -2428,7 +3452,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "すぷりんくる",
@@ -2438,7 +3462,7 @@
        4,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        12.618681599723015,
        18.02134497435782,
@@ -2447,7 +3471,7 @@
       "rot": [
        90,
        0,
-       145.0
+       145
       ],
       "scale": [
        1,
@@ -2459,16 +3483,16 @@
       "material": {
        "color": [
         0.5,
-        1.0,
+        1,
         0.4
        ],
        "roughness": 0.4,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -2497,7 +3521,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "すぷりんくる",
@@ -2507,7 +3531,7 @@
        4,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        -3.8202599086724667,
        21.665770566268577,
@@ -2516,7 +3540,7 @@
       "rot": [
        90,
        0,
-       190.0
+       190
       ],
       "scale": [
        1,
@@ -2527,17 +3551,17 @@
       "blend": 0.3,
       "material": {
        "color": [
-        1.0,
-        1.0,
+        1,
+        1,
         0.2
        ],
        "roughness": 0.4,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -2566,7 +3590,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "すぷりんくる",
@@ -2576,7 +3600,7 @@
        4,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        -18.021344974357824,
        12.618681599723011,
@@ -2585,7 +3609,7 @@
       "rot": [
        90,
        0,
-       235.0
+       235
       ],
       "scale": [
        1,
@@ -2598,15 +3622,15 @@
        "color": [
         0.6,
         0.4,
-        1.0
+        1
        ],
        "roughness": 0.4,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -2635,7 +3659,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "すぷりんくる",
@@ -2645,7 +3669,7 @@
        4,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        -21.665770566268577,
        -3.8202599086724702,
@@ -2654,7 +3678,7 @@
       "rot": [
        90,
        0,
-       280.0
+       280
       ],
       "scale": [
        1,
@@ -2665,17 +3689,17 @@
       "blend": 0.3,
       "material": {
        "color": [
-        1.0,
-        1.0,
-        1.0
+        1,
+        1,
+        1
        ],
        "roughness": 0.4,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -2704,7 +3728,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "すぷりんくる",
@@ -2714,7 +3738,7 @@
        4,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        -12.61868159972302,
        -18.021344974357813,
@@ -2723,7 +3747,7 @@
       "rot": [
        90,
        0,
-       325.0
+       325
       ],
       "scale": [
        1,
@@ -2736,15 +3760,15 @@
        "color": [
         0.3,
         0.8,
-        1.0
+        1
        ],
        "roughness": 0.4,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -2773,7 +3797,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "すぷりんくる",
@@ -2783,7 +3807,7 @@
        4,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        3.820259908672459,
        -21.665770566268577,
@@ -2792,7 +3816,7 @@
       "rot": [
        90,
        0,
-       370.0
+       370
       ],
       "scale": [
        1,
@@ -2804,16 +3828,16 @@
       "material": {
        "color": [
         0.5,
-        1.0,
+        1,
         0.4
        ],
        "roughness": 0.4,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -2842,7 +3866,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "すぷりんくる",
@@ -2852,7 +3876,7 @@
        4,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        18.021344974357813,
        -12.618681599723022,
@@ -2861,7 +3885,7 @@
       "rot": [
        90,
        0,
-       415.0
+       415
       ],
       "scale": [
        1,
@@ -2872,17 +3896,17 @@
       "blend": 0.3,
       "material": {
        "color": [
-        1.0,
-        1.0,
+        1,
+        1,
         0.2
        ],
        "roughness": 0.4,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -2911,7 +3935,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      }
     ]
    }
@@ -2927,7 +3951,7 @@
    "group": {
     "name": "ハンバーガー",
     "op": "Add",
-    "blend": 0.0,
+    "blend": 0,
     "visible": true,
     "shapes": [
      {
@@ -2938,7 +3962,7 @@
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        0,
        0,
@@ -2963,12 +3987,12 @@
         0.25
        ],
        "roughness": 0.6,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -3009,7 +4033,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "パティ",
@@ -3019,7 +4043,7 @@
        8,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        0,
        0,
@@ -3044,12 +4068,12 @@
         0.08
        ],
        "roughness": 0.8,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -3078,7 +4102,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "チーズ",
@@ -3108,17 +4132,17 @@
       "blend": 5,
       "material": {
        "color": [
-        1.0,
+        1,
         0.78,
         0.1
        ],
        "roughness": 0.3,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -3147,7 +4171,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "レタス",
@@ -3157,7 +4181,7 @@
        3.5,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        0,
        0,
@@ -3182,12 +4206,12 @@
         0.2
        ],
        "roughness": 0.7,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -3216,7 +4240,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "トマト",
@@ -3226,7 +4250,7 @@
        3,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        0,
        0,
@@ -3251,12 +4275,12 @@
         0.15
        ],
        "roughness": 0.4,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -3285,7 +4309,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "うえのパン",
@@ -3295,7 +4319,7 @@
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        0,
        0,
@@ -3320,12 +4344,12 @@
         0.25
        ],
        "roughness": 0.6,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -3374,7 +4398,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "ごま",
@@ -3384,7 +4408,7 @@
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        16.914467174146353,
        6.156362579862037,
@@ -3409,12 +4433,12 @@
         0.85
        ],
        "roughness": 0.5,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -3443,7 +4467,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "ごま",
@@ -3453,7 +4477,7 @@
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        5.73275970453032,
        17.06269223100837,
@@ -3478,12 +4502,12 @@
         0.85
        ],
        "roughness": 0.5,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -3512,7 +4536,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "ごま",
@@ -3522,7 +4546,7 @@
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        -9.765832749583668,
        15.120466616713887,
@@ -3547,12 +4571,12 @@
         0.85
        ],
        "roughness": 0.5,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -3581,7 +4605,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "ごま",
@@ -3591,7 +4615,7 @@
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        -17.910553956577225,
        1.7922212387247012,
@@ -3616,12 +4640,12 @@
         0.85
        ],
        "roughness": 0.5,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -3650,7 +4674,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "ごま",
@@ -3660,7 +4684,7 @@
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        -12.568262725549312,
        -12.88560328667493,
@@ -3685,12 +4709,12 @@
         0.85
        ],
        "roughness": 0.5,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -3719,7 +4743,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "ごま",
@@ -3729,7 +4753,7 @@
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        2.238186683654739,
        -17.860305718803097,
@@ -3754,12 +4778,12 @@
         0.85
        ],
        "roughness": 0.5,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -3788,7 +4812,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "ごま",
@@ -3798,7 +4822,7 @@
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        15.359235869378796,
        -9.385833660830974,
@@ -3823,12 +4847,12 @@
         0.85
        ],
        "roughness": 0.5,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -3857,7 +4881,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      }
     ]
    }
@@ -3874,7 +4898,7 @@
    "group": {
     "name": "ケーキ",
     "op": "Add",
-    "blend": 0.0,
+    "blend": 0,
     "visible": true,
     "shapes": [
      {
@@ -3885,7 +4909,7 @@
        24,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        0,
        0,
@@ -3905,17 +4929,17 @@
       "blend": 3,
       "material": {
        "color": [
-        1.0,
+        1,
         0.9,
         0.6
        ],
        "roughness": 0.8,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -3944,7 +4968,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "クリーム",
@@ -3954,7 +4978,7 @@
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        0,
        0,
@@ -3974,17 +4998,17 @@
       "blend": 3,
       "material": {
        "color": [
-        1.0,
+        1,
         0.97,
         0.95
        ],
        "roughness": 0.3,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
        "coat": 0.3,
-       "translucency": 0.0
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -4025,7 +5049,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "まんなかのいちご",
@@ -4035,7 +5059,7 @@
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        0,
        0,
@@ -4060,12 +5084,12 @@
         0.14
        ],
        "roughness": 0.4,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
        "coat": 0.3,
-       "translucency": 0.0
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -4094,7 +5118,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "いちご",
@@ -4104,10 +5128,10 @@
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
-       20.0,
-       0.0,
+       20,
+       0,
        33
       ],
       "rot": [
@@ -4129,12 +5153,12 @@
         0.14
        ],
        "roughness": 0.4,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
        "coat": 0.3,
-       "translucency": 0.0
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -4163,7 +5187,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "いちご",
@@ -4173,7 +5197,7 @@
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        10.000000000000002,
        17.32050807568877,
@@ -4198,12 +5222,12 @@
         0.14
        ],
        "roughness": 0.4,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
        "coat": 0.3,
-       "translucency": 0.0
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -4232,7 +5256,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "いちご",
@@ -4242,7 +5266,7 @@
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        -9.999999999999996,
        17.320508075688775,
@@ -4267,12 +5291,12 @@
         0.14
        ],
        "roughness": 0.4,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
        "coat": 0.3,
-       "translucency": 0.0
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -4301,7 +5325,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "いちご",
@@ -4311,9 +5335,9 @@
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
-       -20.0,
+       -20,
        2.4492935982947065e-15,
        33
       ],
@@ -4336,12 +5360,12 @@
         0.14
        ],
        "roughness": 0.4,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
        "coat": 0.3,
-       "translucency": 0.0
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -4370,7 +5394,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "いちご",
@@ -4380,7 +5404,7 @@
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        -10.000000000000009,
        -17.320508075688767,
@@ -4405,12 +5429,12 @@
         0.14
        ],
        "roughness": 0.4,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
        "coat": 0.3,
-       "translucency": 0.0
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -4439,7 +5463,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "いちご",
@@ -4449,7 +5473,7 @@
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        10.000000000000002,
        -17.32050807568877,
@@ -4474,12 +5498,12 @@
         0.14
        ],
        "roughness": 0.4,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
        "coat": 0.3,
-       "translucency": 0.0
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -4508,7 +5532,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "クリームのかたまり",
@@ -4518,7 +5542,7 @@
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        19.052558883257653,
        10.999999999999998,
@@ -4543,12 +5567,12 @@
         1
        ],
        "roughness": 0.3,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -4577,7 +5601,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "クリームのかたまり",
@@ -4587,7 +5611,7 @@
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        -10.999999999999995,
        19.052558883257653,
@@ -4612,12 +5636,12 @@
         1
        ],
        "roughness": 0.3,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -4646,7 +5670,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "クリームのかたまり",
@@ -4656,7 +5680,7 @@
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        -19.05255888325765,
        -11.000000000000002,
@@ -4681,12 +5705,12 @@
         1
        ],
        "roughness": 0.3,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -4715,7 +5739,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "クリームのかたまり",
@@ -4725,7 +5749,7 @@
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        11.000000000000002,
        -19.05255888325765,
@@ -4750,12 +5774,12 @@
         1
        ],
        "roughness": 0.3,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -4784,7 +5808,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      }
     ]
    }
@@ -4800,7 +5824,7 @@
    "group": {
     "name": "アイスクリーム",
     "op": "Add",
-    "blend": 0.0,
+    "blend": 0,
     "visible": true,
     "shapes": [
      {
@@ -4811,7 +5835,7 @@
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        0,
        0,
@@ -4836,12 +5860,12 @@
         0.3
        ],
        "roughness": 0.8,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -4866,7 +5890,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "ピンク",
@@ -4876,7 +5900,7 @@
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        0,
        0,
@@ -4896,17 +5920,17 @@
       "blend": 4,
       "material": {
        "color": [
-        1.0,
+        1,
         0.6,
         0.75
        ],
        "roughness": 0.3,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
        "coat": 0.4,
-       "translucency": 0.0
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -4935,7 +5959,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "ミント",
@@ -4945,7 +5969,7 @@
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        0,
        0,
@@ -4970,12 +5994,12 @@
         0.8
        ],
        "roughness": 0.3,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
        "coat": 0.4,
-       "translucency": 0.0
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -5004,7 +6028,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "さくらんぼ",
@@ -5014,7 +6038,7 @@
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        0,
        0,
@@ -5039,12 +6063,12 @@
         0.1
        ],
        "roughness": 0.3,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
        "coat": 0.5,
-       "translucency": 0.0
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -5073,7 +6097,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "チョコ",
@@ -5083,7 +6107,7 @@
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        8.156770083329851,
        -14.127940209985123,
@@ -5108,12 +6132,12 @@
         0.05
        ],
        "roughness": 0.4,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -5142,7 +6166,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "チョコ",
@@ -5152,7 +6176,7 @@
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        12.957233587073176,
        4.716047344128929,
@@ -5177,12 +6201,12 @@
         0.05
        ],
        "roughness": 0.4,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -5211,7 +6235,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "チョコ",
@@ -5221,7 +6245,7 @@
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        -8.457233587073173,
        14.64835826428873,
@@ -5246,12 +6270,12 @@
         0.05
        ],
        "roughness": 0.4,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -5280,7 +6304,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "チョコ",
@@ -5290,7 +6314,7 @@
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        -13.85552036376103,
        -5.042996992678238,
@@ -5315,12 +6339,12 @@
         0.05
        ],
        "roughness": 0.4,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -5349,7 +6373,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      }
     ]
    }
@@ -5365,7 +6389,7 @@
    "group": {
     "name": "ピザ",
     "op": "Add",
-    "blend": 0.0,
+    "blend": 0,
     "visible": true,
     "shapes": [
      {
@@ -5376,7 +6400,7 @@
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        0,
        0,
@@ -5401,12 +6425,12 @@
         0.25
        ],
        "roughness": 0.6,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -5451,7 +6475,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "チーズ",
@@ -5461,7 +6485,7 @@
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        0,
        0,
@@ -5481,17 +6505,17 @@
       "blend": 6,
       "material": {
        "color": [
-        1.0,
+        1,
         0.85,
         0.3
        ],
        "roughness": 0.35,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -5524,7 +6548,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "ペパロニ",
@@ -5534,7 +6558,7 @@
        1.8,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        -3.472963553338606,
        -19.69615506024416,
@@ -5559,12 +6583,12 @@
         0.08
        ],
        "roughness": 0.4,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -5593,7 +6617,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "ペパロニ",
@@ -5603,7 +6627,7 @@
        1.8,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        4.16755626400633,
        -23.63538607229299,
@@ -5628,12 +6652,12 @@
         0.08
        ],
        "roughness": 0.4,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -5662,7 +6686,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "ペパロニ",
@@ -5672,10 +6696,10 @@
        1.8,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        6.123233995736766e-16,
-       -10.0,
+       -10,
        11.4
       ],
       "rot": [
@@ -5697,12 +6721,12 @@
         0.08
        ],
        "roughness": 0.4,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -5731,7 +6755,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "バジル",
@@ -5741,7 +6765,7 @@
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        -6,
        -14,
@@ -5766,12 +6790,12 @@
         0.2
        ],
        "roughness": 0.5,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -5800,7 +6824,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "バジル",
@@ -5810,7 +6834,7 @@
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        7,
        -28,
@@ -5835,12 +6859,12 @@
         0.2
        ],
        "roughness": 0.5,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -5869,7 +6893,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      }
     ]
    }
@@ -5886,7 +6910,7 @@
    "group": {
     "name": "めだまやき",
     "op": "Add",
-    "blend": 0.0,
+    "blend": 0,
     "visible": true,
     "shapes": [
      {
@@ -5897,7 +6921,7 @@
        3,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        0,
        0,
@@ -5922,12 +6946,12 @@
         0.97
        ],
        "roughness": 0.2,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
        "coat": 0.5,
-       "translucency": 0.0
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -5956,7 +6980,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "しろみ",
@@ -5966,7 +6990,7 @@
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        0,
        0,
@@ -5991,11 +7015,11 @@
         0.98
        ],
        "roughness": 0.25,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
        "translucency": 0.1
       },
       "visible": true,
@@ -6025,7 +7049,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "きみ",
@@ -6035,7 +7059,7 @@
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        3,
        0,
@@ -6055,17 +7079,17 @@
       "blend": 1.5,
       "material": {
        "color": [
-        1.0,
+        1,
         0.62,
         0.05
        ],
        "roughness": 0.2,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
        "coat": 0.5,
-       "translucency": 0.0
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -6094,7 +7118,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      }
     ]
    }
@@ -6110,7 +7134,7 @@
    "group": {
     "name": "すし",
     "op": "Add",
-    "blend": 0.0,
+    "blend": 0,
     "visible": true,
     "shapes": [
      {
@@ -6146,12 +7170,12 @@
         0.95
        ],
        "roughness": 0.6,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -6180,7 +7204,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "ネタ",
@@ -6210,15 +7234,15 @@
       "blend": 1.5,
       "material": {
        "color": [
-        1.0,
+        1,
         0.5,
         0.35
        ],
        "roughness": 0.3,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
        "coat": 0.4,
        "translucency": 0.15
       },
@@ -6249,7 +7273,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "のり",
@@ -6284,12 +7308,12 @@
         0.08
        ],
        "roughness": 0.6,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -6318,7 +7342,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "ごはん",
@@ -6353,12 +7377,12 @@
         0.95
        ],
        "roughness": 0.6,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -6387,7 +7411,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "ネタ",
@@ -6422,10 +7446,10 @@
         0.2
        ],
        "roughness": 0.3,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
        "coat": 0.4,
        "translucency": 0.15
       },
@@ -6456,7 +7480,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "のり",
@@ -6491,12 +7515,12 @@
         0.08
        ],
        "roughness": 0.6,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -6525,7 +7549,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      }
     ]
    }
@@ -6541,7 +7565,7 @@
    "group": {
     "name": "ラーメン",
     "op": "Add",
-    "blend": 0.0,
+    "blend": 0,
     "visible": true,
     "shapes": [
      {
@@ -6552,7 +7576,7 @@
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        0,
        0,
@@ -6577,12 +7601,12 @@
         0.93
        ],
        "roughness": 0.25,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
        "coat": 0.5,
-       "translucency": 0.0
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -6639,7 +7663,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "スープ",
@@ -6649,7 +7673,7 @@
        8,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        0,
        0,
@@ -6674,10 +7698,10 @@
         0.1
        ],
        "roughness": 0.1,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
        "coat": 0.8,
        "translucency": 0.35
       },
@@ -6708,7 +7732,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "めん1",
@@ -6718,7 +7742,7 @@
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        0,
        0,
@@ -6738,17 +7762,17 @@
       "blend": 0.8,
       "material": {
        "color": [
-        1.0,
+        1,
         0.85,
         0.45
        ],
        "roughness": 0.5,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
        "coat": 0.2,
-       "translucency": 0.0
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -6814,7 +7838,7 @@
        ]
       ],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "めん2",
@@ -6824,7 +7848,7 @@
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        0,
        0,
@@ -6844,17 +7868,17 @@
       "blend": 0.8,
       "material": {
        "color": [
-        1.0,
+        1,
         0.85,
         0.45
        ],
        "roughness": 0.5,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
        "coat": 0.2,
-       "translucency": 0.0
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -6914,7 +7938,7 @@
        ]
       ],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "チャーシュー1",
@@ -6924,7 +7948,7 @@
        3,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        -10,
        6,
@@ -6949,12 +7973,12 @@
         0.45
        ],
        "roughness": 0.5,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -6983,7 +8007,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "チャーシュー2",
@@ -6993,7 +8017,7 @@
        3,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        12,
        -6,
@@ -7018,12 +8042,12 @@
         0.45
        ],
        "roughness": 0.5,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -7052,7 +8076,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "たまご白",
@@ -7062,7 +8086,7 @@
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        14,
        4,
@@ -7087,12 +8111,12 @@
         0.95
        ],
        "roughness": 0.3,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -7121,7 +8145,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "たまご黄",
@@ -7131,7 +8155,7 @@
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        14,
        4,
@@ -7156,12 +8180,12 @@
         0.1
        ],
        "roughness": 0.2,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -7190,7 +8214,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "のり",
@@ -7200,7 +8224,7 @@
        1.2,
        18
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        -16,
        20,
@@ -7225,12 +8249,12 @@
         0.08
        ],
        "roughness": 0.5,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -7259,7 +8283,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "ねぎ1",
@@ -7269,7 +8293,7 @@
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        -6,
        -10,
@@ -7294,12 +8318,12 @@
         0.25
        ],
        "roughness": 0.5,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -7328,7 +8352,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "ねぎ2",
@@ -7338,7 +8362,7 @@
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        4,
        2,
@@ -7363,12 +8387,12 @@
         0.25
        ],
        "roughness": 0.5,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -7397,7 +8421,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "ねぎ3",
@@ -7407,7 +8431,7 @@
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        18,
        0,
@@ -7432,12 +8456,12 @@
         0.25
        ],
        "roughness": 0.5,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -7466,7 +8490,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      }
     ]
    }
@@ -7482,7 +8506,7 @@
    "group": {
     "name": "パン",
     "op": "Add",
-    "blend": 0.0,
+    "blend": 0,
     "visible": true,
     "shapes": [
      {
@@ -7518,12 +8542,12 @@
         0.25
        ],
        "roughness": 0.6,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -7552,7 +8576,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "切れ目",
@@ -7562,7 +8586,7 @@
        30,
        4
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        -18,
        6,
@@ -7587,12 +8611,12 @@
         0.5
        ],
        "roughness": 0.5,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -7621,7 +8645,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "切れ目",
@@ -7631,7 +8655,7 @@
        30,
        4
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        0,
        6,
@@ -7656,12 +8680,12 @@
         0.5
        ],
        "roughness": 0.5,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -7690,7 +8714,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "切れ目",
@@ -7700,7 +8724,7 @@
        30,
        4
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        18,
        6,
@@ -7725,12 +8749,12 @@
         0.5
        ],
        "roughness": 0.5,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -7759,7 +8783,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "スライス",
@@ -7769,7 +8793,7 @@
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        0,
        -26,
@@ -7794,12 +8818,12 @@
         0.8
        ],
        "roughness": 0.7,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -7840,7 +8864,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      }
     ]
    }
@@ -7856,7 +8880,7 @@
    "group": {
     "name": "にんじん",
     "op": "Add",
-    "blend": 0.0,
+    "blend": 0,
     "visible": true,
     "shapes": [
      {
@@ -7867,7 +8891,7 @@
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        0,
        0,
@@ -7887,17 +8911,17 @@
       "blend": 2,
       "material": {
        "color": [
-        1.0,
+        1,
         0.5,
         0.1
        ],
        "roughness": 0.5,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -7942,7 +8966,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "すじ",
@@ -7952,7 +8976,7 @@
        0.8,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        0,
        0,
@@ -7977,12 +9001,12 @@
         0.5
        ],
        "roughness": 0.5,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -8011,7 +9035,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "すじ",
@@ -8021,7 +9045,7 @@
        0.8,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        0,
        0,
@@ -8046,12 +9070,12 @@
         0.5
        ],
        "roughness": 0.5,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -8080,7 +9104,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "すじ",
@@ -8090,7 +9114,7 @@
        0.8,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        0,
        0,
@@ -8115,12 +9139,12 @@
         0.5
        ],
        "roughness": 0.5,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -8149,7 +9173,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "くき",
@@ -8159,7 +9183,7 @@
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        0,
        0,
@@ -8184,12 +9208,12 @@
         0.2
        ],
        "roughness": 0.5,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -8237,7 +9261,7 @@
        ]
       ],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "は",
@@ -8247,7 +9271,7 @@
        12,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        -5,
        0,
@@ -8272,12 +9296,12 @@
         0.2
        ],
        "roughness": 0.5,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -8306,7 +9330,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "は",
@@ -8316,7 +9340,7 @@
        12,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        5,
        0,
@@ -8341,12 +9365,12 @@
         0.2
        ],
        "roughness": 0.5,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -8375,7 +9399,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "は",
@@ -8385,7 +9409,7 @@
        12,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        0,
        0,
@@ -8410,12 +9434,12 @@
         0.2
        ],
        "roughness": 0.5,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -8444,7 +9468,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      }
     ]
    }
@@ -8460,7 +9484,7 @@
    "group": {
     "name": "スイカ",
     "op": "Add",
-    "blend": 0.0,
+    "blend": 0,
     "visible": true,
     "shapes": [
      {
@@ -8471,7 +9495,7 @@
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        0,
        0,
@@ -8496,18 +9520,18 @@
         0.2
        ],
        "roughness": 0.5,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
        [
-        40.0,
-        0.0
+        40,
+        0
        ],
        [
         39.78087581473093,
@@ -8567,7 +9591,7 @@
        ],
        [
         1.1331077795295958e-14,
-        40.0
+        40
        ],
        [
         -4.181138530706133,
@@ -8626,11 +9650,11 @@
         4.181138530706131
        ],
        [
-        -40.0,
+        -40,
         2.2662155590591917e-14
        ],
        [
-        -36.0,
+        -36,
         2.0395940031532726e-14
        ],
        [
@@ -8691,7 +9715,7 @@
        ],
        [
         1.0197970015766363e-14,
-        36.0
+        36
        ],
        [
         3.7630246776355243,
@@ -8750,8 +9774,8 @@
         3.7630246776355243
        ],
        [
-        36.0,
-        0.0
+        36,
+        0
        ]
       ],
       "params": [
@@ -8762,7 +9786,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "あか",
@@ -8772,7 +9796,7 @@
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        0,
        0,
@@ -8792,23 +9816,23 @@
       "blend": 0,
       "material": {
        "color": [
-        1.0,
+        1,
         0.18,
         0.25
        ],
        "roughness": 0.35,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
        [
-        36.0,
-        0.0
+        36,
+        0
        ],
        [
         35.802788233257836,
@@ -8868,7 +9892,7 @@
        ],
        [
         1.0197970015766363e-14,
-        36.0
+        36
        ],
        [
         -3.76302467763552,
@@ -8927,7 +9951,7 @@
         3.7630246776355185
        ],
        [
-        -36.0,
+        -36,
         2.0395940031532726e-14
        ]
       ],
@@ -8939,7 +9963,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "たね",
@@ -8949,7 +9973,7 @@
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        -18,
        -3.6,
@@ -8974,12 +9998,12 @@
         0.06
        ],
        "roughness": 0.4,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -9008,7 +10032,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "たね",
@@ -9018,7 +10042,7 @@
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        -6,
        -3.6,
@@ -9043,12 +10067,12 @@
         0.06
        ],
        "roughness": 0.4,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -9077,7 +10101,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "たね",
@@ -9087,7 +10111,7 @@
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        8,
        -3.6,
@@ -9112,12 +10136,12 @@
         0.06
        ],
        "roughness": 0.4,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -9146,7 +10170,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "たね",
@@ -9156,7 +10180,7 @@
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        18,
        -3.6,
@@ -9181,12 +10205,12 @@
         0.06
        ],
        "roughness": 0.4,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -9215,7 +10239,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "たね",
@@ -9225,7 +10249,7 @@
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        -12,
        -3.6,
@@ -9250,12 +10274,12 @@
         0.06
        ],
        "roughness": 0.4,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -9284,7 +10308,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "たね",
@@ -9294,7 +10318,7 @@
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        4,
        -3.6,
@@ -9319,12 +10343,12 @@
         0.06
        ],
        "roughness": 0.4,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -9353,7 +10377,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "たね",
@@ -9363,7 +10387,7 @@
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        16,
        -3.6,
@@ -9388,12 +10412,12 @@
         0.06
        ],
        "roughness": 0.4,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -9422,7 +10446,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "たね",
@@ -9432,7 +10456,7 @@
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        -22,
        -3.6,
@@ -9457,12 +10481,12 @@
         0.06
        ],
        "roughness": 0.4,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -9491,7 +10515,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "たね",
@@ -9501,7 +10525,7 @@
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        22,
        -3.6,
@@ -9526,12 +10550,12 @@
         0.06
        ],
        "roughness": 0.4,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -9560,7 +10584,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
       "name": "たね",
@@ -9570,7 +10594,7 @@
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        0,
        -3.6,
@@ -9595,12 +10619,12 @@
         0.06
        ],
        "roughness": 0.4,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -9629,7 +10653,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      }
     ]
    }
@@ -9640,12 +10664,13 @@
     "soft serve",
     "soft ice cream",
     "ソフトクリーム",
-    "sweets"
+    "sweets",
+    "swirl"
    ],
    "group": {
     "name": "ソフトクリーム",
     "op": "Add",
-    "blend": 0.0,
+    "blend": 0,
     "visible": true,
     "shapes": [
      {
@@ -9656,7 +10681,7 @@
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        0,
        0,
@@ -9681,12 +10706,12 @@
         0.3
        ],
        "roughness": 0.8,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -9711,17 +10736,17 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      },
      {
-      "name": "うずまき",
+      "name": "クリームのしん",
       "kind": "Revolve",
       "size": [
        1,
        1,
        1
       ],
-      "round": 0.0,
+      "round": 0,
       "pos": [
        0,
        0,
@@ -9731,103 +10756,6 @@
        0,
        0,
        0
-      ],
-      "scale": [
-       1,
-       1,
-       1
-      ],
-      "op": "Add",
-      "blend": 1.5,
-      "material": {
-       "color": [
-        1,
-        0.98,
-        0.92
-       ],
-       "roughness": 0.35,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.2,
-       "translucency": 0.0
-      },
-      "visible": true,
-      "outline": [
-       [
-        0,
-        28
-       ],
-       [
-        15,
-        28
-       ],
-       [
-        16,
-        33
-       ],
-       [
-        13,
-        38
-       ],
-       [
-        15,
-        43
-       ],
-       [
-        12,
-        48
-       ],
-       [
-        14,
-        53
-       ],
-       [
-        10,
-        58
-       ],
-       [
-        11,
-        62
-       ],
-       [
-        7,
-        66
-       ],
-       [
-        0,
-        67
-       ]
-      ],
-      "params": [
-       360,
-       0,
-       0,
-       0
-      ],
-      "path": [],
-      "outline2": [],
-      "shell": 0.0
-     },
-     {
-      "name": "チョコのスティック",
-      "kind": "Box",
-      "size": [
-       2,
-       14,
-       10
-      ],
-      "round": 1,
-      "pos": [
-       8,
-       0,
-       58
-      ],
-      "rot": [
-       0,
-       0,
-       30
       ],
       "scale": [
        1,
@@ -9838,17 +10766,362 @@
       "blend": 1,
       "material": {
        "color": [
-        0.45,
-        0.22,
-        0.08
+        1,
+        0.98,
+        0.92
        ],
-       "roughness": 0.5,
-       "metallic": 0.0,
-       "glow": 0.0,
-       "glass": 0.0,
-       "iridescence": 0.0,
-       "coat": 0.0,
-       "translucency": 0.0
+       "roughness": 0.38,
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0.25,
+       "translucency": 0
+      },
+      "visible": true,
+      "outline": [
+       [
+        0,
+        28
+       ],
+       [
+        9,
+        28
+       ],
+       [
+        11,
+        32
+       ],
+       [
+        10,
+        38
+       ],
+       [
+        8.5,
+        44
+       ],
+       [
+        7,
+        51
+       ],
+       [
+        4.5,
+        59
+       ],
+       [
+        1.8,
+        66
+       ],
+       [
+        0,
+        68
+       ]
+      ],
+      "params": [
+       360,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0
+     },
+     {
+      "name": "らせんのクリーム",
+      "kind": "Curve",
+      "size": [
+       1,
+       1,
+       1
+      ],
+      "round": 0,
+      "pos": [
+       0,
+       0,
+       0
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 1,
+      "material": {
+       "color": [
+        1,
+        0.98,
+        0.93
+       ],
+       "roughness": 0.34,
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0.32,
+       "translucency": 0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0.8,
+       0,
+       1
+      ],
+      "path": [
+       [
+        0,
+        -11.7,
+        31,
+        5.2
+       ],
+       [
+        6.6733,
+        -9.185,
+        32.2,
+        5.1083
+       ],
+       [
+        10.468,
+        -3.4012,
+        33.4,
+        5.0167
+       ],
+       [
+        10.1383,
+        3.2941,
+        34.6,
+        4.925
+       ],
+       [
+        6.062,
+        8.3437,
+        35.8,
+        4.8333
+       ],
+       [
+        0,
+        9.9667,
+        37,
+        4.7417
+       ],
+       [
+        -5.6545,
+        7.7827,
+        38.2,
+        4.65
+       ],
+       [
+        -8.8195,
+        2.8656,
+        39.4,
+        4.5583
+       ],
+       [
+        -8.4898,
+        -2.7585,
+        40.6,
+        4.4667
+       ],
+       [
+        -5.0432,
+        -6.9414,
+        41.8,
+        4.375
+       ],
+       [
+        0,
+        -8.2333,
+        43,
+        4.2833
+       ],
+       [
+        4.6357,
+        -6.3804,
+        44.2,
+        4.1917
+       ],
+       [
+        7.171,
+        -2.33,
+        45.4,
+        4.1
+       ],
+       [
+        6.8413,
+        2.2229,
+        46.6,
+        4.0083
+       ],
+       [
+        4.0244,
+        5.5391,
+        47.8,
+        3.9167
+       ],
+       [
+        0,
+        6.5,
+        49,
+        3.825
+       ],
+       [
+        -3.6168,
+        4.9782,
+        50.2,
+        3.7333
+       ],
+       [
+        -5.5225,
+        1.7944,
+        51.4,
+        3.6417
+       ],
+       [
+        -5.1928,
+        -1.6872,
+        52.6,
+        3.55
+       ],
+       [
+        -3.0055,
+        -4.1368,
+        53.8,
+        3.4583
+       ],
+       [
+        0,
+        -4.7667,
+        55,
+        3.3667
+       ],
+       [
+        2.598,
+        -3.5759,
+        56.2,
+        3.275
+       ],
+       [
+        3.874,
+        -1.2587,
+        57.4,
+        3.1833
+       ],
+       [
+        3.5443,
+        1.1516,
+        58.6,
+        3.0917
+       ],
+       [
+        1.9867,
+        2.7345,
+        59.8,
+        3
+       ],
+       [
+        0,
+        3.0333,
+        61,
+        2.9083
+       ],
+       [
+        -1.5792,
+        2.1736,
+        62.2,
+        2.8167
+       ],
+       [
+        -2.2255,
+        0.7231,
+        63.4,
+        2.725
+       ],
+       [
+        -1.8958,
+        -0.616,
+        64.6,
+        2.6333
+       ],
+       [
+        -0.9679,
+        -1.3322,
+        65.8,
+        2.5417
+       ],
+       [
+        0,
+        -1.3,
+        67,
+        2.45
+       ]
+      ],
+      "outline2": [],
+      "shell": 0
+     },
+     {
+      "name": "さきのとんがり",
+      "kind": "Sphere",
+      "size": [
+       2.8,
+       1,
+       1
+      ],
+      "round": 0,
+      "pos": [
+       0,
+       0,
+       68
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       0.85,
+       0.85,
+       1.4
+      ],
+      "op": "Add",
+      "blend": 1,
+      "material": {
+       "color": [
+        1,
+        0.98,
+        0.93
+       ],
+       "roughness": 0.34,
+       "metallic": 0,
+       "glow": 0,
+       "glass": 0,
+       "iridescence": 0,
+       "coat": 0,
+       "translucency": 0
       },
       "visible": true,
       "outline": [
@@ -9877,7 +11150,7 @@
       ],
       "path": [],
       "outline2": [],
-      "shell": 0.0
+      "shell": 0
      }
     ]
    }
