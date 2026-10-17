@@ -37,7 +37,12 @@ impl Default for Dlg {
 fn set_art(d: &mut Dlg, res: Result<Artwork, String>, name: String) {
     match res {
         Ok(a) => {
-            d.msg = if a.dropped > 0 { format!("{}個の小さい・多すぎる線は読みとばしました", a.dropped) } else { String::new() };
+            let mut notes = Vec::new();
+            if a.dropped > 0 {
+                notes.push(format!("{}個の小さい・多すぎる輪郭は読みとばしました", a.dropped));
+            }
+            notes.extend(a.warnings.iter().cloned());
+            d.msg = notes.join("\n");
             d.art = Some(a);
             d.name = name;
         }
@@ -106,7 +111,9 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
                 );
             }
             if !d.msg.is_empty() {
-                ui.label(RichText::new(&d.msg).size(11.5).color(style::CUT));
+                for line in d.msg.lines() {
+                    ui.label(RichText::new(line).size(11.5).color(style::CUT));
+                }
             }
             ui.add_space(2.0);
             egui::Grid::new("svg_import_grid").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
