@@ -1338,7 +1338,12 @@ impl Callback {
         // (a picture scaled up a lot has little to sharpen: the light touch of a bigger one would only make blocks)
         let lin_a = pics.a.used[0] as f32 / vp[0] as f32;
         let sharpen = self.sharpen.clamp(0.0, 1.0) * (2.0 * lin_a - 0.25).clamp(0.0, 1.0);
-        let params: [f32; 12] = [a[0], a[1], a[2], a[3], b[0], b[1], b[2], b[3], reveal, sharpen, 0.0, 0.0];
+        // Feather the boundary *within finished rows* to prevent a hard horizontal
+        // line when the still picture sharpens progressively. The blit shader
+        // clamps texture B to the last finished texel.
+        let feather = crate::adapt::sharp_band_feather(pics.bands.done, size_b[1]);
+        let feather = if b_current { feather } else { 0.0 };
+        let params: [f32; 12] = [a[0], a[1], a[2], a[3], b[0], b[1], b[2], b[3], reveal, sharpen, feather, 0.0];
         let mut bytes = Vec::with_capacity(BLIT_PARAM_BYTES);
         for v in params {
             bytes.extend_from_slice(&v.to_le_bytes());
