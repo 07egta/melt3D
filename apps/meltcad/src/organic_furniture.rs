@@ -450,6 +450,41 @@ mod tests {
     }
 
     #[test]
+    fn a_transformed_group_keeps_its_orientation_when_dimensions_change() {
+        let p = Settings::preset(Design::Stool);
+        let mut g = sample_group(p);
+        let pivot = g.shapes[0].pos;
+        let turn = crate::sdf::rotation([0.0, 0.0, 90.0]);
+        for sh in &mut g.shapes {
+            let rel = [sh.pos[0] - pivot[0], sh.pos[1] - pivot[1], sh.pos[2] - pivot[2]];
+            sh.pos = [
+                pivot[0] + turn[0][0] * rel[0] + turn[0][1] * rel[1] + turn[0][2] * rel[2],
+                pivot[1] + turn[1][0] * rel[0] + turn[1][1] * rel[1] + turn[1][2] * rel[2],
+                pivot[2] + turn[2][0] * rel[0] + turn[2][1] * rel[1] + turn[2][2] * rel[2],
+            ];
+            sh.rot = [0.0, 0.0, 90.0];
+            sh.scale = [1.25, 1.25, 1.25];
+        }
+        let mut next = p;
+        next.width = 225.0;
+        update_group(&mut g, next).unwrap();
+        assert_eq!(g.shapes[0].pos, pivot);
+        assert!(g.shapes.iter().all(|sh| sh.rot == [0.0, 0.0, 90.0] && sh.scale == [1.25; 3]));
+    }
+
+    #[test]
+    fn damaged_furniture_tags_detach_without_discarding_geometry() {
+        let mut g = sample_group(Settings::preset(Design::Stool));
+        g.shapes[0].source.clear();
+        let original = g.shapes.clone();
+        let scene = Scene { groups: vec![g], ..Scene::default() };
+        let (opened, notes) = Scene::from_json_notes(&scene.to_json()).unwrap();
+        assert!(opened.groups[0].organic_furniture.is_none());
+        assert_eq!(opened.groups[0].shapes, original);
+        assert!(notes.iter().any(|n| n.contains("家具プリセット")));
+    }
+
+    #[test]
     fn invalid_import_settings_are_clamped() {
         let mut p = Settings { width: f32::NAN, depth: -12.0, height: f32::INFINITY,
             leg_diameter: 999_999.0, roundness: f32::NAN, puff: -5.0, ..Settings::default() };
