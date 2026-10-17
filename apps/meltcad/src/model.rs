@@ -4,6 +4,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::mesh::SharedVolume;
+use crate::deform::Deformation;
 use crate::pattern::{Pattern, Xform};
 
 fn is_zero(v: &u32) -> bool {
@@ -381,6 +382,9 @@ pub struct Shape {
     /// Kind-specific extra numbers (`Kind::param_labels`).
     #[serde(default)]
     pub params: [f32; 4],
+    /// Non-destructive shape-local deformation (underlying primitive remains editable).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deformation: Option<Deformation>,
     /// Nodes (x, y, z, radius) of a `Curve` or `Sweep`, in the shape's own space.
     #[serde(default)]
     pub path: Vec<[f32; 4]>,
@@ -444,6 +448,7 @@ impl Shape {
             visible: true,
             outline: kind.default_outline(),
             params: kind.default_params(),
+            deformation: None,
             path: kind.default_path(),
             outline2: kind.default_outline2(),
             shell: 0.0,
@@ -467,6 +472,13 @@ impl Shape {
     /// Half the size of the shape's box in its own axes, before scaling. Rough for the fancy kinds
     /// (used for framing, picking and the gizmo).
     pub fn local_half(&self) -> [f32; 3] {
+        let original = self.base_local_half();
+        self.deformation.map_or(original, |d| d.expanded_half(original))
+    }
+
+    /// Original (pre-deformation) bounds; this is what local Twist's fraction
+    /// and distance safety refer to, independent of the edited result.
+    pub fn base_local_half(&self) -> [f32; 3] {
         let s = self.size;
         let mx = |v: &[[f32; 2]], i: usize| v.iter().map(|p| p[i].abs()).fold(1.0_f32, f32::max);
         match self.kind {
@@ -878,6 +890,7 @@ impl Scene {
                     fix(v, 0.01, 100.0, 1.0);
                 }
                 s.material.sanitize();
+                if let Some(d) = &mut s.deformation { d.sanitize(); }
                 s.outline.truncate(MAX_OUTLINE);
                 for p in &mut s.outline {
                     fix(&mut p[0], -2000.0, 2000.0, 0.0);
