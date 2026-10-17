@@ -1318,6 +1318,38 @@ mod tests {
     use super::*;
 
     #[test]
+    fn undo_and_redo_invalidate_the_cpu_field_and_gpu_scene_pack_immediately() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        let p = [25.0, 0.0, 20.0];
+        let before = app.field();
+        let dist_before = before.distance(p);
+        let rev_before = app.scene_rev;
+        let pack_before = app.perf.pack.get(&app.scene, rev_before);
+
+        app.scene.shape_mut(0, 0).unwrap().pos[0] += 40.0;
+        app.settle(&ctx);
+        let rev_changed = app.scene_rev;
+        assert!(rev_changed > rev_before);
+        let after = app.field();
+        let dist_changed = after.distance(p);
+        assert_ne!(dist_changed, dist_before);
+        let pack_changed = app.perf.pack.get(&app.scene, rev_changed);
+        assert_ne!(pack_before.id, pack_changed.id);
+
+        app.undo();
+        assert!(app.scene_rev > rev_changed);
+        assert_eq!(app.field().distance(p).to_bits(), dist_before.to_bits());
+        let undo_pack = app.perf.pack.get(&app.scene, app.scene_rev);
+        assert_eq!(undo_pack.list.as_ref(), pack_before.list.as_ref());
+        app.redo();
+        assert_eq!(app.field().distance(p).to_bits(), dist_changed.to_bits());
+        let redo_pack = app.perf.pack.get(&app.scene, app.scene_rev);
+        assert_eq!(redo_pack.list.as_ref(), pack_changed.list.as_ref());
+        assert!(app.field_builds.get() >= 4, "each scene revision must refresh the SDF");
+    }
+
+    #[test]
     fn adding_undoing_and_deleting_shapes() {
         let ctx = egui::Context::default();
         let mut app = App::new(true, None);
