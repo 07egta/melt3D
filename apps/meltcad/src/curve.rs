@@ -167,7 +167,7 @@ pub fn segment_shape(shape: &crate::model::Shape, seg: usize, t: f32) -> [f32; 4
     use crate::model::CurveNodeMode;
     let n = shape.path.len();
     let (closed, smooth, _, _) = settings(&shape.params);
-    if n < 2 || seg >= if closed { n } else { n - 1 } {
+    if n < 2 || seg >= (if closed && n >= 3 { n } else { n - 1 }) {
         return [0.0, 0.0, 0.0, 1.0];
     }
     if !shape.curve_handles.iter().any(|h| h.mode != CurveNodeMode::Auto) {
@@ -210,6 +210,29 @@ pub fn segment_shape(shape: &crate::model::Shape, seg: usize, t: f32) -> [f32; 4
     }
     out[3] = (a[3] * u + b[3] * t).clamp(R_MIN, R_MAX);
     out
+}
+
+/// Detect planar crossings of the centreline after subdivision (useful for
+/// self-intersecting sketch paths; crossings in 3D projections are advisory).
+pub fn self_intersections_xy(points: &[[f32; 4]], closed: bool) -> Vec<(usize, usize)> {
+    fn orient(a: [f32; 4], b: [f32; 4], c: [f32; 4]) -> f32 {
+        (b[0]-a[0])*(c[1]-a[1]) - (b[1]-a[1])*(c[0]-a[0])
+    }
+    let m = points.len().saturating_sub(1);
+    let mut intersections = Vec::new();
+    for i in 0..m {
+        let (a,b)=(points[i],points[i+1]);
+        for j in (i+2)..m {
+            if closed && i==0 && j==m-1 { continue; }
+            let (c,d)=(points[j],points[j+1]);
+            let (ab1,ab2)=(orient(a,b,c),orient(a,b,d));
+            let (cd1,cd2)=(orient(c,d,a),orient(c,d,b));
+            if ab1*ab2 < -1e-8 && cd1*cd2 < -1e-8 {
+                intersections.push((i,j));
+            }
+        }
+    }
+    intersections
 }
 
 /// Shared geometry for viewport, GPU and export. For manually edited curves,
@@ -684,6 +707,32 @@ mod tests {
     fn legacy_shape_sampling_is_unchanged() {
         let s = Shape::new(Kind::Curve, [0.0;3], Material::default());
         assert_eq!(build_shape(&s), build(&s.path, &s.params));
+    }
+
+    #[test]
+    fn crossing_detection_distinguishes_a_loop_from_a_bowtie() {
+        let bowtie = [[0.0,0.0,0.0,1.0],[10.0,10.0,0.0,1.0],
+            [0.0,10.0,0.0,1.0],[10.0,0.0,0.0,1.0]];
+        assert_eq!(self_intersections_xy(&bowtie,false), vec![(0,2)]);
+        let square = [[0.0,0.0,0.0,1.0],[10.0,0.0,0.0,1.0],
+            [10.0,10.0,0.0,1.0],[0.0,10.0,0.0,1.0],[0.0,0.0,0.0,1.0]];
+        assert!(self_intersections_xy(&square,true).is_empty());
+    }
+
+    #[test]
+    fn authored_handles_survive_json_round_trip() {
+        use crate::model::{CurveHandles, CurveNodeMode};
+        let mut shape=Shape::new(Kind::Curve,[0.0;3],Material::default());
+        shape.curve_handles=vec![CurveHandles {mode:CurveNodeMode::Corner,
+            incoming:[-2.0,3.0,0.0],outgoing:[3.0,1.0,0.0]}];
+        let json=serde_json::to_string(&shape).unwrap();
+        let loaded:Shape=serde_json::from_str(&json).unwrap();
+        assert_eq!(shape.curve_handles,loaded.curve_handles);
+        let mut old_json:serde_json::Value=serde_json::from_str(&json).unwrap();
+        old_json.as_object_mut().unwrap().remove("curve_handles");
+        let old:Shape=serde_json::from_value(old_json).unwrap();
+        assert!(old.curve_handles.is_empty());
+        assert_eq!(build_shape(&old),build(&old.path,&old.params));
     }
 
 }
