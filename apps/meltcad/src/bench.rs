@@ -300,14 +300,14 @@ fn stats(v: &[f32]) -> (f32, f32, f32) {
 
 /// Run the test. `sizes`: window sizes; `frames`: frames per row; `progress` is told what is being
 /// drawn; `stop` (checked between rows) ends it early with what is done so far.
-pub fn run(sizes: &[[u32; 2]], frames: usize, scenes: &[BenchScene], progress: &mut dyn FnMut(&str), stop: &dyn Fn() -> bool) -> Result<Report, String> {
-    run_with(sizes, frames, scenes, progress, stop, None)
+pub fn run(sizes: &[[u32; 2]], frames: usize, scenes: &[BenchScene], progress: &mut dyn FnMut(&str), stop: &dyn Fn() -> bool, backends: Option<egui_wgpu::wgpu::Backends>) -> Result<Report, String> {
+    run_with(sizes, frames, scenes, progress, stop, None, backends)
 }
 
 /// `run`, with another source for the scene shader (experiments).
-pub fn run_with(sizes: &[[u32; 2]], frames: usize, scenes: &[BenchScene], progress: &mut dyn FnMut(&str), stop: &dyn Fn() -> bool, source: Option<&str>) -> Result<Report, String> {
+pub fn run_with(sizes: &[[u32; 2]], frames: usize, scenes: &[BenchScene], progress: &mut dyn FnMut(&str), stop: &dyn Fn() -> bool, source: Option<&str>, backends: Option<egui_wgpu::wgpu::Backends>) -> Result<Report, String> {
     progress("グラフィックスを準備しています…");
-    let mut gpu = crate::gpu::offscreen::Offscreen::open_with(source)?;
+    let mut gpu = crate::gpu::offscreen::Offscreen::open_with(source, backends)?;
     let mut report = Report {
         version: env!("CARGO_PKG_VERSION").to_string(),
         when: now_text(),
@@ -385,6 +385,16 @@ pub struct Args {
     pub quick: bool,
 }
 
+/// The backend the window would start on (so that the test measures what the person's window uses):
+/// `MELTCAD_BACKEND` if set, else the one that worked last, else the usual set.
+pub fn backends_like_the_window() -> Option<egui_wgpu::wgpu::Backends> {
+    let (choice, _) = crate::backend::choice_now();
+    match crate::backend::plan(choice, cfg!(target_os = "windows"), &crate::backend::load(), &[]) {
+        Some(crate::backend::Plan::Only(b)) => Some(b.to_wgpu()),
+        _ => None,
+    }
+}
+
 /// `meltcad --bench [out.txt] [--frames N] [--quick]`
 pub fn parse_args(args: &[std::ffi::OsString]) -> Option<Args> {
     if args.get(1).and_then(|a| a.to_str()) != Some("--bench") {
@@ -417,7 +427,7 @@ pub fn cli(args: &[std::ffi::OsString]) -> bool {
     let sizes: &[[u32; 2]] = if a.quick { &SIZES[..1] } else { &SIZES };
     let frames = if a.quick { a.frames.min(3) } else { a.frames };
     let mut progress = |s: &str| eprintln!("[bench] {s}");
-    let result = run(sizes, frames, &scenes(), &mut progress, &|| false);
+    let result = run(sizes, frames, &scenes(), &mut progress, &|| false, backends_like_the_window());
     let (title, text, path) = match result {
         Ok(r) => {
             let text = format_table(&r);
@@ -450,6 +460,8 @@ pub struct Job {
     shared: Arc<Mutex<JobState>>,
     stop: Arc<std::sync::atomic::AtomicBool>,
     pub open: bool,
+    /// The backend the window uses (the test draws with the same).
+    pub last_backends: Option<egui_wgpu::wgpu::Backends>,
 }
 
 #[derive(Default, Clone)]
@@ -466,8 +478,9 @@ impl Job {
     }
 
     /// Start the test (does nothing when it is already running).
-    pub fn start(&mut self, ctx: &egui::Context) {
+    pub fn start(&mut self, ctx: &egui::Context, backends: Option<egui_wgpu::wgpu::Backends>) {
         self.open = true;
+        self.last_backends = backends;
         if self.lock().running {
             return;
         }
@@ -487,7 +500,7 @@ impl Job {
                 let s = s.to_string();
                 tell(&|st| st.progress = s.clone());
             };
-            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(&SIZES, FRAMES, &scenes(), &mut progress, &|| stop.load(std::sync::atomic::Ordering::Relaxed))));
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(&SIZES, FRAMES, &scenes(), &mut progress, &|| stop.load(std::sync::atomic::Ordering::Relaxed), backends)));
             let (result, saved) = match outcome {
                 Ok(Ok(r)) => {
                     let text = format_table(&r);
@@ -565,7 +578,7 @@ impl Job {
         });
         self.open = open;
         if restart {
-            self.start(ctx);
+            self.start(ctx, self.last_backends);
         }
     }
 }
@@ -713,7 +726,7 @@ mod tests {
         let only: Option<Vec<String>> = std::env::var("MELTCAD_BENCH_SCENES").ok().map(|v| v.split(',').map(str::to_string).collect());
         let scenes: Vec<BenchScene> = scenes().into_iter().filter(|s| only.as_ref().is_none_or(|o| o.iter().any(|n| n == s.name))).collect();
         let mut progress = |s: &str| eprintln!("[bench] {s}");
-        match run_with(&sizes, frames, &scenes, &mut progress, &|| false, shader_experiment().as_deref()) {
+        match run_with(&sizes, frames, &scenes, &mut progress, &|| false, shader_experiment().as_deref(), None) {
             Ok(r) => println!("{}", format_table(&r)),
             Err(e) => eprintln!("no adapter: {e}"),
         }
@@ -779,7 +792,7 @@ mod tests {
             .map(|v| v.split(',').filter_map(|s| s.split_once('x').and_then(|(w, h)| Some([w.parse().ok()?, h.parse().ok()?]))).collect())
             .unwrap_or_else(|| vec![[320, 180]]);
         let only: Option<Vec<String>> = std::env::var("MELTCAD_BENCH_SCENES").ok().map(|v| v.split(',').map(str::to_string).collect());
-        let mut gpu = match crate::gpu::offscreen::Offscreen::open_with(Some(&counting_source())) {
+        let mut gpu = match crate::gpu::offscreen::Offscreen::open_with(Some(&counting_source()), None) {
             Ok(g) => g,
             Err(e) => {
                 eprintln!("no adapter: {e}");
@@ -937,7 +950,7 @@ mod tests {
     #[test]
     #[ignore]
     fn candidates_match_the_full_scan() {
-        let (mut with, mut without) = match (crate::gpu::offscreen::Offscreen::open_with(Some(&depth_source(true))), crate::gpu::offscreen::Offscreen::open_with(Some(&depth_source(false)))) {
+        let (mut with, mut without) = match (crate::gpu::offscreen::Offscreen::open_with(Some(&depth_source(true)), None), crate::gpu::offscreen::Offscreen::open_with(Some(&depth_source(false)), None)) {
             (Ok(a), Ok(b)) => (a, b),
             _ => {
                 eprintln!("no adapter");
@@ -951,7 +964,7 @@ mod tests {
             }
             g
         };
-        let mut gold = if std::env::var("MELTCAD_BENCH_GOLD").is_ok() { crate::gpu::offscreen::Offscreen::open_with(Some(&gold_src)).ok() } else { None };
+        let mut gold = if std::env::var("MELTCAD_BENCH_GOLD").is_ok() { crate::gpu::offscreen::Offscreen::open_with(Some(&gold_src), None).ok() } else { None };
         let size = [320u32, 200u32];
         for (name, scene) in parity_scenes() {
             let cam = camera_for(&scene);
@@ -1055,7 +1068,7 @@ mod tests {
         let marker = "    if (G.offs2.z < 0.5) {\n        find_candidates(ro, rd, t, tend, 1.0 + G.melt.z + 0.1 * tend);";
         assert!(on.contains(marker), "the shadow's candidates are where the test looks for them");
         let off = on.replace(marker, "    if (false) {\n        find_candidates(ro, rd, t, tend, 1.0 + G.melt.z + 0.1 * tend);");
-        let (mut with, mut without) = match (crate::gpu::offscreen::Offscreen::open_with(Some(&on)), crate::gpu::offscreen::Offscreen::open_with(Some(&off))) {
+        let (mut with, mut without) = match (crate::gpu::offscreen::Offscreen::open_with(Some(&on), None), crate::gpu::offscreen::Offscreen::open_with(Some(&off), None)) {
             (Ok(a), Ok(b)) => (a, b),
             _ => {
                 eprintln!("no adapter");

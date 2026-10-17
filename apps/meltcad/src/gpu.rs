@@ -1373,13 +1373,14 @@ pub(crate) mod offscreen {
     impl Offscreen {
         #[cfg_attr(not(test), allow(dead_code))]
         pub fn open() -> Result<Offscreen, String> {
-            Offscreen::open_with(None)
+            Offscreen::open_with(None, None)
         }
 
-        /// `open`, with the scene shader's source given (the tests count work with an instrumented copy).
-        pub fn open_with(source: Option<&str>) -> Result<Offscreen, String> {
+        /// `open`, with the scene shader's source given (the tests count work with an instrumented copy)
+        /// and the backend the window uses (`None`: what the environment says, else the usual set).
+        pub fn open_with(source: Option<&str>, backends: Option<wgpu::Backends>) -> Result<Offscreen, String> {
             let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
-            if let Some(b) = wgpu::Backends::from_env() {
+            if let Some(b) = backends.or_else(wgpu::Backends::from_env) {
                 desc.backends = b;
             }
             let instance = wgpu::Instance::new(desc);
