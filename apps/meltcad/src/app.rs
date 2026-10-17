@@ -686,12 +686,23 @@ impl App {
 
     // ----- shortcuts -----
 
-    fn keys(&mut self, ctx: &egui::Context) {
-        if self.pending_file_action.is_some() || self.recovery.pending_path().is_some() || ctx.egui_wants_keyboard_input() {
+    pub(crate) fn keys(&mut self, ctx: &egui::Context) {
+        if self.pending_file_action.is_some() || self.recovery.pending_path().is_some() {
+            return;
+        }
+        // Dimensions have their own Tab/Enter/Esc lifecycle. Never dispatch text-input
+        // keys as view shortcuts (in particular Tab, 1/3/5/7 or Delete).
+        if self.sk.dimension.as_ref().is_some_and(|d| d.editing) {
+            self.sketch_keys(ctx);
+            return;
+        }
+        if ctx.egui_wants_keyboard_input() {
             return;
         }
         use egui::{Key, Modifiers};
-        self.sketch_keys(ctx);
+        if self.sketch_keys(ctx) {
+            return;
+        }
         self.curve_keys(ctx);
         self.clipboard_events(ctx);
         let cmd = Modifiers::COMMAND;
