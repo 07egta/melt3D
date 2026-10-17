@@ -141,6 +141,39 @@ mod tests {
     }
 
     #[test]
+    fn home_appliances_are_unique_searchable_and_save_round_trip() {
+        let c = parse(FILES[4]).expect("everyday library must parse");
+        assert_eq!(c.name, "くらしのもの");
+        let expected = [
+            ("冷蔵庫（観音開き）", "refrigerator"),
+            ("電子レンジ", "microwave"),
+            ("洗濯機", "washing machine"),
+            ("掃除機（スティック型）", "vacuum"),
+            ("扇風機", "fan"),
+            ("テレビ（薄型・両脚）", "television"),
+            ("炊飯器", "rice cooker"),
+            ("トースター（2枚焼き）", "toaster"),
+            ("卓上ライト（アーム式）", "desk lamp"),
+            ("エアコン（壁掛け室内機）", "air conditioner"),
+        ];
+        let mut names = std::collections::HashSet::new();
+        for item in &c.items {
+            assert!(names.insert(item.name.as_str()), "duplicate {}", item.name);
+        }
+        for (name, keyword) in expected {
+            let it = c.items.iter().find(|it| it.name == name).expect("missing home appliance");
+            assert!(it.matches(keyword), "{name}: English search tag missing");
+            assert!(it.group.shapes.len() >= 8 && it.group.shapes.len() <= 24, "{name}");
+            assert!(it.fits(0, 0));
+            let placed = it.placed([15.0, -25.0]);
+            assert_eq!(placed.shapes.len(), it.group.shapes.len());
+            let stored = it.scene().to_json();
+            let reopened = Scene::from_json(&stored).expect("library model must reopen");
+            assert_eq!(reopened.groups[0], it.group, "{name}: scene round trip changed geometry");
+        }
+    }
+
+    #[test]
     fn placing_moves_the_middle_and_keeps_the_height() {
         let c = parse(FILES[0]).unwrap_or(Category { name: String::new(), items: Vec::new() });
         for it in c.items.iter().take(3) {
