@@ -459,6 +459,9 @@ impl App {
                     return;
                 }
                 c.name = format!("{} コピー", c.name);
+                // A duplicate of one glyph is a standalone editable solid, not
+                // a second conflicting character with the same run/index IDs.
+                c.puffy_text = None;
                 for s in &mut c.shapes {
                     s.pos = [s.pos[0] + 8.0, s.pos[1] + 8.0, s.pos[2]];
                 }
@@ -756,6 +759,10 @@ impl App {
                             crate::svg_dialog::open(&ctx);
                             ui.close();
                         }
+                        if ui.button("Puffy Text（ぷっくり文字）…").clicked() {
+                            crate::puffy_text_ui::open(self, &ctx);
+                            ui.close();
+                        }
                         if ui.button("メッシュを読み込む…").on_hover_text("STL・OBJ・3MF・PLY・GLB").clicked() {
                             crate::mesh_dialog::open(&ctx);
                             ui.close();
@@ -898,6 +905,9 @@ impl App {
                     self.curve_button(ui);
                     self.pipe_button(ui);
                     self.sketch_button(ui);
+                    if style::pill(ui, "Aa", false).on_hover_text("Puffy Text：日本語・英語の文字をぷっくり立体化").clicked() {
+                        crate::puffy_text_ui::open(self, &ctx);
+                    }
                     style::menu_button(ui, "…", false, |ui| {
                         ui.set_min_width(190.0);
                         ui.label(egui::RichText::new("ほかの形").size(12.0).color(style::DIM));
@@ -1268,6 +1278,7 @@ impl App {
             self.sketch_card(&ctx);
             self.keys_card(ui);
             crate::svg_dialog::update(self, &ctx);
+            crate::puffy_text_ui::update(self, &ctx);
             crate::mesh_dialog::update(self, &ctx);
             crate::array::update(self, &ctx);
             crate::export_dialog::update(self, &ctx);
