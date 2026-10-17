@@ -34,14 +34,22 @@ impl<T: Clone + Send + 'static> Task<T> {
     fn idle() -> Task<T> {
         Task { slot: Arc::new(Mutex::new(Slot::Idle)), prog: Arc::new(Progress::new()) }
     }
-    fn start(&mut self, f: impl FnOnce(&Progress) -> Result<T, String> + Send + 'static) {
+    fn start(&mut self, ctx: &egui::Context, f: impl FnOnce(&Progress) -> Result<T, String> + Send + 'static) {
         self.prog.cancel();
         let slot = Arc::new(Mutex::new(Slot::Running));
         let prog = Arc::new(Progress::new());
         self.slot = slot.clone();
         self.prog = prog.clone();
+        let permit = match crate::work_budget::try_acquire(ctx) {
+            Ok(permit) => permit,
+            Err(e) => {
+                if let Ok(mut s) = self.slot.lock() { *s = Slot::Done(Err(e)); }
+                return;
+            }
+        };
         let spawned = std::thread::Builder::new().name("yura-export-task".into()).spawn(move || {
             let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(&prog))).unwrap_or_else(|_| Err("stopped unexpectedly".into()));
+            drop(permit);
             if let Ok(mut s) = slot.lock() {
                 *s = Slot::Done(res);
             }
@@ -251,7 +259,11 @@ fn start_job(app: &mut App, ctx: &egui::Context, o: Options, path: PathBuf) -> b
         app.say(ctx, "いま書き出し中です");
         return false;
     }
-    let job = Job::start(app.scene.clone(), app.sel, o.clone(), path);
+    let permit = match crate::work_budget::try_acquire(ctx) {
+        Ok(permit) => permit,
+        Err(e) => { app.say(ctx, e); return false; }
+    };
+    let job = Job::start_with_permit(app.scene.clone(), app.sel, o.clone(), path, Some(permit));
     ctx.data_mut(|m| {
         m.insert_temp(job_id(), Running(Some(Arc::new(job))));
         m.insert_temp(last_id(), o);
@@ -304,8 +316,10 @@ fn running_card(app: &mut App, ctx: &egui::Context) {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(format!("{:.0}%　{:.0}秒", job.fraction() * 100.0, job.elapsed())).size(11.5).color(style::DIM));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if style::pill(ui, "やめる", false).clicked() {
-                            job.cancel();
+                        if job.can_cancel() {
+                            if style::pill(ui, "やめる", false).clicked() { job.cancel(); }
+                        } else {
+                            ui.label(RichText::new(job.phase_name()).size(11.5).color(style::DIM));
                         }
                     });
                 });
@@ -335,12 +349,12 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
         d.snap = Some(key);
         d.check.reset();
         let (scene, sel, o) = (app.scene.clone(), app.sel, d.opts.clone());
-        d.est.start(move |p| export_job::estimate(&scene, sel, &o, p));
+        d.est.start(ctx, move |p| export_job::estimate(&scene, sel, &o, p));
     }
     if d.run_check {
         d.run_check = false;
         let (scene, sel, o) = (app.scene.clone(), app.sel, d.opts.clone());
-        d.check.start(move |p| export_job::print_check(&scene, sel, &o, p));
+        d.check.start(ctx, move |p| export_job::print_check(&scene, sel, &o, p));
     }
     if d.est.running() || d.check.running() {
         ctx.request_repaint_after(std::time::Duration::from_millis(100));
@@ -559,7 +573,7 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
     d.opts = d.opts.sanitized_for_edit();
     if check {
         let (scene, sel, o) = (app.scene.clone(), app.sel, d.opts.clone());
-        d.check.start(move |p| export_job::print_check(&scene, sel, &o, p));
+        d.check.start(ctx, move |p| export_job::print_check(&scene, sel, &o, p));
     }
     if go {
         let o = d.opts.clone();
