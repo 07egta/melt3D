@@ -16,11 +16,11 @@ use egui::{Align2, Color32, FontId, Painter, Pos2, Rect, Shape as Gfx, Stroke, U
 
 use crate::app::App;
 use crate::curve_tool::Input;
-use crate::model::{Kind, MAX_OUTLINE, MAX_PATH, MAX_SHAPES, Material, Op, Pick, Shape, Scene};
+use crate::model::{Kind, MAX_OUTLINE, MAX_PATH, MAX_SHAPES, Material, Op, Pick, Scene, Shape};
 use crate::sdf::V3;
 use crate::sketch::{self, Frame, SketchError, SnapGeometry, SnapHit, SnapKind, Which};
-use crate::sketch_edit_ops::{self, EditError};
 use crate::sketch_dimensions::Dimensions;
+use crate::sketch_edit_ops::{self, EditError};
 use crate::style;
 
 /// Pixels within which a click on the first point closes the outline.
@@ -51,10 +51,8 @@ pub enum PlaneSel {
 }
 
 impl PlaneSel {
-    pub const ALL: [PlaneSel; 7] = [
-        PlaneSel::Floor, PlaneSel::Front, PlaneSel::Side, PlaneSel::OnShape,
-        PlaneSel::Height, PlaneSel::Camera, PlaneSel::Custom,
-    ];
+    pub const ALL: [PlaneSel; 7] =
+        [PlaneSel::Floor, PlaneSel::Front, PlaneSel::Side, PlaneSel::OnShape, PlaneSel::Height, PlaneSel::Camera, PlaneSel::Custom];
     pub fn label(self) -> &'static str {
         match self {
             PlaneSel::Floor => "XY (Floor)",
@@ -206,11 +204,19 @@ pub enum Hover {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum EditOp { Trim, Offset, Fillet }
+pub enum EditOp {
+    Trim,
+    Offset,
+    Fillet,
+}
 
 impl EditOp {
     pub fn label(self) -> &'static str {
-        match self { Self::Trim => "Trim", Self::Offset => "Offset", Self::Fillet => "Fillet" }
+        match self {
+            Self::Trim => "Trim",
+            Self::Offset => "Offset",
+            Self::Fillet => "Fillet",
+        }
     }
 }
 
@@ -551,7 +557,8 @@ impl State {
 
 // ------------------------------------------------------------------ the App side: turning it on, the plane, the camera
 
-const COLORS: [[f32; 3]; 6] = [[0.93, 0.56, 0.45], [0.60, 0.72, 0.98], [0.62, 0.90, 0.74], [0.96, 0.80, 0.45], [0.76, 0.66, 0.96], [0.96, 0.66, 0.82]];
+const COLORS: [[f32; 3]; 6] =
+    [[0.93, 0.56, 0.45], [0.60, 0.72, 0.98], [0.62, 0.90, 0.74], [0.96, 0.80, 0.45], [0.76, 0.66, 0.96], [0.96, 0.66, 0.82]];
 
 impl App {
     /// Is the sketch tool on, or an outline being edited? (The gizmo and the node editing stay out of the way.)
@@ -710,7 +717,6 @@ impl App {
         self.cam.project(rect, f.to_world(q))
     }
 
-
     /// Geometry near the current plane, including committed profile and saved sweep path.
     /// A point being dragged is intentionally omitted (otherwise it sticks to its old position).
     fn sketch_snap_geometry(&self, frame: &Frame, omit: Option<usize>) -> SnapGeometry {
@@ -729,7 +735,10 @@ impl App {
                 geo.add_outline(&self.sk.profile, true, None);
             }
             if self.sk.path.len() >= 2 {
-                let points: Vec<[f32; 2]> = self.sk.path.iter()
+                let points: Vec<[f32; 2]> = self
+                    .sk
+                    .path
+                    .iter()
                     .filter(|p| {
                         let d = crate::sdf::dot(crate::sdf::sub(**p, frame.origin), frame.normal());
                         d.abs() <= 0.01
@@ -744,8 +753,13 @@ impl App {
 
     /// Both the visible cursor and the actual drawing/edit point use this resolver.
     fn sketch_resolve_snap(
-        &self, rect: Rect, mouse: Pos2, step: f32, frame: &Frame,
-        old: Option<SnapHit>, omit: Option<usize>,
+        &self,
+        rect: Rect,
+        mouse: Pos2,
+        step: f32,
+        frame: &Frame,
+        old: Option<SnapHit>,
+        omit: Option<usize>,
     ) -> Option<([f32; 2], Option<SnapHit>)> {
         let (o, d) = self.cam.ray_at(rect, mouse);
         let raw = frame.hit(o, d)?;
@@ -760,19 +774,27 @@ impl App {
             }
         };
         add(SnapHit { at: [0.0, 0.0], kind: SnapKind::Origin });
-        for hit in geo.points.drain(..) { add(hit); }
+        for hit in geo.points.drain(..) {
+            add(hit);
+        }
         // Only consider edges close enough on screen; this bounds intersection work.
-        let nearby: Vec<_> = geo.edges.iter().copied().filter(|(a,b)| {
-            let (Some(a), Some(b)) = (self.sketch_px(rect, frame, *a), self.sketch_px(rect, frame, *b)) else { return false };
-            let ab = b-a;
-            let t = ((mouse-a).dot(ab) / ab.length_sq().max(1e-6)).clamp(0.0,1.0);
-            (mouse - (a + ab*t)).length() <= sketch::SNAP_HOLD_PX
-        }).take(64).collect();
+        let nearby: Vec<_> = geo
+            .edges
+            .iter()
+            .copied()
+            .filter(|(a, b)| {
+                let (Some(a), Some(b)) = (self.sketch_px(rect, frame, *a), self.sketch_px(rect, frame, *b)) else { return false };
+                let ab = b - a;
+                let t = ((mouse - a).dot(ab) / ab.length_sq().max(1e-6)).clamp(0.0, 1.0);
+                (mouse - (a + ab * t)).length() <= sketch::SNAP_HOLD_PX
+            })
+            .take(64)
+            .collect();
         for i in 0..nearby.len() {
-            for j in i+1..nearby.len() {
-                let (a,b) = nearby[i];
-                let (c,d) = nearby[j];
-                if let Some(at) = sketch::snap_intersection(a,b,c,d) {
+            for j in i + 1..nearby.len() {
+                let (a, b) = nearby[i];
+                let (c, d) = nearby[j];
+                if let Some(at) = sketch::snap_intersection(a, b, c, d) {
                     add(SnapHit { at, kind: SnapKind::Intersection });
                 }
             }
@@ -783,13 +805,15 @@ impl App {
         if let Some(a) = anchor {
             add(SnapHit { at: [raw[0], a[1]], kind: SnapKind::Horizontal });
             add(SnapHit { at: [a[0], raw[1]], kind: SnapKind::Vertical });
-            if self.sk.angle_snap && let Some(at) = sketch::snap_angle(a, raw, 15.0) {
+            if self.sk.angle_snap
+                && let Some(at) = sketch::snap_angle(a, raw, 15.0)
+            {
                 add(SnapHit { at, kind: SnapKind::Angle });
             }
         }
         // Keep original grid semantics when it is more than 11px away from the
         // raw cursor; the explicit geometric snaps themselves are pixel limited.
-        let chosen = sketch::choose_screen_snap([mouse.x,mouse.y], &hits, old);
+        let chosen = sketch::choose_screen_snap([mouse.x, mouse.y], &hits, old);
         Some((chosen.map_or(grid.at, |hit| hit.at), chosen))
     }
 
@@ -803,7 +827,10 @@ impl App {
                     let mut candidate = self.sk.holes.clone();
                     candidate.push(p);
                     match sketch::validate_holes(&self.sk.profile, &candidate) {
-                        Ok(h) => { self.sk.holes = h; self.sk.msg.clear(); }
+                        Ok(h) => {
+                            self.sk.holes = h;
+                            self.sk.msg.clear();
+                        }
                         Err(e) => self.sk.msg = e.message(),
                     }
                     self.sk.stage = Stage::Ready;
@@ -878,12 +905,16 @@ impl App {
             }
         };
         let make = self.sk.make;
-        let Some(g) = (if self.sk.holes.is_empty() { self.target_group() } else {
+        let Some(g) = (if self.sk.holes.is_empty() {
+            self.target_group()
+        } else {
             let mut group = crate::model::Group::new("Extrude with holes");
             group.sketch_holes = true;
             self.scene.groups.push(group);
             Some(self.scene.groups.len() - 1)
-        }) else { return false };
+        }) else {
+            return false;
+        };
         let mut color = COLORS[self.scene.shape_count() % COLORS.len()];
         if self.new_op == Op::Subtract {
             color = [0.9, 0.35, 0.4];
@@ -924,7 +955,11 @@ impl App {
         if !self.sketch_active() {
             return None;
         }
-        Some(if self.sk.edit.is_some() { self.sketch_edit_input(ui, resp, rect, pos, mods) } else { self.sketch_draw_input(ui, resp, rect, pos, mods) })
+        Some(if self.sk.edit.is_some() {
+            self.sketch_edit_input(ui, resp, rect, pos, mods)
+        } else {
+            self.sketch_draw_input(ui, resp, rect, pos, mods)
+        })
     }
 
     fn sketch_draw_input(&mut self, ui: &Ui, resp: &egui::Response, rect: Rect, pos: Option<Pos2>, mods: egui::Modifiers) -> Input {
@@ -974,8 +1009,10 @@ impl App {
                         Some(q) => {
                             let a = self.sk.anchor;
                             done = self.sk.release(q);
-                            if done.is_some() { measured = a.map(|p| (p, q)); }
-                        },
+                            if done.is_some() {
+                                measured = a.map(|p| (p, q));
+                            }
+                        }
                         None => self.sk.cancel_drag(),
                     }
                 }
@@ -1013,11 +1050,12 @@ impl App {
         }
         // Every primary sketch gesture belongs to the sketch, including drags
         // which have not produced a point. Never fall through to object picking.
-        if !mods.alt && (resp.drag_started_by(egui::PointerButton::Primary)
-            || resp.dragged_by(egui::PointerButton::Primary)
-            || resp.drag_stopped_by(egui::PointerButton::Primary)
-            || resp.clicked_by(egui::PointerButton::Primary)
-            || resp.secondary_clicked())
+        if !mods.alt
+            && (resp.drag_started_by(egui::PointerButton::Primary)
+                || resp.dragged_by(egui::PointerButton::Primary)
+                || resp.drag_stopped_by(egui::PointerButton::Primary)
+                || resp.clicked_by(egui::PointerButton::Primary)
+                || resp.secondary_clicked())
         {
             out.taken = true;
         }
@@ -1055,10 +1093,7 @@ impl App {
             // Stop all global shortcuts, including the numeric view keys.
             return true;
         }
-        if self.sk.edit.is_none()
-            && (self.sk.dimension.is_some() || !self.sk.pts.is_empty())
-            && hit(Key::Tab)
-        {
+        if self.sk.edit.is_none() && (self.sk.dimension.is_some() || !self.sk.pts.is_empty()) && hit(Key::Tab) {
             if let Some(d) = self.sk.dimension.as_mut() {
                 d.begin_again();
             } else if let Some(d) = Dimensions::for_last_point(&self.sk.pts, self.sk.active_pen()) {
@@ -1067,15 +1102,21 @@ impl App {
             return true;
         }
         // A focused numeric field owns its Enter/Delete/Esc and text input.
-        if ctx.egui_wants_keyboard_input() { return false; }
+        if ctx.egui_wants_keyboard_input() {
+            return false;
+        }
         let sketch_uses_delete = self.sk.edit.is_some() || !self.sk.pts.is_empty() || self.sk.anchor.is_some();
         let del = (sketch_uses_delete && hit(Key::Delete)) | hit(Key::Backspace);
         let enter = hit(Key::Enter);
         let esc = hit(Key::Escape);
         if self.sk.edit.is_some() {
             if self.sk.edit_op.is_some() {
-                if esc { self.sk.edit_op = None; self.sk.edit_index = None; }
-                else if enter { self.edit_commit_operation(); }
+                if esc {
+                    self.sk.edit_op = None;
+                    self.sk.edit_index = None;
+                } else if enter {
+                    self.edit_commit_operation();
+                }
                 return esc || enter;
             }
             if del {
@@ -1094,8 +1135,12 @@ impl App {
         if enter && let Some(d) = self.sk.enter() {
             self.sketch_done(d);
         }
-        if del { self.sk.back(); }
-        if esc && self.sk.escape() { self.set_sketch_tool(false); }
+        if del {
+            self.sk.back();
+        }
+        if esc && self.sk.escape() {
+            self.set_sketch_tool(false);
+        }
         del || enter || esc
     }
 
@@ -1200,7 +1245,9 @@ impl App {
         Some(match op {
             EditOp::Trim => self.sk.edit_index.map_or(Err(EditError::CannotTrim), |i| sketch_edit_ops::trim_edge(outline, i)),
             EditOp::Offset => sketch_edit_ops::offset_profile(outline, self.sk.edit_value),
-            EditOp::Fillet => self.sk.edit_index.map_or(Err(EditError::InvalidOutline), |i| sketch_edit_ops::fillet_corner(outline, i, self.sk.edit_value)),
+            EditOp::Fillet => {
+                self.sk.edit_index.map_or(Err(EditError::InvalidOutline), |i| sketch_edit_ops::fillet_corner(outline, i, self.sk.edit_value))
+            }
         })
     }
 
@@ -1314,21 +1361,24 @@ impl App {
     fn check_edited_hole_group(&self) -> Result<(), SketchError> {
         let Some(e) = self.sk.edit.as_ref() else { return Ok(()) };
         let Some(group) = self.scene.groups.get(e.g) else { return Ok(()) };
-        if !group.sketch_holes { return Ok(()) };
+        if !group.sketch_holes {
+            return Ok(());
+        };
         let Some(outer) = group.shapes.first() else { return Ok(()) };
         let Some(of) = sketch::edit_frame(outer, Which::Main) else { return Err(SketchError::HoleMisaligned) };
         let mut holes = Vec::new();
         for sh in &group.shapes {
-            if sh.kind != Kind::Extrude || sh.size[0] != outer.size[0]
-                || sh.rot != outer.rot || sh.scale != outer.scale {
+            if sh.kind != Kind::Extrude || sh.size[0] != outer.size[0] || sh.rot != outer.rot || sh.scale != outer.scale {
                 return Err(SketchError::HoleMisaligned);
             }
         }
         for sh in group.shapes.iter().skip(1) {
-            if sh.op != Op::Subtract { return Err(SketchError::HoleMisaligned); }
+            if sh.op != Op::Subtract {
+                return Err(SketchError::HoleMisaligned);
+            }
             let Some(hf) = sketch::edit_frame(sh, Which::Main) else { return Err(SketchError::HoleMisaligned) };
-            if crate::sdf::dot(of.normal(), hf.normal()) < 0.9999
-                || crate::sdf::dot(crate::sdf::sub(hf.origin, of.origin), of.normal()).abs() > 0.01 {
+            if crate::sdf::dot(of.normal(), hf.normal()) < 0.9999 || crate::sdf::dot(crate::sdf::sub(hf.origin, of.origin), of.normal()).abs() > 0.01
+            {
                 return Err(SketchError::HoleMisaligned);
             }
             holes.push(sh.outline.iter().map(|p| of.from_world(hf.to_world(*p))).collect());
@@ -1346,11 +1396,16 @@ impl App {
                 }
             }
             Some(Hover::Edge(i, at)) => {
-                let added = self.sk.edit.as_ref().and_then(|e| self.scene.shape(e.g, e.s).map(|sh| (e.g, e.s, e.which, sh.kind, sketch::outline_of(sh, e.which).clone()))).is_some_and(|(g, s, which, kind, mut ol)| {
-                    let at = if kind == Kind::Revolve { [at[0].max(0.0), at[1]] } else { at };
-                    sketch::insert_point(&mut ol, i, at)
-                        && self.scene.shape_mut(g, s).is_some_and(|sh| sh.set_sketch_outline(which == Which::Top, ol).is_ok())
-                });
+                let added = self
+                    .sk
+                    .edit
+                    .as_ref()
+                    .and_then(|e| self.scene.shape(e.g, e.s).map(|sh| (e.g, e.s, e.which, sh.kind, sketch::outline_of(sh, e.which).clone())))
+                    .is_some_and(|(g, s, which, kind, mut ol)| {
+                        let at = if kind == Kind::Revolve { [at[0].max(0.0), at[1]] } else { at };
+                        sketch::insert_point(&mut ol, i, at)
+                            && self.scene.shape_mut(g, s).is_some_and(|sh| sh.set_sketch_outline(which == Which::Top, ol).is_ok())
+                    });
                 if let Some(e) = self.sk.edit.as_mut() {
                     e.sel = added.then_some(i + 1);
                     e.edge_sel = Some(i);
@@ -1405,11 +1460,18 @@ impl App {
     /// Delete: remove the chosen point (three stay at least).
     pub fn sketch_edit_delete(&mut self) {
         let Some(i) = self.sk.edit.as_ref().and_then(|e| e.sel) else { return };
-        let res: Option<Result<(), SketchError>> = self.sk.edit.as_ref().and_then(|e| self.scene.shape(e.g, e.s).map(|s| (e.g, e.s, e.which, sketch::outline_of(s, e.which).clone()))).map(|(g, s, which, mut candidate)| {
-            sketch::remove_point(&mut candidate, i)?;
-            self.scene.shape_mut(g, s).ok_or(SketchError::BadNumber)?.set_sketch_outline(which == Which::Top, candidate).map_err(|_| SketchError::SelfIntersect)?;
-            Ok(())
-        });
+        let res: Option<Result<(), SketchError>> =
+            self.sk.edit.as_ref().and_then(|e| self.scene.shape(e.g, e.s).map(|s| (e.g, e.s, e.which, sketch::outline_of(s, e.which).clone()))).map(
+                |(g, s, which, mut candidate)| {
+                    sketch::remove_point(&mut candidate, i)?;
+                    self.scene
+                        .shape_mut(g, s)
+                        .ok_or(SketchError::BadNumber)?
+                        .set_sketch_outline(which == Which::Top, candidate)
+                        .map_err(|_| SketchError::SelfIntersect)?;
+                    Ok(())
+                },
+            );
         match res {
             Some(Ok(())) => {
                 self.sk.msg.clear();
@@ -1430,7 +1492,9 @@ impl App {
         if let Some(op) = self.sk.edit_op {
             let mouse = pos.filter(|p| resp.hovered() && !mods.alt);
             let hit = mouse.and_then(|m| self.edit_hit(rect, m));
-            if let Some(e) = self.sk.edit.as_mut() { e.hover = hit; }
+            if let Some(e) = self.sk.edit.as_mut() {
+                e.hover = hit;
+            }
             if let Some(m) = mouse {
                 if resp.clicked_by(egui::PointerButton::Primary) {
                     self.sk.edit_index = match (op, self.edit_hit(rect, m)) {
@@ -1449,10 +1513,7 @@ impl App {
             return out;
         }
         // left click edits, right click confirms and leaves the editor
-        if resp.secondary_clicked()
-            && resp.hovered()
-            && self.sk.edit.as_ref().is_some_and(|e| e.drag.is_none())
-        {
+        if resp.secondary_clicked() && resp.hovered() && self.sk.edit.as_ref().is_some_and(|e| e.drag.is_none()) {
             self.sk.edit = None;
             out.taken = true;
             return out;
@@ -1465,7 +1526,9 @@ impl App {
             out.busy = true;
             match (primary_down, ui.input(|i| i.pointer.interact_pos())) {
                 (true, Some(p)) if rect.contains(p) => self.edit_drag(rect, p, step),
-                (true, _) => { self.edit_cancel_drag(); }
+                (true, _) => {
+                    self.edit_cancel_drag();
+                }
                 _ => self.edit_release(),
             }
             return out;
@@ -1534,7 +1597,9 @@ impl App {
             Stage::Ready => self.paint_ready(p, rect),
             Stage::LoftTop | Stage::SweepPath | Stage::Hole => {
                 self.paint_outline(p, rect, &st.pframe, &st.profile, Color32::from_white_alpha(110), 1.3);
-                for h in &st.holes { self.paint_outline(p, rect, &st.pframe, h, style::CUT, 1.6); }
+                for h in &st.holes {
+                    self.paint_outline(p, rect, &st.pframe, h, style::CUT, 1.6);
+                }
                 self.paint_saved_path(p, rect);
                 self.paint_draft(p, rect);
             }
@@ -1560,15 +1625,21 @@ impl App {
         let ink = Color32::from_rgb(255, 215, 100);
         let stroke = Stroke::new(1.8, ink);
         match hit.kind {
-            SnapKind::Endpoint | SnapKind::Origin => { p.rect_stroke(Rect::from_center_size(at, vec2(9.0,9.0)), 0.0, stroke, egui::StrokeKind::Middle); }
-            SnapKind::Midpoint | SnapKind::Center => { p.circle_stroke(at, 5.0, stroke); }
-            SnapKind::Intersection => {
-                p.line_segment([at-vec2(5.0,5.0),at+vec2(5.0,5.0)],stroke);
-                p.line_segment([at+vec2(5.0,-5.0),at+vec2(-5.0,5.0)],stroke);
+            SnapKind::Endpoint | SnapKind::Origin => {
+                p.rect_stroke(Rect::from_center_size(at, vec2(9.0, 9.0)), 0.0, stroke, egui::StrokeKind::Middle);
             }
-            _ => { p.circle_stroke(at, 4.0, stroke); }
+            SnapKind::Midpoint | SnapKind::Center => {
+                p.circle_stroke(at, 5.0, stroke);
+            }
+            SnapKind::Intersection => {
+                p.line_segment([at - vec2(5.0, 5.0), at + vec2(5.0, 5.0)], stroke);
+                p.line_segment([at + vec2(5.0, -5.0), at + vec2(-5.0, 5.0)], stroke);
+            }
+            _ => {
+                p.circle_stroke(at, 4.0, stroke);
+            }
         }
-        tag(p, mouse + vec2(15.0,-27.0), hit.kind.label());
+        tag(p, mouse + vec2(15.0, -27.0), hit.kind.label());
     }
 
     /// A polyline on a frame with a dark halo, so it reads on any background.
@@ -1677,7 +1748,12 @@ impl App {
                 let col = if bad { style::CUT } else { color };
                 self.paint_poly(p, rect, f, &shown, closed, col, 1.7);
                 // the way back to the first point
-                if pen != Pen::Line && !closed && st.pts.len() >= 3 && let (Some(a), Some(b)) = (st.pts.last().and_then(|q| self.sketch_px(rect, f, *q)), st.pts.first().and_then(|q| self.sketch_px(rect, f, *q))) {
+                if pen != Pen::Line
+                    && !closed
+                    && st.pts.len() >= 3
+                    && let (Some(a), Some(b)) =
+                        (st.pts.last().and_then(|q| self.sketch_px(rect, f, *q)), st.pts.first().and_then(|q| self.sketch_px(rect, f, *q)))
+                {
                     p.line_segment([a, b], Stroke::new(1.0, color.gamma_multiply(0.35)));
                 }
                 for (i, q) in st.pts.iter().enumerate() {
@@ -1733,7 +1809,9 @@ impl App {
         let f = &st.pframe;
         let ghost = style::ACCENT.gamma_multiply(0.55);
         self.paint_outline(p, rect, f, &st.profile, style::ACCENT, 2.0);
-        for h in &st.holes { self.paint_outline(p, rect, f, h, style::CUT, 2.0); }
+        for h in &st.holes {
+            self.paint_outline(p, rect, f, h, style::CUT, 2.0);
+        }
         let n = f.normal();
         let up = |h: f32| crate::sdf::mul(n, if st.flip { -h } else { h });
         let h = if st.height.is_finite() { st.height.clamp(0.1, 2000.0) } else { 10.0 };
@@ -1811,7 +1889,18 @@ impl App {
             let Some(c) = self.sketch_px(rect, &f, *q) else { continue };
             let hot = e.hover == Some(Hover::Point(i)) || e.drag.as_ref().is_some_and(|d| d.idx == i);
             let chosen = e.sel == Some(i);
-            point_dot(p, c, if hot { 7.0 } else if chosen { 6.0 } else { 4.5 }, hot || chosen);
+            point_dot(
+                p,
+                c,
+                if hot {
+                    7.0
+                } else if chosen {
+                    6.0
+                } else {
+                    4.5
+                },
+                hot || chosen,
+            );
             if chosen {
                 tag(p, c + vec2(12.0, 10.0), &format!("{}, {}", fmt(q[0]), fmt(q[1])));
             }
@@ -1895,24 +1984,36 @@ impl App {
                     ui.add(egui::DragValue::new(&mut self.sk.edit_value).speed(0.1));
                 });
             }
-            hint(ui, match op {
-                EditOp::Trim => "Click a short edge to remove. Neighbor edges extend to keep the outline closed",
-                EditOp::Offset => "A green preview shows the offset. The original solid is kept",
-                EditOp::Fillet => "Click a vertex to round. Check the green arc",
-            });
-            if let Some(Err(err)) = self.edit_preview() { hint(ui, err.message()); }
+            hint(
+                ui,
+                match op {
+                    EditOp::Trim => "Click a short edge to remove. Neighbor edges extend to keep the outline closed",
+                    EditOp::Offset => "A green preview shows the offset. The original solid is kept",
+                    EditOp::Fillet => "Click a vertex to round. Check the green arc",
+                },
+            );
+            if let Some(Err(err)) = self.edit_preview() {
+                hint(ui, err.message());
+            }
             ui.horizontal(|ui| {
                 if style::pill_enabled(ui, "Apply", false, self.edit_preview().is_some_and(|p| p.is_ok())).clicked() {
                     self.edit_commit_operation();
                 }
-                if style::pill(ui, "Cancel", false).clicked() { self.sk.edit_op = None; self.sk.edit_index = None; }
+                if style::pill(ui, "Cancel", false).clicked() {
+                    self.sk.edit_op = None;
+                    self.sk.edit_index = None;
+                }
             });
         }
         let n = self.sk.edit.as_ref().and_then(|e| self.scene.shape(e.g, e.s).map(|s| sketch::outline_of(s, e.which).len())).unwrap_or(0);
-        hint(ui, &format!("Drag point: move  ·  Click line: add point  ·  Click point, Delete: remove  ·  Right-click: done  ·  {n}/{MAX_OUTLINE} points"));
+        hint(
+            ui,
+            &format!("Drag point: move  ·  Click line: add point  ·  Click point, Delete: remove  ·  Right-click: done  ·  {n}/{MAX_OUTLINE} points"),
+        );
         hint(ui, "1 mm steps  ·  Shift = 10 mm  ·  Ctrl = 0.1 mm  ·  Shift+click line: set length  ·  Alt+drag: orbit");
         // Values are transient UI inputs. Geometry is changed only after a validated edit.
-        let current = self.sk.edit.as_ref().and_then(|e| self.scene.shape(e.g, e.s).map(|s| (sketch::outline_of(s, e.which).clone(), e.sel, e.edge_sel)));
+        let current =
+            self.sk.edit.as_ref().and_then(|e| self.scene.shape(e.g, e.s).map(|s| (sketch::outline_of(s, e.which).clone(), e.sel, e.edge_sel)));
         if let Some((outline, selected, edge)) = current {
             if let Some(i) = selected.filter(|i| *i < outline.len()) {
                 let mut x = outline[i][0];
@@ -2047,7 +2148,9 @@ impl App {
                 hint(ui, &format!("Holes: {} / {}", self.sk.holes.len(), sketch::MAX_HOLES));
                 if style::pill_enabled(ui, "+ Draw hole", false, self.sk.holes.len() < sketch::MAX_HOLES).clicked() {
                     self.sk.make = Make::Extrude;
-                    if self.sk.pen == Pen::Line { self.sk.pen = Pen::Polygon; }
+                    if self.sk.pen == Pen::Line {
+                        self.sk.pen = Pen::Polygon;
+                    }
                     self.sk.stage = Stage::Hole;
                     self.sk.clear_drawing();
                 }
@@ -2104,13 +2207,16 @@ impl App {
                     self.sketch_edit_custom_plane(self.sk.custom_frame.origin, angles);
                 }
                 ui.horizontal_wrapped(|ui| {
-                    if style::pill(ui, "Camera target", false).on_hover_text("Keep this plane's orientation, pass through the camera target").clicked() {
+                    if style::pill(ui, "Camera target", false)
+                        .on_hover_text("Keep this plane's orientation, pass through the camera target")
+                        .clicked()
+                    {
                         self.sketch_edit_custom_plane(self.cam.target, self.sk.custom_angles);
                     }
-                    let chosen = crate::view::targets(&self.scene, self.sel)
-                        .into_iter().find_map(|(g, s)| self.scene.shape(g, s).map(|sh| sh.pos));
+                    let chosen = crate::view::targets(&self.scene, self.sel).into_iter().find_map(|(g, s)| self.scene.shape(g, s).map(|sh| sh.pos));
                     if style::pill_enabled(ui, "Selected shape center", false, chosen.is_some())
-                        .on_hover_text("Keep this plane's orientation, pass through the selected shape's center").clicked()
+                        .on_hover_text("Keep this plane's orientation, pass through the selected shape's center")
+                        .clicked()
                         && let Some(origin) = chosen
                     {
                         self.sketch_edit_custom_plane(origin, self.sk.custom_angles);
@@ -2120,7 +2226,8 @@ impl App {
             }
             _ => {
                 if style::pill(ui, "Copy this plane to custom plane", false)
-                    .on_hover_text("Duplicate the current plane as a custom plane that can be moved and rotated").clicked()
+                    .on_hover_text("Duplicate the current plane as a custom plane that can be moved and rotated")
+                    .clicked()
                 {
                     self.sketch_copy_plane_to_custom();
                 }
@@ -2151,10 +2258,13 @@ impl App {
             for index in 0..2 {
                 ui.label(labels[index]);
                 let id = ui.make_persistent_id(("sketch_dimension", index));
-                let response = ui.add(egui::TextEdit::singleline(&mut d.fields[index])
-                    .id(id).desired_width(75.0));
-                if response.changed() { changed = Some(index); }
-                if d.needs_focus && d.selected == index { focus = Some(id); }
+                let response = ui.add(egui::TextEdit::singleline(&mut d.fields[index]).id(id).desired_width(75.0));
+                if response.changed() {
+                    changed = Some(index);
+                }
+                if d.needs_focus && d.selected == index {
+                    focus = Some(id);
+                }
                 ui.label(units[index]);
             }
         });
@@ -2231,7 +2341,11 @@ impl App {
             style::labeled_slider(ui, "Thickness", &mut self.sk.sweep_scale, 0.2..=4.0, "Outline size scale");
             ui.horizontal(|ui| {
                 let have = !self.sk.path.is_empty();
-                ui.label(egui::RichText::new(if have { format!("Path: {} points", self.sk.path.len()) } else { "No path yet".to_string() }).size(11.5).color(style::DIM));
+                ui.label(
+                    egui::RichText::new(if have { format!("Path: {} points", self.sk.path.len()) } else { "No path yet".to_string() })
+                        .size(11.5)
+                        .color(style::DIM),
+                );
                 if style::pill(ui, if have { "Redraw path" } else { "Draw path" }, false).on_hover_text("Draw the path (Enter to finish)").clicked() {
                     self.sk.stage = Stage::SweepPath;
                     self.sk.clear_drawing();
@@ -2412,8 +2526,7 @@ mod tests {
         assert!(app.precision_edge_length(0, 42.0));
         assert!(sketch::validate_profile(&app.scene.shape(g, s).unwrap().outline).is_ok());
         let saved = app.scene.to_json();
-        assert_eq!(Scene::from_json(&saved).unwrap().shape(g, s).unwrap().outline,
-                   app.scene.shape(g, s).unwrap().outline);
+        assert_eq!(Scene::from_json(&saved).unwrap().shape(g, s).unwrap().outline, app.scene.shape(g, s).unwrap().outline);
     }
 
     #[test]
@@ -2597,10 +2710,7 @@ mod tests {
             vec![sketch::circle([0.0, 0.0], 8.0, sketch::CIRCLE_POINTS)],
             vec![sketch::circle([8.0, 0.0], 6.0, sketch::CIRCLE_POINTS)],
             vec![sketch::rect([-10.0, -6.0], [10.0, 6.0])],
-            vec![
-                sketch::circle([-11.0, 0.0], 5.0, sketch::CIRCLE_POINTS),
-                sketch::rect([8.0, -6.0], [16.0, 6.0]),
-            ],
+            vec![sketch::circle([-11.0, 0.0], 5.0, sketch::CIRCLE_POINTS), sketch::rect([8.0, -6.0], [16.0, 6.0])],
         ];
         for (i, holes) in scenarios.drain(..).enumerate() {
             app.scene.groups.clear();
@@ -2789,12 +2899,7 @@ mod tests {
     fn camera_parallel_plane_is_a_fixed_snapshot_with_inverse_ray_mapping() {
         let mut app = app();
         app.set_sketch_tool(true);
-        for (yaw, pitch, ortho) in [
-            (0.0, 0.0, false),
-            (1.0, 0.65, true),
-            (-1.2, -0.43, false),
-            (2.7, std::f32::consts::FRAC_PI_2 - 0.002, true),
-        ] {
+        for (yaw, pitch, ortho) in [(0.0, 0.0, false), (1.0, 0.65, true), (-1.2, -0.43, false), (2.7, std::f32::consts::FRAC_PI_2 - 0.002, true)] {
             app.cam.look(yaw, pitch);
             app.cam.target = [10.0, -20.0, 35.0];
             app.cam.dist = 160.0;
@@ -2807,8 +2912,10 @@ mod tests {
             for q in [[0.0, 0.0], [7.0, -3.0], [-12.0, 18.0]] {
                 let px = app.cam.project(rect(), f.to_world(q)).expect("visible workplane");
                 let recovered = app.sketch_cursor(rect(), px, 0.1, &f).expect("hit plane");
-                assert!((recovered[0] - q[0]).abs() < 0.11 && (recovered[1] - q[1]).abs() < 0.11,
-                    "camera={yaw},{pitch} ortho={ortho}: {q:?} -> {recovered:?}");
+                assert!(
+                    (recovered[0] - q[0]).abs() < 0.11 && (recovered[1] - q[1]).abs() < 0.11,
+                    "camera={yaw},{pitch} ortho={ortho}: {q:?} -> {recovered:?}"
+                );
             }
             app.cam.orbit(20.0, -12.0);
             assert_eq!(app.sketch_plane(), f, "orbiting does not silently turn a saved camera plane");
@@ -2837,8 +2944,10 @@ mod tests {
         let solid = restored.shape(g, s).expect("saved extrusion");
         let edited = sketch::edit_frame(solid, Which::Main).expect("re-editable shape");
         let expected = plane.to_world([10.0, 6.0]);
-        assert!(crate::sdf::len(crate::sdf::sub(edited.to_world([0.0, 0.0]), expected)) < 0.02,
-            "saved 2D outline reopens on the correct oblique world plane");
+        assert!(
+            crate::sdf::len(crate::sdf::sub(edited.to_world([0.0, 0.0]), expected)) < 0.02,
+            "saved 2D outline reopens on the correct oblique world plane"
+        );
     }
 
     #[test]
@@ -2852,8 +2961,7 @@ mod tests {
             app.step_fly(0.016);
         }
         let (_, _, forward) = app.cam.basis();
-        assert!(crate::sdf::dot(forward, frame.normal()) < -0.999,
-            "the camera should look straight into any valid plane normal");
+        assert!(crate::sdf::dot(forward, frame.normal()) < -0.999, "the camera should look straight into any valid plane normal");
     }
 
     #[test]
@@ -2873,7 +2981,10 @@ mod tests {
         assert!(app.sketch_make(&ctx));
         let Some(Pick::Shape(g, s)) = app.sel else { panic!("selected") };
         let sh = app.scene.shape(g, s).expect("there").clone();
-        let field = crate::sdf::Field::new(&Scene { groups: vec![crate::model::Group { shapes: vec![sh], ..crate::model::Group::new("g") }], ..Scene::default() });
+        let field = crate::sdf::Field::new(&Scene {
+            groups: vec![crate::model::Group { shapes: vec![sh], ..crate::model::Group::new("g") }],
+            ..Scene::default()
+        });
         assert!(field.distance([0.0, 0.0, 45.0]) < 0.0, "inside the block on top of the ball");
         assert!(field.distance([0.0, 0.0, 39.0]) > 0.0 && field.distance([0.0, 0.0, 51.0]) > 0.0);
         assert!(field.distance([4.0, 4.0, 41.0]) < 0.0 && field.distance([7.0, 0.0, 45.0]) > 0.0);
@@ -2926,15 +3037,15 @@ mod tests {
         app.sk.on = true;
         app.sk.pen = Pen::Polygon;
         app.sk.pts = vec![[20.0, 10.0], [30.0, 10.0]];
-        let r=rect();
-        let f=Frame::floor();
+        let r = rect();
+        let f = Frame::floor();
         for distance in [90.0, 250.0] {
-            app.cam.dist=distance;
-            let px=app.cam.project(r,f.to_world([20.0,10.0])).unwrap();
-            let mouse=px+vec2(6.0,0.0);
-            let (point,hit)=app.sketch_resolve_snap(r,mouse,1.0,&f,None,None).unwrap();
-            assert_eq!(point,[20.0,10.0]);
-            assert_eq!(hit.unwrap().kind,SnapKind::Endpoint);
+            app.cam.dist = distance;
+            let px = app.cam.project(r, f.to_world([20.0, 10.0])).unwrap();
+            let mouse = px + vec2(6.0, 0.0);
+            let (point, hit) = app.sketch_resolve_snap(r, mouse, 1.0, &f, None, None).unwrap();
+            assert_eq!(point, [20.0, 10.0]);
+            assert_eq!(hit.unwrap().kind, SnapKind::Endpoint);
         }
     }
 
@@ -2943,15 +3054,15 @@ mod tests {
         let mut app = app();
         app.cam = Camera::default();
         app.cam.look(0.0, std::f32::consts::FRAC_PI_2);
-        app.cam.dist=100.0;
-        app.sk.on=true;
-        app.sk.pts=vec![[30.0,30.0]];
-        let r=rect();
-        let f=Frame::floor();
-        let point=app.cam.project(r,f.to_world([45.2,55.4])).unwrap();
-        let (at,hit)=app.sketch_resolve_snap(r,point,1.0,&f,None,None).unwrap();
+        app.cam.dist = 100.0;
+        app.sk.on = true;
+        app.sk.pts = vec![[30.0, 30.0]];
+        let r = rect();
+        let f = Frame::floor();
+        let point = app.cam.project(r, f.to_world([45.2, 55.4])).unwrap();
+        let (at, hit) = app.sketch_resolve_snap(r, point, 1.0, &f, None, None).unwrap();
         assert!(at[0].is_finite() && at[1].is_finite());
-        assert!(hit.is_none_or(|h| h.kind==SnapKind::Grid));
+        assert!(hit.is_none_or(|h| h.kind == SnapKind::Grid));
     }
 
     /// Edit the outline of a made shape point by point, with undo.
@@ -3099,7 +3210,11 @@ mod tests {
         app.sk.pen = Pen::Polygon;
         app.sk.click([0.0, 0.0], false);
         app.sk.click([10.0, 0.0], false);
-        let key = |k: egui::Key| ctx.input_mut(|i| i.events.push(egui::Event::Key { key: k, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE }));
+        let key = |k: egui::Key| {
+            ctx.input_mut(|i| {
+                i.events.push(egui::Event::Key { key: k, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE })
+            })
+        };
         key(egui::Key::Escape);
         app.sketch_keys(&ctx);
         assert!(app.sk.on && app.sk.pts.is_empty(), "the first Esc throws the points away");
@@ -3122,7 +3237,6 @@ mod tests {
         app.sketch_keys(&ctx);
         assert_eq!(app.sk.stage, Stage::Ready);
     }
-
 
     #[test]
     fn live_dimensions_survive_save_reload_and_one_undo_redo() {
@@ -3162,9 +3276,11 @@ mod tests {
         app.sk.pen = Pen::Line;
         app.sk.click([0.0, 0.0], false);
         app.sk.click([10.0, 0.0], false);
-        let key = |k: egui::Key| ctx.input_mut(|i| i.events.push(egui::Event::Key {
-            key: k, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE,
-        }));
+        let key = |k: egui::Key| {
+            ctx.input_mut(|i| {
+                i.events.push(egui::Event::Key { key: k, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE })
+            })
+        };
         key(egui::Key::Tab);
         app.keys(&ctx);
         assert!(app.sk.dimension.as_ref().is_some_and(|d| d.editing));
@@ -3177,7 +3293,11 @@ mod tests {
         ctx.input_mut(|i| i.events.clear());
         key(egui::Key::Num1);
         app.keys(&ctx);
-        assert_eq!((app.cam.yaw, app.cam.pitch, app.cam.ortho), (cam.yaw, cam.pitch, cam.ortho), "number keys must not switch views while entering dimensions");
+        assert_eq!(
+            (app.cam.yaw, app.cam.pitch, app.cam.ortho),
+            (cam.yaw, cam.pitch, cam.ortho),
+            "number keys must not switch views while entering dimensions"
+        );
         ctx.input_mut(|i| i.events.clear());
         key(egui::Key::Escape);
         app.keys(&ctx);

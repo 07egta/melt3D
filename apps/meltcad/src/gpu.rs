@@ -10,8 +10,8 @@ use egui_wgpu::wgpu;
 use egui_wgpu::wgpu::util::DeviceExt;
 
 use crate::camera::{Camera, TAN_HALF_FOV};
-use crate::model::{MAX_GROUPS, MAX_SHAPES, Pick, Scene};
 use crate::gpu_status::{AdapterInfo, GpuStatus, describe_wgpu_error};
+use crate::model::{MAX_GROUPS, MAX_SHAPES, Pick, Scene};
 use crate::sdf::Prepared;
 
 /// Per-frame numbers (camera, light, counts, where the lists start) travel in a small uniform
@@ -41,7 +41,12 @@ const S_STRIDE: usize = 16;
 pub const POLY_PTS: usize = 65536;
 pub const PATH_V4: usize = 32768;
 /// The longest the scene list can ever be (vec4), well inside a 2048-row texture.
-pub const MAX_POOL_V4: usize = MAX_GROUPS * G_STRIDE + MAX_SHAPES * (S_STRIDE + B_STRIDE) + (crate::pattern::MAX_INSTANCES + MAX_GROUPS) * I_STRIDE + POLY_PTS / 2 + PATH_V4 + 4096;
+pub const MAX_POOL_V4: usize = MAX_GROUPS * G_STRIDE
+    + MAX_SHAPES * (S_STRIDE + B_STRIDE)
+    + (crate::pattern::MAX_INSTANCES + MAX_GROUPS) * I_STRIDE
+    + POLY_PTS / 2
+    + PATH_V4
+    + 4096;
 const _: () = assert!(MAX_POOL_V4 <= 2048 * ROW, "the scene list must fit a 2048 x 1024 texture");
 
 /// The volume texture: every imported mesh's distances, half floats, four grid nodes to a texel
@@ -224,7 +229,10 @@ impl ScenePack {
             push(&mut groups, [p.first_block as f32, p.n_blocks as f32, g.op.sign(), g.blend]);
             // (the third number is this group's first item: every instance, or the group itself, is one item the march can leave out)
             let nested_below = scene.groups.get(rg.gi + 1).is_some_and(|n| n.depth > g.depth);
-            push(&mut groups, [first_inst as f32, (inst_n - first_inst) as f32, item_n as f32, f32::from(g.depth) + if nested_below { 0.5 } else { 0.0 }]);
+            push(
+                &mut groups,
+                [first_inst as f32, (inst_n - first_inst) as f32, item_n as f32, f32::from(g.depth) + if nested_below { 0.5 } else { 0.0 }],
+            );
             item_n += (inst_n - first_inst).max(1);
             push(&mut groups, [p.sphere.c[0], p.sphere.c[1], p.sphere.c[2], p.sphere.r]);
             group_n += 1;
@@ -251,8 +259,7 @@ impl ScenePack {
             list: Arc::new(list),
             vols: Arc::new(vols),
             glow: crate::perf::scene_has_glow_resolved(scene, &resolved),
-            overlaps: resolved.iter().filter_map(|r| scene.groups.get(r.gi)).any(|g| g.op == crate::model::Op::Intersect)
-                || packed_overlap,
+            overlaps: resolved.iter().filter_map(|r| scene.groups.get(r.gi)).any(|g| g.op == crate::model::Op::Intersect) || packed_overlap,
             instances: inst_n,
             shape_n,
             group_n,
@@ -271,7 +278,15 @@ impl ScenePack {
 
     /// The per-frame numbers (`GLOBAL_V4` vec4): camera, light, counts, where the lists start, the
     /// selection. `scene` must be the one this pack was made from.
-    pub fn globals(&self, scene: &Scene, cam: &Camera, size: [f32; 2], selected: Option<Pick>, hover: Option<Pick>, srgb: bool) -> [f32; GLOBAL_V4 * 4] {
+    pub fn globals(
+        &self,
+        scene: &Scene,
+        cam: &Camera,
+        size: [f32; 2],
+        selected: Option<Pick>,
+        hover: Option<Pick>,
+        srgb: bool,
+    ) -> [f32; GLOBAL_V4 * 4] {
         let mut u = [0.0_f32; GLOBAL_V4 * 4];
         let (right, up, fwd) = cam.basis();
         let eye = cam.eye();
@@ -352,11 +367,16 @@ fn pack_shape(s: &crate::model::Shape, out: &mut Vec<f32>, poly: &mut Vec<f32>, 
     };
     let radius = crate::perf::shape_radius(s);
     // a mesh: size = nodes along x, y, z (0 = nothing to draw), params = place of node 0 and the cell, ext.x = first node
-    let (mut size4, mut params4, mut ext4) = ([s.size[0], s.size[1], s.size[2], p.round], s.params, [pstart as f32, pcount as f32, start2 as f32, count2 as f32]);
+    let (mut size4, mut params4, mut ext4) =
+        ([s.size[0], s.size[1], s.size[2], p.round], s.params, [pstart as f32, pcount as f32, start2 as f32, count2 as f32]);
     if s.kind == crate::model::Kind::Mesh {
         let found = s.volume.as_ref().and_then(|v| vols.base_of(v).map(|b| (v, b)));
         (size4, params4, ext4) = match found {
-            Some((v, base)) => ([v.dims[0] as f32, v.dims[1] as f32, v.dims[2] as f32, 0.0], [v.origin[0], v.origin[1], v.origin[2], v.cell], [base as f32, 0.0, 0.0, 0.0]),
+            Some((v, base)) => (
+                [v.dims[0] as f32, v.dims[1] as f32, v.dims[2] as f32, 0.0],
+                [v.origin[0], v.origin[1], v.origin[2], v.cell],
+                [base as f32, 0.0, 0.0, 0.0],
+            ),
             None => ([0.0; 4], [0.0; 4], [0.0; 4]),
         };
     }
@@ -565,7 +585,8 @@ pub fn shader_source() -> String {
         include_str!("shader_curve.wgsl"),
         include_str!("shader_corner.wgsl"),
         include_str!("shader_mesh.wgsl"),
-    ].join("\n")
+    ]
+    .join("\n")
 }
 
 const BLIT_SOURCE: &str = include_str!("blit.wgsl");
@@ -622,13 +643,23 @@ fn texture_entry(binding: u32, visibility: wgpu::ShaderStages, filterable: bool)
     wgpu::BindGroupLayoutEntry {
         binding,
         visibility,
-        ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable }, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false },
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable },
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        },
         count: None,
     }
 }
 
 /// A pipeline that draws one full-screen triangle with `module`'s `vs` and `fs` into `format`.
-fn triangle_pipeline(device: &wgpu::Device, label: &str, layout: &wgpu::PipelineLayout, module: &wgpu::ShaderModule, format: wgpu::TextureFormat) -> wgpu::RenderPipeline {
+fn triangle_pipeline(
+    device: &wgpu::Device,
+    label: &str,
+    layout: &wgpu::PipelineLayout,
+    module: &wgpu::ShaderModule,
+    format: wgpu::TextureFormat,
+) -> wgpu::RenderPipeline {
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some(label),
         layout: Some(layout),
@@ -681,11 +712,17 @@ pub(crate) fn try_build_from(device: &wgpu::Device, queue: &wgpu::Queue, format:
                 texture_entry(2, wgpu::ShaderStages::FRAGMENT, false),
             ],
         });
-        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: Some("meltcad"), bind_group_layouts: &[Some(&bgl)], immediate_size: 0 });
+        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("meltcad"),
+            bind_group_layouts: &[Some(&bgl)],
+            immediate_size: 0,
+        });
         (bgl, layout)
     })?;
     // (the slow one: the driver compiles the shader here)
-    let pipeline = step(device, "シーンの描画パイプライン (create_render_pipeline)", || triangle_pipeline(device, "meltcad", &layout, &module, format))?;
+    let pipeline = step(device, "シーンの描画パイプライン (create_render_pipeline)", || {
+        triangle_pipeline(device, "meltcad", &layout, &module, format)
+    })?;
     crate::perf::mark("scene pipeline created");
     let buffer = step(device, "uniform buffer", || {
         device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -697,7 +734,8 @@ pub(crate) fn try_build_from(device: &wgpu::Device, queue: &wgpu::Queue, format:
 
     // the copy of the finished pictures into egui's frame
     let (blit_layout, blit) = step(device, "blit pipeline", || {
-        let blit_module = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("meltcad blit"), source: wgpu::ShaderSource::Wgsl(BLIT_SOURCE.into()) });
+        let blit_module = device
+            .create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("meltcad blit"), source: wgpu::ShaderSource::Wgsl(BLIT_SOURCE.into()) });
         let blit_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("meltcad blit"),
             entries: &[
@@ -717,7 +755,11 @@ pub(crate) fn try_build_from(device: &wgpu::Device, queue: &wgpu::Queue, format:
                 },
             ],
         });
-        let blit_pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: Some("meltcad blit"), bind_group_layouts: &[Some(&blit_layout)], immediate_size: 0 });
+        let blit_pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("meltcad blit"),
+            bind_group_layouts: &[Some(&blit_layout)],
+            immediate_size: 0,
+        });
         let blit = triangle_pipeline(device, "meltcad blit", &blit_pl, &blit_module, format);
         (blit_layout, blit)
     })?;
@@ -728,7 +770,12 @@ pub(crate) fn try_build_from(device: &wgpu::Device, queue: &wgpu::Queue, format:
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         })
     })?;
-    let linear = device.create_sampler(&wgpu::SamplerDescriptor { label: Some("meltcad"), mag_filter: wgpu::FilterMode::Linear, min_filter: wgpu::FilterMode::Linear, ..Default::default() });
+    let linear = device.create_sampler(&wgpu::SamplerDescriptor {
+        label: Some("meltcad"),
+        mag_filter: wgpu::FilterMode::Linear,
+        min_filter: wgpu::FilterMode::Linear,
+        ..Default::default()
+    });
     // (the one-row volume texture: Rgba16Float must be bindable)
     let vol = step(device, "volume texture", || VolTex::new(device, 1))?;
     Ok(Resources {
@@ -847,7 +894,13 @@ impl Pool {
         Pool { texture, view, rows, bind }
     }
 
-    fn bind(device: &wgpu::Device, res_buffer: &wgpu::Buffer, layout: &wgpu::BindGroupLayout, list: &wgpu::TextureView, vol: &wgpu::TextureView) -> wgpu::BindGroup {
+    fn bind(
+        device: &wgpu::Device,
+        res_buffer: &wgpu::Buffer,
+        layout: &wgpu::BindGroupLayout,
+        list: &wgpu::TextureView,
+        vol: &wgpu::TextureView,
+    ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("meltcad"),
             layout,
@@ -894,7 +947,12 @@ impl VolTex {
             }
             let part = bytes.get(done * 8..(done + w * h) * 8).unwrap_or(&[]);
             queue.write_texture(
-                wgpu::TexelCopyTextureInfo { texture: &self.texture, mip_level: 0, origin: wgpu::Origin3d { x: x as u32, y: y as u32, z: 0 }, aspect: wgpu::TextureAspect::All },
+                wgpu::TexelCopyTextureInfo {
+                    texture: &self.texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d { x: x as u32, y: y as u32, z: 0 },
+                    aspect: wgpu::TextureAspect::All,
+                },
                 part,
                 wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(w as u32 * 8), rows_per_image: Some(h as u32) },
                 wgpu::Extent3d { width: w as u32, height: h as u32, depth_or_array_layers: 1 },
@@ -1084,7 +1142,12 @@ fn upload_list(res: &mut Resources, queue: &wgpu::Queue, list: &[f32], id: u64) 
             }
         }
         queue.write_texture(
-            wgpu::TexelCopyTextureInfo { texture: &pool.texture, mip_level: 0, origin: wgpu::Origin3d { x: 0, y: first as u32, z: 0 }, aspect: wgpu::TextureAspect::All },
+            wgpu::TexelCopyTextureInfo {
+                texture: &pool.texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d { x: 0, y: first as u32, z: 0 },
+                aspect: wgpu::TextureAspect::All,
+            },
             &texels,
             wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(ROW as u32 * 16), rows_per_image: Some(n as u32) },
             wgpu::Extent3d { width: ROW as u32, height: n as u32, depth_or_array_layers: 1 },
@@ -1156,7 +1219,14 @@ fn patched(globals: &[f32], size: [u32; 2], fast: bool) -> Vec<f32> {
 }
 
 /// Draw the scene into `view` (the globals go into the uniform buffer; the list must be in the pool).
-fn scene_pass(res: &mut Resources, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView, globals: &[f32], spec: &PassSpec) {
+fn scene_pass(
+    res: &mut Resources,
+    queue: &wgpu::Queue,
+    encoder: &mut wgpu::CommandEncoder,
+    view: &wgpu::TextureView,
+    globals: &[f32],
+    spec: &PassSpec,
+) {
     let g = patched(globals, spec.size, spec.fast);
     let mut bytes = Vec::with_capacity(GLOBAL_BYTES);
     for v in g.iter().take(GLOBAL_V4 * 4) {
@@ -1183,7 +1253,10 @@ fn scene_pass(res: &mut Resources, queue: &wgpu::Queue, encoder: &mut wgpu::Comm
                 view,
                 depth_slice: None,
                 resolve_target: None,
-                ops: wgpu::Operations { load: if spec.clear { wgpu::LoadOp::Clear(wgpu::Color::BLACK) } else { wgpu::LoadOp::Load }, store: wgpu::StoreOp::Store },
+                ops: wgpu::Operations {
+                    load: if spec.clear { wgpu::LoadOp::Clear(wgpu::Color::BLACK) } else { wgpu::LoadOp::Load },
+                    store: wgpu::StoreOp::Store,
+                },
             })],
             depth_stencil_attachment: None,
             timestamp_writes: writes,
@@ -1212,7 +1285,14 @@ pub(crate) fn draw(res: &mut Resources, queue: &wgpu::Queue, encoder: &mut wgpu:
     upload_list(res, queue, list, id);
     let size = [globals.get(V4_VIEW * 4).copied().unwrap_or(1.0) as u32, globals.get(V4_VIEW * 4 + 1).copied().unwrap_or(1.0) as u32];
     let fast = globals.get(V4_VIEW * 4 + 3).is_some_and(|f| (*f + 0.5) as u32 & crate::perf::FLAG_FAST != 0);
-    scene_pass(res, queue, encoder, view, globals, &PassSpec { size, rows: None, clear: true, fast, kind: crate::gpu_timing::Kind::Whole, scale: 1.0 });
+    scene_pass(
+        res,
+        queue,
+        encoder,
+        view,
+        globals,
+        &PassSpec { size, rows: None, clear: true, fast, kind: crate::gpu_timing::Kind::Whole, scale: 1.0 },
+    );
 }
 
 impl egui_wgpu::CallbackTrait for Callback {
@@ -1303,14 +1383,28 @@ impl Callback {
         let lin = |size: [u32; 2]| size[0] as f32 / vp[0] as f32;
         if self.fast {
             if pics.a.key != Some(key_a) {
-                scene_pass(res, queue, encoder, &pics.a.view, &self.globals, &PassSpec { size: size_a, rows: None, clear: true, fast: true, kind: crate::gpu_timing::Kind::Moving, scale: lin(size_a) });
+                scene_pass(
+                    res,
+                    queue,
+                    encoder,
+                    &pics.a.view,
+                    &self.globals,
+                    &PassSpec { size: size_a, rows: None, clear: true, fast: true, kind: crate::gpu_timing::Kind::Moving, scale: lin(size_a) },
+                );
                 pics.a.key = Some(key_a);
                 pics.a.used = size_a;
             }
         } else if pics.b.key != Some(key_b) || !pics.bands.complete() {
             if !same_scene(pics.a.key) && !self.whole {
                 // the cheap picture of this very state first: it is what is shown while the sharp one builds
-                scene_pass(res, queue, encoder, &pics.a.view, &self.globals, &PassSpec { size: size_a, rows: None, clear: true, fast: true, kind: crate::gpu_timing::Kind::Moving, scale: lin(size_a) });
+                scene_pass(
+                    res,
+                    queue,
+                    encoder,
+                    &pics.a.view,
+                    &self.globals,
+                    &PassSpec { size: size_a, rows: None, clear: true, fast: true, kind: crate::gpu_timing::Kind::Moving, scale: lin(size_a) },
+                );
                 pics.a.key = Some(key_a);
                 pics.a.used = size_a;
                 again = true;
@@ -1325,7 +1419,14 @@ impl Callback {
                 }
                 let rows = if self.whole { size_b[1] } else { res.pacer.rows(size_b[1]) };
                 if let Some((first, n)) = pics.bands.next(rows) {
-                    let spec = PassSpec { size: size_b, rows: Some((first, n)), clear: first == 0, fast: false, kind: crate::gpu_timing::Kind::Band, scale: lin(size_b) };
+                    let spec = PassSpec {
+                        size: size_b,
+                        rows: Some((first, n)),
+                        clear: first == 0,
+                        fast: false,
+                        kind: crate::gpu_timing::Kind::Band,
+                        scale: lin(size_b),
+                    };
                     scene_pass(res, queue, encoder, &pics.b.view, &self.globals, &spec);
                     pics.bands.advance(n);
                 }
@@ -1351,7 +1452,8 @@ impl Callback {
         let sharp_done = if b_current { pics.bands.fraction() } else { 0.0 };
         res.pics = Some(pics);
         let band_rows = res.pacer.rows(size_b[1]);
-        self.feedback.push(passes, FeedbackState { timing: res.timer.is_some(), sharp: sharp_done, moving_px: size_a, band_rows, frames: res.frames });
+        self.feedback
+            .push(passes, FeedbackState { timing: res.timer.is_some(), sharp: sharp_done, moving_px: size_a, band_rows, frames: res.frames });
         if again {
             self.ctx.request_repaint();
         }
@@ -1480,11 +1582,19 @@ pub(crate) mod offscreen {
         pub fn read(&self, pic: &Picture) -> Vec<u8> {
             let (w, h) = (pic.size[0], pic.size[1]);
             let bpr = (w * 4).next_multiple_of(256);
-            let out = self.device.create_buffer(&wgpu::BufferDescriptor { label: Some("readback"), size: u64::from(bpr) * u64::from(h), usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false });
+            let out = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("readback"),
+                size: u64::from(bpr) * u64::from(h),
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            });
             let mut enc = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
             enc.copy_texture_to_buffer(
                 wgpu::TexelCopyTextureInfo { texture: &pic.texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
-                wgpu::TexelCopyBufferInfo { buffer: &out, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(bpr), rows_per_image: Some(h) } },
+                wgpu::TexelCopyBufferInfo {
+                    buffer: &out,
+                    layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(bpr), rows_per_image: Some(h) },
+                },
                 wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
             );
             self.queue.submit([enc.finish()]);
@@ -1909,7 +2019,13 @@ pub(crate) mod headless {
             desc.backends = b;
         }
         let instance = wgpu::Instance::new(desc);
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions { power_preference: wgpu::PowerPreference::HighPerformance, force_fallback_adapter: false, compatible_surface: None, ..Default::default() })).ok()?;
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            force_fallback_adapter: false,
+            compatible_surface: None,
+            ..Default::default()
+        }))
+        .ok()?;
         let base = if downlevel { wgpu::Limits::downlevel_webgl2_defaults() } else { wgpu::Limits::default() };
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("headless"),
@@ -1943,12 +2059,20 @@ pub(crate) mod headless {
             ensure_volumes(&mut self.res, &self.device, &self.queue, vols);
             ensure_pool(&mut self.res, &self.device, data.len().saturating_sub(GLOBAL_V4 * 4));
             let bpr = (size[0] * 4).next_multiple_of(256);
-            let out = self.device.create_buffer(&wgpu::BufferDescriptor { label: Some("readback"), size: (bpr * size[1]) as u64, usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false });
+            let out = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("readback"),
+                size: (bpr * size[1]) as u64,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            });
             let mut enc = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
             draw(&mut self.res, &self.queue, &mut enc, &view, data);
             enc.copy_texture_to_buffer(
                 wgpu::TexelCopyTextureInfo { texture: &tex, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
-                wgpu::TexelCopyBufferInfo { buffer: &out, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(bpr), rows_per_image: Some(size[1]) } },
+                wgpu::TexelCopyBufferInfo {
+                    buffer: &out,
+                    layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(bpr), rows_per_image: Some(size[1]) },
+                },
                 wgpu::Extent3d { width: size[0], height: size[1], depth_or_array_layers: 1 },
             );
             let t0 = std::time::Instant::now();
@@ -2041,7 +2165,12 @@ mod headless_tests {
     #[test]
     fn the_library_scene_has_the_asked_size() {
         let sc = library_scene(300);
-        assert!(sc.shape_count() >= 300 && sc.shape_count() <= 340 && sc.groups.len() < MAX_GROUPS, "{} shapes in {} groups", sc.shape_count(), sc.groups.len());
+        assert!(
+            sc.shape_count() >= 300 && sc.shape_count() <= 340 && sc.groups.len() < MAX_GROUPS,
+            "{} shapes in {} groups",
+            sc.shape_count(),
+            sc.groups.len()
+        );
     }
 
     /// Read the real WGSL curve distance back as pixels on an adapter. This covers the rounded
@@ -2061,10 +2190,15 @@ mod headless_tests {
         let mut depth = 0_i32;
         let mut close = None;
         for (off, ch) in src[open..].char_indices() {
-            if ch == '{' { depth += 1; }
+            if ch == '{' {
+                depth += 1;
+            }
             if ch == '}' {
                 depth -= 1;
-                if depth == 0 { close = Some(open + off); break; }
+                if depth == 0 {
+                    close = Some(open + off);
+                    break;
+                }
             }
         }
         src.replace_range(open..=close.expect("fragment end"), "{\n    let q = vec3<f32>(in.uv.x * 48.0 - 24.0, in.uv.y * 48.0 - 24.0, 0.0);\n    let d = curve_dist(shape_at(0), q);\n    return vec4<f32>(clamp((d + 16.0) / 32.0, 0.0, 1.0), 0.0, 0.0, 1.0);\n}");
@@ -2074,15 +2208,22 @@ mod headless_tests {
         apex.path = vec![[0.0, -16.0, 0.0, 4.0], [16.0, 0.0, 0.0, 4.0], [0.0, 16.0, 0.0, 4.0]];
         apex.params = [0.0, 0.0, 0.0, 1.0];
         let mut looped = Shape::new(Kind::Curve, [0.0; 3], Material::default());
-        looped.path = (0..12).map(|i| {
-            let a = i as f32 * std::f32::consts::TAU / 12.0;
-            [12.0 * a.cos(), 12.0 * a.sin(), 0.0, 4.0]
-        }).collect();
+        looped.path = (0..12)
+            .map(|i| {
+                let a = i as f32 * std::f32::consts::TAU / 12.0;
+                [12.0 * a.cos(), 12.0 * a.sin(), 0.0, 4.0]
+            })
+            .collect();
         looped.params = [1.0, 0.0, 0.0, 1.0];
         let size = [64_u32, 64_u32];
         for shape in [apex, looped] {
             let prep = Prepared::new(&shape);
-            let scene = Scene { groups: vec![Group { shapes: vec![shape], ..Group::new("pipe") }], melt: Default::default(), env: Default::default(), saved: Vec::new() };
+            let scene = Scene {
+                groups: vec![Group { shapes: vec![shape], ..Group::new("pipe") }],
+                melt: Default::default(),
+                env: Default::default(),
+                saved: Vec::new(),
+            };
             let data = pack(&scene, &Camera::default(), [size[0] as f32, size[1] as f32], None, None, false);
             let (pixels, _) = gpu.render(&data, size);
             assert_eq!(pixels.len(), (size[0] * size[1] * 4) as usize);
@@ -2091,7 +2232,9 @@ mod headless_tests {
                 for x in (0..size[0]).step_by(3) {
                     let q = [(x as f32 + 0.5) * 48.0 / size[0] as f32 - 24.0, (y as f32 + 0.5) * 48.0 / size[1] as f32 - 24.0, 0.0];
                     let cpu = prep.distance(q);
-                    if !(-15.5..15.5).contains(&cpu) { continue; }
+                    if !(-15.5..15.5).contains(&cpu) {
+                        continue;
+                    }
                     let gpu_d = f32::from(pixels[((y * size[0] + x) * 4) as usize]) * 32.0 / 255.0 - 16.0;
                     assert!((gpu_d - cpu).abs() < 0.18, "at {q:?}: GPU {gpu_d}, CPU {cpu}");
                     compared += 1;
@@ -2169,7 +2312,10 @@ mod headless_tests {
             }
         }
         eprintln!("{secs:.2} s, silhouette: {both} in both, {gpu_only} only the GPU, {cpu_only} only the CPU");
-        let _ = std::fs::write("/tmp/yt_scale/gpu_patterns.ppm", [format!("P6\n{} {}\n255\n", size[0], size[1]).into_bytes(), shown.chunks(4).flat_map(|p| [p[0], p[1], p[2]]).collect()].concat());
+        let _ = std::fs::write(
+            "/tmp/yt_scale/gpu_patterns.ppm",
+            [format!("P6\n{} {}\n255\n", size[0], size[1]).into_bytes(), shown.chunks(4).flat_map(|p| [p[0], p[1], p[2]]).collect()].concat(),
+        );
         assert!(both > 1500, "the scene covers a good part of the picture ({both})");
         // (the two march with different steps and hit limits, so a thin rim of edge pixels differs)
         assert!((gpu_only + cpu_only) * 100 < both * 6, "the silhouettes differ by more than 6%");
@@ -2201,15 +2347,28 @@ mod headless_tests {
         scenes.push(("default_fast", Scene::default(), Some(Pick::Shape(0, 0)), true));
         let mut glass = Scene::default();
         glass.groups[0].shapes.clear();
-        let mut ball = Shape::new(Kind::Sphere, [0.0, 0.0, 22.0], Material { glass: 1.0, color: [0.6, 0.8, 1.0], roughness: 0.1, ..Material::default() });
+        let mut ball =
+            Shape::new(Kind::Sphere, [0.0, 0.0, 22.0], Material { glass: 1.0, color: [0.6, 0.8, 1.0], roughness: 0.1, ..Material::default() });
         ball.size = [22.0, 22.0, 22.0];
         glass.groups[0].shapes.push(ball);
-        glass.groups[0].shapes.push(Shape::new(Kind::Box, [40.0, 10.0, 12.0], Material { metallic: 1.0, roughness: 0.25, iridescence: 0.6, coat: 0.8, ..Material::default() }));
-        glass.groups[0].shapes.push(Shape::new(Kind::Torus, [-40.0, 0.0, 14.0], Material { translucency: 0.8, color: [0.9, 0.5, 0.3], ..Material::default() }));
+        glass.groups[0].shapes.push(Shape::new(
+            Kind::Box,
+            [40.0, 10.0, 12.0],
+            Material { metallic: 1.0, roughness: 0.25, iridescence: 0.6, coat: 0.8, ..Material::default() },
+        ));
+        glass.groups[0].shapes.push(Shape::new(
+            Kind::Torus,
+            [-40.0, 0.0, 14.0],
+            Material { translucency: 0.8, color: [0.9, 0.5, 0.3], ..Material::default() },
+        ));
         scenes.push(("glass", glass.clone(), None, false));
         scenes.push(("glass_fast", glass.clone(), None, true));
         let mut lamp = glass.clone();
-        lamp.groups[0].shapes.push(Shape::new(Kind::Sphere, [0.0, 50.0, 30.0], Material { glow: 3.0, color: [1.0, 0.7, 0.3], ..Material::default() }));
+        lamp.groups[0].shapes.push(Shape::new(
+            Kind::Sphere,
+            [0.0, 50.0, 30.0],
+            Material { glow: 3.0, color: [1.0, 0.7, 0.3], ..Material::default() },
+        ));
         scenes.push(("lamp", lamp, Some(Pick::Shape(0, 1)), false));
         scenes.push(("library", library_scene(12), Some(Pick::Group(0)), false));
         let size = [240u32, 156u32];
@@ -2220,7 +2379,8 @@ mod headless_tests {
             let mut data = pack(&sc, &cam, [size[0] as f32, size[1] as f32], sel, None, false);
             set_view_flags(&mut data, crate::perf::view_flags(false, fast, crate::perf::scene_has_glow(&sc)));
             let (rgba, secs) = gpu.render(&data, size);
-            let ppm = [format!("P6\n{} {}\n255\n", size[0], size[1]).into_bytes(), rgba.chunks(4).flat_map(|p| [p[0], p[1], p[2]]).collect()].concat();
+            let ppm =
+                [format!("P6\n{} {}\n255\n", size[0], size[1]).into_bytes(), rgba.chunks(4).flat_map(|p| [p[0], p[1], p[2]]).collect()].concat();
             let _ = std::fs::write(dir.join(format!("{name}.ppm")), ppm);
             let lit = rgba.chunks(4).filter(|p| p[0] > 8 || p[1] > 8 || p[2] > 8).count();
             eprintln!("{name}: {secs:.2} s, {lit} lit pixels");
@@ -2307,7 +2467,10 @@ mod headless_tests {
         eprintln!("{secs:.2} s, mesh silhouette: {both} in both, {gpu_only} only the GPU, {cpu_only} only the CPU");
         if let Some(dir) = std::env::var_os("YURA_OUT") {
             let _ = std::fs::write(std::path::Path::new(&dir).join("mesh_scene.meltcad"), sc.to_json());
-            let _ = std::fs::write(std::path::Path::new(&dir).join("gpu_mesh.ppm"), [format!("P6\n{} {}\n255\n", size[0], size[1]).into_bytes(), shown.chunks(4).flat_map(|p| [p[0], p[1], p[2]]).collect()].concat());
+            let _ = std::fs::write(
+                std::path::Path::new(&dir).join("gpu_mesh.ppm"),
+                [format!("P6\n{} {}\n255\n", size[0], size[1]).into_bytes(), shown.chunks(4).flat_map(|p| [p[0], p[1], p[2]]).collect()].concat(),
+            );
         }
         assert!(both > 1500, "the mesh covers a good part of the picture ({both})");
         assert!((gpu_only + cpu_only) * 100 < both * 6, "the silhouettes differ by more than 6%");

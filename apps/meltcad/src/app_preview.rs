@@ -91,9 +91,16 @@ fn app_preview() {
     let gpu_state = std::env::var("YURA_GPU").ok();
     if let Some(which) = gpu_state.as_deref() {
         use crate::gpu_status::AdapterInfo;
-        let info = AdapterInfo { backend: "Dx12".into(), name: "NVIDIA GeForce RTX 3060".into(), driver: "NVIDIA 551.23".into(), device_type: "DiscreteGpu".into() };
+        let info = AdapterInfo {
+            backend: "Dx12".into(),
+            name: "NVIDIA GeForce RTX 3060".into(),
+            driver: "NVIDIA 551.23".into(),
+            device_type: "DiscreteGpu".into(),
+        };
         app.gpu.status.set_info(info);
-        let start = std::time::Instant::now().checked_sub(std::time::Duration::from_secs(std::env::var("YURA_GPU_SECS").ok().and_then(|v| v.parse().ok()).unwrap_or(12))).unwrap_or_else(std::time::Instant::now);
+        let start = std::time::Instant::now()
+            .checked_sub(std::time::Duration::from_secs(std::env::var("YURA_GPU_SECS").ok().and_then(|v| v.parse().ok()).unwrap_or(12)))
+            .unwrap_or_else(std::time::Instant::now);
         let g = app.gpu.status.begin(start);
         match which {
             "failed" | "failed_easy" => {

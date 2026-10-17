@@ -112,7 +112,16 @@ fn is_running(ctx: &egui::Context) -> bool {
 
 impl Default for Dlg {
     fn default() -> Dlg {
-        Dlg { opts: Options::default(), snap: None, est: Task::idle(), check: Task::idle(), run_check: false, advanced: false, msg: String::new(), open: false }
+        Dlg {
+            opts: Options::default(),
+            snap: None,
+            est: Task::idle(),
+            check: Task::idle(),
+            run_check: false,
+            advanced: false,
+            msg: String::new(),
+            open: false,
+        }
     }
 }
 
@@ -449,7 +458,11 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
                             ui.label(RichText::new("細かすぎます。「速い・軽い」を試してください").size(11.5).color(style::CUT));
                         } else {
                             let col = if raw > 4.0e6 || secs > 60.0 { style::KEEP } else { style::DIM };
-                            ui.label(RichText::new(format!("目安: {} ・ 最大約{}", time_text(secs), bytes_text(raw * bytes_per_tri(o.format)))).size(11.5).color(col));
+                            ui.label(
+                                RichText::new(format!("目安: {} ・ 最大約{}", time_text(secs), bytes_text(raw * bytes_per_tri(o.format))))
+                                    .size(11.5)
+                                    .color(col),
+                            );
                         }
                         ui.label(RichText::new(format!("大きさ: {}", size_text(e.size))).size(11.5).color(style::DIM));
                     }
@@ -467,112 +480,112 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
             }
             if d.advanced {
                 egui::ScrollArea::vertical().id_salt("ex_advanced_scroll").max_height(200.0).show(ui, |ui| {
-            // file type
-            row(ui, "ファイル形式", |ui| {
-                let items: Vec<(&str, &str)> = Format::ALL
-                    .iter()
-                    .map(|f| {
-                        (
-                            f.label(),
-                            match f {
-                                Format::Stl => "3Dプリント用（色なし・小さい）",
-                                Format::ThreeMf => "スライサー向け（色つき・単位つき）",
-                                Format::Obj => "色つき（MTLファイルもできます）",
-                                Format::Ply => "色つき（点の色）",
-                                Format::Glb => "glTF 2.0（アプリ・Web向け・色とつや）",
-                                Format::StlAscii => "文字のSTL（大きくなります）",
-                            },
-                        )
-                    })
-                    .collect();
-                let cur = Format::ALL.iter().position(|f| *f == o.format);
-                if let Some(i) = style::segmented(ui, "ex_format", &items, cur, false)
-                    && let Some(f) = Format::ALL.get(i)
-                {
-                    choose_format(o, *f);
-                }
-            });
+                    // file type
+                    row(ui, "ファイル形式", |ui| {
+                        let items: Vec<(&str, &str)> = Format::ALL
+                            .iter()
+                            .map(|f| {
+                                (
+                                    f.label(),
+                                    match f {
+                                        Format::Stl => "3Dプリント用（色なし・小さい）",
+                                        Format::ThreeMf => "スライサー向け（色つき・単位つき）",
+                                        Format::Obj => "色つき（MTLファイルもできます）",
+                                        Format::Ply => "色つき（点の色）",
+                                        Format::Glb => "glTF 2.0（アプリ・Web向け・色とつや）",
+                                        Format::StlAscii => "文字のSTL（大きくなります）",
+                                    },
+                                )
+                            })
+                            .collect();
+                        let cur = Format::ALL.iter().position(|f| *f == o.format);
+                        if let Some(i) = style::segmented(ui, "ex_format", &items, cur, false)
+                            && let Some(f) = Format::ALL.get(i)
+                        {
+                            choose_format(o, *f);
+                        }
+                    });
 
-            // precision
-            row(ui, "数値で細かさ", |ui| {
-                for t in [0.05f32, 0.1, 0.2, 0.5] {
-                    let on = (o.tolerance - t).abs() < 1e-4;
-                    if style::pill(ui, &format!("{t}"), on).on_hover_text("1マスの大きさ（mm）。小さいほどきれいで重くなります").clicked()
-                    {
-                        o.tolerance = t;
+                    // precision
+                    row(ui, "数値で細かさ", |ui| {
+                        for t in [0.05f32, 0.1, 0.2, 0.5] {
+                            let on = (o.tolerance - t).abs() < 1e-4;
+                            if style::pill(ui, &format!("{t}"), on).on_hover_text("1マスの大きさ（mm）。小さいほどきれいで重くなります").clicked()
+                            {
+                                o.tolerance = t;
+                            }
+                        }
+                        style::field_sized(
+                            ui,
+                            [74.0, 22.0],
+                            egui::DragValue::new(&mut o.tolerance).speed(0.005).range(MIN_TOLERANCE..=MAX_TOLERANCE).suffix(" mm").max_decimals(3),
+                        );
+                    });
+                    row(ui, "単位", |ui| {
+                        let items: Vec<(&str, &str)> =
+                            Units::ALL.iter().map(|u| (u.label(), if o.format == Format::Glb { "GLBは いつも m です" } else { "" })).collect();
+                        let cur = Units::ALL.iter().position(|u| *u == o.units);
+                        if let Some(i) = style::segmented(ui, "ex_units", &items, cur, false)
+                            && let Some(u) = Units::ALL.get(i)
+                        {
+                            o.units = *u;
+                        }
+                        ui.label(RichText::new("大きさ").color(style::DIM).size(12.0));
+                        style::field_sized(
+                            ui,
+                            [68.0, 22.0],
+                            egui::DragValue::new(&mut o.scale_pct).speed(1.0).range(1.0..=10000.0).suffix(" %").max_decimals(1),
+                        );
+                    });
+                    row(ui, "上の向き", |ui| {
+                        let items = [("Z（そのまま）", "3Dプリンターふう"), ("Y（OBJ・GLBふう）", "Zを上からYを上に回します")];
+                        if let Some(i) = style::segmented(ui, "ex_up", &items, Some(usize::from(o.up == Up::Y)), false) {
+                            o.up = if i == 1 { Up::Y } else { Up::Z };
+                        }
+                    });
+                    row(ui, "なめらか", |ui| {
+                        let items = [("なし", ""), ("すこし", ""), ("ふつう", ""), ("つよい", "")];
+                        if let Some(i) = style::segmented(ui, "ex_smooth", &items, Some(usize::from(o.smooth.min(3))), false) {
+                            o.smooth = i as u8;
+                        }
+                        ui.label(RichText::new("かどは そのまま").size(11.0).color(style::DIM));
+                    });
+                    row(ui, "三角形", |ui| {
+                        let items = [
+                            ("そのまま", "ぜんぶのマスを三角形に"),
+                            ("平らをまとめる", "平らな面を大きな三角形に（形は変わりません）"),
+                            ("数をへらす", "三角形の数をきめて軽くします"),
+                        ];
+                        let cur = match o.lighten {
+                            Lighten::Off => 0,
+                            Lighten::Flat => 1,
+                            Lighten::Target(_) => 2,
+                        };
+                        if let Some(i) = style::segmented(ui, "ex_lighten", &items, Some(cur), false) {
+                            o.lighten = match i {
+                                0 => Lighten::Off,
+                                1 => Lighten::Flat,
+                                _ => Lighten::Target(match o.lighten {
+                                    Lighten::Target(n) => n,
+                                    _ => 100_000,
+                                }),
+                            };
+                        }
+                    });
+                    if let Lighten::Target(n) = &mut o.lighten {
+                        row(ui, "めやす", |ui| {
+                            style::field_sized(ui, [110.0, 22.0], egui::DragValue::new(n).speed(500.0).range(100..=50_000_000).suffix(" こ"));
+                        });
                     }
-                }
-                style::field_sized(
-                    ui,
-                    [74.0, 22.0],
-                    egui::DragValue::new(&mut o.tolerance).speed(0.005).range(MIN_TOLERANCE..=MAX_TOLERANCE).suffix(" mm").max_decimals(3),
-                );
-            });
-            row(ui, "単位", |ui| {
-                let items: Vec<(&str, &str)> =
-                    Units::ALL.iter().map(|u| (u.label(), if o.format == Format::Glb { "GLBは いつも m です" } else { "" })).collect();
-                let cur = Units::ALL.iter().position(|u| *u == o.units);
-                if let Some(i) = style::segmented(ui, "ex_units", &items, cur, false)
-                    && let Some(u) = Units::ALL.get(i)
-                {
-                    o.units = *u;
-                }
-                ui.label(RichText::new("大きさ").color(style::DIM).size(12.0));
-                style::field_sized(
-                    ui,
-                    [68.0, 22.0],
-                    egui::DragValue::new(&mut o.scale_pct).speed(1.0).range(1.0..=10000.0).suffix(" %").max_decimals(1),
-                );
-            });
-            row(ui, "上の向き", |ui| {
-                let items = [("Z（そのまま）", "3Dプリンターふう"), ("Y（OBJ・GLBふう）", "Zを上からYを上に回します")];
-                if let Some(i) = style::segmented(ui, "ex_up", &items, Some(usize::from(o.up == Up::Y)), false) {
-                    o.up = if i == 1 { Up::Y } else { Up::Z };
-                }
-            });
-            row(ui, "なめらか", |ui| {
-                let items = [("なし", ""), ("すこし", ""), ("ふつう", ""), ("つよい", "")];
-                if let Some(i) = style::segmented(ui, "ex_smooth", &items, Some(usize::from(o.smooth.min(3))), false) {
-                    o.smooth = i as u8;
-                }
-                ui.label(RichText::new("かどは そのまま").size(11.0).color(style::DIM));
-            });
-            row(ui, "三角形", |ui| {
-                let items = [
-                    ("そのまま", "ぜんぶのマスを三角形に"),
-                    ("平らをまとめる", "平らな面を大きな三角形に（形は変わりません）"),
-                    ("数をへらす", "三角形の数をきめて軽くします"),
-                ];
-                let cur = match o.lighten {
-                    Lighten::Off => 0,
-                    Lighten::Flat => 1,
-                    Lighten::Target(_) => 2,
-                };
-                if let Some(i) = style::segmented(ui, "ex_lighten", &items, Some(cur), false) {
-                    o.lighten = match i {
-                        0 => Lighten::Off,
-                        1 => Lighten::Flat,
-                        _ => Lighten::Target(match o.lighten {
-                            Lighten::Target(n) => n,
-                            _ => 100_000,
-                        }),
-                    };
-                }
-            });
-            if let Lighten::Target(n) = &mut o.lighten {
-                row(ui, "めやす", |ui| {
-                    style::field_sized(ui, [110.0, 22.0], egui::DragValue::new(n).speed(500.0).range(100..=50_000_000).suffix(" こ"));
-                });
-            }
-            ui.horizontal(|ui| {
-                ui.add_enabled_ui(o.format.has_colour(), |ui| {
-                    style::switch(ui, &mut o.colour, "色もいれる");
-                });
-                style::switch(ui, &mut o.ignore_paint, "ぬった色は むし");
-            });
-            if !o.format.has_colour() {
-                ui.label(RichText::new("STLには色を入れられません").size(11.0).color(style::DIM));
-            }
+                    ui.horizontal(|ui| {
+                        ui.add_enabled_ui(o.format.has_colour(), |ui| {
+                            style::switch(ui, &mut o.colour, "色もいれる");
+                        });
+                        style::switch(ui, &mut o.ignore_paint, "ぬった色は むし");
+                    });
+                    if !o.format.has_colour() {
+                        ui.label(RichText::new("STLには色を入れられません").size(11.0).color(style::DIM));
+                    }
 
                     if let Some(Ok(e)) = d.est.result() {
                         let tris = e.raw_tris(f64::from(o.tolerance.clamp(MIN_TOLERANCE, MAX_TOLERANCE)));

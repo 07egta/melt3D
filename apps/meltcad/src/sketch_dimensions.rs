@@ -44,10 +44,7 @@ fn sign(v: f32) -> f32 {
 impl Dimensions {
     pub fn for_shape(pen: Pen, a: [f32; 2], b: [f32; 2], profile: &[[f32; 2]], top: bool) -> Option<Self> {
         let (target, fields) = match pen {
-            Pen::Rect => (
-                Target::Rectangle { anchor: a, edge: b },
-                [number((b[0] - a[0]).abs()), number((b[1] - a[1]).abs())],
-            ),
+            Pen::Rect => (Target::Rectangle { anchor: a, edge: b }, [number((b[0] - a[0]).abs()), number((b[1] - a[1]).abs())]),
             Pen::Circle => {
                 let radius = (b[0] - a[0]).hypot(b[1] - a[1]);
                 (Target::Circle { center: a, edge: b }, [number(radius), number(radius * 2.0)])
@@ -116,10 +113,7 @@ impl Dimensions {
     pub fn readout(&self) -> String {
         let labels = self.labels();
         let units = self.units();
-        format!(
-            "{} {}{}  /  {} {}{}",
-            labels[0], self.fields[0], units[0], labels[1], self.fields[1], units[1]
-        )
+        format!("{} {}{}  /  {} {}{}", labels[0], self.fields[0], units[0], labels[1], self.fields[1], units[1])
     }
 
     pub fn position(&self, points: &[[f32; 2]]) -> Option<[f32; 2]> {
@@ -155,69 +149,67 @@ impl Dimensions {
     /// Apply on each TextEdit change, never only after Enter. Invalid intermediate strings
     /// leave the last valid geometry visible and disable confirmation.
     pub fn update(&mut self, points: &mut Vec<[f32; 2]>, profile: &mut Vec<[f32; 2]>, changed: usize, prevent_cross: bool) {
-        let result: Result<(Option<Vec<[f32; 2]>>, Option<(usize, [f32; 2])>, Option<String>), String> = (|| {
-            match self.target {
-                Target::Rectangle { anchor, edge } => {
-                    let (w, h) = (self.parse(0)?, self.parse(1)?);
-                    if w <= sketch::MIN_SIDE || h <= sketch::MIN_SIDE {
-                        return Err("Width and height must be greater than 0.5 mm".into());
-                    }
-                    let b = [anchor[0] + sign(edge[0] - anchor[0]) * w, anchor[1] + sign(edge[1] - anchor[1]) * h];
-                    if !finite_point(anchor) || !finite_point(b) {
-                        return Err("Coordinate is outside the sketch area".into());
-                    }
-                    let p = sketch::rect_profile(anchor, b).map_err(sketch::SketchError::message)?;
-                    Ok((Some(p), None, None))
+        let result: Result<(Option<Vec<[f32; 2]>>, Option<(usize, [f32; 2])>, Option<String>), String> = (|| match self.target {
+            Target::Rectangle { anchor, edge } => {
+                let (w, h) = (self.parse(0)?, self.parse(1)?);
+                if w <= sketch::MIN_SIDE || h <= sketch::MIN_SIDE {
+                    return Err("Width and height must be greater than 0.5 mm".into());
                 }
-                Target::Circle { center, edge } => {
-                    let input = self.parse(changed.min(1))?;
-                    let radius = if changed == 0 { input } else { input / 2.0 };
-                    if radius <= sketch::MIN_SIDE {
-                        return Err("Radius must be greater than 0.5 mm".into());
-                    }
-                    let old = (edge[0] - center[0]).hypot(edge[1] - center[1]);
-                    if old < sketch::MIN_SIDE {
-                        return Err("Can't determine circle orientation".into());
-                    }
-                    let b = [center[0] + (edge[0] - center[0]) * radius / old, center[1] + (edge[1] - center[1]) * radius / old];
-                    if !finite_point(center) || !finite_point(b) {
-                        return Err("Coordinate is outside the sketch area".into());
-                    }
-                    let p = sketch::circle_profile(center, b).map_err(sketch::SketchError::message)?;
-                    if !p.iter().copied().all(finite_point) {
-                        return Err("Circle is outside the sketch area".into());
-                    }
-                    let other = if changed == 0 { number(radius * 2.0) } else { number(radius) };
-                    Ok((Some(p), None, Some(other)))
+                let b = [anchor[0] + sign(edge[0] - anchor[0]) * w, anchor[1] + sign(edge[1] - anchor[1]) * h];
+                if !finite_point(anchor) || !finite_point(b) {
+                    return Err("Coordinate is outside the sketch area".into());
                 }
-                Target::Segment { index, start } => {
-                    let length = self.parse(0)?;
-                    let angle = self.parse(1)?;
-                    if length <= sketch::MIN_SIDE || angle.abs() > 36000.0 {
-                        return Err("Length must be greater than 0.5 mm and angle within ±36000°".into());
-                    }
-                    let rad = angle.to_radians();
-                    let b = [start[0] + length * rad.cos(), start[1] + length * rad.sin()];
-                    if !finite_point(b) || points.get(index).is_none() {
-                        return Err("Point is outside the sketch area".into());
-                    }
-                    Ok((None, Some((index, b)), None))
+                let p = sketch::rect_profile(anchor, b).map_err(sketch::SketchError::message)?;
+                Ok((Some(p), None, None))
+            }
+            Target::Circle { center, edge } => {
+                let input = self.parse(changed.min(1))?;
+                let radius = if changed == 0 { input } else { input / 2.0 };
+                if radius <= sketch::MIN_SIDE {
+                    return Err("Radius must be greater than 0.5 mm".into());
                 }
-                Target::Point { index } => {
-                    let b = [self.parse(0)?, self.parse(1)?];
-                    if !finite_point(b) || points.get(index).is_none() {
-                        return Err("X and Y must be within ±2000 mm".into());
-                    }
-                    if let Some(previous) = index.checked_sub(1).and_then(|i| points.get(i)) {
-                        if (previous[0] - b[0]).hypot(previous[1] - b[1]) < 1e-3 {
-                            return Err("Place it apart from the previous point".into());
-                        }
-                        if prevent_cross && index >= 2 && sketch::crosses_polyline(&points[..index], *previous, b, false) {
-                            return Err("The outline crosses at this point".into());
-                        }
-                    }
-                    Ok((None, Some((index, b)), None))
+                let old = (edge[0] - center[0]).hypot(edge[1] - center[1]);
+                if old < sketch::MIN_SIDE {
+                    return Err("Can't determine circle orientation".into());
                 }
+                let b = [center[0] + (edge[0] - center[0]) * radius / old, center[1] + (edge[1] - center[1]) * radius / old];
+                if !finite_point(center) || !finite_point(b) {
+                    return Err("Coordinate is outside the sketch area".into());
+                }
+                let p = sketch::circle_profile(center, b).map_err(sketch::SketchError::message)?;
+                if !p.iter().copied().all(finite_point) {
+                    return Err("Circle is outside the sketch area".into());
+                }
+                let other = if changed == 0 { number(radius * 2.0) } else { number(radius) };
+                Ok((Some(p), None, Some(other)))
+            }
+            Target::Segment { index, start } => {
+                let length = self.parse(0)?;
+                let angle = self.parse(1)?;
+                if length <= sketch::MIN_SIDE || angle.abs() > 36000.0 {
+                    return Err("Length must be greater than 0.5 mm and angle within ±36000°".into());
+                }
+                let rad = angle.to_radians();
+                let b = [start[0] + length * rad.cos(), start[1] + length * rad.sin()];
+                if !finite_point(b) || points.get(index).is_none() {
+                    return Err("Point is outside the sketch area".into());
+                }
+                Ok((None, Some((index, b)), None))
+            }
+            Target::Point { index } => {
+                let b = [self.parse(0)?, self.parse(1)?];
+                if !finite_point(b) || points.get(index).is_none() {
+                    return Err("X and Y must be within ±2000 mm".into());
+                }
+                if let Some(previous) = index.checked_sub(1).and_then(|i| points.get(i)) {
+                    if (previous[0] - b[0]).hypot(previous[1] - b[1]) < 1e-3 {
+                        return Err("Place it apart from the previous point".into());
+                    }
+                    if prevent_cross && index >= 2 && sketch::crosses_polyline(&points[..index], *previous, b, false) {
+                        return Err("The outline crosses at this point".into());
+                    }
+                }
+                Ok((None, Some((index, b)), None))
             }
         })();
         match result {
@@ -225,7 +217,9 @@ impl Dimensions {
                 if let Some(p) = new_profile {
                     *profile = p;
                 }
-                if let Some((index, p)) = new_point && let Some(current) = points.get_mut(index) {
+                if let Some((index, p)) = new_point
+                    && let Some(current) = points.get_mut(index)
+                {
                     *current = p;
                 }
                 if let Some(value) = synced {
@@ -268,7 +262,9 @@ impl Dimensions {
             }
             Target::Circle { center, edge } => {
                 let old = (edge[0] - center[0]).hypot(edge[1] - center[1]);
-                if let Ok(radius) = self.fields[0].parse::<f32>() && old > 0.0 {
+                if let Ok(radius) = self.fields[0].parse::<f32>()
+                    && old > 0.0
+                {
                     edge[0] = center[0] + (edge[0] - center[0]) / old * radius;
                     edge[1] = center[1] + (edge[1] - center[1]) / old * radius;
                 }

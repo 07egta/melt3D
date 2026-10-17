@@ -691,7 +691,19 @@ pub struct Group {
 
 impl Group {
     pub fn new(name: impl Into<String>) -> Group {
-        Group { name: name.into(), op: Op::Add, blend: 0.0, visible: true, shapes: Vec::new(), depth: 0, sketch_holes: false, uid: 0, pattern: None, instance_of: None, xform: Xform::default() }
+        Group {
+            name: name.into(),
+            op: Op::Add,
+            blend: 0.0,
+            visible: true,
+            shapes: Vec::new(),
+            depth: 0,
+            sketch_holes: false,
+            uid: 0,
+            pattern: None,
+            instance_of: None,
+            xform: Xform::default(),
+        }
     }
 }
 
@@ -1223,7 +1235,10 @@ impl Scene {
             notes.push(format!("こわれていて読めないメッシュが{lost}個あったので、取りのぞきました"));
         }
         if over > 0 {
-            notes.push(format!("メッシュが多すぎるので、{over}個を取りのぞきました（{}個・データ量に上限があります）", crate::mesh::MAX_VOLUME_SHAPES));
+            notes.push(format!(
+                "メッシュが多すぎるので、{over}個を取りのぞきました（{}個・データ量に上限があります）",
+                crate::mesh::MAX_VOLUME_SHAPES
+            ));
         }
         notes
     }
@@ -1240,13 +1255,8 @@ mod tests {
     fn a_sketch_outline_edit_updates_the_solid_atomically_and_survives_reload() {
         use crate::sdf::Prepared;
 
-        let built = crate::sketch::extrude(
-            &crate::sketch::Frame::floor(),
-            &crate::sketch::rect([-10.0, -10.0], [10.0, 10.0]),
-            10.0,
-            false,
-        )
-        .expect("a rectangle extrudes");
+        let built = crate::sketch::extrude(&crate::sketch::Frame::floor(), &crate::sketch::rect([-10.0, -10.0], [10.0, 10.0]), 10.0, false)
+            .expect("a rectangle extrudes");
         let mut shape = Shape::new(Kind::Extrude, [0.0; 3], Material::default());
         crate::sketch::apply(&built, &mut shape);
         let original = shape.clone();
@@ -1341,7 +1351,15 @@ mod tests {
 
     #[test]
     fn gradient_fields_are_sanitised() {
-        let mut m = Material { gradient: f32::NAN, grad_soft: 9.0, grad_from: -3.0, grad_to: f32::INFINITY, grad_axis: 77, color2: [f32::NAN, 5.0, -1.0], ..Material::default() };
+        let mut m = Material {
+            gradient: f32::NAN,
+            grad_soft: 9.0,
+            grad_from: -3.0,
+            grad_to: f32::INFINITY,
+            grad_axis: 77,
+            color2: [f32::NAN, 5.0, -1.0],
+            ..Material::default()
+        };
         m.sanitize();
         assert_eq!(m.gradient, 0.0);
         assert_eq!(m.grad_soft, 1.0);
@@ -1395,7 +1413,17 @@ mod tests {
         assert_eq!(m.color, [1.0, 0.0, 0.0]);
         assert!(!m.has_gradient());
         assert_eq!(m.grad_axis, 2);
-        let g = Material { gradient: 0.7, grad_axis: 0, grad_flip: true, grad_local: true, color2: [0.1, 0.2, 0.3], grad_soft: 0.3, grad_from: 0.1, grad_to: 0.9, ..Material::default() };
+        let g = Material {
+            gradient: 0.7,
+            grad_axis: 0,
+            grad_flip: true,
+            grad_local: true,
+            color2: [0.1, 0.2, 0.3],
+            grad_soft: 0.3,
+            grad_from: 0.1,
+            grad_to: 0.9,
+            ..Material::default()
+        };
         let back: Material = serde_json::from_str(&serde_json::to_string(&g).unwrap_or_default()).unwrap_or_default();
         assert_eq!(back, g);
         // a whole old scene still opens
@@ -1463,5 +1491,4 @@ mod tests {
         sh.volume = Some(crate::mesh::SharedVolume::new(crate::mesh::tests::ball_volume(8)));
         assert_eq!(sh.mesh_cell_mm(), Some([2.0, 3.0, 4.0]));
     }
-
 }

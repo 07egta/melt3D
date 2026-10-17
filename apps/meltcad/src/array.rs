@@ -83,7 +83,9 @@ impl App {
             }
             Some(Pick::Group(g)) => {
                 let base: Group = self.scene.groups.get(g).cloned().ok_or("グループがありません")?;
-                if self.scene.groups.len() + copies as usize > MAX_GROUPS || self.scene.shape_count() + base.shapes.len() * copies as usize > MAX_SHAPES {
+                if self.scene.groups.len() + copies as usize > MAX_GROUPS
+                    || self.scene.shape_count() + base.shapes.len() * copies as usize > MAX_SHAPES
+                {
                     return Err("ふやせる数をこえます".into());
                 }
                 crate::mesh::can_add(&self.scene, (0..copies).flat_map(|_| base.shapes.iter()))?;
@@ -142,7 +144,14 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
             });
             ui.add_space(4.0);
             ui.horizontal(|ui| {
-                if ui.add(egui::Button::new(RichText::new("ならべる").strong().color(egui::Color32::WHITE)).fill(style::ACCENT_SOFT).stroke(egui::Stroke::new(1.0, style::ACCENT))).clicked() {
+                if ui
+                    .add(
+                        egui::Button::new(RichText::new("ならべる").strong().color(egui::Color32::WHITE))
+                            .fill(style::ACCENT_SOFT)
+                            .stroke(egui::Stroke::new(1.0, style::ACCENT)),
+                    )
+                    .clicked()
+                {
                     go = true;
                 }
                 if ui.button("やめる").clicked() {

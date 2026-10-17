@@ -229,7 +229,11 @@ pub fn swatch(painter: &Painter, centre: Pos2, radius: f32, m: &Material) {
         centre,
         r,
         vec2(-0.34, -0.38),
-        &[(0.0, lighten(c, 0.22).gamma_multiply(body_alpha)), (0.45, shade(c, 0.92).gamma_multiply(body_alpha)), (1.0, base.gamma_multiply(body_alpha))],
+        &[
+            (0.0, lighten(c, 0.22).gamma_multiply(body_alpha)),
+            (0.45, shade(c, 0.92).gamma_multiply(body_alpha)),
+            (1.0, base.gamma_multiply(body_alpha)),
+        ],
     );
     if m.has_gradient() {
         gradient_tint(painter, centre, r, m, body_alpha);
@@ -326,8 +330,13 @@ mod tests {
         }
         // directions, flip, follow the shape, a stain over a gradient
         let base = Material { color: [1.0, 0.2, 0.2], color2: [0.2, 0.3, 1.0], gradient: 1.0, grad_soft: 0.5, ..Material::default() };
-        for (i, (axis, flip, local, rot)) in [(0u8, false, false, 0.0), (1, false, false, 0.0), (2, true, false, 0.0), (2, false, true, 35.0), (2, false, false, 35.0)].into_iter().enumerate() {
-            let mut sh = Shape::new(Kind::Box, [i as f32 * 28.0, 40.0, 12.0], Material { grad_axis: axis, grad_flip: flip, grad_local: local, ..base });
+        for (i, (axis, flip, local, rot)) in
+            [(0u8, false, false, 0.0), (1, false, false, 0.0), (2, true, false, 0.0), (2, false, true, 35.0), (2, false, false, 35.0)]
+                .into_iter()
+                .enumerate()
+        {
+            let mut sh =
+                Shape::new(Kind::Box, [i as f32 * 28.0, 40.0, 12.0], Material { grad_axis: axis, grad_flip: flip, grad_local: local, ..base });
             sh.size = [20.0, 20.0, 24.0];
             sh.rot = [rot, 0.0, 0.0];
             sh.blend = 0.0;
@@ -362,5 +371,4 @@ mod tests {
         let loaded = crate::model::Scene::from_json(&scene.to_json()).unwrap();
         assert_eq!(loaded.groups[0].shapes.last().unwrap().material, gltf);
     }
-
 }

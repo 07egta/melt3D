@@ -96,7 +96,17 @@ pub fn fxc_report(hlsl: &str) -> FxcReport {
         r.texture_loads += l.matches(".Load(").count();
         r.derivatives += l.matches("fwidth(").count() + l.matches("ddx(").count() + l.matches("ddy(").count();
     }
-    r.functions = hlsl.lines().filter(|l| !l.starts_with(' ') && !l.starts_with('\t') && l.contains('(') && l.trim_end().ends_with(')') && !l.starts_with("//") && !l.starts_with('#')).count();
+    r.functions = hlsl
+        .lines()
+        .filter(|l| {
+            !l.starts_with(' ')
+                && !l.starts_with('\t')
+                && l.contains('(')
+                && l.trim_end().ends_with(')')
+                && !l.starts_with("//")
+                && !l.starts_with('#')
+        })
+        .count();
     r
 }
 
@@ -140,7 +150,9 @@ fn glsl_text(version: glsl::Version, stage: naga::ShaderStage, entry: &str) -> S
     let options = glsl::Options { version, ..Default::default() };
     let pipeline = glsl::PipelineOptions { shader_stage: stage, entry_point: entry.to_string(), multiview: None };
     let mut out = String::new();
-    glsl::Writer::new(&mut out, &m, &info, &options, &pipeline, Default::default()).and_then(|mut w| w.write()).unwrap_or_else(|e| panic!("glsl {version:?} {entry}: {e}"));
+    glsl::Writer::new(&mut out, &m, &info, &options, &pipeline, Default::default())
+        .and_then(|mut w| w.write())
+        .unwrap_or_else(|e| panic!("glsl {version:?} {entry}: {e}"));
     out
 }
 
@@ -264,7 +276,13 @@ pub mod inline_cost {
             let mut direct = Vec::new();
             calls_in(&ep.function.body, &mut direct);
             fs_expanded = ep.function.expressions.len() + direct.iter().map(|c| expanded.get(c).copied().unwrap_or(0)).sum::<usize>();
-            fn walk(h: Handle<Function>, own: &HashMap<Handle<Function>, (usize, Vec<Handle<Function>>)>, mult: usize, out: &mut HashMap<String, usize>, name: &dyn Fn(Handle<Function>) -> String) {
+            fn walk(
+                h: Handle<Function>,
+                own: &HashMap<Handle<Function>, (usize, Vec<Handle<Function>>)>,
+                mult: usize,
+                out: &mut HashMap<String, usize>,
+                name: &dyn Fn(Handle<Function>) -> String,
+            ) {
                 *out.entry(name(h)).or_default() += mult;
                 if let Some((_, calls)) = own.get(&h) {
                     for c in calls {
@@ -286,7 +304,10 @@ fn inlining_cost_report() {
     let t = inline_cost::table(&m);
     eprintln!("fs expanded (expressions after inlining everything): {}", t.fs_expanded);
     for (name, own, calls, exp) in t.rows.iter().take(14) {
-        eprintln!("  {name:<16} own {own:>5}  call sites {calls:>3}  expanded {exp:>8}  copies in fs {:>3}", t.copies_in_fs.get(name).copied().unwrap_or(0));
+        eprintln!(
+            "  {name:<16} own {own:>5}  call sites {calls:>3}  expanded {exp:>8}  copies in fs {:>3}",
+            t.copies_in_fs.get(name).copied().unwrap_or(0)
+        );
     }
     // The distance function is most of the shader and every call site is compiled again by the
     // driver (software Vulkan: 190 s with 23 copies, 75 s with 11). A new call site must be a

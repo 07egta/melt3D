@@ -172,7 +172,13 @@ pub fn wide_button(ui: &mut Ui, label: &str, tip: &str, on: bool, color: Option<
     let ink = if on { Color32::WHITE } else { mix(TEXT, Color32::WHITE, hot) };
     let icon = Rect::from_center_size(rect.left_center() + vec2(18.0, 0.0), Vec2::splat(26.0)).translate(shift);
     paint(ui.painter(), icon, color.map_or(ink, |c| if on { Color32::WHITE } else { c }));
-    ui.painter().text(rect.left_center() + vec2(38.0, 0.0) + shift, Align2::LEFT_CENTER, label, FontId::proportional(13.0), if on { Color32::WHITE } else { color.unwrap_or(ink) });
+    ui.painter().text(
+        rect.left_center() + vec2(38.0, 0.0) + shift,
+        Align2::LEFT_CENTER,
+        label,
+        FontId::proportional(13.0),
+        if on { Color32::WHITE } else { color.unwrap_or(ink) },
+    );
     resp.on_hover_text(tip)
 }
 
@@ -326,7 +332,8 @@ pub fn xyz(ui: &mut Ui, label: &str, v: &mut [f32; 3], speed: f64, range: std::o
         let fw = ((avail - LABEL_W - 5.0 - 3.0 * (10.0 + 5.0) - 2.0 * 5.0) / 3.0).max(44.0);
         for (i, c) in v.iter_mut().enumerate() {
             ui.add_sized([10.0, 22.0], egui::Label::new(egui::RichText::new(["X", "Y", "Z"][i]).color(AXIS[i]).size(12.0).strong()));
-            changed |= field_sized(ui, [fw, 22.0], egui::DragValue::new(c).speed(speed).range(range.clone()).suffix(suffix).max_decimals(2)).changed();
+            changed |=
+                field_sized(ui, [fw, 22.0], egui::DragValue::new(c).speed(speed).range(range.clone()).suffix(suffix).max_decimals(2)).changed();
         }
     });
     changed
@@ -467,7 +474,11 @@ pub fn row_bg(ui: &Ui, resp: &Response, rect: Rect, selected: bool) {
     }
     if sel > 0.01 {
         p.rect_filled(rect, 6.0, Color32::from_rgba_unmultiplied(52, 178, 120, (78.0 * sel) as u8));
-        p.rect_filled(Rect::from_min_max(pos2(rect.left(), rect.top() + 4.0), pos2(rect.left() + 3.0, rect.bottom() - 4.0)), 1.5, Color32::from_rgba_unmultiplied(52, 178, 120, (255.0 * sel) as u8));
+        p.rect_filled(
+            Rect::from_min_max(pos2(rect.left(), rect.top() + 4.0), pos2(rect.left() + 3.0, rect.bottom() - 4.0)),
+            1.5,
+            Color32::from_rgba_unmultiplied(52, 178, 120, (255.0 * sel) as u8),
+        );
     }
 }
 
@@ -759,11 +770,7 @@ mod tests {
         apply(&ctx);
         let mut v = 0.0_f32;
         let frame = |ctx: &egui::Context, events: Vec<egui::Event>, v: &mut f32| {
-            let input = egui::RawInput {
-                screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(400.0, 200.0))),
-                events,
-                ..Default::default()
-            };
+            let input = egui::RawInput { screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(400.0, 200.0))), events, ..Default::default() };
             let mut rect = Rect::NOTHING;
             let mut out = ctx.run_ui(input, |ui| {
                 rect = slider(ui, v, 0.0..=10.0, 200.0).rect;

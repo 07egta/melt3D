@@ -6,13 +6,17 @@
 
 use serde_json::Value;
 
-use crate::import_mesh::{Affine, BAD_INDEX, BAD_NUMBER, CUT_OFF, ImportedMesh, MAX_TRIANGLES, MAX_VERTICES, NO_SHAPE, TOO_MANY_TRIS, TOO_MANY_VERTS, append_transformed};
+use crate::import_mesh::{
+    Affine, BAD_INDEX, BAD_NUMBER, CUT_OFF, ImportedMesh, MAX_TRIANGLES, MAX_VERTICES, NO_SHAPE, TOO_MANY_TRIS, TOO_MANY_VERTS, append_transformed,
+};
 
 /// Read only appearance metadata; never changes geometry decoding or allocates image pixels.
 pub(crate) fn appearance_glb(bytes: &[u8]) -> crate::import_mesh::AppearanceInfo {
     use crate::import_mesh::AppearanceInfo;
     let mut out = AppearanceInfo::default();
-    if bytes.get(..4) != Some(b"glTF") { return out; }
+    if bytes.get(..4) != Some(b"glTF") {
+        return out;
+    }
     let mut offset = 12usize;
     let json_bytes = loop {
         let Some(length) = u32at(bytes, offset).map(|n| n as usize) else { return out };
@@ -20,9 +24,13 @@ pub(crate) fn appearance_glb(bytes: &[u8]) -> crate::import_mesh::AppearanceInfo
         let Some(start) = offset.checked_add(8) else { return out };
         let Some(end) = start.checked_add(length) else { return out };
         let Some(chunk) = bytes.get(start..end) else { return out };
-        if kind == 0x4E4F_534A { break chunk; }
+        if kind == 0x4E4F_534A {
+            break chunk;
+        }
         let Some(next) = start.checked_add(length.div_ceil(4) * 4) else { return out };
-        if next <= offset || next >= bytes.len() { return out; }
+        if next <= offset || next >= bytes.len() {
+            return out;
+        }
         offset = next;
     };
     let Ok(doc) = serde_json::from_slice::<Value>(json_bytes) else { return out };
@@ -33,15 +41,23 @@ pub(crate) fn appearance_glb(bytes: &[u8]) -> crate::import_mesh::AppearanceInfo
         for mesh in meshes {
             if let Some(primitives) = mesh.get("primitives").and_then(Value::as_array) {
                 for p in primitives {
-                    if p.get("mode").and_then(Value::as_u64).unwrap_or(4) < 4 { continue; }
-                    if p.get("attributes").and_then(|a| a.get("COLOR_0")).is_some() { vertex_colours = true; }
+                    if p.get("mode").and_then(Value::as_u64).unwrap_or(4) < 4 {
+                        continue;
+                    }
+                    if p.get("attributes").and_then(|a| a.get("COLOR_0")).is_some() {
+                        vertex_colours = true;
+                    }
                     let idx = usz(p.get("material")).unwrap_or(usize::MAX);
-                    if !used.contains(&idx) { used.push(idx); }
+                    if !used.contains(&idx) {
+                        used.push(idx);
+                    }
                 }
             }
         }
     }
-    if used.len() > 1 || vertex_colours { out.varies = true; }
+    if used.len() > 1 || vertex_colours {
+        out.varies = true;
+    }
     for idx in used {
         let Some(mat) = materials.and_then(|a| a.get(idx)) else { continue };
         let pbr = mat.get("pbrMetallicRoughness");
@@ -57,10 +73,14 @@ pub(crate) fn appearance_glb(bytes: &[u8]) -> crate::import_mesh::AppearanceInfo
         }
         let rough = pbr.and_then(|p| p.get("roughnessFactor")).and_then(Value::as_f64).unwrap_or(1.0) as f32;
         let metal = pbr.and_then(|p| p.get("metallicFactor")).and_then(Value::as_f64).unwrap_or(1.0) as f32;
-        if out.material.is_none() { out.material = crate::materials::from_gltf_pbr(rgba, rough, metal); }
-        if pbr.and_then(|p| p.get("baseColorTexture")).is_some() ||
-           mat.get("normalTexture").is_some() || mat.get("occlusionTexture").is_some() ||
-           mat.get("emissiveTexture").is_some() {
+        if out.material.is_none() {
+            out.material = crate::materials::from_gltf_pbr(rgba, rough, metal);
+        }
+        if pbr.and_then(|p| p.get("baseColorTexture")).is_some()
+            || mat.get("normalTexture").is_some()
+            || mat.get("occlusionTexture").is_some()
+            || mat.get("emissiveTexture").is_some()
+        {
             out.notes.push("GLB の画像テクスチャ（ベース色・法線など）は読み込めません。単色で代用します".into());
         }
         if mat.get("extensions").is_some() {
@@ -73,7 +93,9 @@ pub(crate) fn appearance_glb(bytes: &[u8]) -> crate::import_mesh::AppearanceInfo
             out.notes.push("GLB の発光色は再現されません".into());
         }
     }
-    if vertex_colours { out.notes.push("GLB の頂点色 COLOR_0 は単色SDFへ変換できません".into()); }
+    if vertex_colours {
+        out.notes.push("GLB の頂点色 COLOR_0 は単色SDFへ変換できません".into());
+    }
     if out.material.is_none() && vertex_colours {
         out.notes.push("頂点色のみのGLBのため、既定の材質を使います".into());
     }
@@ -309,7 +331,9 @@ struct Walk<'a> {
 
 impl Walk<'_> {
     fn mesh(&mut self, index: usize, m: &Affine) -> Result<(), String> {
-        let Some(prims) = self.json.get("meshes").and_then(|x| x.get(index)).and_then(|x| x.get("primitives")).and_then(Value::as_array) else { return Ok(()) };
+        let Some(prims) = self.json.get("meshes").and_then(|x| x.get(index)).and_then(|x| x.get("primitives")).and_then(Value::as_array) else {
+            return Ok(());
+        };
         for p in prims {
             if let Some((pos, tris)) = read_primitive(self.json, self.bin, p)? {
                 append_transformed(&mut self.out, &pos, &tris, m)?;
@@ -388,7 +412,11 @@ pub fn read_glb(b: &[u8]) -> Result<ImportedMesh, String> {
     let mut w = Walk { json: &json, bin, visits: 0, out: ImportedMesh::default() };
     let scene_nodes: Option<Vec<usize>> = {
         let scene = usz(json.get("scene")).unwrap_or(0);
-        json.get("scenes").and_then(|s| s.get(scene)).and_then(|s| s.get("nodes")).and_then(Value::as_array).map(|a| a.iter().filter_map(|v| usz(Some(v))).collect())
+        json.get("scenes")
+            .and_then(|s| s.get(scene))
+            .and_then(|s| s.get("nodes"))
+            .and_then(Value::as_array)
+            .map(|a| a.iter().filter_map(|v| usz(Some(v))).collect())
     };
     match scene_nodes {
         Some(nodes) => {
@@ -591,11 +619,13 @@ mod tests {
         assert!(edit(&|d| d["meshes"][0]["primitives"][0]["mode"] = json!(1)).is_err()); // lines only: no shape
         // a lot of instances of a big mesh
         let wide: Vec<Value> = (0..2000).map(|_| json!({"mesh": 0})).collect();
-        assert!(edit(&|d| {
-            d["nodes"] = json!(wide);
-            d["scenes"][0]["nodes"] = json!((0..2000).collect::<Vec<_>>());
-        })
-        .is_ok());
+        assert!(
+            edit(&|d| {
+                d["nodes"] = json!(wide);
+                d["scenes"][0]["nodes"] = json!((0..2000).collect::<Vec<_>>());
+            })
+            .is_ok()
+        );
         // broken containers
         assert!(read_glb(b"glTF").is_err());
         assert!(read_glb(b"glTF\x01\0\0\0\x0c\0\0\0").is_err());
@@ -661,7 +691,7 @@ mod tests {
 
     #[test]
     fn exported_glb_uniform_look_recovers_colour_and_roughness() {
-        let s = surface(&box_mesh([0.0;3],[1.0;3]));
+        let s = surface(&box_mesh([0.0; 3], [1.0; 3]));
         let g = export_formats::glb(&s, "coloured").unwrap();
         let a = appearance_glb(&g);
         let m = a.material.unwrap();
@@ -670,5 +700,4 @@ mod tests {
         assert!((m.color[1] - 100.0 / 255.0).abs() < 0.002);
         assert!((m.roughness - 100.0 / 255.0).abs() < 0.002);
     }
-
 }

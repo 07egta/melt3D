@@ -7,9 +7,9 @@
 //! simple lighting (the lights of the room, a rough soft shadow, a little shine). The window never
 //! waits for it: a newer request makes the worker drop the older one.
 
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
-use std::sync::Arc;
 
 use crate::camera::Camera;
 use crate::model::{Environment, Scene};
@@ -113,7 +113,8 @@ fn grid(col: V3, gp: V3, footprint: f32, fade: f32, below: bool) -> V3 {
     let gs = 10.0_f32;
     let w = (footprint * 1.5).max(1e-4);
     let line_of = |scale: f32| {
-        let a = [((gp[0] / scale - 0.5).rem_euclid(1.0) - 0.5).abs() / (w / scale), ((gp[1] / scale - 0.5).rem_euclid(1.0) - 0.5).abs() / (w / scale)];
+        let a =
+            [((gp[0] / scale - 0.5).rem_euclid(1.0) - 0.5).abs() / (w / scale), ((gp[1] / scale - 0.5).rem_euclid(1.0) - 0.5).abs() / (w / scale)];
         1.0 - a[0].min(a[1]).min(1.0)
     };
     let line = line_of(gs);
@@ -416,7 +417,12 @@ impl EasyView {
                 self.settled = frame.last;
             }
         }
-        let key = Key { scene: scene.clone_if_changed(self.requested.as_ref().map(|(_, k)| &k.scene)), cam: crate::perf::cam_key(cam), view: view_px, moving };
+        let key = Key {
+            scene: scene.clone_if_changed(self.requested.as_ref().map(|(_, k)| &k.scene)),
+            cam: crate::perf::cam_key(cam),
+            view: view_px,
+            moving,
+        };
         if self.requested.as_ref().is_some_and(|(_, k)| *k == key) {
             return;
         }

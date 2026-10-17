@@ -127,11 +127,14 @@ fn unsupported_features(src: &str) -> Vec<String> {
     let mut scanned = 0;
     while let Some(tag) = next_tag(src, &mut pos) {
         scanned += 1;
-        if scanned > MAX_ELEMENTS * 2 { break; }
-        if tag.closing { continue; }
+        if scanned > MAX_ELEMENTS * 2 {
+            break;
+        }
+        if tag.closing {
+            continue;
+        }
         match tag.name.as_str() {
-            "text" | "image" | "foreignobject" | "filter" | "clippath" | "mask"
-            | "lineargradient" | "radialgradient" | "pattern" | "marker" => {
+            "text" | "image" | "foreignobject" | "filter" | "clippath" | "mask" | "lineargradient" | "radialgradient" | "pattern" | "marker" => {
                 tags.insert(tag.name.clone());
             }
             "use" => {
@@ -284,11 +287,7 @@ fn rdp_closed(p: &[(f64, f64)], tol: f64) -> Vec<(f64, f64)> {
         let len2 = dx * dx + dy * dy;
         let mut worst = (0.0_f64, 0usize);
         for (i, q) in p.iter().enumerate().take(b).skip(a + 1) {
-            let d = if len2 < 1e-30 {
-                (q.0 - pa.0).hypot(q.1 - pa.1)
-            } else {
-                ((q.0 - pa.0) * dy - (q.1 - pa.1) * dx).abs() / len2.sqrt()
-            };
+            let d = if len2 < 1e-30 { (q.0 - pa.0).hypot(q.1 - pa.1) } else { ((q.0 - pa.0) * dy - (q.1 - pa.1) * dx).abs() / len2.sqrt() };
             if d > worst.0 {
                 worst = (d, i);
             }
@@ -1129,7 +1128,8 @@ fn walk_part<'a>(
             st.fill_none = f == "none";
         }
         if name == "use" {
-            if !st.hidden && active.len() < 16
+            if !st.hidden
+                && active.len() < 16
                 && let Some(id) = tag.attr("href").or_else(|| tag.attr("xlink:href")).and_then(|v| v.strip_prefix('#'))
                 && let Some(&(begin, end)) = ids.get(id)
                 && !active.iter().any(|v| v == id)
@@ -1165,7 +1165,14 @@ fn walk_part<'a>(
                         let v = numbers(tag.attr("points").unwrap_or(""), 100_000);
                         pen.polygon(&v);
                     }
-                    "rect" => pen.rect(n("x").unwrap_or(0.0), n("y").unwrap_or(0.0), n("width").unwrap_or(0.0), n("height").unwrap_or(0.0), n("rx"), n("ry")),
+                    "rect" => pen.rect(
+                        n("x").unwrap_or(0.0),
+                        n("y").unwrap_or(0.0),
+                        n("width").unwrap_or(0.0),
+                        n("height").unwrap_or(0.0),
+                        n("rx"),
+                        n("ry"),
+                    ),
                     "circle" => pen.ellipse(n("cx").unwrap_or(0.0), n("cy").unwrap_or(0.0), n("r").unwrap_or(0.0), n("r").unwrap_or(0.0)),
                     _ => {
                         let (rx, ry) = (n("rx"), n("ry"));
@@ -1257,11 +1264,7 @@ fn build_artwork(raws: &[Raw], side: f64) -> Result<Artwork, String> {
     let mut containers: Vec<Vec<usize>> = vec![Vec::new(); n];
     for i in 0..n {
         for j in 0..n {
-            if i != j
-                && cands[i].element == cands[j].element
-                && cands[j].area.abs() > cands[i].area.abs()
-                && inside(&cands[j].pts, cands[i].point)
-            {
+            if i != j && cands[i].element == cands[j].element && cands[j].area.abs() > cands[i].area.abs() && inside(&cands[j].pts, cands[i].point) {
                 containers[i].push(j);
             }
         }
@@ -1288,7 +1291,9 @@ fn build_artwork(raws: &[Raw], side: f64) -> Result<Artwork, String> {
     }
     // parents (the smallest container), then solid-then-its-holes order
     let parent: Vec<Option<usize>> = (0..n)
-        .map(|i| containers[i].iter().copied().min_by(|&a, &b| cands[a].area.abs().partial_cmp(&cands[b].area.abs()).unwrap_or(std::cmp::Ordering::Equal)))
+        .map(|i| {
+            containers[i].iter().copied().min_by(|&a, &b| cands[a].area.abs().partial_cmp(&cands[b].area.abs()).unwrap_or(std::cmp::Ordering::Equal))
+        })
         .collect();
     let mut order = Vec::new();
     let mut stack: Vec<usize> = (0..n).rev().filter(|&i| parent[i].is_none()).collect();
@@ -1446,7 +1451,8 @@ mod tests {
 
     #[test]
     fn rounded_rect_circle_and_ellipse() {
-        let a = parse(&wrap(r#"<rect width="80" height="40" rx="10"/><circle cx="50" cy="50" r="10"/><ellipse cx="50" cy="50" rx="20" ry="5"/>"#)).unwrap();
+        let a = parse(&wrap(r#"<rect width="80" height="40" rx="10"/><circle cx="50" cy="50" r="10"/><ellipse cx="50" cy="50" rx="20" ry="5"/>"#))
+            .unwrap();
         assert_eq!(a.solids(), 3);
         let c = parse(&wrap(r#"<circle cx="50" cy="50" r="30"/>"#)).unwrap();
         assert!(c.contours[0].pts.len() <= MAX_OUTLINE && c.contours[0].pts.len() >= 16);
@@ -1472,7 +1478,8 @@ mod tests {
 
     #[test]
     fn paths_with_every_command_work() {
-        let d = "M10 10 h30 v10 H10 z M60,60 l10,0 l0,10 l-10,0 Z M10 80 C 10 60, 30 60, 30 80 S 50 100, 50 80 Q 60 60 70 80 T 90 80 L 90 95 L 10 95 Z";
+        let d =
+            "M10 10 h30 v10 H10 z M60,60 l10,0 l0,10 l-10,0 Z M10 80 C 10 60, 30 60, 30 80 S 50 100, 50 80 Q 60 60 70 80 T 90 80 L 90 95 L 10 95 Z";
         let a = parse(&wrap(&format!(r#"<path d="{d}"/>"#))).unwrap();
         assert_eq!(a.solids(), 3);
         // relative curves land where absolute ones would
@@ -1502,7 +1509,8 @@ mod tests {
 
     #[test]
     fn transforms_and_nested_groups() {
-        let a = parse(&wrap(r#"<g transform="translate(50 50) scale(2)"><rect x="-10" y="-5" width="20" height="10" transform="rotate(90)"/></g>"#)).unwrap();
+        let a = parse(&wrap(r#"<g transform="translate(50 50) scale(2)"><rect x="-10" y="-5" width="20" height="10" transform="rotate(90)"/></g>"#))
+            .unwrap();
         // 20x10 rotated 90 and doubled: 20 wide x 40 tall
         let (lo, hi) = extent(&a);
         let (w, h) = (hi[0] - lo[0], hi[1] - lo[1]);
@@ -1611,9 +1619,11 @@ mod tests {
 
     #[test]
     fn local_use_repeats_defs_and_preserves_instance_transform() {
-        let doc = wrap(r##"<defs><g id="motif"><rect width="10" height="20" fill="#336699"/></g></defs>
+        let doc = wrap(
+            r##"<defs><g id="motif"><rect width="10" height="20" fill="#336699"/></g></defs>
             <use href="#motif" x="10" y="5"/>
-            <use href="#motif" transform="translate(40 5) scale(2)"/>"##);
+            <use href="#motif" transform="translate(40 5) scale(2)"/>"##,
+        );
         let a = parse(&doc).unwrap();
         assert_eq!((a.solids(), a.holes()), (2, 0));
         assert!(a.contours.iter().all(|c| c.color.is_some()));
@@ -1623,9 +1633,11 @@ mod tests {
 
     #[test]
     fn local_use_cycles_and_external_references_do_not_expand() {
-        let doc = wrap(r##"<defs><g id="a"><use href="#b"/></g>
+        let doc = wrap(
+            r##"<defs><g id="a"><use href="#b"/></g>
              <g id="b"><use href="#a"/><rect width="8" height="8"/></g></defs>
-             <use href="#a"/><use href="https://example.com/evil.svg#x"/>"##);
+             <use href="#a"/><use href="https://example.com/evil.svg#x"/>"##,
+        );
         let a = parse(&doc).unwrap();
         assert_eq!(a.solids(), 1);
         assert!(parse(&wrap(r##"<use href="file:///etc/passwd#s"/>"##)).is_err());
@@ -1633,9 +1645,12 @@ mod tests {
 
     #[test]
     fn referenced_hole_has_matching_extrusion() {
-        let a = parse(&wrap(r##"<defs><path id="ring" fill-rule="evenodd"
+        let a = parse(&wrap(
+            r##"<defs><path id="ring" fill-rule="evenodd"
           d="M0 0 H80 V80 H0 Z M20 20 H60 V60 H20 Z"/></defs>
-          <use href="#ring"/>"##)).unwrap();
+          <use href="#ring"/>"##,
+        ))
+        .unwrap();
         assert_eq!((a.solids(), a.holes()), (1, 1));
         let (g, _) = build_group(&a, "ring", &BuildOpts::default(), 64);
         assert_eq!(g.shapes.iter().map(|s| s.op).collect::<Vec<_>>(), vec![Op::Add, Op::Subtract]);

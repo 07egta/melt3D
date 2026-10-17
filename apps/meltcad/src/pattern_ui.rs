@@ -42,7 +42,11 @@ pub fn icon(kind: PatternKind, p: &Painter, rect: Rect, ink: Color32) {
             for i in 0..3 {
                 for j in 0..3 {
                     let (u, v) = (0.18 + i as f32 * 0.32, 0.18 + j as f32 * 0.32);
-                    p.rect_filled(Rect::from_center_size(at(f, u, v), vec2(f.width() * 0.2, f.height() * 0.2)), 2.0, if i + j == 0 { ink } else { ink.gamma_multiply(0.6) });
+                    p.rect_filled(
+                        Rect::from_center_size(at(f, u, v), vec2(f.width() * 0.2, f.height() * 0.2)),
+                        2.0,
+                        if i + j == 0 { ink } else { ink.gamma_multiply(0.6) },
+                    );
                 }
             }
         }
@@ -104,7 +108,12 @@ impl App {
         let mut p = Pattern::starting(kind);
         match &mut p {
             Pattern::Path { source, .. } => {
-                let found = self.scene.groups.iter().enumerate().find_map(|(gi, gr)| gr.shapes.iter().position(|s| pattern::shape_polyline(s).is_some()).map(|si| (gi, si)));
+                let found = self
+                    .scene
+                    .groups
+                    .iter()
+                    .enumerate()
+                    .find_map(|(gi, gr)| gr.shapes.iter().position(|s| pattern::shape_polyline(s).is_some()).map(|si| (gi, si)));
                 match found.and_then(|(gi, si)| self.scene.ensure_shape_uid(gi, si)) {
                     Some(uid) => *source = uid,
                     None => {
@@ -115,7 +124,11 @@ impl App {
             }
             Pattern::Geometry { source, .. } => {
                 let found = self.scene.groups.iter().enumerate().find_map(|(gi, gr)| {
-                    gr.shapes.iter().position(|s| pattern::shape_polyline(s).is_some()).or_else(|| (gi != g).then_some(0).filter(|_| !gr.shapes.is_empty())).map(|si| (gi, si))
+                    gr.shapes
+                        .iter()
+                        .position(|s| pattern::shape_polyline(s).is_some())
+                        .or_else(|| (gi != g).then_some(0).filter(|_| !gr.shapes.is_empty()))
+                        .map(|si| (gi, si))
                 });
                 match found.and_then(|(gi, si)| self.scene.ensure_shape_uid(gi, si)) {
                     Some(uid) => *source = Source::Shape(uid),
@@ -271,9 +284,7 @@ impl App {
             let free = current.is_none() || mirror_axes.is_some();
             for (i, name) in ["X", "Y", "Z"].iter().enumerate() {
                 let on = mirror_axes.is_some_and(|a| a[i]);
-                if style::pill_enabled(ui, name, on, free)
-                    .on_hover_text(["X（左右）に写す", "Y（前後）に写す", "Z（上下）に写す"][i])
-                    .clicked()
+                if style::pill_enabled(ui, name, on, free).on_hover_text(["X（左右）に写す", "Y（前後）に写す", "Z（上下）に写す"][i]).clicked()
                 {
                     self.toggle_mirror(&ctx, i);
                 }
@@ -341,7 +352,9 @@ impl App {
                     egui::ComboBox::from_id_salt("pattern_path_source").selected_text(label).width(150.0).show_ui(ui, |ui| {
                         for (gi, gr) in self.scene.groups.iter().enumerate() {
                             for (si, s) in gr.shapes.iter().enumerate() {
-                                if pattern::shape_polyline(s).is_some() && ui.selectable_label(s.uid != 0 && s.uid == *source, format!("{} ({})", s.name, gr.name)).clicked() {
+                                if pattern::shape_polyline(s).is_some()
+                                    && ui.selectable_label(s.uid != 0 && s.uid == *source, format!("{} ({})", s.name, gr.name)).clicked()
+                                {
                                     chosen = Some(Chosen::Shape(gi, si));
                                 }
                             }
@@ -350,7 +363,8 @@ impl App {
                 });
                 ui.horizontal(|ui| {
                     style::row_label(ui, "ならべ方");
-                    if style::pill(ui, "ぴったり", *mode == PathMode::Even).on_hover_text("線のはしからはしまで、同じ間かくで").clicked() {
+                    if style::pill(ui, "ぴったり", *mode == PathMode::Even).on_hover_text("線のはしからはしまで、同じ間かくで").clicked()
+                    {
                         *mode = PathMode::Even;
                     }
                     if style::pill(ui, "きょり", *mode == PathMode::Step).on_hover_text("決まった長さごとに").clicked() {
@@ -373,11 +387,24 @@ impl App {
                     style::row_label(ui, "点をかりる");
                     egui::ComboBox::from_id_salt("pattern_geometry_source").selected_text(label).width(150.0).show_ui(ui, |ui| {
                         for (gi, gr) in self.scene.groups.iter().enumerate() {
-                            if !gr.shapes.is_empty() && ui.selectable_label(matches!(source, Source::Group(u) if gr.uid != 0 && *u == gr.uid), format!("グループ: {}", gr.name)).clicked() {
+                            if !gr.shapes.is_empty()
+                                && ui
+                                    .selectable_label(
+                                        matches!(source, Source::Group(u) if gr.uid != 0 && *u == gr.uid),
+                                        format!("グループ: {}", gr.name),
+                                    )
+                                    .clicked()
+                            {
                                 chosen = Some(Chosen::Group(gi));
                             }
                             for (si, s) in gr.shapes.iter().enumerate() {
-                                if ui.selectable_label(matches!(source, Source::Shape(u) if s.uid != 0 && *u == s.uid), format!("{} ({})", s.name, gr.name)).clicked() {
+                                if ui
+                                    .selectable_label(
+                                        matches!(source, Source::Shape(u) if s.uid != 0 && *u == s.uid),
+                                        format!("{} ({})", s.name, gr.name),
+                                    )
+                                    .clicked()
+                                {
                                     chosen = Some(Chosen::Shape(gi, si));
                                 }
                             }
@@ -459,7 +486,11 @@ impl App {
             style::xyz(ui, "回転", &mut gr.xform.rot, 1.0, -3600.0..=3600.0, "°");
             ui.horizontal(|ui| {
                 style::row_label(ui, "大きさ");
-                style::field_sized(ui, [74.0, 22.0], egui::DragValue::new(&mut gr.xform.scale).speed(0.01).range(0.01..=100.0).suffix("×").max_decimals(2));
+                style::field_sized(
+                    ui,
+                    [74.0, 22.0],
+                    egui::DragValue::new(&mut gr.xform.scale).speed(0.01).range(0.01..=100.0).suffix("×").max_decimals(2),
+                );
             });
         }
         ui.horizontal(|ui| {
@@ -468,7 +499,10 @@ impl App {
             {
                 self.sel = Some(Pick::Group(s));
             }
-            if style::pill_enabled(ui, "リンクをはずす", false, src.is_some()).on_hover_text("この組の形として、コピーします（もう元とつながりません）").clicked() {
+            if style::pill_enabled(ui, "リンクをはずす", false, src.is_some())
+                .on_hover_text("この組の形として、コピーします（もう元とつながりません）")
+                .clicked()
+            {
                 self.unlink_group(g);
             }
         });

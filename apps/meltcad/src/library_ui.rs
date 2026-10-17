@@ -174,7 +174,12 @@ pub fn panel(app: &mut App, ui: &mut egui::Ui) {
                         });
                         match tex {
                             Some(t) => {
-                                ui.painter().image(t.id(), r.shrink(4.0), egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
+                                ui.painter().image(
+                                    t.id(),
+                                    r.shrink(4.0),
+                                    egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                                    Color32::WHITE,
+                                );
                             }
                             None => {
                                 ui.painter().text(r.center(), Align2::CENTER_CENTER, "…", egui::FontId::proportional(14.0), style::DIM);

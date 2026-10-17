@@ -115,7 +115,11 @@ impl App {
 
         // The handles
         let tool = self.tool;
-        let geom = if clean || self.ct.drawing || self.pt.on || self.sketch_active() { None } else { gizmo::build_multi(&self.cam, rect, &self.scene, &self.picks(), tool) };
+        let geom = if clean || self.ct.drawing || self.pt.on || self.sketch_active() {
+            None
+        } else {
+            gizmo::build_multi(&self.cam, rect, &self.scene, &self.picks(), tool)
+        };
         let over_gnomon = !clean && pos.is_some_and(|p| self.gnomon_hit(rect, p).is_some());
         let hover_handle = match (&geom, pos, &self.drag) {
             (Some(g), Some(p), None) if resp.hovered() && !over_gnomon && !ct.over => gizmo::hit(g, tool, p),
@@ -506,7 +510,11 @@ impl App {
     pub fn frame_view(&mut self, only_selected: bool) {
         let spheres: Vec<crate::accel::Bound> = if only_selected && self.sel.is_some() {
             let t = targets(&self.scene, self.sel);
-            t.iter().filter_map(|(g, s)| self.scene.shape(*g, *s)).filter(|s| s.visible).map(|s| crate::accel::Bound { c: s.pos, r: radius_of(s) }).collect()
+            t.iter()
+                .filter_map(|(g, s)| self.scene.shape(*g, *s))
+                .filter(|s| s.visible)
+                .map(|s| crate::accel::Bound { c: s.pos, r: radius_of(s) })
+                .collect()
         } else {
             crate::pattern::world_spheres(&self.scene)
         };
