@@ -570,6 +570,34 @@ impl App {
         f.hit(o, d).map(|q| sketch::snap(q, step))
     }
 
+    /// Grid remains the fallback. An endpoint or origin within 9 screen pixels wins;
+    /// the threshold stays the same when zooming or on a high-DPI display.
+    fn sketch_cursor_magnetic(&self, rect: Rect, p: Pos2, step: f32, f: &Frame, moving: Option<usize>) -> Option<[f32; 2]> {
+        let snapped = self.sketch_cursor(rect, p, step, f)?;
+        let mut nearest: Option<([f32; 2], f32)> = None;
+        let mut offer = |q: [f32; 2]| {
+            if let Some(screen) = self.sketch_px(rect, f, q) {
+                let distance = (screen - p).length();
+                if distance <= 9.0 && nearest.is_none_or(|(_, d)| distance < d) {
+                    nearest = Some((q, distance));
+                }
+            }
+        };
+        // Current drawing: available endpoints; while editing: every other vertex.
+        if let Some(edit) = &self.sk.edit {
+            if let Some(sh) = self.scene.shape(edit.g, edit.s) {
+                for (i, q) in sketch::outline_of(sh, edit.which).iter().enumerate() {
+                    if Some(i) != moving { offer(*q); }
+                }
+            }
+        } else {
+            for q in &self.sk.pts { offer(*q); }
+            if let Some(q) = self.sk.anchor { offer(q); }
+        }
+        offer([0.0, 0.0]);
+        Some(nearest.map_or(snapped, |(q, _)| q))
+    }
+
     /// Where a point of plane `f` is on the screen.
     fn sketch_px(&self, rect: Rect, f: &Frame, q: [f32; 2]) -> Option<Pos2> {
         self.cam.project(rect, f.to_world(q))
@@ -679,7 +707,7 @@ impl App {
         let step = step_for(mods);
         let mouse = pos.filter(|p| resp.hovered() && !over_gnomon(*p));
         self.sk.mouse = mouse;
-        self.sk.cursor = mouse.and_then(|p| self.sketch_cursor(rect, p, step, &frame));
+        self.sk.cursor = mouse.and_then(|p| self.sketch_cursor_magnetic(rect, p, step, &frame, None));
         out.over = self.sk.cursor.is_some();
         if self.sk.stage == Stage::Ready {
             // nothing to draw: clicks must not pick things behind the card
@@ -694,7 +722,7 @@ impl App {
         if matches!(self.sk.active_pen(), Pen::Rect | Pen::Circle) {
             if resp.drag_started_by(egui::PointerButton::Primary)
                 && let Some(o) = ui.input(|i| i.pointer.press_origin()).or(pos).filter(|o| !over_gnomon(*o))
-                && let Some(q) = self.sketch_cursor(rect, o, step, &frame)
+                && let Some(q) = self.sketch_cursor_magnetic(rect, o, step, &frame, None)
             {
                 self.sk.press(q);
             }
@@ -871,7 +899,7 @@ impl App {
     pub fn edit_drag(&mut self, rect: Rect, m: Pos2, step: f32) {
         let Some((f, _)) = self.edit_target() else { return };
         let Some(idx) = self.sk.edit.as_ref().and_then(|e| e.drag.as_ref()).map(|d| d.idx) else { return };
-        let Some(q) = self.sketch_cursor(rect, m, step, &f) else { return };
+        let Some(q) = self.sketch_cursor_magnetic(rect, m, step, &f, Some(idx)) else { return };
         if let Some((ol, rev)) = self.edit_outline_mut()
             && let Some(p) = ol.get_mut(idx)
         {
