@@ -163,8 +163,13 @@ impl App {
         } else {
             Vec::new()
         };
-        let scroll = egui::ScrollArea::vertical().id_salt("scene_tree").auto_shrink([false, false])
-            .show_rows(ui, 32.0, rows.len(), |ui, visible_range| {
+        let mut area = egui::ScrollArea::vertical().id_salt("scene_tree").auto_shrink([false, false]);
+        if let Some(target) = self.tree_scroll_target.take()
+            && let Some(index) = rows.iter().position(|r| r.pick == target)
+        {
+            area = area.vertical_scroll_offset(index as f32 * 32.0);
+        }
+        area.show_rows(ui, 32.0, rows.len(), |ui, visible_range| {
                 ui.spacing_mut().item_spacing.y = 0.0;
                 for item in &rows[visible_range] {
                     let pick = item.pick;
@@ -222,7 +227,6 @@ impl App {
                     }
                 }
             });
-        let _ = scroll;
         self.layer_drop(ui);
     }
 
@@ -297,11 +301,12 @@ impl App {
         if self.renaming == Some(pick) && !effective_locked {
             let r = ui.put(name_rect.shrink2(vec2(0.0, 3.0)), egui::TextEdit::singleline(&mut self.rename_text)
                 .id(id.with("rename")).font(FontId::proportional(13.0)));
-            if !r.has_focus() { r.request_focus(); }
             let cancel = ui.input(|i| i.key_pressed(egui::Key::Escape));
             let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
-            if cancel || enter {
-                self.finish_tree_rename(enter);
+            if cancel || enter || r.lost_focus() {
+                self.finish_tree_rename(!cancel);
+            } else if !r.has_focus() {
+                r.request_focus();
             }
         } else {
             let col = if visible { style::TEXT } else { style::DIM };
@@ -313,8 +318,9 @@ impl App {
         }
         let er = ui.interact(eye, id.with("eye"), Sense::click())
             .on_hover_text(if visible { "非表示にする（削除ではありません）" } else { "表示する" });
-        let lr = ui.interact(lock, id.with("lock"), Sense::click())
-            .on_hover_text(if local_locked { "ロックを解除" } else { "ロックして編集・削除を防ぐ" });
+        let inherited_lock = effective_locked && !local_locked;
+        let lr = ui.interact(lock, id.with("lock"), if inherited_lock { Sense::hover() } else { Sense::click() })
+            .on_hover_text(if inherited_lock { "親グループがロック中です。親の鍵を外してください" } else if local_locked { "ロックを解除" } else { "ロックして編集・削除を防ぐ" });
         let orr = ui.interact(opr, id.with("op"), if effective_locked { Sense::hover() } else { Sense::click() })
             .on_hover_text(if effective_locked { "ロック中：解除すると演算を切り替えられます" } else { "足す・削る・塗るを変更" });
         for r in [&er, &lr, &orr] {
@@ -323,7 +329,7 @@ impl App {
             }
         }
         glyphs::eye(ui.painter(), eye, visible, if er.hovered() { Color32::WHITE } else { style::DIM });
-        draw_outliner_lock(ui.painter(), lock, local_locked, if lr.hovered() { Color32::WHITE } else { style::DIM });
+        draw_outliner_lock(ui.painter(), lock, effective_locked, if lr.hovered() { Color32::WHITE } else { style::DIM });
         glyphs::op(ui.painter(), opr, op, style::op_color(op).gamma_multiply(if orr.hovered() { 1.0 } else { 0.8 }));
         out.eye = er.clicked();
         out.lock = lr.clicked();
