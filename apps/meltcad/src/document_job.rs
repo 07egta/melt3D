@@ -112,6 +112,7 @@ impl Job {
 
     pub fn poll(&self) -> Option<Result<Completed, String>> {
         match self.rx.try_recv() {
+            Ok(_) if cancelled(&self.state) => Some(Err(crate::export_mesh::CANCELLED.into())),
             Ok(res) => Some(res),
             Err(TryRecvError::Empty) => None,
             Err(TryRecvError::Disconnected) => Some(Err("ファイル処理が予期せず停止しました".into())),
