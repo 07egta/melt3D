@@ -219,13 +219,17 @@ impl App {
                 self.pick_at(rect, p, mods.shift);
             }
         }
+        // while a drawing tool is on, the right click belongs to the tool (it confirms)
+        let tool_busy = self.sketch_active() || self.ct.drawing || self.pt.on;
         if resp.secondary_clicked()
-            && !self.sketch_active()
+            && !tool_busy
             && let Some(p) = pos
         {
             self.pick_at(rect, p, false);
         }
-        resp.context_menu(|ui| self.context_menu(ui));
+        if !tool_busy {
+            resp.context_menu(|ui| self.context_menu(ui));
+        }
         if resp.double_clicked_by(PointerButton::Primary)
             && hover_handle.is_none()
             && !ct.taken

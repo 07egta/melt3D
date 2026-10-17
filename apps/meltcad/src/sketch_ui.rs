@@ -981,7 +981,6 @@ impl App {
                 }
             }
         }
-        eprintln!("DBGI clicked {} dbl {} hovered {} mouse {:?} cursor {:?} pos {:?}", resp.clicked_by(egui::PointerButton::Primary), resp.double_clicked_by(egui::PointerButton::Primary), resp.hovered(), mouse, self.sk.cursor, pos);
         if resp.clicked_by(egui::PointerButton::Primary)
             && let (Some(m), Some(q)) = (mouse, self.sk.cursor)
         {
@@ -997,7 +996,8 @@ impl App {
             }
             out.taken = true;
         }
-        if resp.double_clicked_by(egui::PointerButton::Primary) && mouse.is_some() {
+        // left click places, right click confirms (the same in every drawing tool)
+        if resp.secondary_clicked() && mouse.is_some() {
             done = done.or_else(|| self.sk.enter());
             out.taken = true;
         }
@@ -1017,7 +1017,7 @@ impl App {
             || resp.dragged_by(egui::PointerButton::Primary)
             || resp.drag_stopped_by(egui::PointerButton::Primary)
             || resp.clicked_by(egui::PointerButton::Primary)
-            || resp.double_clicked_by(egui::PointerButton::Primary))
+            || resp.secondary_clicked())
         {
             out.taken = true;
         }
@@ -1441,7 +1441,20 @@ impl App {
                     out.taken = true;
                 }
             }
+            if resp.secondary_clicked() && mouse.is_some() {
+                self.edit_commit_operation();
+                out.taken = true;
+            }
             out.over = hit.is_some();
+            return out;
+        }
+        // left click edits, right click confirms and leaves the editor
+        if resp.secondary_clicked()
+            && resp.hovered()
+            && self.sk.edit.as_ref().is_some_and(|e| e.drag.is_none())
+        {
+            self.sk.edit = None;
+            out.taken = true;
             return out;
         }
         let step = step_for(mods);
@@ -1896,7 +1909,7 @@ impl App {
             });
         }
         let n = self.sk.edit.as_ref().and_then(|e| self.scene.shape(e.g, e.s).map(|s| sketch::outline_of(s, e.which).len())).unwrap_or(0);
-        hint(ui, &format!("点をドラッグして動かす　線をクリックで点をふやす　点をクリックして Delete で消す　{n}/{MAX_OUTLINE}こ"));
+        hint(ui, &format!("点をドラッグして動かす　線をクリックで点をふやす　点をクリックして Delete で消す　右クリックでおわり　{n}/{MAX_OUTLINE}こ"));
         hint(ui, "1mmきざみ　Shift = 10mm　Ctrl = 0.1mm　Shift+線クリックで長さ指定　Alt+ドラッグで見る向きを回す");
         // Values are transient UI inputs. Geometry is changed only after a validated edit.
         let current = self.sk.edit.as_ref().and_then(|e| self.scene.shape(e.g, e.s).map(|s| (sketch::outline_of(s, e.which).clone(), e.sel, e.edge_sel)));
@@ -2254,12 +2267,12 @@ fn hint(ui: &mut Ui, text: &str) {
 fn pen_hint(pen: Pen, stage: Stage) -> &'static str {
     match (pen, stage) {
         (_, Stage::LoftTop) if pen != Pen::Line => "ロフトの上の輪かくをかきます (下の輪かくはうすく見えています)",
-        (Pen::Polygon, _) => "クリックで角をうつ　さいしょの点 / Enter / ダブルクリックでとじる",
+        (Pen::Polygon, _) => "左クリックで角をうつ　右クリック / さいしょの点 / Enterでとじる",
         (Pen::Rect, _) => "ドラッグ (または2回クリック) で、向かい合う2つの角をきめる",
         (Pen::Circle, _) => "まん中から外へドラッグ (または2回クリック) で半径をきめる",
-        (Pen::Spline, _) => "クリックした点を通る、なめらかな輪かく　さいしょの点 / Enterでとじる",
-        (Pen::Line, Stage::SweepPath) => "スイープの通り道をかきます　Enter / ダブルクリックでおわり",
-        (Pen::Line, _) => "クリックで点をうつ　Enter / ダブルクリックでおわり (スイープの通り道になります)",
+        (Pen::Spline, _) => "左クリックした点を通る、なめらかな輪かく　右クリック / さいしょの点 / Enterでとじる",
+        (Pen::Line, Stage::SweepPath) => "スイープの通り道をかきます　左クリックで点　右クリック / Enterでおわり",
+        (Pen::Line, _) => "左クリックで点をうつ　右クリック / Enterでおわり (スイープの通り道になります)",
     }
 }
 

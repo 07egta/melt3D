@@ -235,8 +235,9 @@ impl SnapKind {
             Self::Intersection => 2.0,
             Self::Center => 3.0,
             Self::Midpoint => 4.0,
-            Self::Horizontal | Self::Vertical => 5.5,
-            Self::Angle => 7.0,
+            // alignment guides lose to a real point that is a few pixels away
+            Self::Horizontal | Self::Vertical => 8.0,
+            Self::Angle => 8.5,
             Self::Grid => 9.0,
         }
     }
