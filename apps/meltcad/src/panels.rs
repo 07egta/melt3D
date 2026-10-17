@@ -59,33 +59,9 @@ impl App {
             });
     }
 
-    /// The menu on a right click in the viewport.
+    /// The same contextual actions as the floating toolbar (plus traditional extra actions).
     pub fn context_menu(&mut self, ui: &mut Ui) {
-        if self.sel.is_none() {
-            ui.label(RichText::new("何も選ばれていません").color(style::DIM));
-            return;
-        }
-        if ui.button("複製　Ctrl+D").clicked() {
-            self.duplicate();
-            ui.close();
-        }
-        if ui.button("＋ ⇄ −　Tab").clicked() {
-            self.flip_op();
-            ui.close();
-        }
-        if ui.button("ここを見る　F").clicked() {
-            self.frame_view(true);
-            ui.close();
-        }
-        if ui.button("名前を変える").clicked() {
-            self.renaming = self.sel;
-            ui.close();
-        }
-        ui.separator();
-        if ui.button(RichText::new("削除　Delete").color(style::CUT)).clicked() {
-            self.delete_selected();
-            ui.close();
-        }
+        self.context_actions(ui);
     }
 
     // ----- layers -----
@@ -114,7 +90,7 @@ impl App {
         };
         for gi in 0..ngroups {
             let folded = self.folded.contains(&gi);
-            let sel = self.sel == Some(Pick::Group(gi));
+            let sel = self.is_pick_selected(Pick::Group(gi));
             let (name, op, visible, nshapes) = {
                 let g = &self.scene.groups[gi];
                 (g.name.clone(), g.op, g.visible, g.shapes.len())
@@ -130,7 +106,7 @@ impl App {
                 }
             }
             if row.select {
-                self.sel = Some(Pick::Group(gi));
+                self.select_pick(Some(Pick::Group(gi)), ui.input(|i| i.modifiers.ctrl));
             }
             if row.drag_started {
                 self.layer_drag = Some(Pick::Group(gi));
@@ -145,7 +121,7 @@ impl App {
                 for si in 0..nshapes {
                     let Some(s) = self.scene.shape(gi, si) else { continue };
                     let (name, op, visible, material) = (s.name.clone(), s.op, s.visible, s.material);
-                    let sel = self.sel == Some(Pick::Shape(gi, si));
+                    let sel = self.is_pick_selected(Pick::Shape(gi, si));
                     let id = ui.id().with(("s", gi, si));
                     let row = self.row(
                         ui,
@@ -162,7 +138,7 @@ impl App {
                         "",
                     );
                     if row.select {
-                        self.sel = Some(Pick::Shape(gi, si));
+                        self.select_pick(Some(Pick::Shape(gi, si)), ui.input(|i| i.modifiers.ctrl));
                     }
                     if row.drag_started {
                         self.layer_drag = Some(Pick::Shape(gi, si));
