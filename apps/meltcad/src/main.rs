@@ -3,6 +3,7 @@
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable))]
 
 mod accel;
+mod adapt;
 mod app;
 mod array;
 mod camera;
@@ -20,12 +21,17 @@ mod gizmo;
 mod glyphs;
 mod glyphs_more;
 mod backend;
+mod bench;
 mod easy_view;
 mod gpu;
+mod gpu_timing;
 mod gpu_log;
 mod gpu_status;
 mod gpu_ui;
+mod hud;
 mod icon;
+#[cfg(test)]
+mod frame_bench;
 #[cfg(test)]
 mod input_tests;
 mod import_3mf;
@@ -98,7 +104,7 @@ fn no_graphics(choice: backend::Choice, plan: backend::Plan, tried: &[backend::B
 
 fn main() -> eframe::Result {
     let args: Vec<std::ffi::OsString> = std::env::args_os().collect();
-    if cpu_render::cli(&args) {
+    if cpu_render::cli(&args) || bench::cli(&args) {
         return Ok(());
     }
     perf::init();

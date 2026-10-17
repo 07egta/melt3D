@@ -227,6 +227,14 @@ pub fn wgpu_configuration(plan: Plan) -> egui_wgpu::WgpuConfiguration {
     if let Plan::Only(b) = plan {
         setup.instance_descriptor.backends = b.to_wgpu();
     }
+    // timestamp queries (when the adapter has them) let the viewport time its own scene passes
+    // and choose the picture size from the real cost (see `gpu_timing.rs`)
+    let usual = setup.device_descriptor.clone();
+    setup.device_descriptor = std::sync::Arc::new(move |adapter| {
+        let mut d = usual(adapter);
+        d.required_features |= adapter.features() & egui_wgpu::wgpu::Features::TIMESTAMP_QUERY;
+        d
+    });
     egui_wgpu::WgpuConfiguration { wgpu_setup: egui_wgpu::WgpuSetup::CreateNew(setup), ..Default::default() }
 }
 

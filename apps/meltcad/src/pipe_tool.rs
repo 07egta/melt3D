@@ -123,7 +123,7 @@ impl App {
     /// Where the cursor at `p` would put a stroke point.
     fn pipe_point(&self, rect: Rect, p: Pos2) -> Option<V3> {
         let (o, d) = self.cam.ray_at(rect, p);
-        stroke::trace_point(self.field(), o, d, self.pt.plane, self.pt.cfg.radius)
+        stroke::trace_point(&self.field(), o, d, self.pt.plane, self.pt.cfg.radius)
     }
 
     /// Add the stroke points for a cursor move to `p` (long moves are filled in every few pixels).
