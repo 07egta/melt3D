@@ -665,7 +665,9 @@ impl App {
         };
         let make = self.sk.make;
         let Some(g) = (if self.sk.holes.is_empty() { self.target_group() } else {
-            self.scene.groups.push(crate::model::Group::new("穴あき押し出し"));
+            let mut group = crate::model::Group::new("穴あき押し出し");
+            group.sketch_holes = true;
+            self.scene.groups.push(group);
             Some(self.scene.groups.len() - 1)
         }) else { return false };
         let mut color = COLORS[self.scene.shape_count() % COLORS.len()];
@@ -675,7 +677,7 @@ impl App {
         let mut sh = Shape::new(make.kind(), built.pos, Material { color, ..Material::default() });
         sketch::apply(&built, &mut sh);
         sh.name = make.label().to_string();
-        sh.op = self.new_op;
+        sh.op = if self.sk.holes.is_empty() { self.new_op } else { Op::Add };
         sh.blend = if self.sk.holes.is_empty() { 2.0 } else { 0.0 };
         let mut cutouts = Vec::new();
         for (i, contour) in self.sk.holes.iter().enumerate() {
@@ -945,7 +947,7 @@ impl App {
     fn check_edited_hole_group(&self) -> Result<(), SketchError> {
         let Some(e) = self.sk.edit.as_ref() else { return Ok(()) };
         let Some(group) = self.scene.groups.get(e.g) else { return Ok(()) };
-        if group.name != "穴あき押し出し" { return Ok(()) };
+        if !group.sketch_holes { return Ok(()) };
         let Some(outer) = group.shapes.first() else { return Ok(()) };
         let Some(of) = sketch::edit_frame(outer, Which::Main) else { return Err(SketchError::HoleMisaligned) };
         let mut holes = Vec::new();
@@ -1437,7 +1439,7 @@ impl App {
             ui.horizontal_wrapped(|ui| {
                 ui.label(egui::RichText::new("道具").size(11.0).color(style::DIM));
                 for pen in Pen::ALL {
-                    let usable = !(stage == Stage::LoftTop && pen == Pen::Line);
+                    let usable = !((stage == Stage::LoftTop || stage == Stage::Hole) && pen == Pen::Line);
                     if style::pill_enabled(ui, pen.label(), self.sk.pen == pen, usable).on_hover_text(pen.tip()).clicked() {
                         self.sk.pen = pen;
                         self.sk.clear_drawing();
@@ -1469,6 +1471,7 @@ impl App {
                 hint(ui, &format!("穴: {} / {}", self.sk.holes.len(), sketch::MAX_HOLES));
                 if style::pill_enabled(ui, "＋ 穴を描く", false, self.sk.holes.len() < sketch::MAX_HOLES).clicked() {
                     self.sk.make = Make::Extrude;
+                    if self.sk.pen == Pen::Line { self.sk.pen = Pen::Polygon; }
                     self.sk.stage = Stage::Hole;
                     self.sk.clear_drawing();
                 }
@@ -1853,6 +1856,7 @@ mod tests {
         assert_eq!(app.scene.groups.len(), 1);
         let g = &app.scene.groups[0];
         assert_eq!(g.shapes.len(), 3);
+        assert!(g.sketch_holes);
         assert_eq!(g.shapes[0].op, Op::Add);
         assert!(g.shapes[1..].iter().all(|s| s.op == Op::Subtract && s.blend == 0.0));
         let field = crate::sdf::Field::new(&app.scene);
