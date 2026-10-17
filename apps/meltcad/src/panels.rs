@@ -341,8 +341,27 @@ impl App {
         out.drag_started = resp.drag_started() && !(out.eye || out.lock || out.op || out.chevron) && !effective_locked;
         if resp.secondary_clicked() {
             out.select = true;
-            out.rename = false;
         }
+        resp.context_menu(|ui| {
+            if ui.button("画面中央に表示").clicked() {
+                out.focus = true;
+                ui.close();
+            }
+            if ui.add_enabled(!effective_locked, egui::Button::new("名前変更　F2")).clicked() {
+                out.rename = true;
+                ui.close();
+            }
+            if ui.button(if visible { "非表示にする（削除ではありません）" } else { "表示する" }).clicked() {
+                out.eye = true;
+                ui.close();
+            }
+            if ui.add_enabled(!inherited_lock, egui::Button::new(if local_locked { "ロック解除" } else { "ロック" })).clicked() {
+                out.lock = true;
+                ui.close();
+            }
+            ui.separator();
+            ui.label(RichText::new("削除は Delete / 右の削除ボタンから").size(11.0).color(style::DIM));
+        });
         out
     }
 
