@@ -51,6 +51,10 @@ pub struct Prepared {
     /// Rows of the rotation's transpose (the inverse rotation).
     pub inv: [V3; 3],
     pub scale: V3,
+    /// Shape-local modifier, independent of source primitive data.
+    pub deformation: Option<crate::deform::Deformation>,
+    /// Original (unwarped) half extent for the modifier's axis and safety.
+    pub base_half: V3,
     pub op: Op,
     pub blend: f32,
     pub material: Material,
@@ -129,6 +133,8 @@ impl Prepared {
             pos: s.pos,
             inv,
             scale: s.scale,
+            deformation: s.deformation,
+            base_half: s.base_local_half(),
             op: s.op,
             blend: s.blend,
             material: s.material,
@@ -156,7 +162,11 @@ impl Prepared {
             return m.color;
         }
         let ax = usize::from(m.grad_axis).min(2);
-        let c = if m.grad_local { self.local(p)[ax] } else { p[ax] - self.pos[ax] };
+        let c = if m.grad_local {
+            let q = self.local(p);
+            let original = self.deformation.map_or(q, |d| d.inverse(q, self.base_half));
+            original[ax]
+        } else { p[ax] - self.pos[ax] };
         let t = c * (if m.grad_flip { -0.5 } else { 0.5 }) / self.grad_half.max(1e-3) + 0.5;
         mix3(m.color, m.color2, m.gradient_weight(t.max(0.0).min(1.0)))
     }
@@ -165,7 +175,14 @@ impl Prepared {
     }
     /// The distance to this one shape (negative inside).
     pub fn distance(&self, p: V3) -> f32 {
-        let d = self.local_distance(self.local(p)) * self.min_scale();
+        let q = self.local(p);
+        let (q_original, step_safety) = match self.deformation {
+            Some(d) => (d.inverse(q, self.base_half), d.distance_safety(q, self.base_half)),
+            None => (q, 1.0),
+        };
+        // Correct only the SDF *step estimate*, not the zero isosurface:
+        // the exported mesh therefore retains the full twisted geometry.
+        let d = self.local_distance(q_original) * self.min_scale() * step_safety;
         // hollow walls: the solid's skin of thickness `shell` (negative inside the wall)
         // (a curve hollows itself: its flat ends are cut after the hollowing, see curve::distance)
         if self.shell > 0.0 && self.kind != Kind::Curve { (d + self.shell * 0.5).abs() - self.shell * 0.5 } else { d }
