@@ -1,6 +1,13 @@
 # MELTCAD model library
 
 Each `*.json` here is one category of ready-made models, compiled into the app (`src/library.rs`).
+
+The three procedural **Designer Lamp** models are registered in the existing furniture category by
+`src/library.rs` from `src/designer_lamp.rs` (not duplicated in generated JSON). Their real
+Revolve/Curve/Cylinder geometry shares the normal library thumbnails, 3D selection, editable
+parameters, scene saves and STL/3MF/OBJ export. The inspector can separate three parts onto the
+build plate as independent groups; export each group with **Selected** scope. Real-world electrical
+safety, supports and mechanical joint fits are not automatically guaranteed.
 The files are **generated** by Python scripts in `gen/` (one script per file) so a model is a few
 lines of readable code.
 
