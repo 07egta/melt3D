@@ -179,7 +179,7 @@ impl Timer {
         let slot = self.slots.iter().position(|s| matches!(s.state, SlotState::Free))?;
         // (marked busy now so that nobody else takes it; `finish` makes it Recorded)
         let pending = Pending { kind, pixels, rows, scale, frame: self.frame };
-        self.slots[slot].state = SlotState::Recorded(Pending { frame: u64::MAX, ..pending });
+        self.slots.get_mut(slot)?.state = SlotState::Recorded(Pending { frame: u64::MAX, ..pending });
         Some(Claim { slot, pending })
     }
 
@@ -196,14 +196,17 @@ impl Timer {
     pub fn finish(&mut self, encoder: &mut wgpu::CommandEncoder, claim: Claim) {
         let at = claim.slot as u64 * RESOLVE_STRIDE;
         let q = claim.slot as u32 * 2;
+        let Some(slot) = self.slots.get_mut(claim.slot) else { return };
         encoder.resolve_query_set(&self.queries, q..q + 2, &self.resolve, at);
-        encoder.copy_buffer_to_buffer(&self.resolve, at, &self.slots[claim.slot].read, 0, 16);
-        self.slots[claim.slot].state = SlotState::Recorded(claim.pending);
+        encoder.copy_buffer_to_buffer(&self.resolve, at, &slot.read, 0, 16);
+        slot.state = SlotState::Recorded(claim.pending);
     }
 
     /// Hand a claim back unused (the pass was not recorded).
     pub fn cancel(&mut self, claim: Claim) {
-        self.slots[claim.slot].state = SlotState::Free;
+        if let Some(slot) = self.slots.get_mut(claim.slot) {
+            slot.state = SlotState::Free;
+        }
     }
 
     /// For offscreen use, where the caller submits and waits itself: after `queue.submit`, map

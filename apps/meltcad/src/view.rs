@@ -259,6 +259,7 @@ impl App {
                 scale_moving,
                 scale_still,
                 sharpen: self.perf.sharpen,
+                whole: clean,
                 frame_ms: self.perf.stats.last_interval_ms(),
                 status: self.gpu.status.clone(),
                 feedback: self.perf.feedback.clone(),

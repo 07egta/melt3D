@@ -1094,4 +1094,36 @@ mod tests {
             assert!(differing * 500 <= total, "{name}: the shadows are the same");
         }
     }
+
+    /// Writes a picture of every benchmark scene (full quality) as PPM files into `$MELTCAD_BENCH_OUT`
+    /// (with `MELTCAD_SHADER_DIR` for another version of the shader): to look at, and to compare two versions.
+    /// `cargo test -p meltcad --release render_bench_scenes -- --ignored`
+    #[test]
+    #[ignore]
+    fn render_bench_scenes() {
+        let Some(dir) = std::env::var_os("MELTCAD_BENCH_OUT").map(std::path::PathBuf::from) else {
+            eprintln!("set MELTCAD_BENCH_OUT");
+            return;
+        };
+        let _ = std::fs::create_dir_all(&dir);
+        let Ok(mut gpu) = crate::gpu::offscreen::Offscreen::open_with(None, None) else {
+            eprintln!("no adapter");
+            return;
+        };
+        let size = [640u32, 400u32];
+        let fast = std::env::var("MELTCAD_BENCH_FAST").is_ok();
+        for bs in scenes() {
+            let cam = camera_for(&bs.scene);
+            let pack = crate::gpu::ScenePack::new(&bs.scene, crate::gpu::VolumeSet::of(&bs.scene));
+            gpu.load(&pack);
+            let pic = gpu.picture(size);
+            let mut globals = pack.globals(&bs.scene, &cam, [size[0] as f32, size[1] as f32], None, None, false);
+            crate::gpu::set_view_flags(&mut globals, crate::perf::view_flags(false, fast, pack.glow));
+            gpu.frame(&pic, &globals, fast);
+            let px = gpu.read(&pic);
+            let mut ppm = format!("P6\n{} {}\n255\n", size[0], size[1]).into_bytes();
+            ppm.extend(px.chunks(4).flat_map(|p| [p[0], p[1], p[2]]));
+            let _ = std::fs::write(dir.join(format!("{}.ppm", bs.name)), ppm);
+        }
+    }
 }
