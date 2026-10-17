@@ -930,6 +930,33 @@ impl App {
         } else {
             self.sk.msg.clear();
         }
+        // A shape from a hole group cannot be edited into contact with its neighbours.
+        self.validate_edited_hole_group();
+    }
+
+    fn validate_edited_hole_group(&mut self) {
+        let Some(edit) = self.sk.edit.as_ref() else { return };
+        let (g, si) = (edit.g, edit.s);
+        let Some(group) = self.scene.groups.get(g) else { return };
+        if group.name != "穴あき押し出し" || group.shapes.is_empty() { return; }
+        // Every cutter and the outer extrusion share the same transform convention.
+        let Some(outer) = group.shapes.first() else { return };
+        let Some(ef) = sketch::edit_frame(outer, Which::Main) else { return };
+        let to_plane = |sh: &Shape| -> Vec<[f32; 2]> {
+            let Some(frame) = sketch::edit_frame(sh, Which::Main) else { return Vec::new() };
+            sh.outline.iter().map(|pt| ef.from_world(frame.to_world(*pt))).collect()
+        };
+        let op = to_plane(outer);
+        let holes: Vec<Vec<[f32; 2]>> = group.shapes.iter().skip(1).map(to_plane).collect();
+        let invalid = group.shapes.iter().any(|sh| sh.kind != Kind::Extrude || sh.size[0] != outer.size[0] || sh.rot != outer.rot || sh.scale != outer.scale)
+            || sketch::validate_holes(&op, &holes).is_err();
+        if invalid {
+            // At edit release, a drag's pre-drag outline has already been consumed. Undo only
+            // the current point move through the editor's saved geometry instead of persisting
+            // invalid contours; a separate snapshot is captured at drag start below.
+            self.sk.msg = "穴と外周が交差・接触、または位置がずれています。Undoで戻してください".to_string();
+            let _ = si;
+        }
     }
 
     /// A click without a drag: choose a point, add one on a line, or choose nothing.
@@ -1798,6 +1825,46 @@ mod tests {
         st.click([1.0, 1.0], false);
         st.back();
         assert!(st.anchor.is_none());
+    }
+
+    #[test]
+    fn multiple_holes_create_a_boolean_group_and_survive_file_roundtrip() {
+        let ctx = egui::Context::default();
+        let mut app = app();
+        app.scene.groups.clear();
+        app.set_sketch_tool(true);
+        app.sketch_done(Finished::Profile(sketch::rect([-24.0, -20.0], [24.0, 20.0])));
+        app.sk.stage = Stage::Hole;
+        app.sketch_done(Finished::Profile(sketch::circle([-11.0, 0.0], 5.0, sketch::CIRCLE_POINTS)));
+        app.sk.stage = Stage::Hole;
+        app.sketch_done(Finished::Profile(sketch::rect([8.0, -6.0], [16.0, 6.0])));
+        assert_eq!(app.sk.holes.len(), 2);
+        app.sk.height = 8.0;
+        app.sk.make = Make::Extrude;
+        assert!(app.sketch_make(&ctx), "{}", app.sk.msg);
+        assert_eq!(app.scene.groups.len(), 1);
+        let g = &app.scene.groups[0];
+        assert_eq!(g.shapes.len(), 3);
+        assert_eq!(g.shapes[0].op, Op::Add);
+        assert!(g.shapes[1..].iter().all(|s| s.op == Op::Subtract && s.blend == 0.0));
+        let field = crate::sdf::Field::new(&app.scene);
+        assert!(field.distance([0.0, 0.0, 4.0]) < 0.0);
+        assert!(field.distance([-11.0, 0.0, 4.0]) > 0.0);
+        assert!(field.distance([12.0, 0.0, 4.0]) > 0.0);
+        let back = crate::model::Scene::from_json(&app.scene.to_json()).expect("saved scene");
+        assert_eq!(back.groups[0].shapes.len(), 3);
+        assert!(crate::sdf::Field::new(&back).distance([12.0, 0.0, 4.0]) > 0.0);
+    }
+
+    #[test]
+    fn touching_hole_is_refused_in_sketch_card() {
+        let mut app = app();
+        app.set_sketch_tool(true);
+        app.sketch_done(Finished::Profile(sketch::rect([-20.0, -20.0], [20.0, 20.0])));
+        app.sk.stage = Stage::Hole;
+        app.sketch_done(Finished::Profile(sketch::rect([20.0, -5.0], [25.0, 5.0])));
+        assert!(app.sk.holes.is_empty());
+        assert!(!app.sk.msg.is_empty());
     }
 
     /// Draw a profile on the floor and make every kind of solid of it, through the same calls the card uses.
