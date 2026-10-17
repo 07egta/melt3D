@@ -4,10 +4,24 @@ Run this on a **real Windows desktop** (not the headless GitHub runner). Use the
 exact binaries produced by one successful CI workflow. Do not label the release
 "GUI verified" until the checklist has been performed on both programs.
 
+## Preparing a candidate
+
+Normal pushes and pull requests run checks and retain their build artifacts. They
+do not replace the published download. In Actions, run **Build** on
+`easy-layout-and-melt` with **prepare_draft** enabled only when a candidate is
+wanted. After the Windows, Tests and Web jobs all succeed, the workflow creates a
+new unpublished draft with a unique commit/run/attempt tag, both executables and
+`SHA256SUMS.txt`. A branch-head check skips superseded runs.
+
+Download both executables and their checksum file from that one draft, complete
+the checks below, then obtain release authorization before publishing it. The
+workflow never updates `latest`, overwrites an existing asset or publishes a
+draft automatically. A Linux/software-GPU screenshot is not a Windows result.
+
 ## Provenance
 - Branch / commit SHA: ______________________
 - Actions workflow run URL: __________________
-- Downloaded binary hashes match `YURACAD-SHA256.txt`: Yes / No
+- Downloaded binary hashes match `SHA256SUMS.txt`: Yes / No
 - Windows version / build: ___________________
 - Display DPI / resolution: __________________
 - GPU + driver: ______________________________
@@ -51,3 +65,4 @@ or minutes restrictions, record the exact Actions error text and run URL.
 This is **BLOCKED**, not a passing build or an application code failure.
 Do not merge PR #3 or publish a newly claimed tested release until runner
 execution resumes and required checks pass.
+

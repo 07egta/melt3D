@@ -2,20 +2,27 @@ name: Build
 
 # Windows app (.exe), the web app, and the main tests. Run by hand from the Actions tab
 # ("Run workflow"), on pushes to main / easy-layout-and-melt, or on PRs into the working
-# branch. Upstream release, store and Pages workflows are parked to save Actions minutes.
+# branch. Development checks never publish a release. A manual run can prepare a
+# new draft for a separately authorized, verified release.
 on:
   push:
     branches: [main, easy-layout-and-melt]
   pull_request:
     branches: [easy-layout-and-melt]
   workflow_dispatch:
+    inputs:
+      prepare_draft:
+        description: Prepare a new Windows draft after all checks (does not publish)
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
 
 concurrency:
   group: build-${{ github.workflow }}-${{ github.ref }}
-  # Pull-request runs may be cancelled. Never interrupt a running release promotion.
+  # Pull-request runs may be cancelled. Never interrupt draft preparation.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
@@ -123,80 +130,74 @@ jobs:
           grep -hE "test result" test1.log test2.log test3.log | while read -r line; do echo "::notice::$line"; done
           exit $((s1 + s2 + s3))
 
-  # Never replace the download with a build that failed tests, and never publish
-  # from a pull request or a branch other than the YURACAD working branch.
-  publish:
-    name: Publish tested YURACAD Windows release
-    if: github.event_name == 'push' && github.ref_name == 'easy-layout-and-melt'
-    needs: [windows, tests]
+  # Preparing a release is an explicit action; merging a PR never replaces the
+  # current download. Every attempt uses a new draft, so a partial upload cannot
+  # expose a mixed set of executables or overwrite a previously published asset.
+  prepare_draft:
+    name: Prepare verified Windows draft
+    if: github.event_name == 'workflow_dispatch' && inputs.prepare_draft && github.ref_name == 'easy-layout-and-melt'
+    needs: [windows, tests, web]
     runs-on: ubuntu-latest
-    # Serialize updates from successful workflows, rather than clobbering concurrently.
     concurrency:
-      group: yuracad-rolling-release
+      group: melt3d-windows-draft
       cancel-in-progress: false
     permissions:
       contents: write
     steps:
-      - name: Check for superseding changes on the working branch
-        id: current
+      - name: Download executables from this successful run only
+        uses: actions/download-artifact@v4
+        with:
+          name: meltcad-windows
+          path: dist
+      - name: Validate binaries and prepare checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PYCODE'
+          from pathlib import Path
+          from hashlib import sha256
+          import shutil
+          pairs = [
+              (Path("dist/meltcad.exe"), Path("YURACAD.exe")),
+              (Path("dist/solidcraft.exe"), Path("YURACAD-Classic.exe")),
+          ]
+          sums = []
+          for source, output in pairs:
+              if source.stat().st_size < 1024 * 1024:
+                  raise SystemExit(f"Unexpectedly small Windows executable: {source}")
+              with source.open("rb") as stream:
+                  if stream.read(2) != b"MZ":
+                      raise SystemExit(f"Not a Windows executable: {source}")
+              shutil.copyfile(source, output)
+              sums.append((sha256(output.read_bytes()).hexdigest(), output.name))
+          if sums[0][0] == sums[1][0]:
+              raise SystemExit("The modeller and Classic must be different executables")
+          Path("SHA256SUMS.txt").write_text("".join(f"{digest}  {name}\n" for digest, name in sums))
+          PYCODE
+          cat > release-notes.txt <<EOF
+          Source commit: ${GITHUB_SHA}
+          Successful build: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
+
+          This is an unpublished Windows candidate. CI checks native Rust tests and
+          a headless EXE render. Interactive launch, New, Save/Reopen and Export
+          still require the real-Windows acceptance checks in
+          docs/yuracad-windows-acceptance.md before publication is authorized.
+
+          Asset names preserve the existing download naming. SHA256SUMS.txt covers
+          both executables from this one workflow run. Existing releases are unchanged.
+          EOF
+      - name: Create a new unpublished draft for the current checked commit
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           branch_head="$(gh api "repos/${GITHUB_REPOSITORY}/branches/easy-layout-and-melt" --jq .commit.sha)"
-          if [ "$branch_head" = "$GITHUB_SHA" ]; then
-            echo "publish=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "::notice::Superseded workflow: branch moved to $branch_head. Keeping existing Release."
-            echo "publish=false" >> "$GITHUB_OUTPUT"
+          if [ "$branch_head" != "$GITHUB_SHA" ]; then
+            echo "::notice::Superseded run: branch moved to $branch_head; no draft created."
+            exit 0
           fi
-      - name: Download executables from this successful run only
-        if: steps.current.outputs.publish == 'true'
-        uses: actions/download-artifact@v4
-        with:
-          name: meltcad-windows
-          path: dist
-      - name: Validate binaries and prepare unambiguous release names
-        if: steps.current.outputs.publish == 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-          test -s dist/meltcad.exe
-          test -s dist/solidcraft.exe
-          python3 - <<'PY'
-          from pathlib import Path
-          from hashlib import sha256
-          paths = [Path("dist/meltcad.exe"), Path("dist/solidcraft.exe")]
-          for p in paths:
-              if p.stat().st_size < 1024 * 1024 or p.open("rb").read(2) != b"MZ":
-                  raise SystemExit(f"Not a valid-sized Windows PE executable: {p}")
-          if sha256(paths[0].read_bytes()).digest() == sha256(paths[1].read_bytes()).digest():
-              raise SystemExit("Expected two different Windows executables")
-          PY
-          cp dist/meltcad.exe YURACAD.exe
-          cp dist/solidcraft.exe YURACAD-Classic.exe
-          sha256sum YURACAD.exe YURACAD-Classic.exe > YURACAD-SHA256.txt
-          cat > release-notes.txt <<EOF
-          Windows x64 downloads built from easy-layout-and-melt at ${GITHUB_SHA}.
-
-          - YURACAD.exe: MELTCAD, the blob / sculpt-style modeller (.meltcad).
-          - YURACAD-Classic.exe: SolidCraft, the parametric CAD app (.solidcraft).
-
-          CI: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
-          SHA256 checksums: YURACAD-SHA256.txt
-
-          Windows native Rust tests and a headless EXE render are checked by CI.
-          Interactive launch, File > New, Save, and Export require separate real-Windows
-          verification using docs/yuracad-windows-acceptance.md; CI alone does not prove them.
-          EOF
-      - name: Replace rolling assets only after all required checks pass
-        if: steps.current.outputs.publish == 'true'
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          gh release view latest --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || gh release create latest --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease --title "Latest build" --notes-file release-notes.txt
-          gh release upload latest YURACAD.exe YURACAD-Classic.exe YURACAD-SHA256.txt --repo "$GITHUB_REPOSITORY" --clobber
-          gh release edit latest --repo "$GITHUB_REPOSITORY" --notes-file release-notes.txt
+          tag="melt3d-candidate-${GITHUB_SHA:0:12}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          gh release create "$tag" YURACAD.exe YURACAD-Classic.exe SHA256SUMS.txt \
+            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --draft --prerelease \
+            --title "Melt3D Windows candidate ${GITHUB_SHA:0:12}" --notes-file release-notes.txt
