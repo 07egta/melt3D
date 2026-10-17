@@ -3,7 +3,7 @@
 use crate::sketch;
 use crate::sketch_ui::Pen;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub enum Target {
     Rectangle { anchor: [f32; 2], edge: [f32; 2] },
     Circle { center: [f32; 2], edge: [f32; 2] },
