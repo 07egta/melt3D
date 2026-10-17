@@ -160,6 +160,150 @@ pub fn resample_max(path: &[[f32; 4]], smooth: f32, closed: bool, max_points: us
     out
 }
 
+
+/// Evaluate a true cubic Bezier segment when any node has explicit handle mode.
+/// Legacy shapes without modes continue using the original Catmull-Rom path.
+pub fn segment_shape(shape: &crate::model::Shape, seg: usize, t: f32) -> [f32; 4] {
+    use crate::model::CurveNodeMode;
+    let n = shape.path.len();
+    let (closed, smooth, _, _) = settings(&shape.params);
+    if n < 2 || seg >= (if closed && n >= 3 { n } else { n - 1 }) {
+        return [0.0, 0.0, 0.0, 1.0];
+    }
+    if !shape.curve_handles.iter().any(|h| h.mode != CurveNodeMode::Auto) {
+        return segment_point(&shape.path, seg, t, smooth, closed);
+    }
+    let j = (seg + 1) % n;
+    let a = shape.path[seg];
+    let b = shape.path[j];
+    let tangent = |idx: usize| -> [f32; 3] {
+        if smooth <= 1e-4 { return [0.0; 3]; }
+        // A derivative of the *existing* interpolant at each join, with
+        // the segment's own time scale. Smooth nodes share one direction.
+        let prev = if idx == 0 { if closed { n - 1 } else { 0 } } else { idx - 1 };
+        let next = if idx + 1 == n { if closed { 0 } else { n - 1 } } else { idx + 1 };
+        let p = shape.path[prev];
+        let q = shape.path[next];
+        [0, 1, 2].map(|k| (q[k] - p[k]) * smooth / 6.0)
+    };
+    let handles = |idx: usize, outgoing: bool| -> [f32; 3] {
+        let h = shape.curve_handles.get(idx).copied().unwrap_or_default();
+        match h.mode {
+            CurveNodeMode::Auto => {
+                let v = tangent(idx);
+                if outgoing { v } else { v.map(|x| -x) }
+            }
+            CurveNodeMode::Smooth | CurveNodeMode::Corner => {
+                if outgoing { h.outgoing } else { h.incoming }
+            }
+        }
+    };
+    let hout = handles(seg, true);
+    let hin = handles(j, false);
+    let p1 = [0, 1, 2].map(|k| a[k] + hout[k]);
+    let p2 = [0, 1, 2].map(|k| b[k] + hin[k]);
+    let t = t.clamp(0.0, 1.0);
+    let u = 1.0 - t;
+    let mut out = [0.0; 4];
+    for k in 0..3 {
+        out[k] = u*u*u*a[k] + 3.0*u*u*t*p1[k] + 3.0*u*t*t*p2[k] + t*t*t*b[k];
+    }
+    out[3] = (a[3] * u + b[3] * t).clamp(R_MIN, R_MAX);
+    out
+}
+
+/// Detect planar crossings of the centreline after subdivision (useful for
+/// self-intersecting sketch paths; crossings in 3D projections are advisory).
+pub fn self_intersections_xy(points: &[[f32; 4]], closed: bool) -> Vec<(usize, usize)> {
+    fn orient(a: [f32; 4], b: [f32; 4], c: [f32; 4]) -> f32 {
+        (b[0]-a[0])*(c[1]-a[1]) - (b[1]-a[1])*(c[0]-a[0])
+    }
+    let m = points.len().saturating_sub(1);
+    let mut intersections = Vec::new();
+    for i in 0..m {
+        let (a,b)=(points[i],points[i+1]);
+        for j in (i+2)..m {
+            if closed && i==0 && j==m-1 { continue; }
+            let (c,d)=(points[j],points[j+1]);
+            let (ab1,ab2)=(orient(a,b,c),orient(a,b,d));
+            let (cd1,cd2)=(orient(c,d,a),orient(c,d,b));
+            if ab1*ab2 < -1e-8 && cd1*cd2 < -1e-8 {
+                intersections.push((i,j));
+            }
+        }
+    }
+    intersections
+}
+
+/// Shared geometry for viewport, GPU and export. For manually edited curves,
+/// adapt subdivision to curvature while honoring the GPU's 96-point limit.
+pub fn build_shape(shape: &crate::model::Shape) -> Vec<[f32; 4]> {
+    build_shape_max(shape, MAX_POINTS)
+}
+
+pub fn build_shape_max(shape: &crate::model::Shape, cap: usize) -> Vec<[f32; 4]> {
+    use crate::model::CurveNodeMode;
+    if !shape.curve_handles.iter().any(|h| h.mode != CurveNodeMode::Auto) {
+        return build_max(&shape.path, &shape.params, cap);
+    }
+    let n = shape.path.len();
+    if n < 2 { return build_max(&shape.path, &shape.params, cap); }
+    let (closed, _, _, thick) = settings(&shape.params);
+    let segs = if closed && n >= 3 { n } else { n - 1 };
+    let cap = cap.clamp(4, MAX_POINTS);
+    // Always retain endpoints of every segment. If the user exceeds the GPU
+    // budget, use the established legacy point cap as a safe fallback.
+    if segs + 1 > cap { return build_max(&shape.path, &shape.params, cap); }
+    let mut divisions = vec![1usize; segs];
+    // Iteratively split the segment with greatest midpoint chord error.
+    // Additional quarter probes guard against inflection cancellation.
+    for _ in 0..cap.saturating_sub(segs + 1) {
+        let mut best = None;
+        let mut score = 0.0_f32;
+        for seg in 0..segs {
+            if divisions[seg] >= 64 { continue; }
+            let count = divisions[seg];
+            let mut worst = 0.0_f32;
+            for j in 0..count {
+                let a = j as f32 / count as f32;
+                let b = (j + 1) as f32 / count as f32;
+                let pa = segment_shape(shape, seg, a);
+                let pb = segment_shape(shape, seg, b);
+                for fraction in [0.25, 0.5, 0.75] {
+                    let t = a + (b - a) * fraction;
+                    let actual = segment_shape(shape, seg, t);
+                    let chord = lerp4(pa, pb, fraction);
+                    let err = (0..3).map(|k| (actual[k] - chord[k]).powi(2)).sum::<f32>().sqrt();
+                    worst = worst.max(err);
+                }
+            }
+            if worst > score { score = worst; best = Some(seg); }
+        }
+        // 0.02mm in local space is a useful upper error target, not a
+        // guaranteed screen-space tolerance when the GPU cap is exhausted.
+        if score < 0.02 { break; }
+        let Some(seg) = best else { break };
+        divisions[seg] += 1;
+    }
+    let mut out = Vec::with_capacity(cap);
+    for seg in 0..segs {
+        for step in 0..divisions[seg] {
+            out.push(segment_shape(shape, seg, step as f32 / divisions[seg] as f32));
+        }
+    }
+    out.push(if closed && n >= 3 { shape.path[0] } else { shape.path[n - 1] });
+    for p in &mut out { p[3] = (p[3] * thick).clamp(R_MIN, R_MAX); }
+    out
+}
+
+pub fn half_extent_shape(shape: &crate::model::Shape) -> V3 {
+    let mut h = [1.0_f32; 3];
+    for p in build_shape(shape) {
+        for i in 0..3 { h[i] = h[i].max(p[i].abs() + p[3] * 1.25); }
+    }
+    h
+}
+
 /// A box around the points, grown by their largest radius: (low corner, high corner).
 pub fn bounds(points: &[[f32; 4]]) -> (V3, V3) {
     let mut lo = [f32::MAX; 3];
@@ -538,4 +682,57 @@ mod tests {
         // an old file with no multiplier (0) means 1
         assert_eq!(build(&path, &[0.0; 4]), build(&path, &[0.0, 0.0, 0.0, 1.0]));
     }
+    #[test]
+    fn cubic_bezier_endpoints_and_smooth_joint() {
+        use crate::model::{CurveHandles, CurveNodeMode};
+        let mut s = Shape::new(Kind::Curve, [0.0; 3], Material::default());
+        s.path = vec![[0.0,0.0,0.0,2.0],[10.0,0.0,0.0,2.0],[20.0,0.0,0.0,2.0]];
+        s.curve_handles = vec![CurveHandles::default(); 3];
+        s.curve_handles[1] = CurveHandles { mode: CurveNodeMode::Smooth, incoming: [-3.0, -4.0, 0.0], outgoing: [3.0, 4.0, 0.0] };
+        assert_eq!(segment_shape(&s, 0, 1.0), s.path[1]);
+        assert_eq!(segment_shape(&s, 1, 0.0), s.path[1]);
+        let e = 1e-3;
+        let left = segment_shape(&s, 0, 1.0-e);
+        let right = segment_shape(&s, 1, e);
+        let joint = s.path[1];
+        let a = [0,1,2].map(|k| (joint[k]-left[k])/e);
+        let b = [0,1,2].map(|k| (right[k]-joint[k])/e);
+        assert!((0..3).all(|k| (a[k]-b[k]).abs() < 0.05));
+        let sampled = build_shape(&s);
+        assert!(sampled.len() <= MAX_POINTS);
+        assert!(sampled.iter().all(|p| p.iter().all(|v| v.is_finite())));
+    }
+
+    #[test]
+    fn legacy_shape_sampling_is_unchanged() {
+        let s = Shape::new(Kind::Curve, [0.0;3], Material::default());
+        assert_eq!(build_shape(&s), build(&s.path, &s.params));
+    }
+
+    #[test]
+    fn crossing_detection_distinguishes_a_loop_from_a_bowtie() {
+        let bowtie = [[0.0,0.0,0.0,1.0],[10.0,10.0,0.0,1.0],
+            [0.0,10.0,0.0,1.0],[10.0,0.0,0.0,1.0]];
+        assert_eq!(self_intersections_xy(&bowtie,false), vec![(0,2)]);
+        let square = [[0.0,0.0,0.0,1.0],[10.0,0.0,0.0,1.0],
+            [10.0,10.0,0.0,1.0],[0.0,10.0,0.0,1.0],[0.0,0.0,0.0,1.0]];
+        assert!(self_intersections_xy(&square,true).is_empty());
+    }
+
+    #[test]
+    fn authored_handles_survive_json_round_trip() {
+        use crate::model::{CurveHandles, CurveNodeMode};
+        let mut shape=Shape::new(Kind::Curve,[0.0;3],Material::default());
+        shape.curve_handles=vec![CurveHandles {mode:CurveNodeMode::Corner,
+            incoming:[-2.0,3.0,0.0],outgoing:[3.0,1.0,0.0]}];
+        let json=serde_json::to_string(&shape).unwrap();
+        let loaded:Shape=serde_json::from_str(&json).unwrap();
+        assert_eq!(shape.curve_handles,loaded.curve_handles);
+        let mut old_json:serde_json::Value=serde_json::from_str(&json).unwrap();
+        old_json.as_object_mut().unwrap().remove("curve_handles");
+        let old:Shape=serde_json::from_value(old_json).unwrap();
+        assert!(old.curve_handles.is_empty());
+        assert_eq!(build_shape(&old),build(&old.path,&old.params));
+    }
+
 }

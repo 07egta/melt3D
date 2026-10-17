@@ -390,9 +390,9 @@ fn pack_curve(s: &crate::model::Shape, path: &mut Vec<f32>) -> (usize, usize) {
     let used = path.len() / 4;
     let room = PATH_V4.saturating_sub(used + 2);
     let need = |n: usize| n + n.saturating_sub(1).div_ceil(crate::curve::GROUP_SEGMENTS);
-    let mut pts = crate::curve::build(&s.path, &s.params);
+    let mut pts = crate::curve::build_shape(s);
     if need(pts.len()) > room {
-        pts = crate::curve::build_max(&s.path, &s.params, (room * crate::curve::GROUP_SEGMENTS / (crate::curve::GROUP_SEGMENTS + 1)).max(4));
+        pts = crate::curve::build_shape_max(s, (room * crate::curve::GROUP_SEGMENTS / (crate::curve::GROUP_SEGMENTS + 1)).max(4));
     }
     if pts.len() < 2 || need(pts.len()) > room {
         return (0, 0);
