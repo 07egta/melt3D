@@ -129,7 +129,9 @@ impl App {
             if mods.shift {
                 self.cam.pan(d.x, d.y, rect.height());
             } else if mods.ctrl {
-                self.cam.zoom(-d.y * 2.0);
+                if let Some(p) = pos {
+                    self.cam.zoom_at(rect, p, -d.y * 2.0);
+                }
             } else {
                 self.cam.orbit(d.x, d.y);
             }
@@ -143,12 +145,12 @@ impl App {
         if resp.hovered() {
             let (scroll, pinch) = ui.input(|i| (i.smooth_scroll_delta.y, i.zoom_delta()));
             if let Some(p) = pos {
-                if scroll != 0.0 {
-                    self.cam.zoom_at(rect, p, scroll);
-                    moved_camera = true;
-                }
-                if pinch != 1.0 {
-                    self.cam.zoom_at(rect, p, (1.0 / pinch).ln() * -660.0);
+                // Apply wheel and pinch in one step, keeping the cursor anchor stable.
+                // Keep the original pinch sensitivity and mouse bindings.
+                let pinch_scroll = if pinch.is_finite() && pinch > 0.0 { pinch.ln() * 660.0 } else { 0.0 };
+                let total_scroll = scroll + pinch_scroll;
+                if total_scroll.is_finite() && total_scroll != 0.0 {
+                    self.cam.zoom_at(rect, p, total_scroll);
                     moved_camera = true;
                 }
             }
@@ -297,7 +299,14 @@ impl App {
             return;
         }
         self.gpu_cards(ui.ctx(), rect);
-        if let Some(g) = &geom {
+        // Input can move the camera or shape earlier this frame. Draw handles against
+        // the updated positions rather than the stale pre-input geometry.
+        let draw_geom = if moved_camera || self.drag.is_some() {
+            gizmo::build(&self.cam, rect, &self.scene, self.sel, tool)
+        } else {
+            geom
+        };
+        if let Some(g) = &draw_geom {
             let active = self.drag.as_ref().map(gizmo::Drag::handle).or(hover_handle);
             gizmo::draw(&painter, g, tool, active);
         }
