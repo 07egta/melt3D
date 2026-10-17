@@ -33,6 +33,12 @@ fn id() -> egui::Id {
     egui::Id::new("yura_high_memory_job_budget")
 }
 
+/// Is a high-memory worker still active? Closing a card does not release its permit.
+pub fn is_busy(ctx: &egui::Context) -> bool {
+    ctx.data(|data| data.get_temp::<Budget>(id()))
+        .is_some_and(|b| b.0.load(Ordering::Acquire))
+}
+
 /// Context-scoped, so two independent document windows/tests do not block each other.
 pub fn try_acquire(ctx: &egui::Context) -> Result<Permit, String> {
     let budget = ctx.data_mut(|data| {
