@@ -32,6 +32,14 @@ impl Rig {
             egui::CentralPanel::default().frame(egui::Frame::new()).show(ui, |ui| app.viewport(ui));
         });
         out.textures_delta.clear();
+        self.app.settle(&self.ctx);
+    }
+
+    fn key(&mut self, key: egui::Key) {
+        self.frame(vec![Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() }]);
+        self.ctx.input_mut(|i| i.events.push(Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() }));
+        self.app.keys(&self.ctx);
+        self.app.settle(&self.ctx);
     }
 
     fn mv(&mut self, p: Pos2) {
@@ -138,4 +146,73 @@ fn with_the_pipe_tool_still_on_a_press_on_a_node_moves_the_node_instead_of_traci
     let after = r.app.scene.shape(g, s).and_then(|s| s.path.get(mid).copied());
     assert_eq!(r.app.scene.shape_count(), count, "no second pipe was traced");
     assert_ne!(before, after, "the node must move even though the pipe tool is on (before {before:?}, after {after:?})");
+}
+
+#[test]
+fn escape_during_handle_drag_restores_the_shape_and_clears_drag() {
+    let mut r = Rig::new();
+    r.app.tool = crate::gizmo::Tool::Move;
+    let start = r.app.scene.clone();
+    let g = crate::gizmo::build(&r.app.cam, r.app.view_rect, &r.app.scene, r.app.sel, r.app.tool).expect("gizmo");
+    let c = r.app.cam.project(r.app.view_rect, [0.0, 0.0, 20.0]).expect("centre");
+    let mut handle = None;
+    for dx in 12..72 {
+        let p = c + vec2(dx as f32, 0.0);
+        if crate::gizmo::hit(&g, r.app.tool, p).is_some() {
+            handle = Some(p);
+            break;
+        }
+    }
+    let from = handle.expect("visible move handle");
+    r.mv(from);
+    r.button(from, true);
+    r.mv(from + vec2(90.0, 60.0));
+    assert!(r.app.drag.is_some(), "pointer events started a gizmo drag");
+    r.key(egui::Key::Escape);
+    assert!(r.app.drag.is_none(), "Escape cancels the active drag");
+    assert_eq!(r.app.scene, start, "Escape restores the pre-drag geometry");
+    r.button(from + vec2(90.0, 60.0), false);
+    r.frame(vec![]);
+    assert_eq!(r.app.scene, start, "release after cancellation must not mutate the scene");
+}
+
+#[test]
+fn a_gizmo_drag_is_exactly_one_undo_step() {
+    let mut r = Rig::new();
+    r.app.tool = crate::gizmo::Tool::Scale;
+    let start = r.app.scene.clone();
+    let centre = r.app.cam.project(r.app.view_rect, [0.0, 0.0, 20.0]).expect("centre");
+    r.drag(centre, centre + vec2(90.0, -60.0));
+    assert_ne!(r.app.scene, start, "scaling changes the shape");
+    let end = r.app.scene.clone();
+    r.app.undo();
+    assert_eq!(r.app.scene, start);
+    r.app.redo();
+    assert_eq!(r.app.scene, end);
+}
+
+#[test]
+fn drag_release_outside_viewport_clears_capture_and_keeps_undo() {
+    let mut r = Rig::new();
+    r.app.tool = crate::gizmo::Tool::Scale;
+    let start = r.app.scene.clone();
+    let centre = r.app.cam.project(r.app.view_rect, [0.0, 0.0, 20.0]).expect("centre");
+    r.mv(centre);
+    r.button(centre, true);
+    r.mv(pos2(-70.0, -50.0));
+    r.button(pos2(-70.0, -50.0), false);
+    r.frame(vec![]);
+    assert!(r.app.drag.is_none(), "a release outside the window must end a drag");
+    if r.app.scene != start {
+        r.app.undo();
+        assert_eq!(r.app.scene, start);
+    }
+}
+
+#[test]
+fn delete_without_curve_node_selection_still_deletes_selected_shape() {
+    let mut r = Rig::new();
+    let n = r.app.scene.shape_count();
+    r.key(egui::Key::Delete);
+    assert_eq!(r.app.scene.shape_count(), n - 1, "Delete regression");
 }
