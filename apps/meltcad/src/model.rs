@@ -535,6 +535,33 @@ impl Shape {
             }
         }
     }
+    /// Atomically replace a sketch-driven outline. Validate before touching the model:
+    /// invalid drags must never enter the 3D renderer, undo history or saved file.
+    /// The coordinates are already in the shape's local plane, so position, rotation,
+    /// height, material and the other loft profile remain unchanged.
+    pub fn set_sketch_outline(&mut self, top: bool, points: Vec<[f32; 2]>) -> Result<bool, String> {
+        if !self.kind.uses_outline() || (top && !self.kind.uses_outline2()) {
+            return Err("この形には編集できる輪かくがありません".to_string());
+        }
+        if points.iter().any(|p| p.iter().any(|v| !v.is_finite() || v.abs() > crate::sketch::COORD_MAX)) {
+            return Err("輪かくの座標は±2000mm以内にしてください".to_string());
+        }
+        let checked = crate::sketch::validate_profile(&points).map_err(|e| e.message())?;
+        if checked.len() != points.len() {
+            return Err(crate::sketch::SketchError::TooSmall.message());
+        }
+        if self.kind == Kind::Revolve && points.iter().any(|p| p[0] < 0.0) {
+            return Err(crate::sketch::SketchError::LeftOfAxis.message());
+        }
+        // Keep the original vertex order, so selection indices do not jump if a
+        // legacy model happens to have clockwise winding.
+        let original = if top { &mut self.outline2 } else { &mut self.outline };
+        if *original == points {
+            return Ok(false);
+        }
+        *original = points;
+        Ok(true)
+    }
 }
 
 impl Kind {
@@ -984,6 +1011,56 @@ pub const MAX_SHAPES: usize = 512;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_sketch_outline_edit_updates_the_solid_atomically_and_survives_reload() {
+        use crate::sdf::Prepared;
+
+        let built = crate::sketch::extrude(
+            &crate::sketch::Frame::floor(),
+            &crate::sketch::rect([-10.0, -10.0], [10.0, 10.0]),
+            10.0,
+            false,
+        )
+        .expect("a rectangle extrudes");
+        let mut shape = Shape::new(Kind::Extrude, [0.0; 3], Material::default());
+        crate::sketch::apply(&built, &mut shape);
+        let original = shape.clone();
+        let probe = [13.0, 7.0, 5.0];
+        assert!(Prepared::new(&shape).distance(probe) > 0.0);
+
+        let mut crossing = shape.outline.clone();
+        crossing[2] = [-20.0, 0.0];
+        assert!(shape.set_sketch_outline(false, crossing).is_err());
+        assert_eq!(shape, original, "rejecting a crossing is non-destructive");
+
+        let mut repeated = shape.outline.clone();
+        repeated[2] = repeated[1];
+        assert!(shape.set_sketch_outline(false, repeated).is_err());
+        assert_eq!(shape, original, "zero-length edges are also rejected");
+
+        let mut enlarged = shape.outline.clone();
+        enlarged[2] = [20.0, 10.0];
+        assert_eq!(shape.set_sketch_outline(false, enlarged.clone()), Ok(true));
+        assert_eq!(shape.set_sketch_outline(false, enlarged.clone()), Ok(false));
+        assert!(Prepared::new(&shape).distance(probe) < 0.0, "3D solid follows the new profile");
+        assert_eq!((shape.pos, shape.rot, shape.size), (original.pos, original.rot, original.size));
+        assert_eq!(shape.material, original.material);
+
+        let mut scene = Scene::default();
+        scene.groups[0].shapes = vec![shape.clone()];
+        let restored = Scene::from_json(&scene.to_json()).expect("saved sketch loads");
+        let mut reopened = restored.shape(0, 0).expect("shape stays").clone();
+        assert_eq!(reopened, shape, "the vertices and other properties survive serialization");
+        assert!(Prepared::new(&reopened).distance(probe) < 0.0);
+        let mut new_outline = reopened.outline.clone();
+        new_outline[2] = [24.0, 10.0];
+        assert_eq!(reopened.set_sketch_outline(false, new_outline), Ok(true), "reopened sketch is editable again");
+
+        let mut primitive = Shape::new(Kind::Box, [0.0; 3], Material::default());
+        assert!(primitive.set_sketch_outline(false, enlarged).is_err());
+        assert!(shape.set_sketch_outline(true, shape.outline.clone()).is_err(), "only lofts have a top outline");
+    }
 
     #[test]
     fn a_scene_round_trips_and_hostile_numbers_are_made_safe() {

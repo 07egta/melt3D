@@ -216,10 +216,16 @@ impl App {
         if resp.double_clicked_by(PointerButton::Primary)
             && hover_handle.is_none()
             && !ct.taken
+            && !self.sketch_active()
             && let Some(p) = pos
             && self.gnomon_hit(rect, p).is_none()
         {
-            self.frame_view(self.sel.is_some());
+            match self.shape_at(rect, p) {
+                Some((g, s)) if self.scene.shape(g, s).is_some_and(crate::sketch::editable) => {
+                    self.sketch_edit_begin(g, s);
+                }
+                _ => self.frame_view(self.sel.is_some()),
+            }
         }
 
         // The picture itself. It is made after the input above so that it shows this frame's state.
