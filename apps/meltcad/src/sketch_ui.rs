@@ -415,6 +415,15 @@ impl State {
         }
     }
 
+    /// Abandon a rectangle/circle drag lost outside the viewport.
+    /// Do not leave a stale two-click anchor behind.
+    pub fn cancel_drag(&mut self) {
+        self.dragging = false;
+        self.anchor = None;
+        self.cursor = None;
+        self.mouse = None;
+    }
+
     /// The button came up at `p` after a drag.
     pub fn release(&mut self, p: [f32; 2]) -> Option<Finished> {
         if !self.dragging {
@@ -432,7 +441,10 @@ impl State {
     /// Enter (or a double click): close the outline / end the line.
     pub fn enter(&mut self) -> Option<Finished> {
         match self.active_pen() {
-            Pen::Rect | Pen::Circle => None,
+            Pen::Rect | Pen::Circle => match (self.anchor, self.cursor) {
+                (Some(a), Some(b)) if !same(a, b) => self.finish_shape(a, b),
+                _ => None,
+            },
             _ if self.pts.is_empty() => None,
             _ => self.finish_points(),
         }
@@ -677,6 +689,11 @@ impl App {
         let frame = self.sk.frame;
         let step = step_for(mods);
         let mouse = pos.filter(|p| resp.hovered() && !over_gnomon(*p));
+        // Losing the pointer during a shape gesture cancels it, rather than
+        // reusing its first corner on the next click.
+        if self.sk.dragging && ui.input(|i| i.pointer.interact_pos()).is_none() {
+            self.sk.cancel_drag();
+        }
         self.sk.mouse = mouse;
         self.sk.cursor = mouse.and_then(|p| self.sketch_cursor(rect, p, step, &frame));
         out.over = self.sk.cursor.is_some();
@@ -703,7 +720,7 @@ impl App {
                 if !primary_down || resp.drag_stopped() {
                     match self.sk.cursor {
                         Some(q) => done = self.sk.release(q),
-                        None => self.sk.dragging = false,
+                        None => self.sk.cancel_drag(),
                     }
                 }
             }
@@ -723,6 +740,16 @@ impl App {
         if let Some(d) = done {
             self.sketch_done(d);
         }
+        // Every primary sketch gesture belongs to the sketch, including drags
+        // which have not produced a point. Never fall through to object picking.
+        if !mods.alt && (resp.drag_started_by(egui::PointerButton::Primary)
+            || resp.dragged_by(egui::PointerButton::Primary)
+            || resp.drag_stopped_by(egui::PointerButton::Primary)
+            || resp.clicked_by(egui::PointerButton::Primary)
+            || resp.double_clicked_by(egui::PointerButton::Primary))
+        {
+            out.taken = true;
+        }
         out
     }
 
@@ -741,6 +768,10 @@ impl App {
         let enter = hit(Key::Enter);
         let esc = hit(Key::Escape);
         if self.sk.edit.is_some() {
+            if esc && self.sk.edit.as_ref().is_some_and(|e| e.drag.is_some()) {
+                self.edit_cancel_drag();
+                return;
+            }
             if del {
                 self.sketch_edit_delete();
             }
@@ -875,6 +906,15 @@ impl App {
         }
     }
 
+    /// Escape during a node drag restores the exact original outline.
+    pub fn edit_cancel_drag(&mut self) {
+        let Some(d) = self.sk.edit.as_mut().and_then(|e| e.drag.take()) else { return };
+        if let Some((ol, _)) = self.edit_outline_mut() {
+            *ol = d.before;
+        }
+        self.sk.msg.clear();
+    }
+
     /// The button came up: keep the new outline unless it now crosses itself.
     pub fn edit_release(&mut self) {
         let Some(d) = self.sk.edit.as_mut().and_then(|e| e.drag.take()) else { return };
@@ -943,7 +983,8 @@ impl App {
             out.taken = true;
             out.busy = true;
             match (primary_down, ui.input(|i| i.pointer.interact_pos())) {
-                (true, Some(p)) => self.edit_drag(rect, p, step),
+                (true, Some(p)) if rect.contains(p) => self.edit_drag(rect, p, step),
+                (true, _) => self.edit_cancel_drag(),
                 _ => self.edit_release(),
             }
             return out;
