@@ -434,6 +434,85 @@ mod tests {
     }
 
     #[test]
+    fn old_circular_tube_remains_numerically_unchanged() {
+        let path = [[-16.0, 0.0, 0.0, 5.0], [0.0, 6.0, 0.0, 7.0], [15.0, -2.0, 0.0, 4.0]];
+        let mut seed = 47;
+        for _ in 0..250 {
+            let q = [
+                lcg(&mut seed) * 75.0 - 37.5,
+                lcg(&mut seed) * 75.0 - 37.5,
+                lcg(&mut seed) * 40.0 - 20.0,
+            ];
+            let original = smooth_tube(&path, q, false, false);
+            let profiled = smooth_tube_section(&path, q, false, 1.0, false);
+            assert_eq!(original, profiled, "default sections must keep old curves exactly");
+        }
+    }
+
+    #[test]
+    fn oval_and_rounded_square_sections_are_stable_and_distinct() {
+        let (a, b) = ([-25.0, 0.0, 0.0], [25.0, 0.0, 0.0]);
+        // The section's transverse axes are Y/Z for this X-oriented path.
+        let oval_side = section_cone([0.0, 2.5, 0.0], a, 5.0, b, 5.0, 0.5, false);
+        let oval_top = section_cone([0.0, 0.0, 5.0], a, 5.0, b, 5.0, 0.5, false);
+        assert!(oval_side.abs() < 1e-4, "{oval_side}");
+        assert!(oval_top.abs() < 1e-4, "{oval_top}");
+        let round = section_cone([0.0, 4.0, 4.0], a, 5.0, b, 5.0, 1.0, false);
+        let soft_square = section_cone([0.0, 4.0, 4.0], a, 5.0, b, 5.0, 1.0, true);
+        assert!(round > 0.1 && soft_square < -0.1, "{round}, {soft_square}");
+        // A tight bend or a nearly vertical segment may not divide by zero.
+        for b in [[0.0, 0.0, 40.0], [0.0, 0.0, -40.0], [0.001, 0.001, 0.001]] {
+            for squircle in [false, true] {
+                for aspect in [0.45, 0.7, 1.0] {
+                    for x in [-10.0, 0.0, 10.0] {
+                        assert!(section_cone([x, 1.0, 3.0], [0.0; 3], 5.0, b, 2.0, aspect, squircle).is_finite());
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn cap_roundness_is_continuous_and_preserves_flat_end_compatibility() {
+        let mut s = Shape::new(Kind::Curve, [0.0; 3], Material::default());
+        s.path = vec![[-15.0, 0.0, 0.0, 5.0], [15.0, 0.0, 0.0, 5.0]];
+        for flatness in [0.0, 0.25, 0.5, 0.75, 1.0] {
+            s.params = [0.0, 0.0, flatness, 1.0];
+            let d = Prepared::new(&s).distance([-17.0, 0.0, 0.0]);
+            assert!(d.is_finite());
+            if flatness == 0.0 {
+                assert!(d < -1.0, "rounded cap must still surround the point: {d}");
+            }
+            if flatness == 1.0 {
+                assert!(d > 1.0, "flat cap must cut at the end node: {d}");
+            }
+        }
+    }
+
+    #[test]
+    fn tight_hairpins_keep_finite_closed_sdf_for_both_sections() {
+        let mut s = Shape::new(Kind::Curve, [0.0; 3], Material::default());
+        s.path = vec![[-22.0, 0.0, 0.0, 4.0], [0.0, 0.0, 0.0, 5.0], [-0.6, 1.0, 0.0, 5.0], [-22.0, 3.0, 0.0, 3.0]];
+        s.params = [0.0, 1.0, 0.0, 1.0];
+        for aspect in [0.5, 1.0] {
+            for squared in [1.0, 2.0] {
+                s.size[1] = aspect;
+                s.size[2] = squared;
+                let prepared = Prepared::new(&s);
+                for p in &s.path {
+                    let d = prepared.distance([p[0], p[1], p[2]]);
+                    assert!(d.is_finite() && d < -0.05, "hairpin control point must remain inside: {d}");
+                }
+                let points = build(&s.path, &s.params);
+                let (lo, hi) = bounds_profile(&points, squared >= 1.5);
+                for a in 0..3 {
+                    assert!(lo[a] < hi[a] && lo[a].is_finite() && hi[a].is_finite());
+                }
+            }
+        }
+    }
+
+    #[test]
     fn a_straight_two_node_curve_is_a_capsule() {
         let (a, b, r) = ([-20.0, 5.0, 3.0], [25.0, -10.0, 12.0], 4.0);
         let mut s = Shape::new(Kind::Curve, [0.0; 3], Material::default());
