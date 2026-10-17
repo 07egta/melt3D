@@ -177,11 +177,11 @@ fn back_outline(width: f32, height: f32) -> Vec<[f32; 2]> {
     .collect()
 }
 
-fn curve(name: impl Into<String>, nodes: Vec<[f32; 4]>, mat: Material, blend: f32) -> Shape {
+fn curve(name: impl Into<String>, nodes: Vec<[f32; 4]>, mat: Material, blend: f32, smoothness: f32) -> Shape {
     let mut s = part(Kind::Curve, name, [0.0, 0.0, 0.0], mat, 0.0, blend);
     s.path = nodes;
     // The existing curve builder supports splined variable-radius paths.
-    s.params = [0.0, 0.66, 0.0, 1.0];
+    s.params = [0.0, smoothness.clamp(0.0, 1.0), 0.0, 1.0];
     s
 }
 
@@ -253,6 +253,7 @@ fn generated_shapes(p: Parameters) -> Vec<Shape> {
                 ],
                 seat_mat,
                 1.4,
+                0.83,
             ));
         }
     }
@@ -291,7 +292,9 @@ fn generated_shapes(p: Parameters) -> Vec<Shape> {
                 [x * 1.16, y * 1.17, r * 0.82, r * 0.85],
             ]
         };
-        shapes.push(curve(format!("脚 {}", i + 1), nodes, leg_mat, if mono { 2.2 } else { 0.6 }));
+        // The rounding slider also changes the interpolation through each tapered leg.
+        let leg_smooth = (0.25 + p.roundness * 0.09).clamp(0.25, 0.95);
+        shapes.push(curve(format!("脚 {}", i + 1), nodes, leg_mat, if mono { 2.2 } else { 0.6 }, leg_smooth));
     }
 
     if p.leg_count == 1 {
@@ -339,13 +342,14 @@ pub fn regenerate(group: &mut Group, next: Parameters) {
         for (a, off) in shape.pos.iter_mut().zip(offset) {
             *a += off;
         }
-        // Colour changes when switching design variants; numeric edits preserve
-        // per-part material customisation and visibility.
-        if previous.style == next.style
-            && let Some(old) = old_parts.iter().find(|s| s.name == shape.name)
-        {
-            shape.material = old.material;
+        // Retain stable part identities and custom material when the user tweaks a
+        // dimension. Style changes intentionally use the new style's palette.
+        if let Some(old) = old_parts.iter().find(|s| s.name == shape.name) {
+            shape.uid = old.uid;
             shape.visible = old.visible;
+            if previous.style == next.style {
+                shape.material = old.material;
+            }
         }
     }
     let mut extras: Vec<Shape> = group.shapes.drain(..).filter(|s| s.source != GENERATOR_TAG).collect();
@@ -464,6 +468,21 @@ mod tests {
         let loaded = Scene::from_json(&serialized).unwrap();
         assert_eq!(loaded.groups[0], g);
         assert!(loaded.groups[0].shapes[1].outline.len() >= 12);
+    }
+
+    #[test]
+    fn custom_material_visibility_and_part_identity_survive_dimension_changes() {
+        let mut g = generate(Parameters::default());
+        let custom = material([0.25, 0.80, 0.60], 0.2, 0.0);
+        g.shapes[0].uid = 108;
+        g.shapes[0].material = custom;
+        g.shapes[1].visible = false;
+        let mut params = Parameters::default();
+        params.seat_depth = 68.0;
+        regenerate(&mut g, params);
+        assert_eq!(g.shapes[0].uid, 108);
+        assert_eq!(g.shapes[0].material, custom);
+        assert!(!g.shapes[1].visible);
     }
 
     #[test]
