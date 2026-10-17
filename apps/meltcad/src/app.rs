@@ -1215,6 +1215,13 @@ impl App {
             }
             self.lib_open = false;
         }
+        // Memory QA: close the currently loaded model without terminating the
+        // process, so the same PID can be measured before and after release.
+        if dir.join("reset_scene").exists() && std::fs::remove_file(dir.join("reset_scene")).is_ok() {
+            self.new_scene(Scene::default());
+            let _ = std::fs::write(dir.join("reset_scene.done"), format!("{}\n", self.scene.shape_count()));
+            ctx.request_repaint();
+        }
         if dir.join("quit").exists() {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
