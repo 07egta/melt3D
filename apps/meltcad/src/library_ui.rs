@@ -129,6 +129,12 @@ pub fn panel(app: &mut App, ui: &mut egui::Ui) {
     collect(&ctx);
     let mut made_one = false;
     let mut pick: Option<(usize, usize)> = None;
+    if style::pill(ui, "＋ Organic Blob · ぷっくりブロブ", false)
+        .on_hover_text("ランダムシードとスライダーで形を調整するプリセット")
+        .clicked()
+    {
+        crate::organic_blob::open(&ctx);
+    }
     ui.add(egui::TextEdit::singleline(&mut app.lib_query).hint_text("さがす（なまえ・English）").desired_width(f32::INFINITY));
     ui.add_space(2.0);
     ui.horizontal_wrapped(|ui| {
