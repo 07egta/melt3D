@@ -367,8 +367,14 @@ pub fn controls(ui: &mut Ui, group: &mut Group, other_shapes: usize) -> bool {
     ui.horizontal_wrapped(|ui| {
         for style_id in Style::ALL {
             if style::pill(ui, style_id.label(), params.style == style_id).clicked() {
-                // Retain dimensions when switching styles, only change the sculptural design.
-                params.style = style_id;
+                // Preserve custom leg counts; otherwise use the selected style's
+                // signature leg layout (monocoque starts with a single pedestal).
+                if params.style != style_id {
+                    if params.leg_count == Parameters::for_style(params.style).leg_count {
+                        params.leg_count = Parameters::for_style(style_id).leg_count;
+                    }
+                    params.style = style_id;
+                }
             }
         }
     });
@@ -438,6 +444,29 @@ mod tests {
             sc.sanitize();
             assert_eq!(sc.groups[0], g, "generated parts must survive sanitization unchanged");
         }
+    }
+
+    #[test]
+    fn native_undo_redo_reverts_a_designer_chair_parameter_edit() {
+        let ctx = egui::Context::default();
+        let mut app = crate::app::App::new(true, None);
+        app.scene.groups.clear();
+        app.scene.groups.push(generate(Parameters::default()));
+        app.sel = Some(Pick::Group(0));
+        app.settle(&ctx);
+        let prior = app.scene.clone();
+
+        let mut changed = Parameters::default();
+        changed.seat_width = 68.0;
+        changed.leg_count = 3;
+        regenerate(&mut app.scene.groups[0], changed);
+        app.settle(&ctx);
+        assert_ne!(prior, app.scene);
+        let later = app.scene.clone();
+        app.undo();
+        assert_eq!(app.scene, prior, "Undo returns old chair dimensions");
+        app.redo();
+        assert_eq!(app.scene, later, "Redo regenerates the same saved shapes");
     }
 
     #[test]
