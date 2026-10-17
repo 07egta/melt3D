@@ -351,9 +351,9 @@ impl App {
 
     fn handle_close_request(&mut self, ctx: &egui::Context) {
         if ctx.input(|i| i.viewport().close_requested()) && !self.close_approved {
-            if self.native_job.is_some() || self.queued_open.is_some() || self.after_save.is_some() {
+            if self.native_job.is_some() || self.queued_open.is_some() || self.after_save.is_some() || crate::work_budget::is_busy(ctx) {
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-                self.say(ctx, "ファイル処理中です。完了するか中止してから閉じてください");
+                self.say(ctx, "重い処理が動いています。完了するか中止してから閉じてください");
             } else if self.has_unsaved_work() || self.pending_file_action.is_some() {
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
                 if self.pending_file_action.is_none() {
