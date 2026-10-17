@@ -462,6 +462,10 @@ impl App {
                 for s in &mut c.shapes {
                     s.pos = [s.pos[0] + 8.0, s.pos[1] + 8.0, s.pos[2]];
                 }
+                if let Some(p) = &mut c.lamp {
+                    p.offset[0] += 8.0;
+                    p.offset[1] += 8.0;
+                }
                 self.scene.groups.insert(g + 1, c);
                 self.sel = Some(Pick::Group(g + 1));
             }
