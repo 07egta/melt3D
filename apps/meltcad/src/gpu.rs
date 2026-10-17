@@ -1643,6 +1643,111 @@ mod tests {
         }
     }
 
+    fn incremental_pack_scene(count: usize) -> Scene {
+        let mut scene = Scene::default();
+        scene.groups.clear();
+        for gi in 0..count.div_ceil(10) {
+            let mut group = crate::model::Group::new(format!("group-{gi}"));
+            group.blend = 2.0;
+            group.op = if gi > 0 && gi % 4 == 0 { crate::model::Op::Subtract } else { crate::model::Op::Add };
+            for si in 0..10 {
+                let i = gi * 10 + si;
+                if i >= count { break; }
+                let kind = match i % 7 {
+                    0 => crate::model::Kind::Sphere,
+                    1 => crate::model::Kind::Extrude,
+                    2 => crate::model::Kind::Revolve,
+                    3 => crate::model::Kind::Sweep,
+                    4 => crate::model::Kind::Box,
+                    5 => crate::model::Kind::Cylinder,
+                    _ => crate::model::Kind::Curve, // deliberately uses the uncached exact path
+                };
+                let mut sh = Shape::new(kind, [(i % 20) as f32 * 25.0, (i / 20) as f32 * 25.0, 10.0], Material::default());
+                if i % 5 == 0 { sh.shell = 0.6; }
+                if i % 6 == 0 && si > 0 { sh.op = crate::model::Op::Subtract; }
+                if matches!(kind, crate::model::Kind::Curve | crate::model::Kind::Sweep) {
+                    sh.path = vec![[0.0, 0.0, 0.0, 2.0], [8.0, 0.0, 1.0, 2.0], [12.0, 8.0, 0.0, 2.0]];
+                }
+                group.shapes.push(sh);
+            }
+            scene.groups.push(group);
+        }
+        scene
+    }
+
+    fn same_pack_as_cold(scene: &Scene, prev: Option<(&Scene, &ScenePack)>) -> ScenePack {
+        let fast = ScenePack::reusing(scene, VolumeSet::of(scene), prev);
+        let cold = ScenePack::new(scene, VolumeSet::of(scene));
+        assert_eq!(fast.list.as_ref(), cold.list.as_ref(), "GPU input must be bit-for-bit identical");
+        assert_eq!(fast.offs, cold.offs);
+        assert_eq!(fast.offs2, cold.offs2);
+        assert_eq!(fast.slots, cold.slots);
+        assert_eq!(fast.ranges, cold.ranges);
+        assert_eq!(fast.shape_n, cold.shape_n);
+        assert_eq!(fast.group_n, cold.group_n);
+        assert_eq!(fast.glow, cold.glow);
+        assert_eq!(fast.overlaps, cold.overlaps);
+        fast
+    }
+
+    #[test]
+    fn incremental_gpu_pack_is_byte_identical_for_10_100_300_boolean_thin_and_path_shapes() {
+        for n in [10, 100, 300] {
+            let original = incremental_pack_scene(n);
+            let old = same_pack_as_cold(&original, None);
+            let mut changed = original.clone();
+            changed.groups[0].shapes[0].pos[0] += 1.25;
+            changed.melt.mode = crate::model::BlendMode::Gooey;
+            let fresh = same_pack_as_cold(&changed, Some((&original, &old)));
+            assert_eq!(fresh.shapes_reused, n - n/7 - 1, "{n} shapes; curves rebuilt exactly");
+            assert_eq!(fresh.shapes_repacked, n/7 + 1);
+
+            // Undo/redo must not resurrect cached positions or a previous Boolean op.
+            let undone = same_pack_as_cold(&original, Some((&changed, &fresh)));
+            assert_eq!(undone.shape_n, n);
+            let mut op_change = changed.clone();
+            op_change.groups[0].shapes[3].op = crate::model::Op::Intersect;
+            op_change.groups[1.min(op_change.groups.len()-1)].op = crate::model::Op::Subtract;
+            let _ = same_pack_as_cold(&op_change, Some((&changed, &fresh)));
+
+            // Insertion/deletion shifts the slots and polygon offsets; no old slot can leak.
+            let mut deleted = original.clone();
+            deleted.groups[0].shapes.remove(1);
+            let _ = same_pack_as_cold(&deleted, Some((&original, &old)));
+        }
+    }
+
+    /// Run explicitly for comparative CPU packing timings on the actual target machine.
+    #[test]
+    #[ignore]
+    fn incremental_gpu_pack_timing_10_100_300() {
+        use std::time::{Duration, Instant};
+        const REPEATS: usize = 30;
+        for n in [10, 100, 300] {
+            let mut scene = incremental_pack_scene(n);
+            let mut last = ScenePack::new(&scene, VolumeSet::of(&scene));
+            let mut cold_time = Duration::ZERO;
+            let mut reuse_time = Duration::ZERO;
+            for k in 0..REPEATS {
+                let mut edited = scene.clone();
+                edited.groups[k/10].shapes[k%10].pos[0] += 0.3;
+                let started = Instant::now();
+                let cold = ScenePack::new(&edited, VolumeSet::of(&edited));
+                cold_time += started.elapsed();
+                let started = Instant::now();
+                let updated = ScenePack::reusing(&edited, VolumeSet::of(&edited), Some((&scene, &last)));
+                reuse_time += started.elapsed();
+                assert_eq!(updated.list.as_ref(), cold.list.as_ref());
+                scene = edited;
+                last = updated;
+            }
+            eprintln!("GPU pack {:>3} shapes: cold {:.3}ms/edit, incremental {:.3}ms/edit, speedup {:.2}x ({} edits)",
+                n, cold_time.as_secs_f64()*1000.0/REPEATS as f64,
+                reuse_time.as_secs_f64()*1000.0/REPEATS as f64,
+                cold_time.as_secs_f64()/reuse_time.as_secs_f64().max(1e-12), REPEATS);
+        }
+    }
+
     #[test]
     fn the_default_scene_packs_without_overflow() {
         let u = pack(&Scene::default(), &Camera::default(), [800.0, 600.0], Some(Pick::Shape(0, 0)), None, true);
