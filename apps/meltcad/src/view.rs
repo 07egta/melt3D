@@ -237,6 +237,18 @@ impl App {
             ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(wait));
         }
         let vp = crate::perf::viewport_px(rect, ppp);
+        // The adaptive cost estimate belongs to this render area and quality mode.
+        // Ignore tiny panel-layout changes; reset only on substantial resizing.
+        let old_vp = self.perf.preview_viewport;
+        let resized = old_vp[0] > 0 && old_vp[1] > 0
+            && (vp[0].abs_diff(old_vp[0]) > (old_vp[0] / 5).max(64)
+                || vp[1].abs_diff(old_vp[1]) > (old_vp[1] / 5).max(64));
+        if resized || self.perf.preview_quality != Some(self.perf.quality) {
+            self.perf.scale = crate::adapt::ScaleController::default();
+            self.perf.preview_scale = crate::adapt::PreviewScale::default();
+        }
+        self.perf.preview_quality = Some(self.perf.quality);
+        self.perf.preview_viewport = vp;
         let (scale_moving, scale_still) = if clean { (1.0, 1.0) } else { self.picture_scales(now, fast) };
         let shown_sel = if clean { None } else { self.sel };
         let shown_hover = if clean { None } else { self.hover };
@@ -326,7 +338,7 @@ impl App {
             self.perf.scale.observe(crate::adapt::Sample::Frame { ms: interval, scale: self.perf.last_scale, cpu_ms: self.perf.stats.prev_cpu_ms() });
         }
         let q = self.perf.quality;
-        (q.moving_scale().unwrap_or_else(|| self.perf.scale.scale()), q.still_scale())
+        (q.moving_scale().unwrap_or_else(|| self.perf.preview_scale.choose(self.perf.scale.scale(), now)), q.still_scale())
     }
 
     fn gnomon_items(&self, rect: Rect) -> Vec<(V3, Pos2, bool)> {
