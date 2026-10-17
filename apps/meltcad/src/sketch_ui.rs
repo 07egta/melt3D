@@ -1865,6 +1865,47 @@ mod tests {
     }
 
     #[test]
+    fn concentric_eccentric_rectangular_multiple_holes_export_as_watertight_stl() {
+        use crate::export_formats::Format;
+        use crate::export_job::{self, Options, Scope};
+        use crate::export_mesh::Progress;
+        use solidcraft_geom::melt;
+        let ctx = egui::Context::default();
+        let mut app = app();
+        app.scene.groups.clear();
+        let mut scenarios: Vec<Vec<Vec<[f32; 2]>>> = vec![
+            vec![sketch::circle([0.0, 0.0], 8.0, sketch::CIRCLE_POINTS)],
+            vec![sketch::circle([8.0, 0.0], 6.0, sketch::CIRCLE_POINTS)],
+            vec![sketch::rect([-10.0, -6.0], [10.0, 6.0])],
+            vec![
+                sketch::circle([-11.0, 0.0], 5.0, sketch::CIRCLE_POINTS),
+                sketch::rect([8.0, -6.0], [16.0, 6.0]),
+            ],
+        ];
+        for (i, holes) in scenarios.drain(..).enumerate() {
+            app.scene.groups.clear();
+            app.sk.reset();
+            app.sk.on = true;
+            app.sketch_done(Finished::Profile(sketch::rect([-25.0, -20.0], [25.0, 20.0])));
+            app.sk.holes = holes.clone();
+            app.sk.make = Make::Extrude;
+            app.sk.height = 8.0;
+            assert!(app.sketch_make(&ctx), "scenario {i}: {}", app.sk.msg);
+            let options = Options { format: Format::Stl, tolerance: 0.45, scope: Scope::Visible, ..Options::default() };
+            let built = export_job::build(&app.scene, None, &options, &Progress::new()).expect("export mesh");
+            assert!(built.closed, "scenario {i}");
+            assert!(melt::is_watertight(&built.surface.mesh), "scenario {i}");
+            let area = 50.0 * 40.0 - holes.iter().map(|h| sketch::signed_area(h).abs()).sum::<f32>();
+            let expected = f64::from(area * 8.0);
+            let measured = melt::volume(&built.surface.mesh).abs();
+            assert!((measured / expected - 1.0).abs() < 0.04, "scenario {i}: {measured} vs {expected}");
+            let bytes = export_job::serialize(&built, &options, std::path::Path::new("test-holes.stl")).expect("STL serialization");
+            assert_eq!(bytes.len(), 1);
+            assert!(bytes[0].1.len() > 84, "non-empty binary STL scenario {i}");
+        }
+    }
+
+    #[test]
     fn touching_hole_is_refused_in_sketch_card() {
         let mut app = app();
         app.set_sketch_tool(true);
