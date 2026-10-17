@@ -439,7 +439,11 @@ impl App {
 
     fn pick_at(&mut self, rect: Rect, p: Pos2, keep: bool) {
         match self.shape_at(rect, p) {
-            Some((g, s)) => self.select_item(as_pick(g, s), keep),
+            Some((g, s)) => {
+                let pick = as_pick(g, s);
+                self.select_item(pick, keep);
+                self.reveal_in_tree(pick);
+            },
             None if !keep => {
                 self.sel = None;
                 self.extra_selected.clear();
