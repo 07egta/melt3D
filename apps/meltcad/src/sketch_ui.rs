@@ -18,7 +18,7 @@ use crate::app::App;
 use crate::curve_tool::Input;
 use crate::model::{Kind, MAX_OUTLINE, MAX_PATH, MAX_SHAPES, Material, Op, Pick, Shape};
 use crate::sdf::V3;
-use crate::sketch::{self, Frame, SketchError, Which};
+use crate::sketch::{self, Frame, SketchError, SnapGeometry, SnapHit, SnapKind, Which};
 use crate::style;
 
 /// Pixels within which a click on the first point closes the outline.
@@ -204,6 +204,10 @@ pub struct State {
     pub cursor: Option<[f32; 2]>,
     /// Where the mouse is on the screen (None when it is elsewhere).
     pub mouse: Option<Pos2>,
+    /// Locked snap and the visual marker shown next to the cursor.
+    pub snap_hit: Option<SnapHit>,
+    /// Optional angular constraint, without changing existing modifier shortcuts.
+    pub angle_snap: bool,
     /// The finished profile and the plane it was drawn on.
     pub profile: Vec<[f32; 2]>,
     pub pframe: Frame,
@@ -237,6 +241,8 @@ impl Default for State {
             dragging: false,
             cursor: None,
             mouse: None,
+            snap_hit: None,
+            angle_snap: false,
             profile: Vec::new(),
             pframe: Frame::floor(),
             profile2: Vec::new(),
@@ -281,6 +287,7 @@ impl State {
         self.dragging = false;
         self.cursor = None;
         self.mouse = None;
+        self.snap_hit = None;
     }
 
     /// Back to a blank page (the settings stay).
@@ -574,6 +581,89 @@ impl App {
         self.cam.project(rect, f.to_world(q))
     }
 
+
+    /// Geometry near the current plane, including committed profile and saved sweep path.
+    /// A point being dragged is intentionally omitted (otherwise it sticks to its old position).
+    fn sketch_snap_geometry(&self, frame: &Frame, omit: Option<usize>) -> SnapGeometry {
+        let mut geo = SnapGeometry::default();
+        if let Some(e) = &self.sk.edit {
+            if let Some(shape) = self.scene.shape(e.g, e.s) {
+                geo.add_outline(sketch::outline_of(shape, e.which), true, omit);
+            }
+        } else {
+            let pen = self.sk.active_pen();
+            geo.add_outline(&self.sk.pts, false, None);
+            if let Some(a) = self.sk.anchor {
+                geo.points.push(SnapHit { at: a, kind: if pen == Pen::Circle { SnapKind::Center } else { SnapKind::Endpoint } });
+            }
+            if self.sk.stage == Stage::LoftTop {
+                geo.add_outline(&self.sk.profile, true, None);
+            }
+            if self.sk.path.len() >= 2 {
+                let points: Vec<[f32; 2]> = self.sk.path.iter()
+                    .filter(|p| {
+                        let d = crate::sdf::dot(crate::sdf::sub(**p, frame.origin), frame.normal());
+                        d.abs() <= 0.01
+                    })
+                    .map(|p| frame.from_world(*p))
+                    .collect();
+                geo.add_outline(&points, false, None);
+            }
+        }
+        geo
+    }
+
+    /// Both the visible cursor and the actual drawing/edit point use this resolver.
+    fn sketch_resolve_snap(
+        &self, rect: Rect, mouse: Pos2, step: f32, frame: &Frame,
+        old: Option<SnapHit>, omit: Option<usize>,
+    ) -> Option<([f32; 2], Option<SnapHit>)> {
+        let (o, d) = self.cam.ray_at(rect, mouse);
+        let raw = frame.hit(o, d)?;
+        let mut geo = self.sketch_snap_geometry(frame, omit);
+        let mut hits: Vec<(SnapHit, [f32; 2])> = Vec::new();
+        let mut add = |hit: SnapHit| {
+            if let Some(px) = self.sketch_px(rect, frame, hit.at)
+                && (px - mouse).length() <= sketch::SNAP_HOLD_PX
+                && hits.len() < 1536
+            {
+                hits.push((hit, [px.x, px.y]));
+            }
+        };
+        add(SnapHit { at: [0.0, 0.0], kind: SnapKind::Origin });
+        for hit in geo.points.drain(..) { add(hit); }
+        // Only consider edges close enough on screen; this bounds intersection work.
+        let nearby: Vec<_> = geo.edges.iter().copied().filter(|(a,b)| {
+            let (Some(a), Some(b)) = (self.sketch_px(rect, frame, *a), self.sketch_px(rect, frame, *b)) else { return false };
+            let ab = b-a;
+            let t = ((mouse-a).dot(ab) / ab.length_sq().max(1e-6)).clamp(0.0,1.0);
+            (mouse - (a + ab*t)).length() <= sketch::SNAP_HOLD_PX
+        }).take(64).collect();
+        for i in 0..nearby.len() {
+            for j in i+1..nearby.len() {
+                let (a,b) = nearby[i];
+                let (c,d) = nearby[j];
+                if let Some(at) = sketch::snap_intersection(a,b,c,d) {
+                    add(SnapHit { at, kind: SnapKind::Intersection });
+                }
+            }
+        }
+        let grid = SnapHit { at: sketch::snap(raw, step), kind: SnapKind::Grid };
+        add(grid);
+        let anchor = self.sk.pts.last().copied().or(self.sk.anchor);
+        if let Some(a) = anchor {
+            add(SnapHit { at: [raw[0], a[1]], kind: SnapKind::Horizontal });
+            add(SnapHit { at: [a[0], raw[1]], kind: SnapKind::Vertical });
+            if self.sk.angle_snap && let Some(at) = sketch::snap_angle(a, raw, 15.0) {
+                add(SnapHit { at, kind: SnapKind::Angle });
+            }
+        }
+        // Keep original grid semantics when it is more than 11px away from the
+        // raw cursor; the explicit geometric snaps themselves are pixel limited.
+        let chosen = sketch::choose_screen_snap([mouse.x,mouse.y], &hits, old);
+        Some((chosen.map_or(grid.at, |hit| hit.at), chosen))
+    }
+
     // ----- what a finished gesture does -----
 
     /// A profile or a line has been drawn.
@@ -678,7 +768,9 @@ impl App {
         let step = step_for(mods);
         let mouse = pos.filter(|p| resp.hovered() && !over_gnomon(*p));
         self.sk.mouse = mouse;
-        self.sk.cursor = mouse.and_then(|p| self.sketch_cursor(rect, p, step, &frame));
+        let resolved = mouse.and_then(|p| self.sketch_resolve_snap(rect, p, step, &frame, self.sk.snap_hit, None));
+        self.sk.cursor = resolved.map(|r| r.0);
+        self.sk.snap_hit = resolved.and_then(|r| r.1);
         out.over = self.sk.cursor.is_some();
         if self.sk.stage == Stage::Ready {
             // nothing to draw: clicks must not pick things behind the card
@@ -693,7 +785,7 @@ impl App {
         if matches!(self.sk.active_pen(), Pen::Rect | Pen::Circle) {
             if resp.drag_started_by(egui::PointerButton::Primary)
                 && let Some(o) = ui.input(|i| i.pointer.press_origin()).or(pos).filter(|o| !over_gnomon(*o))
-                && let Some(q) = self.sketch_cursor(rect, o, step, &frame)
+                && let Some((q, _)) = self.sketch_resolve_snap(rect, o, step, &frame, None, None)
             {
                 self.sk.press(q);
             }
@@ -867,7 +959,8 @@ impl App {
     pub fn edit_drag(&mut self, rect: Rect, m: Pos2, step: f32) {
         let Some((f, _)) = self.edit_target() else { return };
         let Some(idx) = self.sk.edit.as_ref().and_then(|e| e.drag.as_ref()).map(|d| d.idx) else { return };
-        let Some(q) = self.sketch_cursor(rect, m, step, &f) else { return };
+        let Some((q, hit)) = self.sketch_resolve_snap(rect, m, step, &f, self.sk.snap_hit, Some(idx)) else { return };
+        self.sk.snap_hit = hit;
         if let Some((ol, rev)) = self.edit_outline_mut()
             && let Some(p) = ol.get_mut(idx)
         {
@@ -950,6 +1043,7 @@ impl App {
         }
         let over_gnomon = |p: Pos2| (p - pos2(rect.right() - 62.0, rect.top() + 62.0)).length() < GNOMON_PX;
         let mouse = pos.filter(|p| resp.hovered() && !over_gnomon(*p) && !mods.alt);
+        self.sk.snap_hit = None;
         let hover = mouse.and_then(|m| self.edit_hit(rect, m));
         if let Some(e) = self.sk.edit.as_mut() {
             e.hover = hover;
@@ -1003,7 +1097,26 @@ impl App {
                 self.paint_saved_path(p, rect);
                 self.paint_draft(p, rect);
             }
+        if self.sk.stage != Stage::Ready {
+            self.paint_snap_marker(p, rect, &self.sk.frame);
         }
+    }
+
+    fn paint_snap_marker(&self, p: &Painter, rect: Rect, frame: &Frame) {
+        let (Some(hit), Some(mouse)) = (self.sk.snap_hit, self.sk.mouse) else { return };
+        let Some(at) = self.sketch_px(rect, frame, hit.at) else { return };
+        let ink = Color32::from_rgb(255, 215, 100);
+        let stroke = Stroke::new(1.8, ink);
+        match hit.kind {
+            SnapKind::Endpoint | SnapKind::Origin => { p.rect_stroke(Rect::from_center_size(at, vec2(9.0,9.0)), 0.0, stroke, egui::StrokeKind::Middle); }
+            SnapKind::Midpoint | SnapKind::Center => { p.circle_stroke(at, 5.0, stroke); }
+            SnapKind::Intersection => {
+                p.line_segment([at-vec2(5.0,5.0),at+vec2(5.0,5.0)],stroke);
+                p.line_segment([at+vec2(5.0,-5.0),at+vec2(-5.0,5.0)],stroke);
+            }
+            _ => { p.circle_stroke(at, 4.0, stroke); }
+        }
+        tag(p, mouse + vec2(15.0,-27.0), hit.kind.label());
     }
 
     /// A polyline on a frame with a dark halo, so it reads on any background.
@@ -1232,6 +1345,7 @@ impl App {
         }
         let ol = sketch::outline_of(sh, e.which);
         self.paint_poly(p, rect, &f, ol, true, style::ACCENT, 2.0);
+        self.paint_snap_marker(p, rect, &f);
         for (i, q) in ol.iter().enumerate() {
             let Some(c) = self.sketch_px(rect, &f, *q) else { continue };
             let hot = e.hover == Some(Hover::Point(i)) || e.drag.as_ref().is_some_and(|d| d.idx == i);
@@ -1371,7 +1485,8 @@ impl App {
                 });
             }
             hint(ui, pen_hint(pen, stage));
-            hint(ui, "1mmきざみ　Shift = 10mm　Ctrl = 0.1mm　Backspaceで1つもどる　Escでやりなおし");
+            hint(ui, "端点・中点・交点・原点にスナップ　Shift = 10mm　Ctrl = 0.1mm　Backspaceで1つもどる　Escでやりなおし");
+            if style::pill(ui, "角度スナップ 15°", self.sk.angle_snap).clicked() { self.sk.angle_snap = !self.sk.angle_snap; }
         }
         if stage == Stage::Draw && !self.sk.path.is_empty() {
             hint(ui, &format!("おぼえている線: {}点（スイープで使えます）", self.sk.path.len()));
