@@ -7,6 +7,8 @@
 //! are ignored. Hostile files never panic: the size, the number of commands, points, outlines and
 //! the nesting are all capped.
 
+use std::collections::HashMap;
+
 use crate::model::{Group, Kind, MAX_OUTLINE, Material, Op, Shape};
 
 /// A bigger file is refused.
@@ -468,6 +470,7 @@ fn parse_color(s: &str) -> Option<[f32; 3]> {
 // XML
 
 struct Tag<'a> {
+    start: usize,
     name: String,
     attrs: Vec<(&'a str, &'a str)>,
     closing: bool,
@@ -606,7 +609,7 @@ fn next_tag<'a>(src: &'a str, pos: &mut usize) -> Option<Tag<'a>> {
         if closing {
             selfclose = false;
         }
-        return Some(Tag { name, attrs, closing, selfclose });
+        return Some(Tag { start: s, name, attrs, closing, selfclose });
     }
 }
 
@@ -957,7 +960,6 @@ fn skipped(name: &str) -> bool {
             | "foreignobject"
             | "text"
             | "image"
-            | "use"
             | "switch"
             | "animate"
             | "animatetransform"
@@ -965,17 +967,68 @@ fn skipped(name: &str) -> bool {
     )
 }
 
-/// Walk the document and flatten every filled shape. `tol` = allowed error in document units
-/// (None = rough pass, only for measuring).
+/// Index id-bearing elements without executing scripts, loading URLs or expanding entities.
+/// Referencing a subtree is bounded by both a recursion limit and the shared geometry budget.
+fn collect_ids(src: &str) -> HashMap<&str, (usize, usize)> {
+    let mut ids = HashMap::new();
+    let mut open: Vec<(Option<&str>, usize)> = Vec::new();
+    let mut pos = 0;
+    while let Some(tag) = next_tag(src, &mut pos) {
+        if tag.closing {
+            if let Some((Some(id), begin)) = open.pop() {
+                ids.entry(id).or_insert((begin, pos));
+            }
+            continue;
+        }
+        let id = tag.attr("id").filter(|v| !v.is_empty() && v.len() <= 128);
+        if tag.selfclose {
+            if let Some(id) = id {
+                if ids.len() < MAX_ELEMENTS {
+                    ids.entry(id).or_insert((tag.start, pos));
+                }
+            }
+        } else {
+            if open.len() >= MAX_DEPTH {
+                break;
+            }
+            open.push((id, tag.start));
+        }
+    }
+    ids
+}
+
+/// Walk the document. Local #id references are expanded in the same paint order as <use>;
+/// external hrefs are never read or fetched.
 fn walk(src: &str, tol: Option<f64>) -> Vec<Raw> {
+    let ids = collect_ids(src);
     let mut budget = Budget { commands: 0, points: 0, elements: 0 };
-    let mut out: Vec<Raw> = Vec::new();
-    let mut stack = vec![State { xf: Affine::ID, fill_none: false, evenodd: false, hidden: false, color: None }];
+    let mut out = Vec::new();
+    let initial = State { xf: Affine::ID, fill_none: false, evenodd: false, hidden: false, color: None };
+    walk_part(src, src, tol, &ids, &mut budget, &mut out, initial, false, &mut Vec::new());
+    out
+}
+
+#[allow(clippy::too_many_arguments)]
+fn walk_part<'a>(
+    document: &'a str,
+    fragment: &'a str,
+    tol: Option<f64>,
+    ids: &HashMap<&'a str, (usize, usize)>,
+    budget: &mut Budget,
+    out: &mut Vec<Raw>,
+    inherited: State,
+    referenced: bool,
+    active: &mut Vec<String>,
+) {
+    let mut stack = vec![inherited];
     let mut skip = 0usize;
     let mut over = 0usize;
-    let mut seen_root = false;
+    let mut seen_root = referenced;
     let mut pos = 0usize;
-    while let Some(tag) = next_tag(src, &mut pos) {
+    while let Some(tag) = next_tag(fragment, &mut pos) {
+        if budget.elements >= MAX_ELEMENTS || budget.points >= MAX_POINTS || budget.commands >= MAX_COMMANDS {
+            break;
+        }
         if tag.closing {
             if skip > 0 {
                 skip -= 1;
@@ -998,13 +1051,12 @@ fn walk(src: &str, tol: Option<f64>) -> Vec<Raw> {
         }
         let name = tag.name.as_str();
         let hide = tag.prop("display").is_some_and(|v| v == "none") || tag.prop("opacity").and_then(length).is_some_and(|o| o <= 0.0);
-        if skipped(name) || hide {
+        if (skipped(name) && !(referenced && name == "symbol")) || hide {
             if !tag.selfclose {
                 skip = 1;
                 if name == "style" || name == "script" {
-                    // raw text: jump over it
                     let close = format!("</{name}");
-                    if let Some(i) = src.get(pos..).and_then(|r| r.find(&close)) {
+                    if let Some(i) = fragment.get(pos..).and_then(|r| r.find(&close)) {
                         pos += i;
                     }
                 }
@@ -1035,19 +1087,38 @@ fn walk(src: &str, tol: Option<f64>) -> Vec<Raw> {
         if let Some(r) = tag.prop("fill-rule") {
             st.evenodd = r == "evenodd";
         }
-        let own_fill = tag.prop("fill");
-        if let Some(f) = own_fill {
+        if let Some(f) = tag.prop("fill") {
             if f != "none" {
                 st.color = parse_color(f).or(st.color);
             }
             st.fill_none = f == "none";
+        }
+        if name == "use" {
+            if !st.hidden && active.len() < 16
+                && let Some(id) = tag.attr("href").or_else(|| tag.attr("xlink:href")).and_then(|v| v.strip_prefix('#'))
+                && let Some(&(begin, end)) = ids.get(id)
+                && !active.iter().any(|v| v == id)
+                && let Some(part) = document.get(begin..end)
+            {
+                // x/y is a translation inside the use element's own transform.
+                st.xf = st.xf.mul(&Affine([1.0, 0.0, 0.0, 1.0, tag.len("x").unwrap_or(0.0), tag.len("y").unwrap_or(0.0)]));
+                if st.xf.ok() {
+                    active.push(id.to_owned());
+                    walk_part(document, part, tol, ids, budget, out, st, true, active);
+                    active.pop();
+                }
+            }
+            if !tag.selfclose {
+                skip = 1;
+            }
+            continue;
         }
         let drawable = matches!(name, "path" | "rect" | "circle" | "ellipse" | "polygon" | "polyline");
         if drawable {
             if !st.hidden && !st.fill_none && budget.elements < MAX_ELEMENTS && budget.points < MAX_POINTS && budget.commands < MAX_COMMANDS {
                 budget.elements += 1;
                 let sf = xf.scale().max(1e-12);
-                let mut pen = Pen { xf, tol: tol.map(|t| t / sf), out: Vec::new(), sub: Vec::new(), budget: &mut budget };
+                let mut pen = Pen { xf, tol: tol.map(|t| t / sf), out: Vec::new(), sub: Vec::new(), budget };
                 let n = |k: &str| tag.len(k);
                 match name {
                     "path" => {
@@ -1071,7 +1142,6 @@ fn walk(src: &str, tol: Option<f64>) -> Vec<Raw> {
                     out.push(Raw { polys, evenodd: st.evenodd, color: st.color });
                 }
             }
-            // a shape has no children worth reading
             if !tag.selfclose {
                 skip = 1;
             }
@@ -1085,7 +1155,6 @@ fn walk(src: &str, tol: Option<f64>) -> Vec<Raw> {
             }
         }
     }
-    out
 }
 
 /// The matrix from the `<svg>` element's viewBox to its width and height (px).
