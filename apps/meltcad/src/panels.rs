@@ -143,6 +143,8 @@ impl App {
         self.row_rects.clear();
         // Each fixed-size row uses 32 logical points; show_rows only materializes
         // the viewport's rows even for a synthetic 1,000-object benchmark.
+        // The outer spacing must agree with the inner row spacing or scroll offsets drift.
+        ui.spacing_mut().item_spacing.y = 0.0;
         let rows = self.tree_rows();
         if rows.is_empty() {
             ui.label(RichText::new(if self.tree_query.is_empty() { "グループがありません" } else { "名前が一致する形はありません" }).color(style::DIM).size(12.0));
@@ -1010,6 +1012,135 @@ fn draw_outliner_lock(p: &egui::Painter, rect: Rect, locked: bool, color: Color3
         egui::pos2(x + 4.0, c.y - 1.0),
     ], Stroke::new(1.4, color)));
     p.rect_stroke(Rect::from_center_size(c + vec2(0.0, 4.0), vec2(12.0, 9.0)), 2.0, Stroke::new(1.5, color), egui::StrokeKind::Outside);
+}
+
+#[cfg(test)]
+mod outliner_tests {
+    use super::*;
+    use crate::model::{Group, Scene, Shape};
+
+    #[test]
+    fn filtering_reveals_matching_children_without_destroying_fold_state() {
+        let mut app = App::new(true, None);
+        let mut group = Group::new("家具");
+        let mut chair = Shape::new(Kind::Box, [0.0; 3], Material::default());
+        chair.name = "いす Chair".into();
+        group.shapes.push(chair);
+        let mut table = Shape::new(Kind::Box, [0.0; 3], Material::default());
+        table.name = "机".into();
+        group.shapes.push(table);
+        app.scene.groups = vec![group];
+        app.folded.insert(0);
+        assert_eq!(app.tree_rows(), vec![TreeRow { pick: Pick::Group(0), expanded: false }]);
+        app.tree_query = "chair".into();
+        assert_eq!(app.tree_rows(), vec![
+            TreeRow { pick: Pick::Group(0), expanded: true },
+            TreeRow { pick: Pick::Shape(0, 0), expanded: false },
+        ]);
+        assert!(app.folded.contains(&0), "search does not permanently expand a group");
+        app.tree_query = "unknown".into();
+        assert!(app.tree_rows().is_empty());
+        app.tree_query.clear();
+        assert_eq!(app.tree_rows().len(), 1);
+    }
+
+    #[test]
+    fn shift_range_and_viewport_reveal_keep_a_coherent_tree_selection() {
+        let mut app = App::new(true, None);
+        let mut group = Group::new("g");
+        group.shapes = (0..5).map(|n| {
+            let mut shape = Shape::new(Kind::Box, [n as f32, 0.0, 0.0], Material::default());
+            shape.name = format!("shape {n}");
+            shape
+        }).collect();
+        app.scene.groups = vec![group];
+        let visible: Vec<_> = app.tree_rows().into_iter().map(|r| r.pick).collect();
+        app.select_item(Pick::Shape(0, 1), false);
+        app.select_tree_range(Pick::Shape(0, 4), &visible);
+        assert_eq!(app.selected_picks().len(), 4);
+        assert!(app.is_tree_selected(Pick::Shape(0, 3)));
+        app.select_item(Pick::Shape(0, 2), false);
+        assert!(app.extra_selected.is_empty());
+        app.folded.insert(0);
+        app.tree_query = "other".into();
+        app.reveal_in_tree(Pick::Shape(0, 2));
+        assert!(!app.folded.contains(&0));
+        assert!(app.tree_query.is_empty());
+        assert_eq!(app.tree_scroll_target, Some(Pick::Shape(0, 2)));
+    }
+
+    #[test]
+    fn outliner_renames_are_committed_as_one_undoable_edit() {
+        let mut app = App::new(true, None);
+        let ctx = egui::Context::default();
+        let pick = Pick::Shape(0, 0);
+        let old = app.scene.shape(0, 0).expect("shape").name.clone();
+        app.begin_tree_rename(pick);
+        app.rename_text = "形 A".into();
+        app.finish_tree_rename(false);
+        assert_eq!(app.scene.shape(0, 0).unwrap().name, old, "Esc cancels rename");
+        app.begin_tree_rename(pick);
+        app.rename_text = "形 B".into();
+        app.finish_tree_rename(true);
+        app.settle(&ctx);
+        assert_eq!(app.scene.shape(0, 0).unwrap().name, "形 B");
+        app.undo();
+        assert_eq!(app.scene.shape(0, 0).unwrap().name, old);
+    }
+
+    /// Run explicitly on the same machine and build before/after changes:
+    /// cargo test -p meltcad outliner_headless_scroll_and_select_benchmark -- --ignored --nocapture
+    /// The 1000-row case is synthetic UI-only: a saved Scene is currently capped at 512 shapes.
+    #[test]
+    #[ignore]
+    fn outliner_headless_scroll_and_select_benchmark() {
+        use std::time::Instant;
+
+        fn percentile(sorted: &[f64], fraction: f64) -> f64 {
+            let index = ((sorted.len().saturating_sub(1)) as f64 * fraction).round() as usize;
+            sorted.get(index).copied().unwrap_or(0.0)
+        }
+        for count in [100usize, 300, 1000] {
+            let mut app = App::new(true, None);
+            let mut scene = Scene::default();
+            scene.groups[0].shapes = (0..count).map(|i| {
+                let mut shape = Shape::new(Kind::Box, [i as f32, 0.0, 0.0], Material::default());
+                shape.name = format!("test_{i:04}");
+                shape
+            }).collect();
+            app.scene = scene;
+            app.folded.clear();
+            let ctx = egui::Context::default();
+            let mut frames_ms = Vec::new();
+            let mut selection_us = Vec::new();
+            for frame in 0..80 {
+                let idx = (frame * 37) % count;
+                let start_select = Instant::now();
+                app.select_item(Pick::Shape(0, idx), false);
+                selection_us.push(start_select.elapsed().as_secs_f64() * 1e6);
+                // Programmatic jumps represent scroll to differing list positions.
+                app.tree_scroll_target = Some(Pick::Shape(0, idx));
+                let input = egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(520.0, 700.0))),
+                    ..Default::default()
+                };
+                let start_frame = Instant::now();
+                let mut output = ctx.run_ui(input, |ui| {
+                    ui.allocate_ui_with_layout(vec2(272.0, 460.0), egui::Layout::top_down(egui::Align::Min), |ui| app.layers(ui));
+                });
+                frames_ms.push(start_frame.elapsed().as_secs_f64() * 1000.0);
+                assert!(app.row_rects.len() < 80, "only the viewport rows should be materialized");
+                output.textures_delta.clear();
+            }
+            frames_ms.sort_by(f64::total_cmp);
+            selection_us.sort_by(f64::total_cmp);
+            eprintln!(
+                "outliner n={count} scroll-jump+egui-frame p50={:.3}ms p95={:.3}ms; selection-handler p50={:.3}us p95={:.3}us (headless synthetic)",
+                percentile(&frames_ms, 0.50), percentile(&frames_ms, 0.95),
+                percentile(&selection_us, 0.50), percentile(&selection_us, 0.95)
+            );
+        }
+    }
 }
 
 /// Two blobs melting together with the chosen curve: a live picture of what the settings do.
