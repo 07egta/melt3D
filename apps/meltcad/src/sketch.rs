@@ -1039,8 +1039,57 @@ mod tests {
         assert!(len(sub([r[0][0], r[1][0], r[2][0]], [0.0, 0.0, -1.0])) < 1e-4);
     }
 
+
     #[test]
-    fn snapping_rounds_to_the_grid_and_ignores_bad_steps() {
+    fn segment_snap_intersections_are_finite_and_reject_parallel_overlaps() {
+        let cross = snap_intersection([0.0,0.0],[10.0,10.0],[0.0,10.0],[10.0,0.0]);
+        assert_eq!(cross, Some([5.0,5.0]));
+        assert_eq!(snap_intersection([0.0,0.0],[10.0,0.0],[5.0,0.0],[15.0,0.0]), None);
+        assert_eq!(snap_intersection([0.0,0.0],[10.0,0.0],[10.0,0.0],[10.0,8.0]), None);
+        assert_eq!(snap_intersection([f32::NAN,0.0],[10.0,0.0],[5.0,-5.0],[5.0,5.0]), None);
+    }
+
+    #[test]
+    fn snap_geometry_collects_endpoints_midpoints_and_centers_without_dragged_vertex() {
+        let mut geo = SnapGeometry::default();
+        geo.add_outline(&[[0.0,0.0],[20.0,0.0],[20.0,10.0],[0.0,10.0]],true,None);
+        assert_eq!(geo.edges.len(),4);
+        assert!(geo.points.iter().any(|h| h.kind==SnapKind::Center && h.at==[10.0,5.0]));
+        assert!(geo.points.iter().any(|h| h.kind==SnapKind::Midpoint && h.at==[10.0,0.0]));
+        let mut edit = SnapGeometry::default();
+        edit.add_outline(&[[0.0,0.0],[20.0,0.0],[20.0,10.0],[0.0,10.0]],true,Some(0));
+        assert!(!edit.points.iter().any(|h| h.at==[0.0,0.0]));
+        assert_eq!(edit.edges.len(),2);
+    }
+
+    #[test]
+    fn screen_snap_priorities_zoom_and_hysteresis_are_stable() {
+        let a=SnapHit { at:[0.0,0.0],kind:SnapKind::Origin };
+        let b=SnapHit { at:[1.0,1.0],kind:SnapKind::Grid };
+        let hits=vec![(a,[104.0,100.0]),(b,[100.0,100.0])];
+        assert_eq!(choose_screen_snap([100.0,100.0],&hits,None),Some(a));
+        assert_eq!(choose_screen_snap([100.0,100.0],&[(b,[100.0,100.0])],Some(a)),Some(b));
+        // Held target stays while inside release radius, unless the alternative is clearly closer.
+        let swapped=vec![(a,[112.0,100.0]),(b,[108.0,100.0])];
+        assert_eq!(choose_screen_snap([100.0,100.0],&swapped,Some(a)),Some(a));
+        assert_eq!(choose_screen_snap([90.0,100.0],&hits,Some(a)),Some(a));
+        assert_eq!(choose_screen_snap([200.0,100.0],&hits,Some(a)),None);
+        // Equal pixel locations behave identically irrespective of underlying millimetres.
+        let far=SnapHit { at:[1000.0,800.0],kind:SnapKind::Endpoint };
+        assert_eq!(choose_screen_snap([0.0,0.0],&[(far,[8.0,0.0])],None),Some(far));
+        assert_eq!(choose_screen_snap([0.0,0.0],&[(far,[12.0,0.0])],None),None);
+    }
+
+    #[test]
+    fn angle_snap_follows_the_nearest_fifteen_degree_ray() {
+        let p=snap_angle([3.0,4.0],[13.0,6.0],15.0).unwrap();
+        assert!((p[1]-4.0-(p[0]-3.0)*15f32.to_radians().tan()).abs()<1e-3);
+        assert_eq!(snap_angle([0.0,0.0],[0.0,0.0],15.0),None);
+        assert_eq!(snap_angle([0.0,0.0],[5.0,3.0],f32::NAN),None);
+    }
+
+    #[test]
+ing_rounds_to_the_grid_and_ignores_bad_steps() {
         assert_eq!(snap([1.4, -2.6], 1.0), [1.0, -3.0]);
         assert_eq!(snap([12.4, 7.6], 10.0), [10.0, 10.0]);
         assert_eq!(snap([0.34, 0.26], 0.1), [0.3, 0.3]);
