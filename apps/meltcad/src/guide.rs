@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use egui::{Align2, Color32, RichText, Stroke, pos2, vec2};
+use egui::{Align2, RichText, pos2};
 use serde::{Deserialize, Serialize};
 
 use crate::app::App;
@@ -70,7 +70,8 @@ impl Preferences {
             std::fs::create_dir_all(parent)?;
         }
         let temp = path.with_extension("json.tmp");
-        std::fs::write(&temp, serde_json::to_vec_pretty(self)?)?;
+        let bytes = serde_json::to_vec_pretty(self).map_err(std::io::Error::other)?;
+        std::fs::write(&temp, bytes)?;
         std::fs::rename(&temp, path)
     }
 }
@@ -102,6 +103,13 @@ pub struct Guide {
 
 impl Guide {
     pub fn load(opening_file: bool) -> Self {
+        // Unit tests must not write to a real user's per-machine settings.
+        if cfg!(test) {
+            return Self {
+                prefs: Preferences::default(), panel_open: false, practice: Practice::Off,
+                actions: 0, started: None, elapsed_seconds: None,
+            };
+        }
         let mut prefs = preferences_path().map_or_else(Preferences::default, |path| Preferences::read(&path));
         let first = !prefs.intro_seen && !opening_file;
         // Once shown, never force the introduction again, even after an abrupt exit.
@@ -117,6 +125,9 @@ impl Guide {
     }
 
     fn persist(&self) {
+        if cfg!(test) {
+            return;
+        }
         if let Some(path) = preferences_path()
             && let Err(e) = self.prefs.write(&path)
         {
@@ -285,7 +296,6 @@ enum Action {
 
 fn content(ui: &mut egui::Ui, step: Practice, actions: u32, elapsed: Option<f64>) -> Action {
     let mut action = Action::None;
-    ui.set_max_width(292.0);
     ui.horizontal(|ui| {
         ui.label(RichText::new("はじめてのYuraCAD").strong().color(style::ACCENT).size(14.0));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -356,7 +366,7 @@ impl App {
             .fixed_pos(pos2(rect.right() - 12.0, rect.bottom() - 90.0))
             .show(ctx, |ui| {
                 style::card().show(ui, |ui| {
-                    ui.set_max_width((rect.width() - 24.0).clamp(180.0, 292.0));
+                    ui.set_max_width((rect.width() - 24.0).clamp(120.0, 292.0));
                     action = content(ui, self.guide.practice, self.guide.actions, self.guide.elapsed_seconds);
                 });
             });
@@ -465,7 +475,10 @@ mod tests {
                 });
                 let out = ctx.end_pass();
                 let tess = ctx.tessellate(out.shapes, 1.0);
-                triangles = tess.iter().map(|p| p.primitive.triangles_len()).sum();
+                triangles = tess.iter().map(|p| match &p.primitive {
+                    egui::epaint::Primitive::Mesh(mesh) => mesh.indices.len() / 3,
+                    _ => 0,
+                }).sum();
                 micros.push(start.elapsed().as_micros());
             }
             micros.sort_unstable();
