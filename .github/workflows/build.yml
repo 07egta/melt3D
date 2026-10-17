@@ -188,7 +188,7 @@ jobs:
 
           Windows native Rust tests and a headless EXE render are checked by CI.
           Interactive launch, File > New, Save, and Export require separate real-Windows
-          verification using scripts/windows-manual-smoke.ps1; CI alone does not prove them.
+          verification using docs/yuracad-windows-acceptance.md; CI alone does not prove them.
           EOF
       - name: Replace rolling assets only after all required checks pass
         if: steps.current.outputs.publish == 'true'
