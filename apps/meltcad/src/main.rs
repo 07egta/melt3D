@@ -38,6 +38,7 @@ mod import_3mf;
 mod import_glb;
 mod import_inflate;
 mod import_mesh;
+mod fusion;
 mod library;
 mod library_ui;
 mod materials;
