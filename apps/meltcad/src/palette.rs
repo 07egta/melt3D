@@ -1,5 +1,5 @@
-//! The search palette (key F): type a few letters of anything - a shape, a ready-made model, a
-//! command - and press Enter. It matches Japanese names and English / other common names.
+//! The existing search palette (Ctrl+K or F): type a few letters of a shape, library model, or
+//! command, then Enter. It reuses Japanese names and existing English/alternate names.
 //! This is a child module of `app` so it can reach the app's private pieces.
 
 use std::collections::{BinaryHeap, HashMap, HashSet};
@@ -413,8 +413,8 @@ impl Catalog {
     }
 }
 
-/// How well q matches an existing entry. Ranking is unchanged; only candidate
-/// generation is indexed. Lower rank is better.
+/// How well q matches an existing entry. Exact/partial names outrank aliases;
+/// ties prefer executable commands over library models. Lower is better.
 fn score(e: &Entry, label: &str, q: &str) -> Option<u32> {
     if label == q { return Some(0); }
     if label.starts_with(q) { return Some(1); }
