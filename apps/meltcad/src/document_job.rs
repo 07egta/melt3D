@@ -184,11 +184,12 @@ mod tests {
         let path = path("cancel.yura");
         std::fs::write(&path, Scene::default().to_json()).expect("fixture");
         let mut job = Job::open(&ctx, path.clone(), 1).expect("start loading");
-        let _ = job.cancel();
-        let result = wait(&job);
-        // Cancellation may lose the race to an already finished tiny read, but never
-        // yields a partially parsed Scene; App verifies the revision before applying it.
-        assert!(matches!(result, Err(_) | Ok(Completed::Opened { .. })));
+        assert!(job.cancel(), "open remains cancellable until the result is observed");
+        let error = match wait(&job) {
+            Err(e) => e,
+            Ok(_) => panic!("a cancelled result must never replace the live scene"),
+        };
+        assert_eq!(error, crate::export_mesh::CANCELLED);
         let _ = std::fs::remove_file(path);
     }
 
