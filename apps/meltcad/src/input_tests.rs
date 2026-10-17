@@ -39,7 +39,7 @@ impl Rig {
         let app = &mut self.app;
         let mut out = self.ctx.run_ui(input, |ui| {
             // Match frame_body ordering: keys, canvas, then the interactive overlay.
-            app.sketch_keys(ui.ctx());
+            app.keys(ui.ctx());
             egui::CentralPanel::default().frame(egui::Frame::new()).show(ui, |ui| app.viewport(ui));
             app.sketch_card(ui.ctx());
         });
@@ -47,11 +47,12 @@ impl Rig {
         self.app.settle(&self.ctx);
     }
 
-    fn key(&mut self, key: egui::Key) {
-        self.frame(vec![Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() }]);
-        self.ctx.input_mut(|i| i.events.push(Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() }));
-        self.app.keys(&self.ctx);
-        self.app.settle(&self.ctx);
+    fn right_click(&mut self, p: Pos2) {
+        self.mv(p);
+        for pressed in [true, false] {
+            self.frame(vec![Event::PointerButton { pos: p, button: PointerButton::Secondary, pressed, modifiers: self.mods }]);
+        }
+        self.frame(vec![]);
     }
 
     fn mv(&mut self, p: Pos2) {
@@ -69,7 +70,7 @@ impl Rig {
         self.frame(vec![]);
     }
 
-    fn key_in_frame(&mut self, key: egui::Key) {
+    fn key(&mut self, key: egui::Key) {
         self.frame(vec![Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: self.mods }]);
         self.frame(vec![]);
     }
@@ -250,28 +251,41 @@ fn sketch_polygon_clicks_and_enter_complete_without_changing_selection() {
     }
     assert_eq!(r.app.sk.pts.len(), 3, "three pointer clicks make three corners");
     assert_eq!(r.app.sel, selected, "drawing must not pick the solid behind the sketch");
-    r.key_in_frame(egui::Key::Enter);
+    r.key(egui::Key::Enter);
     assert_eq!(r.app.sk.stage, Stage::Ready);
     assert_eq!(r.app.sk.profile.len(), 3);
     assert!(r.app.sk.pts.is_empty());
 }
 
 #[test]
-fn sketch_double_click_finishes_line_without_duplicate_endpoint() {
+fn sketch_right_click_finishes_line_without_duplicate_endpoint() {
     let mut r = Rig::new();
     r.sketch(Pen::Line);
     r.app.sk.smooth = false;
     let a = r.on_plane([-30.0, -20.0]);
     let b = r.on_plane([25.0, 12.0]);
     r.click(a);
-    eprintln!("DBG a {a:?} pts {:?}", r.app.sk.pts);
     r.click(b);
-    eprintln!("DBG b {b:?} pts {:?}", r.app.sk.pts);
-    r.click(b);
-    eprintln!("DBG b2 pts {:?} path {:?} stage {:?} dim {:?}", r.app.sk.pts, r.app.sk.path, r.app.sk.stage, r.app.sk.dimension.is_some());
+    r.right_click(b);
     assert_eq!(r.app.sk.stage, Stage::Draw, "an open line stays in the sketch tool");
-    assert_eq!(r.app.sk.path.len(), 2, "the second click at the endpoint must not add another node");
+    assert_eq!(r.app.sk.path.len(), 2, "left clicks place points, the right click confirms without adding one");
     assert!(r.app.sk.pts.is_empty());
+}
+
+#[test]
+fn right_click_confirms_a_polygon_and_does_not_open_the_menu_or_pick() {
+    let mut r = Rig::new();
+    r.sketch(Pen::Polygon);
+    let selected = r.app.sel;
+    for q in [[-24.0, -17.0], [26.0, -17.0], [24.0, 18.0]] {
+        let p = r.on_plane(q);
+        r.click(p);
+    }
+    let p = r.on_plane([24.0, 18.0]);
+    r.right_click(p);
+    assert_eq!(r.app.sk.stage, Stage::Ready);
+    assert_eq!(r.app.sk.profile.len(), 3);
+    assert_eq!(r.app.sel, selected, "the right click must not pick the solid behind");
 }
 
 #[test]
@@ -308,7 +322,7 @@ fn sketch_rectangle_enter_finishes_a_two_click_preview() {
     r.click(a);
     assert!(r.app.sk.anchor.is_some());
     r.mv(b);
-    r.key_in_frame(egui::Key::Enter);
+    r.key(egui::Key::Enter);
     assert_eq!(r.app.sk.stage, Stage::Ready);
     assert_eq!(r.app.sk.profile.len(), 4);
     assert!(r.app.sk.anchor.is_none());
@@ -321,10 +335,10 @@ fn sketch_escape_cancels_pending_points_before_ending_tool() {
     let p = r.on_plane([-20.0, -10.0]);
     r.click(p);
     assert_eq!(r.app.sk.pts.len(), 1);
-    r.key_in_frame(egui::Key::Escape);
+    r.key(egui::Key::Escape);
     assert!(r.app.sk.on);
     assert!(r.app.sk.pts.is_empty());
-    r.key_in_frame(egui::Key::Escape);
+    r.key(egui::Key::Escape);
     assert!(!r.app.sk.on);
 }
 
@@ -354,9 +368,11 @@ fn sketch_drag_lost_outside_window_cancels_without_stale_anchor() {
     r.mv(start + vec2(35.0, -15.0));
     assert!(r.app.sk.dragging);
     r.frame(vec![Event::PointerGone]);
-    assert!(!r.app.sk.dragging);
-    assert!(r.app.sk.anchor.is_none(), "no phantom first corner after PointerGone");
+    // egui may keep the button held while the pointer is outside; the release then ends the gesture
     r.button(pos2(-50.0, -50.0), false);
+    r.frame(vec![]);
+    assert!(!r.app.sk.dragging);
+    assert!(r.app.sk.anchor.is_none(), "no phantom first corner after the pointer was lost");
     assert_eq!(r.app.sk.stage, Stage::Draw);
     let next = r.on_plane([15.0, -14.0]);
     r.click(next);

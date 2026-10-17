@@ -588,7 +588,8 @@ impl App {
         if !resp.hovered() || over_gnomon(p) {
             return *out;
         }
-        if resp.double_clicked_by(egui::PointerButton::Primary) {
+        // left click lays a node, right click finishes the curve
+        if resp.secondary_clicked() {
             self.finish_drawing();
             out.taken = true;
         } else if resp.clicked_by(egui::PointerButton::Primary) {
@@ -695,7 +696,7 @@ impl App {
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("せん").strong().color(style::ACCENT));
                         style::labeled_slider(ui, "ふとさ", &mut self.ct.draw_radius, 0.5..=40.0, "あたらしい点の太さ (半径 mm)");
-                        if style::pill(ui, "おわり", false).on_hover_text("この線を終える (Enter / ダブルクリック)").clicked() {
+                        if style::pill(ui, "おわり", false).on_hover_text("この線を終える (右クリック / Enter)").clicked() {
                             self.finish_drawing();
                         }
                         if style::pill(ui, "やめる", false).on_hover_text("せんツールを切る (Esc)").clicked() {
@@ -703,7 +704,7 @@ impl App {
                             self.ct.drawing = false;
                         }
                     });
-                    ui.label(egui::RichText::new("クリックで点をふやす　ダブルクリック / Enterでおわり　Backspaceで1つもどる").size(11.0).color(style::DIM));
+                    ui.label(egui::RichText::new("左クリックで点をふやす　右クリック / Enterでおわり　Backspaceで1つもどる").size(11.0).color(style::DIM));
                 });
             });
     }
