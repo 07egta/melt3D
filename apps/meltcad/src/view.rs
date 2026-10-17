@@ -301,7 +301,9 @@ impl App {
         self.gpu_cards(ui.ctx(), rect);
         // Input can move the camera or shape earlier this frame. Draw handles against
         // the updated positions rather than the stale pre-input geometry.
-        let draw_geom = if moved_camera || self.drag.is_some() {
+        let draw_geom = if clean || self.ct.drawing || self.pt.on || self.sketch_active() {
+            None
+        } else if moved_camera || self.drag.is_some() {
             gizmo::build(&self.cam, rect, &self.scene, self.sel, tool)
         } else {
             geom
