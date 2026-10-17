@@ -48,6 +48,7 @@ mod cad;
 mod cpu_render;
 mod curve;
 mod curve_tool;
+mod designer_bag;
 mod pipe_tool;
 mod model;
 mod perf;
