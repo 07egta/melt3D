@@ -1012,7 +1012,8 @@ mod tests {
         assert_eq!(shape.set_sketch_outline(false, enlarged.clone()), Ok(true));
         assert_eq!(shape.set_sketch_outline(false, enlarged.clone()), Ok(false));
         assert!(Prepared::new(&shape).distance(probe) < 0.0, "3D solid follows the new profile");
-        assert_eq!((shape.pos, shape.rot, shape.size, shape.material), (original.pos, original.rot, original.size, original.material));
+        assert_eq!((shape.pos, shape.rot, shape.size), (original.pos, original.rot, original.size));
+        assert_eq!(shape.material, original.material);
 
         let mut scene = Scene::default();
         scene.groups[0].shapes = vec![shape.clone()];
