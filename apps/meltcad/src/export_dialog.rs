@@ -12,7 +12,7 @@ use crate::app::{App, ExportFormat};
 use crate::export_formats::{Format, Units};
 use crate::export_job::{self, Estimate, Job, Lighten, MAX_TOLERANCE, MIN_TOLERANCE, Options, PrintCheck, Scope, Up};
 use crate::export_mesh::{CANCELLED, MAX_VERTS, Progress};
-use crate::model::{Pick, Scene};
+use crate::model::Pick;
 use crate::style;
 
 // ---------------------------------------------------------------- small background tasks
