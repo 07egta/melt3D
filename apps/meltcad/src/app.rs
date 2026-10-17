@@ -157,7 +157,7 @@ impl App {
             ct: Default::default(),
             pt: Default::default(),
             sk: Default::default(),
-            perf: crate::perf::Perf::default(),
+            perf: crate::perf::Perf { sharpen: crate::perf::DEFAULT_SHARPEN, hud: std::env::var_os("MELTCAD_HUD").is_some_and(|v| v != "0"), ..Default::default() },
             clipboard: None,
             lib_open: false,
             lib_cat: 0,

@@ -879,13 +879,29 @@ fn soft_shadow(ro: vec3<f32>, rd: vec3<f32>, maxt: f32, nsteps: i32) -> f32 {
     if (-b + sq < t) { return 1.0; }
     t = max(t, -b - sq);
     tend = min(maxt, -b + sq);
+    // Only the shapes near the shadow ray are read (as for the primary march). The penumbra is
+    // 10 h / t, so a shape farther than tend / 10 from the ray cannot darken any point of it.
+    var list_ok = false;
+    use_cand = false;
+    if (G.offs2.z < 0.5) {
+        find_candidates(ro, rd, t, tend, 1.0 + G.melt.z + 0.1 * tend);
+        if (ncs == 0 && !ovf) { return 1.0; }
+        use_cand = true;
+        list_ok = !ovf;
+    }
     let max_step = select(6.0, 14.0, nsteps < 20);
     for (var i = 0; i < nsteps; i = i + 1) {
-        let h = map_d(ro + rd * t);
+        var h = 0.0;
+        if (list_ok) {
+            h = map_d_cand(ro + rd * t);
+        } else {
+            h = map_d(ro + rd * t);
+        }
         res = min(res, 10.0 * h / t);
         t = t + clamp(h, 0.4, max_step);
         if (res < 0.001 || t > tend) { break; }
     }
+    use_cand = false;
     return clamp(res, 0.0, 1.0);
 }
 
@@ -1136,9 +1152,29 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
         h = map(ro + rd * t);
     }
 
-    // ground
+    // What is seen is the floor or a surface (never both). Either way the key light's shadow of
+    // that point is wanted: it is found here, in one place (the code of a shadow is large).
     let above = ro.z >= 0.0;
-    if (above && t_ground < 1e8 && (!hit || t_ground < t) && (grid_on || floor_on)) {
+    let floor_vis = above && t_ground < 1e8 && (!hit || t_ground < t) && (grid_on || floor_on);
+    let surf_vis = hit && (t_ground > t || !(grid_on || floor_on));
+    var n_hit = vec3<f32>(0.0, 0.0, 1.0);
+    var sh_ro = vec3<f32>(0.0);
+    var sh_steps = 0;
+    if (floor_vis && floor_on && !fast) {
+        sh_ro = ro + rd * t_ground + vec3<f32>(0.0, 0.0, 0.05);
+        sh_steps = 32;
+    } else if (surf_vis) {
+        let p0 = ro + rd * t;
+        // (three taps are enough while moving)
+        n_hit = surface_normal(p0, select(0.02 + t * 0.0008, 0.03 + t * 0.0015, fast), fast, h.d);
+        sh_ro = p0 + n_hit * 0.1;
+        if (n_lights() > 0) { sh_steps = select(32, 4, fast); }
+    }
+    var shadow_raw = 1.0;
+    if (sh_steps > 0) { shadow_raw = soft_shadow(sh_ro, key, 300.0, sh_steps); }
+
+    // ground
+    if (floor_vis) {
         let gp = ro + rd * t_ground;
         let fade = clamp(1.0 - length(gp.xy) / 600.0, 0.0, 1.0);
         if (grid_on) {
@@ -1164,18 +1200,16 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
                     col = col * mix(1.0, mix(0.6, 1.0, ao), shadow_k);
                 }
             } else {
-                let sh = soft_shadow(gp + vec3<f32>(0.0, 0.0, 0.05), key, 300.0, 32);
-                col = col * mix(1.0, mix(0.55, 1.0, sh), shadow_k);
+                col = col * mix(1.0, mix(0.55, 1.0, shadow_raw), shadow_k);
                 let ao = ambient_occ(gp, vec3<f32>(0.0, 0.0, 1.0));
                 col = col * mix(1.0, mix(0.6, 1.0, ao), shadow_k);
             }
         }
     }
 
-    if (hit && (t_ground > t || !(grid_on || floor_on))) {
+    if (surf_vis) {
         let p = ro + rd * t;
-        // (three taps are enough while moving)
-        let n = surface_normal(p, select(0.02 + t * 0.0008, 0.03 + t * 0.0015, fast), fast, h.d);
+        let n = n_hit;
         let v = -rd;
         let rough = clamp(h.rough, 0.04, 1.0);
         let metal = h.metal;
@@ -1207,7 +1241,7 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
             let lc = light_col(i);
             var sh = 1.0;
             if (i == 0) {
-                sh = mix(1.0, soft_shadow(p + n * 0.1, L, 300.0, select(32, 4, fast)), shadow_k);
+                sh = mix(1.0, shadow_raw, shadow_k);
                 sh = mix(sh, 1.0, h.glass * 0.6);
             }
             let ndl = max(dot(n, L), 0.0);
