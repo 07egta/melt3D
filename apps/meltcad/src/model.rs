@@ -474,7 +474,11 @@ impl Shape {
             Kind::Box | Kind::Wedge => [s[0] * 0.5, s[1] * 0.5, s[2] * 0.5],
             Kind::Cylinder | Kind::Cone => [s[0], s[0], s[1] * 0.5],
             Kind::Torus => [s[0] + s[1], s[0] + s[1], s[1]],
-            Kind::Extrude => [mx(&self.outline, 0), mx(&self.outline, 1), s[0] * 0.5],
+            Kind::Extrude => {
+                // params[0] is an optional signed puff distance. Legacy extrusions use zero.
+                let swell = self.params[0].max(0.0).min(40.0);
+                [mx(&self.outline, 0) + swell, mx(&self.outline, 1) + swell, s[0] * 0.5 + swell]
+            },
             Kind::Prism3 | Kind::PrismN | Kind::Star | Kind::Pyramid => [s[0], s[0], s[1] * 0.5],
             Kind::Octa | Kind::Tetra => [s[0]; 3],
             // the dome fills z in -r/2 ..= r/2 (flat face at the bottom of its box)
@@ -548,6 +552,9 @@ pub struct Group {
     pub blend: f32,
     pub visible: bool,
     pub shapes: Vec<Shape>,
+    /// Non-destructive Puffy Text source. Geometry remains ordinary extrusions and cuts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub puffy_text: Option<crate::puffy_text::LetterMeta>,
     /// A number linked copies and patterns find this group by (0 = none; see `Scene::ensure_group_uid`).
     #[serde(default, skip_serializing_if = "is_zero")]
     pub uid: u32,
@@ -564,7 +571,7 @@ pub struct Group {
 
 impl Group {
     pub fn new(name: impl Into<String>) -> Group {
-        Group { name: name.into(), op: Op::Add, blend: 0.0, visible: true, shapes: Vec::new(), uid: 0, pattern: None, instance_of: None, xform: Xform::default() }
+        Group { name: name.into(), op: Op::Add, blend: 0.0, visible: true, shapes: Vec::new(), puffy_text: None, uid: 0, pattern: None, instance_of: None, xform: Xform::default() }
     }
 }
 
@@ -856,6 +863,7 @@ impl Scene {
                 p.sanitize();
             }
             g.xform.sanitize();
+            if let Some(meta) = &mut g.puffy_text { meta.sanitize(); }
             if g.instance_of.is_some() {
                 // a linked copy shows its source's shapes, not its own
                 g.shapes.clear();
