@@ -364,8 +364,8 @@ pub fn apply(scene: &mut Scene, settings: &Settings, editing_run: Option<u32>) -
                 let width = f32::from(bounds.x_max - bounds.x_min);
                 let height = f32::from(bounds.y_max - bounds.y_min);
                 let centre = [
-                    settings.anchor[0] + cursor + f32::from(bounds.x_min + bounds.x_max) * 0.5 * size,
-                    settings.anchor[1] + f32::from(bounds.y_min + bounds.y_max) * 0.5 * size,
+                    settings.anchor[0] + cursor + (f32::from(bounds.x_min) + f32::from(bounds.x_max)) * 0.5 * size,
+                    settings.anchor[1] + (f32::from(bounds.y_min) + f32::from(bounds.y_max)) * 0.5 * size,
                 ];
                 let mut group = glyph_group(&art, ch, index, settings, centre, width.max(height) * size)?;
                 let baseline = mean_centre(&group);
@@ -398,16 +398,10 @@ pub fn apply(scene: &mut Scene, settings: &Settings, editing_run: Option<u32>) -
     }
     let insertion = old_ids.first().copied().unwrap_or(scene.groups.len());
     let mut next = scene.clone();
-    let mut removed = 0usize;
-    next.groups.retain(|g| {
-        let discard = g.puffy_text.as_ref().is_some_and(|m| m.run_id == new_run);
-        if discard { removed += 1; }
-        !discard
-    });
+    next.groups.retain(|g| !g.puffy_text.as_ref().is_some_and(|m| m.run_id == new_run));
     // Do not reorder any unrelated groups.
     let at = insertion.min(next.groups.len());
     next.groups.splice(at..at, built);
-    let _ = removed;
     *scene = next;
     Ok(Pick::Group(at))
 }
