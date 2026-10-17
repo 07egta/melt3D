@@ -193,4 +193,27 @@ mod tests {
         let it = Item { name: "いぬ".into(), tags: vec!["Dog".into()], group: Group::new("x") };
         assert!(it.matches("") && it.matches("いぬ") && it.matches("dog") && !it.matches("ねこ"));
     }
+    #[test]
+    fn everyday_vehicle_library_loads_places_saves_and_renders_thumbnails() {
+        let cat = all().iter().find(|c| c.name == "のりもの").expect("vehicle category");
+        let names = ["セダン", "軽自動車", "SUV", "バス", "トラック", "自転車", "バイク", "電車", "飛行機", "船"];
+        let mut distinct = std::collections::HashSet::new();
+        for it in &cat.items {
+            assert!(distinct.insert(it.name.as_str()), "duplicate model {}", it.name);
+        }
+        for name in names {
+            let it = cat.items.iter().find(|it| it.name == name).unwrap_or_else(|| panic!("missing {name}"));
+            assert!(!it.group.shapes.is_empty() && it.group.shapes.len() <= 40);
+            assert!(it.fits(0, 0));
+            let placed = it.placed([25.0, -10.0]);
+            assert_eq!(placed.shapes.len(), it.group.shapes.len());
+            let json = it.scene().to_json();
+            let loaded = Scene::from_json(&json).expect("save/load round trip");
+            assert_eq!(loaded.groups.len(), 1);
+            assert_eq!(loaded.groups[0].shapes.len(), it.group.shapes.len());
+            let pixels = crate::cpu_render::thumb(&loaded, 16);
+            assert_eq!(pixels.len(), 16 * 16 * 4);
+        }
+    }
+
 }
