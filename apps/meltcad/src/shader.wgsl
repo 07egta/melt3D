@@ -94,6 +94,22 @@ fn block_far(g: f32, kmax: f32, rm: f32) -> f32 {
     return max(rm * kmax + abs(g) + 0.02, paint_far(kmax));
 }
 
+// Fast viewport-only subpixel LOD: a tiny additive group that cannot even
+// cover one physical pixel can be omitted while orbiting. All selection/hover,
+// carving, intersection, drips and static/full-quality renders remain exact.
+// In particular this never affects the CPU SDF or exported meshes.
+fn preview_omit_subpixel(sphere: vec4<f32>, gr: vec4<f32>) -> bool {
+    if (!is_fast() || G.counts.w > 0.5 || G.hover.y > 0.5 || G.melt.z > 0.0) { return false; }
+    if (gr.z < 0.5 || gr.z > 1.5) { return false; }
+    let forward = dot(sphere.xyz - G.cam_pos.xyz, G.cam_fwd.xyz);
+    if (forward <= 0.0) { return false; }
+    let half_h = select(G.view.z, forward * G.cam_fwd.w, G.cam_fwd.w > 0.0);
+    let mm_per_pixel = 2.0 * half_h / max(G.view.y, 1.0);
+    let blend_reach = reach_mult() * max(gr.w * G.melt.y, 0.0);
+    // Diameter < 0.5 display pixel including any smooth union reach.
+    return sphere.w + blend_reach < mm_per_pixel * 0.25;
+}
+
 // how far a blend reaches, in units of the blend size k (the soft minimum is exact beyond it)
 fn reach_mult() -> f32 {
     let mode = i32(G.melt.x + 0.5);
@@ -533,6 +549,7 @@ fn find_candidates(ro: vec3<f32>, rd: vec3<f32>, t0: f32, t1: f32, slack: f32) {
             let near = seg_sphere(ro, rd, 1.0, t0, t1, sphere);
             // (a group that keeps only the overlap changes the result everywhere: never left out)
             if (near >= grow && gr.z < 1.5) { continue; }
+            if (preview_omit_subpixel(sphere, gr)) { continue; }
             let item = ib0 + j;
             if (item < 256) { cand[item >> 5] = cand[item >> 5] | (1u << u32(item & 31)); }
             // the ray in the group's own space (the instance's rows carry a world point back)
