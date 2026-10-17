@@ -138,7 +138,7 @@ impl LetterMeta {
         self.settings.sanitize();
         for n in &mut self.base_centre {
             if !n.is_finite() { *n = 0.0; }
-            *n = n.clamp(-5000.0, 5000.0);
+            *n = (*n).clamp(-5000.0, 5000.0);
         }
     }
 }
@@ -149,11 +149,13 @@ impl LetterMeta {
 struct SvgPen {
     d: String,
     count: usize,
+    invalid: bool,
 }
 
 impl SvgPen {
     fn cmd(&mut self, name: char, coordinates: &[f32]) {
         if self.count >= MAX_PEN_COMMANDS || coordinates.iter().any(|v| !v.is_finite() || v.abs() > 1.0e6) {
+            self.invalid = true;
             return;
         }
         self.count += 1;
@@ -195,7 +197,7 @@ fn outlined(face: &Face<'_>, id: GlyphId) -> Result<Artwork, String> {
     if pen.count == 0 {
         return Err("この文字には閉じた輪郭がありません".into());
     }
-    if pen.count >= MAX_PEN_COMMANDS || pen.d.len() > MAX_GLYPH_SVG_BYTES {
+    if pen.invalid || pen.count >= MAX_PEN_COMMANDS || pen.d.len() > MAX_GLYPH_SVG_BYTES {
         return Err("文字の輪郭が複雑すぎます（上限を超えました）".into());
     }
     // Even-odd parity keeps O, B, 田, 日 etc. hollow regardless of font winding.
@@ -361,8 +363,8 @@ pub fn apply(scene: &mut Scene, settings: &Settings, editing_run: Option<u32>) -
         if let Some(id) = id {
             if let Some(bounds) = face.glyph_bounding_box(id) {
                 let art = outlined(&face, id).map_err(|reason| format!("「{ch}」: {reason}"))?;
-                let width = f32::from(bounds.x_max - bounds.x_min);
-                let height = f32::from(bounds.y_max - bounds.y_min);
+                let width = f32::from(bounds.x_max) - f32::from(bounds.x_min);
+                let height = f32::from(bounds.y_max) - f32::from(bounds.y_min);
                 let centre = [
                     settings.anchor[0] + cursor + (f32::from(bounds.x_min) + f32::from(bounds.x_max)) * 0.5 * size,
                     settings.anchor[1] + (f32::from(bounds.y_min) + f32::from(bounds.y_max)) * 0.5 * size,
@@ -481,6 +483,7 @@ mod tests {
 
     /// Requires a known-licensed installed font on the test machine. No font is bundled.
     #[test]
+    #[ignore = "requires a known-installed CJK font on the test runner"]
     fn if_an_installed_cjk_font_exists_japanese_english_can_be_regenerated() {
         let Some(path) = crate::fonts::find_cjk_font_path() else { return };
         let mut settings = Settings::default();
