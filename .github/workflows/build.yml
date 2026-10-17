@@ -32,18 +32,18 @@ jobs:
           path: |
             target/release/meltcad.exe
             target/release/solidcraft.exe
-      # A rolling "latest" release holds the newest exe, named MELTCAD.exe, so it can be fetched
+      # A rolling "latest" release holds the newest exe, named YURACAD.exe, so it can be fetched
       # with one plain download.
-      - name: Publish MELTCAD.exe to the latest release
-        if: github.ref_name == 'easy-layout-and-melt' || github.ref_name == 'main'
+      - name: Publish YURACAD.exe to the latest release
+        if: github.ref_name == 'easy-layout-and-melt'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          cp target/release/meltcad.exe MELTCAD.exe
-          cp target/release/solidcraft.exe MELTCAD-Classic.exe
-          gh release view latest >/dev/null 2>&1 || gh release create latest --prerelease --title "Latest build" --notes "Newest Windows builds: MELTCAD.exe (blob modeller) and MELTCAD-Classic.exe (CAD)"
-          gh release upload latest MELTCAD.exe MELTCAD-Classic.exe --clobber
+          cp target/release/meltcad.exe YURACAD.exe
+          cp target/release/solidcraft.exe YURACAD-Classic.exe
+          gh release view latest >/dev/null 2>&1 || gh release create latest --prerelease --title "Latest build" --notes "Newest Windows builds: YURACAD.exe (blob modeller) and YURACAD-Classic.exe (CAD)"
+          gh release upload latest YURACAD.exe YURACAD-Classic.exe --clobber
 
   web:
     name: Web app
