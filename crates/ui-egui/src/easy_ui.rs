@@ -309,7 +309,7 @@ fn switch(ui: &mut egui::Ui, label: &str, on: &mut bool) {
 
 /// Plane buttons: draw on XY, YZ or XZ straight away, or make a construction plane.
 fn plane_section(app: &mut SolveApp, ui: &mut egui::Ui) {
-    header(ui, &tr("easy.plane"));
+    header(ui, tr("easy.plane"));
     let gap = ui.spacing().item_spacing.x;
     let w = (ui.available_width() - 2.0 * gap) / 3.0;
     ui.horizontal(|ui| {
@@ -360,7 +360,7 @@ fn plane_section(app: &mut SolveApp, ui: &mut egui::Ui) {
 }
 
 fn display_section(app: &mut SolveApp, ui: &mut egui::Ui) {
-    header(ui, &tr("easy.display"));
+    header(ui, tr("easy.display"));
     ui.horizontal(|ui| {
         let gap = ui.spacing().item_spacing.x;
         let w = (ui.available_width() - 3.0 * gap) / 4.0;
@@ -388,15 +388,15 @@ fn display_section(app: &mut SolveApp, ui: &mut egui::Ui) {
         }
     });
     ui.add_space(4.0);
-    switch(ui, &tr("easy.grid"), &mut app.ui.show_grid);
-    switch(ui, &tr("easy.origin"), &mut app.ui.show_origin);
-    switch(ui, &tr("easy.ground_shadow"), &mut app.ui.ground_shadow);
-    switch(ui, &tr("easy.sketches"), &mut app.ui.show_sketches);
+    switch(ui, tr("easy.grid"), &mut app.ui.show_grid);
+    switch(ui, tr("easy.origin"), &mut app.ui.show_origin);
+    switch(ui, tr("easy.ground_shadow"), &mut app.ui.ground_shadow);
+    switch(ui, tr("easy.sketches"), &mut app.ui.show_sketches);
 }
 
 fn camera_section(app: &mut SolveApp, ui: &mut egui::Ui) {
-    header(ui, &tr("easy.camera"));
-    switch(ui, &tr("easy.perspective"), &mut app.ui.perspective);
+    header(ui, tr("easy.camera"));
+    switch(ui, tr("easy.perspective"), &mut app.ui.perspective);
     ui.add_space(4.0);
     if ui.add_sized([ui.available_width(), 28.0], egui::Button::new(tr("easy.reset_camera"))).clicked() {
         app.animate_view("home");

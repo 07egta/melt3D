@@ -156,7 +156,13 @@ fn ms(v: f32) -> String {
 /// The HUD text, one line per entry.
 pub fn lines(s: &Summary, c: &Context) -> Vec<String> {
     let mut out = Vec::new();
-    out.push(format!("{:.0} fps　間隔 平均 {} / 最悪 {} ms (10秒で {})", s.fps, ms(s.interval_avg_ms), ms(s.interval_worst_ms), ms(s.interval_worst_long_ms)));
+    out.push(format!(
+        "{:.0} fps　間隔 平均 {} / 最悪 {} ms (10秒で {})",
+        s.fps,
+        ms(s.interval_avg_ms),
+        ms(s.interval_worst_ms),
+        ms(s.interval_worst_long_ms)
+    ));
     out.push(format!("CPU 平均 {} / 最悪 {} ms", ms(s.cpu_avg_ms), ms(s.cpu_worst_ms)));
     out.push(match (s.gpu_avg_ms, s.gpu_worst_ms) {
         (Some(a), Some(w)) => format!("GPU(シーン) 平均 {} / 最悪 {} ms", ms(a), ms(w)),
@@ -181,19 +187,24 @@ pub fn lines(s: &Summary, c: &Context) -> Vec<String> {
 
 /// Draw the HUD over the viewport `rect`.
 pub fn show(ctx: &egui::Context, rect: egui::Rect, summary: &Summary, info: &Context) {
-    egui::Area::new(egui::Id::new("frame_hud")).order(egui::Order::Foreground).fixed_pos(rect.left_bottom() + egui::vec2(12.0, -12.0)).pivot(egui::Align2::LEFT_BOTTOM).interactable(false).show(ctx, |ui| {
-        egui::Frame::new().fill(egui::Color32::from_black_alpha(190)).corner_radius(6.0).inner_margin(egui::Margin::symmetric(10, 6)).show(ui, |ui| {
-            let worst = summary.interval_worst_ms;
-            for (i, l) in lines(summary, info).iter().enumerate() {
-                let color = if i == 0 && worst > 33.0 {
-                    egui::Color32::from_rgb(255, 150, 120)
-                } else {
-                    egui::Color32::from_rgb(210, 235, 215)
-                };
-                ui.label(egui::RichText::new(l).monospace().size(12.0).color(color));
-            }
+    egui::Area::new(egui::Id::new("frame_hud"))
+        .order(egui::Order::Foreground)
+        .fixed_pos(rect.left_bottom() + egui::vec2(12.0, -12.0))
+        .pivot(egui::Align2::LEFT_BOTTOM)
+        .interactable(false)
+        .show(ctx, |ui| {
+            egui::Frame::new().fill(egui::Color32::from_black_alpha(190)).corner_radius(6.0).inner_margin(egui::Margin::symmetric(10, 6)).show(
+                ui,
+                |ui| {
+                    let worst = summary.interval_worst_ms;
+                    for (i, l) in lines(summary, info).iter().enumerate() {
+                        let color =
+                            if i == 0 && worst > 33.0 { egui::Color32::from_rgb(255, 150, 120) } else { egui::Color32::from_rgb(210, 235, 215) };
+                        ui.label(egui::RichText::new(l).monospace().size(12.0).color(color));
+                    }
+                },
+            );
         });
-    });
 }
 
 #[cfg(test)]
@@ -283,8 +294,29 @@ mod tests {
 
     #[test]
     fn the_hud_lines_tell_the_story() {
-        let sum = Summary { fps: 31.0, interval_avg_ms: 32.0, interval_worst_ms: 120.0, interval_worst_long_ms: 700.0, cpu_avg_ms: 2.5, cpu_worst_ms: 9.0, gpu_avg_ms: Some(28.0), gpu_worst_ms: Some(40.0), gpu_last_ms: None };
-        let ctx = Context { shapes: 12, instances: 3, groups: 2, scale: 0.5, adapter: "Vulkan / Test".into(), gpu_timing: true, fast: true, sharp: 0.0, pixels: [1264, 720], quality: "じどう".into() };
+        let sum = Summary {
+            fps: 31.0,
+            interval_avg_ms: 32.0,
+            interval_worst_ms: 120.0,
+            interval_worst_long_ms: 700.0,
+            cpu_avg_ms: 2.5,
+            cpu_worst_ms: 9.0,
+            gpu_avg_ms: Some(28.0),
+            gpu_worst_ms: Some(40.0),
+            gpu_last_ms: None,
+        };
+        let ctx = Context {
+            shapes: 12,
+            instances: 3,
+            groups: 2,
+            scale: 0.5,
+            adapter: "Vulkan / Test".into(),
+            gpu_timing: true,
+            fast: true,
+            sharp: 0.0,
+            pixels: [1264, 720],
+            quality: "じどう".into(),
+        };
         let l = lines(&sum, &ctx);
         let all = l.join("\n");
         assert!(all.contains("31 fps") && all.contains("最悪 120") && all.contains("700"));

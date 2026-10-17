@@ -8,7 +8,7 @@
 
 use std::path::Path;
 
-use crate::import_mesh::{self, Imported, ImportOptions, ImportedMesh, MeshFormat};
+use crate::import_mesh::{self, ImportOptions, Imported, ImportedMesh, MeshFormat};
 use crate::mesh::SharedVolume;
 use crate::sdf_volume::{BakeControl, BakeOptions, BakeStats, Volume, bake_with};
 
@@ -134,7 +134,8 @@ pub fn estimate(size: [f32; 3], tris: usize, res: u32) -> Estimate {
     let opts = BakeOptions { res, ..BakeOptions::default() };
     let longest = size.into_iter().fold(0.0f32, f32::max).max(1e-6);
     let mut cells = f64::from(res.clamp(4, 512));
-    let nodes_at = |cells: f64| -> f64 { size.iter().map(|s| (f64::from(s / longest) * cells).ceil().max(1.0) + 2.0 * f64::from(opts.pad) + 1.0).product() };
+    let nodes_at =
+        |cells: f64| -> f64 { size.iter().map(|s| (f64::from(s / longest) * cells).ceil().max(1.0) + 2.0 * f64::from(opts.pad) + 1.0).product() };
     // (the bake lowers the cell count itself when the grid would be too big)
     while nodes_at(cells) > opts.max_cells as f64 && cells > 8.0 {
         cells -= 1.0;
@@ -302,14 +303,17 @@ pub(crate) mod tests {
     fn the_up_axis_choice_stands_a_model_upright() {
         // a tall box in a Y-up file: 10 wide, 40 tall (y), 20 deep (z)
         let m = box_mesh([-5.0, 0.0, -10.0], [5.0, 40.0, 10.0]);
-        for (up, fmt, tall) in [(Up::Auto, MeshFormat::Obj, true), (Up::Auto, MeshFormat::Stl, false), (Up::Y, MeshFormat::Stl, true), (Up::Z, MeshFormat::Obj, false)] {
+        for (up, fmt, tall) in
+            [(Up::Auto, MeshFormat::Obj, true), (Up::Auto, MeshFormat::Stl, false), (Up::Y, MeshFormat::Stl, true), (Up::Z, MeshFormat::Obj, false)]
+        {
             let st = Settings { target_mm: 40.0, up, floor: true, centre: true, res: 32 };
             let b = bake(&m, fmt, &st, &BakeControl::new()).unwrap();
             assert_eq!(b.size[2] > 30.0, tall, "{up:?} {fmt:?} {:?}", b.size);
         }
         assert_eq!(upright_size([10.0, 40.0, 20.0], true), [10.0, 20.0, 40.0]);
         // where the file had it is kept when centring is off
-        let b = bake(&m, MeshFormat::Stl, &Settings { target_mm: 40.0, up: Up::Z, floor: false, centre: false, res: 32 }, &BakeControl::new()).unwrap();
+        let b =
+            bake(&m, MeshFormat::Stl, &Settings { target_mm: 40.0, up: Up::Z, floor: false, centre: false, res: 32 }, &BakeControl::new()).unwrap();
         let p = place(&b, false, false, [99.0, 99.0]);
         assert!((p[1] - 20.0).abs() < 1e-3 && p[0].abs() < 1e-3 && p[2].abs() < 1e-3, "{p:?}");
     }

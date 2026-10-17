@@ -711,7 +711,7 @@ mod tests {
     #[test]
     fn bad_input_is_an_error_and_never_a_panic() {
         let s = sphere([0.0; 3], 10.0, 16, 24);
-        assert!(melt(&[s.clone()], &Params::default()).is_err());
+        assert!(melt(std::slice::from_ref(&s), &Params::default()).is_err());
         assert!(melt(&[], &Params::default()).is_err());
         assert!(melt(&[s.clone(), TriMesh::default()], &Params::default()).is_err());
         let mut broken = s.clone();

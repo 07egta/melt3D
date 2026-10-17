@@ -2,7 +2,7 @@
 //! does in the window (the unit tests of each tool call its methods directly and cannot see
 //! problems in how the viewport hands the mouse to them).
 
-use egui::{Event, PointerButton, Pos2, RawInput, Rect, pos2, vec2};
+use egui::{Event, PointerButton, Pos2, RawInput, Rect, vec2};
 
 use crate::app::App;
 use crate::curve_tool::layout;
@@ -26,7 +26,8 @@ impl Rig {
 
     fn frame(&mut self, events: Vec<Event>) {
         self.time += 0.016;
-        let input = RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1100.0, 760.0))), events, time: Some(self.time), ..Default::default() };
+        let input =
+            RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1100.0, 760.0))), events, time: Some(self.time), ..Default::default() };
         let app = &mut self.app;
         let mut out = self.ctx.run_ui(input, |ui| {
             egui::CentralPanel::default().frame(egui::Frame::new()).show(ui, |ui| app.viewport(ui));

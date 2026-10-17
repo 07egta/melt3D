@@ -97,18 +97,23 @@ fn cmd(label: &str, words: &str, action: Action) -> Entry {
 }
 
 /// Everything the palette can run: shapes, every library model, and the commands.
-pub fn entries() -> Vec<Entry> {
+fn entries(index: Option<&library::SearchIndex>) -> Vec<Entry> {
     let mut v = Vec::new();
     for k in Kind::ALL {
-        v.push(Entry { label: format!("{}を足す", k.label()), tag: "形", words: format!("{} {}", k.label(), kind_words(k)).to_lowercase(), action: Action::AddShape(k) });
+        v.push(Entry {
+            label: format!("{}を足す", k.label()),
+            tag: "形",
+            words: format!("{} {}", k.label(), kind_words(k)).to_lowercase(),
+            action: Action::AddShape(k),
+        });
     }
-    for (ci, c) in library::all().iter().enumerate() {
-        for (ii, it) in c.items.iter().enumerate() {
+    if let Some(index) = index {
+        for item in &index.entries {
             v.push(Entry {
-                label: it.name.clone(),
+                label: item.name.clone(),
                 tag: "ライブラリ",
-                words: format!("{} {}", c.name, it.tags.join(" ")).to_lowercase(),
-                action: Action::Insert(ci, ii),
+                words: format!("{} {}", library::label(item.category).unwrap_or_default(), item.search_words()).to_lowercase(),
+                action: Action::Insert(item.category, item.item),
             });
         }
     }
@@ -222,7 +227,6 @@ pub fn open(ctx: &egui::Context) {
 }
 
 #[allow(dead_code)]
-#[allow(dead_code)]
 pub fn is_open(ctx: &egui::Context) -> bool {
     ctx.data(|m| m.get_temp::<State>(id())).is_some()
 }
@@ -234,11 +238,15 @@ impl App {
         match a {
             Action::AddShape(k) => self.add_shape(ctx, k),
             Action::AddGroup => self.add_group(),
-            Action::Insert(c, i) => {
-                if let Some(item) = library::all().get(c).and_then(|c| c.items.get(i)) {
-                    crate::library_ui::insert(self, ctx, item);
+            Action::Insert(c, i) => match library::load_category(c) {
+                Some(Ok(category)) => {
+                    if let Some(item) = category.items.get(i) {
+                        crate::library_ui::insert(self, ctx, item);
+                    }
                 }
-            }
+                Some(Err(error)) => self.say(ctx, format!("このモデルを読み込めません: {error}")),
+                None => self.say(ctx, "このモデルは見つかりませんでした"),
+            },
             Action::Undo => self.undo(),
             Action::Redo => self.redo(),
             Action::Copy => self.copy(ctx),
@@ -281,7 +289,9 @@ impl App {
     /// Draw the palette when it is open and run the chosen entry.
     pub fn palette_ui(&mut self, ctx: &egui::Context) {
         let Some(mut st) = ctx.data(|m| m.get_temp::<State>(id())) else { return };
-        let all = ENTRIES.get_or_init(entries);
+        let index = library::search_index();
+        let preparing_library = index.is_none() && library::request_search(ctx);
+        let all = if let Some(index) = index { ENTRIES.get_or_init(|| entries(Some(index))) } else { BASIC_ENTRIES.get_or_init(|| entries(None)) };
         let hits = search(all, &st.query, 9);
         st.sel = st.sel.min(hits.len().saturating_sub(1));
         let (mut close, mut run) = (false, None);
@@ -301,37 +311,68 @@ impl App {
         });
         let before = st.query.clone();
         let rect = self.view_rect;
-        egui::Area::new(egui::Id::new("palette_area")).order(egui::Order::Tooltip).pivot(Align2::CENTER_TOP).fixed_pos(egui::pos2(rect.center().x, rect.top() + 70.0)).show(ctx, |ui| {
-            style::card().show(ui, |ui| {
-                ui.set_width(460.0);
-                let r = ui.add(egui::TextEdit::singleline(&mut st.query).hint_text("さがす（形・ライブラリ・コマンド　English もOK）").desired_width(f32::INFINITY).font(egui::FontId::proportional(15.0)));
-                if st.fresh {
-                    r.request_focus();
-                    st.fresh = false;
-                }
-                ui.add_space(4.0);
-                if hits.is_empty() {
-                    ui.label(RichText::new("見つかりませんでした").color(style::DIM));
-                }
-                for (n, &i) in hits.iter().enumerate() {
-                    let Some(e) = all.get(i) else { continue };
-                    let (rc, resp) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 28.0), egui::Sense::click());
-                    if n == st.sel {
-                        ui.painter().rect_filled(rc, 6.0, Color32::from_rgba_unmultiplied(52, 178, 120, 80));
-                    } else if resp.hovered() {
-                        ui.painter().rect_filled(rc, 6.0, Color32::from_white_alpha(16));
+        egui::Area::new(egui::Id::new("palette_area"))
+            .order(egui::Order::Tooltip)
+            .pivot(Align2::CENTER_TOP)
+            .fixed_pos(egui::pos2(rect.center().x, rect.top() + 70.0))
+            .show(ctx, |ui| {
+                style::card().show(ui, |ui| {
+                    ui.set_width(460.0);
+                    let r = ui.add(
+                        egui::TextEdit::singleline(&mut st.query)
+                            .hint_text("さがす（形・ライブラリ・コマンド　English もOK）")
+                            .desired_width(f32::INFINITY)
+                            .font(egui::FontId::proportional(15.0)),
+                    );
+                    if st.fresh {
+                        r.request_focus();
+                        st.fresh = false;
                     }
-                    ui.painter().text(rc.left_center() + Vec2::new(10.0, 0.0), Align2::LEFT_CENTER, &e.label, egui::FontId::proportional(13.5), style::TEXT);
-                    ui.painter().text(rc.right_center() - Vec2::new(10.0, 0.0), Align2::RIGHT_CENTER, e.tag, egui::FontId::proportional(11.5), style::DIM);
-                    if resp.hovered() && ui.input(|i| i.pointer.delta().length() > 0.5) {
-                        st.sel = n;
+                    ui.add_space(4.0);
+                    if index.is_none() {
+                        ui.label(
+                            RichText::new(if preparing_library {
+                                "ライブラリ検索を準備しています…"
+                            } else {
+                                "ライブラリ検索を読み込めませんでした"
+                            })
+                            .color(style::DIM),
+                        );
                     }
-                    if resp.clicked() {
-                        run = Some(i);
+                    if hits.is_empty() {
+                        ui.label(RichText::new("見つかりませんでした").color(style::DIM));
                     }
-                }
+                    for (n, &i) in hits.iter().enumerate() {
+                        let Some(e) = all.get(i) else { continue };
+                        let (rc, resp) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 28.0), egui::Sense::click());
+                        if n == st.sel {
+                            ui.painter().rect_filled(rc, 6.0, Color32::from_rgba_unmultiplied(52, 178, 120, 80));
+                        } else if resp.hovered() {
+                            ui.painter().rect_filled(rc, 6.0, Color32::from_white_alpha(16));
+                        }
+                        ui.painter().text(
+                            rc.left_center() + Vec2::new(10.0, 0.0),
+                            Align2::LEFT_CENTER,
+                            &e.label,
+                            egui::FontId::proportional(13.5),
+                            style::TEXT,
+                        );
+                        ui.painter().text(
+                            rc.right_center() - Vec2::new(10.0, 0.0),
+                            Align2::RIGHT_CENTER,
+                            e.tag,
+                            egui::FontId::proportional(11.5),
+                            style::DIM,
+                        );
+                        if resp.hovered() && ui.input(|i| i.pointer.delta().length() > 0.5) {
+                            st.sel = n;
+                        }
+                        if resp.clicked() {
+                            run = Some(i);
+                        }
+                    }
+                });
             });
-        });
         if st.query != before {
             st.sel = 0;
         }
@@ -351,13 +392,36 @@ impl App {
 }
 
 static ENTRIES: std::sync::OnceLock<Vec<Entry>> = std::sync::OnceLock::new();
+static BASIC_ENTRIES: std::sync::OnceLock<Vec<Entry>> = std::sync::OnceLock::new();
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    #[test]
+    fn opening_palette_does_not_parse_models_on_ui_thread() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        let before = library::test_tracking::parses_on_this_thread();
+        open(&ctx);
+        ctx.run_ui(egui::RawInput::default(), |ui| app.palette_ui(ui.ctx())).textures_delta.clear();
+        assert_eq!(library::test_tracking::parses_on_this_thread(), before, "opening search must not deserialize full model geometry");
+    }
+
+    #[test]
+    fn palette_insertion_loads_only_the_requested_shared_category() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        let before = library::test_tracking::parses_on_this_thread();
+        app.run_action(&ctx, Action::Insert(0, 0));
+        assert_eq!(app.scene.groups.len(), 2);
+        assert_eq!(app.scene.groups[1].name, "おとこのこ");
+        assert!(library::loaded(0).is_some(), "palette and library must share their parsed models");
+        assert!(library::test_tracking::parses_on_this_thread() - before <= 1, "one insert must not deserialize unrelated categories");
+    }
+
     fn top(q: &str) -> Option<Action> {
-        let all = entries();
+        let all = entries(None);
         search(&all, q, 5).first().and_then(|i| all.get(*i)).map(|e| e.action)
     }
 
@@ -375,16 +439,23 @@ mod tests {
 
     #[test]
     fn library_models_are_found_by_name_and_tag() {
-        let all = entries();
+        let ctx = egui::Context::default();
+        assert!(library::request_search(&ctx));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while library::search_index().is_none() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        let index = library::search_index().expect("search index arrives from its worker");
+        let all = entries(Some(index));
         assert!(all.iter().any(|e| matches!(e.action, Action::Insert(_, _))), "the library is in the palette");
-        let first = library::all().first().and_then(|c| c.items.first()).map(|i| i.name.clone()).unwrap_or_default();
+        let first = index.entries.first().map(|item| item.name.clone()).unwrap_or_default();
         let hits = search(&all, &first, 5);
         assert!(hits.iter().any(|i| all.get(*i).is_some_and(|e| e.label == first)));
     }
 
     #[test]
     fn empty_and_nonsense_queries_are_safe() {
-        let all = entries();
+        let all = entries(None);
         let n = search(&all, "", 9).len();
         assert!(n > 0 && n <= 9);
         assert!(search(&all, "zzzzqqqqxxxx😀", 9).is_empty());
@@ -393,7 +464,7 @@ mod tests {
 
     #[test]
     fn best_matches_come_first() {
-        let all = entries();
+        let all = entries(None);
         let hits = search(&all, "コピー", 20);
         let labels: Vec<&str> = hits.iter().filter_map(|i| all.get(*i)).map(|e| e.label.as_str()).collect();
         assert_eq!(labels.first(), Some(&"コピー"), "{labels:?}");
@@ -414,8 +485,11 @@ mod tests {
         app.run_action(&ctx, Action::ShowAssets);
         assert!(app.lib_open);
         // every action can run on a fresh app without panicking (dialogs excluded: they need a window)
-        for e in entries() {
-            if matches!(e.action, Action::Open | Action::Save | Action::SaveAs | Action::Export(_) | Action::ExportPng | Action::ImportSvg | Action::ImportMesh) {
+        for e in entries(None) {
+            if matches!(
+                e.action,
+                Action::Open | Action::Save | Action::SaveAs | Action::Export(_) | Action::ExportPng | Action::ImportSvg | Action::ImportMesh
+            ) {
                 continue;
             }
             let mut a = App::new(true, None);

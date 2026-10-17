@@ -90,7 +90,11 @@ pub fn to_world(s: &Shape, p: V3) -> V3 {
 pub fn to_local(s: &Shape, w: V3) -> V3 {
     let r = rotation(s.rot);
     let d = sub(w, s.pos);
-    let q = [r[0][0] * d[0] + r[1][0] * d[1] + r[2][0] * d[2], r[0][1] * d[0] + r[1][1] * d[1] + r[2][1] * d[2], r[0][2] * d[0] + r[1][2] * d[1] + r[2][2] * d[2]];
+    let q = [
+        r[0][0] * d[0] + r[1][0] * d[1] + r[2][0] * d[2],
+        r[0][1] * d[0] + r[1][1] * d[1] + r[2][1] * d[2],
+        r[0][2] * d[0] + r[1][2] * d[1] + r[2][2] * d[2],
+    ];
     [q[0] / s.scale[0].max(1e-6), q[1] / s.scale[1].max(1e-6), q[2] / s.scale[2].max(1e-6)]
 }
 
@@ -633,7 +637,11 @@ impl App {
                             self.ct.drawing = false;
                         }
                     });
-                    ui.label(egui::RichText::new("クリックで点をふやす　ダブルクリック / Enterでおわり　Backspaceで1つもどる").size(11.0).color(style::DIM));
+                    ui.label(
+                        egui::RichText::new("クリックで点をふやす　ダブルクリック / Enterでおわり　Backspaceで1つもどる")
+                            .size(11.0)
+                            .color(style::DIM),
+                    );
                 });
             });
     }
@@ -771,7 +779,8 @@ impl App {
                 ui.label(egui::RichText::new("ぜんたいの太さ").color(style::DIM).size(12.0));
                 ui.add(egui::DragValue::new(&mut sh.params[3]).speed(0.01).range(0.1..=5.0).suffix(" ×").max_decimals(2));
             });
-            if style::pill(ui, "ぜんぶのふしを同じ太さに", false).on_hover_text("えらんだふし(なければ先頭)の太さにそろえる").clicked() {
+            if style::pill(ui, "ぜんぶのふしを同じ太さに", false).on_hover_text("えらんだふし(なければ先頭)の太さにそろえる").clicked()
+            {
                 let r = sh.path.get(chosen.unwrap_or(0)).map(|p| p[3]).unwrap_or(5.0);
                 set_all_radii(&mut sh.path, r);
             }
@@ -785,7 +794,13 @@ impl App {
                     if ui.selectable_label(chosen == Some(i), format!("ふし {}", i + 1)).clicked() {
                         pick = Some(i);
                     }
-                    ui.add(egui::DragValue::new(&mut node[3]).speed(0.1).range(0.1..=500.0).prefix(if is_curve { "太さ " } else { "倍 " }).max_decimals(1));
+                    ui.add(
+                        egui::DragValue::new(&mut node[3])
+                            .speed(0.1)
+                            .range(0.1..=500.0)
+                            .prefix(if is_curve { "太さ " } else { "倍 " })
+                            .max_decimals(1),
+                    );
                     if ui.add_enabled(n > 2, egui::Button::new("×").small()).on_hover_text("このふしを消す").clicked() {
                         del = Some(i);
                     }

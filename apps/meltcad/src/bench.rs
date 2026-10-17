@@ -110,6 +110,26 @@ pub fn library_scene(shapes: usize) -> Scene {
     sc
 }
 
+/// Deterministic exactly-300-shape file for comparing Windows memory footprints.
+/// This does not rely on the model library, whose contents may change between builds.
+pub fn memory_fixture_scene() -> Scene {
+    let mut scene = Scene::default();
+    scene.groups.clear();
+    for g in 0..12 {
+        let mut group = Group::new(format!("memory benchmark {g}"));
+        for s in 0..25 {
+            let i = g * 25 + s;
+            let pos = [((i % 20) as f32 - 9.5) * 17.0, ((i / 20) as f32 - 7.0) * 17.0, 12.0];
+            let mut shape = Shape::new(Kind::Sphere, pos, Material::default());
+            shape.size[0] = 6.0;
+            group.shapes.push(shape);
+        }
+        scene.groups.push(group);
+    }
+    tidy_env(&mut scene);
+    scene
+}
+
 /// The scenes of the test, in the order of the table.
 pub fn scenes() -> Vec<BenchScene> {
     let lib = |n: usize| {
@@ -117,13 +137,59 @@ pub fn scenes() -> Vec<BenchScene> {
         tidy_env(&mut s);
         s
     };
+    // Matched pairs keep geometry, instances and camera framing unchanged; only glow differs.
+    let unlit = |n: usize| {
+        let mut scene = lib(n);
+        for group in &mut scene.groups {
+            for shape in &mut group.shapes {
+                shape.material.glow = 0.0;
+            }
+        }
+        scene
+    };
     vec![
         BenchScene { name: "pipe", scene: pipe_scene() },
         BenchScene { name: "library20", scene: lib(20) },
         BenchScene { name: "shapes100", scene: lib(100) },
+        BenchScene { name: "shapes100_unlit", scene: unlit(100) },
         BenchScene { name: "shapes300", scene: lib(300) },
+        BenchScene { name: "shapes300_unlit", scene: unlit(300) },
         BenchScene { name: "gradient", scene: gradient_scene() },
     ]
+}
+
+#[cfg(test)]
+mod performance_scene_tests {
+    use super::*;
+
+    #[test]
+    fn matched_100_and_300_shape_scenes_have_identical_geometry() {
+        let all = scenes();
+        for n in [100, 300] {
+            let lit_name = format!("shapes{n}");
+            let unlit_name = format!("shapes{n}_unlit");
+            let lit = all.iter().find(|s| s.name == lit_name).expect("lit scene");
+            let unlit = all.iter().find(|s| s.name == unlit_name).expect("unlit scene");
+            assert_eq!(lit.scene.shape_count(), unlit.scene.shape_count());
+            assert_eq!(lit.scene.groups.len(), unlit.scene.groups.len());
+            // GPU bounds include emission halos, so they are not geometry bounds.
+            // Both benchmark rows must nevertheless use exactly the same camera.
+            let lit_cam = camera_for_case(lit, &all);
+            let unlit_cam = camera_for_case(unlit, &all);
+            assert_eq!(lit_cam.target, unlit_cam.target);
+            assert_eq!(lit_cam.eye(), unlit_cam.eye());
+            assert_eq!(lit_cam.basis(), unlit_cam.basis());
+            assert!(!crate::perf::scene_has_glow(&unlit.scene));
+            for (a, b) in lit.scene.groups.iter().zip(&unlit.scene.groups) {
+                assert_eq!(a.shapes.len(), b.shapes.len());
+                for (a, b) in a.shapes.iter().zip(&b.shapes) {
+                    let mut copy = a.clone();
+                    copy.material.glow = 0.0;
+                    assert_eq!(&copy, b);
+                }
+            }
+        }
+    }
 }
 
 /// The camera that frames a scene.
@@ -132,6 +198,13 @@ pub fn camera_for(scene: &Scene) -> Camera {
     let (c, r) = crate::gpu::bounds(scene, None);
     cam.frame(c, r.max(10.0));
     cam
+}
+
+/// Paired emission trials use the lit row's framing: turning off a lamp shrinks
+/// its halo bounds, but must not change the camera or screen coverage in an A/B trial.
+fn camera_for_case(case: &BenchScene, cases: &[BenchScene]) -> Camera {
+    let reference = case.name.strip_suffix("_unlit").and_then(|name| cases.iter().find(|other| other.name == name)).unwrap_or(case);
+    camera_for(&reference.scene)
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -245,7 +318,11 @@ pub fn format_table(r: &Report) -> String {
     out.push_str(&format!("backend   : {}{}\n", r.backend, if r.software { "  (software renderer, not a real graphics card)" } else { "" }));
     out.push_str(&format!(
         "timing    : {}\n",
-        if r.timestamps { "GPU timestamp queries (ms = time the card spent on the scene pass)" } else { "wall clock around submit + wait (this device has no timestamp queries)" }
+        if r.timestamps {
+            "GPU timestamp queries (ms = time the card spent on the scene pass)"
+        } else {
+            "wall clock around submit + wait (this device has no timestamp queries)"
+        }
     ));
     out.push_str(&format!("shader    : compiled in {:.2} s\n", r.compile_secs));
     out.push_str(&format!("frames    : {} per row after {} warm-up\n", r.frames, WARMUP));
@@ -254,7 +331,10 @@ pub fn format_table(r: &Report) -> String {
         out.push_str(&format!("cpu pack  : {} ms per frame that changes the scene\n", list.join(", ")));
     }
     out.push('\n');
-    out.push_str(&format!("{:<10} {:>6}  {:<10} {:<5} {:>8} {:>8} {:>8} {:>7} {:>8}\n", "scene", "shapes", "size", "mode", "avg ms", "min", "max", "fps", "wall ms"));
+    out.push_str(&format!(
+        "{:<10} {:>6}  {:<10} {:<5} {:>8} {:>8} {:>8} {:>7} {:>8}\n",
+        "scene", "shapes", "size", "mode", "avg ms", "min", "max", "fps", "wall ms"
+    ));
     let mut last_scene = String::new();
     for row in &r.rows {
         if !last_scene.is_empty() && last_scene != row.scene {
@@ -280,7 +360,12 @@ pub fn format_table(r: &Report) -> String {
     if !fast_rows.is_empty() {
         out.push_str(&format!("\nwhile moving at {}x{} the adaptive resolution would settle at about:\n", big[0], big[1]));
         for x in fast_rows {
-            out.push_str(&format!("  {:<10} {:.2} x  ({:.0} fps at that size)\n", x.scene, expected_scale(x.avg_ms), 1000.0 / (x.avg_ms * expected_scale(x.avg_ms).powi(2)).max(0.01)));
+            out.push_str(&format!(
+                "  {:<10} {:.2} x  ({:.0} fps at that size)\n",
+                x.scene,
+                expected_scale(x.avg_ms),
+                1000.0 / (x.avg_ms * expected_scale(x.avg_ms).powi(2)).max(0.01)
+            ));
         }
     }
     for n in &r.notes {
@@ -300,12 +385,27 @@ fn stats(v: &[f32]) -> (f32, f32, f32) {
 
 /// Run the test. `sizes`: window sizes; `frames`: frames per row; `progress` is told what is being
 /// drawn; `stop` (checked between rows) ends it early with what is done so far.
-pub fn run(sizes: &[[u32; 2]], frames: usize, scenes: &[BenchScene], progress: &mut dyn FnMut(&str), stop: &dyn Fn() -> bool, backends: Option<egui_wgpu::wgpu::Backends>) -> Result<Report, String> {
+pub fn run(
+    sizes: &[[u32; 2]],
+    frames: usize,
+    scenes: &[BenchScene],
+    progress: &mut dyn FnMut(&str),
+    stop: &dyn Fn() -> bool,
+    backends: Option<egui_wgpu::wgpu::Backends>,
+) -> Result<Report, String> {
     run_with(sizes, frames, scenes, progress, stop, None, backends)
 }
 
 /// `run`, with another source for the scene shader (experiments).
-pub fn run_with(sizes: &[[u32; 2]], frames: usize, scenes: &[BenchScene], progress: &mut dyn FnMut(&str), stop: &dyn Fn() -> bool, source: Option<&str>, backends: Option<egui_wgpu::wgpu::Backends>) -> Result<Report, String> {
+pub fn run_with(
+    sizes: &[[u32; 2]],
+    frames: usize,
+    scenes: &[BenchScene],
+    progress: &mut dyn FnMut(&str),
+    stop: &dyn Fn() -> bool,
+    source: Option<&str>,
+    backends: Option<egui_wgpu::wgpu::Backends>,
+) -> Result<Report, String> {
     progress("グラフィックスを準備しています…");
     let mut gpu = crate::gpu::offscreen::Offscreen::open_with(source, backends)?;
     let mut report = Report {
@@ -320,7 +420,7 @@ pub fn run_with(sizes: &[[u32; 2]], frames: usize, scenes: &[BenchScene], progre
         ..Default::default()
     };
     for bs in scenes {
-        let cam = camera_for(&bs.scene);
+        let cam = camera_for_case(bs, scenes);
         // the processor's side of a frame that changes the scene
         let t = Instant::now();
         let mut pack = crate::gpu::ScenePack::new(&bs.scene, crate::gpu::VolumeSet::of(&bs.scene));
@@ -351,10 +451,22 @@ pub fn run_with(sizes: &[[u32; 2]], frames: usize, scenes: &[BenchScene], progre
                         }
                     }
                 }
-                let (source, used) = if gpu_ms.len() == wall_ms.len() && !gpu_ms.is_empty() { (Source::Gpu, &gpu_ms) } else { (Source::Wall, &wall_ms) };
+                let (source, used) =
+                    if gpu_ms.len() == wall_ms.len() && !gpu_ms.is_empty() { (Source::Gpu, &gpu_ms) } else { (Source::Wall, &wall_ms) };
                 let (avg, min, max) = stats(used);
                 let (wall_avg, _, _) = stats(&wall_ms);
-                report.rows.push(Row { scene: bs.name.to_string(), shapes: bs.scene.shape_count(), size, mode, frames, avg_ms: avg, min_ms: min, max_ms: max, source, wall_avg_ms: wall_avg });
+                report.rows.push(Row {
+                    scene: bs.name.to_string(),
+                    shapes: bs.scene.shape_count(),
+                    size,
+                    mode,
+                    frames,
+                    avg_ms: avg,
+                    min_ms: min,
+                    max_ms: max,
+                    source,
+                    wall_avg_ms: wall_avg,
+                });
             }
         }
     }
@@ -423,6 +535,18 @@ pub fn parse_args(args: &[std::ffi::OsString]) -> Option<Args> {
 
 /// Handle `--bench`: returns true when the arguments were a benchmark request (the program then ends).
 pub fn cli(args: &[std::ffi::OsString]) -> bool {
+    // Offline fixture writer: requires no graphics device and changes no user data.
+    if args.get(1).and_then(|a| a.to_str()) == Some("--memory-fixture") {
+        let Some(path) = args.get(2) else {
+            eprintln!("usage: meltcad --memory-fixture PATH.meltcad");
+            std::process::exit(2);
+        };
+        if let Err(e) = std::fs::write(std::path::Path::new(path), memory_fixture_scene().to_json()) {
+            eprintln!("could not create memory fixture: {e}");
+            std::process::exit(2);
+        }
+        return true;
+    }
     let Some(a) = parse_args(args) else { return false };
     let sizes: &[[u32; 2]] = if a.quick { &SIZES[..1] } else { &SIZES };
     let frames = if a.quick { a.frames.min(3) } else { a.frames };
@@ -444,7 +568,12 @@ pub fn cli(args: &[std::ffi::OsString]) -> bool {
     eprintln!("[bench] done {}", path.map(|p| p.display().to_string()).unwrap_or_default());
     // (a release build on Windows has no console: the answer is shown in a dialog too)
     if std::env::var_os("MELTCAD_BENCH_QUIET").is_none() {
-        rfd::MessageDialog::new().set_level(rfd::MessageLevel::Info).set_title(title).set_description(text).set_buttons(rfd::MessageButtons::Ok).show();
+        rfd::MessageDialog::new()
+            .set_level(rfd::MessageLevel::Info)
+            .set_title(title)
+            .set_description(text)
+            .set_buttons(rfd::MessageButtons::Ok)
+            .show();
     }
     true
 }
@@ -500,16 +629,21 @@ impl Job {
                 let s = s.to_string();
                 tell(&|st| st.progress = s.clone());
             };
-            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(&SIZES, FRAMES, &scenes(), &mut progress, &|| stop.load(std::sync::atomic::Ordering::Relaxed), backends)));
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                run(&SIZES, FRAMES, &scenes(), &mut progress, &|| stop.load(std::sync::atomic::Ordering::Relaxed), backends)
+            }));
             let (result, saved) = match outcome {
                 Ok(Ok(r)) => {
                     let text = format_table(&r);
                     let path = default_output();
                     let saved = std::fs::write(&path, &text).map(|()| path.display().to_string()).map_err(|e| format!("{}: {e}", path.display()));
-                    (Ok(text), Some(match saved {
-                        Ok(p) => format!("保存しました: {p}"),
-                        Err(e) => format!("保存できませんでした: {e}"),
-                    }))
+                    (
+                        Ok(text),
+                        Some(match saved {
+                            Ok(p) => format!("保存しました: {p}"),
+                            Err(e) => format!("保存できませんでした: {e}"),
+                        }),
+                    )
                 }
                 Ok(Err(e)) => (Err(e), None),
                 Err(_) => (Err("テスト中にエラーがおきました (panic)".to_string()), None),
@@ -591,7 +725,7 @@ mod tests {
     fn the_scenes_have_the_sizes_the_test_promises() {
         let all = scenes();
         let names: Vec<&str> = all.iter().map(|s| s.name).collect();
-        assert_eq!(names, ["pipe", "library20", "shapes100", "shapes300", "gradient"]);
+        assert_eq!(names, ["pipe", "library20", "shapes100", "shapes100_unlit", "shapes300", "shapes300_unlit", "gradient"]);
         let count = |n: &str| all.iter().find(|s| s.name == n).map(|s| s.scene.shape_count()).unwrap_or(0);
         assert_eq!(count("pipe"), 1);
         assert!((18..=40).contains(&count("library20")), "{}", count("library20"));
@@ -635,7 +769,18 @@ mod tests {
     }
 
     fn sample_report() -> Report {
-        let row = |scene: &str, size: [u32; 2], mode, avg: f32| Row { scene: scene.to_string(), shapes: 1, size, mode, frames: 12, avg_ms: avg, min_ms: avg * 0.9, max_ms: avg * 1.3, source: Source::Gpu, wall_avg_ms: avg + 0.4 };
+        let row = |scene: &str, size: [u32; 2], mode, avg: f32| Row {
+            scene: scene.to_string(),
+            shapes: 1,
+            size,
+            mode,
+            frames: 12,
+            avg_ms: avg,
+            min_ms: avg * 0.9,
+            max_ms: avg * 1.3,
+            source: Source::Gpu,
+            wall_avg_ms: avg + 0.4,
+        };
         Report {
             version: "0.11.0".into(),
             when: "2026-10-17 12:00 UTC".into(),
@@ -659,7 +804,22 @@ mod tests {
     #[test]
     fn the_table_has_what_a_person_must_send_us() {
         let t = format_table(&sample_report());
-        for want in ["speed test", "Intel(R) Arc(TM) 140V", "Vulkan", "GPU timestamp queries", "1.25 s", "pipe 0.05", "shapes300 1.23", "2560x1440", "avg ms", "fast", "full", "41.0", "160", "3.20"] {
+        for want in [
+            "speed test",
+            "Intel(R) Arc(TM) 140V",
+            "Vulkan",
+            "GPU timestamp queries",
+            "1.25 s",
+            "pipe 0.05",
+            "shapes300 1.23",
+            "2560x1440",
+            "avg ms",
+            "fast",
+            "full",
+            "41.0",
+            "160",
+            "3.20",
+        ] {
             assert!(t.contains(want), "missing {want:?} in:\n{t}");
         }
         // the lines of the table line up
@@ -694,7 +854,10 @@ mod tests {
         assert_eq!(parse_args(&a(&[])), None);
         assert_eq!(parse_args(&a(&["scene.meltcad"])), None);
         assert_eq!(parse_args(&a(&["--bench"])), Some(Args { out: None, frames: FRAMES, quick: false }));
-        assert_eq!(parse_args(&a(&["--bench", "r.txt", "--frames", "5", "--quick"])), Some(Args { out: Some("r.txt".into()), frames: 5, quick: true }));
+        assert_eq!(
+            parse_args(&a(&["--bench", "r.txt", "--frames", "5", "--quick"])),
+            Some(Args { out: Some("r.txt".into()), frames: 5, quick: true })
+        );
         assert_eq!(parse_args(&a(&["--bench", "--frames", "99999"])).map(|x| x.frames), Some(1000));
         assert_eq!(parse_args(&a(&["--bench", "--frames", "x"])).map(|x| x.frames), Some(FRAMES));
     }
@@ -799,7 +962,10 @@ mod tests {
                 return;
             }
         };
-        println!("{:<10} {:>6} {:<9} {:<5} {:>12} {:>9} {:>12} {:>9} {:>9}", "scene", "shapes", "size", "mode", "reads/px", "p95", "evals/px", "p95", "max");
+        println!(
+            "{:<10} {:>6} {:<9} {:<5} {:>12} {:>9} {:>12} {:>9} {:>9}",
+            "scene", "shapes", "size", "mode", "reads/px", "p95", "evals/px", "p95", "max"
+        );
         for bs in scenes().into_iter().filter(|s| only.as_ref().is_none_or(|o| o.iter().any(|n| n == s.name))) {
             let cam = camera_for(&bs.scene);
             let pack = crate::gpu::ScenePack::new(&bs.scene, crate::gpu::VolumeSet::of(&bs.scene));
@@ -950,7 +1116,10 @@ mod tests {
     #[test]
     #[ignore]
     fn candidates_match_the_full_scan() {
-        let (mut with, mut without) = match (crate::gpu::offscreen::Offscreen::open_with(Some(&depth_source(true)), None), crate::gpu::offscreen::Offscreen::open_with(Some(&depth_source(false)), None)) {
+        let (mut with, mut without) = match (
+            crate::gpu::offscreen::Offscreen::open_with(Some(&depth_source(true)), None),
+            crate::gpu::offscreen::Offscreen::open_with(Some(&depth_source(false)), None),
+        ) {
             (Ok(a), Ok(b)) => (a, b),
             _ => {
                 eprintln!("no adapter");
@@ -959,12 +1128,14 @@ mod tests {
         };
         let gold_src = {
             let mut g = depth_source(false);
-            for (a, b) in [("var relax = select(1.1, 1.5, fast);", "var relax = 0.9;"), ("var max_it = select(128, 48, fast);", "var max_it = 400;")] {
+            for (a, b) in [("var relax = select(1.1, 1.5, fast);", "var relax = 0.9;"), ("var max_it = select(128, 48, fast);", "var max_it = 400;")]
+            {
                 g = g.replace(a, b);
             }
             g
         };
-        let mut gold = if std::env::var("MELTCAD_BENCH_GOLD").is_ok() { crate::gpu::offscreen::Offscreen::open_with(Some(&gold_src), None).ok() } else { None };
+        let mut gold =
+            if std::env::var("MELTCAD_BENCH_GOLD").is_ok() { crate::gpu::offscreen::Offscreen::open_with(Some(&gold_src), None).ok() } else { None };
         let size = [320u32, 200u32];
         for (name, scene) in parity_scenes() {
             let cam = camera_for(&scene);
@@ -973,7 +1144,18 @@ mod tests {
                 let mut n = 0;
                 for (gi, g) in scene.groups.iter().enumerate() {
                     for (si, sh) in g.shapes.iter().enumerate() {
-                        println!("shape {n:>3} (g{gi} s{si}) {:?} pos {:?} size {:?} scale {:?} rot {:?} op {:?} blend {} round {} radius {:.1}", sh.kind, sh.pos, sh.size, sh.scale, sh.rot, sh.op, sh.blend, sh.round, crate::perf::shape_radius(sh));
+                        println!(
+                            "shape {n:>3} (g{gi} s{si}) {:?} pos {:?} size {:?} scale {:?} rot {:?} op {:?} blend {} round {} radius {:.1}",
+                            sh.kind,
+                            sh.pos,
+                            sh.size,
+                            sh.scale,
+                            sh.rot,
+                            sh.op,
+                            sh.blend,
+                            sh.round,
+                            crate::perf::shape_radius(sh)
+                        );
                         n += 1;
                     }
                 }
@@ -1052,7 +1234,9 @@ mod tests {
                     }
                 }
             }
-            println!("{name:<10} {both:>6} hit by both ({inner} away from the silhouette), {only_a} only with candidates, {only_b} only without; away from the silhouette the worst distance difference is {worst:.3} mm, {far} pixels differ by more than the march's own tolerance");
+            println!(
+                "{name:<10} {both:>6} hit by both ({inner} away from the silhouette), {only_a} only with candidates, {only_b} only without; away from the silhouette the worst distance difference is {worst:.3} mm, {far} pixels differ by more than the march's own tolerance"
+            );
             assert!(both > 200, "{name}: the scene is in the picture");
             assert!(only_a + only_b <= both / 12 + 2, "{name}: about the same pixels hit (the rest is silhouette)");
             assert!(far <= inner / 300 + 1, "{name}: the hits are at the same distance");
@@ -1068,13 +1252,14 @@ mod tests {
         let marker = "    if (G.offs2.z < 0.5) {\n        find_candidates(ro, rd, t, tend, 1.0 + G.melt.z + 0.1 * tend);";
         assert!(on.contains(marker), "the shadow's candidates are where the test looks for them");
         let off = on.replace(marker, "    if (false) {\n        find_candidates(ro, rd, t, tend, 1.0 + G.melt.z + 0.1 * tend);");
-        let (mut with, mut without) = match (crate::gpu::offscreen::Offscreen::open_with(Some(&on), None), crate::gpu::offscreen::Offscreen::open_with(Some(&off), None)) {
-            (Ok(a), Ok(b)) => (a, b),
-            _ => {
-                eprintln!("no adapter");
-                return;
-            }
-        };
+        let (mut with, mut without) =
+            match (crate::gpu::offscreen::Offscreen::open_with(Some(&on), None), crate::gpu::offscreen::Offscreen::open_with(Some(&off), None)) {
+                (Ok(a), Ok(b)) => (a, b),
+                _ => {
+                    eprintln!("no adapter");
+                    return;
+                }
+            };
         let size = [320u32, 200u32];
         for (name, scene) in parity_scenes() {
             let cam = camera_for(&scene);
@@ -1088,7 +1273,8 @@ mod tests {
                 gpu.frame(&pic, &globals, false);
                 images.push(gpu.read(&pic));
             }
-            let differing = images[0].chunks(4).zip(images[1].chunks(4)).filter(|(a, b)| a[..3].iter().zip(&b[..3]).any(|(x, y)| x.abs_diff(*y) > 6)).count();
+            let differing =
+                images[0].chunks(4).zip(images[1].chunks(4)).filter(|(a, b)| a[..3].iter().zip(&b[..3]).any(|(x, y)| x.abs_diff(*y) > 6)).count();
             let total = (size[0] * size[1]) as usize;
             println!("{name:<10} {differing} of {total} pixels differ by more than 6/255 with the shadows reading less");
             assert!(differing * 500 <= total, "{name}: the shadows are the same");
@@ -1125,5 +1311,21 @@ mod tests {
             ppm.extend(px.chunks(4).flat_map(|p| [p[0], p[1], p[2]]));
             let _ = std::fs::write(dir.join(format!("{}.ppm", bs.name)), ppm);
         }
+    }
+}
+
+#[cfg(test)]
+mod memory_fixture_tests {
+    use super::*;
+
+    #[test]
+    fn memory_fixture_is_exactly_300_shapes_and_roundtrips() {
+        let source = memory_fixture_scene();
+        assert_eq!(source.shape_count(), 300);
+        assert_eq!(source.groups.len(), 12);
+        let (loaded, notes) = Scene::from_json_notes(&source.to_json()).expect("valid benchmark scene");
+        assert!(notes.is_empty(), "benchmark must not depend on sanitizing invalid geometry: {notes:?}");
+        assert_eq!(loaded.shape_count(), 300);
+        assert_eq!(loaded.groups.len(), source.groups.len());
     }
 }

@@ -150,6 +150,8 @@ impl Prepared {
         [q[0] / self.scale[0], q[1] / self.scale[1], q[2] / self.scale[2]]
     }
     /// The surface colour at `p`: the material's colour, or its gradient (see `Material::gradient_weight`).
+    // Keep max/min semantics: unlike clamp, they turn a NaN input into the lower bound.
+    #[allow(clippy::manual_clamp)]
     pub fn color_at(&self, p: V3) -> V3 {
         let m = &self.material;
         if !m.has_gradient() {
@@ -242,11 +244,7 @@ impl Prepared {
 fn gradient_half(s: &Shape, rot: &[V3; 3]) -> f32 {
     let ax = usize::from(s.material.grad_axis).min(2);
     let half = s.local_half();
-    let h = if s.material.grad_local {
-        half[ax]
-    } else {
-        (0..3).map(|j| rot[ax][j].abs() * s.scale[j].abs() * half[j]).sum()
-    };
+    let h = if s.material.grad_local { half[ax] } else { (0..3).map(|j| rot[ax][j].abs() * s.scale[j].abs() * half[j]).sum() };
     if h.is_finite() { h.max(1e-3) } else { 1.0 }
 }
 
@@ -388,7 +386,11 @@ impl Field {
         let mut acc: Option<Sample> = None;
         let multi = g.info.blocks.len() > 1;
         for blk in &g.info.blocks {
-            if multi && blk.skippable && let Some(a) = &acc && blk.bound.lower(p) >= block_far(a.dist, blk.kmax * self.amount, self.mode) {
+            if multi
+                && blk.skippable
+                && let Some(a) = &acc
+                && blk.bound.lower(p) >= block_far(a.dist, blk.kmax * self.amount, self.mode)
+            {
                 continue;
             }
             for i in blk.first..blk.first + blk.count {
@@ -679,7 +681,15 @@ mod tests {
                 s.size = [4.0 + rnd() * 12.0, 4.0 + rnd() * 12.0, 4.0 + rnd() * 12.0];
                 s.rot = [rnd() * 90.0, rnd() * 90.0, rnd() * 90.0];
                 s.blend = rnd() * 12.0;
-                s.op = if si > 0 && rnd() < 0.2 { Op::Subtract } else if si > 0 && rnd() < 0.08 { Op::Intersect } else if si > 0 && rnd() < 0.08 { Op::Paint } else { Op::Add };
+                s.op = if si > 0 && rnd() < 0.2 {
+                    Op::Subtract
+                } else if si > 0 && rnd() < 0.08 {
+                    Op::Intersect
+                } else if si > 0 && rnd() < 0.08 {
+                    Op::Paint
+                } else {
+                    Op::Add
+                };
                 g.shapes.push(s);
             }
             sc.groups.push(g);
@@ -950,11 +960,24 @@ mod tests {
                     let b = crate::accel::shape_bound(s);
                     let p = Prepared::new(s);
                     for _ in 0..200 {
-                        let q = [s.pos[0] + (rnd() - 0.5) * 2.0 * b.r * 1.5, s.pos[1] + (rnd() - 0.5) * 2.0 * b.r * 1.5, s.pos[2] + (rnd() - 0.5) * 2.0 * b.r * 1.5];
+                        let q = [
+                            s.pos[0] + (rnd() - 0.5) * 2.0 * b.r * 1.5,
+                            s.pos[1] + (rnd() - 0.5) * 2.0 * b.r * 1.5,
+                            s.pos[2] + (rnd() - 0.5) * 2.0 * b.r * 1.5,
+                        ];
                         let d = p.distance(q);
                         let lb = b.lower(q);
                         if d < lb - 1e-3 {
-                            let e = kinds.entry(format!("{:?} round {} shell {} chamfer {:?} scale {:?}", s.kind, s.round > 0.0, s.shell > 0.0, s.corner, s.scale)).or_insert((0, 0.0));
+                            let e = kinds
+                                .entry(format!(
+                                    "{:?} round {} shell {} chamfer {:?} scale {:?}",
+                                    s.kind,
+                                    s.round > 0.0,
+                                    s.shell > 0.0,
+                                    s.corner,
+                                    s.scale
+                                ))
+                                .or_insert((0, 0.0));
                             e.0 += 1;
                             e.1 = e.1.max(lb - d);
                         }
@@ -982,7 +1005,8 @@ mod tests {
             state = state.wrapping_mul(1664525).wrapping_add(1013904223);
             (state >> 8) as f32 / (1u32 << 24) as f32
         };
-        let pts: Vec<V3> = (0..20000).map(|_| [c[0] + (rnd() - 0.5) * 2.0 * r, c[1] + (rnd() - 0.5) * 2.0 * r, c[2] + (rnd() - 0.5) * 2.0 * r * 0.4]).collect();
+        let pts: Vec<V3> =
+            (0..20000).map(|_| [c[0] + (rnd() - 0.5) * 2.0 * r, c[1] + (rnd() - 0.5) * 2.0 * r, c[2] + (rnd() - 0.5) * 2.0 * r * 0.4]).collect();
         let time = |f: &Field| {
             let t = std::time::Instant::now();
             let mut acc = 0.0;
@@ -993,7 +1017,12 @@ mod tests {
         };
         let (a, sa) = time(&fast);
         let (b, sb) = time(&slow);
-        eprintln!("{} shapes: Field::new {:.1} ms; 20000 distances: {a:.0} ms with skips, {b:.0} ms without ({:.1}x); sums {sa:.1} {sb:.1}", sc.shape_count(), prep.as_secs_f64() * 1000.0, b / a);
+        eprintln!(
+            "{} shapes: Field::new {:.1} ms; 20000 distances: {a:.0} ms with skips, {b:.0} ms without ({:.1}x); sums {sa:.1} {sb:.1}",
+            sc.shape_count(),
+            prep.as_secs_f64() * 1000.0,
+            b / a
+        );
     }
 
     fn graded(kind: Kind, mat: Material) -> Shape {

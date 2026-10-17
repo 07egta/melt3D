@@ -105,7 +105,9 @@ pub fn parse_choice(text: Option<&str>) -> Result<Choice, String> {
     match text.map(str::trim) {
         None | Some("") => Ok(Choice::Auto),
         Some(t) if t.eq_ignore_ascii_case("auto") => Ok(Choice::Auto),
-        Some(t) => Backend::parse(t).map(Choice::Fixed).ok_or_else(|| format!("MELTCAD_BACKEND={t} は知らない値です (vulkan / dx12 / gl / metal / auto)")),
+        Some(t) => {
+            Backend::parse(t).map(Choice::Fixed).ok_or_else(|| format!("MELTCAD_BACKEND={t} は知らない値です (vulkan / dx12 / gl / metal / auto)"))
+        }
     }
 }
 
@@ -308,7 +310,8 @@ pub struct Relaunch {
 /// The command line and environment of the new run.
 pub fn relaunch_args(r: &Relaunch) -> (Vec<OsString>, Vec<(String, String)>) {
     let args: Vec<OsString> = r.file.iter().map(|f| f.clone().into_os_string()).collect();
-    let envs = vec![("MELTCAD_BACKEND".to_string(), r.choice.clone().unwrap_or_default()), ("MELTCAD_BACKEND_TRIED".to_string(), tried_text(&r.tried))];
+    let envs =
+        vec![("MELTCAD_BACKEND".to_string(), r.choice.clone().unwrap_or_default()), ("MELTCAD_BACKEND_TRIED".to_string(), tried_text(&r.tried))];
     (args, envs)
 }
 
@@ -413,7 +416,11 @@ mod tests {
         s.note_ok(Backend::Gl);
         assert_eq!(plan(Choice::Auto, true, &s, &[]), Some(Plan::Only(Backend::Gl)), "the last good one is first");
         assert_eq!(plan(Choice::Auto, true, &s, &[Backend::Gl]), Some(Plan::Only(Backend::Dx12)));
-        assert_eq!(plan(Choice::Auto, true, &s, &[Backend::Gl, Backend::Dx12]), Some(Plan::Only(Backend::Vulkan)), "failed ones still get their turn at the end");
+        assert_eq!(
+            plan(Choice::Auto, true, &s, &[Backend::Gl, Backend::Dx12]),
+            Some(Plan::Only(Backend::Vulkan)),
+            "failed ones still get their turn at the end"
+        );
     }
 
     #[test]
@@ -438,7 +445,7 @@ mod tests {
         assert_eq!(Settings::parse("not json at all"), Settings::default());
         assert_eq!(Settings::parse("{}"), Settings::default());
         assert_eq!(Settings::parse("{\"last_ok\":\"nonsense\"}"), Settings::default(), "an unknown backend word is dropped with the file");
-        assert_eq!(Settings::parse("{\"easy\":true,\"future_field\":1}").easy, true);
+        assert!(Settings::parse("{\"easy\":true,\"future_field\":1}").easy);
     }
 
     #[test]
@@ -459,7 +466,11 @@ mod tests {
         assert_eq!(next_after_failure(Choice::Auto, true, &s, &[], Plan::Only(Backend::Vulkan)), Some(Plan::Only(Backend::Dx12)));
         assert_eq!(next_after_failure(Choice::Auto, true, &s, &[Backend::Vulkan], Plan::Only(Backend::Dx12)), Some(Plan::Only(Backend::Gl)));
         assert_eq!(next_after_failure(Choice::Auto, true, &s, &[Backend::Vulkan, Backend::Dx12], Plan::Only(Backend::Gl)), None);
-        assert_eq!(next_after_failure(Choice::Fixed(Backend::Vulkan), true, &s, &[], Plan::Only(Backend::Vulkan)), None, "no loop on an explicit choice");
+        assert_eq!(
+            next_after_failure(Choice::Fixed(Backend::Vulkan), true, &s, &[], Plan::Only(Backend::Vulkan)),
+            None,
+            "no loop on an explicit choice"
+        );
         assert_eq!(next_after_failure(Choice::Auto, false, &s, &[], Plan::Default), None, "the defaults are tried once");
     }
 

@@ -7,9 +7,9 @@
 //! simple lighting (the lights of the room, a rough soft shadow, a little shine). The window never
 //! waits for it: a newer request makes the worker drop the older one.
 
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
-use std::sync::Arc;
 
 use crate::camera::Camera;
 use crate::model::{Environment, Scene};
@@ -113,7 +113,8 @@ fn grid(col: V3, gp: V3, footprint: f32, fade: f32, below: bool) -> V3 {
     let gs = 10.0_f32;
     let w = (footprint * 1.5).max(1e-4);
     let line_of = |scale: f32| {
-        let a = [((gp[0] / scale - 0.5).rem_euclid(1.0) - 0.5).abs() / (w / scale), ((gp[1] / scale - 0.5).rem_euclid(1.0) - 0.5).abs() / (w / scale)];
+        let a =
+            [((gp[0] / scale - 0.5).rem_euclid(1.0) - 0.5).abs() / (w / scale), ((gp[1] / scale - 0.5).rem_euclid(1.0) - 0.5).abs() / (w / scale)];
         1.0 - a[0].min(a[1]).min(1.0)
     };
     let line = line_of(gs);
@@ -398,6 +399,18 @@ pub struct EasyView {
 }
 
 impl EasyView {
+    /// Release the old software image and its full scene snapshot on document replacement.
+    /// A worker still rendering the old scene observes a changed request id and stops.
+    pub fn invalidate(&mut self) {
+        if let Some(worker) = &self.worker {
+            worker.latest.store(u64::MAX, Ordering::Relaxed);
+            while worker.rx.try_recv().is_ok() {}
+        }
+        self.requested = None;
+        self.texture = None;
+        self.settled = false;
+    }
+
     /// Make sure the picture shows `scene` through `cam` at `view_px`; call every frame.
     pub fn update(&mut self, ctx: &egui::Context, scene: &Scene, cam: &Camera, view_px: [u32; 2], moving: bool) {
         if self.worker.is_none() && !self.failed {
@@ -416,7 +429,12 @@ impl EasyView {
                 self.settled = frame.last;
             }
         }
-        let key = Key { scene: scene.clone_if_changed(self.requested.as_ref().map(|(_, k)| &k.scene)), cam: crate::perf::cam_key(cam), view: view_px, moving };
+        let key = Key {
+            scene: scene.clone_if_changed(self.requested.as_ref().map(|(_, k)| &k.scene)),
+            cam: crate::perf::cam_key(cam),
+            view: view_px,
+            moving,
+        };
         if self.requested.as_ref().is_some_and(|(_, k)| *k == key) {
             return;
         }
@@ -555,8 +573,7 @@ mod tests {
     fn a_shape_is_drawn_solid_in_its_colour_and_the_sky_colour_follows_the_room() {
         let mut sc = Scene::default();
         sc.groups[0].shapes[0] = Shape::new(Kind::Sphere, [0.0, 0.0, 20.0], Material { color: [0.9, 0.1, 0.1], ..Material::default() });
-        let mut cam = Camera::default();
-        cam.target = [0.0, 0.0, 20.0];
+        let cam = Camera { target: [0.0, 0.0, 20.0], ..Camera::default() };
         let (w, h) = (80, 60);
         let img = render(&sc, &cam, [w, h], true, 2, &never).expect("drawn");
         let mid = px(&img, w, w / 2, h / 2);
@@ -574,8 +591,7 @@ mod tests {
         sc.groups[0].shapes[0].pos = [f32::NAN, f32::INFINITY, 1e30];
         sc.groups[0].shapes[0].size = [f32::NAN; 3];
         sc.env.exposure = f32::NAN;
-        let mut cam = Camera::default();
-        cam.dist = f32::NAN;
+        let cam = Camera { dist: f32::NAN, ..Camera::default() };
         let img = render(&sc, &cam, [16, 16], true, 2, &never);
         assert_eq!(img.map(|i| i.len()), Some(16 * 16 * 4));
         let img = render(&Scene::default(), &Camera::default(), [100000, 0], false, 0, &never);
@@ -610,6 +626,14 @@ mod tests {
         v.update(&ctx, &sc, &cam2, [120, 90], true);
         assert_ne!(v.requested.as_ref().map(|(i, _)| *i), id);
         assert!(!v.settled);
+        v.invalidate();
+        assert!(v.requested.is_none(), "the worker's full scene snapshot must be released");
+        assert!(v.texture.is_none(), "the old software picture must be dropped");
+        assert!(!v.settled);
+        assert_eq!(v.worker.as_ref().map(|w| w.latest.load(Ordering::Relaxed)), Some(u64::MAX));
+        // The same worker may be reused for the next document.
+        v.update(&ctx, &sc, &cam, [120, 90], false);
+        assert!(v.requested.is_some());
     }
 
     #[test]

@@ -7,12 +7,8 @@ license.workspace = true
 publish = false
 default-run = "meltcad"
 
-[lints.rust]
-unsafe_code = "forbid"
-
-[lints.clippy]
-dbg_macro = "warn"
-todo = "warn"
+[lints]
+workspace = true
 
 [dependencies]
 eframe = { workspace = true, features = ["default_fonts", "wgpu", "wayland", "x11"] }

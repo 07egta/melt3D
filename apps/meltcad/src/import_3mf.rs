@@ -8,7 +8,10 @@
 use std::collections::HashMap;
 
 use crate::import_inflate::Zip;
-use crate::import_mesh::{Affine, BAD_INDEX, BAD_NUMBER, CUT_OFF, ImportedMesh, MAX_TRIANGLES, MAX_VERTICES, NO_SHAPE, TOO_MANY_TRIS, TOO_MANY_VERTS, append_transformed, parse_f32};
+use crate::import_mesh::{
+    Affine, BAD_INDEX, BAD_NUMBER, CUT_OFF, ImportedMesh, MAX_TRIANGLES, MAX_VERTICES, NO_SHAPE, TOO_MANY_TRIS, TOO_MANY_VERTS, append_transformed,
+    parse_f32,
+};
 
 /// The biggest model XML we unpack (bytes). The tests use a small cap so that the "bomb" test is light.
 #[cfg(not(test))]
@@ -225,7 +228,12 @@ fn parse_doc(src: &[u8], total_verts: &mut usize, total_tris: &mut usize) -> Res
             (b"object", false) => {
                 let id = id_attr(&t, "id")?;
                 let ty = t.attr("type").unwrap_or("model");
-                let obj = Obj { v: doc.verts.len()..doc.verts.len(), t: doc.tris.len()..doc.tris.len(), skip: ty == "support" || ty == "solidsupport", ..Obj::default() };
+                let obj = Obj {
+                    v: doc.verts.len()..doc.verts.len(),
+                    t: doc.tris.len()..doc.tris.len(),
+                    skip: ty == "support" || ty == "solidsupport",
+                    ..Obj::default()
+                };
                 if t.self_closing {
                     doc.objects.insert(id, obj);
                 } else {
@@ -344,7 +352,10 @@ impl Package<'_> {
             let part = if obj.t.is_empty() {
                 None
             } else {
-                Some((doc.verts.get(obj.v.clone()).map(<[_]>::to_vec).ok_or(BAD_INDEX)?, doc.tris.get(obj.t.clone()).map(<[_]>::to_vec).ok_or(BAD_INDEX)?))
+                Some((
+                    doc.verts.get(obj.v.clone()).map(<[_]>::to_vec).ok_or(BAD_INDEX)?,
+                    doc.tris.get(obj.t.clone()).map(<[_]>::to_vec).ok_or(BAD_INDEX)?,
+                ))
             };
             let comps: Vec<(u32, Option<String>, Affine)> = obj.comps.iter().map(|c| (c.id, c.path.clone(), c.m)).collect();
             (doc.unit_mm, comps, part)
@@ -407,7 +418,8 @@ pub fn read_3mf(bytes: &[u8]) -> Result<ImportedMesh, String> {
     let mut out = ImportedMesh::default();
     if build.is_empty() {
         // no build section: take the objects nobody else uses as a component
-        let used: std::collections::HashSet<u32> = pkg.docs.get(&main_key).map(|d| d.objects.values().flat_map(|o| o.comps.iter().map(|c| c.id)).collect()).unwrap_or_default();
+        let used: std::collections::HashSet<u32> =
+            pkg.docs.get(&main_key).map(|d| d.objects.values().flat_map(|o| o.comps.iter().map(|c| c.id)).collect()).unwrap_or_default();
         all_ids.retain(|i| !used.contains(i));
         for id in all_ids {
             pkg.emit(&main, id, &scale, 0, &mut out)?;
@@ -433,7 +445,8 @@ mod tests {
     use crate::import_mesh::tests::{box_mesh, sphere_mesh, surface};
 
     fn model(unit: &str, body: &str) -> Vec<u8> {
-        format!("<?xml version=\"1.0\"?>\n<model unit=\"{unit}\" xmlns=\"http://schemas.microsoft.com/3dmanufacturing/core/2015/02\">{body}</model>").into_bytes()
+        format!("<?xml version=\"1.0\"?>\n<model unit=\"{unit}\" xmlns=\"http://schemas.microsoft.com/3dmanufacturing/core/2015/02\">{body}</model>")
+            .into_bytes()
     }
 
     fn pkg(xml: &[u8]) -> Vec<u8> {
@@ -478,7 +491,12 @@ mod tests {
         assert_eq!((lo[0], hi[0]), (-110.0, 0.0));
         assert_eq!((lo[1], hi[1]), (5.0, 15.0));
         // a rotation by 90 degrees about z (row vectors): x -> y
-        let xml = model("millimeter", &format!("<resources><object id=\"1\">{TETRA}</object></resources><build><item objectid=\"1\" transform=\"0 1 0 -1 0 0 0 0 1 0 0 0\"/></build>"));
+        let xml = model(
+            "millimeter",
+            &format!(
+                "<resources><object id=\"1\">{TETRA}</object></resources><build><item objectid=\"1\" transform=\"0 1 0 -1 0 0 0 0 1 0 0 0\"/></build>"
+            ),
+        );
         let m = read_3mf(&pkg(&xml)).unwrap();
         assert!((vol(&m) - 1000.0 / 6.0).abs() < 1e-3);
         let (lo, hi) = m.bounds().unwrap();
@@ -487,7 +505,12 @@ mod tests {
 
     #[test]
     fn without_a_build_section_the_free_objects_are_used() {
-        let xml = model("millimeter", &format!("<resources><object id=\"1\">{TETRA}</object><object id=\"2\"><components><component objectid=\"1\"/></components></object></resources>"));
+        let xml = model(
+            "millimeter",
+            &format!(
+                "<resources><object id=\"1\">{TETRA}</object><object id=\"2\"><components><component objectid=\"1\"/></components></object></resources>"
+            ),
+        );
         assert_eq!(read_3mf(&pkg(&xml)).unwrap().triangles.len(), 4);
     }
 
@@ -528,7 +551,9 @@ mod tests {
 
     #[test]
     fn hostile_models_fail_cleanly() {
-        let obj = |inner: &str| model("millimeter", &format!("<resources><object id=\"1\">{inner}</object></resources><build><item objectid=\"1\"/></build>"));
+        let obj = |inner: &str| {
+            model("millimeter", &format!("<resources><object id=\"1\">{inner}</object></resources><build><item objectid=\"1\"/></build>"))
+        };
         for bad in [
             // index out of range
             obj(&TETRA.replace("v3=\"3\"", "v3=\"4\"")),
@@ -550,11 +575,17 @@ mod tests {
         }
         // a bad transform
         for tr in ["1 2 3", "1 0 0 0 1 0 0 0 1 0 0 nan", "a b c d e f g h i j k l", "1 0 0 0 1 0 0 0 1 0 0 1e99"] {
-            let xml = model("millimeter", &format!("<resources><object id=\"1\">{TETRA}</object></resources><build><item objectid=\"1\" transform=\"{tr}\"/></build>"));
+            let xml = model(
+                "millimeter",
+                &format!("<resources><object id=\"1\">{TETRA}</object></resources><build><item objectid=\"1\" transform=\"{tr}\"/></build>"),
+            );
             assert!(read_3mf(&pkg(&xml)).is_err(), "{tr}");
         }
         // a component cycle and a very deep chain
-        let cyc = model("millimeter", "<resources><object id=\"1\"><components><component objectid=\"2\"/></components></object><object id=\"2\"><components><component objectid=\"1\"/></components></object></resources><build><item objectid=\"1\"/></build>");
+        let cyc = model(
+            "millimeter",
+            "<resources><object id=\"1\"><components><component objectid=\"2\"/></components></object><object id=\"2\"><components><component objectid=\"1\"/></components></object></resources><build><item objectid=\"1\"/></build>",
+        );
         assert!(read_3mf(&pkg(&cyc)).is_err());
         // exponential fan-out: 10 components each referencing the next level, 10 levels
         let mut body = String::from("<resources><object id=\"0\">");

@@ -6,60 +6,60 @@ mod accel;
 mod adapt;
 mod app;
 mod array;
+mod backend;
+mod bench;
+mod cad;
 mod camera;
 mod clip;
 mod corner;
+mod cpu_render;
+mod curve;
+mod curve_tool;
+mod easy_view;
 mod export;
 mod export_decimate;
-mod export_dialog;
 mod export_deflate;
+mod export_dialog;
 mod export_formats;
 mod export_job;
 mod export_mesh;
 mod fonts;
+#[cfg(test)]
+mod frame_bench;
 mod gizmo;
 mod glyphs;
 mod glyphs_more;
-mod backend;
-mod bench;
-mod easy_view;
 mod gpu;
-mod gpu_timing;
 mod gpu_log;
 mod gpu_status;
+mod gpu_timing;
 mod gpu_ui;
 mod hud;
 mod icon;
-#[cfg(test)]
-mod frame_bench;
-#[cfg(test)]
-mod input_tests;
 mod import_3mf;
 mod import_glb;
 mod import_inflate;
 mod import_mesh;
+#[cfg(test)]
+mod input_tests;
 mod library;
 mod library_ui;
 mod materials;
 mod mesh;
 mod mesh_dialog;
 mod mesh_import;
-mod cad;
-mod cpu_render;
-mod curve;
-mod curve_tool;
-mod pipe_tool;
 mod model;
-mod perf;
-mod prims;
 mod panels;
 mod pattern;
 mod pattern_ui;
+mod perf;
+mod pipe_tool;
 mod png;
+mod prims;
 mod sdf;
+mod sdf_volume;
 #[cfg(test)]
 mod shader_portability;
-mod sdf_volume;
 mod sketch;
 mod sketch_ui;
 mod stroke;
@@ -141,8 +141,11 @@ fn main() -> eframe::Result {
         options,
         Box::new(move |cc| {
             perf::mark("window and graphics ready");
-            fonts::install(&cc.egui_ctx, font_job.finish());
-            perf::mark("fonts installed");
+            let mut font_job = font_job;
+            if let Some(bytes) = font_job.poll() {
+                fonts::install(&cc.egui_ctx, bytes);
+                perf::mark("font installed before first frame");
+            }
             style::apply(&cc.egui_ctx);
             let rs = cc.wgpu_render_state.clone();
             if rs.is_none() {
@@ -150,6 +153,7 @@ fn main() -> eframe::Result {
             }
             let srgb = rs.as_ref().is_none_or(|rs| rs.target_format.is_srgb());
             let mut app = app::App::new(srgb, std::env::args_os().nth(1).map(std::path::PathBuf::from));
+            app.attach_font_job(font_job);
             // the shader compiles on its own thread: the window shows first, with the simple view
             app.attach_gpu(rs, &cc.egui_ctx, settings.easy);
             perf::mark("app created");

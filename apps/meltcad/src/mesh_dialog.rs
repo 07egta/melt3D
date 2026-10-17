@@ -76,7 +76,9 @@ fn id() -> egui::Id {
 
 /// Menu entry "メッシュを読み込む…": ask for a file, then show the card.
 pub fn open(ctx: &egui::Context) {
-    let Some(path) = rfd::FileDialog::new().add_filter("メッシュ (STL・OBJ・3MF・PLY・GLB)", &mesh_import::EXTENSIONS).pick_file() else { return };
+    let Some(path) = rfd::FileDialog::new().add_filter("メッシュ (STL・OBJ・3MF・PLY・GLB)", &mesh_import::EXTENSIONS).pick_file() else {
+        return;
+    };
     open_path(ctx, path);
 }
 
@@ -216,7 +218,9 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
         style::card().show(ui, |ui| {
             ui.set_width(380.0);
             ui.label(RichText::new("メッシュを読み込む").strong().size(15.0));
-            ui.label(RichText::new("STL・OBJ・3MF・PLY・GLB の立体を、ほかの形と同じようにとかしたり くり抜いたりできます").size(11.5).color(style::DIM));
+            ui.label(
+                RichText::new("STL・OBJ・3MF・PLY・GLB の立体を、ほかの形と同じようにとかしたり くり抜いたりできます").size(11.5).color(style::DIM),
+            );
             ui.add_space(4.0);
             if let Some(b) = d.bake.clone() {
                 baking(ui, &b);
@@ -242,7 +246,9 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
                     }
                 } else {
                     ui.add_enabled_ui(d.loaded.is_some(), |ui| {
-                        let b = egui::Button::new(RichText::new("読みこむ").strong().color(Color32::WHITE)).fill(style::ACCENT_SOFT).stroke(Stroke::new(1.0, style::ACCENT));
+                        let b = egui::Button::new(RichText::new("読みこむ").strong().color(Color32::WHITE))
+                            .fill(style::ACCENT_SOFT)
+                            .stroke(Stroke::new(1.0, style::ACCENT));
                         if ui.add(b).clicked() {
                             go = true;
                         }
@@ -306,8 +312,11 @@ fn options(ui: &mut egui::Ui, d: &mut Dlg, app: &App, pick: &mut bool) {
     let Some(l) = d.loaded.clone() else { return };
     ui.add_space(2.0);
     let imp = &l.imported;
-    let dropped = if imp.dropped_triangles > 0 { format!("（面積のない {} 個はのぞきました）", imp.dropped_triangles) } else { String::new() };
-    ui.label(RichText::new(format!("{}　{}　三角形 {}{}", l.file_name, imp.format.label(), count_text(imp.mesh.triangles.len()), dropped)).size(12.5));
+    let dropped =
+        if imp.dropped_triangles > 0 { format!("（面積のない {} 個はのぞきました）", imp.dropped_triangles) } else { String::new() };
+    ui.label(
+        RichText::new(format!("{}　{}　三角形 {}{}", l.file_name, imp.format.label(), count_text(imp.mesh.triangles.len()), dropped)).size(12.5),
+    );
     let y_up = d.st.up.is_y(imp.format);
     ui.label(RichText::new(format!("もとの大きさ {}", size_text(mesh_import::upright_size(l.size, y_up)))).size(11.5).color(style::DIM));
     for n in &imp.notes {
@@ -317,9 +326,16 @@ fn options(ui: &mut egui::Ui, d: &mut Dlg, app: &App, pick: &mut bool) {
     egui::Grid::new("mesh_import_grid").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
         ui.label(RichText::new("目標の大きさ").color(style::DIM));
         ui.horizontal(|ui| {
-            ui.add(egui::DragValue::new(&mut d.st.target_mm).speed(0.5).range(mesh_import::MIN_TARGET_MM..=mesh_import::MAX_TARGET_MM).suffix(" mm").max_decimals(1))
-                .on_hover_text("いちばん長い辺の長さ");
-            if style::pill(ui, "もとの大きさ", false).on_hover_text("ファイルの大きさのまま（200mmより大きいときは200mm）").clicked() {
+            ui.add(
+                egui::DragValue::new(&mut d.st.target_mm)
+                    .speed(0.5)
+                    .range(mesh_import::MIN_TARGET_MM..=mesh_import::MAX_TARGET_MM)
+                    .suffix(" mm")
+                    .max_decimals(1),
+            )
+            .on_hover_text("いちばん長い辺の長さ");
+            if style::pill(ui, "もとの大きさ", false).on_hover_text("ファイルの大きさのまま（200mmより大きいときは200mm）").clicked()
+            {
                 d.st.target_mm = mesh_import::default_target(l.size);
             }
         });
@@ -336,13 +352,17 @@ fn options(ui: &mut egui::Ui, d: &mut Dlg, app: &App, pick: &mut bool) {
         ui.label("");
         ui.vertical(|ui| {
             style::checkbox(ui, &mut d.st.floor, "床に置く").on_hover_text("いちばん下を 床（高さ0）にそろえます");
-            style::checkbox(ui, &mut d.st.centre, "まんなかに置く").on_hover_text("いま見ている場所の まんなかに置きます。切ると、ファイルの位置のまま");
+            style::checkbox(ui, &mut d.st.centre, "まんなかに置く")
+                .on_hover_text("いま見ている場所の まんなかに置きます。切ると、ファイルの位置のまま");
         });
         ui.end_row();
         ui.label(RichText::new("細かさ").color(style::DIM));
         ui.horizontal(|ui| {
             for r in RES_CHOICES {
-                if style::pill(ui, &r.to_string(), d.st.res == r).on_hover_text("いちばん長い辺を 何マスに分けるか。大きいほど きれいで、重くなります").clicked() {
+                if style::pill(ui, &r.to_string(), d.st.res == r)
+                    .on_hover_text("いちばん長い辺を 何マスに分けるか。大きいほど きれいで、重くなります")
+                    .clicked()
+                {
                     d.st.res = r;
                 }
             }
@@ -352,7 +372,9 @@ fn options(ui: &mut egui::Ui, d: &mut Dlg, app: &App, pick: &mut bool) {
     let e = estimate_of(&l, &d.st);
     let refuse = mesh_import::refuse(&app.scene, e.nodes);
     let col = if refuse.is_some() { style::CUT } else { style::DIM };
-    ui.label(RichText::new(format!("目安: {}・ファイル {}・マス {}", time_text(e.secs), bytes_text(e.bytes), count_text(e.nodes))).size(11.5).color(col));
+    ui.label(
+        RichText::new(format!("目安: {}・ファイル {}・マス {}", time_text(e.secs), bytes_text(e.bytes), count_text(e.nodes))).size(11.5).color(col),
+    );
     if let Some(why) = refuse {
         ui.label(RichText::new(why).size(11.5).color(style::CUT));
     }
