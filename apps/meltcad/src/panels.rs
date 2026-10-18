@@ -114,6 +114,8 @@ impl App {
         };
         // a folded group hides everything nested in it
         let mut hidden_below: Option<u8> = None;
+        // Shift + click: everything between the picked row and this one (Ctrl + click adds one by one)
+        let mut range_to: Option<Pick> = None;
         for gi in 0..ngroups {
             let depth = self.scene.groups[gi].depth;
             if let Some(d) = hidden_below {
@@ -143,8 +145,11 @@ impl App {
                 }
             }
             if row.select {
-                if ui.input(|i| i.modifiers.shift) {
+                let (shift, ctrl) = ui.input(|i| (i.modifiers.shift, i.modifiers.command || i.modifiers.ctrl));
+                if ctrl {
                     self.toggle_pick(Pick::Group(gi));
+                } else if shift {
+                    range_to = Some(Pick::Group(gi));
                 } else {
                     self.sel = Some(Pick::Group(gi));
                 }
@@ -179,8 +184,11 @@ impl App {
                         "",
                     );
                     if row.select {
-                        if ui.input(|i| i.modifiers.shift) {
+                        let (shift, ctrl) = ui.input(|i| (i.modifiers.shift, i.modifiers.command || i.modifiers.ctrl));
+                        if ctrl {
                             self.toggle_pick(Pick::Shape(gi, si));
+                        } else if shift {
+                            range_to = Some(Pick::Shape(gi, si));
                         } else {
                             self.sel = Some(Pick::Shape(gi, si));
                         }
@@ -200,6 +208,17 @@ impl App {
                     }
                     self.curve_ball_rows(ui, gi, si, 36.0 + indent_px);
                 }
+            }
+        }
+        if let Some(to) = range_to {
+            let order: Vec<Pick> = self.row_rects.iter().map(|(k, _)| *k).collect();
+            let from = self.sel.filter(|s| order.contains(s)).unwrap_or(to);
+            let (i, j) = (order.iter().position(|k| *k == from), order.iter().position(|k| *k == to));
+            if let (Some(i), Some(j)) = (i, j) {
+                let (lo, hi) = (i.min(j), i.max(j));
+                self.sel = Some(from);
+                self.multi = order[lo..=hi].iter().copied().filter(|k| *k != from).collect();
+                self.multi_for = self.sel;
             }
         }
         if ngroups == 0 {

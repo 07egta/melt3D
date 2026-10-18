@@ -51,7 +51,7 @@ pub struct App {
     pub sel: Option<Pick>,
     /// More picks next to `sel` (Shift + click). Only valid while `multi_for` is still `sel`.
     pub multi: Vec<Pick>,
-    multi_for: Option<Pick>,
+    pub(crate) multi_for: Option<Pick>,
     pub tool: Tool,
     /// What a new shape does: add to the group or carve from it.
     pub new_op: Op,
@@ -77,6 +77,10 @@ pub struct App {
     close_approved: bool,
     status: (String, f64),
     pub renaming: Option<Pick>,
+    /// Box selection: which kind is on, and the corner where the drag began.
+    pub marquee: Option<crate::marquee::Marquee>,
+    pub marquee_from: Option<egui::Pos2>,
+    pub marquee_to: egui::Pos2,
     /// How the view is turned and zoomed: the mouse's way or the trackpad's way (or follow what is used).
     pub input_dev: crate::view::InputDev,
     /// What the last scroll looked like (when the choice is Auto).
@@ -171,6 +175,9 @@ impl App {
             close_approved: false,
             status: (String::new(), 0.0),
             renaming: None,
+            marquee: None,
+            marquee_from: None,
+            marquee_to: egui::Pos2::ZERO,
             input_dev: crate::view::InputDev::Auto,
             input_seen: crate::view::Device::Mouse,
             folded: HashSet::new(),
@@ -1211,6 +1218,16 @@ impl App {
                     style::vsep(ui);
                     if style::pill(ui, "Find  F", false).on_hover_text("Find shapes, library, commands (F)").clicked() {
                         palette::open(&ctx);
+                    }
+                    // box selection: only what is completely inside, or everything the box touches
+                    for (mode, tip, icon) in [
+                        (crate::marquee::Marquee::Inside, "Box select: drag a box, take only shapes completely inside (Shift adds)", crate::glyphs_more::box_inside as fn(&egui::Painter, egui::Rect, Color32)),
+                        (crate::marquee::Marquee::Touching, "Box select: drag a box, take every shape it touches (Shift adds)", crate::glyphs_more::box_touching as fn(&egui::Painter, egui::Rect, Color32)),
+                    ] {
+                        let on = self.marquee == Some(mode);
+                        if style::icon_button(ui, 32.0, tip, on, icon).clicked() {
+                            self.marquee = if on { None } else { Some(mode) };
+                        }
                     }
                     let left_end = ui.cursor().left();
                     let right_start = ui.max_rect().right();

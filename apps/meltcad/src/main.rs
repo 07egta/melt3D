@@ -27,6 +27,7 @@ mod fonts;
 #[cfg(test)]
 mod frame_bench;
 mod gizmo;
+mod marquee;
 mod glyphs;
 mod glyphs_more;
 mod gpu;

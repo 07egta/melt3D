@@ -254,8 +254,11 @@ impl App {
             }
         }
 
+        // Box selection (when one of the two box buttons is on) takes drags that start on empty space
+        let marquee_free = hover_handle.is_none() && !ct.taken && !ct.over && !over_gnomon;
+        let marquee_taken = self.marquee_input(ui, &resp, rect, marquee_free, mods.shift);
         // A drag that starts on a handle moves the thing; a drag that starts anywhere else turns the view
-        if resp.drag_started_by(PointerButton::Primary) && !mods.alt && !ct.taken && !self.sketch_active() {
+        if resp.drag_started_by(PointerButton::Primary) && !mods.alt && !ct.taken && !marquee_taken && !self.sketch_active() {
             // where the button went down (the pointer has moved a little by now)
             let origin = ui.input(|i| i.pointer.press_origin()).or(pos);
             let grabbed = match (&geom, origin) {
@@ -435,6 +438,7 @@ impl App {
         self.curve_paint(&painter, rect);
         self.pipe_paint(&painter, rect);
         self.sketch_paint(&painter, rect);
+        self.marquee_paint(&painter);
         self.draw_gnomon(&painter, rect, pos);
     }
 
