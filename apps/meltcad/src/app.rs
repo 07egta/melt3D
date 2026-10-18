@@ -1145,6 +1145,32 @@ impl App {
                                 if style::wide_button(ui, "New group", "New group", false, None, glyphs::group).clicked() {
                                     self.add_group();
                                 }
+                                let pr = style::wide_button(ui, "Pattern", "Repeat the selected group: mirror, grid, circle, along a path", false, None, |p, r, ink| {
+                                    crate::pattern_ui::icon(crate::pattern::PatternKind::Circular, p, r, ink)
+                                });
+                                egui::Popup::menu(&pr).show(|ui| {
+                                    ui.set_min_width(170.0);
+                                    for k in crate::pattern::PatternKind::ALL {
+                                        let r = ui.horizontal(|ui| {
+                                            let (rc, _) = ui.allocate_exact_size(egui::vec2(24.0, 24.0), egui::Sense::hover());
+                                            crate::pattern_ui::icon(k, ui.painter(), rc, ui.visuals().text_color());
+                                            ui.selectable_label(false, k.label())
+                                        });
+                                        if r.inner.clicked() {
+                                            self.set_pattern_kind(&ctx, k);
+                                            ui.close();
+                                        }
+                                    }
+                                    ui.separator();
+                                    if ui.selectable_label(false, "Linked copy").clicked() {
+                                        self.make_instance(&ctx);
+                                        ui.close();
+                                    }
+                                    if ui.selectable_label(false, "Remove pattern").clicked() {
+                                        self.clear_pattern();
+                                        ui.close();
+                                    }
+                                });
                             });
                         });
                 });

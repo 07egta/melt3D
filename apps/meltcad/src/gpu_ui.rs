@@ -139,7 +139,6 @@ impl App {
     pub fn set_easy(&mut self, ctx: &egui::Context, on: bool) {
         self.gpu.easy = on;
         self.gpu.details = false;
-        crate::backend::update(|s| s.easy = on);
         crate::gpu_log::log(&format!("Simple view: {}", if on { "ON" } else { "OFF" }));
         // back to the GPU picture: build it if it was never started
         if !on && matches!(self.gpu.status.snapshot().state, State::Off) {
