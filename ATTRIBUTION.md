@@ -154,6 +154,10 @@ in THIRD-PARTY-LICENSES.txt; no images or artwork from that project are copied.
 | vendor/truck-stepio | truck-stepio 0.3.0, https://github.com/ricosjp/truck (RICOS Co. Ltd.) | Apache-2.0 | STEP writer: intersection-curve surfaces written at unique ids (vendor/README.md) |
 | vendor/truck-shapeops | truck-shapeops 0.4.0, https://github.com/ricosjp/truck (RICOS Co. Ltd.) | Apache-2.0 | robust meshing and nearest-parameter fallback in booleans; degenerate intersection-curve rejection; face and edge history of booleans; trace macro; corner choice at vertices several intersection curves end on (vendor/README.md) |
 | vendor/matext4cgmath | matext4cgmath 0.1.0, https://github.com/ricosjp/matext4cgmath (RICOS Co. Ltd.) | Apache-2.0 | root refinement stops after 100 Newton steps (vendor/README.md) |
+| apps/meltcad/assets/logo/melt3d-mark.svg | owner (07egta) | the owner's Melt3D loop-mark artwork, outline redrawn with smooth curves; original, no third-party material | MIT OR Apache-2.0 |
+| apps/meltcad/assets/logo/melt3d-icon.svg | owner (07egta) | the owner's Melt3D app icon (white mark on black rounded square), from the same artwork | MIT OR Apache-2.0 |
+| apps/meltcad/assets/logo/icon-128.rgba | owner (07egta) | raw 128x128 RGBA raster of melt3d-icon.svg | MIT OR Apache-2.0 |
+| apps/meltcad/assets/logo/mark-192x131.a8 | owner (07egta) | raw 192x131 alpha map of melt3d-mark.svg | MIT OR Apache-2.0 |
 
 ## Vendored renderer compatibility fix
 
