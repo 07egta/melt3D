@@ -374,7 +374,11 @@ impl App {
         self.pattern_section(ui, g);
         self.actions(ui);
         let linked = self.scene.groups.get(g).is_some_and(crate::model::Group::is_linked);
-        let hint = if linked { "リンクコピーの位置・回転・大きさは、上のらんで変えます" } else { "グループごと動かす・回す・大きさを変えられます" };
+        let hint = if linked {
+            "リンクコピーの位置・回転・大きさは、上のらんで変えます"
+        } else {
+            "グループごと動かす・回す・大きさを変えられます"
+        };
         ui.label(RichText::new(hint).size(12.0).color(style::DIM));
     }
 
@@ -400,7 +404,8 @@ impl App {
                     ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
                     for k in Kind::ALL {
                         let on = sh.kind == k;
-                        if style::icon_button(ui, 32.0, k.label(), on, |p, r, ink| glyphs::kind(p, r, k, ink, Color32::from_white_alpha(18))).clicked()
+                        if style::icon_button(ui, 32.0, k.label(), on, |p, r, ink| glyphs::kind(p, r, k, ink, Color32::from_white_alpha(18)))
+                            .clicked()
                             && !on
                         {
                             if sh.name == sh.kind.label() {
@@ -451,7 +456,13 @@ impl App {
                 }
             }
             style::labeled_slider(ui, "とけあい", &mut sh.blend, 0.0..=80.0, "この形が、まわりとどのくらい溶けてくっつくか (グープ)");
-            style::labeled_slider(ui, "ちゅうぐう\nシェル", &mut sh.shell, 0.0..=40.0, "中をくり抜いて、かべの あつさ(mm)だけ のこす。0 = つまっている");
+            style::labeled_slider(
+                ui,
+                "ちゅうぐう\nシェル",
+                &mut sh.shell,
+                0.0..=40.0,
+                "中をくり抜いて、かべの あつさ(mm)だけ のこす。0 = つまっている",
+            );
             if sh.kind.uses_outline() {
                 outline_changed = true;
                 top_changed = sh.kind.uses_outline2();
@@ -524,7 +535,12 @@ impl App {
             let (rect, _) = ui.allocate_exact_size(vec2(72.0, 72.0), Sense::hover());
             style::gfx::vgrad(ui.painter(), rect, 14.0, style::INSET_TOP, style::INSET_BOTTOM);
             ui.painter().rect_stroke(rect, 14.0, Stroke::new(1.0, Color32::from_white_alpha(18)), egui::StrokeKind::Inside);
-            style::gfx::shadow(&ui.painter_at(rect), Rect::from_center_size(rect.center() + vec2(0.0, 24.0), vec2(36.0, 4.0)), 2.0, &[(0, 10, 0, 90)]);
+            style::gfx::shadow(
+                &ui.painter_at(rect),
+                Rect::from_center_size(rect.center() + vec2(0.0, 24.0), vec2(36.0, 4.0)),
+                2.0,
+                &[(0, 10, 0, 90)],
+            );
             materials::swatch(&ui.painter_at(rect), rect.center(), 28.0, &m);
             ui.vertical(|ui| {
                 ui.label(RichText::new(current.unwrap_or("オリジナル")).strong().size(14.0));
@@ -995,5 +1011,3 @@ fn gradient_controls(ui: &mut Ui, m: &mut Material) {
     style::labeled_slider(ui, "ここから", &mut m.grad_from, 0.0..=1.0, "形のどこから色がかわりはじめるか (0 = はし)");
     style::labeled_slider(ui, "ここまで", &mut m.grad_to, 0.0..=1.0, "形のどこで色がかわりおわるか (1 = はんたいのはし)");
 }
-
-

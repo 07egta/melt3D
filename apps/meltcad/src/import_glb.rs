@@ -6,7 +6,9 @@
 
 use serde_json::Value;
 
-use crate::import_mesh::{Affine, BAD_INDEX, BAD_NUMBER, CUT_OFF, ImportedMesh, MAX_TRIANGLES, MAX_VERTICES, NO_SHAPE, TOO_MANY_TRIS, TOO_MANY_VERTS, append_transformed};
+use crate::import_mesh::{
+    Affine, BAD_INDEX, BAD_NUMBER, CUT_OFF, ImportedMesh, MAX_TRIANGLES, MAX_VERTICES, NO_SHAPE, TOO_MANY_TRIS, TOO_MANY_VERTS, append_transformed,
+};
 
 const BAD_GLB: &str = "GLB ファイルがこわれています";
 const MAX_NODE_VISITS: usize = 100_000;
@@ -203,7 +205,7 @@ fn read_primitive(json: &Value, bin: &[u8], prim: &Value) -> Result<Option<Part>
     match mode {
         4 => {
             tris.reserve(indices.len() / 3);
-            for t in indices.chunks_exact(3) {
+            for t in indices.as_chunks::<3>().0 {
                 tris.push([t[0], t[1], t[2]]);
             }
         }
@@ -237,7 +239,9 @@ struct Walk<'a> {
 
 impl Walk<'_> {
     fn mesh(&mut self, index: usize, m: &Affine) -> Result<(), String> {
-        let Some(prims) = self.json.get("meshes").and_then(|x| x.get(index)).and_then(|x| x.get("primitives")).and_then(Value::as_array) else { return Ok(()) };
+        let Some(prims) = self.json.get("meshes").and_then(|x| x.get(index)).and_then(|x| x.get("primitives")).and_then(Value::as_array) else {
+            return Ok(());
+        };
         for p in prims {
             if let Some((pos, tris)) = read_primitive(self.json, self.bin, p)? {
                 append_transformed(&mut self.out, &pos, &tris, m)?;
@@ -316,7 +320,11 @@ pub fn read_glb(b: &[u8]) -> Result<ImportedMesh, String> {
     let mut w = Walk { json: &json, bin, visits: 0, out: ImportedMesh::default() };
     let scene_nodes: Option<Vec<usize>> = {
         let scene = usz(json.get("scene")).unwrap_or(0);
-        json.get("scenes").and_then(|s| s.get(scene)).and_then(|s| s.get("nodes")).and_then(Value::as_array).map(|a| a.iter().filter_map(|v| usz(Some(v))).collect())
+        json.get("scenes")
+            .and_then(|s| s.get(scene))
+            .and_then(|s| s.get("nodes"))
+            .and_then(Value::as_array)
+            .map(|a| a.iter().filter_map(|v| usz(Some(v))).collect())
     };
     match scene_nodes {
         Some(nodes) => {
@@ -519,11 +527,13 @@ mod tests {
         assert!(edit(&|d| d["meshes"][0]["primitives"][0]["mode"] = json!(1)).is_err()); // lines only: no shape
         // a lot of instances of a big mesh
         let wide: Vec<Value> = (0..2000).map(|_| json!({"mesh": 0})).collect();
-        assert!(edit(&|d| {
-            d["nodes"] = json!(wide);
-            d["scenes"][0]["nodes"] = json!((0..2000).collect::<Vec<_>>());
-        })
-        .is_ok());
+        assert!(
+            edit(&|d| {
+                d["nodes"] = json!(wide);
+                d["scenes"][0]["nodes"] = json!((0..2000).collect::<Vec<_>>());
+            })
+            .is_ok()
+        );
         // broken containers
         assert!(read_glb(b"glTF").is_err());
         assert!(read_glb(b"glTF\x01\0\0\0\x0c\0\0\0").is_err());

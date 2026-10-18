@@ -37,7 +37,12 @@ impl Default for Dlg {
 fn set_art(d: &mut Dlg, res: Result<Artwork, String>, name: String) {
     match res {
         Ok(a) => {
-            d.msg = if a.dropped > 0 { format!("{}個の小さい・多すぎる線は読みとばしました", a.dropped) } else { String::new() };
+            let mut notes = Vec::new();
+            if a.dropped > 0 {
+                notes.push(format!("{}個の小さい・多すぎる輪郭は読みとばしました", a.dropped));
+            }
+            notes.extend(a.warnings.iter().cloned());
+            d.msg = notes.join("\n");
             d.art = Some(a);
             d.name = name;
         }
@@ -78,57 +83,67 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
         style::card().show(ui, |ui| {
             ui.set_width(330.0);
             ui.label(RichText::new("SVGを読み込む").strong().size(15.0));
-            ui.label(RichText::new("絵（SVG）をぐーっと押し出して、立体にします。あなは自動でくり抜きます").size(11.5).color(style::DIM));
-            ui.add_space(4.0);
-            ui.horizontal(|ui| {
-                if style::pill(ui, "ファイルをえらぶ…", false).clicked()
-                    && let Some(p) = rfd::FileDialog::new().add_filter("SVG", &["svg"]).pick_file()
-                {
-                    set_art(&mut d, svg::load_file(&p), stem(&p));
+            // Preview, options and all warnings can scroll; the action buttons
+            // remain on screen even when a partial SVG import adds many notes.
+            egui::ScrollArea::vertical().id_salt("svg_card_scroll").max_height((ctx.content_rect().height() - 132.0).max(120.0)).show(ui, |ui| {
+                ui.label(RichText::new("絵（SVG）をぐーっと押し出して、立体にします。あなは自動でくり抜きます").size(11.5).color(style::DIM));
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    if style::pill(ui, "ファイルをえらぶ…", false).clicked()
+                        && let Some(p) = rfd::FileDialog::new().add_filter("SVG", &["svg"]).pick_file()
+                    {
+                        set_art(&mut d, svg::load_file(&p), stem(&p));
+                    }
+                    if style::pill(ui, "サンプルの星を入れる", false).clicked() {
+                        set_art(&mut d, svg::parse(svg::SAMPLE_SVG), "サンプルの星".into());
+                    }
+                });
+                ui.label(RichText::new("（.svg ファイルを、ここにドラッグしてもOK）").size(11.0).color(style::DIM));
+                preview(ui, &d);
+                if let Some(a) = &d.art {
+                    ui.label(
+                        RichText::new(format!(
+                            "もとの大きさ {:.1} × {:.1} mm　かたまり {}・あな {}",
+                            a.natural_mm[0],
+                            a.natural_mm[1],
+                            a.solids(),
+                            a.holes()
+                        ))
+                        .size(11.5)
+                        .color(style::DIM),
+                    );
                 }
-                if style::pill(ui, "サンプルの星を入れる", false).clicked() {
-                    set_art(&mut d, svg::parse(svg::SAMPLE_SVG), "サンプルの星".into());
+                if !d.msg.is_empty() {
+                    for line in d.msg.lines() {
+                        ui.label(RichText::new(line).size(11.5).color(style::CUT));
+                    }
                 }
-            });
-            ui.label(RichText::new("（.svg ファイルを、ここにドラッグしてもOK）").size(11.0).color(style::DIM));
-            preview(ui, &d);
-            if let Some(a) = &d.art {
-                ui.label(
-                    RichText::new(format!(
-                        "もとの大きさ {:.1} × {:.1} mm　かたまり {}・あな {}",
-                        a.natural_mm[0],
-                        a.natural_mm[1],
-                        a.solids(),
-                        a.holes()
-                    ))
-                    .size(11.5)
-                    .color(style::DIM),
-                );
-            }
-            if !d.msg.is_empty() {
-                ui.label(RichText::new(&d.msg).size(11.5).color(style::CUT));
-            }
-            ui.add_space(2.0);
-            egui::Grid::new("svg_import_grid").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
-                ui.label(RichText::new("大きさ").color(style::DIM));
-                ui.add(egui::DragValue::new(&mut d.target).speed(0.5).range(1.0..=500.0).suffix(" mm").max_decimals(1)).on_hover_text("長いほうの辺の長さ");
-                ui.end_row();
-                ui.label(RichText::new("高さ").color(style::DIM));
-                ui.add(egui::DragValue::new(&mut d.height).speed(0.2).range(0.5..=200.0).suffix(" mm").max_decimals(1)).on_hover_text("押し出す高さ");
-                ui.end_row();
-                ui.label(RichText::new("かどの丸み").color(style::DIM));
-                let max_round = (d.height * 0.5).min(20.0);
-                ui.add(egui::DragValue::new(&mut d.round).speed(0.05).range(0.0..=max_round).suffix(" mm").max_decimals(2))
-                    .on_hover_text("角を丸くします。細い所は消えることがあります");
-                ui.end_row();
-                ui.label("");
-                ui.checkbox(&mut d.flip, "上下を反転");
-                ui.end_row();
+                ui.add_space(2.0);
+                egui::Grid::new("svg_import_grid").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
+                    ui.label(RichText::new("大きさ").color(style::DIM));
+                    ui.add(egui::DragValue::new(&mut d.target).speed(0.5).range(1.0..=500.0).suffix(" mm").max_decimals(1))
+                        .on_hover_text("長いほうの辺の長さ");
+                    ui.end_row();
+                    ui.label(RichText::new("高さ").color(style::DIM));
+                    ui.add(egui::DragValue::new(&mut d.height).speed(0.2).range(0.5..=200.0).suffix(" mm").max_decimals(1))
+                        .on_hover_text("押し出す高さ");
+                    ui.end_row();
+                    ui.label(RichText::new("かどの丸み").color(style::DIM));
+                    let max_round = (d.height * 0.5).min(20.0);
+                    ui.add(egui::DragValue::new(&mut d.round).speed(0.05).range(0.0..=max_round).suffix(" mm").max_decimals(2))
+                        .on_hover_text("角を丸くします。細い所は消えることがあります");
+                    ui.end_row();
+                    ui.label("");
+                    ui.checkbox(&mut d.flip, "上下を反転");
+                    ui.end_row();
+                });
             });
             ui.add_space(4.0);
             ui.horizontal(|ui| {
                 ui.add_enabled_ui(d.art.is_some(), |ui| {
-                    let b = egui::Button::new(RichText::new("読みこむ").strong().color(Color32::WHITE)).fill(style::ACCENT_SOFT).stroke(Stroke::new(1.0, style::ACCENT));
+                    let b = egui::Button::new(RichText::new("読みこむ").strong().color(Color32::WHITE))
+                        .fill(style::ACCENT_SOFT)
+                        .stroke(Stroke::new(1.0, style::ACCENT));
                     if ui.add(b).clicked() {
                         go = true;
                     }
@@ -198,6 +213,89 @@ fn import(app: &mut App, ctx: &egui::Context, d: &Dlg) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn visible_text(output: &egui::FullOutput, wanted: &str) -> Option<Pos2> {
+        fn find(shape: &egui::Shape, clip: egui::Rect, wanted: &str) -> Option<Pos2> {
+            match shape {
+                egui::Shape::Text(text) if text.galley.text() == wanted => {
+                    let center = egui::Rect::from_min_size(text.pos, text.galley.size()).center();
+                    clip.contains(center).then_some(center)
+                }
+                egui::Shape::Vec(shapes) => shapes.iter().find_map(|shape| find(shape, clip, wanted)),
+                _ => None,
+            }
+        }
+        output.shapes.iter().find_map(|shape| find(&shape.shape, shape.clip_rect, wanted))
+    }
+
+    #[test]
+    fn many_import_warnings_are_scrollable_and_actions_stay_visible() {
+        for import_it in [false, true] {
+            let ctx = egui::Context::default();
+            let mut app = App::new(true, None);
+            let source = svg::SAMPLE_SVG.replace(
+                "</svg>",
+                r##"<rect width="5" height="5" fill="none" stroke="red"/>
+                <text/><image/><foreignObject/><filter/><clipPath/><mask/>
+                <linearGradient/><radialGradient/><pattern/><marker/>
+                <use href="https://example.invalid/shape.svg#x"/><use href="#missing"/></svg>"##,
+            );
+            let mut d = Dlg::default();
+            set_art(&mut d, svg::parse(&source), "警告のある星".into());
+            assert!(d.art.is_some() && d.msg.lines().count() >= 12);
+            let last_warning = d.msg.lines().last().expect("last import warning").to_owned();
+            let all_warnings = d.msg.clone();
+            ctx.data_mut(|m| m.insert_temp(id(), d));
+            let screen = egui::Rect::from_min_size(Pos2::ZERO, egui::vec2(960.0, 600.0));
+            let frame = |app: &mut App, events| {
+                let mut output = ctx.run_ui(egui::RawInput { screen_rect: Some(screen), events, ..Default::default() }, |ui| update(app, ui.ctx()));
+                output.textures_delta.clear();
+                output
+            };
+            for _ in 0..3 {
+                frame(&mut app, Vec::new());
+            }
+            let card = ctx.memory(|m| m.area_rect(egui::Id::new("svg_import_area"))).expect("SVG import card");
+            assert!(screen.contains_rect(card), "warnings must not push the card off screen: {card:?}");
+            let output = frame(&mut app, Vec::new());
+            assert!(visible_text(&output, "読みこむ").is_some());
+            assert!(visible_text(&output, "やめる").is_some());
+
+            // Real wheel events expose the final warning without truncating it.
+            frame(
+                &mut app,
+                vec![
+                    egui::Event::PointerMoved(card.center()),
+                    egui::Event::MouseWheel {
+                        unit: egui::MouseWheelUnit::Point,
+                        delta: egui::vec2(0.0, -2000.0),
+                        phase: egui::TouchPhase::Move,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
+            for _ in 0..12 {
+                frame(&mut app, Vec::new());
+            }
+            let output = frame(&mut app, Vec::new());
+            assert!(visible_text(&output, &last_warning).is_some(), "all warning details remain reachable");
+            assert_eq!(ctx.data_mut(|m| m.get_temp::<Dlg>(id())).expect("open card").msg, all_warnings);
+            let label = if import_it { "読みこむ" } else { "やめる" };
+            let pos = visible_text(&output, label).expect("action stays visible after scrolling");
+            let groups_before = app.scene.groups.len();
+            for pressed in [true, false] {
+                frame(
+                    &mut app,
+                    vec![
+                        egui::Event::PointerMoved(pos),
+                        egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE },
+                    ],
+                );
+            }
+            assert!(ctx.data_mut(|m| m.get_temp::<Dlg>(id())).is_none(), "the visible action button closes the card");
+            assert_eq!(app.scene.groups.len(), groups_before + usize::from(import_it));
+        }
+    }
 
     #[test]
     fn the_card_draws_and_imports_the_sample() {

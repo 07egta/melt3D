@@ -76,7 +76,18 @@ pub struct State {
 
 impl Default for State {
     fn default() -> Self {
-        State { on: false, cfg: Config::default(), plane: Plane::Floor, stroke: Vec::new(), stroke_skin: Vec::new(), stroke_plane: Vec::new(), tracing: false, last_screen: None, hover: None, last: None }
+        State {
+            on: false,
+            cfg: Config::default(),
+            plane: Plane::Floor,
+            stroke: Vec::new(),
+            stroke_skin: Vec::new(),
+            stroke_plane: Vec::new(),
+            tracing: false,
+            last_screen: None,
+            hover: None,
+            last: None,
+        }
     }
 }
 
@@ -179,7 +190,12 @@ impl App {
     fn pipe_options(&self, raw: &[V3]) -> stroke::Options {
         let cfg = &self.pt.cfg;
         let mm_px = self.cam.mm_per_px(stroke::centre(raw), self.view_rect.height()).clamp(0.001, 100.0);
-        stroke::Options { tol: (mm_px * 3.0).max(cfg.radius * 0.15).max(0.2), max_nodes: PIPE_NODES, closed: cfg.closed, min_len: cfg.radius.max(2.0) }
+        stroke::Options {
+            tol: (mm_px * 3.0).max(cfg.radius * 0.15).max(0.2),
+            max_nodes: PIPE_NODES,
+            closed: cfg.closed,
+            min_len: cfg.radius.max(2.0),
+        }
     }
 
     /// Make a `Kind::Curve` pipe from raw world points. False when the stroke is no line, or the
@@ -352,7 +368,13 @@ impl App {
                     });
                     style::labeled_slider(ui, "外半径", &mut cfg.radius, 0.5..=40.0, "パイプの外がわの半径 (mm)");
                     let max_wall = (cfg.radius - 0.1).clamp(0.0, 20.0);
-                    style::labeled_slider(ui, "かべの\nあつさ", &mut cfg.wall, 0.0..=max_wall.max(0.1), "0 = つまった棒 / それより大きい = 中が空のパイプ (mm)");
+                    style::labeled_slider(
+                        ui,
+                        "かべの\nあつさ",
+                        &mut cfg.wall,
+                        0.0..=max_wall.max(0.1),
+                        "0 = つまった棒 / それより大きい = 中が空のパイプ (mm)",
+                    );
                     ui.horizontal(|ui| {
                         if style::pill(ui, "とじた輪", cfg.closed).on_hover_text("さいごとさいしょをつなぐ").clicked() {
                             cfg.closed = !cfg.closed;
@@ -361,7 +383,8 @@ impl App {
                         if style::pill(ui, "まる", !cfg.open_ends).on_hover_text("はしを丸くふさぐ").clicked() {
                             cfg.open_ends = false;
                         }
-                        if style::pill(ui, "すっぱり", cfg.open_ends).on_hover_text("はしをまっすぐ切る (中の穴が見える)").clicked() {
+                        if style::pill(ui, "すっぱり", cfg.open_ends).on_hover_text("はしをまっすぐ切る (中の穴が見える)").clicked()
+                        {
                             cfg.open_ends = true;
                         }
                         style::color_edit(ui, &mut cfg.color);
@@ -370,7 +393,8 @@ impl App {
                         ui.horizontal(|ui| {
                             ui.label(egui::RichText::new("なぞる面").size(11.0).color(style::DIM));
                             for pl in Plane::ALL {
-                                if style::pill(ui, pl.label(), self.pt.plane == pl).on_hover_text("形にあたらない所は、この面の上になぞる").clicked() {
+                                if style::pill(ui, pl.label(), self.pt.plane == pl).on_hover_text("形にあたらない所は、この面の上になぞる").clicked()
+                                {
                                     self.pt.plane = pl;
                                 }
                             }
@@ -618,7 +642,15 @@ mod tests {
         app.pipe_cancel();
         assert!(!app.pt.tracing && app.pt.stroke.is_empty() && app.pt.on);
         // Esc with the tool on and nothing traced switches it off
-        ctx.input_mut(|i| i.events.push(egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE }));
+        ctx.input_mut(|i| {
+            i.events.push(egui::Event::Key {
+                key: egui::Key::Escape,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            })
+        });
         app.pipe_keys(&ctx);
         assert!(!app.pt.on);
     }
@@ -707,19 +739,21 @@ mod tests {
         app.pipe_finish();
         // a loop on the floor
         app.pt.cfg = Config { radius: 5.0, wall: 1.5, closed: true, open_ends: false, color: [0.9, 0.5, 0.3] };
-        let ring: Vec<V3> = (0..=100).map(|i| {
-            let a = i as f32 / 100.0 * std::f32::consts::TAU;
-            [c[0] + 70.0 + 30.0 * a.cos(), c[1] + 30.0 * a.sin(), 5.0]
-        })
-        .collect();
+        let ring: Vec<V3> = (0..=100)
+            .map(|i| {
+                let a = i as f32 / 100.0 * std::f32::consts::TAU;
+                [c[0] + 70.0 + 30.0 * a.cos(), c[1] + 30.0 * a.sin(), 5.0]
+            })
+            .collect();
         app.pipe_from_stroke(&ring);
         // an open-ended elbow, so the bore shows
         app.pt.cfg = Config { radius: 6.0, wall: 1.5, closed: false, open_ends: true, color: [0.6, 0.75, 0.95] };
-        let elbow: Vec<V3> = (0..=40).map(|i| {
-            let t = i as f32 / 40.0;
-            if t < 0.5 { [c[0] - 70.0 + t * 80.0, c[1] - 50.0, 6.0] } else { [c[0] - 70.0 + 40.0, c[1] - 50.0, 6.0 + (t - 0.5) * 80.0] }
-        })
-        .collect();
+        let elbow: Vec<V3> = (0..=40)
+            .map(|i| {
+                let t = i as f32 / 40.0;
+                if t < 0.5 { [c[0] - 70.0 + t * 80.0, c[1] - 50.0, 6.0] } else { [c[0] - 70.0 + 40.0, c[1] - 50.0, 6.0 + (t - 0.5) * 80.0] }
+            })
+            .collect();
         app.pipe_from_stroke(&elbow);
         let _ = std::fs::write(out, app.scene.to_json());
     }

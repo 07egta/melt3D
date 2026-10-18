@@ -377,21 +377,32 @@ pub fn shape_radius(s: &Shape) -> f32 {
 
 /// Centre and radius of a sphere around the given shapes (radius 0 when there are none).
 pub fn sphere_of(scene: &Scene, shapes: &[(usize, usize)]) -> [f32; 4] {
-    let list: Vec<&Shape> = shapes.iter().filter_map(|(g, s)| scene.shape(*g, *s)).collect();
+    let list = shapes.iter().filter_map(|(g, s)| scene.shape(*g, *s).map(|shape| ((), shape))).collect();
+    sphere_from_list(list, |(), shape| shape_radius(shape))
+}
+
+/// The identical selection sphere with exact, already prepared radii supplied by
+/// a caller. The ordinary path keeps its pointer-only list through the unit key.
+pub fn sphere_of_with_radius(scene: &Scene, shapes: &[(usize, usize)], radius: impl FnMut((usize, usize), &Shape) -> f32) -> [f32; 4] {
+    let list = shapes.iter().filter_map(|&(g, s)| scene.shape(g, s).map(|shape| ((g, s), shape))).collect();
+    sphere_from_list(list, radius)
+}
+
+fn sphere_from_list<K: Copy>(list: Vec<(K, &Shape)>, mut radius: impl FnMut(K, &Shape) -> f32) -> [f32; 4] {
     if list.is_empty() {
         return [0.0; 4];
     }
     let n = list.len() as f32;
     let mut c = [0.0_f32; 3];
-    for s in &list {
+    for (_, s) in &list {
         for (i, v) in c.iter_mut().enumerate() {
             *v += s.pos[i] / n;
         }
     }
     let mut r = 0.0_f32;
-    for s in &list {
+    for (key, s) in &list {
         let d = [s.pos[0] - c[0], s.pos[1] - c[1], s.pos[2] - c[2]];
-        r = r.max((d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt() + shape_radius(s));
+        r = r.max((d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt() + radius(*key, s));
     }
     if !r.is_finite() {
         return [0.0; 4];

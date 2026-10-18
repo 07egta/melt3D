@@ -1064,6 +1064,8 @@ impl App {
         self.paint_poly(p, rect, f, pts, true, color, w);
     }
 
+    // Keep the coordinate frame, closure and stroke styling explicit at sketch call sites.
+    #[allow(clippy::too_many_arguments)]
     fn paint_poly(&self, p: &Painter, rect: Rect, f: &Frame, pts: &[[f32; 2]], closed: bool, color: Color32, w: f32) {
         let px: Vec<Pos2> = pts.iter().filter_map(|q| self.sketch_px(rect, f, *q)).collect();
         halo_line(p, px, closed && pts.len() >= 3, color, w);
@@ -1674,8 +1676,7 @@ mod tests {
 
     #[test]
     fn a_polygon_is_closed_by_clicking_the_first_point_or_enter() {
-        let mut st = State::default();
-        st.pen = Pen::Polygon;
+        let mut st = State { pen: Pen::Polygon, ..State::default() };
         click_all(&mut st, &[[0.0, 0.0], [20.0, 0.0], [20.0, 10.0]]);
         let p = profile_of(st.click([0.0, 10.0], false).or_else(|| st.click([0.0, 0.0], true)));
         // the fourth point was only added; clicking the first one closed it
@@ -1695,8 +1696,7 @@ mod tests {
 
     #[test]
     fn a_point_that_would_cross_the_outline_is_refused() {
-        let mut st = State::default();
-        st.pen = Pen::Polygon;
+        let mut st = State { pen: Pen::Polygon, ..State::default() };
         click_all(&mut st, &[[0.0, 0.0], [20.0, 0.0], [20.0, 20.0], [10.0, 20.0]]);
         assert!(st.would_cross([10.0, -10.0]));
         assert!(!st.would_cross([0.0, 20.0]));
@@ -1708,16 +1708,14 @@ mod tests {
         st.click([0.0, 20.0], false);
         assert_eq!(st.pts.len(), 5);
         // a bow tie can never be finished
-        let mut bow = State::default();
-        bow.pts = vec![[0.0, 0.0], [10.0, 10.0], [10.0, 0.0], [0.0, 15.0]];
+        let mut bow = State { pts: vec![[0.0, 0.0], [10.0, 10.0], [10.0, 0.0], [0.0, 15.0]], ..State::default() };
         assert!(bow.enter().is_none());
         assert_eq!(bow.msg, SketchError::SelfIntersect.message());
     }
 
     #[test]
     fn rectangles_and_circles_are_dragged_or_clicked_out() {
-        let mut st = State::default();
-        st.pen = Pen::Rect;
+        let mut st = State { pen: Pen::Rect, ..State::default() };
         st.press([5.0, 5.0]);
         assert!(st.dragging && st.anchor == Some([5.0, 5.0]));
         let p = profile_of(st.release([25.0, 15.0]));
@@ -1748,9 +1746,7 @@ mod tests {
 
     #[test]
     fn a_spline_is_smooth_within_the_limit_and_corners_can_be_chosen() {
-        let mut st = State::default();
-        st.pen = Pen::Spline;
-        st.smooth = true;
+        let mut st = State { pen: Pen::Spline, smooth: true, ..State::default() };
         click_all(&mut st, &[[0.0, 0.0], [30.0, 0.0], [30.0, 20.0], [0.0, 20.0]]);
         let p = profile_of(st.enter());
         assert!(p.len() > 8 && p.len() <= MAX_OUTLINE, "{} points", p.len());
@@ -1792,8 +1788,7 @@ mod tests {
 
     #[test]
     fn backspace_and_escape_step_back() {
-        let mut st = State::default();
-        st.pen = Pen::Polygon;
+        let mut st = State { pen: Pen::Polygon, ..State::default() };
         click_all(&mut st, &[[0.0, 0.0], [10.0, 0.0], [10.0, 10.0]]);
         st.back();
         assert_eq!(st.pts.len(), 2);

@@ -181,7 +181,8 @@ impl Affine {
 
     pub fn determinant(&self) -> f64 {
         let m = &self.0;
-        m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0]) + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0])
+        m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
+            + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0])
     }
 
     #[allow(dead_code)]
@@ -233,7 +234,7 @@ fn read_stl_binary(b: &[u8]) -> Result<ImportedMesh, String> {
     }
     let mut w = Welder::default();
     let mut triangles = Vec::with_capacity(n);
-    for rec in body.chunks_exact(50).take(n) {
+    for rec in body.as_chunks::<50>().0.iter().take(n) {
         let mut idx = [0u32; 3];
         for (k, slot) in idx.iter_mut().enumerate() {
             let o = 12 + 12 * k;
@@ -916,7 +917,9 @@ pub mod tests {
 
     /// A closed unit-ish box from `lo` to `hi`, outward facing, 12 triangles.
     pub fn box_mesh(lo: [f32; 3], hi: [f32; 3]) -> ImportedMesh {
-        let p = |x: usize, y: usize, z: usize| [if x == 0 { lo[0] } else { hi[0] }, if y == 0 { lo[1] } else { hi[1] }, if z == 0 { lo[2] } else { hi[2] }];
+        let p = |x: usize, y: usize, z: usize| {
+            [if x == 0 { lo[0] } else { hi[0] }, if y == 0 { lo[1] } else { hi[1] }, if z == 0 { lo[2] } else { hi[2] }]
+        };
         let mut positions = Vec::new();
         for z in 0..2 {
             for y in 0..2 {

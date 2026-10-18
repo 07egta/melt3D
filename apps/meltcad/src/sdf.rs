@@ -193,6 +193,7 @@ impl Prepared {
         [q[0] / self.scale[0], q[1] / self.scale[1], q[2] / self.scale[2]]
     }
     /// The surface colour at `p`: the material's colour, or its gradient (see `Material::gradient_weight`).
+    #[allow(clippy::manual_clamp, reason = "preserve the gradient's existing NaN-to-zero fallback")]
     pub fn color_at(&self, p: V3) -> V3 {
         let m = &self.material;
         if !m.has_gradient() {
@@ -429,12 +430,18 @@ impl Field {
                     sources.push(Arc::clone(old));
                     return sources.len() - 1;
                 }
-                let old_shapes: std::collections::HashMap<usize, (&Prepared, &Arc<Shape>)> = older
+                let old_shapes: std::collections::HashMap<usize, (&Prepared, &Arc<Shape>, &crate::accel::Bound)> = older
                     .map(|old| {
                         old.origin
                             .iter()
                             .enumerate()
-                            .filter_map(|(i, &(_, si))| old.shapes.get(i).zip(old.inputs.get(i)).map(|pair| (si, pair)))
+                            .filter_map(|(i, &(_, si))| {
+                                old.shapes
+                                    .get(i)
+                                    .zip(old.inputs.get(i))
+                                    .zip(old.bounds.get(i))
+                                    .map(|((prepared, input), bound)| (si, (prepared, input, bound)))
+                            })
                             .collect()
                     })
                     .unwrap_or_default();
@@ -442,16 +449,18 @@ impl Field {
                 let mut inputs = Vec::new();
                 let mut origin = Vec::new();
                 let mut members: Vec<&Shape> = Vec::new();
+                let mut bounds = Vec::new();
                 for (si, s) in srcg.shapes.iter().enumerate() {
                     if !s.visible {
                         continue;
                     }
-                    if let Some((prepared, input)) = old_shapes.get(&si).filter(|(_, input)| crate::perf::same_shape_for_cache(input, s)) {
+                    if let Some((prepared, input, bound)) = old_shapes.get(&si).filter(|(_, input, _)| crate::perf::same_shape_for_cache(input, s)) {
                         #[cfg(test)]
                         {
                             prepared_reused += 1;
                         }
                         shapes.push(Prepared::clone(prepared));
+                        bounds.push(**bound);
                         if keep_inputs {
                             inputs.push(Arc::clone(input));
                         }
@@ -461,6 +470,7 @@ impl Field {
                             prepared_built += 1;
                         }
                         shapes.push(Prepared::new(s));
+                        bounds.push(crate::accel::shape_bound(s));
                         if keep_inputs {
                             inputs.push(Arc::new(s.clone()));
                         }
@@ -468,8 +478,7 @@ impl Field {
                     origin.push((rg.src, si));
                     members.push(s);
                 }
-                let info = crate::accel::group_info(&members, &scene.melt);
-                let bounds = members.iter().map(|s| crate::accel::shape_bound(s)).collect();
+                let info = crate::accel::group_info_with_bounds(&members, &bounds, &scene.melt);
                 sources.push(Arc::new(PreparedGroup { source_group: rg.src, inputs, shapes, origin, bounds, info }));
                 sources.len() - 1
             });
@@ -737,6 +746,13 @@ mod tests {
     }
 
     fn same_field_samples(a: &Field, b: &Field) {
+        let bits = |bound: &crate::accel::Bound| (bound.c.map(f32::to_bits), bound.r.to_bits());
+        assert_eq!(a.sources.len(), b.sources.len());
+        for (left, right) in a.sources.iter().zip(&b.sources) {
+            assert_eq!(left.bounds.iter().map(bits).collect::<Vec<_>>(), right.bounds.iter().map(bits).collect::<Vec<_>>());
+            assert_eq!(bits(&left.info.bound), bits(&right.info.bound));
+            assert_eq!(left.info.blocks, right.info.blocks);
+        }
         let mut points = Vec::new();
         for x in [-15.0, 0.0, 12.0, 45.0, 96.0, 230.0] {
             for z in [0.0, 9.6, 10.0, 14.0, 22.0] {
