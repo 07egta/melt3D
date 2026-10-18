@@ -18,7 +18,20 @@ fn frame(rect: Rect) -> Rect {
 }
 
 fn pen(rect: Rect, ink: Color32) -> Stroke {
-    Stroke::new((rect.width() * 0.075).clamp(1.2, 2.6), ink)
+    Stroke::new((rect.width() * 0.058).clamp(1.15, 2.1), ink)
+}
+
+/// A stroked path with round joins and ends (no mitre spikes at sharp corners), open or closed.
+pub(crate) fn round_path(p: &Painter, mut pts: Vec<Pos2>, s: Stroke, closed: bool) {
+    if closed && let Some(&first) = pts.first() {
+        pts.push(first);
+    }
+    if s.width > 0.0 && s.color.a() == 255 {
+        for q in &pts {
+            p.circle_filled(*q, s.width * 0.5, s.color);
+        }
+    }
+    p.add(Shape::line(pts, s));
 }
 
 /// Unit coordinates to screen points.
@@ -74,24 +87,23 @@ fn quad(a: (f32, f32), c: (f32, f32), b: (f32, f32)) -> Vec<(f32, f32)> {
 
 /// Open polyline.
 fn polyline(p: &Painter, f: Rect, pts: &[(f32, f32)], s: Stroke) {
-    p.add(Shape::line(px(f, pts), s));
+    round_path(p, px(f, pts), s, false);
 }
 
 /// Closed outline (first point is repeated at the end).
 fn outline(p: &Painter, f: Rect, pts: &[(f32, f32)], s: Stroke) {
-    let mut v = px(f, pts);
-    if let Some(&first) = v.first() {
-        v.push(first);
-    }
-    p.add(Shape::line(v, s));
+    round_path(p, px(f, pts), s, true);
 }
 
 fn polygon(p: &Painter, f: Rect, pts: &[(f32, f32)], fill: Color32, s: Stroke) {
-    p.add(Shape::convex_polygon(px(f, pts), fill, s));
+    p.add(Shape::convex_polygon(px(f, pts), fill, Stroke::NONE));
+    if s.width > 0.0 {
+        round_path(p, px(f, pts), s, true);
+    }
 }
 
 fn segment(p: &Painter, f: Rect, a: (f32, f32), b: (f32, f32), s: Stroke) {
-    p.line_segment([at(f, a.0, a.1), at(f, b.0, b.1)], s);
+    round_path(p, vec![at(f, a.0, a.1), at(f, b.0, b.1)], s, false);
 }
 
 /// Draws a solid model primitive icon as a flat line drawing in `ink` (a thin outline, like the other
@@ -102,25 +114,25 @@ pub fn kind(p: &Painter, rect: Rect, k: Kind, ink: Color32, fill: Color32) {
     let dim = Stroke::new(s.width * 0.8, Color32::from_rgba_unmultiplied(ink.r(), ink.g(), ink.b(), 90));
     match k {
         Kind::Sphere => {
-            p.add(Shape::convex_polygon(px(f, &ellipse(0.5, 0.5, 0.42, 0.42)), fill, s));
+            polygon(p, f, &ellipse(0.5, 0.5, 0.42, 0.42), fill, s);
             polyline(p, f, &arc(0.5, 0.5, 0.42, 0.14, 0.0, PI, 14), s);
             polyline(p, f, &arc(0.5, 0.5, 0.42, 0.14, PI, 2.0 * PI, 14), dim);
         }
         Kind::Box => {
             let h = hex(0.5, 0.5, 0.44, 0.44);
-            p.add(Shape::convex_polygon(px(f, &h), fill, s));
+            polygon(p, f, &h, fill, s);
             segment(p, f, (0.5, 0.5), h[1], s);
             segment(p, f, (0.5, 0.5), h[3], s);
             segment(p, f, (0.5, 0.5), h[5], s);
         }
         Kind::Cylinder => {
-            p.add(Shape::convex_polygon(px(f, &ellipse(0.5, 0.24, 0.34, 0.13)), fill, s));
+            polygon(p, f, &ellipse(0.5, 0.24, 0.34, 0.13), fill, s);
             polyline(p, f, &arc(0.5, 0.76, 0.34, 0.13, 0.0, PI, 14), s);
             segment(p, f, (0.16, 0.24), (0.16, 0.76), s);
             segment(p, f, (0.84, 0.24), (0.84, 0.76), s);
         }
         Kind::Torus => {
-            p.add(Shape::convex_polygon(px(f, &ellipse(0.5, 0.5, 0.45, 0.27)), fill, s));
+            polygon(p, f, &ellipse(0.5, 0.5, 0.45, 0.27), fill, s);
             outline(p, f, &ellipse(0.5, 0.5, 0.2, 0.09), s);
         }
         Kind::Cone => {
@@ -295,4 +307,35 @@ mod tests {
         });
         out.textures_delta.clear();
     }
+}
+
+/// `YURA_GLYPHS=/path/sheet.ppm cargo test -p meltcad glyph_sheet -- --ignored`: every shape icon, large and at 34 px.
+#[cfg(test)]
+#[test]
+#[ignore]
+fn glyph_sheet() {
+    use crate::style::preview::{Textures, apply_deltas, raster, write_ppm};
+    let ppp = 2.0;
+    let ctx = egui::Context::default();
+    ctx.set_pixels_per_point(ppp);
+    let mut tex = Textures::new();
+    let size = vec2(760.0, 330.0);
+    let input = egui::RawInput { screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), size)), ..Default::default() };
+    let mut out = ctx.run_ui(input, |ui| {
+        let p = ui.painter().clone();
+        p.rect_filled(ui.max_rect(), 0.0, Color32::from_rgb(31, 31, 32));
+        for (i, k) in Kind::ALL.iter().enumerate() {
+            let (col, row) = (i % 10, i / 10);
+            let big = Rect::from_min_size(pos2(8.0 + col as f32 * 74.0, 8.0 + row as f32 * 118.0), vec2(68.0, 68.0));
+            kind(&p, big, *k, Color32::from_rgb(230, 230, 230), Color32::from_white_alpha(18));
+            let small = Rect::from_min_size(pos2(big.left() + 17.0, big.bottom() + 6.0), vec2(34.0, 34.0));
+            kind(&p, small, *k, Color32::from_rgb(230, 230, 230), Color32::from_white_alpha(18));
+        }
+    });
+    apply_deltas(&mut tex, &out.textures_delta);
+    out.textures_delta.clear();
+    let prims = ctx.tessellate(out.shapes, ppp);
+    let (w, h) = ((size.x * ppp) as usize, (size.y * ppp) as usize);
+    let img = raster(&prims, &tex, w, h, ppp, [0.12, 0.12, 0.125]);
+    write_ppm(img, w, h, &std::env::var("YURA_GLYPHS").unwrap_or_else(|_| "glyphs.ppm".into()));
 }
