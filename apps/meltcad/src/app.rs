@@ -77,6 +77,10 @@ pub struct App {
     close_approved: bool,
     status: (String, f64),
     pub renaming: Option<Pick>,
+    /// How the view is turned and zoomed: the mouse's way or the trackpad's way (or follow what is used).
+    pub input_dev: crate::view::InputDev,
+    /// What the last scroll looked like (when the choice is Auto).
+    pub input_seen: crate::view::Device,
     pub folded: HashSet<usize>,
     /// A row of the scene list being dragged, and where every row is on screen this frame.
     pub layer_drag: Option<Pick>,
@@ -165,6 +169,8 @@ impl App {
             close_approved: false,
             status: (String::new(), 0.0),
             renaming: None,
+            input_dev: crate::view::InputDev::Auto,
+            input_seen: crate::view::Device::Mouse,
             folded: HashSet::new(),
             layer_drag: None,
             row_rects: Vec::new(),
@@ -1167,6 +1173,27 @@ impl App {
                                 ui.close();
                             }
                         });
+                        // Mouse or trackpad: Auto follows what the last scroll looked like
+                        {
+                            let eff = self.input_dev.device(self.input_seen);
+                            let items = [
+                                ("Auto", if eff == crate::view::Device::Mouse { "Follow the device you use (now: Mouse)" } else { "Follow the device you use (now: Trackpad)" }),
+                                ("Mouse", "Wheel zooms, middle-drag turns, right-drag slides"),
+                                ("Trackpad", "Two fingers turn (Shift: slide), pinch zooms"),
+                            ];
+                            let cur = match self.input_dev {
+                                crate::view::InputDev::Auto => 0,
+                                crate::view::InputDev::Mouse => 1,
+                                crate::view::InputDev::Trackpad => 2,
+                            };
+                            if let Some(i) = style::segmented(ui, "input_dev", &items, Some(cur), false) {
+                                self.input_dev = match i {
+                                    1 => crate::view::InputDev::Mouse,
+                                    2 => crate::view::InputDev::Trackpad,
+                                    _ => crate::view::InputDev::Auto,
+                                };
+                            }
+                        }
                         let mut menu = crate::perf::MenuState { quality: self.perf.quality, hud: self.perf.hud, bench: false };
                         crate::perf::quality_menu(ui, &mut menu, |ui| self.gpu_menu_items(ui));
                         self.perf.quality = menu.quality;

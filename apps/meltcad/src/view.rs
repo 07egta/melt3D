@@ -10,6 +10,48 @@ use crate::perf::Gate;
 use crate::sdf::{V3, add, dot, len, mul, sub};
 use crate::style;
 
+/// The pointing device the view controls are tuned for.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Device {
+    Mouse,
+    Trackpad,
+}
+
+/// The person's choice: a fixed device, or follow what the scrolling looks like.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum InputDev {
+    Auto,
+    Mouse,
+    Trackpad,
+}
+
+impl InputDev {
+    /// The device in use: the fixed choice, or what was last seen.
+    pub fn device(self, seen: Device) -> Device {
+        match self {
+            InputDev::Auto => seen,
+            InputDev::Mouse => Device::Mouse,
+            InputDev::Trackpad => Device::Trackpad,
+        }
+    }
+}
+
+/// What a scroll event says about the device: a notched wheel sends whole lines; a trackpad sends
+/// pixels or fractions of a line (and pinches).
+pub fn device_of_scroll(unit: egui::MouseWheelUnit, delta: egui::Vec2) -> Option<Device> {
+    if !delta.x.is_finite() || !delta.y.is_finite() || (delta.x == 0.0 && delta.y == 0.0) {
+        return None;
+    }
+    match unit {
+        egui::MouseWheelUnit::Point => Some(Device::Trackpad),
+        egui::MouseWheelUnit::Page => Some(Device::Mouse),
+        egui::MouseWheelUnit::Line => {
+            let whole = |v: f32| (v - v.round()).abs() < 1e-3;
+            if whole(delta.x) && whole(delta.y) { Some(Device::Mouse) } else { Some(Device::Trackpad) }
+        }
+    }
+}
+
 /// The shapes a pick stands for.
 pub fn targets(scene: &Scene, pick: Option<Pick>) -> Vec<(usize, usize)> {
     match pick {
@@ -177,7 +219,29 @@ impl App {
             moved_camera = true;
         }
         if resp.hovered() {
-            let (scroll, pinch) = ui.input(|i| (i.smooth_scroll_delta.y, i.zoom_delta()));
+            // learn what the person is using from how the scrolling arrives
+            let seen = ui.input(|i| {
+                i.events.iter().rev().find_map(|e| match e {
+                    egui::Event::MouseWheel { unit, delta, .. } => device_of_scroll(*unit, *delta),
+                    egui::Event::Zoom(_) => Some(Device::Trackpad),
+                    _ => None,
+                })
+            });
+            if let Some(d) = seen {
+                self.input_seen = d;
+            }
+            let device = self.input_dev.device(self.input_seen);
+            let (scroll_v, pinch) = ui.input(|i| (i.smooth_scroll_delta, i.zoom_delta()));
+            // trackpad: two fingers turn the view (Shift: slide it); the wheel of a mouse zooms
+            let (scroll, turn) = if device == Device::Trackpad { (0.0, scroll_v) } else { (scroll_v.y, egui::Vec2::ZERO) };
+            if turn != egui::Vec2::ZERO && turn.x.is_finite() && turn.y.is_finite() {
+                if mods.shift {
+                    self.cam.pan(turn.x, turn.y, rect.height());
+                } else {
+                    self.cam.orbit(-turn.x, -turn.y);
+                }
+                moved_camera = true;
+            }
             if let Some(p) = pos {
                 // Apply wheel and pinch in one step, keeping the cursor anchor stable.
                 // Keep the original pinch sensitivity and mouse bindings.
@@ -566,5 +630,28 @@ mod tests {
         }
         assert!(app.fly.is_none());
         assert!(goal.is_some_and(|g| (app.cam.dist - g).abs() < 0.5));
+    }
+}
+
+#[cfg(test)]
+mod device_tests {
+    use super::*;
+    use egui::{MouseWheelUnit as U, vec2};
+
+    #[test]
+    fn the_scroll_shape_tells_wheel_from_trackpad() {
+        assert_eq!(device_of_scroll(U::Line, vec2(0.0, 1.0)), Some(Device::Mouse));
+        assert_eq!(device_of_scroll(U::Line, vec2(0.0, -3.0)), Some(Device::Mouse));
+        assert_eq!(device_of_scroll(U::Line, vec2(0.0, 0.37)), Some(Device::Trackpad));
+        assert_eq!(device_of_scroll(U::Point, vec2(2.0, 5.0)), Some(Device::Trackpad));
+        assert_eq!(device_of_scroll(U::Point, vec2(0.0, 0.0)), None);
+        assert_eq!(device_of_scroll(U::Point, vec2(f32::NAN, 1.0)), None);
+    }
+
+    #[test]
+    fn a_fixed_choice_beats_what_was_seen() {
+        assert_eq!(InputDev::Auto.device(Device::Trackpad), Device::Trackpad);
+        assert_eq!(InputDev::Mouse.device(Device::Trackpad), Device::Mouse);
+        assert_eq!(InputDev::Trackpad.device(Device::Mouse), Device::Trackpad);
     }
 }
