@@ -85,7 +85,7 @@ fn fatal(message: &str) {
     gpu_log::log(&format!("FATAL: {message}"));
     rfd::MessageDialog::new()
         .set_level(rfd::MessageLevel::Error)
-        .set_title("MELTCAD")
+        .set_title("Melt 3D")
         .set_description(format!("{message}\n\nLog: {}", gpu_log::path().display()))
         .set_buttons(rfd::MessageButtons::Ok)
         .show();
@@ -142,7 +142,7 @@ fn main() -> eframe::Result {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1380.0, 860.0])
             .with_min_inner_size([960.0, 600.0])
-            .with_title("MELTCAD")
+            .with_title("Melt 3D")
             .with_icon(icon::data()),
         wgpu_options: backend::wgpu_configuration(plan),
         ..Default::default()

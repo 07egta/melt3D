@@ -197,3 +197,15 @@ fn a_line_that_is_not_closed_is_not_extruded() {
     let mut app = app();
     assert!(!app.make_from_selected_line(&ctx, Make::Extrude), "nothing selected");
 }
+
+#[test]
+fn both_sides_centres_the_solid_on_the_plane() {
+    let mut a = app();
+    a.sk.make = Make::Extrude;
+    closed_outline(&mut a, 30.0);
+    let one = a.build_shape().map(|b| b.pos).unwrap_or([f32::NAN; 3]);
+    a.sk.both = true;
+    let two = a.build_shape().map(|b| b.pos).unwrap_or([f32::NAN; 3]);
+    let moved = ((one[0] - two[0]).powi(2) + (one[1] - two[1]).powi(2) + (one[2] - two[2]).powi(2)).sqrt();
+    assert!((moved - a.sk.height * 0.5).abs() < 1e-3, "moved {moved}");
+}

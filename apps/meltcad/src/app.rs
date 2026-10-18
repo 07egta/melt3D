@@ -905,7 +905,7 @@ impl App {
     }
 
     fn open_dialog(&mut self, _ctx: &egui::Context) {
-        if let Some(p) = rfd::FileDialog::new().add_filter("MELTCAD", &["meltcad", "yura", "json"]).pick_file() {
+        if let Some(p) = rfd::FileDialog::new().add_filter("Melt 3D", &["meltcad", "yura", "json"]).pick_file() {
             self.open_path(p);
         }
     }
@@ -917,7 +917,7 @@ impl App {
     fn try_save(&mut self, ctx: &egui::Context, ask: bool) -> bool {
         let path = match (&self.path, ask) {
             (Some(p), false) => Some(p.clone()),
-            _ => rfd::FileDialog::new().add_filter("MELTCAD", &["meltcad"]).set_file_name("Untitled.meltcad").save_file(),
+            _ => rfd::FileDialog::new().add_filter("Melt 3D", &["meltcad"]).set_file_name("Untitled.meltcad").save_file(),
         };
         let Some(path) = path else { return false };
         match crate::recovery::save_project(&path, &self.scene) {
@@ -1759,7 +1759,7 @@ impl App {
         }
         self.test_hooks(&ctx);
         let title = format!(
-            "MELTCAD — {}{}",
+            "Melt 3D — {}{}",
             self.path.as_ref().and_then(|p| p.file_stem()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "Untitled".into()),
             if self.dirty { " *" } else { "" }
         );
