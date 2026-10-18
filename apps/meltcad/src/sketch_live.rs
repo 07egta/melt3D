@@ -57,7 +57,14 @@ impl App {
     pub(crate) fn build_shape(&self) -> Result<Built, SketchError> {
         let st = &self.sk;
         match st.make {
-            Make::Extrude => sketch::extrude(&st.pframe, &st.profile, st.height, st.flip),
+            Make::Extrude => {
+                let mut b = sketch::extrude(&st.pframe, &st.profile, st.height, st.flip)?;
+                if st.both {
+                    // half each way: the middle of the solid sits on the plane
+                    b.pos = st.pframe.to_world(sketch::centre(&st.profile));
+                }
+                Ok(b)
+            }
             Make::Revolve => sketch::revolve(&st.pframe, &st.profile),
             Make::Loft => {
                 let top = match st.loft_top {
@@ -283,7 +290,8 @@ impl App {
         }
         let base = f.to_world(sketch::centre(&self.sk.profile));
         let h = if self.sk.height.is_finite() { self.sk.height.clamp(0.1, 2000.0) } else { 10.0 };
-        let tip = sdf::add(base, sdf::mul(f.normal(), if self.sk.flip { -h } else { h }));
+        let reach = if self.sk.both && self.sk.make == Make::Extrude { h * 0.5 } else { h };
+        let tip = sdf::add(base, sdf::mul(f.normal(), if self.sk.flip { -reach } else { reach }));
         (base.iter().chain(tip.iter()).all(|v| v.is_finite())).then_some((base, tip))
     }
 
@@ -308,7 +316,8 @@ impl App {
             } else if let (Some(p), Some((base, _))) = (pos, self.handle_world()) {
                 let (o, d) = self.cam.ray_at(rect, p);
                 let n = self.sk.pframe.normal();
-                if let Some((h, flip)) = along_line(o, d, base, n).and_then(|t| height_from(t, step)) {
+                let both = self.sk.both && self.sk.make == Make::Extrude;
+                if let Some((h, flip)) = along_line(o, d, base, n).and_then(|t| height_from(t, step)).map(|(h, f)| (if both { h * 2.0 } else { h }, f)) {
                     if h != self.sk.height || flip != self.sk.flip {
                         self.sk.height = h;
                         self.sk.flip = flip;
@@ -409,6 +418,11 @@ impl App {
                 top = style::wide_button(ui, "Top outline", "Draw the top outline yourself", self.sk.loft_top == LoftTop::Drawn, None, crate::sketch_icons::pencil_top).clicked();
             }
             if make == Make::Extrude {
+                let both = style::wide_button(ui, "Both sides", "Grow equally to both sides of the plane", self.sk.both, None, crate::sketch_icons::both_sides).clicked();
+                if both {
+                    self.sk.both = !self.sk.both;
+                    changed = true;
+                }
                 hole = style::wide_button(ui, "Holes", "Cut holes into this solid", false, None, crate::sketch_icons::hole).clicked();
             }
             accept = style::wide_button(ui, "Done", "Keep it (Enter or right-click)", false, Some(style::ACCENT), crate::sketch_icons::check).clicked();

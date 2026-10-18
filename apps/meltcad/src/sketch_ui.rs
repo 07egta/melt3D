@@ -272,6 +272,8 @@ pub struct State {
     pub height: f32,
     /// Grow against the plane's normal.
     pub flip: bool,
+    /// Extrude equally to both sides of the plane.
+    pub both: bool,
     pub loft_top: LoftTop,
     pub loft_scale: f32,
     pub sweep_scale: f32,
@@ -332,6 +334,7 @@ impl Default for State {
             keep_sketch: false,
             height: 20.0,
             flip: false,
+            both: false,
             loft_top: LoftTop::Scaled,
             loft_scale: 0.5,
             sweep_scale: 1.0,
@@ -1124,7 +1127,11 @@ impl App {
         }
         if self.sk.stage == Stage::Ready {
             // nothing to draw: clicks must not pick things behind the card
-            out.taken = mouse.is_some() && resp.clicked_by(egui::PointerButton::Primary);
+            out.taken = mouse.is_some() && (resp.clicked_by(egui::PointerButton::Primary) || resp.secondary_clicked());
+            if resp.secondary_clicked() && mouse.is_some() {
+                // right click confirms here too
+                self.sketch_make(ui.ctx());
+            }
             return out;
         }
         if mods.alt {

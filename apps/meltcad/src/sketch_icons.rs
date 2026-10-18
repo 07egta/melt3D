@@ -157,6 +157,17 @@ pub fn solid(p: &Painter, r: Rect, ink: Color32) {
     poly(p, r, &[(0.5, 0.5), (0.88, 0.3), (0.88, 0.7), (0.5, 0.92)], Some(face(50)), st);
 }
 
+/// Both sides: a plane line with arrows pointing up and down from it.
+pub fn both_sides(p: &Painter, r: Rect, ink: Color32) {
+    let st = pen(r, ink);
+    p.line_segment([at(r, 0.1, 0.5), at(r, 0.9, 0.5)], Stroke::new(st.width * 0.7, ink.gamma_multiply(0.6)));
+    for (y0, y1, w) in [(0.42, 0.1, 0.12), (0.58, 0.9, -0.12)] {
+        p.line_segment([at(r, 0.5, y0), at(r, 0.5, y1)], st);
+        p.line_segment([at(r, 0.5, y1), at(r, 0.5 - 0.16, y1 + w * 1.4)], st);
+        p.line_segment([at(r, 0.5, y1), at(r, 0.5 + 0.16, y1 + w * 1.4)], st);
+    }
+}
+
 /// Revolve: a profile beside an axis, with an arc turning around it.
 pub fn revolve(p: &Painter, r: Rect, ink: Color32) {
     let st = pen(r, ink);
