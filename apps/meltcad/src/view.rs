@@ -234,6 +234,24 @@ impl App {
             let (scroll_v, pinch) = ui.input(|i| (i.smooth_scroll_delta, i.zoom_delta()));
             // trackpad: two fingers turn the view (Shift: slide it); the wheel of a mouse zooms
             let (scroll, turn) = if device == Device::Trackpad { (0.0, scroll_v) } else { (scroll_v.y, egui::Vec2::ZERO) };
+            // egui folds a Shift+scroll into a sideways-only scroll: read the raw events so that
+            // Shift + two fingers slides the view up/down as well as left/right
+            let turn = if device == Device::Trackpad && mods.shift {
+                let raw = ui.input(|i| {
+                    i.events.iter().fold(egui::Vec2::ZERO, |acc, e| match e {
+                        egui::Event::MouseWheel { unit, delta, .. } => {
+                            acc + match unit {
+                                egui::MouseWheelUnit::Point => *delta,
+                                _ => *delta * 24.0,
+                            }
+                        }
+                        _ => acc,
+                    })
+                });
+                if raw != egui::Vec2::ZERO { raw } else { turn }
+            } else {
+                turn
+            };
             if turn != egui::Vec2::ZERO && turn.x.is_finite() && turn.y.is_finite() {
                 if mods.shift {
                     self.cam.pan(turn.x, turn.y, rect.height());
