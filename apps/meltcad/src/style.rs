@@ -19,12 +19,12 @@ use gfx::{Buf, Sink, lerp, lit, mix};
 // ----- colours -----
 
 /// Bars, the outliner and the deepest wells.
-pub const PANEL_DARK: Color32 = Color32::from_rgb(30, 30, 30);
+pub const PANEL_DARK: Color32 = Color32::from_rgb(24, 24, 25);
 /// Side panel.
-pub const PANEL: Color32 = Color32::from_rgb(38, 38, 38);
+pub const PANEL: Color32 = Color32::from_rgb(31, 31, 32);
 /// Plates and buttons at rest.
-pub const CARD: Color32 = Color32::from_rgb(52, 52, 52);
-pub const HOVER: Color32 = Color32::from_rgb(68, 68, 68);
+pub const CARD: Color32 = Color32::from_rgb(44, 44, 46);
+pub const HOVER: Color32 = Color32::from_rgb(62, 62, 65);
 #[allow(dead_code)]
 pub const BORDER: Color32 = Color32::from_rgb(72, 72, 72);
 pub const TEXT: Color32 = Color32::from_rgb(230, 230, 230);
@@ -50,19 +50,19 @@ pub fn op_color(op: crate::model::Op) -> Color32 {
 pub const AXIS: [Color32; 3] = [Color32::from_rgb(232, 84, 84), Color32::from_rgb(110, 200, 100), Color32::from_rgb(80, 140, 240)];
 
 /// Sunken wells (text fields, slider rails, segmented tracks).
-pub const INSET_TOP: Color32 = Color32::from_rgb(26, 26, 26);
-pub const INSET_BOTTOM: Color32 = Color32::from_rgb(26, 26, 26);
+pub const INSET_TOP: Color32 = Color32::from_rgb(20, 20, 21);
+pub const INSET_BOTTOM: Color32 = Color32::from_rgb(20, 20, 21);
 
-const BTN_TOP: Color32 = Color32::from_rgb(56, 56, 56);
-const BTN_BOTTOM: Color32 = Color32::from_rgb(56, 56, 56);
-const BTN_EDGE: Color32 = Color32::from_rgb(74, 74, 74);
-const BTN_HOT_TOP: Color32 = Color32::from_rgb(72, 72, 72);
-const BTN_HOT_BOTTOM: Color32 = Color32::from_rgb(72, 72, 72);
+const BTN_TOP: Color32 = Color32::from_rgb(42, 42, 44);
+const BTN_BOTTOM: Color32 = Color32::from_rgb(42, 42, 44);
+const BTN_EDGE: Color32 = Color32::from_rgb(48, 48, 50);
+const BTN_HOT_TOP: Color32 = Color32::from_rgb(62, 62, 65);
+const BTN_HOT_BOTTOM: Color32 = Color32::from_rgb(62, 62, 65);
 const BTN_ON_TOP: Color32 = Color32::from_rgb(36, 132, 90);
 const BTN_ON_BOTTOM: Color32 = Color32::from_rgb(36, 132, 90);
 const BTN_ON_EDGE: Color32 = Color32::from_rgb(70, 190, 134);
-const BTN_DOWN_TOP: Color32 = Color32::from_rgb(44, 44, 44);
-const BTN_DOWN_BOTTOM: Color32 = Color32::from_rgb(44, 44, 44);
+const BTN_DOWN_TOP: Color32 = Color32::from_rgb(36, 36, 38);
+const BTN_DOWN_BOTTOM: Color32 = Color32::from_rgb(36, 36, 38);
 
 /// Fastest animation we use (seconds).
 const FAST: f32 = 0.10;
@@ -71,7 +71,7 @@ const MEDIUM: f32 = 0.12;
 pub fn apply(ctx: &egui::Context) {
     let mut v = egui::Visuals::dark();
     v.panel_fill = PANEL;
-    v.window_fill = Color32::from_rgb(40, 40, 40);
+    v.window_fill = Color32::from_rgb(34, 34, 36);
     v.extreme_bg_color = INSET_TOP;
     v.faint_bg_color = CARD;
     v.override_text_color = Some(TEXT);
@@ -129,7 +129,7 @@ pub fn button_look(hot: f32, on: f32, pressed: bool) -> (Color32, Color32, Color
     }
     let top = mix(mix(BTN_TOP, BTN_HOT_TOP, hot), BTN_ON_TOP, on);
     let bottom = mix(mix(BTN_BOTTOM, BTN_HOT_BOTTOM, hot), BTN_ON_BOTTOM, on);
-    let edge = mix(mix(BTN_EDGE, Color32::from_rgb(70, 74, 104), hot * 0.6), BTN_ON_EDGE, on);
+    let edge = mix(mix(BTN_EDGE, Color32::from_rgb(92, 92, 98), hot * 0.6), BTN_ON_EDGE, on);
     (top, bottom, edge)
 }
 
