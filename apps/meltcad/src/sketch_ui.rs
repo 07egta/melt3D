@@ -1772,16 +1772,20 @@ impl App {
             }
         }
         let centre = f.from_world(self.cam.target);
-        if hits < 3 {
+        // a corner that misses the plane (looking along it, or far away) must not shrink the grid to a
+        // patch: always cover at least what is within the camera's distance of the view's middle
+        let reach = if self.cam.dist.is_finite() { self.cam.dist.clamp(50.0, 4000.0) } else { 150.0 };
+        if hits < 5 {
             for i in 0..2 {
-                lo[i] = centre[i] - 150.0;
-                hi[i] = centre[i] + 150.0;
+                lo[i] = lo[i].min(centre[i] - reach);
+                hi[i] = hi[i].max(centre[i] + reach);
             }
         }
-        // never more than a screenful around the view's middle
+        // but never more than a few screenfuls around the view's middle
+        let cap = (reach * 2.5).max(800.0);
         for i in 0..2 {
-            lo[i] = lo[i].max(centre[i] - 800.0).max(-sketch::COORD_MAX);
-            hi[i] = hi[i].min(centre[i] + 800.0).min(sketch::COORD_MAX);
+            lo[i] = lo[i].max(centre[i] - cap).max(-sketch::COORD_MAX);
+            hi[i] = hi[i].min(centre[i] + cap).min(sketch::COORD_MAX);
         }
         let mm_px = self.cam.mm_per_px(f.to_world(centre), rect.height()).max(1e-4);
         let mut step = nice_step(mm_px * 26.0);

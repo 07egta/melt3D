@@ -591,6 +591,64 @@ impl App {
         v
     }
 
+    /// The shapes and groups a "Melt" press is about: everything picked, and the groups of picked shapes.
+    fn melt_targets(&self) -> (Vec<(usize, usize)>, Vec<usize>, Vec<usize>) {
+        let picks = self.picks();
+        let mut shapes: Vec<(usize, usize)> = Vec::new();
+        let mut picked_groups: Vec<usize> = Vec::new();
+        let mut parents: Vec<usize> = Vec::new();
+        for p in &picks {
+            match *p {
+                Pick::Shape(g, s) => {
+                    shapes.push((g, s));
+                    parents.push(g);
+                }
+                Pick::Group(g) => picked_groups.push(g),
+            }
+        }
+        parents.sort_unstable();
+        parents.dedup();
+        (shapes, picked_groups, parents)
+    }
+
+    /// Is everything picked set to melt (shapes and the groups they sit in)?
+    pub fn selection_melts(&self) -> bool {
+        let (shapes, groups, parents) = self.melt_targets();
+        if shapes.is_empty() && groups.is_empty() {
+            return false;
+        }
+        shapes.iter().all(|&(g, s)| self.scene.shape(g, s).is_some_and(|x| x.blend > 0.0))
+            && groups.iter().chain(parents.iter()).all(|&g| self.scene.groups.get(g).is_some_and(|x| x.blend > 0.0))
+    }
+
+    /// One press: melt what is picked into its neighbours (the shapes AND the groups, which used to
+    /// be two switches), or take the melt away again. With nothing picked, it is the whole scene.
+    pub fn toggle_melt_selected(&mut self) {
+        let (mut shapes, mut groups, mut parents) = self.melt_targets();
+        if shapes.is_empty() && groups.is_empty() {
+            groups = (0..self.scene.groups.len()).collect();
+            shapes = groups.iter().flat_map(|&g| (0..self.scene.groups[g].shapes.len()).map(move |s| (g, s))).collect();
+            parents.clear();
+        }
+        let on = !self.selection_melts_of(&shapes, &groups, &parents);
+        for &(g, s) in &shapes {
+            if let Some(sh) = self.scene.shape_mut(g, s) {
+                sh.blend = if on { if sh.blend > 0.0 { sh.blend } else { 6.0 } } else { 0.0 };
+            }
+        }
+        for &g in groups.iter().chain(if on { parents.iter() } else { [].iter() }) {
+            if let Some(gr) = self.scene.groups.get_mut(g) {
+                gr.blend = if on { if gr.blend > 0.0 { gr.blend } else { 12.0 } } else { 0.0 };
+            }
+        }
+    }
+
+    fn selection_melts_of(&self, shapes: &[(usize, usize)], groups: &[usize], parents: &[usize]) -> bool {
+        !(shapes.is_empty() && groups.is_empty())
+            && shapes.iter().all(|&(g, s)| self.scene.shape(g, s).is_some_and(|x| x.blend > 0.0))
+            && groups.iter().chain(parents.iter()).all(|&g| self.scene.groups.get(g).is_some_and(|x| x.blend > 0.0))
+    }
+
     /// The shapes of everything that is selected, each once.
     pub fn sel_targets(&self) -> Vec<(usize, usize)> {
         crate::view::targets_all(&self.scene, &self.picks())
@@ -1306,6 +1364,10 @@ impl App {
                                 ui.end_row();
                                 if style::wide_button(ui, "New group", "New group", false, None, glyphs::group).clicked() {
                                     self.add_group();
+                                }
+                                let melting = self.selection_melts();
+                                if style::wide_button(ui, "Melt", "Melt the selected shapes together in one click (again to un-melt). Nothing selected: the whole scene", melting, None, crate::glyphs_more::melt).clicked() {
+                                    self.toggle_melt_selected();
                                 }
                                 let pr = style::wide_button(ui, "Pattern", "Repeat the selected group: mirror, grid, circle, along a path", false, None, |p, r, ink| {
                                     crate::pattern_ui::icon(crate::pattern::PatternKind::Circular, p, r, ink)
