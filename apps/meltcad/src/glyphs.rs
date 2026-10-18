@@ -196,19 +196,23 @@ pub fn op(p: &Painter, rect: Rect, o: Op, ink: Color32) {
     }
 }
 
-/// Almond eye with a pupil; a diagonal slash is added when `open` is false.
+/// An open eye (almond with a pupil) or a closed one (a lid curving down with three lashes).
 pub fn eye(p: &Painter, rect: Rect, open: bool, ink: Color32) {
     let f = frame(rect);
     let s = pen(rect, ink);
-    let mut almond = quad((0.05, 0.5), (0.5, -0.1), (0.95, 0.5));
-    almond.extend(quad((0.95, 0.5), (0.5, 1.1), (0.05, 0.5)).into_iter().skip(1));
     if open {
+        let mut almond = quad((0.05, 0.5), (0.5, -0.1), (0.95, 0.5));
+        almond.extend(quad((0.95, 0.5), (0.5, 1.1), (0.05, 0.5)).into_iter().skip(1));
         polygon(p, f, &almond, ink.gamma_multiply(0.14), Stroke::NONE);
-    }
-    outline(p, f, &almond, s);
-    p.circle_filled(at(f, 0.5, 0.5), f.width() * 0.15, ink);
-    if !open {
-        segment(p, f, (0.15, 0.15), (0.85, 0.85), s);
+        outline(p, f, &almond, s);
+        p.circle_filled(at(f, 0.5, 0.5), f.width() * 0.15, ink);
+    } else {
+        // the closed lid, and lashes pointing down and out
+        let lid = quad((0.05, 0.42), (0.5, 0.98), (0.95, 0.42));
+        polyline(p, f, &lid, s);
+        segment(p, f, (0.2, 0.62), (0.12, 0.8), s);
+        segment(p, f, (0.5, 0.7), (0.5, 0.9), s);
+        segment(p, f, (0.8, 0.62), (0.88, 0.8), s);
     }
 }
 
