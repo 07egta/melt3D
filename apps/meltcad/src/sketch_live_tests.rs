@@ -167,3 +167,33 @@ fn a_loft_gets_a_scaled_copy_on_top() {
     assert_eq!(l.kind, Kind::Loft);
     assert_eq!(l.outline.len(), l.outline2.len());
 }
+
+#[test]
+fn a_plain_sketch_stays_a_line_until_extrude_is_pressed() {
+    let ctx = egui::Context::default();
+    let mut app = app();
+    let n = app.scene.shape_count();
+    app.set_sketch_tool(true);
+    app.sk.keep_sketch = true;
+    closed_outline(&mut app, 30.0);
+    // a line, not a solid: nothing is live, the sketch tool goes on
+    assert!(app.sk.live.is_none() && app.sk.stage == Stage::Draw);
+    assert_eq!(app.scene.shape_count(), n + 1);
+    let Some(crate::model::Pick::Shape(g, s)) = app.sel else { panic!("the line is selected") };
+    assert_eq!(app.scene.shape(g, s).map(|sh| sh.kind), Some(Kind::Curve));
+    assert!(app.selected_closed_curve().is_some());
+    // Extrude on the selected line makes the solid, with the live handle, standing on the same plane
+    assert!(app.make_from_selected_line(&ctx, Make::Extrude));
+    assert!(app.sk.live.is_some() && app.sk.stage == Stage::Shape);
+    assert_eq!(app.scene.shape_count(), n + 2);
+    let Some((lg, ls)) = app.sk.live else { panic!("live") };
+    let sh = app.scene.shape(lg, ls).map(|sh| (sh.kind, sh.size[0]));
+    assert!(sh.is_some_and(|(k, w)| k == Kind::Extrude && (w - 30.0).abs() < 1.5 || w > 0.0), "{sh:?}");
+}
+
+#[test]
+fn a_line_that_is_not_closed_is_not_extruded() {
+    let ctx = egui::Context::default();
+    let mut app = app();
+    assert!(!app.make_from_selected_line(&ctx, Make::Extrude), "nothing selected");
+}

@@ -219,6 +219,7 @@ impl App {
             self.live_discard();
         }
         self.sk.make = m;
+        self.sk.keep_sketch = false;
         self.sk.msg.clear();
         match (m, self.sk.stage) {
             (Make::Sweep, Stage::Draw | Stage::SweepPath) => {
