@@ -145,7 +145,7 @@ pub struct Context {
     pub sharp: f32,
     /// The window's picture size in pixels.
     pub pixels: [u32; 2],
-    /// Quality choice shown to the person ("じどう").
+    /// Quality choice shown to the person ("Auto").
     pub quality: String,
 }
 
@@ -315,7 +315,7 @@ mod tests {
             fast: true,
             sharp: 0.0,
             pixels: [1264, 720],
-            quality: "じどう".into(),
+            quality: "Auto".into(),
         };
         let l = lines(&sum, &ctx);
         let all = l.join("\n");

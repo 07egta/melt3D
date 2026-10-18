@@ -1,4 +1,4 @@
-//! "かんたん表示": the viewport drawn on the CPU, for when the graphics path is not ready (the
+//! "Simple view": the viewport drawn on the CPU, for when the graphics path is not ready (the
 //! shader is still compiling, or the driver refused it) or the person chose not to use it.
 //!
 //! The picture is small (a third of the viewport, a sixth while the view moves), drawn by a worker
@@ -366,7 +366,7 @@ fn spawn_worker(ctx: Option<egui::Context>) -> Option<Worker> {
                         }
                         Ok(None) => break,
                         Err(p) => {
-                            crate::gpu_log::log(&format!("かんたん表示: the drawing panicked: {}", crate::gpu_status::panic_text(&*p)));
+                            crate::gpu_log::log(&format!("Simple view: the drawing panicked: {}", crate::gpu_status::panic_text(&*p)));
                             break;
                         }
                     }

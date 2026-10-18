@@ -1,4 +1,4 @@
-//! The group inspector's "パターン" section, and the commands behind the Edit menu and the search
+//! The group inspector's "Pattern" section, and the commands behind the Edit menu and the search
 //! palette: live patterns (mirror, grid, circle, along a path, on points) and linked copies
 //! ("インスタンス") of a group. The numbers and the maths are in `pattern.rs`.
 
@@ -102,7 +102,7 @@ impl App {
     /// that has something to follow).
     pub fn set_pattern_kind(&mut self, ctx: &egui::Context, kind: PatternKind) {
         let Some(g) = self.selected_group() else {
-            self.say(ctx, "グループか形をえらんでください");
+            self.say(ctx, "Select a group or shape first");
             return;
         };
         let mut p = Pattern::starting(kind);
@@ -117,7 +117,7 @@ impl App {
                 match found.and_then(|(gi, si)| self.scene.ensure_shape_uid(gi, si)) {
                     Some(uid) => *source = uid,
                     None => {
-                        self.say(ctx, "たどる線がありません（線・スイープ・押し出しなどを先に作ります）");
+                        self.say(ctx, "No path to follow (make a line, sweep or extrusion first)");
                         return;
                     }
                 }
@@ -133,7 +133,7 @@ impl App {
                 match found.and_then(|(gi, si)| self.scene.ensure_shape_uid(gi, si)) {
                     Some(uid) => *source = Source::Shape(uid),
                     None => {
-                        self.say(ctx, "点をかりる、ほかの形がありません");
+                        self.say(ctx, "No other shape to borrow points from");
                         return;
                     }
                 }
@@ -149,7 +149,7 @@ impl App {
     /// Turn the mirror about world axis `axis` (0 X, 1 Y, 2 Z) on or off for the selected group.
     pub fn toggle_mirror(&mut self, ctx: &egui::Context, axis: usize) {
         let Some(g) = self.selected_group() else {
-            self.say(ctx, "グループか形をえらんでください");
+            self.say(ctx, "Select a group or shape first");
             return;
         };
         let Some(gr) = self.scene.groups.get_mut(g) else { return };
@@ -170,7 +170,7 @@ impl App {
                 }
             }
             Some(_) => {
-                self.say(ctx, "ほかのパターンがついています。先にパターンをやめてください");
+                self.say(ctx, "Another pattern is already on. Turn it off first");
                 return;
             }
         }
@@ -189,11 +189,11 @@ impl App {
     /// A linked copy of the selected group: it shows the same shapes, and follows every edit of them.
     pub fn make_instance(&mut self, ctx: &egui::Context) {
         let Some(g) = self.selected_group() else {
-            self.say(ctx, "グループか形をえらんでください");
+            self.say(ctx, "Select a group or shape first");
             return;
         };
         if self.scene.groups.len() >= MAX_GROUPS {
-            self.say(ctx, format!("グループは{MAX_GROUPS}個までです"));
+            self.say(ctx, format!("Up to {MAX_GROUPS} groups"));
             return;
         }
         // a copy of a copy is a copy of the original
@@ -203,13 +203,13 @@ impl App {
             Some(s) => (s.name.clone(), pattern::group_sphere(&s.shapes).r),
             None => return,
         };
-        let mut copy = Group::new(format!("{name} (リンク)"));
+        let mut copy = Group::new(format!("{name} (link)"));
         copy.instance_of = Some(uid);
         copy.xform = Xform { pos: [(reach * 2.0 + 10.0).clamp(20.0, 400.0), 0.0, 0.0], ..Xform::default() };
         let at = (g + 1).min(self.scene.groups.len());
         self.scene.groups.insert(at, copy);
         self.sel = Some(Pick::Group(at));
-        self.say(ctx, "リンクコピーを作りました。元を直すと、こちらも変わります");
+        self.say(ctx, "Made a linked copy. Edits to the original also change this one");
     }
 
     /// Make a linked copy a group of its own again (its shapes are copied, placed where the copy stood).
@@ -252,12 +252,12 @@ impl App {
         if self.scene.groups.get(g).is_some_and(Group::is_linked) {
             self.link_box(ui, g);
         }
-        style::title(ui, "パターン");
+        style::title(ui, "Pattern");
         let current = self.scene.groups.get(g).and_then(|gr| gr.pattern.clone());
         // the kind: nothing, or one of five
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
-            if style::icon_button(ui, 34.0, "パターンなし", current.is_none(), |p, r, ink| {
+            if style::icon_button(ui, 34.0, "No pattern", current.is_none(), |p, r, ink| {
                 let f = frame(r);
                 p.line_segment([at(f, 0.2, 0.2), at(f, 0.8, 0.8)], Stroke::new(2.0, ink));
                 p.line_segment([at(f, 0.8, 0.2), at(f, 0.2, 0.8)], Stroke::new(2.0, ink));
@@ -280,18 +280,20 @@ impl App {
         };
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
-            style::row_label(ui, "ミラー");
+            style::row_label(ui, "Mirror");
             let free = current.is_none() || mirror_axes.is_some();
             for (i, name) in ["X", "Y", "Z"].iter().enumerate() {
                 let on = mirror_axes.is_some_and(|a| a[i]);
-                if style::pill_enabled(ui, name, on, free).on_hover_text(["X（左右）に写す", "Y（前後）に写す", "Z（上下）に写す"][i]).clicked()
+                if style::pill_enabled(ui, name, on, free)
+                    .on_hover_text(["Mirror across X (left/right)", "Mirror across Y (front/back)", "Mirror across Z (up/down)"][i])
+                    .clicked()
                 {
                     self.toggle_mirror(&ctx, i);
                 }
             }
         });
         let Some(mut pat) = current.clone() else {
-            ui.label(RichText::new("グループを、いくつもならべたり、左右に写したりできます").size(12.0).color(style::DIM));
+            ui.label(RichText::new("Repeat a group many times, or mirror it left and right").size(12.0).color(style::DIM));
             return;
         };
         let centre = self.scene.groups.get(g).map(|gr| pattern::centre_of_shapes(&gr.shapes)).unwrap_or([0.0; 3]);
@@ -299,56 +301,56 @@ impl App {
         match &mut pat {
             Pattern::Mirror { centre: about, .. } => {
                 ui.horizontal(|ui| {
-                    style::row_label(ui, "写す面");
-                    if style::pill(ui, "原点", !*about).on_hover_text("世界の真ん中（原点）を通る面").clicked() {
+                    style::row_label(ui, "Mirror plane");
+                    if style::pill(ui, "Origin", !*about).on_hover_text("The plane through the world origin").clicked() {
                         *about = false;
                     }
-                    if style::pill(ui, "グループの中心", *about).on_hover_text("このグループの中心を通る面").clicked() {
+                    if style::pill(ui, "Group center", *about).on_hover_text("The plane through this group's center").clicked() {
                         *about = true;
                     }
                 });
             }
             Pattern::Rect { counts, spacing } => {
                 ui.horizontal(|ui| {
-                    style::row_label(ui, "こすう");
+                    style::row_label(ui, "Count");
                     for (i, c) in counts.iter_mut().enumerate() {
                         ui.label(RichText::new(["X", "Y", "Z"][i]).color(style::AXIS[i]).size(12.0).strong());
                         style::field_sized(ui, [44.0, 22.0], egui::DragValue::new(c).speed(0.1).range(1..=pattern::MAX_SIDE));
                     }
                 });
-                style::xyz(ui, "あいだ", spacing, 0.5, -5000.0..=5000.0, "");
+                style::xyz(ui, "Spacing", spacing, 0.5, -5000.0..=5000.0, "");
             }
             Pattern::Circular { count, angle, axis, centre: c, rotate } => {
                 ui.horizontal(|ui| {
-                    style::row_label(ui, "こすう");
+                    style::row_label(ui, "Count");
                     style::field_sized(ui, [54.0, 22.0], egui::DragValue::new(count).speed(0.1).range(1..=pattern::MAX_INSTANCES as u32));
-                    ui.label(RichText::new("角度").color(style::DIM).size(12.0));
+                    ui.label(RichText::new("Angle").color(style::DIM).size(12.0));
                     style::field_sized(ui, [64.0, 22.0], egui::DragValue::new(angle).speed(1.0).range(-3600.0..=3600.0).suffix("°"));
                 });
                 ui.horizontal(|ui| {
-                    style::row_label(ui, "回る軸");
+                    style::row_label(ui, "Rotation axis");
                     for (i, name) in ["X", "Y", "Z"].iter().enumerate() {
                         if style::pill(ui, name, usize::from(*axis) == i).clicked() {
                             *axis = i as u8;
                         }
                     }
                 });
-                style::xyz(ui, "中心", c, 0.5, -5000.0..=5000.0, "");
+                style::xyz(ui, "Center", c, 0.5, -5000.0..=5000.0, "");
                 ui.horizontal(|ui| {
                     ui.add_space(style::LABEL_W);
-                    if style::pill(ui, "原点", false).clicked() {
+                    if style::pill(ui, "Origin", false).clicked() {
                         *c = [0.0; 3];
                     }
-                    if style::pill(ui, "グループの中心", false).clicked() {
+                    if style::pill(ui, "Group center", false).clicked() {
                         *c = centre;
                     }
                 });
-                style::checkbox(ui, rotate, "コピーもいっしょに回す");
+                style::checkbox(ui, rotate, "Rotate copies too");
             }
             Pattern::Path { source, count, mode, step, align } => {
                 let label = self.source_label(Source::Shape(*source));
                 ui.horizontal(|ui| {
-                    style::row_label(ui, "たどる線");
+                    style::row_label(ui, "Path");
                     egui::ComboBox::from_id_salt("pattern_path_source").selected_text(label).width(150.0).show_ui(ui, |ui| {
                         for (gi, gr) in self.scene.groups.iter().enumerate() {
                             for (si, s) in gr.shapes.iter().enumerate() {
@@ -362,36 +364,35 @@ impl App {
                     });
                 });
                 ui.horizontal(|ui| {
-                    style::row_label(ui, "ならべ方");
-                    if style::pill(ui, "ぴったり", *mode == PathMode::Even).on_hover_text("線のはしからはしまで、同じ間かくで").clicked()
-                    {
+                    style::row_label(ui, "Layout");
+                    if style::pill(ui, "Even", *mode == PathMode::Even).on_hover_text("Evenly from one end of the line to the other").clicked() {
                         *mode = PathMode::Even;
                     }
-                    if style::pill(ui, "きょり", *mode == PathMode::Step).on_hover_text("決まった長さごとに").clicked() {
+                    if style::pill(ui, "Distance", *mode == PathMode::Step).on_hover_text("Every set length").clicked() {
                         *mode = PathMode::Step;
                     }
                 });
                 ui.horizontal(|ui| {
-                    style::row_label(ui, if *mode == PathMode::Even { "こすう" } else { "多くても" });
+                    style::row_label(ui, if *mode == PathMode::Even { "Count" } else { "At most" });
                     style::field_sized(ui, [54.0, 22.0], egui::DragValue::new(count).speed(0.1).range(1..=pattern::MAX_INSTANCES as u32));
                     if *mode == PathMode::Step {
-                        ui.label(RichText::new("間かく").color(style::DIM).size(12.0));
+                        ui.label(RichText::new("Gap").color(style::DIM).size(12.0));
                         style::field_sized(ui, [70.0, 22.0], egui::DragValue::new(step).speed(0.5).range(0.1..=5000.0).suffix(" mm"));
                     }
                 });
-                style::checkbox(ui, align, "線のむきにそろえる");
+                style::checkbox(ui, align, "Align to the line's direction");
             }
             Pattern::Geometry { source, orient } => {
                 let label = self.source_label(*source);
                 ui.horizontal(|ui| {
-                    style::row_label(ui, "点をかりる");
+                    style::row_label(ui, "Borrow points");
                     egui::ComboBox::from_id_salt("pattern_geometry_source").selected_text(label).width(150.0).show_ui(ui, |ui| {
                         for (gi, gr) in self.scene.groups.iter().enumerate() {
                             if !gr.shapes.is_empty()
                                 && ui
                                     .selectable_label(
                                         matches!(source, Source::Group(u) if gr.uid != 0 && *u == gr.uid),
-                                        format!("グループ: {}", gr.name),
+                                        format!("Group: {}", gr.name),
                                     )
                                     .clicked()
                             {
@@ -411,8 +412,12 @@ impl App {
                         }
                     });
                 });
-                style::checkbox(ui, orient, "点のむきにそろえる");
-                ui.label(RichText::new("線・スイープ・押し出しは ふし・かど、箱は 8つの角、ほかは中心に").size(11.5).color(style::DIM));
+                style::checkbox(ui, orient, "Align to the point's direction");
+                ui.label(
+                    RichText::new("Lines, sweeps and extrusions use nodes and corners, boxes use 8 corners, others use the center")
+                        .size(11.5)
+                        .color(style::DIM),
+                );
             }
         }
         // what was picked from a list: give that shape or group a number to be found by
@@ -439,53 +444,53 @@ impl App {
         let (n, capped) = pattern::describe(&self.scene, g);
         let missing = pat.follows().is_some() && pattern::natural_count(&pat, &self.scene) == 0;
         ui.horizontal(|ui| {
-            style::row_label(ui, "いまの数");
-            ui.label(RichText::new(format!("{n} こ")).strong().size(13.0));
+            style::row_label(ui, "Current count");
+            ui.label(RichText::new(format!("{n} copies")).strong().size(13.0));
         });
         if capped {
             ui.label(RichText::new(pattern::TOO_MANY).size(12.0).color(style::CUT));
         }
         if missing {
-            ui.label(RichText::new("たどるもの（線・形）が見つかりません").size(12.0).color(style::CUT));
+            ui.label(RichText::new("No path found (line or shape)").size(12.0).color(style::CUT));
         }
         if let Some(gr) = self.scene.groups.get_mut(g)
             && gr.pattern.as_ref() != Some(&pat)
         {
             gr.pattern = Some(pat);
         }
-        ui.label(RichText::new("形のワクは使いません。コピーを選ぶと、元のグループがえらばれます").size(11.5).color(style::DIM));
+        ui.label(RichText::new("The shape frame is not used. Choosing a copy selects its original group").size(11.5).color(style::DIM));
     }
 
     fn source_label(&self, s: Source) -> String {
         match s {
             Source::Shape(uid) => match self.scene.shape_by_uid(uid).and_then(|(g, i)| self.scene.shape(g, i)) {
                 Some(sh) => sh.name.clone(),
-                None => "（えらんでください）".into(),
+                None => "(choose one)".into(),
             },
             Source::Group(uid) => match self.scene.group_by_uid(uid).and_then(|g| self.scene.groups.get(g)) {
-                Some(gr) => format!("グループ: {}", gr.name),
-                None => "（えらんでください）".into(),
+                Some(gr) => format!("Group: {}", gr.name),
+                None => "(choose one)".into(),
             },
         }
     }
 
     /// The box for a linked copy: whose shapes it shows, and where it stands.
     fn link_box(&mut self, ui: &mut Ui, g: usize) {
-        style::title(ui, "リンクコピー");
+        style::title(ui, "Linked copy");
         let src = pattern::link_source(&self.scene, g);
         let src_name = src.and_then(|s| self.scene.groups.get(s)).map(|s| s.name.clone());
         ui.horizontal_wrapped(|ui| {
-            ui.label(RichText::new("もと").color(style::DIM).size(12.0));
+            ui.label(RichText::new("Source").color(style::DIM).size(12.0));
             match &src_name {
                 Some(n) => ui.label(RichText::new(n).strong().size(13.0)),
-                None => ui.label(RichText::new("元のグループがありません").color(style::CUT).size(12.0)),
+                None => ui.label(RichText::new("No source group").color(style::CUT).size(12.0)),
             };
         });
         if let Some(gr) = self.scene.groups.get_mut(g) {
-            style::xyz(ui, "位置", &mut gr.xform.pos, 0.5, -5000.0..=5000.0, "");
-            style::xyz(ui, "回転", &mut gr.xform.rot, 1.0, -3600.0..=3600.0, "°");
+            style::xyz(ui, "Position", &mut gr.xform.pos, 0.5, -5000.0..=5000.0, "");
+            style::xyz(ui, "Rotation", &mut gr.xform.rot, 1.0, -3600.0..=3600.0, "°");
             ui.horizontal(|ui| {
-                style::row_label(ui, "大きさ");
+                style::row_label(ui, "Scale");
                 style::field_sized(
                     ui,
                     [74.0, 22.0],
@@ -494,19 +499,19 @@ impl App {
             });
         }
         ui.horizontal(|ui| {
-            if style::pill_enabled(ui, "元をえらぶ", false, src.is_some()).clicked()
+            if style::pill_enabled(ui, "Pick source", false, src.is_some()).clicked()
                 && let Some(s) = src
             {
                 self.sel = Some(Pick::Group(s));
             }
-            if style::pill_enabled(ui, "リンクをはずす", false, src.is_some())
-                .on_hover_text("この組の形として、コピーします（もう元とつながりません）")
+            if style::pill_enabled(ui, "Unlink", false, src.is_some())
+                .on_hover_text("Copies it as a plain shape (no longer linked to the source)")
                 .clicked()
             {
                 self.unlink_group(g);
             }
         });
-        ui.label(RichText::new("元を直すと、リンクコピーも同じに変わります").size(11.5).color(style::DIM));
+        ui.label(RichText::new("Edits to the source also change the linked copy").size(11.5).color(style::DIM));
     }
 }
 

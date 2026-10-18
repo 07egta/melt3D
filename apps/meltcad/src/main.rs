@@ -77,7 +77,7 @@ fn fatal(message: &str) {
     rfd::MessageDialog::new()
         .set_level(rfd::MessageLevel::Error)
         .set_title("MELTCAD")
-        .set_description(format!("{message}\n\nログ: {}", gpu_log::path().display()))
+        .set_description(format!("{message}\n\nLog: {}", gpu_log::path().display()))
         .set_buttons(rfd::MessageButtons::Ok)
         .show();
 }
@@ -101,7 +101,7 @@ fn no_graphics(choice: backend::Choice, plan: backend::Plan, tried: &[backend::B
             std::process::exit(0);
         }
     }
-    fatal(&format!("グラフィックスを始められませんでした。\n{reason}\nグラフィックスドライバーを新しくすると直ることがあります。"));
+    fatal(&format!("Could not start graphics.\n{reason}\nUpdating your graphics driver may fix it."));
     std::process::exit(1)
 }
 
@@ -122,7 +122,7 @@ fn main() -> eframe::Result {
     let settings = backend::load();
     gpu_log::log(&format!("settings {settings:?}, choice {choice:?}, tried {tried:?}"));
     let Some(plan) = backend::plan(choice, cfg!(target_os = "windows"), &settings, &tried) else {
-        fatal("どの描画方式でも始められませんでした。");
+        fatal("Could not start with any graphics mode.");
         return Ok(());
     };
     gpu_log::log(&format!("graphics plan {plan:?}"));
@@ -149,7 +149,7 @@ fn main() -> eframe::Result {
             style::apply(&cc.egui_ctx);
             let rs = cc.wgpu_render_state.clone();
             if rs.is_none() {
-                no_graphics(choice, plan, &tried_for_app, "グラフィックスのデバイス (wgpu) を作れませんでした。");
+                no_graphics(choice, plan, &tried_for_app, "Could not create a graphics device (wgpu).");
             }
             let srgb = rs.as_ref().is_none_or(|rs| rs.target_format.is_srgb());
             let mut app = app::App::new(srgb, std::env::args_os().nth(1).map(std::path::PathBuf::from));

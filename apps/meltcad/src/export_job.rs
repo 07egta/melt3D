@@ -592,8 +592,7 @@ pub struct Report {
     pub closed: bool,
 }
 
-pub const NAMES: [&str; 6] =
-    ["空間をさがしています", "形をはかっています", "面をつないでいます", "なめらかにしています", "三角形をへらしています", "色をしらべています"];
+pub const NAMES: [&str; 6] = ["Searching space…", "Measuring the shape…", "Joining faces…", "Smoothing…", "Reducing triangles…", "Checking colours…"];
 
 /// An export running on its own thread.
 pub struct Job {
@@ -651,9 +650,9 @@ impl Job {
 
     pub fn phase_name(&self) -> &'static str {
         if self.writing.load(std::sync::atomic::Ordering::Relaxed) {
-            return "ファイルに書いています";
+            return "Writing the file…";
         }
-        NAMES.get(self.progress.phase() as usize).copied().unwrap_or("つくっています")
+        NAMES.get(self.progress.phase() as usize).copied().unwrap_or("Building…")
     }
 }
 

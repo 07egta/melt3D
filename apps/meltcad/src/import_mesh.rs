@@ -20,13 +20,13 @@ pub const MAX_VERTICES: usize = 15_000_000;
 /// Coordinates beyond this (in file units) are taken for garbage.
 pub const MAX_COORD: f32 = 1.0e9;
 
-pub const TOO_BIG_FILE: &str = "ファイルが大きすぎます（256MB まで）";
-pub const TOO_MANY_TRIS: &str = "三角形が多すぎます（500万まで）";
-pub const TOO_MANY_VERTS: &str = "頂点が多すぎます";
-pub const CUT_OFF: &str = "ファイルが途中で切れています";
-pub const BAD_NUMBER: &str = "数値がおかしいです（NaN や無限大、または大きすぎる値）";
-pub const BAD_INDEX: &str = "頂点の番号が範囲の外です";
-pub const NO_SHAPE: &str = "形が見つかりませんでした（面積のある三角形が 0 個です）";
+pub const TOO_BIG_FILE: &str = "File is too big (up to 256 MB)";
+pub const TOO_MANY_TRIS: &str = "Too many triangles (up to 5 million)";
+pub const TOO_MANY_VERTS: &str = "Too many vertices";
+pub const CUT_OFF: &str = "File is cut off partway through";
+pub const BAD_NUMBER: &str = "Bad number (NaN, infinite, or too large)";
+pub const BAD_INDEX: &str = "Vertex index is out of range";
+pub const NO_SHAPE: &str = "No shape found (0 triangles with area)";
 
 /// A triangle mesh in millimetres.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -356,7 +356,7 @@ fn read_obj(b: &[u8]) -> Result<ImportedMesh, String> {
                     count += 1;
                 }
                 if count < 3 {
-                    return Err("面の頂点が 3 つ未満です".into());
+                    return Err("A face has fewer than 3 vertices".into());
                 }
             }
             _ => {}
@@ -473,7 +473,7 @@ impl Values<'_> {
 }
 
 fn read_ply(b: &[u8]) -> Result<ImportedMesh, String> {
-    const BAD: &str = "PLY のヘッダーがおかしいです";
+    const BAD: &str = "The PLY header is wrong";
     let end = b.windows(10).take(1 << 16).position(|w| w == b"end_header").ok_or(BAD)?;
     let head = std::str::from_utf8(b.get(..end).ok_or(BAD)?).map_err(|_| BAD.to_string())?;
     let mut body_start = end + 10;
@@ -551,7 +551,7 @@ fn read_ply(b: &[u8]) -> Result<ImportedMesh, String> {
         let col = |name: &str| el.props.iter().position(|p| p.name == name && p.list.is_none());
         let (cx, cy, cz) = (col("x"), col("y"), col("z"));
         if is_vertex && (cx.is_none() || cy.is_none() || cz.is_none()) {
-            return Err("PLY に x y z の座標がありません".into());
+            return Err("The PLY has no x y z coordinates".into());
         }
         for _ in 0..el.count {
             let mut p = [0f64; 3];
@@ -573,7 +573,7 @@ fn read_ply(b: &[u8]) -> Result<ImportedMesh, String> {
                     Some(ct) => {
                         let k = v.next(ct)?;
                         if !(0.0..=1.0e6).contains(&k) {
-                            return Err("PLY の面の頂点数がおかしいです".into());
+                            return Err("The PLY face vertex count is wrong".into());
                         }
                         let keep = is_face && (prop.name == "vertex_indices" || prop.name == "vertex_index");
                         for _ in 0..k as usize {
@@ -875,7 +875,7 @@ pub fn import_bytes(bytes: &[u8], name: &str, opts: &ImportOptions) -> Result<Im
     if bytes.len() > MAX_FILE_BYTES {
         return Err(TOO_BIG_FILE.into());
     }
-    let format = sniff(bytes, name).ok_or("このファイルの形式がわかりません（STL・OBJ・PLY・3MF・GLB に対応しています）")?;
+    let format = sniff(bytes, name).ok_or("Can't tell this file's format (supports STL, OBJ, PLY, 3MF, GLB)")?;
     let appearance_info = match format {
         MeshFormat::ThreeMf => crate::import_3mf::appearance_3mf(bytes),
         MeshFormat::Glb => crate::import_glb::appearance_glb(bytes),
@@ -896,21 +896,21 @@ pub fn import_bytes(bytes: &[u8], name: &str, opts: &ImportOptions) -> Result<Im
     let health = mesh.health();
     let mut notes = appearance_info.notes;
     if appearance_info.varies {
-        notes.push("複数の色・材質があります。SDF では面別の色を保持できないため、代表色で読み込みます（元の色分けは保存されません）".into());
+        notes.push("Several colours or materials found. SDF can't keep colours per face, so one main colour is used (the original colour split is not saved)".into());
     }
     if health.open_edges > 0 {
-        notes.push(format!("穴があいている所があります（開いた辺 {} 本）。形は近似で読みこみます", health.open_edges));
+        notes.push(format!("There are holes (open edges: {}). The shape is loaded approximately", health.open_edges));
     }
     if health.nonmanifold_edges > 0 {
-        notes.push(format!("3 枚以上の面が重なる辺があります（{} 本）", health.nonmanifold_edges));
+        notes.push(format!("Some edges have 3 or more faces meeting ({} edges)", health.nonmanifold_edges));
     }
     if dropped_triangles > 0 {
-        notes.push(format!("面積のない三角形を {dropped_triangles} 個、とりのぞきました"));
+        notes.push(format!("Removed {dropped_triangles} zero-area triangles"));
     }
     let s = mesh.size();
     let longest = s.into_iter().fold(0.0f32, f32::max);
     if longest > 0.0 && s.iter().any(|d| *d < longest * 1e-6) {
-        notes.push("平らな形です（厚みがありません）".to_string());
+        notes.push("Flat shape (no thickness)".to_string());
     }
     Ok(Imported {
         mesh,
@@ -927,13 +927,13 @@ pub fn import_bytes(bytes: &[u8], name: &str, opts: &ImportOptions) -> Result<Im
 /// Read a mesh file (refusing anything over 256 MB).
 pub fn import_file(path: &std::path::Path, opts: &ImportOptions) -> Result<Imported, String> {
     use std::io::Read;
-    let f = std::fs::File::open(path).map_err(|e| format!("ファイルを開けません: {e}"))?;
+    let f = std::fs::File::open(path).map_err(|e| format!("Can't open the file: {e}"))?;
     let len = f.metadata().map(|m| m.len()).unwrap_or(0);
     if len > MAX_FILE_BYTES as u64 {
         return Err(TOO_BIG_FILE.into());
     }
     let mut bytes = Vec::with_capacity(len as usize);
-    f.take(MAX_FILE_BYTES as u64 + 1).read_to_end(&mut bytes).map_err(|e| format!("ファイルを読めません: {e}"))?;
+    f.take(MAX_FILE_BYTES as u64 + 1).read_to_end(&mut bytes).map_err(|e| format!("Can't read the file: {e}"))?;
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     import_bytes(&bytes, &name, opts)
 }
@@ -1306,10 +1306,10 @@ pub mod tests {
         let bytes = export_formats::stl_binary(&to_trimesh(&b), "o");
         let r = load(&bytes, "o.stl");
         assert_eq!(r.health.open_edges, 4);
-        assert!(r.notes.iter().any(|n| n.contains("穴")));
+        assert!(r.notes.iter().any(|n| n.contains("hole")));
         let flat = ImportedMesh { positions: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], triangles: vec![[0, 1, 2]] };
         let r = load(&export_formats::stl_binary(&to_trimesh(&flat), "f"), "f.stl");
-        assert!(r.notes.iter().any(|n| n.contains("平ら")));
+        assert!(r.notes.iter().any(|n| n.contains("Flat")));
     }
 
     #[test]

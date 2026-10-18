@@ -23,7 +23,7 @@ fn id() -> egui::Id {
     egui::Id::new("svg_import_card")
 }
 
-/// Open the card (menu entry "SVGを読み込む…"). The file is chosen inside the card.
+/// Open the card (menu entry "Import SVG…"). The file is chosen inside the card.
 pub fn open(ctx: &egui::Context) {
     ctx.data_mut(|m| m.insert_temp(id(), Dlg::default()));
 }
@@ -39,7 +39,7 @@ fn set_art(d: &mut Dlg, res: Result<Artwork, String>, name: String) {
         Ok(a) => {
             let mut notes = Vec::new();
             if a.dropped > 0 {
-                notes.push(format!("{}個の小さい・多すぎる輪郭は読みとばしました", a.dropped));
+                notes.push(format!("Skipped {} tiny or extra outlines", a.dropped));
             }
             notes.extend(a.warnings.iter().cloned());
             d.msg = notes.join("\n");
@@ -82,25 +82,25 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
     egui::Area::new(egui::Id::new("svg_import_area")).order(egui::Order::Foreground).anchor(Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
         style::card().show(ui, |ui| {
             ui.set_width(330.0);
-            ui.label(RichText::new("SVGを読み込む").strong().size(15.0));
-            ui.label(RichText::new("絵（SVG）をぐーっと押し出して、立体にします。あなは自動でくり抜きます").size(11.5).color(style::DIM));
+            ui.label(RichText::new("Import SVG").strong().size(15.0));
+            ui.label(RichText::new("Pushes the picture (SVG) out into a solid. Holes are cut out automatically").size(11.5).color(style::DIM));
             ui.add_space(4.0);
             ui.horizontal(|ui| {
-                if style::pill(ui, "ファイルをえらぶ…", false).clicked()
+                if style::pill(ui, "Choose file…", false).clicked()
                     && let Some(p) = rfd::FileDialog::new().add_filter("SVG", &["svg"]).pick_file()
                 {
                     set_art(&mut d, svg::load_file(&p), stem(&p));
                 }
-                if style::pill(ui, "サンプルの星を入れる", false).clicked() {
-                    set_art(&mut d, svg::parse(svg::SAMPLE_SVG), "サンプルの星".into());
+                if style::pill(ui, "Add sample star", false).clicked() {
+                    set_art(&mut d, svg::parse(svg::SAMPLE_SVG), "Sample star".into());
                 }
             });
-            ui.label(RichText::new("（.svg ファイルを、ここにドラッグしてもOK）").size(11.0).color(style::DIM));
+            ui.label(RichText::new("(You can also drag a .svg file here)").size(11.0).color(style::DIM));
             preview(ui, &d);
             if let Some(a) = &d.art {
                 ui.label(
                     RichText::new(format!(
-                        "もとの大きさ {:.1} × {:.1} mm　かたまり {}・あな {}",
+                        "Original size {:.1} × {:.1} mm  {} solids · {} holes",
                         a.natural_mm[0],
                         a.natural_mm[1],
                         a.solids(),
@@ -117,33 +117,34 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
             }
             ui.add_space(2.0);
             egui::Grid::new("svg_import_grid").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
-                ui.label(RichText::new("大きさ").color(style::DIM));
+                ui.label(RichText::new("Size").color(style::DIM));
                 ui.add(egui::DragValue::new(&mut d.target).speed(0.5).range(1.0..=500.0).suffix(" mm").max_decimals(1))
-                    .on_hover_text("長いほうの辺の長さ");
+                    .on_hover_text("Length of the longer side");
                 ui.end_row();
-                ui.label(RichText::new("高さ").color(style::DIM));
-                ui.add(egui::DragValue::new(&mut d.height).speed(0.2).range(0.5..=200.0).suffix(" mm").max_decimals(1)).on_hover_text("押し出す高さ");
+                ui.label(RichText::new("Height").color(style::DIM));
+                ui.add(egui::DragValue::new(&mut d.height).speed(0.2).range(0.5..=200.0).suffix(" mm").max_decimals(1))
+                    .on_hover_text("Extrusion height");
                 ui.end_row();
-                ui.label(RichText::new("かどの丸み").color(style::DIM));
+                ui.label(RichText::new("Corner rounding").color(style::DIM));
                 let max_round = (d.height * 0.5).min(20.0);
                 ui.add(egui::DragValue::new(&mut d.round).speed(0.05).range(0.0..=max_round).suffix(" mm").max_decimals(2))
-                    .on_hover_text("角を丸くします。細い所は消えることがあります");
+                    .on_hover_text("Rounds the corners. Thin parts may disappear");
                 ui.end_row();
                 ui.label("");
-                ui.checkbox(&mut d.flip, "上下を反転");
+                ui.checkbox(&mut d.flip, "Flip upside down");
                 ui.end_row();
             });
             ui.add_space(4.0);
             ui.horizontal(|ui| {
                 ui.add_enabled_ui(d.art.is_some(), |ui| {
-                    let b = egui::Button::new(RichText::new("読みこむ").strong().color(Color32::WHITE))
+                    let b = egui::Button::new(RichText::new("Load").strong().color(Color32::WHITE))
                         .fill(style::ACCENT_SOFT)
                         .stroke(Stroke::new(1.0, style::ACCENT));
                     if ui.add(b).clicked() {
                         go = true;
                     }
                 });
-                if ui.button("やめる").clicked() {
+                if ui.button("Cancel").clicked() {
                     close = true;
                 }
             });
@@ -165,7 +166,7 @@ fn preview(ui: &mut egui::Ui, d: &Dlg) {
     let p = ui.painter_at(rect);
     p.rect_filled(rect, 8.0, style::PANEL_DARK);
     let Some(a) = &d.art else {
-        p.text(rect.center(), Align2::CENTER_CENTER, "ここに絵が出ます", egui::FontId::proportional(12.5), style::DIM);
+        p.text(rect.center(), Align2::CENTER_CENTER, "The picture shows up here", egui::FontId::proportional(12.5), style::DIM);
         return;
     };
     let inner = rect.shrink(14.0);
@@ -184,24 +185,24 @@ fn preview(ui: &mut egui::Ui, d: &Dlg) {
 fn import(app: &mut App, ctx: &egui::Context, d: &Dlg) -> bool {
     let Some(art) = &d.art else { return false };
     if app.scene.groups.len() >= MAX_GROUPS {
-        app.say(ctx, format!("グループは{MAX_GROUPS}個までです"));
+        app.say(ctx, format!("Up to {MAX_GROUPS} groups"));
         return false;
     }
     let room = MAX_SHAPES.saturating_sub(app.scene.shape_count());
     if room == 0 {
-        app.say(ctx, format!("形は{MAX_SHAPES}個までです"));
+        app.say(ctx, format!("Up to {MAX_SHAPES} shapes"));
         return false;
     }
     let o = BuildOpts { target_mm: d.target, height_mm: d.height, round_mm: d.round, flip: d.flip, at: [app.cam.target[0], app.cam.target[1]] };
     let (group, note) = svg::build_group(art, &d.name, &o, room);
     if group.shapes.is_empty() {
-        app.say(ctx, "入れられる形がありませんでした");
+        app.say(ctx, "No shapes could be added");
         return false;
     }
     let n = group.shapes.len();
     app.scene.groups.push(group);
     app.sel = Some(Pick::Group(app.scene.groups.len() - 1));
-    app.say(ctx, note.unwrap_or_else(|| format!("SVGを入れました（形 {n}個）")));
+    app.say(ctx, note.unwrap_or_else(|| format!("Added SVG ({n} shapes)")));
     true
 }
 
@@ -216,7 +217,7 @@ mod tests {
         open(&ctx);
         ctx.run_ui(egui::RawInput::default(), |ui| update(&mut app, ui.ctx())).textures_delta.clear();
         let mut d = Dlg::default();
-        set_art(&mut d, svg::parse(svg::SAMPLE_SVG), "星".into());
+        set_art(&mut d, svg::parse(svg::SAMPLE_SVG), "Star".into());
         assert!(d.art.is_some() && d.msg.is_empty());
         ctx.data_mut(|m| m.insert_temp(id(), d.clone()));
         ctx.run_ui(egui::RawInput::default(), |ui| update(&mut app, ui.ctx())).textures_delta.clear();

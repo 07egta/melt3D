@@ -686,7 +686,7 @@ fn try_build(device: &wgpu::Device, queue: &wgpu::Queue, format: wgpu::TextureFo
 
 /// `try_build` with the scene shader's source given (so that tests can hand it a broken one).
 pub(crate) fn try_build_from(device: &wgpu::Device, queue: &wgpu::Queue, format: wgpu::TextureFormat, source: &str) -> Result<Resources, String> {
-    let module = step(device, "シェーダーを読む (create_shader_module)", || {
+    let module = step(device, "Read shader (create_shader_module)", || {
         device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("meltcad"), source: wgpu::ShaderSource::Wgsl(source.into()) })
     })?;
     let (messages, any_error) = compilation_messages(&module);
@@ -694,7 +694,7 @@ pub(crate) fn try_build_from(device: &wgpu::Device, queue: &wgpu::Queue, format:
         crate::gpu_log::log(&format!("shader: {m}"));
     }
     if any_error {
-        return Err(format!("シェーダーのエラー:\n{}", messages.join("\n")));
+        return Err(format!("Shader error:\n{}", messages.join("\n")));
     }
     crate::perf::mark("shader module created");
     let (bgl, layout) = step(device, "bind group layout", || {
@@ -720,9 +720,7 @@ pub(crate) fn try_build_from(device: &wgpu::Device, queue: &wgpu::Queue, format:
         (bgl, layout)
     })?;
     // (the slow one: the driver compiles the shader here)
-    let pipeline = step(device, "シーンの描画パイプライン (create_render_pipeline)", || {
-        triangle_pipeline(device, "meltcad", &layout, &module, format)
-    })?;
+    let pipeline = step(device, "Scene render pipeline (create_render_pipeline)", || triangle_pipeline(device, "meltcad", &layout, &module, format))?;
     crate::perf::mark("scene pipeline created");
     let buffer = step(device, "uniform buffer", || {
         device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -856,7 +854,7 @@ pub fn install(rs: &egui_wgpu::RenderState, ctx: &egui::Context, status: &GpuSta
                 }
             }
             Err(payload) => {
-                let message = format!("パニック (panic) がおきました: {}", crate::gpu_status::panic_text(&*payload));
+                let message = format!("Panic happened: {}", crate::gpu_status::panic_text(&*payload));
                 crate::gpu_log::log(&format!("shader compile: PANIC after {secs:.3} s: {message}"));
                 st.finish_err(generation, message);
                 if let Some(b) = backend {
@@ -1311,7 +1309,7 @@ impl egui_wgpu::CallbackTrait for Callback {
         // our own resources are made inside an error scope: a refusal from the driver (no memory
         // for the picture, a texture it cannot make) fails the graphics path with a message
         // instead of panicking the window
-        let (_, errors) = scoped(device, "描画の準備 (prepare)", || self.prepare_frame(device, queue, encoder, res));
+        let (_, errors) = scoped(device, "Prepare frame (prepare)", || self.prepare_frame(device, queue, encoder, res));
         if !errors.is_empty() && res.timer.is_some() {
             // (the timing of passes is a convenience: before giving the whole graphics path up, try without it)
             crate::gpu_log::log(&format!("drawing failed, trying without the timing of passes:\n{}", errors.join("\n")));
@@ -1509,7 +1507,7 @@ pub(crate) mod offscreen {
                 compatible_surface: None,
                 ..Default::default()
             }))
-            .map_err(|e| format!("グラフィックスのアダプターが見つかりません: {e}"))?;
+            .map_err(|e| format!("No graphics adapter found: {e}"))?;
             let info = adapter.get_info();
             let gl = info.backend == wgpu::Backend::Gl;
             let base = if gl { wgpu::Limits::downlevel_webgl2_defaults() } else { wgpu::Limits::default() };
@@ -1520,7 +1518,7 @@ pub(crate) mod offscreen {
                 required_limits: wgpu::Limits { max_texture_dimension_2d: adapter.limits().max_texture_dimension_2d.min(8192), ..base },
                 ..Default::default()
             }))
-            .map_err(|e| format!("グラフィックスのデバイスを作れません: {e}"))?;
+            .map_err(|e| format!("Could not create a graphics device: {e}"))?;
             let t = std::time::Instant::now();
             let res = match source {
                 Some(src) => try_build_from(&device, &queue, wgpu::TextureFormat::Rgba8Unorm, src)?,
@@ -2157,7 +2155,7 @@ mod headless_tests {
             })
         });
         assert_eq!(errors.len(), 1, "{errors:?}");
-        assert!(errors[0].starts_with("test: 検証エラー"), "{}", errors[0]);
+        assert!(errors[0].starts_with("test: Validation error"), "{}", errors[0]);
         let (_, none) = scoped(&device, "test", || 1 + 1);
         assert!(none.is_empty());
     }

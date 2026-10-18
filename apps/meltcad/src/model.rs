@@ -923,7 +923,7 @@ pub const MAX_SAVED: usize = 24;
 
 impl Default for Scene {
     fn default() -> Self {
-        let mut g = Group::new("グループ 1");
+        let mut g = Group::new("Group 1");
         g.shapes.push(Shape::new(Kind::Sphere, [0.0, 0.0, 20.0], Material::default()));
         Scene { groups: vec![g], melt: Melt::default(), env: Environment::default(), saved: Vec::new() }
     }

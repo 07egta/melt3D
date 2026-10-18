@@ -39,16 +39,16 @@ impl Up {
     pub const ALL: [Up; 3] = [Up::Auto, Up::Y, Up::Z];
     pub fn label(self) -> &'static str {
         match self {
-            Up::Auto => "自動",
-            Up::Y => "Y上",
-            Up::Z => "Z上",
+            Up::Auto => "Auto",
+            Up::Y => "Y up",
+            Up::Z => "Z up",
         }
     }
     pub fn hint(self) -> &'static str {
         match self {
-            Up::Auto => "ファイルの種類でえらびます（OBJとGLBはY上、ほかはZ上）",
-            Up::Y => "Yが上のデータ。立てて入れます",
-            Up::Z => "Zが上のデータ。そのまま入れます",
+            Up::Auto => "Picks by file type (OBJ and GLB are Y up, others Z up)",
+            Up::Y => "Y-up data. Stands it up on import",
+            Up::Z => "Z-up data. Imported as is",
         }
     }
     /// Is the file Y up?
@@ -111,7 +111,7 @@ pub fn load(path: &Path) -> Result<Loaded, String> {
     let imported = import_mesh::import_file(path, &ImportOptions { y_up: Some(false) })?;
     let size = imported.mesh.size();
     let file_name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    let stem = path.file_stem().map(|n| n.to_string_lossy().into_owned()).filter(|s| !s.is_empty()).unwrap_or_else(|| "メッシュ".into());
+    let stem = path.file_stem().map(|n| n.to_string_lossy().into_owned()).filter(|s| !s.is_empty()).unwrap_or_else(|| "Mesh".into());
     Ok(Loaded { file_name, stem, imported, size })
 }
 
@@ -184,7 +184,7 @@ pub fn rebake(mesh: &ImportedMesh, y_up: bool, final_size: [f32; 3], res: u32, c
     let c = [0, 1, 2].map(|a| 0.5 * (lo[a] + hi[a]));
     let orig = m.size();
     if final_size.iter().any(|x| !x.is_finite() || *x <= 0.0) || orig.iter().any(|x| *x <= 0.0) {
-        return Err("寸法が不正です".into());
+        return Err("Invalid dimensions".into());
     }
     let factors = [0, 1, 2].map(|a| final_size[a] / orig[a]);
     for p in &mut m.positions {
@@ -228,7 +228,7 @@ pub fn surface_residual(mesh: &ImportedMesh, y_up: bool, final_size: [f32; 3], v
     (if n > 0 { (total / n as f64) as f32 } else { 0.0 }, worst, n)
 }
 
-/// Turn, centre, scale and bake. Cancelling through `ctl` gives `Err("中止しました")`.
+/// Turn, centre, scale and bake. Cancelling through `ctl` gives `Err("Stopped")`.
 pub fn bake(mesh: &ImportedMesh, format: MeshFormat, st: &Settings, ctl: &BakeControl) -> Result<Baked, String> {
     let st = st.sanitized();
     let mut m = mesh.clone();

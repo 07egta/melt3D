@@ -1,4 +1,4 @@
-//! The card for importing a mesh ("メッシュを読み込む"): file name and type, triangles, size, health
+//! The card for importing a mesh ("Import mesh"): file name and type, triangles, size, health
 //! notes, then the options (target size, which way is up, put it on the floor, put it in the middle,
 //! how fine), and a progress bar with a cancel button while the distance volume is baked on a
 //! worker thread. The result is a `Kind::Mesh` shape in a new group at the middle of the view.
@@ -27,7 +27,7 @@ impl<T: Send + 'static> Job<T> {
         let job = Arc::new(Job { slot: Mutex::new(None) });
         let j = job.clone();
         let spawned = std::thread::Builder::new().name(name.into()).spawn(move || {
-            let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).unwrap_or_else(|_| Err("途中で止まってしまいました".into()));
+            let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).unwrap_or_else(|_| Err("Stopped partway through".into()));
             if let Ok(mut s) = j.slot.lock() {
                 *s = Some(res);
             }
@@ -35,7 +35,7 @@ impl<T: Send + 'static> Job<T> {
         if spawned.is_err()
             && let Ok(mut s) = job.slot.lock()
         {
-            *s = Some(Err("読みこみを始められませんでした".into()));
+            *s = Some(Err("Couldn't start loading".into()));
         }
         job
     }
@@ -85,7 +85,7 @@ fn rebake_id() -> egui::Id {
 
 fn launch_rebake(req: &mut RebakeRequest) {
     let Some(path) = req.path.clone() else {
-        req.msg = "元メッシュファイルを選び直してください".into();
+        req.msg = "Please pick the original mesh file again".into();
         return;
     };
     let Some(old) = req.original.volume.clone() else { return };
@@ -99,10 +99,10 @@ fn launch_rebake(req: &mut RebakeRequest) {
         let hash = mesh_import::mesh_hash(&loaded.imported.mesh);
         if let Some(src) = &orig.mesh_source {
             if src.mesh_hash != 0 && src.mesh_hash != hash {
-                return Err("元ファイルが変更されています。別のモデルで上書きすることはできません".into());
+                return Err("The original file has changed. Can't overwrite with a different model".into());
             }
         } else if !orig.source.is_empty() && loaded.file_name != orig.source {
-            return Err("元のファイル名が違います。同名のファイルを選択してください".into());
+            return Err("File name doesn't match. Pick the file with the same name".into());
         }
         if c.cancel.load(Ordering::Relaxed) {
             return Err(ERR_CANCEL.into());
@@ -160,7 +160,7 @@ fn rebake_panel(app: &mut App, ctx: &egui::Context) {
                 req.job = None;
                 // Reject stale results and replacements that would exceed the scene volume budget.
                 if app.scene.shape(req.group, req.shape) != Some(&req.original) {
-                    req.msg = "対象が編集中に変わりました。もう一度実行してください".into();
+                    req.msg = "The target changed while editing. Please run it again".into();
                 } else {
                     let mut candidate = app.scene.clone();
                     if let Some(sh) = candidate.shape_mut(req.group, req.shape) {
@@ -176,7 +176,7 @@ fn rebake_panel(app: &mut App, ctx: &egui::Context) {
                         app.say(
                             ctx,
                             format!(
-                                "再ベイク完了 {:.2}秒・表面残差 平均 {:.3}→{:.3}mm、最大 {:.3}→{:.3}mm（各{} / {}点）",
+                                "Re-bake done in {:.2} s. Surface error avg {:.3}→{:.3} mm, max {:.3}→{:.3} mm ({} / {} points each)",
                                 result.elapsed, result.before.0, result.after.0, result.before.1, result.after.1, result.before.2, result.after.2
                             ),
                         );
@@ -193,17 +193,17 @@ fn rebake_panel(app: &mut App, ctx: &egui::Context) {
     }
     let mut start = false;
     let mut pick = false;
-    egui::Window::new("メッシュを再ベイク").collapsible(false).resizable(false).show(ctx, |ui| {
+    egui::Window::new("Re-bake mesh").collapsible(false).resizable(false).show(ctx, |ui| {
         let Some(vol) = req.original.volume.as_ref() else {
-            ui.label("距離データがありません");
+            ui.label("No distance data");
             return;
         };
         let size = [0, 1, 2].map(|a| req.original.size[a] * req.original.scale[a]);
         let effective = [0, 1, 2].map(|a| vol.cell * req.original.scale[a]);
-        ui.label(format!("現在の実セル幅: X {:.3} / Y {:.3} / Z {:.3} mm", effective[0], effective[1], effective[2]));
-        ui.label(format!("対象: {}", req.original.name));
+        ui.label(format!("Current actual cell width: X {:.3} / Y {:.3} / Z {:.3} mm", effective[0], effective[1], effective[2]));
+        ui.label(format!("Target: {}", req.original.name));
         ui.horizontal(|ui| {
-            ui.label("細かさ:");
+            ui.label("Detail:");
             for r in [64, 96, 128, 160, 192, 256] {
                 ui.selectable_value(&mut req.res, r, r.to_string());
             }
@@ -211,34 +211,38 @@ fn rebake_panel(app: &mut App, ctx: &egui::Context) {
         let e = mesh_import::estimate(size, 100_000, req.res);
         let budget = crate::mesh::Usage::of(app.scene.groups.iter().flat_map(|g| g.shapes.iter()));
         let remaining = crate::mesh::MAX_TOTAL_NODES.saturating_sub(budget.nodes.saturating_sub(vol.nodes()));
-        ui.label(format!("推定ノード数: {} / 許容量 {}、処理用距離配列 約 {:.1} MB", e.nodes, remaining, e.nodes as f64 * 4.0 / 1e6));
+        ui.label(format!("Estimated nodes: {} / limit {}, working distance array about {:.1} MB", e.nodes, remaining, e.nodes as f64 * 4.0 / 1e6));
         let projected_cell = size.into_iter().fold(0.0_f32, f32::max) / req.res as f32;
         let min_dim = size.into_iter().fold(f32::INFINITY, f32::min);
         if min_dim < 3.0 * projected_cell {
-            ui.colored_label(style::CUT, "注意: 薄い部分がセルの幅に近く、消える可能性があります");
+            ui.colored_label(style::CUT, "Note: thin parts are close to the cell width and may disappear");
         }
         if e.nodes > remaining {
-            ui.colored_label(style::CUT, "メモリ/シーンの上限を超えます。細かさを下げてください");
+            ui.colored_label(style::CUT, "Over the memory or scene limit. Lower the detail");
         }
         if let Some(p) = &req.path {
-            ui.label(format!("元ファイル: {}", p.display()));
+            ui.label(format!("Original file: {}", p.display()));
         } else {
-            ui.colored_label(style::CUT, "元ファイルの場所が不明です。再選択してください");
+            ui.colored_label(style::CUT, "Original file location unknown. Please pick it again");
         }
         if let Some(j) = &req.job {
-            ui.label(format!("再計算中 {:.0}% / {:.1}秒", j.ctl.progress.load(Ordering::Relaxed) as f32 / 10.0, j.started.elapsed().as_secs_f64()));
-            if ui.button("中止").clicked() {
+            ui.label(format!(
+                "Recalculating {:.0}% / {:.1} sec",
+                j.ctl.progress.load(Ordering::Relaxed) as f32 / 10.0,
+                j.started.elapsed().as_secs_f64()
+            ));
+            if ui.button("Stop").clicked() {
                 j.ctl.cancel.store(true, Ordering::Relaxed);
             }
         } else {
             ui.horizontal(|ui| {
-                if ui.button("元ファイルを選び直す…").clicked() {
+                if ui.button("Pick original file again…").clicked() {
                     pick = true;
                 }
-                if ui.add_enabled(req.path.is_some() && e.nodes <= remaining, egui::Button::new("再ベイク開始")).clicked() {
+                if ui.add_enabled(req.path.is_some() && e.nodes <= remaining, egui::Button::new("Start re-bake")).clicked() {
                     start = true;
                 }
-                if ui.button("閉じる").clicked() {
+                if ui.button("Close").clicked() {
                     close = true;
                 }
             });
@@ -248,7 +252,7 @@ fn rebake_panel(app: &mut App, ctx: &egui::Context) {
         }
     });
     if pick {
-        if let Some(path) = rfd::FileDialog::new().add_filter("メッシュ", &mesh_import::EXTENSIONS).pick_file() {
+        if let Some(path) = rfd::FileDialog::new().add_filter("Mesh", &mesh_import::EXTENSIONS).pick_file() {
             req.path = Some(path);
         }
     }
@@ -286,9 +290,9 @@ fn id() -> egui::Id {
     egui::Id::new("mesh_import_card")
 }
 
-/// Menu entry "メッシュを読み込む…": ask for a file, then show the card.
+/// Menu entry "Import mesh…": ask for a file, then show the card.
 pub fn open(ctx: &egui::Context) {
-    let Some(path) = rfd::FileDialog::new().add_filter("メッシュ (STL・OBJ・3MF・PLY・GLB)", &mesh_import::EXTENSIONS).pick_file() else {
+    let Some(path) = rfd::FileDialog::new().add_filter("Mesh (STL, OBJ, 3MF, PLY, GLB)", &mesh_import::EXTENSIONS).pick_file() else {
         return;
     };
     open_path(ctx, path);
@@ -324,16 +328,16 @@ fn take_drops(ctx: &egui::Context) {
 }
 
 fn count_text(n: usize) -> String {
-    if n >= 10_000 { format!("{:.1}万", n as f64 / 1.0e4) } else { format!("{n}") }
+    if n >= 10_000 { format!("{:.1} x10K", n as f64 / 1.0e4) } else { format!("{n}") }
 }
 
 fn time_text(s: f64) -> String {
     if s < 1.5 {
-        "1秒くらい".into()
+        "about 1 sec".into()
     } else if s < 90.0 {
-        format!("{s:.0}秒くらい")
+        format!("about {s:.0} sec")
     } else {
-        format!("{:.0}分くらい", s / 60.0)
+        format!("about {:.0} min", s / 60.0)
     }
 }
 
@@ -347,7 +351,7 @@ fn size_text(s: [f32; 3]) -> String {
 
 /// Friendly words for an error from the readers or the bake.
 fn jp_error(e: &str) -> String {
-    if e == ERR_CANCEL { "やめました".into() } else { e.to_string() }
+    if e == ERR_CANCEL { "Cancelled".into() } else { e.to_string() }
 }
 
 fn start_bake(d: &mut Dlg) {
@@ -363,11 +367,11 @@ fn start_bake(d: &mut Dlg) {
 /// The shape and group of a baked mesh go into the scene. Returns whether the card can close.
 fn finish(app: &mut App, ctx: &egui::Context, b: &BakeJob, baked: &Baked) -> bool {
     if app.scene.groups.len() >= MAX_GROUPS {
-        app.say(ctx, format!("グループは{MAX_GROUPS}個までです"));
+        app.say(ctx, format!("Up to {MAX_GROUPS} groups"));
         return false;
     }
     if app.scene.shape_count() >= MAX_SHAPES {
-        app.say(ctx, format!("形は{MAX_SHAPES}個までです"));
+        app.say(ctx, format!("Up to {MAX_SHAPES} shapes"));
         return false;
     }
     if let Some(why) = mesh_import::refuse(&app.scene, baked.volume.nodes()) {
@@ -392,7 +396,7 @@ fn finish(app: &mut App, ctx: &egui::Context, b: &BakeJob, baked: &Baked) -> boo
     app.sel = Some(Pick::Shape(gi, 0));
     app.frame_view(true);
     let secs = baked.stats.bvh_secs + baked.stats.sign_secs + baked.stats.dist_secs;
-    app.say(ctx, format!("メッシュを入れました: {}（{}・{:.1}秒）", b.loaded.file_name, size_text(baked.size), secs));
+    app.say(ctx, format!("Added mesh: {} ({} · {:.1} sec)", b.loaded.file_name, size_text(baked.size), secs));
     true
 }
 
@@ -439,15 +443,13 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
     egui::Area::new(egui::Id::new("mesh_import_area")).order(egui::Order::Foreground).anchor(Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
         style::card().show(ui, |ui| {
             ui.set_width(380.0);
-            ui.label(RichText::new("メッシュを読み込む").strong().size(15.0));
-            ui.label(
-                RichText::new("STL・OBJ・3MF・PLY・GLB の立体を、ほかの形と同じようにとかしたり くり抜いたりできます").size(11.5).color(style::DIM),
-            );
+            ui.label(RichText::new("Import mesh").strong().size(15.0));
+            ui.label(RichText::new("Loads STL, OBJ, 3MF, PLY and GLB solids. Melt or cut them like other shapes").size(11.5).color(style::DIM));
             ui.add_space(4.0);
             if let Some(b) = d.bake.clone() {
                 baking(ui, &b);
             } else if busy_read {
-                ui.label(RichText::new("ファイルを読んでいます…").color(style::DIM));
+                ui.label(RichText::new("Reading the file…").color(style::DIM));
                 if let Some((_, p)) = &d.reading {
                     ui.label(RichText::new(p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()).size(11.5).color(style::DIM));
                 }
@@ -461,28 +463,28 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
             ui.add_space(4.0);
             ui.horizontal(|ui| {
                 if d.bake.is_some() {
-                    if style::pill(ui, "中止", false).clicked()
+                    if style::pill(ui, "Stop", false).clicked()
                         && let Some(b) = &d.bake
                     {
                         b.ctl.cancel.store(true, Ordering::Relaxed);
                     }
                 } else {
                     ui.add_enabled_ui(d.loaded.is_some(), |ui| {
-                        let b = egui::Button::new(RichText::new("読みこむ").strong().color(Color32::WHITE))
+                        let b = egui::Button::new(RichText::new("Load").strong().color(Color32::WHITE))
                             .fill(style::ACCENT_SOFT)
                             .stroke(Stroke::new(1.0, style::ACCENT));
                         if ui.add(b).clicked() {
                             go = true;
                         }
                     });
-                    if ui.button("やめる").clicked() {
+                    if ui.button("Cancel").clicked() {
                         close = true;
                     }
                 }
             });
         });
     });
-    if pick && let Some(p) = rfd::FileDialog::new().add_filter("メッシュ", &mesh_import::EXTENSIONS).pick_file() {
+    if pick && let Some(p) = rfd::FileDialog::new().add_filter("Mesh", &mesh_import::EXTENSIONS).pick_file() {
         ctx.data_mut(|m| m.insert_temp(id(), d));
         open_path(ctx, p);
         return;
@@ -512,8 +514,8 @@ fn estimate_of(l: &Loaded, st: &Settings) -> mesh_import::Estimate {
 }
 
 fn baking(ui: &mut egui::Ui, b: &BakeJob) {
-    ui.label(RichText::new(format!("かたちをはかっています… {}", b.loaded.file_name)).size(13.0));
-    ui.label(RichText::new("まわりの空間までの きょりを 計算しています").size(11.5).color(style::DIM));
+    ui.label(RichText::new(format!("Measuring the shape… {}", b.loaded.file_name)).size(13.0));
+    ui.label(RichText::new("Calculating distance to the surrounding space").size(11.5).color(style::DIM));
     let frac = (b.ctl.progress.load(Ordering::Relaxed) as f32 / 1000.0).clamp(0.0, 1.0);
     let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 10.0), egui::Sense::hover());
     ui.painter().rect_filled(rect, 5.0, style::PANEL_DARK);
@@ -521,32 +523,31 @@ fn baking(ui: &mut egui::Ui, b: &BakeJob) {
     if w > 1.0 {
         ui.painter().rect_filled(egui::Rect::from_min_size(rect.min, egui::vec2(w, rect.height())), 5.0, style::ACCENT);
     }
-    ui.label(RichText::new(format!("{:.0}%　{:.0}秒", frac * 100.0, b.started.elapsed().as_secs_f64())).size(11.5).color(style::DIM));
+    ui.label(RichText::new(format!("{:.0}%  {:.0} sec", frac * 100.0, b.started.elapsed().as_secs_f64())).size(11.5).color(style::DIM));
 }
 
 fn options(ui: &mut egui::Ui, d: &mut Dlg, app: &App, pick: &mut bool) {
     ui.horizontal(|ui| {
-        if style::pill(ui, "ファイルをえらぶ…", false).clicked() {
+        if style::pill(ui, "Choose file…", false).clicked() {
             *pick = true;
         }
     });
-    ui.label(RichText::new("（ファイルを ここにドラッグしてもOK）").size(11.0).color(style::DIM));
+    ui.label(RichText::new("(You can also drag a file here)").size(11.0).color(style::DIM));
     let Some(l) = d.loaded.clone() else { return };
     ui.add_space(2.0);
     let imp = &l.imported;
-    let dropped =
-        if imp.dropped_triangles > 0 { format!("（面積のない {} 個はのぞきました）", imp.dropped_triangles) } else { String::new() };
+    let dropped = if imp.dropped_triangles > 0 { format!("({} zero-area removed)", imp.dropped_triangles) } else { String::new() };
     ui.label(
-        RichText::new(format!("{}　{}　三角形 {}{}", l.file_name, imp.format.label(), count_text(imp.mesh.triangles.len()), dropped)).size(12.5),
+        RichText::new(format!("{} · {} · triangles {}{}", l.file_name, imp.format.label(), count_text(imp.mesh.triangles.len()), dropped)).size(12.5),
     );
     let y_up = d.st.up.is_y(imp.format);
-    ui.label(RichText::new(format!("もとの大きさ {}", size_text(mesh_import::upright_size(l.size, y_up)))).size(11.5).color(style::DIM));
+    ui.label(RichText::new(format!("Original size {}", size_text(mesh_import::upright_size(l.size, y_up)))).size(11.5).color(style::DIM));
     for n in &imp.notes {
-        ui.label(RichText::new(format!("・{n}")).size(11.5).color(style::KEEP));
+        ui.label(RichText::new(format!("· {n}")).size(11.5).color(style::KEEP));
     }
     ui.add_space(2.0);
     egui::Grid::new("mesh_import_grid").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
-        ui.label(RichText::new("目標の大きさ").color(style::DIM));
+        ui.label(RichText::new("Target size").color(style::DIM));
         ui.horizontal(|ui| {
             ui.add(
                 egui::DragValue::new(&mut d.st.target_mm)
@@ -555,14 +556,13 @@ fn options(ui: &mut egui::Ui, d: &mut Dlg, app: &App, pick: &mut bool) {
                     .suffix(" mm")
                     .max_decimals(1),
             )
-            .on_hover_text("いちばん長い辺の長さ");
-            if style::pill(ui, "もとの大きさ", false).on_hover_text("ファイルの大きさのまま（200mmより大きいときは200mm）").clicked()
-            {
+            .on_hover_text("Length of the longest side");
+            if style::pill(ui, "Original size", false).on_hover_text("Keeps the file's size (capped at 200 mm if bigger)").clicked() {
                 d.st.target_mm = mesh_import::default_target(l.size);
             }
         });
         ui.end_row();
-        ui.label(RichText::new("向き").color(style::DIM));
+        ui.label(RichText::new("Orientation").color(style::DIM));
         let items: Vec<(&str, &str)> = Up::ALL.iter().map(|u| (u.label(), u.hint())).collect();
         let cur = Up::ALL.iter().position(|u| *u == d.st.up);
         if let Some(i) = style::segmented(ui, "mesh_up", &items, cur, false)
@@ -573,16 +573,15 @@ fn options(ui: &mut egui::Ui, d: &mut Dlg, app: &App, pick: &mut bool) {
         ui.end_row();
         ui.label("");
         ui.vertical(|ui| {
-            style::checkbox(ui, &mut d.st.floor, "床に置く").on_hover_text("いちばん下を 床（高さ0）にそろえます");
-            style::checkbox(ui, &mut d.st.centre, "まんなかに置く")
-                .on_hover_text("いま見ている場所の まんなかに置きます。切ると、ファイルの位置のまま");
+            style::checkbox(ui, &mut d.st.floor, "Place on floor").on_hover_text("Lines the bottom up with the floor (height 0)");
+            style::checkbox(ui, &mut d.st.centre, "Centre it").on_hover_text("Puts it in the middle of the view. Off keeps the file's position");
         });
         ui.end_row();
-        ui.label(RichText::new("細かさ").color(style::DIM));
+        ui.label(RichText::new("Detail").color(style::DIM));
         ui.horizontal(|ui| {
             for r in RES_CHOICES {
                 if style::pill(ui, &r.to_string(), d.st.res == r)
-                    .on_hover_text("いちばん長い辺を 何マスに分けるか。大きいほど きれいで、重くなります")
+                    .on_hover_text("Cells across the longest side. Bigger is smoother but heavier")
                     .clicked()
                 {
                     d.st.res = r;
@@ -595,7 +594,7 @@ fn options(ui: &mut egui::Ui, d: &mut Dlg, app: &App, pick: &mut bool) {
     let refuse = mesh_import::refuse(&app.scene, e.nodes);
     let col = if refuse.is_some() { style::CUT } else { style::DIM };
     ui.label(
-        RichText::new(format!("目安: {}・ファイル {}・マス {}", time_text(e.secs), bytes_text(e.bytes), count_text(e.nodes))).size(11.5).color(col),
+        RichText::new(format!("About {} · file {} · cells {}", time_text(e.secs), bytes_text(e.bytes), count_text(e.nodes))).size(11.5).color(col),
     );
     if let Some(why) = refuse {
         ui.label(RichText::new(why).size(11.5).color(style::CUT));
@@ -605,20 +604,20 @@ fn options(ui: &mut egui::Ui, d: &mut Dlg, app: &App, pick: &mut bool) {
 /// The part of the inspector for a mesh shape: where it came from, how big it is, how fine.
 pub fn inspector(ui: &mut egui::Ui, sh: &mut crate::model::Shape) {
     ui.horizontal_wrapped(|ui| {
-        ui.label(RichText::new("もとのファイル").color(style::DIM).size(12.0));
-        ui.label(RichText::new(if sh.source.is_empty() { "（不明）" } else { &sh.source }).size(12.0));
+        ui.label(RichText::new("Original file").color(style::DIM).size(12.0));
+        ui.label(RichText::new(if sh.source.is_empty() { "(unknown)" } else { &sh.source }).size(12.0));
     });
     let now = [sh.size[0] * sh.scale[0], sh.size[1] * sh.scale[1], sh.size[2] * sh.scale[2]];
     ui.horizontal_wrapped(|ui| {
-        ui.label(RichText::new("大きさ").color(style::DIM).size(12.0));
+        ui.label(RichText::new("Size").color(style::DIM).size(12.0));
         ui.label(RichText::new(size_text(now)).size(12.0));
     });
     if let Some(v) = &sh.volume {
         ui.horizontal_wrapped(|ui| {
-            ui.label(RichText::new("細かさ").color(style::DIM).size(12.0));
+            ui.label(RichText::new("Detail").color(style::DIM).size(12.0));
             ui.label(
                 RichText::new(format!(
-                    "保存セル {:.3}mm / 実セル X {:.3} Y {:.3} Z {:.3} mm　{}×{}×{}",
+                    "Saved cell {:.3} mm / actual cell X {:.3} Y {:.3} Z {:.3} mm  {}×{}×{}",
                     v.cell,
                     v.cell * sh.scale[0],
                     v.cell * sh.scale[1],
@@ -631,13 +630,13 @@ pub fn inspector(ui: &mut egui::Ui, sh: &mut crate::model::Shape) {
             );
         });
     } else {
-        ui.label(RichText::new("データがありません").size(12.0).color(style::CUT));
+        ui.label(RichText::new("No data").size(12.0).color(style::CUT));
     }
-    if sh.volume.is_some() && ui.button("解像度を上げる / 再ベイク…").clicked() {
+    if sh.volume.is_some() && ui.button("Raise resolution / re-bake…").clicked() {
         // The inspector is invoked from the selected shape; resolve its location in panel code.
         ui.ctx().data_mut(|m| m.insert_temp(egui::Id::new("rebake_inspector_clicked"), true));
     }
-    if sh.scale != [1.0; 3] && style::pill(ui, "もとの大きさにもどす", false).clicked() {
+    if sh.scale != [1.0; 3] && style::pill(ui, "Restore original size", false).clicked() {
         sh.scale = [1.0; 3];
     }
 }
@@ -668,7 +667,7 @@ mod tests {
     fn the_card_reads_a_file_bakes_it_and_adds_a_selected_mesh_in_a_new_group() {
         let dir = std::env::temp_dir().join(format!("meltcad_card_{}", std::process::id()));
         let _ = std::fs::create_dir_all(&dir);
-        let path = dir.join("かたまり.stl");
+        let path = dir.join("Solid.stl");
         std::fs::write(&path, mesh_import::tests::sample_stl()).unwrap();
         let ctx = egui::Context::default();
         let mut app = App::new(true, None);
@@ -678,7 +677,7 @@ mod tests {
         pump(&mut app, &ctx, |_| ctx.data(|m| m.get_temp::<Dlg>(id())).is_some_and(|d| d.loaded.is_some()));
         let d = ctx.data(|m| m.get_temp::<Dlg>(id())).unwrap();
         let l = d.loaded.clone().expect("the file was read");
-        assert_eq!(l.file_name, "かたまり.stl");
+        assert_eq!(l.file_name, "Solid.stl");
         assert!(l.imported.mesh.triangles.len() > 100 && d.msg.is_empty(), "{}", d.msg);
         // options: smaller and coarse so the test is quick
         let mut d = d;
@@ -695,7 +694,7 @@ mod tests {
         let sh = app.scene.groups[g].shapes[0].clone();
         assert_eq!(sh.kind, Kind::Mesh);
         assert!(sh.volume.is_some());
-        assert_eq!((sh.source.as_str(), app.scene.groups[g].name.as_str()), ("かたまり.stl", "かたまり"));
+        assert_eq!((sh.source.as_str(), app.scene.groups[g].name.as_str()), ("Solid.stl", "Solid"));
         assert!((sh.pos[0] - 40.0).abs() < 1e-3 && (sh.pos[1] + 10.0).abs() < 1e-3, "at the view's middle: {:?}", sh.pos);
         assert!((sh.pos[2] - sh.size[2] * 0.5).abs() < 1e-3, "on the floor");
         assert!(sh.size.iter().cloned().fold(0.0, f32::max) > 29.0 && sh.size.iter().cloned().fold(0.0, f32::max) < 31.0);
@@ -743,7 +742,7 @@ mod tests {
         pump(&mut app, &ctx, |_| ctx.data(|m| m.get_temp::<Dlg>(id())).is_some_and(|d| d.bake.is_none()));
         let d = ctx.data(|m| m.get_temp::<Dlg>(id())).unwrap();
         assert_eq!(app.scene.shape_count(), 1, "nothing was added");
-        assert!(d.msg == "やめました" || d.loaded.is_some(), "{}", d.msg);
+        assert!(d.msg == "Cancelled" || d.loaded.is_some(), "{}", d.msg);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

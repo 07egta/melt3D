@@ -42,7 +42,7 @@ pub fn default_directory() -> PathBuf {
 }
 
 fn size_error() -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidData, "ファイルが128 MiBの安全上限を超えています")
+    io::Error::new(io::ErrorKind::InvalidData, "The file is over the 128 MiB safety limit")
 }
 
 fn read_limited(path: &Path) -> io::Result<Vec<u8>> {
@@ -60,7 +60,7 @@ fn read_limited(path: &Path) -> io::Result<Vec<u8>> {
 
 fn parse_scene(text: &str) -> Result<(Scene, Vec<String>), String> {
     // A damaged design must never unwind through the event loop.
-    std::panic::catch_unwind(|| Scene::from_json_notes(text)).map_err(|_| "破損した作品データの読み取りが中断されました".to_owned())?
+    std::panic::catch_unwind(|| Scene::from_json_notes(text)).map_err(|_| "Reading the damaged design data was stopped".to_owned())?
 }
 
 pub fn read_project(path: &Path) -> Result<(Scene, Vec<String>), String> {
@@ -81,7 +81,7 @@ fn atomic_write_with<F: FnOnce(&Path) -> io::Result<()>>(path: &Path, bytes: &[u
         return Err(size_error());
     }
     let parent = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or_else(|| Path::new("."));
-    let name = path.file_name().ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "保存先のファイル名がありません"))?;
+    let name = path.file_name().ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "The save location has no file name"))?;
     for _ in 0..16 {
         let mut tmp_name = OsString::from(".");
         tmp_name.push(name);
@@ -110,7 +110,7 @@ fn atomic_write_with<F: FnOnce(&Path) -> io::Result<()>>(path: &Path, bytes: &[u
         }
         return result;
     }
-    Err(io::Error::new(io::ErrorKind::AlreadyExists, "一時ファイルを作成できません"))
+    Err(io::Error::new(io::ErrorKind::AlreadyExists, "Could not create a temp file"))
 }
 
 pub fn save_project(path: &Path, scene: &Scene) -> Result<(), String> {
@@ -139,12 +139,12 @@ fn checksum(bytes: &[u8]) -> u64 {
 
 pub fn read_snapshot(path: &Path) -> Result<(Scene, Vec<String>, Option<String>), String> {
     let bytes = read_limited(path).map_err(|e| e.to_string())?;
-    let snapshot: Snapshot = serde_json::from_slice(&bytes).map_err(|e| format!("復旧ファイルの形式が不正です: {e}"))?;
+    let snapshot: Snapshot = serde_json::from_slice(&bytes).map_err(|e| format!("Recovery file format is invalid: {e}"))?;
     if snapshot.version != FORMAT_VERSION {
-        return Err(format!("未対応の復旧データ形式: {}", snapshot.version));
+        return Err(format!("Unsupported recovery data format: {}", snapshot.version));
     }
     if checksum(snapshot.payload.as_bytes()) != snapshot.checksum {
-        return Err("復旧データのチェックサムが一致しません（破損の可能性）".into());
+        return Err("Recovery data checksum does not match (may be damaged)".into());
     }
     let (scene, notes) = parse_scene(&snapshot.payload)?;
     Ok((scene, notes, snapshot.source))
@@ -210,7 +210,7 @@ impl Store {
     /// the recovered work has been explicitly saved or discarded.
     pub fn recover_pending(&mut self) -> Result<(Scene, Vec<String>, Option<String>), String> {
         let Some(path) = self.pending.first() else {
-            return Err("復旧ファイルが見つかりません".into());
+            return Err("Recovery file not found".into());
         };
         let restored = read_snapshot(path)?;
         self.restored_from = Some(path.clone());
@@ -282,7 +282,7 @@ mod tests {
 
     fn edited() -> Scene {
         let mut scene = Scene::default();
-        scene.groups.push(crate::model::Group::new("追加のグループ"));
+        scene.groups.push(crate::model::Group::new("Added group"));
         scene
     }
 
