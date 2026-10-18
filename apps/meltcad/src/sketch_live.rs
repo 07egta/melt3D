@@ -192,6 +192,21 @@ impl App {
         }
     }
 
+    /// Take the live solid back and show the "Ready" card for the same outline (the way to add
+    /// holes). Does nothing when no solid is live.
+    pub(crate) fn live_to_ready(&mut self) {
+        if self.sk.live.is_none() {
+            return;
+        }
+        let (profile, pframe) = (self.sk.profile.clone(), self.sk.pframe);
+        self.live_discard();
+        self.sk.profile = profile;
+        self.sk.pframe = pframe;
+        self.sk.frame = pframe;
+        self.sk.make = Make::Extrude;
+        self.sk.stage = Stage::Ready;
+    }
+
     /// A strip button was pressed: make `m` the way of making (changing the live solid in place
     /// when it is a prism and so is `m`).
     pub(crate) fn sketch_choose_make(&mut self, m: Make) {
@@ -411,9 +426,7 @@ impl App {
             self.sk.stage = Stage::LoftTop;
         } else if hole {
             // the old way: the same outline, with the card that can hold holes
-            self.live_discard();
-            self.sk.make = Make::Extrude;
-            self.sk.stage = Stage::Ready;
+            self.live_to_ready();
         } else if accept {
             self.live_accept(ctx);
         } else if discard {

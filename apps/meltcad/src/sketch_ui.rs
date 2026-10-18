@@ -289,6 +289,13 @@ pub struct State {
     pub handle_drag: bool,
     /// The plane was chosen by hand (it is not picked automatically any more).
     pub plane_manual: bool,
+    /// The viewport waits for a plane to be picked: the first click on a face or the ground
+    /// chooses the plane and places the first point.
+    pub picking: bool,
+    /// The plane under the mouse while picking (and whether it is a face of a shape).
+    pub hover_frame: Option<(Frame, bool, V3)>,
+    /// The chosen plane came from a face: its grid is a square around the picked point.
+    pub plane_square: bool,
 }
 
 impl Default for State {
@@ -333,6 +340,9 @@ impl Default for State {
             live_sel: None,
             handle_drag: false,
             plane_manual: false,
+            picking: false,
+            hover_frame: None,
+            plane_square: false,
         }
     }
 }
@@ -624,10 +634,14 @@ impl App {
             self.ct.drawing = false;
             self.set_pipe_tool(false);
             self.sk.frame = self.sketch_plane();
-            let f = self.sk.frame;
-            self.sketch_fly(&f);
+            // the viewport waits for a click on a face or the ground (no glide until then)
+            self.sk.picking = true;
+            self.sk.hover_frame = None;
+            self.sk.plane_square = false;
         } else {
             self.sk.plane_manual = false;
+            self.sk.picking = false;
+            self.sk.hover_frame = None;
         }
     }
 
@@ -726,6 +740,9 @@ impl App {
         let interrupted = !self.sk.pts.is_empty() || self.sk.anchor.is_some();
         self.sk.plane = plane;
         self.sk.plane_manual = true;
+        self.sk.picking = false;
+        self.sk.hover_frame = None;
+        self.sk.plane_square = false;
         self.sk.clear_drawing();
         self.sk.frame = self.sketch_plane();
         self.sk.msg = if interrupted {
@@ -1045,6 +1062,15 @@ impl App {
             Stage::Ready | Stage::LoftTop | Stage::Hole | Stage::Shape => self.sk.frame = self.sk.pframe,
             _ if self.sk.pts.is_empty() && self.sk.anchor.is_none() => self.sk.frame = self.sketch_plane(),
             _ => {}
+        }
+        if self.picking_now() {
+            // the first click picks the plane and (below) goes on to place the first point
+            self.plane_pick_input(ui, resp, rect, pos, mods);
+            if self.picking_now() {
+                out.over = self.sk.hover_frame.is_some();
+                out.taken = pos.is_some() && (resp.clicked_by(egui::PointerButton::Primary) || resp.secondary_clicked());
+                return out;
+            }
         }
         let frame = self.sk.frame;
         let step = step_for(mods);
@@ -1680,6 +1706,10 @@ impl App {
         if !self.sk.on {
             return;
         }
+        if self.picking_now() {
+            self.paint_pick(p, rect);
+            return;
+        }
         let f = self.sk.frame;
         self.paint_grid(p, rect, &f);
         let st = &self.sk;
@@ -1787,6 +1817,12 @@ impl App {
             lo[i] = lo[i].max(centre[i] - cap).max(-sketch::COORD_MAX);
             hi[i] = hi[i].min(centre[i] + cap).min(sketch::COORD_MAX);
         }
+        // a plane picked on a face: a square around the picked point (visible at any distance)
+        if self.sk.on && self.sk.plane_square && self.sk.plane == PlaneSel::Custom && f.origin == self.sk.custom_frame.origin {
+            let half = (reach * 0.8).clamp(40.0, 1500.0);
+            lo = [-half; 2];
+            hi = [half; 2];
+        }
         let mm_px = self.cam.mm_per_px(f.to_world(centre), rect.height()).max(1e-4);
         let mut step = nice_step(mm_px * 26.0);
         while ((hi[0] - lo[0]) / step > 90.0 || (hi[1] - lo[1]) / step > 90.0) && step < 1e5 {
@@ -1814,6 +1850,7 @@ impl App {
             y += step;
             guard += 1;
         }
+        self.paint_plane_axes(p, rect, f);
         // the axis a revolve turns about
         if f.is_vertical() && lo[0] <= 0.0 && hi[0] >= 0.0 {
             line([0.0, lo[1]], [0.0, hi[1]], style::ACCENT.gamma_multiply(0.5), 1.4);
@@ -2184,7 +2221,25 @@ impl App {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
                 let cur = self.sk.plane;
-                let r = style::wide_button(ui, cur.label(), cur.tip(), false, None, |p, r, ink| crate::sketch_icons::plane(p, r, cur, ink));
+                // the quick planes, then "pick on screen": one click each
+                let mut quick = None;
+                for pl in [PlaneSel::Floor, PlaneSel::Front, PlaneSel::Side, PlaneSel::Camera] {
+                    let on = cur == pl && !self.sk.picking;
+                    if style::wide_button(ui, pl.label(), pl.tip(), on, None, |p, r, ink| crate::sketch_icons::plane(p, r, pl, ink)).clicked() {
+                        quick = Some(pl);
+                    }
+                }
+                if style::wide_button(ui, "Pick plane", "Click a face of a shape or the ground to draw on it", self.sk.picking, None, crate::sketch_icons::pick_plane)
+                    .clicked()
+                {
+                    self.sketch_repick();
+                }
+                if let Some(pl) = quick {
+                    self.sketch_set_plane(pl);
+                }
+                let r = style::wide_button(ui, "More planes", "More planes: on the selected shape, at a height, custom", false, None, |p, r, ink| {
+                    crate::sketch_icons::plane(p, r, PlaneSel::Custom, ink)
+                });
                 let mut picked = None;
                 let mut head_on = false;
                 let mut copy = false;
@@ -2226,6 +2281,9 @@ impl App {
                     self.sketch_copy_plane_to_custom();
                 }
             });
+        }
+        if plane_free && self.picking_now() {
+            hint(ui, "Click a face of a shape, or the ground, to start drawing there");
         }
         if plane_free && matches!(self.sk.plane, PlaneSel::Height | PlaneSel::Custom) {
             self.sketch_plane_settings(ui);
@@ -2563,7 +2621,7 @@ fn point_dot(p: &Painter, c: Pos2, r: f32, lit: bool) {
 }
 
 /// A small label with a dark plate.
-fn tag(p: &Painter, at: Pos2, text: &str) {
+pub(crate) fn tag(p: &Painter, at: Pos2, text: &str) {
     let g = p.layout_no_wrap(text.to_string(), FontId::proportional(11.5), style::TEXT);
     let r = Rect::from_min_size(at, g.size()).expand2(vec2(5.0, 2.0));
     p.rect_filled(r, 4.0, Color32::from_black_alpha(160));
@@ -2619,6 +2677,13 @@ mod tests {
         for p in pts {
             assert!(st.click(*p, false).is_none());
         }
+    }
+
+    /// Finish a gesture the way the old card flow did: the outline stays "Ready" (no live solid),
+    /// for tests that set the height or the holes before making the shape.
+    fn done_ready(app: &mut App, d: Finished) {
+        app.sketch_done(d);
+        app.live_to_ready();
     }
 
     #[test]
@@ -2795,11 +2860,11 @@ mod tests {
         let mut app = app();
         app.scene.groups.clear();
         app.set_sketch_tool(true);
-        app.sketch_done(Finished::Profile(sketch::rect([-24.0, -20.0], [24.0, 20.0])));
+        done_ready(&mut app, Finished::Profile(sketch::rect([-24.0, -20.0], [24.0, 20.0])));
         app.sk.stage = Stage::Hole;
-        app.sketch_done(Finished::Profile(sketch::circle([-11.0, 0.0], 5.0, sketch::CIRCLE_POINTS)));
+        done_ready(&mut app, Finished::Profile(sketch::circle([-11.0, 0.0], 5.0, sketch::CIRCLE_POINTS)));
         app.sk.stage = Stage::Hole;
-        app.sketch_done(Finished::Profile(sketch::rect([8.0, -6.0], [16.0, 6.0])));
+        done_ready(&mut app, Finished::Profile(sketch::rect([8.0, -6.0], [16.0, 6.0])));
         assert_eq!(app.sk.holes.len(), 2);
         app.sk.height = 8.0;
         app.sk.make = Make::Extrude;
@@ -2838,7 +2903,7 @@ mod tests {
             app.scene.groups.clear();
             app.sk.reset();
             app.sk.on = true;
-            app.sketch_done(Finished::Profile(sketch::rect([-25.0, -20.0], [25.0, 20.0])));
+            done_ready(&mut app, Finished::Profile(sketch::rect([-25.0, -20.0], [25.0, 20.0])));
             app.sk.holes = holes.clone();
             app.sk.make = Make::Extrude;
             app.sk.height = 8.0;
@@ -2873,13 +2938,14 @@ mod tests {
     fn a_profile_becomes_each_kind_of_solid_in_the_right_group() {
         let ctx = egui::Context::default();
         let mut app = app();
+        app.sel = None;
         app.set_sketch_tool(true);
-        assert!(app.sk.on && app.fly.is_some(), "the camera glides to look at the plane");
+        assert!(app.sk.on && app.picking_now(), "the viewport waits for a plane to be picked");
         let n = app.scene.shape_count();
         app.sk.pen = Pen::Rect;
         app.sk.click([10.0, 10.0], false);
         let p = app.sk.click([40.0, 30.0], false);
-        app.sketch_done(p.expect("a profile"));
+        done_ready(&mut app, p.expect("a profile"));
         assert_eq!(app.sk.stage, Stage::Ready);
         // 押し出し
         app.sk.make = Make::Extrude;
@@ -2897,7 +2963,7 @@ mod tests {
         app.sk.pen = Pen::Polygon;
         click_all(&mut app.sk, &[[10.0, 0.0], [25.0, 0.0], [20.0, 40.0], [10.0, 40.0]]);
         let p = app.sk.enter().expect("closed");
-        app.sketch_done(p);
+        done_ready(&mut app, p);
         app.sk.make = Make::Revolve;
         assert!(app.sketch_make(&ctx));
         let Some(Pick::Shape(g, s)) = app.sel else { panic!("selected") };
@@ -2909,7 +2975,7 @@ mod tests {
         app.sk.pen = Pen::Circle;
         app.sk.press([0.0, 0.0]);
         let c = app.sk.release([10.0, 0.0]).expect("a circle");
-        app.sketch_done(c);
+        done_ready(&mut app, c);
         app.sk.make = Make::Loft;
         app.sk.loft_top = LoftTop::Scaled;
         app.sk.loft_scale = 0.5;
@@ -2935,7 +3001,7 @@ mod tests {
         app.sk.pen = Pen::Circle;
         app.sk.press([0.0, 0.0]);
         let c = app.sk.release([6.0, 0.0]).expect("a circle");
-        app.sketch_done(c);
+        done_ready(&mut app, c);
         // no path yet: nothing is made
         app.sk.make = Make::Sweep;
         assert!(!app.sketch_make(&ctx));
@@ -2946,7 +3012,7 @@ mod tests {
         assert_eq!(app.sk.active_pen(), Pen::Line, "a path is always a line");
         click_all(&mut app.sk, &[[0.0, 0.0], [0.0, 30.0], [30.0, 50.0]]);
         let l = app.sk.enter().expect("a line");
-        app.sketch_done(l);
+        done_ready(&mut app, l);
         assert_eq!((app.sk.stage, app.sk.make), (Stage::Ready, Make::Sweep));
         assert_eq!(app.sk.frame, app.sk.pframe, "back on the profile's plane");
         let n = app.scene.shape_count();
@@ -2963,7 +3029,7 @@ mod tests {
         app.sk.pen = Pen::Rect;
         app.sk.click([0.0, 0.0], false);
         let p = app.sk.click([20.0, 20.0], false).expect("rect");
-        app.sketch_done(p);
+        done_ready(&mut app, p);
         app.sk.make = Make::Loft;
         app.sk.loft_top = LoftTop::Drawn;
         app.sk.stage = Stage::LoftTop;
@@ -2971,7 +3037,7 @@ mod tests {
         app.sk.pen = Pen::Circle;
         app.sk.click([10.0, 10.0], false);
         let c = app.sk.click([15.0, 10.0], false).expect("circle");
-        app.sketch_done(c);
+        done_ready(&mut app, c);
         assert_eq!((app.sk.stage, app.sk.profile2.len()), (Stage::Ready, sketch::CIRCLE_POINTS));
         assert!(app.sketch_make(&ctx));
         let Some(Pick::Shape(g, s)) = app.sel else { panic!("selected") };
@@ -2982,6 +3048,7 @@ mod tests {
     #[test]
     fn height_and_custom_planes_can_be_reselected_without_coordinate_drift() {
         let mut app = app();
+        app.sel = None;
         app.set_sketch_tool(true);
         assert_eq!(app.sketch_plane(), Frame::floor());
         app.sketch_set_plane(PlaneSel::Height);
@@ -3098,7 +3165,7 @@ mod tests {
         app.sk.pen = Pen::Rect;
         app.sk.click([-5.0, -5.0], false);
         let p = app.sk.click([5.0, 5.0], false).expect("rect");
-        app.sketch_done(p);
+        done_ready(&mut app, p);
         app.sk.height = 10.0;
         assert!(app.sketch_make(&ctx));
         let Some(Pick::Shape(g, s)) = app.sel else { panic!("selected") };
@@ -3192,11 +3259,12 @@ mod tests {
     fn an_outline_is_edited_in_the_viewport_with_undo() {
         let ctx = egui::Context::default();
         let mut app = app();
+        app.sel = None;
         app.set_sketch_tool(true);
         app.sk.pen = Pen::Rect;
         app.sk.click([0.0, 0.0], false);
         let p = app.sk.click([20.0, 20.0], false).expect("rect");
-        app.sketch_done(p);
+        done_ready(&mut app, p);
         assert!(app.sketch_make(&ctx));
         app.settle(&ctx);
         let Some(Pick::Shape(g, s)) = app.sel else { panic!("selected") };
@@ -3357,7 +3425,7 @@ mod tests {
         ctx.input_mut(|i| i.events.clear());
         key(egui::Key::Enter);
         app.sketch_keys(&ctx);
-        assert_eq!(app.sk.stage, Stage::Ready);
+        assert_eq!(app.sk.stage, Stage::Shape, "the closed outline is a live solid");
     }
 
     #[test]
