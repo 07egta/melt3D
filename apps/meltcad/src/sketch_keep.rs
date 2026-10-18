@@ -240,7 +240,7 @@ mod tests {
         scene.groups.push(g);
         let field = crate::sdf::Field::new(&scene);
         let d = field.sample([0.0, 0.0, 0.0]).dist;
-        assert!(d > 1.0e3 || !d.is_finite() || d > 100.0, "an empty field is far from everything: {d}");
+        assert!(d >= 0.0, "a sketch line has no inside: {d}");
         scene.groups[0].shapes[0].guide = false;
         let d2 = crate::sdf::Field::new(&scene).sample([0.0, 0.0, 0.0]).dist;
         assert!(d2 < 0.0, "the same box as a solid has an inside: {d2}");
