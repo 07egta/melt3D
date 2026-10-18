@@ -868,7 +868,9 @@ impl App {
                 self.ct.edit_nodes = !self.ct.edit_nodes;
             }
         });
-        ui.add(egui::Label::new(egui::RichText::new("Drag the + at an end to extend, the + between nodes to add").size(10.5).color(style::DIM)).wrap());
+        ui.add(
+            egui::Label::new(egui::RichText::new("Drag the + at an end to extend, the + between nodes to add").size(10.5).color(style::DIM)).wrap(),
+        );
         if is_curve {
             // Populate the optional handle array on first inspection so a
             // legacy shape can enter Smooth/Corner mode without any migration.
@@ -921,10 +923,7 @@ impl App {
                 ui.label(egui::RichText::new("Overall thickness").color(style::DIM).size(12.0));
                 ui.add(egui::DragValue::new(&mut sh.params[3]).speed(0.01).range(0.1..=5.0).suffix(" ×").max_decimals(2));
             });
-            if style::pill(ui, "Same thickness", false)
-                .on_hover_text("Match the selected node's thickness (or the first)")
-                .clicked()
-            {
+            if style::pill(ui, "Same thickness", false).on_hover_text("Match the selected node's thickness (or the first)").clicked() {
                 let r = sh.path.get(chosen.unwrap_or(0)).map(|p| p[3]).unwrap_or(5.0);
                 set_all_radii(&mut sh.path, r);
             }

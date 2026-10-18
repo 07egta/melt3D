@@ -118,14 +118,22 @@ pub fn swatch(ui: &mut egui::Ui, mode: ViewMode, size: f32, selected: bool) -> e
             };
             let to = |x: f32| (x.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
             let min = egui::pos2(c.x - rad + ix as f32 * cell, c.y - rad + iy as f32 * cell);
-            p.rect_filled(egui::Rect::from_min_size(min, egui::vec2(cell + 0.4, cell + 0.4)), 0.0, egui::Color32::from_rgb(to(col[0]), to(col[1]), to(col[2])));
+            p.rect_filled(
+                egui::Rect::from_min_size(min, egui::vec2(cell + 0.4, cell + 0.4)),
+                0.0,
+                egui::Color32::from_rgb(to(col[0]), to(col[1]), to(col[2])),
+            );
         }
     }
     if mode == ViewMode::UpDown {
         // (a sampled line this thin would be missed by the cells)
         p.line_segment([egui::pos2(c.x - rad, c.y), egui::pos2(c.x + rad, c.y)], egui::Stroke::new(1.6, egui::Color32::from_rgb(26, 77, 255)));
     }
-    let ring = if selected { egui::Stroke::new(2.0, ui.visuals().selection.stroke.color) } else { egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color) };
+    let ring = if selected {
+        egui::Stroke::new(2.0, ui.visuals().selection.stroke.color)
+    } else {
+        egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color)
+    };
     p.circle_stroke(c, rad + 1.0, ring);
     resp
 }

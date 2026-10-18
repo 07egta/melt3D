@@ -317,7 +317,9 @@ impl App {
                 let (o, d) = self.cam.ray_at(rect, p);
                 let n = self.sk.pframe.normal();
                 let both = self.sk.both && self.sk.make == Make::Extrude;
-                if let Some((h, flip)) = along_line(o, d, base, n).and_then(|t| height_from(t, step)).map(|(h, f)| (if both { h * 2.0 } else { h }, f)) {
+                if let Some((h, flip)) =
+                    along_line(o, d, base, n).and_then(|t| height_from(t, step)).map(|(h, f)| (if both { h * 2.0 } else { h }, f))
+                {
                     if h != self.sk.height || flip != self.sk.flip {
                         self.sk.height = h;
                         self.sk.flip = flip;
@@ -336,7 +338,10 @@ impl App {
         }
         // nothing else to draw: clicks must not pick things behind the card
         if pos.is_some()
-            && (resp.clicked_by(egui::PointerButton::Primary) || resp.drag_started_by(egui::PointerButton::Primary) || resp.dragged_by(egui::PointerButton::Primary) || resp.secondary_clicked())
+            && (resp.clicked_by(egui::PointerButton::Primary)
+                || resp.drag_started_by(egui::PointerButton::Primary)
+                || resp.dragged_by(egui::PointerButton::Primary)
+                || resp.secondary_clicked())
         {
             out.taken = true;
         }
@@ -415,17 +420,34 @@ impl App {
                 }
             }
             if make == Make::Loft {
-                top = style::wide_button(ui, "Top outline", "Draw the top outline yourself", self.sk.loft_top == LoftTop::Drawn, None, crate::sketch_icons::pencil_top).clicked();
+                top = style::wide_button(
+                    ui,
+                    "Top outline",
+                    "Draw the top outline yourself",
+                    self.sk.loft_top == LoftTop::Drawn,
+                    None,
+                    crate::sketch_icons::pencil_top,
+                )
+                .clicked();
             }
             if make == Make::Extrude {
-                let both = style::wide_button(ui, "Both sides", "Grow equally to both sides of the plane", self.sk.both, None, crate::sketch_icons::both_sides).clicked();
+                let both = style::wide_button(
+                    ui,
+                    "Both sides",
+                    "Grow equally to both sides of the plane",
+                    self.sk.both,
+                    None,
+                    crate::sketch_icons::both_sides,
+                )
+                .clicked();
                 if both {
                     self.sk.both = !self.sk.both;
                     changed = true;
                 }
                 hole = style::wide_button(ui, "Holes", "Cut holes into this solid", false, None, crate::sketch_icons::hole).clicked();
             }
-            accept = style::wide_button(ui, "Done", "Keep it (Enter or right-click)", false, Some(style::ACCENT), crate::sketch_icons::check).clicked();
+            accept =
+                style::wide_button(ui, "Done", "Keep it (Enter or right-click)", false, Some(style::ACCENT), crate::sketch_icons::check).clicked();
             discard = style::wide_button(ui, "Discard", "Throw it away (Esc)", false, None, crate::sketch_icons::cross).clicked();
         });
         if !self.sk.msg.is_empty() {

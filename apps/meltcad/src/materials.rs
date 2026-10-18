@@ -274,7 +274,6 @@ pub fn swatch(painter: &Painter, centre: Pos2, radius: f32, m: &Material) {
     }
 }
 
-
 /// How heavy a material is for the graphics card (0 = light). Glass bends rays and soaks light, the
 /// clear coat and rainbow sheen add taps, metal and glow add a little.
 pub fn cost(m: &Material) -> f32 {
@@ -331,7 +330,11 @@ pub fn random_color(seed: &mut u32) -> [f32; 3] {
 
 /// A starting value for `random_color` that differs on every press.
 pub fn fresh_seed() -> u32 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.subsec_nanos() ^ (d.as_secs() as u32).rotate_left(16)).unwrap_or(0x1234_5678) | 1
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos() ^ (d.as_secs() as u32).rotate_left(16))
+        .unwrap_or(0x1234_5678)
+        | 1
 }
 
 #[cfg(test)]

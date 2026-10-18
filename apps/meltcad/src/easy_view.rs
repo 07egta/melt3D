@@ -284,7 +284,15 @@ pub fn render(scene: &Scene, cam: &Camera, size: [usize; 2], fine: bool, threads
 }
 
 /// `render` with an analysis view mode (`ViewMode::id`; 0 = the usual shading).
-pub fn render_mode(scene: &Scene, cam: &Camera, size: [usize; 2], fine: bool, threads: usize, mode: u32, cancel: &(dyn Fn() -> bool + Sync)) -> Option<Vec<u8>> {
+pub fn render_mode(
+    scene: &Scene,
+    cam: &Camera,
+    size: [usize; 2],
+    fine: bool,
+    threads: usize,
+    mode: u32,
+    cancel: &(dyn Fn() -> bool + Sync),
+) -> Option<Vec<u8>> {
     let size = [size[0].clamp(1, 8192), size[1].clamp(1, 8192)];
     let field = Field::new(scene);
     let bound = crate::gpu::bounds(scene, None);
@@ -373,7 +381,9 @@ fn spawn_worker(ctx: Option<egui::Context>) -> Option<Worker> {
                         break;
                     }
                     let fine = i + 1 == n;
-                    let done = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| render_mode(&job.scene, &job.cam, *size, fine, threads, job.mode, &cancel)));
+                    let done = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        render_mode(&job.scene, &job.cam, *size, fine, threads, job.mode, &cancel)
+                    }));
                     match done {
                         Ok(Some(rgba)) => {
                             if frames_tx.send(Frame { id, size: *size, rgba, last: fine }).is_err() {
