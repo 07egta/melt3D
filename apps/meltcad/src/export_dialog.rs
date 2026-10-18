@@ -756,9 +756,9 @@ mod tests {
         assert!(path.exists());
         assert!(last(&ctx).is_some_and(|o| o.format == Format::ThreeMf));
         let _ = std::fs::remove_dir_all(&dir);
-        // an error is said in Japanese
+        // an error is shown in English
         assert_eq!(jp_error(CANCELLED), "Cancelled");
-        assert!(jp_error("the model is too big for this precision; choose a coarser one").contains("Detail"));
+        assert!(jp_error("the model is too big for this precision; choose a coarser one").contains("detail"));
     }
 
     #[test]
