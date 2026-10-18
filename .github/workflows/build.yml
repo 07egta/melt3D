@@ -119,7 +119,7 @@ jobs:
         shell: bash
         run: |
           set +e
-          cargo test --profile ci --locked -p solidcraft-geom -p solidcraft-doc -p solidcraft-ui-egui --lib 2>&1 | tee test1.log
+          RUST_TEST_THREADS=1 cargo test --profile ci --locked -p solidcraft-geom -p solidcraft-doc -p solidcraft-ui-egui --lib 2>&1 | tee test1.log
           s1=${PIPESTATUS[0]}
           cargo test --profile ci --locked -p solidcraft-engine --lib -- --skip robustness --skip hostile_params 2>&1 | tee test2.log
           s2=${PIPESTATUS[0]}
