@@ -129,7 +129,7 @@ impl Make {
             Make::Sweep => "Sweep",
         }
     }
-    fn kind(self) -> Kind {
+    pub(crate) fn kind(self) -> Kind {
         match self {
             Make::Extrude => Kind::Extrude,
             Make::Revolve => Kind::Revolve,
@@ -151,6 +151,8 @@ pub enum Stage {
     /// Drawing the sweep's path.
     SweepPath,
     Hole,
+    /// The solid exists already (a live shape in the scene): drag its height handle, then accept.
+    Shape,
 }
 
 /// How the loft's top profile is found.
@@ -276,6 +278,17 @@ pub struct State {
     pub edit_value: f32,
     /// Transient precise numeric editor (saved geometry remains in the existing profile).
     pub dimension: Option<Dimensions>,
+    /// The live solid made from the closed outline (group, shape). It is a real shape in the
+    /// scene; undo steps are made only when it is accepted.
+    pub live: Option<(usize, usize)>,
+    /// The live solid's group was made for it (removed again when the solid is discarded).
+    pub live_group: bool,
+    /// The selection before the live solid was made.
+    pub live_sel: Option<Pick>,
+    /// The height handle is being dragged.
+    pub handle_drag: bool,
+    /// The plane was chosen by hand (it is not picked automatically any more).
+    pub plane_manual: bool,
 }
 
 impl Default for State {
@@ -315,6 +328,11 @@ impl Default for State {
             edit_index: None,
             edit_value: 2.0,
             dimension: None,
+            live: None,
+            live_group: false,
+            live_sel: None,
+            handle_drag: false,
+            plane_manual: false,
         }
     }
 }
@@ -360,6 +378,10 @@ impl State {
         self.holes.clear();
         self.loft_top = LoftTop::Scaled;
         self.msg.clear();
+        // (the live solid, if any, stays in the scene: removing it is `App::live_discard`)
+        self.live = None;
+        self.live_group = false;
+        self.handle_drag = false;
     }
 
     /// Corners (not a smooth curve) with the live crossing check?
@@ -545,8 +567,23 @@ impl State {
                 self.msg.clear();
                 false
             }
+            Stage::LoftTop if self.live.is_some() => {
+                self.stage = Stage::Shape;
+                if self.profile2.is_empty() {
+                    self.loft_top = LoftTop::Scaled;
+                }
+                self.msg.clear();
+                false
+            }
+            Stage::SweepPath if self.live.is_none() && self.profile.is_empty() => true,
             Stage::LoftTop | Stage::SweepPath | Stage::Hole => {
                 self.stage = Stage::Ready;
+                self.msg.clear();
+                false
+            }
+            // (the live solid is discarded by the App, which owns the scene)
+            Stage::Shape => {
+                self.stage = Stage::Draw;
                 self.msg.clear();
                 false
             }
@@ -557,7 +594,7 @@ impl State {
 
 // ------------------------------------------------------------------ the App side: turning it on, the plane, the camera
 
-const COLORS: [[f32; 3]; 6] =
+pub(crate) const COLORS: [[f32; 3]; 6] =
     [[0.93, 0.56, 0.45], [0.60, 0.72, 0.98], [0.62, 0.90, 0.74], [0.96, 0.80, 0.45], [0.76, 0.66, 0.96], [0.96, 0.66, 0.82]];
 
 impl App {
@@ -572,15 +609,25 @@ impl App {
         self.sk.edit = None;
         self.sk.edit_op = None;
         self.sk.edit_index = None;
+        // (leaving the tool keeps a live solid that is on the screen)
         self.sk.reset();
         self.sk.on = on;
         if on {
+            // the plane follows the selection until one is chosen by hand
+            if !self.sk.plane_manual {
+                self.sk.plane = if matches!(self.sel, Some(Pick::Shape(..))) { PlaneSel::OnShape } else { PlaneSel::Floor };
+            }
+            if self.sk.make == Make::Sweep {
+                self.sk.make = Make::Extrude;
+            }
             self.finish_drawing();
             self.ct.drawing = false;
             self.set_pipe_tool(false);
             self.sk.frame = self.sketch_plane();
             let f = self.sk.frame;
             self.sketch_fly(&f);
+        } else {
+            self.sk.plane_manual = false;
         }
     }
 
@@ -619,8 +666,7 @@ impl App {
                     if !self.sk.on {
                         self.set_sketch_tool(true);
                     }
-                    self.sk.make = m;
-                    self.sk.msg.clear();
+                    self.sketch_choose_make(m);
                 }
             }
         }
@@ -679,6 +725,7 @@ impl App {
         }
         let interrupted = !self.sk.pts.is_empty() || self.sk.anchor.is_some();
         self.sk.plane = plane;
+        self.sk.plane_manual = true;
         self.sk.clear_drawing();
         self.sk.frame = self.sketch_plane();
         self.sk.msg = if interrupted {
@@ -865,6 +912,11 @@ impl App {
                     self.sk.profile2 = p;
                     self.sk.loft_top = LoftTop::Drawn;
                     self.sk.make = Make::Loft;
+                    if self.sk.live.is_some() {
+                        self.sk.stage = Stage::Shape;
+                        self.live_update();
+                        return;
+                    }
                 } else {
                     self.sk.profile = p;
                     self.sk.pframe = self.sk.frame;
@@ -874,13 +926,20 @@ impl App {
                     if self.sk.make == Make::Revolve && !self.sk.pframe.is_vertical() {
                         self.sk.make = Make::Extrude;
                     }
+                    // Extrude and Loft: the solid appears right away
+                    if matches!(self.sk.make, Make::Extrude | Make::Loft) && self.live_begin() {
+                        return;
+                    }
                 }
                 self.sk.stage = Stage::Ready;
             }
             Finished::Line(l) => {
                 let f = self.sk.frame;
                 self.sk.path = l.iter().map(|q| f.to_world(*q)).collect();
-                if self.sk.stage == Stage::SweepPath {
+                if self.sk.stage == Stage::SweepPath && self.sk.profile.is_empty() {
+                    // path first: a round tube follows it
+                    self.sweep_path_done();
+                } else if self.sk.stage == Stage::SweepPath {
                     self.sk.stage = Stage::Ready;
                     self.sk.make = Make::Sweep;
                     self.sk.frame = self.sk.pframe;
@@ -893,6 +952,11 @@ impl App {
 
     /// Make the shape the card is set to. True when it was made.
     pub fn sketch_make(&mut self, ctx: &egui::Context) -> bool {
+        if self.sk.live.is_some() {
+            let ok = self.live_alive();
+            self.live_accept(ctx);
+            return ok;
+        }
         if self.scene.shape_count().saturating_add(1 + self.sk.holes.len()) > MAX_SHAPES {
             self.sk.msg = format!("Up to {MAX_SHAPES} shapes");
             return false;
@@ -909,20 +973,7 @@ impl App {
             self.sk.msg = "Group limit reached".to_string();
             return false;
         }
-        let st = &self.sk;
-        let built = match st.make {
-            Make::Extrude => sketch::extrude(&st.pframe, &st.profile, st.height, st.flip),
-            Make::Revolve => sketch::revolve(&st.pframe, &st.profile),
-            Make::Loft => {
-                let top = match st.loft_top {
-                    LoftTop::Scaled => sketch::scaled(&st.profile, st.loft_scale),
-                    LoftTop::Drawn => st.profile2.clone(),
-                };
-                sketch::loft(&st.pframe, &st.profile, &top, st.height, st.flip)
-            }
-            Make::Sweep => sketch::sweep(&st.profile, &st.path, st.sweep_scale),
-        };
-        let built = match built {
+        let built = match self.build_shape() {
             Ok(b) => b,
             Err(e) => {
                 self.sk.msg = e.message();
@@ -991,7 +1042,7 @@ impl App {
         let mut out = Input::default();
         let over_gnomon = |p: Pos2| (p - pos2(rect.right() - 62.0, rect.top() + 62.0)).length() < GNOMON_PX;
         match self.sk.stage {
-            Stage::Ready | Stage::LoftTop | Stage::Hole => self.sk.frame = self.sk.pframe,
+            Stage::Ready | Stage::LoftTop | Stage::Hole | Stage::Shape => self.sk.frame = self.sk.pframe,
             _ if self.sk.pts.is_empty() && self.sk.anchor.is_none() => self.sk.frame = self.sketch_plane(),
             _ => {}
         }
@@ -1008,6 +1059,10 @@ impl App {
         self.sk.cursor = resolved.map(|r| r.0);
         self.sk.snap_hit = resolved.and_then(|r| r.1);
         out.over = self.sk.cursor.is_some();
+        if self.sk.stage == Stage::Shape {
+            let shaped = self.live_input(ui, resp, rect, pos, mods);
+            return Input { over: out.over || shaped.over, taken: shaped.taken, busy: shaped.busy, ..out };
+        }
         if self.sk.stage == Stage::Ready {
             // nothing to draw: clicks must not pick things behind the card
             out.taken = mouse.is_some() && resp.clicked_by(egui::PointerButton::Primary);
@@ -1156,6 +1211,16 @@ impl App {
                 self.sk.edit = None;
             }
             return del || enter || esc;
+        }
+        if self.sk.stage == Stage::Shape && self.sk.live.is_some() {
+            // Enter keeps the solid, Esc / Delete throw it away
+            let delete = hit(Key::Delete);
+            if enter {
+                self.live_accept(ctx);
+            } else if esc || delete {
+                self.live_discard();
+            }
+            return del || enter || esc || delete;
         }
         if enter && let Some(d) = self.sk.enter() {
             self.sketch_done(d);
@@ -1620,6 +1685,7 @@ impl App {
         let st = &self.sk;
         match st.stage {
             Stage::Ready => self.paint_ready(p, rect),
+            Stage::Shape => self.paint_live(p, rect),
             Stage::LoftTop | Stage::SweepPath | Stage::Hole => {
                 self.paint_outline(p, rect, &st.pframe, &st.profile, Color32::from_white_alpha(110), 1.3);
                 for h in &st.holes {
@@ -1633,7 +1699,7 @@ impl App {
                 self.paint_draft(p, rect);
             }
         }
-        if self.sk.stage != Stage::Ready {
+        if !matches!(self.sk.stage, Stage::Ready | Stage::Shape) {
             self.paint_snap_marker(p, rect, &self.sk.frame);
         }
         if let Some(d) = &st.dimension
@@ -1677,12 +1743,12 @@ impl App {
         halo_line(p, px, closed && pts.len() >= 3, color, w);
     }
 
-    fn paint_world_poly(&self, p: &Painter, rect: Rect, pts: &[V3], closed: bool, color: Color32, w: f32) {
+    pub(crate) fn paint_world_poly(&self, p: &Painter, rect: Rect, pts: &[V3], closed: bool, color: Color32, w: f32) {
         let px: Vec<Pos2> = pts.iter().filter_map(|q| self.cam.project(rect, *q)).collect();
         halo_line(p, px, closed, color, w);
     }
 
-    fn paint_saved_path(&self, p: &Painter, rect: Rect) {
+    pub(crate) fn paint_saved_path(&self, p: &Painter, rect: Rect) {
         if self.sk.path.len() >= 2 {
             self.paint_world_poly(p, rect, &self.sk.path, false, style::ACCENT.gamma_multiply(0.55), 1.4);
         }
@@ -2098,53 +2164,65 @@ impl App {
     fn draw_card_body(&mut self, ui: &mut Ui, ctx: &egui::Context) {
         let mut off = false;
         let stage = self.sk.stage;
+        if stage == Stage::Shape && self.sk.live.is_some() {
+            self.shape_card(ui, ctx);
+            return;
+        }
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new("Sketch").strong().color(style::ACCENT));
             if style::pill(ui, "Exit", false).on_hover_text("Exit sketch (Esc)").clicked() {
                 off = true;
             }
         });
-        // the plane: three faces of a cube, the camera, and the rest behind "…"
+        // the plane: one small icon, the choices behind it
         let plane_free = matches!(stage, Stage::Draw | Stage::SweepPath);
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
-            for pl in [PlaneSel::Floor, PlaneSel::Front, PlaneSel::Side, PlaneSel::Camera] {
-                let on = self.sk.plane == pl;
-                let r = ui.add_enabled_ui(plane_free, |ui| style::wide_button(ui, pl.label(), pl.tip(), on, None, |p, r, ink| crate::sketch_icons::plane(p, r, pl, ink))).inner;
-                if r.clicked() {
-                    self.sketch_set_plane(pl);
-                }
-            }
-            if plane_free {
-                style::menu_button(ui, "…", !matches!(self.sk.plane, PlaneSel::Floor | PlaneSel::Front | PlaneSel::Side | PlaneSel::Camera), |ui| {
-                    for pl in [PlaneSel::OnShape, PlaneSel::Height, PlaneSel::Custom] {
+        if plane_free {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
+                let cur = self.sk.plane;
+                let r = style::wide_button(ui, cur.label(), cur.tip(), false, None, |p, r, ink| crate::sketch_icons::plane(p, r, cur, ink));
+                let mut picked = None;
+                let mut head_on = false;
+                let mut copy = false;
+                egui::Popup::menu(&r).show(|ui| {
+                    ui.set_min_width(190.0);
+                    for pl in PlaneSel::ALL {
                         let usable = pl != PlaneSel::OnShape || self.sel.is_some();
-                        let r = ui.add_enabled_ui(usable, |ui| {
+                        let row = ui.add_enabled_ui(usable, |ui| {
                             ui.horizontal(|ui| {
                                 let (rc, _) = ui.allocate_exact_size(egui::vec2(24.0, 24.0), egui::Sense::hover());
                                 crate::sketch_icons::plane(ui.painter(), rc, pl, ui.visuals().text_color());
-                                ui.selectable_label(self.sk.plane == pl, pl.label()).on_hover_text(pl.tip())
+                                ui.selectable_label(cur == pl, pl.label()).on_hover_text(pl.tip())
                             })
                             .inner
                         });
-                        if r.inner.clicked() {
-                            self.sketch_set_plane(pl);
+                        if row.inner.clicked() {
+                            picked = Some(pl);
                             ui.close();
                         }
                     }
                     ui.separator();
                     if ui.selectable_label(false, "View this plane head-on").clicked() {
-                        let f = self.sk.frame;
-                        self.sketch_fly(&f);
+                        head_on = true;
                         ui.close();
                     }
                     if ui.selectable_label(false, "Copy this plane to custom plane").clicked() {
-                        self.sketch_copy_plane_to_custom();
+                        copy = true;
                         ui.close();
                     }
                 });
-            }
-        });
+                if let Some(pl) = picked {
+                    self.sketch_set_plane(pl);
+                }
+                if head_on {
+                    let f = self.sk.frame;
+                    self.sketch_fly(&f);
+                }
+                if copy {
+                    self.sketch_copy_plane_to_custom();
+                }
+            });
+        }
         if plane_free && matches!(self.sk.plane, PlaneSel::Height | PlaneSel::Custom) {
             self.sketch_plane_settings(ui);
         }

@@ -169,3 +169,39 @@ pub fn sweep(p: &Painter, r: Rect, ink: Color32) {
     p.add(egui::Shape::line(pts, st));
     dots(p, r, &[(0.9, 0.18)], ink);
 }
+
+/// Accept: a tick.
+pub fn check(p: &Painter, r: Rect, ink: Color32) {
+    let pts: Vec<Pos2> = [(0.16, 0.54), (0.4, 0.78), (0.86, 0.24)].iter().map(|(u, v)| at(r, *u, *v)).collect();
+    p.add(egui::Shape::line(pts, Stroke::new((r.width() * 0.11).clamp(1.8, 3.0), ink)));
+}
+
+/// Discard: a cross.
+pub fn cross(p: &Painter, r: Rect, ink: Color32) {
+    let st = Stroke::new((r.width() * 0.11).clamp(1.8, 3.0), ink);
+    p.line_segment([at(r, 0.22, 0.22), at(r, 0.78, 0.78)], st);
+    p.line_segment([at(r, 0.78, 0.22), at(r, 0.22, 0.78)], st);
+}
+
+/// Height: an arrow pointing up with a base line.
+pub fn height(p: &Painter, r: Rect, ink: Color32) {
+    let st = pen(r, ink);
+    p.line_segment([at(r, 0.5, 0.86), at(r, 0.5, 0.16)], st);
+    p.line_segment([at(r, 0.28, 0.38), at(r, 0.5, 0.16)], st);
+    p.line_segment([at(r, 0.72, 0.38), at(r, 0.5, 0.16)], st);
+    p.line_segment([at(r, 0.24, 0.92), at(r, 0.76, 0.92)], pen(r, ink.gamma_multiply(0.7)));
+}
+
+/// Hole: a circle inside a square.
+pub fn hole(p: &Painter, r: Rect, ink: Color32) {
+    poly(p, r, &[(0.1, 0.1), (0.9, 0.1), (0.9, 0.9), (0.1, 0.9)], None, pen(r, ink));
+    p.circle_stroke(at(r, 0.5, 0.5), r.width() * 0.22, pen(r, ink));
+}
+
+/// Draw the top outline: a pencil over a small outline.
+pub fn pencil_top(p: &Painter, r: Rect, ink: Color32) {
+    let st = pen(r, ink);
+    poly(p, r, &[(0.1, 0.62), (0.5, 0.62), (0.5, 0.92), (0.1, 0.92)], None, st);
+    poly(p, r, &[(0.5, 0.52), (0.84, 0.16), (0.94, 0.26), (0.6, 0.62)], None, st);
+    p.line_segment([at(r, 0.5, 0.52), at(r, 0.46, 0.66)], st);
+}

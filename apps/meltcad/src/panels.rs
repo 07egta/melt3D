@@ -302,7 +302,12 @@ impl App {
         if self.renaming == Some(pick) {
             let mut text = name.clone();
             let r = ui.put(name_rect.shrink2(vec2(0.0, 3.0)), egui::TextEdit::singleline(&mut text).font(FontId::proportional(13.0)));
-            r.request_focus();
+            // take the keyboard once when the rename starts; after that a click elsewhere ends it
+            let started = id.with("rename_started");
+            if !ui.data(|d| d.get_temp::<bool>(started).unwrap_or(false)) {
+                r.request_focus();
+                ui.data_mut(|d| d.insert_temp(started, true));
+            }
             match pick {
                 Pick::Group(g) => {
                     if let Some(gr) = self.scene.groups.get_mut(g) {
@@ -315,8 +320,9 @@ impl App {
                     }
                 }
             }
-            if r.lost_focus() {
+            if r.lost_focus() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                 self.renaming = None;
+                ui.data_mut(|d| d.remove::<bool>(started));
             }
         } else {
             let col = if visible { style::TEXT } else { style::DIM };
@@ -362,7 +368,7 @@ impl App {
     fn actions(&mut self, ui: &mut Ui) {
         if self.picks().len() > 1 {
             ui.label(RichText::new(format!("{} selected (Shift + click adds or removes)", self.picks().len())).size(12.0).color(style::ACCENT));
-            if style::pill(ui, "Group them (Ctrl+G)", false).on_hover_text("Put the selected shapes in one new group so they melt together").clicked()
+            if style::pill(ui, "Group them (Ctrl+G)", false).on_hover_text("Put the selected shapes or groups inside one new group (groups can nest)").clicked()
             {
                 self.group_selected();
             }
