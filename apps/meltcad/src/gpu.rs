@@ -480,6 +480,14 @@ fn bounds_of(scene: &Scene, selected: Option<Pick>, resolved: &[crate::pattern::
     (c, r)
 }
 
+/// Set the analysis view mode (`G.hover.z`, see `view_mode::ViewMode::id`). It is part of the
+/// picture's key, so a change redraws.
+pub fn set_view_mode(data: &mut [f32], mode: u32) {
+    if let Some(dst) = data.get_mut(V4_HOVER * 4 + 2) {
+        *dst = mode as f32;
+    }
+}
+
 /// Set the shader's flag word (`G.view.w`): see `perf::view_flags`.
 pub fn set_view_flags(data: &mut [f32], flags: f32) {
     if let Some(dst) = data.get_mut(4 * 4 + 3) {

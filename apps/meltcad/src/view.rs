@@ -372,6 +372,7 @@ impl App {
             let pack = self.perf.pack.get(&self.scene, rev);
             let mut globals = pack.globals(&self.scene, &self.cam, [vp[0] as f32, vp[1] as f32], shown_sel, shown_hover, self.srgb);
             crate::gpu::set_view_flags(&mut globals, crate::perf::view_flags(self.srgb, false, pack.glow));
+            crate::gpu::set_view_mode(&mut globals, self.view_mode.id());
             counts = (self.scene.shape_count(), pack.group_n, pack.instances);
             let fbs = self.perf.feedback.state();
             sharp = if fast { 0.0 } else { fbs.sharp };
@@ -393,6 +394,7 @@ impl App {
             ui.painter().add(egui_wgpu::Callback::new_paint_callback(rect, cb));
         } else {
             // the simple view: drawn on the CPU by a worker thread, never blocking the window
+            self.gpu.easy_view.mode = self.view_mode.id();
             self.gpu.easy_view.update(ui.ctx(), &self.scene, &self.cam, vp, fast);
             self.gpu.easy_view.paint(&ui.painter_at(rect), rect, self.scene.env.backdrop);
         }

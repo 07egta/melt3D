@@ -57,6 +57,8 @@ pub struct App {
     pub new_op: Op,
     pub drag: Option<Drag>,
     pub srgb: bool,
+    /// Analysis shading of the viewport (zebra, rings, up / down): a viewer setting, not part of the design.
+    pub view_mode: crate::view_mode::ViewMode,
     pub last_view_height: f32,
     /// The scene as of the last `track_scene` and its revision number: a change is found once per
     /// frame by comparing, and everything else (the picture, the field, the undo step) asks the
@@ -101,6 +103,8 @@ pub struct App {
     /// A left-drag that began on empty space is turning the view.
     pub orbiting: bool,
     pub show_keys: bool,
+    /// Pinned palette entries and custom shortcuts.
+    pub prefs: crate::palette_prefs::Prefs,
     /// Which tab of the right panel is showing.
     pub tab: Tab,
     /// The material list's chosen category (None = the person's saved ones).
@@ -167,6 +171,7 @@ impl App {
             new_op: Op::Add,
             drag: None,
             srgb,
+            view_mode: crate::view_mode::ViewMode::Normal,
             last_view_height: 600.0,
             path: None,
             dirty: false,
@@ -190,6 +195,7 @@ impl App {
             fly: None,
             orbiting: false,
             show_keys: false,
+            prefs: crate::palette_prefs::Prefs::load(),
             tab: Tab::Shape,
             mat_cat: Some(crate::materials::Category::Basic),
             mat_group: false,
@@ -956,7 +962,7 @@ impl App {
             self.sketch_keys(ctx);
             return;
         }
-        if ctx.egui_wants_keyboard_input() {
+        if ctx.egui_wants_keyboard_input() || palette::capturing(ctx) {
             return;
         }
         use egui::{Key, Modifiers};
@@ -966,6 +972,9 @@ impl App {
             return;
         }
         if self.sketch_keys(ctx) {
+            return;
+        }
+        if !palette::is_open(ctx) && self.custom_shortcuts(ctx) {
             return;
         }
         self.curve_keys(ctx);
@@ -1199,6 +1208,13 @@ impl App {
                             self.cam.ortho = !self.cam.ortho;
                             ui.close();
                         }
+                        ui.horizontal(|ui| {
+                            for m in crate::view_mode::ViewMode::ALL {
+                                if crate::view_mode::swatch(ui, m, 28.0, self.view_mode == m).clicked() {
+                                    self.view_mode = m;
+                                }
+                            }
+                        });
                         if ui.button("Frame all  Home").clicked() {
                             self.frame_view(false);
                             ui.close();
