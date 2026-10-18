@@ -238,12 +238,11 @@ mod tests {
         let mut g = crate::model::Group::new("g");
         g.shapes.push(sh);
         scene.groups.push(g);
-        let field = crate::sdf::Field::new(&scene);
-        let d = field.sample([0.0, 0.0, 0.0]).dist;
-        assert!(d >= 0.0, "a sketch line has no inside: {d}");
+        let none = crate::sdf::Field::new(&scene).sample([0.0, 0.0, 0.0]).nearest;
+        assert!(none.is_none(), "a sketch line is nobody's nearest shape: {none:?}");
         scene.groups[0].shapes[0].guide = false;
-        let d2 = crate::sdf::Field::new(&scene).sample([0.0, 0.0, 0.0]).dist;
-        assert!(d2 < 0.0, "the same box as a solid has an inside: {d2}");
+        let some = crate::sdf::Field::new(&scene).sample([0.0, 0.0, 0.0]).nearest;
+        assert_eq!(some, Some((0, 0)), "the same box as a solid is");
     }
 
     #[test]
