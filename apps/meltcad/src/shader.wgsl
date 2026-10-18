@@ -1154,6 +1154,27 @@ fn vs(@builtin(vertex_index) i: u32) -> VOut {
     return o;
 }
 
+// Analysis view modes (G.hover.z: 0 normal, 1 zebra horizontal, 2 zebra vertical, 3 rings, 4 up / down).
+// Same formulas as view_mode.rs. One call, at the end of fs; no loops.
+fn view_mode_band(x: f32) -> f32 { return smoothstep(0.0, 0.06, fract(x)) - smoothstep(0.5, 0.56, fract(x)); }
+
+fn view_mode_color(c: vec3<f32>, n: vec3<f32>, rd: vec3<f32>, on: bool) -> vec3<f32> {
+    let m = i32(G.hover.z + 0.5);
+    if (!on || m < 1 || m > 4) { return c; }
+    let d = dot(rd, n);
+    let r = rd - 2.0 * d * n;
+    let ndv = clamp(-d, 0.0, 1.0);
+    let x = select(dot(r, G.cam_up.xyz), dot(r, G.cam_right.xyz), m == 2);
+    let zebra = mix(vec3<f32>(0.06, 0.06, 0.08), vec3<f32>(0.96, 0.96, 0.94), view_mode_band(x * 5.0));
+    let rings = mix(vec3<f32>(0.10, 0.16, 0.34), vec3<f32>(0.88, 0.94, 1.0), view_mode_band(ndv * 9.0));
+    let ud0 = select(vec3<f32>(0.85, 0.22, 0.20), vec3<f32>(0.22, 0.72, 0.34), n.z > 0.0) * (0.7 + 0.3 * ndv);
+    let ud = mix(ud0, vec3<f32>(0.10, 0.30, 1.0), 1.0 - smoothstep(0.02, 0.05, abs(n.z)));
+    var o = select(zebra, rings, m == 3);
+    o = select(o, ud, m == 4);
+    // (the colours are display values: a target that encodes sRGB itself wants them linear)
+    return select(o, pow(o, vec3<f32>(2.2)), flag(1));
+}
+
 @fragment
 fn fs(in: VOut) -> @location(0) vec4<f32> {
     let aspect = G.view.x / max(G.view.y, 1.0);
@@ -1540,5 +1561,5 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
         col = mix(col, vec3<f32>(0.32, 0.24, 0.95), clamp(a, 0.0, 1.0));
     }
 
-    return vec4<f32>(encode(col), 1.0);
+    return vec4<f32>(view_mode_color(encode(col), n_hit, rd, surf_vis), 1.0);
 }

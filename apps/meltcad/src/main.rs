@@ -50,6 +50,7 @@ mod mesh;
 mod mesh_dialog;
 mod mesh_import;
 mod model;
+mod palette_prefs;
 mod panels;
 mod pattern;
 mod pattern_ui;
@@ -60,6 +61,7 @@ mod prims;
 mod recovery;
 mod sdf;
 mod sdf_volume;
+mod view_mode;
 #[cfg(test)]
 mod shader_portability;
 mod sketch;

@@ -7,6 +7,7 @@ use egui::{Align2, Color32, Key, RichText, Vec2};
 use super::{App, ExportFormat, Tool};
 use crate::library;
 use crate::model::{Kind, Op};
+use crate::palette_prefs::{Conflict, Shortcut};
 use crate::pattern::PatternKind;
 use crate::style;
 
@@ -63,6 +64,13 @@ pub struct Entry {
     /// Lower-case words that also match (English names, readings).
     pub words: String,
     pub action: Action,
+}
+
+impl Entry {
+    /// A stable name for pins and shortcuts (kind and label).
+    pub fn id(&self) -> String {
+        format!("{}:{}", self.tag, self.label)
+    }
 }
 
 /// English and common names of a shape kind.
@@ -216,6 +224,10 @@ struct State {
     query: String,
     sel: usize,
     fresh: bool,
+    /// The entry id that is waiting for a key combo.
+    assign: Option<String>,
+    /// A short message in the shortcut panel (a conflict).
+    msg: String,
 }
 
 fn id() -> egui::Id {
@@ -226,13 +238,58 @@ pub fn open(ctx: &egui::Context) {
     ctx.data_mut(|m| m.insert_temp(id(), State { fresh: true, ..State::default() }));
 }
 
-#[allow(dead_code)]
-#[allow(dead_code)]
 pub fn is_open(ctx: &egui::Context) -> bool {
     ctx.data(|m| m.get_temp::<State>(id())).is_some()
 }
 
+/// Is the palette waiting for a key combo? (Then no other shortcut may run.)
+pub fn capturing(ctx: &egui::Context) -> bool {
+    ctx.data(|m| m.get_temp::<State>(id())).is_some_and(|s| s.assign.is_some())
+}
+
+fn all_entries() -> &'static [Entry] {
+    ENTRIES.get_or_init(entries)
+}
+
+/// A small star: outline, or filled.
+fn star(p: &egui::Painter, c: egui::Pos2, r: f32, color: Color32, filled: bool) {
+    let pts: Vec<egui::Pos2> = (0..10)
+        .map(|i| {
+            let a = -std::f32::consts::FRAC_PI_2 + i as f32 * std::f32::consts::PI / 5.0;
+            let rr = if i % 2 == 0 { r } else { r * 0.45 };
+            c + Vec2::new(a.cos(), a.sin()) * rr
+        })
+        .collect();
+    if filled {
+        for i in 0..10 {
+            let (a, b) = (pts[i], pts[(i + 1) % 10]);
+            p.add(egui::Shape::convex_polygon(vec![c, a, b], color, egui::Stroke::new(0.6, color)));
+        }
+    } else {
+        p.add(egui::Shape::closed_line(pts, egui::Stroke::new(1.3, color)));
+    }
+}
+
+fn dots(p: &egui::Painter, c: egui::Pos2, color: Color32) {
+    for dx in [-4.5, 0.0, 4.5] {
+        p.circle_filled(c + Vec2::new(dx, 0.0), 1.5, color);
+    }
+}
+
 impl App {
+    /// Run the entry whose custom shortcut was pressed. True when one ran.
+    pub fn custom_shortcuts(&mut self, ctx: &egui::Context) -> bool {
+        let hit = self.prefs.bindings().into_iter().find(|(sc, _)| ctx.input_mut(|i| i.consume_key(sc.modifiers(), sc.key))).map(|(_, id)| id.to_string());
+        let Some(hit) = hit else { return false };
+        match all_entries().iter().find(|e| e.id() == hit) {
+            Some(e) => {
+                self.run_action(ctx, e.action);
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Do what a palette entry says.
     pub fn run_action(&mut self, ctx: &egui::Context, a: Action) {
         let pi = std::f32::consts::PI;
@@ -286,13 +343,27 @@ impl App {
     /// Draw the palette when it is open and run the chosen entry.
     pub fn palette_ui(&mut self, ctx: &egui::Context) {
         let Some(mut st) = ctx.data(|m| m.get_temp::<State>(id())) else { return };
-        let all = ENTRIES.get_or_init(entries);
+        let all = all_entries();
         let hits = search(all, &st.query, 9);
         st.sel = st.sel.min(hits.len().saturating_sub(1));
         let (mut close, mut run) = (false, None);
+        let assigning = st.assign.clone();
+        let mut pressed = None;
         ctx.input_mut(|i| {
             if i.consume_key(egui::Modifiers::NONE, Key::Escape) {
-                close = true;
+                if st.assign.is_some() {
+                    st.assign = None;
+                    st.msg.clear();
+                } else {
+                    close = true;
+                }
+            }
+            if assigning.is_some() {
+                pressed = i.events.iter().find_map(|e| match e {
+                    egui::Event::Key { key, pressed: true, repeat: false, modifiers, .. } => Shortcut::from_press(*key, *modifiers),
+                    _ => None,
+                });
+                return;
             }
             if i.consume_key(egui::Modifiers::NONE, Key::ArrowDown) {
                 st.sel = (st.sel + 1).min(hits.len().saturating_sub(1));
@@ -304,15 +375,55 @@ impl App {
                 run = hits.get(st.sel).copied();
             }
         });
+        let mut changed = false;
+        if let (Some(aid), Some(sc)) = (assigning.as_ref(), pressed) {
+            match self.prefs.set_shortcut(aid, sc) {
+                Ok(()) => {
+                    st.assign = None;
+                    st.msg.clear();
+                    changed = true;
+                }
+                Err(Conflict::BuiltIn(name)) => st.msg = format!("{} is already used by {name}", sc.badge()),
+                Err(Conflict::Custom(other)) => {
+                    let name = other.split_once(':').map_or(other.as_str(), |(_, l)| l);
+                    st.msg = format!("{} is already used by {name}", sc.badge());
+                }
+            }
+        }
         let before = st.query.clone();
+        let was_fresh = st.fresh;
         let rect = self.view_rect;
-        egui::Area::new(egui::Id::new("palette_area"))
+        let prefs = &mut self.prefs;
+        let area = egui::Area::new(egui::Id::new("palette_area"))
             .order(egui::Order::Tooltip)
             .pivot(Align2::CENTER_TOP)
             .fixed_pos(egui::pos2(rect.center().x, rect.top() + 70.0))
             .show(ctx, |ui| {
                 style::card().show(ui, |ui| {
                     ui.set_width(460.0);
+                    if let Some(aid) = st.assign.clone() {
+                        let name = all.iter().find(|e| e.id() == aid).map_or("", |e| e.label.as_str());
+                        ui.label(RichText::new(format!("Set shortcut: {name}")).color(style::TEXT));
+                        ui.add_space(4.0);
+                        ui.label(RichText::new("Press a key combo (Esc to cancel)").color(style::DIM));
+                        if !st.msg.is_empty() {
+                            ui.label(RichText::new(&st.msg).color(style::CUT));
+                        }
+                        ui.add_space(6.0);
+                        ui.horizontal(|ui| {
+                            if style::pill(ui, "Clear", false).clicked() {
+                                prefs.clear_shortcut(&aid);
+                                changed = true;
+                                st.assign = None;
+                                st.msg.clear();
+                            }
+                            if style::pill(ui, "Cancel", false).clicked() {
+                                st.assign = None;
+                                st.msg.clear();
+                            }
+                        });
+                        return;
+                    }
                     let r = ui.add(
                         egui::TextEdit::singleline(&mut st.query)
                             .hint_text("Search shapes, library, commands (Japanese also works)")
@@ -324,40 +435,95 @@ impl App {
                         st.fresh = false;
                     }
                     ui.add_space(4.0);
+                    // pinned entries: one click runs them (right-click unpins)
+                    if st.query.trim().is_empty() && !prefs.pins.is_empty() {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.spacing_mut().item_spacing = Vec2::new(4.0, 4.0);
+                            for pid in prefs.pins.clone() {
+                                let Some(i) = all.iter().position(|e| e.id() == pid) else { continue };
+                                let Some(e) = all.get(i) else { continue };
+                                let resp = style::pill(ui, &e.label, false).on_hover_text("Run  (right-click to unpin)");
+                                if resp.clicked() {
+                                    run = Some(i);
+                                }
+                                if resp.secondary_clicked() {
+                                    prefs.toggle_pin(&pid);
+                                    changed = true;
+                                }
+                            }
+                        });
+                        ui.add_space(4.0);
+                    }
                     if hits.is_empty() {
                         ui.label(RichText::new("No results").color(style::DIM));
                     }
                     for (n, &i) in hits.iter().enumerate() {
                         let Some(e) = all.get(i) else { continue };
+                        let eid = e.id();
                         let (rc, resp) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 28.0), egui::Sense::click());
+                        let hot = n == st.sel || resp.hovered();
                         if n == st.sel {
                             ui.painter().rect_filled(rc, 6.0, Color32::from_rgba_unmultiplied(52, 178, 120, 80));
                         } else if resp.hovered() {
                             ui.painter().rect_filled(rc, 6.0, Color32::from_white_alpha(16));
                         }
-                        ui.painter().text(
+                        // right to left: [...] pin shortcut-badge tag
+                        let more = egui::Rect::from_center_size(egui::pos2(rc.right() - 14.0, rc.center().y), Vec2::splat(22.0));
+                        let pin = more.translate(Vec2::new(-24.0, 0.0));
+                        let pinned = prefs.is_pinned(&eid);
+                        let more_r = ui.interact(more, egui::Id::new(("pal_more", i)), egui::Sense::click()).on_hover_text("Set shortcut");
+                        let pin_r = ui
+                            .interact(pin, egui::Id::new(("pal_pin", i)), egui::Sense::click())
+                            .on_hover_text(if pinned { "Unpin" } else { "Pin to the top" });
+                        let dim = |hover: bool| if hover { style::TEXT } else { style::DIM };
+                        if hot || pinned {
+                            star(ui.painter(), pin.center(), 6.0, if pinned { style::KEEP } else { dim(pin_r.hovered()) }, pinned);
+                        }
+                        if hot {
+                            dots(ui.painter(), more.center(), dim(more_r.hovered()));
+                        }
+                        let mut x = pin.left() - 6.0;
+                        let tag = ui.painter().text(egui::pos2(x, rc.center().y), Align2::RIGHT_CENTER, e.tag, egui::FontId::proportional(11.5), style::DIM);
+                        x = tag.left() - 8.0;
+                        if let Some(sc) = prefs.shortcut(&eid) {
+                            let g = ui.painter().layout_no_wrap(sc.badge(), egui::FontId::proportional(11.0), style::TEXT);
+                            let b = egui::Rect::from_min_max(egui::pos2(x - g.size().x - 10.0, rc.center().y - 9.0), egui::pos2(x, rc.center().y + 9.0));
+                            ui.painter().rect_filled(b, 5.0, Color32::from_white_alpha(22));
+                            ui.painter().galley(b.center() - g.size() / 2.0, g, style::TEXT);
+                            x = b.left() - 8.0;
+                        }
+                        let label_clip = egui::Rect::from_min_max(rc.min, egui::pos2(x.max(rc.left() + 40.0), rc.max.y));
+                        ui.painter().with_clip_rect(label_clip).text(
                             rc.left_center() + Vec2::new(10.0, 0.0),
                             Align2::LEFT_CENTER,
                             &e.label,
                             egui::FontId::proportional(13.5),
                             style::TEXT,
                         );
-                        ui.painter().text(
-                            rc.right_center() - Vec2::new(10.0, 0.0),
-                            Align2::RIGHT_CENTER,
-                            e.tag,
-                            egui::FontId::proportional(11.5),
-                            style::DIM,
-                        );
                         if resp.hovered() && ui.input(|i| i.pointer.delta().length() > 0.5) {
                             st.sel = n;
                         }
-                        if resp.clicked() {
+                        if pin_r.clicked() {
+                            prefs.toggle_pin(&eid);
+                            changed = true;
+                        } else if more_r.clicked() {
+                            st.assign = Some(eid.clone());
+                            st.msg.clear();
+                        } else if resp.clicked() {
                             run = Some(i);
                         }
                     }
                 });
             });
+        if changed {
+            self.prefs.save();
+        }
+        // a click anywhere outside the palette closes it
+        let outside = !was_fresh
+            && ctx.input(|i| i.pointer.any_pressed() && i.pointer.interact_pos().is_some_and(|p| !area.response.rect.contains(p)));
+        if outside {
+            close = true;
+        }
         if st.query != before {
             st.sel = 0;
         }

@@ -48,6 +48,8 @@ struct Setup<'a> {
     bound: ([f32; 3], f32),
     /// Soft shadows and the finer normals (off for the quick pass).
     fine: bool,
+    /// Analysis view mode (`ViewMode::id`), 0 = normal shading.
+    mode: u32,
 }
 
 fn lin(c: V3) -> V3 {
@@ -134,7 +136,7 @@ fn grid(col: V3, gp: V3, footprint: f32, fade: f32, below: bool) -> V3 {
 }
 
 /// The colour (linear) of a surface point seen along `rd`.
-fn shade_point(s: &Setup, o: V3, rd: V3, t: f32, hit: &crate::sdf::Sample) -> V3 {
+fn shade_point(s: &Setup, o: V3, rd: V3, t: f32, hit: &crate::sdf::Sample) -> (V3, V3) {
     let f = s.field;
     let p = add(o, mul(rd, t));
     let n = if s.fine {
@@ -188,7 +190,7 @@ fn shade_point(s: &Setup, o: V3, rd: V3, t: f32, hit: &crate::sdf::Sample) -> V3
     for k in 0..3 {
         c[k] = diff[k] * (amb[k] + lit[k]) + spec[k] + refl[k] * refl_k * tint[k] + 0.05 * fres;
     }
-    c
+    (c, n)
 }
 
 /// One pixel of the picture, as sRGB bytes.
@@ -226,6 +228,7 @@ fn pixel(s: &Setup, x: usize, y: usize) -> [u8; 4] {
         }
     }
 
+    let mut surf_n: Option<V3> = None;
     let above = o[2] >= 0.0;
     let footprint = |gp: V3| s.cam.mm_per_px(gp, h);
     if above && t_ground < 1e8 && hit.as_ref().is_none_or(|(t, _)| t_ground < *t) && (grid_on || floor_on) {
@@ -248,7 +251,9 @@ fn pixel(s: &Setup, x: usize, y: usize) -> [u8; 4] {
     if let Some((t, smp)) = &hit
         && (t_ground > *t || !(grid_on || floor_on))
     {
-        col = shade_point(s, o, rd, *t, smp);
+        let (c, n) = shade_point(s, o, rd, *t, smp);
+        col = c;
+        surf_n = Some(n);
     }
     // seen from below the ground is see-through: only its lines are drawn
     if !above && t_ground < 1e8 && hit.as_ref().is_none_or(|(t, _)| t_ground < *t) && grid_on {
@@ -256,7 +261,14 @@ fn pixel(s: &Setup, x: usize, y: usize) -> [u8; 4] {
         let fade = (1.0 - len([gp[0], gp[1], 0.0]) / 600.0).clamp(0.0, 1.0);
         col = grid(col, gp, footprint(gp), fade, true);
     }
-    let [r, g, b] = encode(col, env.exposure);
+    let [mut r, mut g, mut b] = encode(col, env.exposure);
+    if let Some(n) = surf_n {
+        let (right, up, _) = s.cam.basis();
+        if let Some(c) = crate::view_mode::color(s.mode, n, rd, right, up) {
+            let to = |x: f32| (x.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+            [r, g, b] = [to(c[0]), to(c[1]), to(c[2])];
+        }
+    }
     [r, g, b, 255]
 }
 
@@ -266,11 +278,17 @@ type Rows = Vec<(usize, Vec<u8>)>;
 /// Draw the scene as RGBA bytes (`size[0] * size[1] * 4`, rows from the top), using `threads`
 /// threads. The same input always gives the same bytes, whatever the thread count. `cancel` is
 /// asked once per row; when it says yes the drawing stops and the result is `None`.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn render(scene: &Scene, cam: &Camera, size: [usize; 2], fine: bool, threads: usize, cancel: &(dyn Fn() -> bool + Sync)) -> Option<Vec<u8>> {
+    render_mode(scene, cam, size, fine, threads, 0, cancel)
+}
+
+/// `render` with an analysis view mode (`ViewMode::id`; 0 = the usual shading).
+pub fn render_mode(scene: &Scene, cam: &Camera, size: [usize; 2], fine: bool, threads: usize, mode: u32, cancel: &(dyn Fn() -> bool + Sync)) -> Option<Vec<u8>> {
     let size = [size[0].clamp(1, 8192), size[1].clamp(1, 8192)];
     let field = Field::new(scene);
     let bound = crate::gpu::bounds(scene, None);
-    let setup = Setup { field: &field, env: &scene.env, cam, size, aspect: size[0] as f32 / size[1] as f32, bound, fine };
+    let setup = Setup { field: &field, env: &scene.env, cam, size, aspect: size[0] as f32 / size[1] as f32, bound, fine, mode };
     let threads = threads.clamp(1, 64).min(size[1]);
     let rows: Vec<Option<Rows>> = std::thread::scope(|sc| {
         let handles: Vec<_> = (0..threads)
@@ -315,6 +333,7 @@ struct Job {
     scene: Scene,
     cam: Camera,
     sizes: Vec<[usize; 2]>,
+    mode: u32,
 }
 
 /// A finished picture.
@@ -354,7 +373,7 @@ fn spawn_worker(ctx: Option<egui::Context>) -> Option<Worker> {
                         break;
                     }
                     let fine = i + 1 == n;
-                    let done = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| render(&job.scene, &job.cam, *size, fine, threads, &cancel)));
+                    let done = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| render_mode(&job.scene, &job.cam, *size, fine, threads, job.mode, &cancel)));
                     match done {
                         Ok(Some(rgba)) => {
                             if frames_tx.send(Frame { id, size: *size, rgba, last: fine }).is_err() {
@@ -384,6 +403,7 @@ struct Key {
     cam: [f32; 7],
     view: [u32; 2],
     moving: bool,
+    mode: u32,
 }
 
 /// The simple view: asks the worker for pictures, keeps the latest one as a texture.
@@ -396,6 +416,8 @@ pub struct EasyView {
     next_id: u64,
     /// Is the finest picture of the last request on screen?
     pub settled: bool,
+    /// The analysis view mode to draw (`ViewMode::id`).
+    pub mode: u32,
 }
 
 impl EasyView {
@@ -422,6 +444,7 @@ impl EasyView {
             cam: crate::perf::cam_key(cam),
             view: view_px,
             moving,
+            mode: self.mode,
         };
         if self.requested.as_ref().is_some_and(|(_, k)| *k == key) {
             return;
@@ -429,7 +452,7 @@ impl EasyView {
         self.next_id += 1;
         let id = self.next_id;
         worker.latest.store(id, Ordering::Relaxed);
-        let job = Job { id, scene: key.scene.clone(), cam: *cam, sizes: sizes(view_px, moving) };
+        let job = Job { id, scene: key.scene.clone(), cam: *cam, sizes: sizes(view_px, moving), mode: self.mode };
         if worker.tx.send(job).is_ok() {
             self.requested = Some((id, key));
             self.settled = false;
@@ -496,6 +519,21 @@ mod tests {
         assert!(img.chunks(4).all(|p| p[3] == 255));
         let first = [img[0], img[1], img[2]];
         assert!(img.chunks(4).any(|p| [p[0], p[1], p[2]] != first));
+    }
+
+    #[test]
+    fn view_modes_change_only_the_surface_and_normal_is_unchanged() {
+        let sc = Scene::default();
+        let mut cam = Camera::default();
+        cam.frame([0.0, 0.0, 20.0], 40.0);
+        let normal = render(&sc, &cam, [64, 40], true, 2, &never).expect("normal");
+        assert_eq!(normal, render_mode(&sc, &cam, [64, 40], true, 2, 0, &never).expect("mode 0"));
+        for mode in 1..=4u32 {
+            let img = render_mode(&sc, &cam, [64, 40], true, 2, mode, &never).expect("mode");
+            assert_eq!(img.len(), normal.len());
+            assert!(img.chunks(4).all(|p| p[3] == 255));
+            assert_ne!(img, normal, "mode {mode} draws something different");
+        }
     }
 
     #[test]
