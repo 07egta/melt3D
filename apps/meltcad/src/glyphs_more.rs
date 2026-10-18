@@ -333,3 +333,19 @@ mod tests {
         assert!(shapes_of(Kind::Sphere).is_empty());
     }
 }
+
+/// Melt: two round blobs joined by a smooth neck.
+pub fn melt(p: &Painter, rect: Rect, ink: Color32) {
+    let f = Rect::from_center_size(rect.center(), egui::Vec2::splat(rect.width().min(rect.height()) * 0.8));
+    let at = |u: f32, v: f32| Pos2::new(f.left() + f.width() * u, f.top() + f.height() * v);
+    let s = Stroke::new((rect.width() * 0.075).clamp(1.2, 2.2), ink);
+    p.circle_filled(at(0.28, 0.42), f.width() * 0.2, ink.gamma_multiply(0.22));
+    p.circle_filled(at(0.72, 0.42), f.width() * 0.2, ink.gamma_multiply(0.22));
+    p.circle_stroke(at(0.28, 0.42), f.width() * 0.2, s);
+    p.circle_stroke(at(0.72, 0.42), f.width() * 0.2, s);
+    // the neck and a drip
+    p.line_segment([at(0.44, 0.34), at(0.56, 0.34)], s);
+    p.line_segment([at(0.44, 0.5), at(0.56, 0.5)], s);
+    p.circle_filled(at(0.5, 0.82), f.width() * 0.07, ink);
+    p.line_segment([at(0.5, 0.62), at(0.5, 0.76)], s);
+}
