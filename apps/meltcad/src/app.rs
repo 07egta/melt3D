@@ -913,10 +913,15 @@ impl App {
                 // left: logo, file, edit, undo / redo, search.  right: export.  middle: the file name.
                 ui.horizontal_centered(|ui| {
                     ui.spacing_mut().item_spacing.x = 6.0;
-                    let (mark, _) = ui.allocate_exact_size(egui::vec2(18.0, 18.0), egui::Sense::hover());
-                    ui.painter().circle_filled(mark.center(), 8.0, style::ACCENT);
-                    ui.painter().circle_filled(mark.center() + egui::vec2(-2.5, -2.5), 2.6, Color32::from_white_alpha(120));
-                    ui.label(RichText::new("MELTCAD").size(14.0).strong().color(style::TEXT));
+                    // the white mark, made once and kept in the context
+                    let tex: egui::TextureHandle =
+                        ui.ctx().data_mut(|d| d.get_temp::<egui::TextureHandle>(egui::Id::new("logo_tex"))).unwrap_or_else(|| {
+                            let h = ui.ctx().load_texture("logo", crate::icon::mark_image(), egui::TextureOptions::LINEAR);
+                            ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("logo_tex"), h.clone()));
+                            h
+                        });
+                    ui.add(egui::Image::new(&tex).fit_to_exact_size(egui::vec2(30.0, 30.0 * 131.0 / 192.0)).tint(style::TEXT));
+                    ui.label(RichText::new("Melt 3D").size(14.0).strong().color(style::TEXT));
                     style::vsep(ui);
                     style::menu_button(ui, "File", false, |ui| {
                         if ui.button("New").clicked() {
