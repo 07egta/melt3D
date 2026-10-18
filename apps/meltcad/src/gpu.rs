@@ -184,7 +184,7 @@ impl ScenePack {
             let first = shape_n;
             let mut members: Vec<&crate::model::Shape> = Vec::new();
             for (si, s) in g.shapes.iter().enumerate() {
-                if !s.visible || shape_n >= MAX_SHAPES {
+                if !s.solid() || shape_n >= MAX_SHAPES {
                     continue;
                 }
                 pack_shape(s, &mut shapes, &mut poly, &mut path, &vols);
@@ -453,7 +453,7 @@ fn bounds_of(scene: &Scene, selected: Option<Pick>, resolved: &[crate::pattern::
                 Some(Pick::Group(a)) => a == rg.gi,
                 None => false,
             };
-            if !s.visible || (!is_sel && (s.op != crate::model::Op::Add || g.op != crate::model::Op::Add)) {
+            if !s.solid() || (!is_sel && (s.op != crate::model::Op::Add || g.op != crate::model::Op::Add)) {
                 continue;
             }
             // a lamp's glow reaches a good way out

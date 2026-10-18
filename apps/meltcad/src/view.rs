@@ -455,6 +455,7 @@ impl App {
             let active = self.drag.as_ref().map(gizmo::Drag::handle).or(hover_handle);
             gizmo::draw(&painter, g, tool, active);
         }
+        self.guide_paint(&painter, rect);
         self.curve_paint(&painter, rect);
         self.pipe_paint(&painter, rect);
         self.sketch_paint(&painter, rect);
@@ -586,7 +587,9 @@ impl App {
     }
 
     fn pick_at(&mut self, rect: Rect, p: Pos2, keep: bool) {
-        match self.shape_at(rect, p) {
+        // a sketch line near the click wins over what lies behind it
+        let hit = self.guide_at(rect, p).or_else(|| self.shape_at(rect, p));
+        match hit {
             Some((g, s)) => {
                 let want = as_pick(g, s);
                 self.sel = if keep && self.sel == Some(want) { Some(Pick::Group(g)) } else { Some(want) };

@@ -201,7 +201,7 @@ pub fn bounds(scene: &Scene) -> Result<([f64; 3], [f64; 3]), String> {
         }
         let one = [crate::pattern::Inst::IDENTITY];
         let insts: &[crate::pattern::Inst] = if rg.insts.is_empty() { &one } else { &rg.insts };
-        for s in src.shapes.iter().filter(|s| s.visible && s.op == Op::Add) {
+        for s in src.shapes.iter().filter(|s| s.solid() && s.op == Op::Add) {
             let r = reach_of(s) * 1.05 + (f64::from(s.blend.max(0.0)) + f64::from(g.blend.max(0.0))) * amount * factor;
             for inst in insts {
                 let at = inst.apply(s.pos);
@@ -226,7 +226,7 @@ fn single_look(scene: &Scene) -> Option<Mat8> {
     let mut first: Option<Mat8> = None;
     for rg in crate::pattern::resolve(scene) {
         let Some(src) = scene.groups.get(rg.src) else { continue };
-        for s in src.shapes.iter().filter(|s| s.visible) {
+        for s in src.shapes.iter().filter(|s| s.solid()) {
             let m = look_of(s.material.color, s.material.roughness, s.material.metallic);
             match first {
                 None => first = Some(m),
@@ -310,7 +310,7 @@ impl Painter {
                 u.op = Op::Add;
                 stains.push((alone(gi, u), g.blend * amount));
             } else {
-                for sh in g.shapes.iter().filter(|s| s.visible && s.op == Op::Paint) {
+                for sh in g.shapes.iter().filter(|s| s.solid() && s.op == Op::Paint) {
                     let mut one = sh.clone();
                     one.op = Op::Add;
                     let mut u = g.clone();

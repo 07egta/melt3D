@@ -379,7 +379,7 @@ impl Field {
                 let mut origin = Vec::new();
                 let mut members: Vec<&Shape> = Vec::new();
                 for (si, s) in srcg.shapes.iter().enumerate() {
-                    if s.visible {
+                    if s.solid() {
                         shapes.push(Prepared::new(s));
                         origin.push((rg.src, si));
                         members.push(s);
@@ -931,7 +931,7 @@ mod tests {
             for (n, i) in insts.iter().enumerate() {
                 let mut c = plain.clone();
                 c.name = format!("{} {n}", g.name);
-                for s in src.shapes.iter().filter(|s| s.visible) {
+                for s in src.shapes.iter().filter(|s| s.solid()) {
                     let mut t = s.clone();
                     t.uid = 0;
                     t.pos = i.apply(s.pos);

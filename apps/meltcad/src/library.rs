@@ -94,7 +94,7 @@ impl Item {
         let mut lo = [f32::INFINITY; 2];
         let mut hi = [f32::NEG_INFINITY; 2];
         for s in &self.group.shapes {
-            if !s.visible || s.op != crate::model::Op::Add {
+            if !s.solid() || s.op != crate::model::Op::Add {
                 continue;
             }
             let r = crate::view::radius_of(s);

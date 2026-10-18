@@ -6,6 +6,10 @@ use serde::{Deserialize, Serialize};
 use crate::mesh::SharedVolume;
 use crate::pattern::{Pattern, Xform};
 
+fn is_false(v: &bool) -> bool {
+    !*v
+}
+
 fn is_zero(v: &u32) -> bool {
     *v == 0
 }
@@ -411,6 +415,10 @@ pub struct Shape {
     pub blend: f32,
     pub material: Material,
     pub visible: bool,
+    /// A sketch line: drawn on the screen as a line, never part of the solid (not rendered, not
+    /// exported, not measured). Extrude, Loft or Revolve turn it into a solid.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub guide: bool,
     /// Corners of an `Extrude` outline, in the shape's own XY plane.
     pub outline: Vec<[f32; 2]>,
     /// Kind-specific extra numbers (`Kind::param_labels`).
@@ -506,6 +514,11 @@ pub const MAX_ROUND: f32 = 500.0;
 pub const MAX_PATH: usize = 48;
 
 impl Shape {
+    /// Shown and part of the solid (a hidden shape or a sketch line is not).
+    pub fn solid(&self) -> bool {
+        self.visible && !self.guide
+    }
+
     pub fn new(kind: Kind, pos: [f32; 3], material: Material) -> Shape {
         Shape {
             name: kind.label().to_string(),
@@ -519,6 +532,7 @@ impl Shape {
             blend: 6.0,
             material,
             visible: true,
+            guide: false,
             outline: kind.default_outline(),
             params: kind.default_params(),
             path: kind.default_path(),
