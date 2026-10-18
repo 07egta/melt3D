@@ -1089,6 +1089,50 @@ impl App {
                             self.delete_selected();
                             ui.close();
                         }
+                        ui.separator();
+                        if ui.button("Select none  Esc").clicked() {
+                            self.sel = None;
+                            self.multi.clear();
+                            ui.close();
+                        }
+                        if ui.button("Show all hidden").clicked() {
+                            for g in &mut self.scene.groups {
+                                g.visible = true;
+                                for sh in &mut g.shapes {
+                                    sh.visible = true;
+                                }
+                            }
+                            ui.close();
+                        }
+                    });
+                    style::menu_button(ui, "View", false, |ui| {
+                        let pi = std::f32::consts::PI;
+                        for (name, yaw, pitch) in [("Front  1", 0.0, 0.0), ("Right  3", pi / 2.0, 0.0), ("Top  7", self.cam.yaw, pi / 2.0), ("Back  Ctrl+1", pi, 0.0), ("Left  Ctrl+3", -pi / 2.0, 0.0), ("Bottom  Ctrl+7", self.cam.yaw, -pi / 2.0)] {
+                            if ui.button(name).clicked() {
+                                self.fly_look(yaw, pitch);
+                                ui.close();
+                            }
+                        }
+                        ui.separator();
+                        if ui.button("Turn left  Alt+←").clicked() {
+                            self.cam.yaw -= 0.26;
+                        }
+                        if ui.button("Turn right  Alt+→").clicked() {
+                            self.cam.yaw += 0.26;
+                        }
+                        ui.separator();
+                        if ui.button(if self.cam.ortho { "Perspective view  5" } else { "Flat (ortho) view  5" }).clicked() {
+                            self.cam.ortho = !self.cam.ortho;
+                            ui.close();
+                        }
+                        if ui.button("Frame all  Home").clicked() {
+                            self.frame_view(false);
+                            ui.close();
+                        }
+                        if ui.button("Frame selection  Shift+F").clicked() {
+                            self.frame_view(true);
+                            ui.close();
+                        }
                     });
                     style::vsep(ui);
                     if style::icon_button(ui, 32.0, "Undo (Ctrl+Z)", false, glyphs::undo).clicked() {
@@ -1329,7 +1373,6 @@ impl App {
                         ("Shift+F / Home", "Frame selection / Frame all"),
                         ("1 3 7 (Ctrl: opposite)", "Front / Right / Top"),
                         ("5", "Perspective ⇄ Ortho"),
-                        ("H / Alt+H", "Hide ⇄ show / Show all"),
                         ("Tab", "Add ⇄ Subtract"),
                         ("Ctrl + drag", "1 mm / 15° steps"),
                         ("Arrow keys", "Move 1 mm (Shift: 10 mm)"),
