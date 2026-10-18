@@ -65,6 +65,7 @@ mod sketch;
 mod sketch_dimensions;
 mod sketch_edit_ops;
 mod sketch_icons;
+mod sketch_live;
 mod sketch_ui;
 mod stroke;
 mod style;

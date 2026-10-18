@@ -291,6 +291,11 @@ impl App {
             rev = self.track_scene();
             self.deduped_rev = rev;
         }
+        // a live sketch solid is one undo step, made when it is accepted
+        self.live_validate();
+        if self.sk.live.is_some() {
+            return;
+        }
         if self.committed_rev != rev && !ctx.input(|i| i.pointer.any_down()) {
             // (compared exactly once per change: a drag that ends where it began is no edit)
             if self.scene != self.committed {
@@ -305,7 +310,7 @@ impl App {
         }
     }
 
-    fn fix_selection(&mut self) {
+    pub(crate) fn fix_selection(&mut self) {
         let ok = match self.sel {
             Some(Pick::Shape(g, s)) => self.scene.shape(g, s).is_some(),
             Some(Pick::Group(g)) => g < self.scene.groups.len(),
@@ -317,6 +322,11 @@ impl App {
     }
 
     pub fn undo(&mut self) {
+        if self.sk.live.is_some() {
+            // undo while shaping = throw the live solid away
+            self.live_discard();
+            return;
+        }
         if let Some(prev) = self.undo.pop() {
             self.redo.push(std::mem::replace(&mut self.scene, prev.clone()));
             self.committed = prev;
@@ -600,6 +610,11 @@ impl App {
 
     /// Put the selected shapes into one new group (they melt together; the group is the unit to move and melt with others).
     pub fn group_selected(&mut self) {
+        let picked_groups = self.picks().iter().any(|p| matches!(p, Pick::Group(_)));
+        if picked_groups {
+            self.group_groups();
+            return;
+        }
         let mut shapes: Vec<(usize, usize)> =
             self.picks().into_iter().filter_map(|p| if let Pick::Shape(g, s) = p { Some((g, s)) } else { None }).collect();
         if shapes.len() < 2 || self.scene.groups.len() >= MAX_GROUPS {
@@ -621,6 +636,71 @@ impl App {
         self.folded.clear();
         self.multi.clear();
         self.sel = Some(Pick::Group(at));
+        self.multi_for = self.sel;
+    }
+
+    /// Put the picked groups (and any picked loose shapes) inside one new parent group, so groups
+    /// can be nested (a "big group"). One picked group gets wrapped on its own.
+    fn group_groups(&mut self) {
+        let n = self.scene.groups.len();
+        if n >= MAX_GROUPS {
+            return;
+        }
+        let picks = self.picks();
+        let mut groups: Vec<usize> = picks.iter().filter_map(|p| if let Pick::Group(g) = p { Some(*g) } else { None }).filter(|g| *g < n).collect();
+        groups.sort_unstable();
+        groups.dedup();
+        // only the outermost picked groups: what sits inside one of them travels with it
+        let mut ranges: Vec<(usize, usize)> = Vec::new();
+        for &g in &groups {
+            if !ranges.iter().any(|&(a, b)| g >= a && g < b) {
+                ranges.push((g, self.scene.subtree_end(g)));
+            }
+        }
+        let Some(&(first, _)) = ranges.first() else { return };
+        let mut loose: Vec<(usize, usize)> = picks
+            .iter()
+            .filter_map(|p| if let Pick::Shape(g, s) = p { Some((*g, *s)) } else { None })
+            .filter(|(g, _)| !ranges.iter().any(|&(a, b)| *g >= a && *g < b))
+            .collect();
+        loose.sort_unstable();
+        loose.dedup();
+        let mut parent = Group::new(format!("Group {}", n + 1));
+        let mut taken: Vec<Shape> = Vec::new();
+        for (g, s) in loose.iter().rev() {
+            if let Some(sh) = self.scene.groups.get_mut(*g).filter(|gr| *s < gr.shapes.len()).map(|gr| gr.shapes.remove(*s)) {
+                taken.push(sh);
+            }
+        }
+        taken.reverse();
+        parent.shapes = taken;
+        let pdepth = self.scene.groups.get(first).map_or(0, |g| g.depth);
+        parent.depth = pdepth;
+        let tdepth: Vec<i32> = ranges.iter().map(|&(a, _)| self.scene.groups.get(a).map_or(0, |g| i32::from(g.depth))).collect();
+        let old = std::mem::take(&mut self.scene.groups);
+        let mut out: Vec<Group> = Vec::with_capacity(old.len() + 1);
+        let mut block: Vec<Group> = Vec::new();
+        for (i, mut g) in old.into_iter().enumerate() {
+            if i == first {
+                out.push(std::mem::replace(&mut parent, Group::new(String::new())));
+            }
+            if let Some(k) = ranges.iter().position(|&(a, b)| i >= a && i < b) {
+                let base = tdepth.get(k).copied().unwrap_or(0);
+                g.depth = (i32::from(g.depth) - base + i32::from(pdepth) + 1).clamp(0, i32::from(crate::model::MAX_DEPTH)) as u8;
+                block.push(g);
+            } else {
+                out.push(g);
+            }
+        }
+        let at = (first + 1).min(out.len());
+        for (i, g) in block.into_iter().enumerate() {
+            out.insert(at + i, g);
+        }
+        self.scene.groups = out;
+        self.scene.normalize_depths();
+        self.folded.clear();
+        self.multi.clear();
+        self.sel = Some(Pick::Group(first));
         self.multi_for = self.sel;
     }
 
@@ -1054,13 +1134,20 @@ impl App {
                         self.path.as_ref().and_then(|p| p.file_stem()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "Untitled".into());
                     let label = format!("{}{}", name, if self.dirty { " ●" } else { "" });
                     let cx = bar.center().x.clamp(left_end + 60.0, (right_start - 220.0).max(left_end + 60.0));
-                    ui.painter().text(
+                    let shown = ui.painter().text(
                         egui::pos2(cx, bar.center().y),
                         egui::Align2::CENTER_CENTER,
                         label,
                         egui::FontId::proportional(13.0),
                         style::DIM,
                     );
+                    // click the name to give the design a name (Save As)
+                    let hit = ui.interact(shown.expand2(egui::vec2(8.0, 6.0)), egui::Id::new("doc_name"), egui::Sense::click());
+                    let hit = hit.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text("Click to name and save this design");
+                    if hit.clicked() {
+                        let ctx = ui.ctx().clone();
+                        self.save(&ctx, true);
+                    }
                 });
             },
         );
@@ -1198,7 +1285,10 @@ impl App {
                     ui.horizontal(|ui| {
                         ui.label(RichText::new(format!("{} shapes", self.scene.shape_count())).size(12.0).color(style::DIM));
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if style::icon_button(ui, 26.0, "New group", false, glyphs::group).clicked() {
+                            if style::pill(ui, "+ Group", false)
+                                .on_hover_text("New empty group.\nTo nest: Shift+click several shapes or groups in the list, then press Ctrl+G")
+                                .clicked()
+                            {
                                 self.add_group();
                             }
                         });

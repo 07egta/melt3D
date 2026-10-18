@@ -36,6 +36,7 @@ describe SolidCraft; where they conflict with this file, **this file wins for wo
 - Integration order is decided by the owner. A PR is ready only when CI is green and the PR checklist is filled.
 
 ## UX rules (what "easy" means here)
+- Shortcuts are a bonus, never a requirement: every feature must be reachable without remembering any key (a visible button, a menu entry or the Find palette), and every shortcut is shown in the tooltip of its button.
 - Fewer clicks beats more options. Defaults must work without opening a panel.
 - UI text is Japanese and plain (no jargon) unless the owner says otherwise.
 - Esc always cancels only the current gesture; undo is always one step per gesture.
