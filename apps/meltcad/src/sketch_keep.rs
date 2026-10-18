@@ -233,6 +233,7 @@ mod tests {
     #[test]
     fn a_sketch_line_adds_nothing_to_the_field() {
         let mut scene = crate::model::Scene::default();
+        scene.groups.clear();
         let mut sh = Shape::new(Kind::Box, [0.0; 3], Material::default());
         sh.guide = true;
         let mut g = crate::model::Group::new("g");
