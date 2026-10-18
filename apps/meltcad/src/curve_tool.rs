@@ -730,10 +730,7 @@ impl App {
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("Curve").strong().color(style::ACCENT));
                         style::labeled_slider(ui, "Thickness", &mut self.ct.draw_radius, 0.5..=40.0, "Radius of new nodes (mm)");
-                        if style::pill(ui, "Done", false).on_hover_text("Finish this curve (right-click / Enter)").clicked() {
-                            self.finish_drawing();
-                        }
-                        if style::pill(ui, "Cancel", false).on_hover_text("Turn off the curve tool (Esc)").clicked() {
+                        if style::pill(ui, "Done", false).on_hover_text("Finish this curve and leave the tool (Esc)").clicked() {
                             self.finish_drawing();
                             self.ct.drawing = false;
                         }

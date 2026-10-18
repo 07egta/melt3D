@@ -2075,43 +2075,64 @@ impl App {
         let stage = self.sk.stage;
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new("Sketch").strong().color(style::ACCENT));
-            let sub = match stage {
-                Stage::Draw => "Draw on a plane",
-                Stage::Ready => "Make the outline into a solid",
-                Stage::LoftTop => "Draw the loft's top outline",
-                Stage::SweepPath => "Draw the sweep path (line)",
-                Stage::Hole => "Draw the hole outline",
-            };
-            ui.label(egui::RichText::new(sub).size(11.0).color(style::DIM));
             if style::pill(ui, "Exit", false).on_hover_text("Exit sketch (Esc)").clicked() {
                 off = true;
             }
         });
-        // the plane
+        // the plane: three faces of a cube, the camera, and the rest behind "…"
         let plane_free = matches!(stage, Stage::Draw | Stage::SweepPath);
-        ui.horizontal_wrapped(|ui| {
-            ui.label(egui::RichText::new("Plane").size(11.0).color(style::DIM));
-            for pl in PlaneSel::ALL {
-                let usable = plane_free && (pl != PlaneSel::OnShape || self.sel.is_some());
-                if style::pill_enabled(ui, pl.label(), self.sk.plane == pl, usable).on_hover_text(pl.tip()).clicked() {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
+            for pl in [PlaneSel::Floor, PlaneSel::Front, PlaneSel::Side, PlaneSel::Camera] {
+                let on = self.sk.plane == pl;
+                let r = ui.add_enabled_ui(plane_free, |ui| style::wide_button(ui, pl.label(), pl.tip(), on, None, |p, r, ink| crate::sketch_icons::plane(p, r, pl, ink))).inner;
+                if r.clicked() {
                     self.sketch_set_plane(pl);
                 }
             }
-            if plane_free && style::pill(ui, "View", false).on_hover_text("View this plane head-on").clicked() {
-                let f = self.sk.frame;
-                self.sketch_fly(&f);
+            if plane_free {
+                style::menu_button(ui, "…", !matches!(self.sk.plane, PlaneSel::Floor | PlaneSel::Front | PlaneSel::Side | PlaneSel::Camera), |ui| {
+                    for pl in [PlaneSel::OnShape, PlaneSel::Height, PlaneSel::Custom] {
+                        let usable = pl != PlaneSel::OnShape || self.sel.is_some();
+                        let r = ui.add_enabled_ui(usable, |ui| {
+                            ui.horizontal(|ui| {
+                                let (rc, _) = ui.allocate_exact_size(egui::vec2(24.0, 24.0), egui::Sense::hover());
+                                crate::sketch_icons::plane(ui.painter(), rc, pl, ui.visuals().text_color());
+                                ui.selectable_label(self.sk.plane == pl, pl.label()).on_hover_text(pl.tip())
+                            })
+                            .inner
+                        });
+                        if r.inner.clicked() {
+                            self.sketch_set_plane(pl);
+                            ui.close();
+                        }
+                    }
+                    ui.separator();
+                    if ui.selectable_label(false, "View this plane head-on").clicked() {
+                        let f = self.sk.frame;
+                        self.sketch_fly(&f);
+                        ui.close();
+                    }
+                    if ui.selectable_label(false, "Copy this plane to custom plane").clicked() {
+                        self.sketch_copy_plane_to_custom();
+                        ui.close();
+                    }
+                });
             }
         });
-        if plane_free {
+        if plane_free && matches!(self.sk.plane, PlaneSel::Height | PlaneSel::Custom) {
             self.sketch_plane_settings(ui);
         }
         // the pens
         if matches!(stage, Stage::Draw | Stage::LoftTop | Stage::Hole) {
-            ui.horizontal_wrapped(|ui| {
-                ui.label(egui::RichText::new("Tool").size(11.0).color(style::DIM));
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
                 for pen in Pen::ALL {
                     let usable = !((stage == Stage::LoftTop || stage == Stage::Hole) && pen == Pen::Line);
-                    if style::pill_enabled(ui, pen.label(), self.sk.pen == pen, usable).on_hover_text(pen.tip()).clicked() {
+                    let on = self.sk.pen == pen;
+                    let tip = format!("{}\n{}", pen.tip(), pen_hint(pen, stage));
+                    let r = ui.add_enabled_ui(usable, |ui| style::wide_button(ui, pen.label(), &tip, on, None, |p, r, ink| crate::sketch_icons::pen_tool(p, r, pen, ink))).inner;
+                    if r.clicked() {
                         self.sk.pen = pen;
                         self.sk.clear_drawing();
                     }
@@ -2120,29 +2141,23 @@ impl App {
         }
         if matches!(stage, Stage::Draw | Stage::LoftTop | Stage::SweepPath | Stage::Hole) {
             let pen = self.sk.active_pen();
-            if matches!(pen, Pen::Spline | Pen::Line) {
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("Shape").size(11.0).color(style::DIM));
-                    if style::pill(ui, "Smooth", self.sk.smooth).on_hover_text("Smooth curve through the points").clicked() {
-                        self.sk.smooth = true;
-                    }
-                    if style::pill(ui, "Sharp", !self.sk.smooth).on_hover_text("Straight lines between points").clicked() {
-                        self.sk.smooth = false;
-                    }
-                });
-            }
-            hint(ui, pen_hint(pen, stage));
-            // one short row: the long help sits in a tooltip so the card stays out of the way
             ui.horizontal(|ui| {
-                if style::pill(ui, "Angle snap 15°", self.sk.angle_snap).clicked() { self.sk.angle_snap = !self.sk.angle_snap; }
-                ui.label(egui::RichText::new("ⓘ Hints").size(11.0).color(style::DIM)).on_hover_text(
-                    "Snaps to endpoints, midpoints, intersections, origin\nShift = 10 mm  ·  Ctrl = 0.1 mm\nBackspace: undo last point  ·  Esc: restart\nTab: enter length of last point or segment");
+                ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
+                if matches!(pen, Pen::Spline | Pen::Line) {
+                    let on = self.sk.smooth;
+                    let tip = if on { "Smooth curve through the points (click for straight lines)" } else { "Straight lines between points (click for a smooth curve)" };
+                    if style::wide_button(ui, if on { "Smooth" } else { "Sharp" }, tip, false, None, |p, r, ink| crate::sketch_icons::smooth(p, r, on, ink)).clicked() {
+                        self.sk.smooth = !self.sk.smooth;
+                    }
+                }
+                let snap = self.sk.angle_snap;
+                let tip = "Snap angles to 15°. Also snaps to endpoints, midpoints and crossings\nShift = 10 mm  ·  Ctrl = 0.1 mm\nBackspace: undo last point  ·  Esc: restart\nTab: type a length";
+                if style::wide_button(ui, "Angle snap 15°", tip, snap, None, crate::sketch_icons::snap).clicked() {
+                    self.sk.angle_snap = !self.sk.angle_snap;
+                }
             });
         }
         self.dimension_card(ui);
-        if stage == Stage::Draw && !self.sk.path.is_empty() {
-            hint(ui, &format!("Saved path: {} points (usable with Sweep)", self.sk.path.len()));
-        }
         if stage == Stage::Ready {
             ui.horizontal_wrapped(|ui| {
                 hint(ui, &format!("Holes: {} / {}", self.sk.holes.len(), sketch::MAX_HOLES));

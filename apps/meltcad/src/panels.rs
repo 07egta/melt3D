@@ -198,6 +198,7 @@ impl App {
                     {
                         s.op = op.next();
                     }
+                    self.curve_ball_rows(ui, gi, si, 36.0 + indent_px);
                 }
             }
         }
@@ -205,6 +206,32 @@ impl App {
             ui.label(RichText::new("Click a shape above to add one").color(style::DIM).size(12.0));
         }
         self.layer_drop(ui);
+    }
+
+    /// A selected curve is a group of balls: one small row per ball, to pick it from the list.
+    fn curve_ball_rows(&mut self, ui: &mut Ui, gi: usize, si: usize, indent: f32) {
+        if self.sel != Some(Pick::Shape(gi, si)) {
+            return;
+        }
+        let Some(sh) = self.scene.shape(gi, si) else { return };
+        if !sh.kind.uses_path() {
+            return;
+        }
+        let radii: Vec<f32> = sh.path.iter().take(256).map(|p| p[3]).collect();
+        let chosen = self.chosen_node(gi, si);
+        for (i, r) in radii.iter().enumerate() {
+            let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 24.0), Sense::click());
+            let on = chosen == Some(i);
+            style::row_bg(ui, &resp, rect, on);
+            let c = egui::pos2(rect.left() + indent + 8.0, rect.center().y);
+            let col = if on { style::ACCENT } else { style::DIM };
+            ui.painter().circle_stroke(c, 5.0, Stroke::new(1.5, col));
+            let text = format!("Ball {}   r {:.1}", i + 1, r);
+            ui.painter().text(egui::pos2(c.x + 14.0, c.y), Align2::LEFT_CENTER, text, FontId::proportional(12.0), if on { style::TEXT } else { style::DIM });
+            if resp.clicked() {
+                self.ct.node = Some((gi, si, i));
+            }
+        }
     }
 
     /// While a row is being dragged: show where it would land, and put it there on release.

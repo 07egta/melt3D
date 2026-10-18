@@ -64,6 +64,7 @@ mod shader_portability;
 mod sketch;
 mod sketch_dimensions;
 mod sketch_edit_ops;
+mod sketch_icons;
 mod sketch_ui;
 mod stroke;
 mod style;
@@ -154,7 +155,8 @@ fn main() -> eframe::Result {
             let srgb = rs.as_ref().is_none_or(|rs| rs.target_format.is_srgb());
             let mut app = app::App::new(srgb, std::env::args_os().nth(1).map(std::path::PathBuf::from));
             // the shader compiles on its own thread: the window shows first, with the simple view
-            app.attach_gpu(rs, &cc.egui_ctx, settings.easy);
+            // the GPU picture is the default every launch; the simple view is only a temporary choice
+            app.attach_gpu(rs, &cc.egui_ctx, false);
             perf::mark("app created");
             Ok(Box::new(app))
         }),
