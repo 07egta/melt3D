@@ -53,16 +53,19 @@ fn quad(a: P, c: P, b: P, n: usize) -> Vec<P> {
 }
 
 fn polyline(p: &Painter, f: Rect, pts: &[P], s: Stroke) {
-    p.add(Shape::line(px(f, pts), s));
+    crate::glyphs::round_path(p, px(f, pts), s, false);
 }
 
 fn segment(p: &Painter, f: Rect, a: P, b: P, s: Stroke) {
-    p.line_segment([at(f, a.0, a.1), at(f, b.0, b.1)], s);
+    crate::glyphs::round_path(p, vec![at(f, a.0, a.1), at(f, b.0, b.1)], s, false);
 }
 
 /// Convex filled polygon with an outline.
 fn poly(p: &Painter, f: Rect, pts: &[P], fill: Color32, s: Stroke) {
-    p.add(Shape::convex_polygon(px(f, pts), fill, s));
+    p.add(Shape::convex_polygon(px(f, pts), fill, Stroke::NONE));
+    if s.width > 0.0 {
+        crate::glyphs::round_path(p, px(f, pts), s, true);
+    }
 }
 
 /// Fill of any star-shaped polygon (seen from `c`) as a triangle fan, then its outline.
@@ -77,11 +80,7 @@ fn fan(p: &Painter, f: Rect, pts: &[P], c: P, fill: Color32, s: Stroke) {
         m.add_triangle(0, 1 + i, 1 + (i + 1) % n);
     }
     p.add(Shape::mesh(m));
-    let mut ring = px(f, pts);
-    if let Some(&first) = ring.first() {
-        ring.push(first);
-    }
-    p.add(Shape::line(ring, s));
+    crate::glyphs::round_path(p, px(f, pts), s, true);
 }
 
 /// A strip of quads between two sides of equal length (for ribbons), no outline.
@@ -134,11 +133,7 @@ fn slab(p: &Painter, f: Rect, top: &[P], concave_centre: Option<P>, drop: f32, f
         None => poly(p, f, top, fill, s),
     }
     // a closed outline for the top face
-    let mut o = px(f, top);
-    if let Some(&first) = o.first() {
-        o.push(first);
-    }
-    p.add(Shape::line(o, s));
+    crate::glyphs::round_path(p, px(f, top), s, true);
 }
 
 fn prism3(p: &Painter, f: Rect, fill: Color32, s: Stroke) {
@@ -152,15 +147,17 @@ fn prism_n(p: &Painter, f: Rect, fill: Color32, s: Stroke) {
 }
 
 fn star(p: &Painter, f: Rect, fill: Color32, s: Stroke) {
-    let (cu, cv, ru, rv) = (0.5, 0.38, 0.47, 0.27);
-    let top: Vec<P> = (0..10)
-        .map(|k| {
-            let a = -PI * 0.5 + PI * k as f32 / 5.0;
-            let r = if k % 2 == 0 { 1.0 } else { 0.45 };
-            (cu + ru * r * a.cos(), cv + rv * r * a.sin())
-        })
-        .collect();
-    slab(p, f, &top, Some((cu, cv)), 0.3, fill, s);
+    // a plain five-point star, drawn flat with a little thickness underneath
+    let pts = |dv: f32| -> Vec<P> {
+        (0..10)
+            .map(|k| {
+                let a = -PI * 0.5 + PI * k as f32 / 5.0;
+                let r = if k % 2 == 0 { 0.46 } else { 0.2 };
+                (0.5 + r * a.cos(), 0.52 + dv + r * a.sin())
+            })
+            .collect()
+    };
+    fan(p, f, &pts(0.0), (0.5, 0.52), fill, s);
 }
 
 fn octa(p: &Painter, f: Rect, fill: Color32, s: Stroke) {
@@ -259,27 +256,20 @@ fn s_path(n: usize) -> Vec<P> {
 }
 
 fn curve(p: &Painter, f: Rect, fill: Color32, s: Stroke) {
+    // a smooth line with the nodes you drag
     let path = s_path(24);
-    let w = f.width() * 0.17;
-    let line = |width: f32, c: Color32| {
-        p.add(Shape::line(px(f, &path), Stroke::new(width, c)));
-        for q in [path[0], path[path.len() - 1]] {
-            p.circle_filled(at(f, q.0, q.1), width * 0.5, c);
-        }
-    };
-    line(w + s.width * 2.0, s.color);
-    line(w, fill);
-    // the nodes you drag
+    crate::glyphs::round_path(p, px(f, &path), Stroke::new(s.width * 1.25, s.color), false);
     for i in [0, 12, 24] {
         let q = path[i];
-        p.circle_filled(at(f, q.0, q.1), f.width() * 0.07, s.color);
-        p.circle_filled(at(f, q.0, q.1), f.width() * 0.035, fill);
+        p.circle_filled(at(f, q.0, q.1), f.width() * 0.085, s.color);
+        p.circle_filled(at(f, q.0, q.1), f.width() * 0.04, fill);
     }
 }
 
 fn sweep(p: &Painter, f: Rect, fill: Color32, s: Stroke) {
+    // a ribbon along the path: two edges and a soft fill, with the profile ring at its start
     let path = s_path(24);
-    let half = 0.085;
+    let half = 0.07;
     let (mut a, mut b) = (Vec::new(), Vec::new());
     for i in 0..path.len() {
         let (p0, p1) = (path[i.saturating_sub(1)], path[(i + 1).min(path.len() - 1)]);
@@ -292,15 +282,8 @@ fn sweep(p: &Painter, f: Rect, fill: Color32, s: Stroke) {
     strip(p, f, &a, &b, fill.gamma_multiply(0.8));
     polyline(p, f, &a, s);
     polyline(p, f, &b, s);
-    // the profile at the start, standing across the path
-    let (a0, b0) = (a[0], b[0]);
-    let off = (0.0, -0.10);
-    poly(p, f, &[a0, b0, (b0.0 + off.0, b0.1 + off.1), (a0.0 + off.0, a0.1 + off.1)], fill, s);
-    // and the guide line down the middle
-    let mid: Vec<P> = path.iter().step_by(2).copied().collect();
-    for w in mid.windows(2).step_by(2) {
-        segment(p, f, w[0], w[1], Stroke::new(s.width * 0.7, faint(s.color)));
-    }
+    // the cut across the start
+    segment(p, f, a[0], b[0], s);
 }
 
 /// Draws the icon of an extra solid or a CAD feature. Other kinds draw nothing here.
