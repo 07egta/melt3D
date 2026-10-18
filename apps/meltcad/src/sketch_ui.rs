@@ -601,6 +601,31 @@ impl App {
         }
     }
 
+    /// Strip buttons for Extrude, Loft and Sweep: start the sketch with that way of making chosen
+    /// (or switch to it while sketching). Draw the outline, then press "Make".
+    pub fn sketch_make_buttons(&mut self, ui: &mut Ui) {
+        type Icon = fn(&egui::Painter, egui::Rect, Color32);
+        let items: [(Make, &str, &str, Icon); 3] = [
+            (Make::Extrude, "Extrude", "Draw an outline, then push it into a solid", crate::sketch_icons::extrude),
+            (Make::Loft, "Loft", "Draw an outline and blend it into a second outline", crate::sketch_icons::loft),
+            (Make::Sweep, "Sweep", "Draw an outline, then pull it along a path", crate::sketch_icons::sweep),
+        ];
+        for (m, name, tip, icon) in items {
+            let on = self.sk.on && self.sk.make == m;
+            if style::wide_button(ui, name, tip, on, None, icon).clicked() {
+                if on {
+                    self.set_sketch_tool(false);
+                } else {
+                    if !self.sk.on {
+                        self.set_sketch_tool(true);
+                    }
+                    self.sk.make = m;
+                    self.sk.msg.clear();
+                }
+            }
+        }
+    }
+
     /// The top of the selected shape (or of the highest shape in the selected group).
     fn selection_top(&self) -> Option<f32> {
         let tops: Vec<f32> = crate::view::targets(&self.scene, self.sel)
