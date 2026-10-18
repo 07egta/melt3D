@@ -116,6 +116,49 @@ impl Frame {
         }
         Some(Frame { origin, u, v: mul(v, 1.0 / lv) })
     }
+    /// The plane that touches a surface at `point` whose outward direction is `normal`. The
+    /// in-plane axes follow the nearest world axes: on a level face `u` is X (or Y when that fits
+    /// better); on a standing face `u` is the level axis most along it and `v` points up. Normal +Z
+    /// gives the floor's axes, +X the side's. A normal or point that is not finite (or a normal of
+    /// no length) falls back to the floor.
+    pub fn from_hit(point: V3, normal: V3) -> Frame {
+        Self::try_from_hit(point, normal).unwrap_or_else(Frame::floor)
+    }
+
+    fn try_from_hit(point: V3, normal: V3) -> Option<Frame> {
+        if !point.iter().chain(normal.iter()).all(|x| x.is_finite() && x.abs() <= 1.0e6) {
+            return None;
+        }
+        let l = len(normal);
+        if l < 1e-6 {
+            return None;
+        }
+        let n = mul(normal, 1.0 / l);
+        let level = n[2].abs() >= 0.7;
+        let axes: [V3; 3] = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+        let mut best: Option<(f32, V3)> = None;
+        // (only the level axes lead: a face is never turned about the vertical)
+        for a in axes.iter().take(2) {
+            let pr = sub(*a, mul(n, dot(*a, n)));
+            let pl = len(pr);
+            if pl.is_finite() && best.is_none_or(|b| pl > b.0 + 1e-6) {
+                best = Some((pl, pr));
+            }
+        }
+        let (pl, pr) = best?;
+        if pl < 1e-6 {
+            return None;
+        }
+        let mut u = mul(pr, 1.0 / pl);
+        let mut v = cross(n, u);
+        if !level && v[2] < 0.0 {
+            u = mul(u, -1.0);
+            v = mul(v, -1.0);
+        }
+        let origin = [point[0], point[1], point[2]];
+        Frame::from_axes(origin, u, v)
+    }
+
     /// Place a plane through a world point with X/Y/Z Euler rotation (degrees).
     /// The same rotation convention is used by saved sketch-generated shapes.
     pub fn oriented(origin: V3, degrees: V3) -> Option<Frame> {

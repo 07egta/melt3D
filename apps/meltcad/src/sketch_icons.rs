@@ -198,6 +198,19 @@ pub fn hole(p: &Painter, r: Rect, ink: Color32) {
     p.circle_stroke(at(r, 0.5, 0.5), r.width() * 0.22, pen(r, ink));
 }
 
+/// Re-pick the plane: a crosshair on a square plane.
+pub fn pick_plane(p: &Painter, r: Rect, ink: Color32) {
+    let st = pen(r, ink);
+    let dim = Stroke::new(st.width, ink.gamma_multiply(0.7));
+    poly(p, r, &[(0.12, 0.62), (0.58, 0.5), (0.9, 0.22), (0.44, 0.34)], Some(ink.gamma_multiply(0.3)), dim);
+    let c = at(r, 0.5, 0.56);
+    p.circle_stroke(c, r.width() * 0.17, st);
+    for (dx, dy) in [(-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0)] {
+        let d = Vec2::new(dx, dy) * r.width();
+        p.line_segment([c + d * 0.17, c + d * 0.36], st);
+    }
+}
+
 /// Draw the top outline: a pencil over a small outline.
 pub fn pencil_top(p: &Painter, r: Rect, ink: Color32) {
     let st = pen(r, ink);

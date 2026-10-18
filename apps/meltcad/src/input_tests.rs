@@ -78,6 +78,8 @@ impl Rig {
 
     fn sketch(&mut self, pen: Pen) {
         self.app.set_sketch_tool(true);
+        // (the plane is chosen by name: the pick-a-plane gesture has its own tests)
+        self.app.sketch_set_plane(crate::sketch_ui::PlaneSel::Floor);
         self.app.sk.pen = pen;
         self.app.cam.look(0.0, std::f32::consts::FRAC_PI_2);
         self.app.cam.target = [0.0, 0.0, 0.0];
@@ -253,7 +255,7 @@ fn sketch_polygon_clicks_and_enter_complete_without_changing_selection() {
     assert_eq!(r.app.sk.pts.len(), 3, "three pointer clicks make three corners");
     assert_eq!(r.app.sel, selected, "drawing must not pick the solid behind the sketch");
     r.key(egui::Key::Enter);
-    assert_eq!(r.app.sk.stage, Stage::Ready);
+    assert_eq!(r.app.sk.stage, Stage::Shape);
     assert_eq!(r.app.sk.profile.len(), 3);
     assert!(r.app.sk.pts.is_empty());
 }
@@ -277,16 +279,17 @@ fn sketch_right_click_finishes_line_without_duplicate_endpoint() {
 fn right_click_confirms_a_polygon_and_does_not_open_the_menu_or_pick() {
     let mut r = Rig::new();
     r.sketch(Pen::Polygon);
-    let selected = r.app.sel;
     for q in [[-24.0, -17.0], [26.0, -17.0], [24.0, 18.0]] {
         let p = r.on_plane(q);
         r.click(p);
     }
     let p = r.on_plane([24.0, 18.0]);
     r.right_click(p);
-    assert_eq!(r.app.sk.stage, Stage::Ready);
+    assert_eq!(r.app.sk.stage, Stage::Shape);
     assert_eq!(r.app.sk.profile.len(), 3);
-    assert_eq!(r.app.sel, selected, "the right click must not pick the solid behind");
+    let live = r.app.sk.live.map(|(g, s)| Pick::Shape(g, s));
+    assert!(live.is_some());
+    assert_eq!(r.app.sel, live, "the right click closed the outline; it must not pick the solid behind");
 }
 
 #[test]
@@ -299,7 +302,7 @@ fn sketch_rectangle_and_circle_drag_are_profiles_not_camera_orbits() {
         let a = r.on_plane([-25.0, -14.0]);
         let b = r.on_plane([25.0, 17.0]);
         r.drag(a, b);
-        assert_eq!(r.app.sk.stage, Stage::Ready, "{pen:?} drag must finish");
+        assert_eq!(r.app.sk.stage, Stage::Shape, "{pen:?} drag must finish");
         assert_eq!(r.app.sk.profile.len(), sides);
         assert!(!r.app.sk.dragging && r.app.sk.anchor.is_none());
         assert_eq!((r.app.cam.yaw, r.app.cam.pitch), (yaw, pitch), "sketch drag must not orbit");
@@ -324,7 +327,7 @@ fn sketch_rectangle_enter_finishes_a_two_click_preview() {
     assert!(r.app.sk.anchor.is_some());
     r.mv(b);
     r.key(egui::Key::Enter);
-    assert_eq!(r.app.sk.stage, Stage::Ready);
+    assert_eq!(r.app.sk.stage, Stage::Shape);
     assert_eq!(r.app.sk.profile.len(), 4);
     assert!(r.app.sk.anchor.is_none());
 }
@@ -428,6 +431,74 @@ fn sketch_pointer_coordinates_remain_stable_after_resize_and_high_dpi() {
         r.click(p);
         assert_eq!(r.app.sk.pts.as_slice(), &[[17.0, -14.0]], "logical point coordinates at {scale} ppp, {size:?}");
     }
+}
+
+impl Rig {
+    /// The sketch tool just started: looking down, no plane chosen yet.
+    fn sketch_unpicked(&mut self, pen: Pen) {
+        self.app.set_sketch_tool(true);
+        self.app.sk.pen = pen;
+        self.app.cam.look(0.0, std::f32::consts::FRAC_PI_2);
+        self.app.cam.target = [0.0, 0.0, 0.0];
+        self.app.cam.dist = 140.0;
+        self.app.fly = None;
+        self.frame(vec![]);
+        self.frame(vec![]);
+    }
+}
+
+#[test]
+fn one_click_on_the_ground_picks_the_floor_and_places_the_first_point() {
+    let mut r = Rig::new();
+    r.sketch_unpicked(Pen::Polygon);
+    assert!(r.app.picking_now(), "the viewport waits for a plane");
+    let p = r.on_plane([55.0, 45.0]);
+    r.mv(p);
+    assert!(r.app.sk.hover_frame.is_some_and(|(_, face, _)| !face), "hovering empty ground shows the floor");
+    r.click(p);
+    assert!(!r.app.picking_now());
+    assert_eq!(r.app.sk.frame, Frame::floor());
+    assert_eq!(r.app.sk.pts.len(), 1, "the same click placed the first point");
+    assert_eq!(r.app.sk.pts.first().copied(), Some([55.0, 45.0]));
+}
+
+#[test]
+fn one_click_on_a_face_picks_that_face_and_places_the_first_point() {
+    let mut r = Rig::new();
+    r.sketch_unpicked(Pen::Polygon);
+    let p = r.on_plane([3.0, 2.0]);
+    r.mv(p);
+    assert!(r.app.sk.hover_frame.is_some_and(|(_, face, _)| face), "hovering the sphere shows a square on its surface");
+    r.click(p);
+    assert!(!r.app.picking_now());
+    assert_eq!(r.app.sk.plane, crate::sketch_ui::PlaneSel::Custom);
+    assert!(r.app.sk.frame.origin[2] > 10.0, "the plane sits on the sphere, not on the floor");
+    assert!(r.app.sk.frame.normal()[2] > 0.9, "the top of the sphere faces up");
+    assert_eq!(r.app.sk.pts.len(), 1);
+    assert!(r.app.fly.is_some(), "the camera glides to face the plane");
+}
+
+#[test]
+fn a_rectangle_drag_on_the_ground_picks_the_plane_too() {
+    let mut r = Rig::new();
+    r.sketch_unpicked(Pen::Rect);
+    let a = r.on_plane([50.0, 40.0]);
+    let b = r.on_plane([62.0, 50.0]);
+    r.drag(a, b);
+    assert!(!r.app.picking_now());
+    assert_eq!(r.app.sk.stage, Stage::Shape, "the rectangle closed and its solid is live");
+    assert_eq!(r.app.sk.profile.len(), 4);
+}
+
+#[test]
+fn re_pick_plane_waits_for_a_click_again() {
+    let mut r = Rig::new();
+    r.sketch(Pen::Polygon);
+    assert!(!r.app.picking_now());
+    r.app.sketch_repick();
+    assert!(r.app.picking_now());
+    r.app.sketch_set_plane(crate::sketch_ui::PlaneSel::Side);
+    assert!(!r.app.picking_now());
 }
 
 #[test]
