@@ -470,7 +470,7 @@ pub fn poly_length(poly: &Poly) -> f32 {
 
 /// The middle of a group's visible shapes.
 pub fn centre_of_shapes(shapes: &[Shape]) -> V3 {
-    let vis: Vec<&Shape> = shapes.iter().filter(|s| s.visible).collect();
+    let vis: Vec<&Shape> = shapes.iter().filter(|s| s.solid()).collect();
     if vis.is_empty() {
         return [0.0; 3];
     }
@@ -491,7 +491,7 @@ fn follow_points(src: Source, scene: &Scene) -> Vec<(V3, Option<V3>, Option<Mat>
             None => Vec::new(),
         },
         Source::Group(uid) => match scene.group_by_uid(uid).and_then(|g| scene.groups.get(g)) {
-            Some(g) => g.shapes.iter().filter(|s| s.visible).map(|s| (s.pos, None, None)).collect(),
+            Some(g) => g.shapes.iter().filter(|s| s.solid()).map(|s| (s.pos, None, None)).collect(),
             None => Vec::new(),
         },
     }
@@ -704,7 +704,7 @@ pub fn world_spheres(scene: &Scene) -> Vec<Bound> {
     let mut out = Vec::new();
     for rg in resolve(scene) {
         let Some(src) = scene.groups.get(rg.src) else { continue };
-        let parts: Vec<Bound> = src.shapes.iter().filter(|s| s.visible).map(|s| Bound { c: s.pos, r: crate::view::radius_of(s) }).collect();
+        let parts: Vec<Bound> = src.shapes.iter().filter(|s| s.solid()).map(|s| Bound { c: s.pos, r: crate::view::radius_of(s) }).collect();
         if parts.is_empty() {
             continue;
         }
@@ -720,7 +720,7 @@ pub fn world_spheres(scene: &Scene) -> Vec<Bound> {
 
 /// A sphere around the whole of a visible group's `Add` parts, in the group's own space.
 pub fn group_sphere(shapes: &[Shape]) -> Bound {
-    let spheres: Vec<Bound> = shapes.iter().filter(|s| s.visible).map(crate::accel::shape_bound).collect();
+    let spheres: Vec<Bound> = shapes.iter().filter(|s| s.solid()).map(crate::accel::shape_bound).collect();
     crate::accel::enclose(&spheres)
 }
 

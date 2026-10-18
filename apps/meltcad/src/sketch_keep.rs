@@ -72,6 +72,7 @@ impl App {
         sh.name = "Sketch".to_string();
         sh.op = Op::Add;
         sh.blend = 0.0;
+        sh.guide = true;
         let Some(group) = self.scene.groups.get_mut(g) else { return false };
         group.shapes.push(sh);
         let idx = group.shapes.len() - 1;
@@ -141,9 +142,109 @@ impl App {
     }
 }
 
+/// The points of a sketch line in the world, closed again when the line is a loop.
+pub fn guide_points(sh: &Shape) -> Vec<V3> {
+    let (closed, ..) = curve::settings(&sh.params);
+    let mut pts: Vec<V3> = curve::build(&sh.path, &sh.params).iter().map(|n| crate::curve_tool::to_world(sh, [n[0], n[1], n[2]])).collect();
+    if closed && let (Some(first), Some(last)) = (pts.first().copied(), pts.last().copied()) && sdf::dot(sdf::sub(first, last), sdf::sub(first, last)) > 1e-6 {
+        pts.push(first);
+    }
+    pts.retain(|p| p.iter().all(|x| x.is_finite()));
+    pts
+}
+
+/// Distance in pixels from `p` to the segment `a`-`b`.
+fn seg_dist(p: egui::Pos2, a: egui::Pos2, b: egui::Pos2) -> f32 {
+    let ab = b - a;
+    let l2 = ab.length_sq();
+    let t = if l2 > 1e-6 { ((p - a).dot(ab) / l2).clamp(0.0, 1.0) } else { 0.0 };
+    (p - (a + ab * t)).length()
+}
+
+/// Pixels within which a click picks a sketch line.
+const PICK_PX: f32 = 7.0;
+
+impl App {
+    /// Draw the sketch lines over the picture (they are not part of the rendered solid).
+    pub(crate) fn guide_paint(&self, painter: &egui::Painter, rect: egui::Rect) {
+        for (gi, g) in self.scene.groups.iter().enumerate() {
+            if !g.visible {
+                continue;
+            }
+            for (si, sh) in g.shapes.iter().enumerate() {
+                if !sh.guide || !sh.visible {
+                    continue;
+                }
+                let on = self.picks().contains(&Pick::Shape(gi, si)) || self.sel == Some(Pick::Group(gi));
+                let px: Vec<egui::Pos2> = guide_points(sh).iter().filter_map(|p| self.cam.project(rect, *p)).collect();
+                if px.len() < 2 {
+                    continue;
+                }
+                let col = if on { egui::Color32::from_rgb(255, 176, 64) } else { egui::Color32::from_rgb(250, 214, 120) };
+                if on {
+                    painter.add(egui::Shape::line(px.clone(), egui::Stroke::new(5.0, egui::Color32::from_black_alpha(90))));
+                }
+                painter.add(egui::Shape::line(px, egui::Stroke::new(if on { 2.6 } else { 1.8 }, col)));
+            }
+        }
+    }
+
+    /// The sketch line close to a point on the screen.
+    pub(crate) fn guide_at(&self, rect: egui::Rect, p: egui::Pos2) -> Option<(usize, usize)> {
+        let mut best: Option<(f32, (usize, usize))> = None;
+        for (gi, g) in self.scene.groups.iter().enumerate() {
+            if !g.visible {
+                continue;
+            }
+            for (si, sh) in g.shapes.iter().enumerate() {
+                if !sh.guide || !sh.visible {
+                    continue;
+                }
+                let px: Vec<egui::Pos2> = guide_points(sh).iter().filter_map(|q| self.cam.project(rect, *q)).collect();
+                for w in px.windows(2) {
+                    let d = seg_dist(p, w[0], w[1]);
+                    if d <= PICK_PX && best.is_none_or(|b| d < b.0) {
+                        best = Some((d, (gi, si)));
+                    }
+                }
+            }
+        }
+        best.map(|b| b.1)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_sketch_line_is_not_part_of_the_solid() {
+        let mut sh = Shape::new(Kind::Curve, [0.0; 3], Material::default());
+        assert!(sh.solid());
+        sh.guide = true;
+        assert!(!sh.solid());
+        let back: Shape = serde_json::from_str(&serde_json::to_string(&sh).unwrap_or_default()).unwrap_or_else(|_| Shape::new(Kind::Box, [0.0; 3], Material::default()));
+        assert!(back.guide, "the flag is saved");
+        let pts = guide_points(&Shape { path: vec![[0.0, 0.0, 0.0, 1.0], [10.0, 0.0, 0.0, 1.0], [10.0, 10.0, 0.0, 1.0]], params: [1.0, 0.0, 0.0, 1.0], ..sh });
+        assert!(pts.len() >= 4 && pts.first() == pts.last(), "a loop is closed again");
+        assert!(seg_dist(egui::pos2(5.0, 3.0), egui::pos2(0.0, 0.0), egui::pos2(10.0, 0.0)) - 3.0 < 1e-4);
+    }
+
+    #[test]
+    fn a_sketch_line_adds_nothing_to_the_field() {
+        let mut scene = crate::model::Scene::default();
+        let mut sh = Shape::new(Kind::Box, [0.0; 3], Material::default());
+        sh.guide = true;
+        let mut g = crate::model::Group::new("g");
+        g.shapes.push(sh);
+        scene.groups.push(g);
+        let field = crate::sdf::Field::new(&scene);
+        let d = field.sample([0.0, 0.0, 0.0]).dist;
+        assert!(d > 1.0e3 || !d.is_finite() || d > 100.0, "an empty field is far from everything: {d}");
+        scene.groups[0].shapes[0].guide = false;
+        let d2 = crate::sdf::Field::new(&scene).sample([0.0, 0.0, 0.0]).dist;
+        assert!(d2 < 0.0, "the same box as a solid has an inside: {d2}");
+    }
 
     #[test]
     fn thinning_keeps_the_ends_and_the_order() {
