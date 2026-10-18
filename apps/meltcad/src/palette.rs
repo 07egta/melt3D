@@ -100,12 +100,17 @@ fn cmd(label: &str, words: &str, action: Action) -> Entry {
 pub fn entries() -> Vec<Entry> {
     let mut v = Vec::new();
     for k in Kind::ALL {
-        v.push(Entry { label: format!("{}を足す", k.label()), tag: "形", words: format!("{} {}", k.label(), kind_words(k)).to_lowercase(), action: Action::AddShape(k) });
+        v.push(Entry {
+            label: format!("{}を足す", k.label()),
+            tag: "形",
+            words: format!("{} {}", k.label(), kind_words(k)).to_lowercase(),
+            action: Action::AddShape(k),
+        });
     }
-    for (ci, c) in library::all().iter().enumerate() {
+    for (ci, c) in library::catalog().iter().enumerate() {
         for (ii, it) in c.items.iter().enumerate() {
             v.push(Entry {
-                label: it.name.clone(),
+                label: it.name.to_owned(),
                 tag: "ライブラリ",
                 words: format!("{} {}", c.name, it.tags.join(" ")).to_lowercase(),
                 action: Action::Insert(ci, ii),
@@ -222,7 +227,6 @@ pub fn open(ctx: &egui::Context) {
 }
 
 #[allow(dead_code)]
-#[allow(dead_code)]
 pub fn is_open(ctx: &egui::Context) -> bool {
     ctx.data(|m| m.get_temp::<State>(id())).is_some()
 }
@@ -235,8 +239,10 @@ impl App {
             Action::AddShape(k) => self.add_shape(ctx, k),
             Action::AddGroup => self.add_group(),
             Action::Insert(c, i) => {
-                if let Some(item) = library::all().get(c).and_then(|c| c.items.get(i)) {
+                if let Some(item) = library::item(c, i) {
                     crate::library_ui::insert(self, ctx, item);
+                } else {
+                    self.say(ctx, "このモデルを読み込めませんでした");
                 }
             }
             Action::Undo => self.undo(),
@@ -301,37 +307,58 @@ impl App {
         });
         let before = st.query.clone();
         let rect = self.view_rect;
-        egui::Area::new(egui::Id::new("palette_area")).order(egui::Order::Tooltip).pivot(Align2::CENTER_TOP).fixed_pos(egui::pos2(rect.center().x, rect.top() + 70.0)).show(ctx, |ui| {
-            style::card().show(ui, |ui| {
-                ui.set_width(460.0);
-                let r = ui.add(egui::TextEdit::singleline(&mut st.query).hint_text("さがす（形・ライブラリ・コマンド　English もOK）").desired_width(f32::INFINITY).font(egui::FontId::proportional(15.0)));
-                if st.fresh {
-                    r.request_focus();
-                    st.fresh = false;
-                }
-                ui.add_space(4.0);
-                if hits.is_empty() {
-                    ui.label(RichText::new("見つかりませんでした").color(style::DIM));
-                }
-                for (n, &i) in hits.iter().enumerate() {
-                    let Some(e) = all.get(i) else { continue };
-                    let (rc, resp) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 28.0), egui::Sense::click());
-                    if n == st.sel {
-                        ui.painter().rect_filled(rc, 6.0, Color32::from_rgba_unmultiplied(52, 178, 120, 80));
-                    } else if resp.hovered() {
-                        ui.painter().rect_filled(rc, 6.0, Color32::from_white_alpha(16));
+        egui::Area::new(egui::Id::new("palette_area"))
+            .order(egui::Order::Tooltip)
+            .pivot(Align2::CENTER_TOP)
+            .fixed_pos(egui::pos2(rect.center().x, rect.top() + 70.0))
+            .show(ctx, |ui| {
+                style::card().show(ui, |ui| {
+                    ui.set_width(460.0);
+                    let r = ui.add(
+                        egui::TextEdit::singleline(&mut st.query)
+                            .hint_text("さがす（形・ライブラリ・コマンド　English もOK）")
+                            .desired_width(f32::INFINITY)
+                            .font(egui::FontId::proportional(15.0)),
+                    );
+                    if st.fresh {
+                        r.request_focus();
+                        st.fresh = false;
                     }
-                    ui.painter().text(rc.left_center() + Vec2::new(10.0, 0.0), Align2::LEFT_CENTER, &e.label, egui::FontId::proportional(13.5), style::TEXT);
-                    ui.painter().text(rc.right_center() - Vec2::new(10.0, 0.0), Align2::RIGHT_CENTER, e.tag, egui::FontId::proportional(11.5), style::DIM);
-                    if resp.hovered() && ui.input(|i| i.pointer.delta().length() > 0.5) {
-                        st.sel = n;
+                    ui.add_space(4.0);
+                    if hits.is_empty() {
+                        ui.label(RichText::new("見つかりませんでした").color(style::DIM));
                     }
-                    if resp.clicked() {
-                        run = Some(i);
+                    for (n, &i) in hits.iter().enumerate() {
+                        let Some(e) = all.get(i) else { continue };
+                        let (rc, resp) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 28.0), egui::Sense::click());
+                        if n == st.sel {
+                            ui.painter().rect_filled(rc, 6.0, Color32::from_rgba_unmultiplied(52, 178, 120, 80));
+                        } else if resp.hovered() {
+                            ui.painter().rect_filled(rc, 6.0, Color32::from_white_alpha(16));
+                        }
+                        ui.painter().text(
+                            rc.left_center() + Vec2::new(10.0, 0.0),
+                            Align2::LEFT_CENTER,
+                            &e.label,
+                            egui::FontId::proportional(13.5),
+                            style::TEXT,
+                        );
+                        ui.painter().text(
+                            rc.right_center() - Vec2::new(10.0, 0.0),
+                            Align2::RIGHT_CENTER,
+                            e.tag,
+                            egui::FontId::proportional(11.5),
+                            style::DIM,
+                        );
+                        if resp.hovered() && ui.input(|i| i.pointer.delta().length() > 0.5) {
+                            st.sel = n;
+                        }
+                        if resp.clicked() {
+                            run = Some(i);
+                        }
                     }
-                }
+                });
             });
-        });
         if st.query != before {
             st.sel = 0;
         }
@@ -415,7 +442,10 @@ mod tests {
         assert!(app.lib_open);
         // every action can run on a fresh app without panicking (dialogs excluded: they need a window)
         for e in entries() {
-            if matches!(e.action, Action::Open | Action::Save | Action::SaveAs | Action::Export(_) | Action::ExportPng | Action::ImportSvg | Action::ImportMesh) {
+            if matches!(
+                e.action,
+                Action::Open | Action::Save | Action::SaveAs | Action::Export(_) | Action::ExportPng | Action::ImportSvg | Action::ImportMesh
+            ) {
                 continue;
             }
             let mut a = App::new(true, None);

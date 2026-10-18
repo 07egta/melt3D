@@ -326,8 +326,8 @@ impl Painter {
             if !w.is_finite() || w >= 1.0 {
                 continue;
             }
-            for a in 0..3 {
-                c[a] = b.color[a] + (c[a] - b.color[a]) * w;
+            for (a, color) in c.iter_mut().enumerate() {
+                *color = b.color[a] + (*color - b.color[a]) * w;
             }
             r = b.roughness + (r - b.roughness) * w;
             m = b.metallic + (m - b.metallic) * w;
@@ -1182,8 +1182,7 @@ mod tests {
         scenes.push(("r100 sphere".into(), scene_of(vec![round])));
         for (ci, ii) in [(0usize, 0usize), (7, 0), (10, 0), (10, 5), (8, 0), (2, 1)] {
             if let Some(item) = crate::library::all().get(ci).and_then(|c| c.items.get(ii)) {
-                let mut sc = Scene::default();
-                sc.groups = vec![item.group.clone()];
+                let sc = Scene { groups: vec![item.group.clone()], ..Scene::default() };
                 scenes.push((format!("lib {} / {}", crate::library::all()[ci].name, item.name), sc));
             }
         }

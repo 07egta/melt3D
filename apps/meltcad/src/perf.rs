@@ -13,6 +13,100 @@ use std::time::Instant;
 use crate::camera::Camera;
 use crate::model::{Scene, Shape};
 
+/// Cache hits preserve float representations too: derived `PartialEq` alone treats -0.0
+/// and +0.0 as equal, but a freshly packed GPU record can distinguish their bits. Keep the
+/// ordinary comparison first (including metadata and lengths), then check every float without
+/// allocating or inspecting the shared mesh-volume payload.
+pub(crate) fn same_shape_for_cache(a: &Shape, b: &Shape) -> bool {
+    fn scalars(s: &Shape) -> [u32; 36] {
+        use crate::model::Material;
+        // Exhaustive patterns make an added Shape/Material field require a cache-key review.
+        let Shape {
+            name: _,
+            kind: _,
+            size,
+            round,
+            pos,
+            rot,
+            scale,
+            op: _,
+            blend,
+            material,
+            visible: _,
+            outline: _,
+            params,
+            path: _,
+            outline2: _,
+            shell,
+            corner: _,
+            uid: _,
+            volume: _,
+            source: _,
+        } = s;
+        let Material {
+            color,
+            roughness,
+            metallic,
+            glow,
+            glass,
+            iridescence,
+            coat,
+            translucency,
+            color2,
+            gradient,
+            grad_axis: _,
+            grad_flip: _,
+            grad_local: _,
+            grad_soft,
+            grad_from,
+            grad_to,
+        } = material;
+        [
+            size[0],
+            size[1],
+            size[2],
+            *round,
+            pos[0],
+            pos[1],
+            pos[2],
+            rot[0],
+            rot[1],
+            rot[2],
+            scale[0],
+            scale[1],
+            scale[2],
+            *blend,
+            color[0],
+            color[1],
+            color[2],
+            *roughness,
+            *metallic,
+            *glow,
+            *glass,
+            *iridescence,
+            *coat,
+            *translucency,
+            color2[0],
+            color2[1],
+            color2[2],
+            *gradient,
+            *grad_soft,
+            *grad_from,
+            *grad_to,
+            params[0],
+            params[1],
+            params[2],
+            params[3],
+            *shell,
+        ]
+        .map(f32::to_bits)
+    }
+    fn points<const N: usize>(a: &[[f32; N]], b: &[[f32; N]]) -> bool {
+        a.iter().zip(b).all(|(a, b)| a.map(f32::to_bits) == b.map(f32::to_bits))
+    }
+    a == b && scalars(a) == scalars(b) && points(&a.outline, &b.outline) && points(&a.path, &b.path) && points(&a.outline2, &b.outline2)
+}
+
 // ---------------------------------------------------------------------------------------------
 // Start-up timing
 
@@ -182,11 +276,13 @@ pub enum Gate {
 pub struct HoverGate {
     last_pos: Option<[f32; 2]>,
     last_t: f64,
+    /// A changed scene/camera still needs a pick after the throttle delay, even once drawn.
+    pending_dirty: bool,
 }
 
 impl Default for HoverGate {
     fn default() -> Self {
-        HoverGate { last_pos: None, last_t: f64::NEG_INFINITY }
+        HoverGate { last_pos: None, last_t: f64::NEG_INFINITY, pending_dirty: false }
     }
 }
 
@@ -194,8 +290,9 @@ impl HoverGate {
     /// `dirty`: the picture under the mouse may have changed (camera or scene) even though the
     /// mouse has not.
     pub fn check(&mut self, pos: [f32; 2], now: f64, dirty: bool) -> Gate {
+        self.pending_dirty |= dirty;
         let moved = self.last_pos != Some(pos);
-        if !moved && !dirty {
+        if !moved && !self.pending_dirty {
             return Gate::Same;
         }
         let wait = self.last_t + HOVER_GAP - now;
@@ -204,13 +301,21 @@ impl HoverGate {
         }
         self.last_pos = Some(pos);
         self.last_t = now;
+        self.pending_dirty = false;
         Gate::Pick
+    }
+
+    /// Input after the hover check changed the picture. Keep the next pick pending while
+    /// preserving the same 30 Hz budget (unlike resetting the gate).
+    pub fn invalidate(&mut self) {
+        self.pending_dirty = true;
     }
 
     /// The mouse left or a button went down: pick at once next time.
     pub fn reset(&mut self) {
         self.last_pos = None;
         self.last_t = f64::NEG_INFINITY;
+        self.pending_dirty = false;
     }
 }
 
@@ -244,11 +349,17 @@ pub fn view_flags(srgb: bool, fast: bool, glow: bool) -> f32 {
     v as f32
 }
 
-/// Does any visible shape glow (so the shader must march with materials and draw halos)?
+/// Does any rendered source glow? A visible linked copy may draw a hidden source.
+#[cfg(test)]
 pub fn scene_has_glow(scene: &Scene) -> bool {
-    // a linked copy shows its source's shapes (even a hidden source's)
-    let linked = scene.groups.iter().any(|g| g.visible && g.is_linked());
-    scene.groups.iter().filter(|g| g.visible || linked).any(|g| g.shapes.iter().any(|s| s.visible && s.material.glow > 0.0))
+    scene_has_glow_resolved(scene, &crate::pattern::resolve(scene))
+}
+
+/// Reuse the already resolved list while packing, including only referenced hidden lamps.
+pub fn scene_has_glow_resolved(scene: &Scene, resolved: &[crate::pattern::RGroup]) -> bool {
+    resolved
+        .iter()
+        .any(|rg| scene.groups.get(rg.src).is_some_and(|source| source.shapes.iter().any(|shape| shape.visible && shape.material.glow > 0.0)))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -266,21 +377,32 @@ pub fn shape_radius(s: &Shape) -> f32 {
 
 /// Centre and radius of a sphere around the given shapes (radius 0 when there are none).
 pub fn sphere_of(scene: &Scene, shapes: &[(usize, usize)]) -> [f32; 4] {
-    let list: Vec<&Shape> = shapes.iter().filter_map(|(g, s)| scene.shape(*g, *s)).collect();
+    let list = shapes.iter().filter_map(|(g, s)| scene.shape(*g, *s).map(|shape| ((), shape))).collect();
+    sphere_from_list(list, |(), shape| shape_radius(shape))
+}
+
+/// The identical selection sphere with exact, already prepared radii supplied by
+/// a caller. The ordinary path keeps its pointer-only list through the unit key.
+pub fn sphere_of_with_radius(scene: &Scene, shapes: &[(usize, usize)], radius: impl FnMut((usize, usize), &Shape) -> f32) -> [f32; 4] {
+    let list = shapes.iter().filter_map(|&(g, s)| scene.shape(g, s).map(|shape| ((g, s), shape))).collect();
+    sphere_from_list(list, radius)
+}
+
+fn sphere_from_list<K: Copy>(list: Vec<(K, &Shape)>, mut radius: impl FnMut(K, &Shape) -> f32) -> [f32; 4] {
     if list.is_empty() {
         return [0.0; 4];
     }
     let n = list.len() as f32;
     let mut c = [0.0_f32; 3];
-    for s in &list {
+    for (_, s) in &list {
         for (i, v) in c.iter_mut().enumerate() {
             *v += s.pos[i] / n;
         }
     }
     let mut r = 0.0_f32;
-    for s in &list {
+    for (key, s) in &list {
         let d = [s.pos[0] - c[0], s.pos[1] - c[1], s.pos[2] - c[2]];
-        r = r.max((d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt() + shape_radius(s));
+        r = r.max((d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt() + radius(*key, s));
     }
     if !r.is_finite() {
         return [0.0; 4];
@@ -326,7 +448,14 @@ impl Drawn {
 
     /// Does the picture differ from what is now on the screen's model? Asks for another frame at
     /// most `MAX_STALE_RUN` times in a row.
-    pub fn wants_another_frame(&mut self, rev: u64, sel: Option<crate::model::Pick>, hover: Option<crate::model::Pick>, cam: &Camera, clean: bool) -> bool {
+    pub fn wants_another_frame(
+        &mut self,
+        rev: u64,
+        sel: Option<crate::model::Pick>,
+        hover: Option<crate::model::Pick>,
+        cam: &Camera,
+        clean: bool,
+    ) -> bool {
         let shown_sel = if clean { None } else { sel };
         let shown_hover = if clean { None } else { hover };
         let stale = self.rev != rev || self.sel != shown_sel || self.hover != shown_hover || self.cam != cam_key(cam) || self.clean != clean;
@@ -357,11 +486,17 @@ impl PackCache {
         {
             return p.clone();
         }
-        let p = std::sync::Arc::new(crate::gpu::ScenePack::new(scene, crate::gpu::VolumeSet::of(scene)));
+        let p = std::sync::Arc::new(crate::gpu::ScenePack::reusing(scene, crate::gpu::VolumeSet::of(scene), self.pack.as_deref()));
         self.rev = Some(rev);
         self.pack = Some(p.clone());
         self.packs += 1;
         p
+    }
+
+    /// Drop retained shape inputs and GPU data when replacing or closing a document.
+    pub fn clear(&mut self) {
+        self.rev = None;
+        self.pack = None;
     }
 }
 
@@ -416,7 +551,8 @@ pub fn quality_menu(ui: &mut egui::Ui, menu: &mut MenuState, extra: impl FnOnce(
         }
         ui.separator();
         ui.checkbox(&mut menu.hud, "フレーム時間を表示　F3").on_hover_text("1秒あたりの枚数・CPU と GPU の時間・描画の倍率を絵の上に出します");
-        if ui.button("速さをはかる…").on_hover_text("いくつかのシーンを描いて、この機械での速さを表にします").clicked() {
+        if ui.button("速さをはかる…").on_hover_text("いくつかのシーンを描いて、この機械での速さを表にします").clicked()
+        {
             menu.bench = true;
             ui.close();
         }
@@ -426,6 +562,30 @@ pub fn quality_menu(ui: &mut egui::Ui, menu: &mut MenuState, extra: impl FnOnce(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn cache_shape_keys_distinguish_signed_zero_in_scalar_and_variable_inputs() {
+        use crate::model::{Kind, Material, Shape};
+        let mut original = Shape::new(Kind::Loft, [0.0; 3], Material::default());
+        original.outline = vec![[0.0; 2]];
+        original.outline2 = vec![[0.0; 2]];
+        original.path = vec![[0.0; 4]];
+        let edits: [fn(&mut Shape); 7] = [
+            |s| s.pos[0] = -0.0,
+            |s| s.rot[0] = -0.0,
+            |s| s.material.glow = -0.0,
+            |s| s.params[0] = -0.0,
+            |s| s.outline[0][0] = -0.0,
+            |s| s.outline2[0][0] = -0.0,
+            |s| s.path[0][0] = -0.0,
+        ];
+        assert!(super::same_shape_for_cache(&original, &original.clone()));
+        for edit in edits {
+            let mut changed = original.clone();
+            edit(&mut changed);
+            assert_eq!(original, changed, "ordinary equality intentionally keeps its old behavior");
+            assert!(!super::same_shape_for_cache(&original, &changed));
+        }
+    }
     use super::*;
     use crate::model::{Kind, Material};
     use crate::sdf::Prepared;
@@ -503,6 +663,32 @@ mod tests {
     }
 
     #[test]
+    fn a_throttled_scene_change_is_picked_after_the_delay_without_mouse_motion() {
+        let mut gate = HoverGate::default();
+        let pos = [7.0, 5.0];
+        assert_eq!(gate.check(pos, 1.0, false), Gate::Pick);
+        assert!(matches!(gate.check(pos, 1.0 + HOVER_GAP * 0.5, true), Gate::Wait(_)));
+        // The viewport has drawn the new revision by the scheduled repaint, so `dirty`
+        // is false now. The waiting pick must still happen at the unchanged position.
+        assert_eq!(gate.check(pos, 1.0 + HOVER_GAP + 0.001, false), Gate::Pick);
+        assert_eq!(gate.check(pos, 1.0 + HOVER_GAP + 0.002, false), Gate::Same);
+        assert!(matches!(gate.check(pos, 1.0 + HOVER_GAP + 0.003, true), Gate::Wait(_)));
+        gate.reset();
+        assert_eq!(gate.check(pos, 1.0 + HOVER_GAP + 0.004, false), Gate::Pick);
+    }
+
+    #[test]
+    fn late_camera_or_scene_invalidation_preserves_the_hover_throttle() {
+        let mut gate = HoverGate::default();
+        let pos = [7.0, 5.0];
+        assert_eq!(gate.check(pos, 1.0, false), Gate::Pick);
+        gate.invalidate();
+        assert!(matches!(gate.check(pos, 1.001, false), Gate::Wait(_)));
+        assert_eq!(gate.check(pos, 1.0 + HOVER_GAP + 0.001, false), Gate::Pick);
+        assert_eq!(gate.check(pos, 1.0 + HOVER_GAP + 0.002, false), Gate::Same);
+    }
+
+    #[test]
     fn a_change_after_the_picture_asks_for_one_more_frame() {
         use crate::model::Pick;
         let cam = Camera::default();
@@ -545,6 +731,25 @@ mod tests {
         let d = c.get(&scene, 2);
         assert!(!std::sync::Arc::ptr_eq(&a, &d) && d.id != a.id);
         assert_eq!(c.packs, 2);
+    }
+
+    #[test]
+    fn clearing_the_pack_releases_its_inputs_and_allows_the_same_revision_again() {
+        let scene = Scene::default();
+        let mut cache = PackCache::default();
+        let weak = {
+            let packed = cache.get(&scene, 1);
+            for _ in 0..100 {
+                assert!(std::sync::Arc::ptr_eq(&packed, &cache.get(&scene, 1)));
+            }
+            std::sync::Arc::downgrade(&packed)
+        };
+        assert_eq!(cache.packs, 1);
+        cache.clear();
+        assert!(weak.upgrade().is_none(), "the cache must release the old document");
+        let fresh = cache.get(&scene, 1);
+        assert_eq!(fresh.shapes_repacked, 1);
+        assert_eq!(cache.packs, 2);
     }
 
     /// The shader skips a shape when it is `reach` further than the rest. That is exact only if
@@ -617,6 +822,34 @@ mod tests {
         s.groups.push(copy);
         s.groups[0].visible = false;
         assert!(scene_has_glow(&s));
+        assert!(crate::gpu::ScenePack::new(&s, crate::gpu::VolumeSet::of(&s)).glow);
+
+        let mut unrelated = Scene::default();
+        let uid = unrelated.ensure_group_uid(0).unwrap();
+        let mut lamp = crate::model::Group::new("hidden unused lamp");
+        lamp.visible = false;
+        lamp.shapes.push(Shape::new(Kind::Sphere, [300.0, 0.0, 20.0], Material { glow: 3.0, ..Material::default() }));
+        unrelated.groups.push(lamp);
+        let mut linked = crate::model::Group::new("visible ordinary copy");
+        linked.instance_of = Some(uid);
+        unrelated.groups.push(linked);
+        assert!(!scene_has_glow(&unrelated));
+        assert!(!crate::gpu::ScenePack::new(&unrelated, crate::gpu::VolumeSet::of(&unrelated)).glow);
+
+        // A nested link still resolves to the lamp; a broken link never emits.
+        let source_uid = unrelated.ensure_group_uid(1).unwrap();
+        unrelated.groups[2].instance_of = Some(source_uid);
+        let link_uid = unrelated.ensure_group_uid(2).unwrap();
+        unrelated.groups[2].visible = false;
+        let mut nested = crate::model::Group::new("nested copy");
+        nested.instance_of = Some(link_uid);
+        unrelated.groups.push(nested);
+        assert!(scene_has_glow(&unrelated));
+        unrelated.groups[1].shapes[0].visible = false;
+        assert!(!scene_has_glow(&unrelated));
+        unrelated.groups[1].shapes[0].visible = true;
+        unrelated.groups[3].instance_of = Some(u32::MAX);
+        assert!(!scene_has_glow(&unrelated));
     }
 
     /// Outside the bounding sphere, a basic solid is never reached (so the shader may skip it).

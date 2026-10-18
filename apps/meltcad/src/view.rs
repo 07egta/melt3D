@@ -73,7 +73,6 @@ impl App {
         let clean = self.capture.is_some();
         let now = ui.input(|i| i.time);
         let rev = self.track_scene();
-        let scene_changed = self.perf.drawn.scene_changed(rev);
 
         let mods = ui.input(|i| i.modifiers);
         let pos = resp.hover_pos().or_else(|| ui.input(|i| i.pointer.interact_pos()));
@@ -86,10 +85,19 @@ impl App {
         } else {
             self.curve_input(ui, &resp, rect, pos, mods)
         };
+        // Tool input can add or reshape geometry before hover picking. Retain
+        // the first revision check for tool raycasts, then refresh only after
+        // a handled gesture so idle and camera-only frames do no extra scan.
+        let hover_rev = if ct.taken || ct.busy { self.track_scene() } else { rev };
+        let scene_changed = self.perf.drawn.scene_changed(hover_rev);
 
         // The handles
         let tool = self.tool;
-        let geom = if clean || self.ct.drawing || self.pt.on || self.sketch_active() { None } else { gizmo::build(&self.cam, rect, &self.scene, self.sel, tool) };
+        let geom = if clean || self.ct.drawing || self.pt.on || self.sketch_active() {
+            None
+        } else {
+            gizmo::build(&self.cam, rect, &self.scene, self.sel, tool)
+        };
         let over_gnomon = !clean && pos.is_some_and(|p| self.gnomon_hit(rect, p).is_some());
         let hover_handle = match (&geom, pos, &self.drag) {
             (Some(g), Some(p), None) if resp.hovered() && !over_gnomon && !ct.over => gizmo::hit(g, tool, p),
@@ -155,7 +163,7 @@ impl App {
         }
 
         // A drag that starts on a handle moves the thing; a drag that starts anywhere else turns the view
-        if resp.drag_started_by(PointerButton::Primary) && !mods.alt && !ct.taken {
+        if resp.drag_started_by(PointerButton::Primary) && !mods.alt && !ct.taken && !self.sketch_active() {
             // where the button went down (the pointer has moved a little by now)
             let origin = ui.input(|i| i.pointer.press_origin()).or(pos);
             let grabbed = match (&geom, origin) {
@@ -169,7 +177,12 @@ impl App {
                 self.orbiting = origin.is_some_and(|o| self.gnomon_hit(rect, o).is_none());
             }
         }
-        if self.orbiting && resp.dragged_by(PointerButton::Primary) && self.drag.is_none() && !mods.alt {
+        if self.sketch_active() {
+            // A pending orbit from before the tool was enabled must never
+            // leak into a sketch gesture, including when the modifier changes.
+            self.orbiting = false;
+        }
+        if self.orbiting && resp.dragged_by(PointerButton::Primary) && self.drag.is_none() && !mods.alt && !ct.busy {
             let d = resp.drag_delta();
             if mods.shift {
                 self.cam.pan(d.x, d.y, rect.height());
@@ -198,16 +211,16 @@ impl App {
         // Clicks
         if resp.clicked_by(PointerButton::Primary)
             && hover_handle.is_none()
-            && !ct.taken
             && let Some(p) = pos
         {
             if let Some(axis) = self.gnomon_hit(rect, p) {
                 self.look_along(axis);
-            } else {
+            } else if !ct.taken && !self.sketch_active() {
                 self.pick_at(rect, p, mods.shift);
             }
         }
         if resp.secondary_clicked()
+            && !self.sketch_active()
             && let Some(p) = pos
         {
             self.pick_at(rect, p, false);
@@ -216,6 +229,7 @@ impl App {
         if resp.double_clicked_by(PointerButton::Primary)
             && hover_handle.is_none()
             && !ct.taken
+            && !self.sketch_active()
             && let Some(p) = pos
             && self.gnomon_hit(rect, p).is_none()
         {
@@ -225,6 +239,14 @@ impl App {
         // The picture itself. It is made after the input above so that it shows this frame's state.
         // Fast mode (cheap shading, fewer pixels) runs while the view or a handle moves, and for a
         // moment after; then one full-quality frame follows.
+        let render_rev = self.track_scene();
+        if render_rev != hover_rev || moved_camera {
+            // Camera and context-menu input run after hover. Preserve their
+            // pick request after Drawn records this frame's new state.
+            self.perf.hover_gate.invalidate();
+            ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(crate::perf::HOVER_GAP));
+        }
+        let scene_changed = self.perf.drawn.scene_changed(render_rev);
         let cam_now = crate::perf::cam_key(&self.cam);
         if cam_now != self.perf.last_cam || self.drag.is_some() || (scene_changed && ui.input(|i| i.pointer.any_down())) {
             self.perf.activity.touch(now);
@@ -244,7 +266,7 @@ impl App {
         let mut counts = (self.scene.shape_count(), self.scene.groups.len(), 0);
         let mut scale_shown = 1.0;
         if crate::gpu_ui::use_gpu(&self.gpu.status.snapshot(), self.gpu.easy) {
-            let pack = self.perf.pack.get(&self.scene, rev);
+            let pack = self.perf.pack.get(&self.scene, render_rev);
             let mut globals = pack.globals(&self.scene, &self.cam, [vp[0] as f32, vp[1] as f32], shown_sel, shown_hover, self.srgb);
             crate::gpu::set_view_flags(&mut globals, crate::perf::view_flags(self.srgb, false, pack.glow));
             counts = (self.scene.shape_count(), pack.group_n, pack.instances);
@@ -273,7 +295,7 @@ impl App {
         }
         self.perf.last_scale = scale_moving;
         self.perf.last_fast = fast;
-        self.perf.drawn.note(rev, shown_sel, shown_hover, &self.cam, clean);
+        self.perf.drawn.note(render_rev, shown_sel, shown_hover, &self.cam, clean);
         if self.perf.hud && !clean {
             let fbs = self.perf.feedback.state();
             let info = crate::hud::Context {
@@ -436,7 +458,11 @@ impl App {
     pub fn frame_view(&mut self, only_selected: bool) {
         let spheres: Vec<crate::accel::Bound> = if only_selected && self.sel.is_some() {
             let t = targets(&self.scene, self.sel);
-            t.iter().filter_map(|(g, s)| self.scene.shape(*g, *s)).filter(|s| s.visible).map(|s| crate::accel::Bound { c: s.pos, r: radius_of(s) }).collect()
+            t.iter()
+                .filter_map(|(g, s)| self.scene.shape(*g, *s))
+                .filter(|s| s.visible)
+                .map(|s| crate::accel::Bound { c: s.pos, r: radius_of(s) })
+                .collect()
         } else {
             crate::pattern::world_spheres(&self.scene)
         };

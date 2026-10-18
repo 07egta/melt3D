@@ -108,12 +108,23 @@ pub struct GroupInfo {
 
 /// The blocks and the sphere of a group whose visible shapes are `shapes`.
 pub fn group_info(shapes: &[&Shape], melt: &Melt) -> GroupInfo {
+    let bounds: Vec<Bound> = shapes.iter().map(|s| shape_bound(s)).collect();
+    group_info_with_bounds(shapes, &bounds, melt)
+}
+
+/// Build the same acceleration records from already measured shape bounds. A curve's
+/// bound resamples its path, so fields and GPU packs retain that work alongside their
+/// prepared geometry. The bounds must describe these shapes in this exact order.
+pub fn group_info_with_bounds(shapes: &[&Shape], bounds: &[Bound], melt: &Melt) -> GroupInfo {
+    if bounds.len() != shapes.len() {
+        // A caller without a complete matching list still gets correct bounds.
+        return group_info(shapes, melt);
+    }
     let mut blocks = Vec::new();
     let mut first = 0;
-    for chunk in shapes.chunks(BLOCK) {
-        let spheres: Vec<Bound> = chunk.iter().map(|s| shape_bound(s)).collect();
+    for (chunk, spheres) in shapes.chunks(BLOCK).zip(bounds.chunks(BLOCK)) {
         blocks.push(Block {
-            bound: enclose(&spheres),
+            bound: enclose(spheres),
             kmax: chunk.iter().map(|s| clean(s.blend)).fold(0.0_f32, f32::max),
             skippable: chunk.iter().all(|s| s.op != Op::Intersect),
             first,
@@ -122,10 +133,9 @@ pub fn group_info(shapes: &[&Shape], melt: &Melt) -> GroupInfo {
         first += chunk.len();
     }
     // what can lower the distance: adds and overlaps (a carve or a stain never does)
-    let lowering: Vec<&&Shape> = shapes.iter().filter(|s| matches!(s.op, Op::Add | Op::Intersect)).collect();
-    let spheres: Vec<Bound> = lowering.iter().map(|s| shape_bound(s)).collect();
+    let spheres: Vec<Bound> = shapes.iter().zip(bounds).filter(|(s, _)| matches!(s.op, Op::Add | Op::Intersect)).map(|(_, b)| *b).collect();
     let mut bound = enclose(&spheres);
-    let total_pull: f32 = lowering.iter().filter(|s| s.op == Op::Add).map(|s| pull(melt.mode, clean(s.blend) * melt.amount.max(0.0))).sum();
+    let total_pull: f32 = shapes.iter().filter(|s| s.op == Op::Add).map(|s| pull(melt.mode, clean(s.blend) * melt.amount.max(0.0))).sum();
     bound.r = (bound.r + total_pull + 0.5).min(1.0e5);
     GroupInfo { bound, blocks }
 }
@@ -138,6 +148,72 @@ fn clean(v: f32) -> f32 {
 mod tests {
     use super::*;
     use crate::model::{Kind, Material};
+
+    /// The pre-reuse algorithm measured each block and the lowering set separately.
+    /// Retain it as a reference: cached bounds must preserve every floating-point bit.
+    fn reference_group_info(shapes: &[&Shape], melt: &Melt) -> GroupInfo {
+        let mut blocks = Vec::new();
+        let mut first = 0;
+        for chunk in shapes.chunks(BLOCK) {
+            let spheres: Vec<Bound> = chunk.iter().map(|s| shape_bound(s)).collect();
+            blocks.push(Block {
+                bound: enclose(&spheres),
+                kmax: chunk.iter().map(|s| clean(s.blend)).fold(0.0_f32, f32::max),
+                skippable: chunk.iter().all(|s| s.op != Op::Intersect),
+                first,
+                count: chunk.len(),
+            });
+            first += chunk.len();
+        }
+        let lowering: Vec<&&Shape> = shapes.iter().filter(|s| matches!(s.op, Op::Add | Op::Intersect)).collect();
+        let spheres: Vec<Bound> = lowering.iter().map(|s| shape_bound(s)).collect();
+        let mut bound = enclose(&spheres);
+        let total_pull: f32 = lowering.iter().filter(|s| s.op == Op::Add).map(|s| pull(melt.mode, clean(s.blend) * melt.amount.max(0.0))).sum();
+        bound.r = (bound.r + total_pull + 0.5).min(1.0e5);
+        GroupInfo { bound, blocks }
+    }
+
+    #[test]
+    fn retained_shape_bounds_match_the_original_acceleration_records_bit_for_bit() {
+        let shapes: Vec<Shape> = Kind::ALL
+            .into_iter()
+            .chain([Kind::Mesh])
+            .enumerate()
+            .map(|(i, kind)| {
+                let mut shape = Shape::new(kind, [i as f32 * 13.7, -0.0, i as f32 * -2.5], Material::default());
+                shape.scale = [0.01 + i as f32 * 0.07, 1.3, 2.1];
+                shape.rot = [17.0, -35.0, 83.0];
+                shape.op = [Op::Add, Op::Subtract, Op::Intersect, Op::Paint][i % 4];
+                shape.blend = i as f32 * 0.625;
+                shape.shell = 0.8;
+                shape
+            })
+            .collect();
+        let refs: Vec<&Shape> = shapes.iter().collect();
+        let bounds: Vec<Bound> = refs.iter().map(|shape| shape_bound(shape)).collect();
+        let bits = |bound: &Bound| (bound.c.map(f32::to_bits), bound.r.to_bits());
+        let records = |info: &GroupInfo| {
+            (
+                bits(&info.bound),
+                info.blocks
+                    .iter()
+                    .map(|block| (bits(&block.bound), block.kmax.to_bits(), block.skippable, block.first, block.count))
+                    .collect::<Vec<_>>(),
+            )
+        };
+        for count in [0, 1, BLOCK - 1, BLOCK, BLOCK + 1, shapes.len()] {
+            for mode in BlendMode::ALL {
+                for amount in [-0.0, 0.25, 1.0, 3.0] {
+                    let melt = Melt { mode, amount, ..Melt::default() };
+                    let expected = reference_group_info(&refs[..count], &melt);
+                    assert_eq!(records(&group_info_with_bounds(&refs[..count], &bounds[..count], &melt)), records(&expected));
+                    assert_eq!(records(&group_info(&refs[..count], &melt)), records(&expected));
+                    // Incomplete callers must recompute, never omit an unbounded shape.
+                    assert_eq!(records(&group_info_with_bounds(&refs[..count], &[], &melt)), records(&expected));
+                }
+            }
+        }
+    }
 
     #[test]
     fn a_sphere_around_spheres_holds_them() {

@@ -1,5 +1,10 @@
 # MELTCAD performance notes
 
+For the measured 2026-10-17 exact-reuse and usability changes, see
+[the validation report](../../docs/melt3d-performance-validation-2026-10-17.md).
+The historical estimates and quality tradeoffs below describe earlier work;
+the 2026-10-17 changes retain the current quality choices and geometry.
+
 Goal: light on the machine. Dropping effects while moving is fine. Nothing here could be run on a GPU
 by the author of the change (no display in the build box), so the effects below are reasoned
 estimates, marked **(est.)**. Please check them once on a real machine (`MELTCAD_TIMING=1`).

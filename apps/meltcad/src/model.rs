@@ -326,6 +326,8 @@ impl Material {
     /// shape's size; the flip is already in `t`). The range `grad_from..grad_to` is stretched over
     /// 0..1 and `grad_soft` decides how wide the blend is around its middle. The GPU copy is
     /// `shape_color` in `shader.wgsl`.
+    // Keep max/min semantics: unlike clamp, they turn a NaN input into the lower bound.
+    #[allow(clippy::manual_clamp)]
     pub fn gradient_weight(&self, t: f32) -> f32 {
         let span = (self.grad_to - self.grad_from).max(0.02);
         let u = ((t - self.grad_from) / span).max(0.0).min(1.0);
@@ -564,7 +566,17 @@ pub struct Group {
 
 impl Group {
     pub fn new(name: impl Into<String>) -> Group {
-        Group { name: name.into(), op: Op::Add, blend: 0.0, visible: true, shapes: Vec::new(), uid: 0, pattern: None, instance_of: None, xform: Xform::default() }
+        Group {
+            name: name.into(),
+            op: Op::Add,
+            blend: 0.0,
+            visible: true,
+            shapes: Vec::new(),
+            uid: 0,
+            pattern: None,
+            instance_of: None,
+            xform: Xform::default(),
+        }
     }
 }
 
@@ -807,6 +819,7 @@ impl Scene {
     pub fn shape_count(&self) -> usize {
         self.groups.iter().map(|g| g.shapes.len()).sum()
     }
+    #[cfg(test)]
     pub fn to_json(&self) -> String {
         // (a volume used by several shapes is written once: see mesh.rs)
         let _guard = crate::mesh::SaveGuard::begin();
@@ -940,7 +953,10 @@ impl Scene {
             notes.push(format!("こわれていて読めないメッシュが{lost}個あったので、取りのぞきました"));
         }
         if over > 0 {
-            notes.push(format!("メッシュが多すぎるので、{over}個を取りのぞきました（{}個・データ量に上限があります）", crate::mesh::MAX_VOLUME_SHAPES));
+            notes.push(format!(
+                "メッシュが多すぎるので、{over}個を取りのぞきました（{}個・データ量に上限があります）",
+                crate::mesh::MAX_VOLUME_SHAPES
+            ));
         }
         notes
     }
@@ -1008,7 +1024,15 @@ mod tests {
 
     #[test]
     fn gradient_fields_are_sanitised() {
-        let mut m = Material { gradient: f32::NAN, grad_soft: 9.0, grad_from: -3.0, grad_to: f32::INFINITY, grad_axis: 77, color2: [f32::NAN, 5.0, -1.0], ..Material::default() };
+        let mut m = Material {
+            gradient: f32::NAN,
+            grad_soft: 9.0,
+            grad_from: -3.0,
+            grad_to: f32::INFINITY,
+            grad_axis: 77,
+            color2: [f32::NAN, 5.0, -1.0],
+            ..Material::default()
+        };
         m.sanitize();
         assert_eq!(m.gradient, 0.0);
         assert_eq!(m.grad_soft, 1.0);
@@ -1062,7 +1086,17 @@ mod tests {
         assert_eq!(m.color, [1.0, 0.0, 0.0]);
         assert!(!m.has_gradient());
         assert_eq!(m.grad_axis, 2);
-        let g = Material { gradient: 0.7, grad_axis: 0, grad_flip: true, grad_local: true, color2: [0.1, 0.2, 0.3], grad_soft: 0.3, grad_from: 0.1, grad_to: 0.9, ..Material::default() };
+        let g = Material {
+            gradient: 0.7,
+            grad_axis: 0,
+            grad_flip: true,
+            grad_local: true,
+            color2: [0.1, 0.2, 0.3],
+            grad_soft: 0.3,
+            grad_from: 0.1,
+            grad_to: 0.9,
+            ..Material::default()
+        };
         let back: Material = serde_json::from_str(&serde_json::to_string(&g).unwrap_or_default()).unwrap_or_default();
         assert_eq!(back, g);
         // a whole old scene still opens
@@ -1072,7 +1106,7 @@ mod tests {
 
     #[test]
     fn a_file_with_too_much_is_cut_to_the_new_limits() {
-        assert!(MAX_SHAPES >= 512 && MAX_GROUPS >= 96);
+        const { assert!(MAX_SHAPES >= 512 && MAX_GROUPS >= 96) };
         let mut sc = Scene::default();
         let one = sc.groups[0].shapes[0].clone();
         sc.groups.clear();

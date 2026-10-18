@@ -49,7 +49,14 @@ pub fn build_max(path: &[[f32; 4]], params: &[f32; 4], max_points: usize) -> Vec
 fn clean(path: &[[f32; 4]]) -> Vec<[f32; 4]> {
     path.iter()
         .filter(|p| p.iter().all(|v| v.is_finite()))
-        .map(|p| [p[0].clamp(-COORD_LIMIT, COORD_LIMIT), p[1].clamp(-COORD_LIMIT, COORD_LIMIT), p[2].clamp(-COORD_LIMIT, COORD_LIMIT), p[3].clamp(R_MIN, R_MAX)])
+        .map(|p| {
+            [
+                p[0].clamp(-COORD_LIMIT, COORD_LIMIT),
+                p[1].clamp(-COORD_LIMIT, COORD_LIMIT),
+                p[2].clamp(-COORD_LIMIT, COORD_LIMIT),
+                p[3].clamp(R_MIN, R_MAX),
+            ]
+        })
         .collect()
 }
 
@@ -125,6 +132,7 @@ pub fn segment_point(nodes: &[[f32; 4]], seg: usize, t: f32, smooth: f32, closed
 /// Turn the nodes into at most `MAX_POINTS` points along the smooth curve (a loop ends on its
 /// first point again). Hostile input (NaN, huge numbers, thousands of nodes) gives a short, finite
 /// list; no nodes gives none; one node gives a (zero-length) pair, which draws as a ball.
+#[cfg(test)]
 pub fn resample(path: &[[f32; 4]], smooth: f32, closed: bool) -> Vec<[f32; 4]> {
     resample_max(path, smooth, closed, MAX_POINTS)
 }
@@ -243,6 +251,7 @@ pub fn round_cone(q: V3, a: V3, ra: f32, b: V3, rb: f32) -> f32 {
 }
 
 /// Distance to the tube through already-resampled `points`; `flat` cuts the two ends flat.
+#[cfg(test)]
 pub fn tube(points: &[[f32; 4]], q: V3, flat: bool) -> f32 {
     let mut d = 1.0e6_f32;
     for w in points.windows(2) {
@@ -307,8 +316,7 @@ pub fn smooth_tube(points: &[[f32; 4]], q: V3, flat: bool, closed: bool) -> f32 
         }
         prev = Some(one);
     }
-    if closed && let (Some(last), Some(first)) = (prev, first)
-    {
+    if closed && let (Some(last), Some(first)) = (prev, first) {
         let k = closed_joint_blend(points, closed);
         d = d.min(joint_min(last, first, k));
     }
@@ -497,7 +505,9 @@ mod tests {
         let mut seed = 99;
         for round in 0..40 {
             let n = 2 + (lcg(&mut seed) * 40.0) as usize;
-            let nodes: Vec<[f32; 4]> = (0..n).map(|_| [lcg(&mut seed) * 120.0 - 60.0, lcg(&mut seed) * 120.0 - 60.0, lcg(&mut seed) * 60.0, 0.5 + lcg(&mut seed) * 6.0]).collect();
+            let nodes: Vec<[f32; 4]> = (0..n)
+                .map(|_| [lcg(&mut seed) * 120.0 - 60.0, lcg(&mut seed) * 120.0 - 60.0, lcg(&mut seed) * 60.0, 0.5 + lcg(&mut seed) * 6.0])
+                .collect();
             let pts = build(&nodes, &[0.0, 1.0, 0.0, 1.0]);
             let spheres = group_spheres(&pts);
             assert_eq!(spheres.len(), (pts.len() - 1).div_ceil(GROUP_SEGMENTS));

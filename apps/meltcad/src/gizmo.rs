@@ -9,7 +9,7 @@ use egui::{Color32, Painter, Pos2, Rect, Shape, Stroke, Vec2, vec2};
 use crate::app::App;
 use crate::camera::Camera;
 use crate::model::{Kind, Pick, Scene};
-use crate::sdf::{Prepared, V3, add, cross, dot, mul, sub};
+use crate::sdf::{V3, add, cross, dot, mul, sub};
 use crate::style;
 use crate::view::targets;
 
@@ -160,8 +160,17 @@ pub fn build(cam: &Camera, rect: Rect, scene: &Scene, sel: Option<Pick>, tool: T
         Some(Pick::Shape(g, s)) => scene.shape(g, s),
         _ => None,
     };
-    let local = shape.map(|s| Prepared::new(s).inv).unwrap_or(WORLD);
-    let ext = shape.map(half_extents).unwrap_or([0.0; 3]);
+    // Only scale handles need the shape's local box. Preparing its entire SDF
+    // here would copy profiles and resample curves on every viewport frame.
+    let (local, ext) = if tool.scales() {
+        shape.map_or((WORLD, [0.0; 3]), |s| {
+            let r = crate::sdf::rotation(s.rot);
+            let inv = [[r[0][0], r[1][0], r[2][0]], [r[0][1], r[1][1], r[2][1]], [r[0][2], r[1][2], r[2][2]]];
+            (inv, half_extents(s))
+        })
+    } else {
+        (WORLD, [0.0; 3])
+    };
     // arrows follow the world; in the scale tool they follow the shape
     let axes = if tool == Tool::Scale { local } else { WORLD };
     let ends = [0, 1, 2].map(|i| cam.project(rect, add(centre_w, mul(axes[i], len_w))));
@@ -491,6 +500,25 @@ impl App {
         }
     }
 
+    /// Cancel a gizmo gesture without generating an undo step.
+    pub(crate) fn cancel_gizmo_drag(&mut self) -> bool {
+        let Some(d) = self.drag.take() else { return false };
+        if let Some((gi, xform)) = d.link
+            && let Some(group) = self.scene.groups.get_mut(gi)
+        {
+            group.xform = xform;
+        }
+        for (gi, si, pos, rot, scale) in d.from {
+            if let Some(shape) = self.scene.shape_mut(gi, si) {
+                shape.pos = pos;
+                shape.rot = rot;
+                shape.scale = scale;
+            }
+        }
+        self.orbiting = false;
+        true
+    }
+
     pub fn apply_drag(&mut self, d: &mut Drag, mouse: Pos2, snap: bool) {
         let delta = mouse - d.start;
         let group = matches!(self.sel, Some(Pick::Group(_)));
@@ -677,6 +705,39 @@ mod tests {
         let min_x = s.pos[0] - 15.0 * s.scale[0];
         assert!((min_x + 15.0).abs() < 0.2, "the - x face stayed at -15, now {min_x}");
         assert!(s.pos[1] == 0.0 && s.pos[2] == 15.0);
+    }
+
+    #[test]
+    fn rotated_local_scale_handles_preserve_the_opposite_face_in_both_tools() {
+        let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0));
+        for rot in [[0.0, -0.0, 0.0], [25.0, 35.0, 55.0], [-10.0, 179.0, -80.0]] {
+            for tool in [Tool::All, Tool::Scale, Tool::Move, Tool::Rotate] {
+                let mut app = App::new(true, None);
+                let s = app.scene.shape_mut(0, 0).expect("shape");
+                s.kind = Kind::Box;
+                s.size = [30.0, 24.0, 20.0];
+                s.rot = rot;
+                s.scale = [1.1, 0.8, 1.3];
+                let local = crate::sdf::Prepared::new(s).inv;
+                let opposite = sub(s.pos, mul(local[0], half_extents(s)[0]));
+                let g = build(&app.cam, rect, &app.scene, Some(Pick::Shape(0, 0)), tool).expect("gizmo");
+                let expected_axes = if tool == Tool::Scale { local } else { WORLD };
+                assert_eq!(g.axes.map(|axis| axis.map(f32::to_bits)), expected_axes.map(|axis| axis.map(f32::to_bits)));
+                if !tool.scales() {
+                    assert!(g.faces.is_none() && g.corners.is_none());
+                    continue;
+                }
+                assert_eq!(g.local.map(|axis| axis.map(f32::to_bits)), local.map(|axis| axis.map(f32::to_bits)));
+                let face = g.faces.and_then(|f| f[1]).expect("local +X scale handle");
+                let mut d = app.begin_drag(Handle::Face(1), &g, rect, face, tool, false);
+                let out = d.dirs[0].normalized() * d.corner_px * 0.5;
+                app.apply_drag(&mut d, face + out, false);
+                let s = app.scene.shape(0, 0).expect("shape after scaling");
+                assert!(s.scale[0] > 1.1 && s.scale[1] == 0.8 && s.scale[2] == 1.3);
+                let after = sub(s.pos, mul(local[0], half_extents(s)[0]));
+                assert!(after.into_iter().zip(opposite).all(|(a, b)| (a - b).abs() < 1e-4), "{tool:?}, {rot:?}: {opposite:?} -> {after:?}");
+            }
+        }
     }
 
     #[test]

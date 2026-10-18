@@ -129,15 +129,16 @@ fn jacobi(mut a: [[f64; 3]; 3]) -> ([f64; 3], [[f64; 3]; 3]) {
             let t = if theta == 0.0 { 1.0 } else { t };
             let c = 1.0 / (t * t + 1.0).sqrt();
             let s = t * c;
-            for k in 0..3 {
-                let (akp, akq) = (a[k][p], a[k][q]);
-                a[k][p] = c * akp - s * akq;
-                a[k][q] = s * akp + c * akq;
+            for row in &mut a {
+                let (akp, akq) = (row[p], row[q]);
+                row[p] = c * akp - s * akq;
+                row[q] = s * akp + c * akq;
             }
-            for k in 0..3 {
-                let (apk, aqk) = (a[p][k], a[q][k]);
-                a[p][k] = c * apk - s * aqk;
-                a[q][k] = s * apk + c * aqk;
+            let (before_q, from_q) = a.split_at_mut(q);
+            for (apk, aqk) in before_q[p].iter_mut().zip(from_q[0].iter_mut()) {
+                let (old_p, old_q) = (*apk, *aqk);
+                *apk = c * old_p - s * old_q;
+                *aqk = s * old_p + c * old_q;
             }
             for row in v.iter_mut() {
                 let (vkp, vkq) = (row[p], row[q]);
@@ -280,8 +281,8 @@ fn build_table() -> CellTable {
             }
         }
         let mut ids: Vec<usize> = Vec::new();
-        for e in 0..12 {
-            if !crossed[e] {
+        for (e, &is_crossed) in crossed.iter().enumerate() {
+            if !is_crossed {
                 continue;
             }
             let r = find(&mut parent, e);

@@ -2,6 +2,8 @@
 //! shader (`shader.wgsl`) implements the same formulas; this copy picks shapes with the mouse and
 //! builds the mesh for export.
 
+use std::sync::Arc;
+
 use crate::corner;
 use crate::model::{BlendMode, Kind, Material, Op, Scene, Shape};
 
@@ -54,10 +56,10 @@ pub struct Prepared {
     pub op: Op,
     pub blend: f32,
     pub material: Material,
-    pub outline: Vec<[f32; 2]>,
+    pub outline: Arc<[[f32; 2]]>,
     pub params: [f32; 4],
-    pub path: Vec<[f32; 4]>,
-    pub outline2: Vec<[f32; 2]>,
+    pub path: Arc<[[f32; 4]]>,
+    pub outline2: Arc<[[f32; 2]]>,
     /// Wall thickness of the hollowed-out shape (0 = solid).
     pub shell: f32,
     /// The corners are cut flat (a chamfer) instead of rounded.
@@ -75,7 +77,14 @@ pub struct Prepared {
 /// linked copies, is prepared once).
 #[derive(Clone, Debug)]
 pub struct PreparedGroup {
+    /// Keep the hot sampling records contiguous. Their heavy immutable point buffers are
+    /// shared across revisions, so cloning an unchanged record never copies a curve/profile.
     pub shapes: Vec<Prepared>,
+    /// Source group index, including when the group has no visible shapes.
+    pub source_group: usize,
+    /// Exact source inputs for an interactive cache. Unchanged inputs share their allocation;
+    /// export-only fields leave this empty instead of cloning an entire scene.
+    inputs: Vec<Arc<Shape>>,
     /// The scene (group, shape) of each prepared shape.
     pub origin: Vec<(usize, usize)>,
     /// A bounding sphere of each shape, and the blocks and sphere of the whole group (accel.rs):
@@ -101,11 +110,36 @@ pub struct FieldGroup {
 #[derive(Clone, Debug)]
 pub struct Field {
     pub groups: Vec<FieldGroup>,
-    pub sources: Vec<PreparedGroup>,
+    pub sources: Vec<Arc<PreparedGroup>>,
+    /// Work counters for deterministic incremental-update tests and ignored benchmarks.
+    #[cfg(test)]
+    pub prepared_built: usize,
+    #[cfg(test)]
+    pub prepared_reused: usize,
     pub mode: BlendMode,
     pub amount: f32,
     pub drip: f32,
     pub ripple: f32,
+}
+
+/// Empty point buffers are common on primitives. Share one control block per point type;
+/// nonempty source buffers are copied directly into their Arc without a temporary Vec copy.
+fn shared_outline(points: &[[f32; 2]]) -> Arc<[[f32; 2]]> {
+    if points.is_empty() {
+        static EMPTY: std::sync::OnceLock<Arc<[[f32; 2]]>> = std::sync::OnceLock::new();
+        Arc::clone(EMPTY.get_or_init(|| Arc::from(&[][..])))
+    } else {
+        Arc::from(points)
+    }
+}
+
+fn shared_path(points: &[[f32; 4]]) -> Arc<[[f32; 4]]> {
+    if points.is_empty() {
+        static EMPTY: std::sync::OnceLock<Arc<[[f32; 4]]>> = std::sync::OnceLock::new();
+        Arc::clone(EMPTY.get_or_init(|| Arc::from(&[][..])))
+    } else {
+        Arc::from(points)
+    }
 }
 
 impl Prepared {
@@ -114,8 +148,17 @@ impl Prepared {
         let inv = [[r[0][0], r[1][0], r[2][0]], [r[0][1], r[1][1], r[2][1]], [r[0][2], r[1][2], r[2][2]]];
         let round = if s.round.is_finite() { s.round.max(0.0) } else { 0.0 };
         // a revolve profile lives on the +x side of the axis
-        let outline: Vec<[f32; 2]> =
-            if s.kind == Kind::Revolve { s.outline.iter().map(|p| [p[0].max(0.0), p[1]]).collect() } else { s.outline.clone() };
+        let outline = if s.kind == Kind::Revolve && !s.outline.is_empty() {
+            s.outline.iter().map(|p| [p[0].max(0.0), p[1]]).collect::<Vec<_>>().into()
+        } else {
+            shared_outline(&s.outline)
+        };
+        let path = if s.kind == Kind::Curve {
+            let nodes = crate::curve::build(&s.path, &s.params);
+            if nodes.is_empty() { shared_path(&[]) } else { nodes.into() }
+        } else {
+            shared_path(&s.path)
+        };
         let (poly_orient, poly_limit) = match s.kind {
             Kind::Revolve | Kind::Sweep | Kind::Extrude if round > 0.0 => crate::cad::inset_params(&outline, s.kind == Kind::Revolve),
             _ => (1.0, 0.0),
@@ -134,8 +177,8 @@ impl Prepared {
             material: s.material,
             outline,
             params: s.params,
-            path: if s.kind == Kind::Curve { crate::curve::build(&s.path, &s.params) } else { s.path.clone() },
-            outline2: s.outline2.clone(),
+            path,
+            outline2: shared_outline(&s.outline2),
             shell: if s.shell.is_finite() { s.shell.max(0.0) } else { 0.0 },
             poly_orient,
             poly_limit,
@@ -150,6 +193,7 @@ impl Prepared {
         [q[0] / self.scale[0], q[1] / self.scale[1], q[2] / self.scale[2]]
     }
     /// The surface colour at `p`: the material's colour, or its gradient (see `Material::gradient_weight`).
+    #[allow(clippy::manual_clamp, reason = "preserve the gradient's existing NaN-to-zero fallback")]
     pub fn color_at(&self, p: V3) -> V3 {
         let m = &self.material;
         if !m.has_gradient() {
@@ -242,11 +286,7 @@ impl Prepared {
 fn gradient_half(s: &Shape, rot: &[V3; 3]) -> f32 {
     let ax = usize::from(s.material.grad_axis).min(2);
     let half = s.local_half();
-    let h = if s.material.grad_local {
-        half[ax]
-    } else {
-        (0..3).map(|j| rot[ax][j].abs() * s.scale[j].abs() * half[j]).sum()
-    };
+    let h = if s.material.grad_local { half[ax] } else { (0..3).map(|j| rot[ax][j].abs() * s.scale[j].abs() * half[j]).sum() };
     if h.is_finite() { h.max(1e-3) } else { 1.0 }
 }
 
@@ -343,37 +383,127 @@ pub struct Sample {
 
 impl Field {
     pub fn new(scene: &Scene) -> Field {
+        Self::build(scene, None, false)
+    }
+
+    /// Rebuild the Boolean/pattern dependency graph, retaining expensive prepared shapes and
+    /// acceleration data only when their source inputs are unchanged. Inputs are compared by
+    /// value; only a changed shape gets a new input snapshot, never an entire Scene clone.
+    /// Group operations/linked transforms are always resolved anew; only their source geometry
+    /// can be shared. The caller needs to retain only the previous field.
+    pub fn reusing(scene: &Scene, previous: Option<&Field>) -> Field {
+        Self::build(scene, previous, true)
+    }
+
+    fn build(scene: &Scene, previous: Option<&Field>, keep_inputs: bool) -> Field {
         let mut groups = Vec::new();
-        let mut sources: Vec<PreparedGroup> = Vec::new();
+        let mut sources: Vec<Arc<PreparedGroup>> = Vec::new();
         let mut made: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+        let old_sources: std::collections::HashMap<usize, &Arc<PreparedGroup>> =
+            previous.map(|field| field.sources.iter().map(|p| (p.source_group, p)).collect()).unwrap_or_default();
+        #[cfg(test)]
+        let mut prepared_built = 0;
+        #[cfg(test)]
+        let mut prepared_reused = 0;
         for rg in crate::pattern::resolve(scene) {
             let (Some(g), Some(srcg)) = (scene.groups.get(rg.gi), scene.groups.get(rg.src)) else { continue };
             let src = *made.entry(rg.src).or_insert_with(|| {
+                let older = old_sources.get(&rg.src).copied();
+                let same_melt = previous.is_some_and(|old| old.mode == scene.melt.mode && old.amount.to_bits() == scene.melt.amount.to_bits());
+                let same_inputs = older.is_some_and(|old| {
+                    if old.inputs.len() != old.shapes.len() {
+                        return false;
+                    }
+                    let mut visible = srcg.shapes.iter().enumerate().filter(|(_, shape)| shape.visible);
+                    old.origin.iter().zip(&old.inputs).all(|(&(gi, si), input)| {
+                        visible.next().is_some_and(|(now_si, shape)| gi == rg.src && si == now_si && crate::perf::same_shape_for_cache(input, shape))
+                    }) && visible.next().is_none()
+                });
+                if let Some(old) = older
+                    && same_melt
+                    && same_inputs
+                {
+                    #[cfg(test)]
+                    {
+                        prepared_reused += old.shapes.len();
+                    }
+                    sources.push(Arc::clone(old));
+                    return sources.len() - 1;
+                }
+                let old_shapes: std::collections::HashMap<usize, (&Prepared, &Arc<Shape>, &crate::accel::Bound)> = older
+                    .map(|old| {
+                        old.origin
+                            .iter()
+                            .enumerate()
+                            .filter_map(|(i, &(_, si))| {
+                                old.shapes
+                                    .get(i)
+                                    .zip(old.inputs.get(i))
+                                    .zip(old.bounds.get(i))
+                                    .map(|((prepared, input), bound)| (si, (prepared, input, bound)))
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
                 let mut shapes = Vec::new();
+                let mut inputs = Vec::new();
                 let mut origin = Vec::new();
                 let mut members: Vec<&Shape> = Vec::new();
+                let mut bounds = Vec::new();
                 for (si, s) in srcg.shapes.iter().enumerate() {
-                    if s.visible {
-                        shapes.push(Prepared::new(s));
-                        origin.push((rg.src, si));
-                        members.push(s);
+                    if !s.visible {
+                        continue;
                     }
+                    if let Some((prepared, input, bound)) = old_shapes.get(&si).filter(|(_, input, _)| crate::perf::same_shape_for_cache(input, s)) {
+                        #[cfg(test)]
+                        {
+                            prepared_reused += 1;
+                        }
+                        shapes.push(Prepared::clone(prepared));
+                        bounds.push(**bound);
+                        if keep_inputs {
+                            inputs.push(Arc::clone(input));
+                        }
+                    } else {
+                        #[cfg(test)]
+                        {
+                            prepared_built += 1;
+                        }
+                        shapes.push(Prepared::new(s));
+                        bounds.push(crate::accel::shape_bound(s));
+                        if keep_inputs {
+                            inputs.push(Arc::new(s.clone()));
+                        }
+                    }
+                    origin.push((rg.src, si));
+                    members.push(s);
                 }
-                let info = crate::accel::group_info(&members, &scene.melt);
-                let bounds = members.iter().map(|s| crate::accel::shape_bound(s)).collect();
-                sources.push(PreparedGroup { shapes, origin, bounds, info });
+                let info = crate::accel::group_info_with_bounds(&members, &bounds, &scene.melt);
+                sources.push(Arc::new(PreparedGroup { source_group: rg.src, inputs, shapes, origin, bounds, info }));
                 sources.len() - 1
             });
             groups.push(FieldGroup { gi: rg.gi, op: g.op, blend: g.blend, src, insts: rg.insts, linked: rg.linked });
         }
         let m = scene.melt;
-        Field { groups, sources, mode: m.mode, amount: m.amount, drip: m.drip, ripple: m.ripple }
+        Field {
+            groups,
+            sources,
+            mode: m.mode,
+            amount: m.amount,
+            drip: m.drip,
+            ripple: m.ripple,
+            #[cfg(test)]
+            prepared_built,
+            #[cfg(test)]
+            prepared_reused,
+        }
     }
 
     /// The same field with every skip switched off (for the tests that prove the skips are exact).
     #[cfg(test)]
     pub fn without_culling(mut self) -> Field {
         for g in &mut self.sources {
+            let g = Arc::make_mut(g);
             g.bounds = vec![crate::accel::Bound { c: [0.0; 3], r: 1.0e9 }; g.shapes.len()];
             g.info.bound = crate::accel::Bound { c: [0.0; 3], r: 1.0e9 };
             g.info.blocks = vec![crate::accel::Block { bound: g.info.bound, kmax: 0.0, skippable: false, first: 0, count: g.shapes.len() }];
@@ -388,7 +518,11 @@ impl Field {
         let mut acc: Option<Sample> = None;
         let multi = g.info.blocks.len() > 1;
         for blk in &g.info.blocks {
-            if multi && blk.skippable && let Some(a) = &acc && blk.bound.lower(p) >= block_far(a.dist, blk.kmax * self.amount, self.mode) {
+            if multi
+                && blk.skippable
+                && let Some(a) = &acc
+                && blk.bound.lower(p) >= block_far(a.dist, blk.kmax * self.amount, self.mode)
+            {
                 continue;
             }
             for i in blk.first..blk.first + blk.count {
@@ -558,10 +692,243 @@ mod tests {
     use super::*;
     use crate::model::{Group, Material, Scene};
 
+    #[test]
+    fn empty_prepared_geometry_shares_one_buffer_per_point_type() {
+        let first = Prepared::new(&Shape::new(Kind::Sphere, [0.0; 3], Material::default()));
+        let second = Prepared::new(&Shape::new(Kind::Box, [0.0; 3], Material::default()));
+        assert!(first.path.is_empty() && second.path.is_empty());
+        assert!(first.outline2.is_empty() && second.outline2.is_empty());
+        assert!(Arc::ptr_eq(&first.path, &second.path));
+        assert!(Arc::ptr_eq(&first.outline2, &second.outline2));
+    }
+
     fn scene_of(shapes: Vec<Shape>) -> Scene {
         let mut g = Group::new("g");
         g.shapes = shapes;
         Scene { groups: vec![g], melt: Default::default(), env: Default::default(), saved: Vec::new() }
+    }
+
+    /// Exact 10/100/300-shape scenes with group Boolean dependencies and some thin shells.
+    fn cache_test_scene(count: usize) -> Scene {
+        let mut scene = Scene::default();
+        scene.groups.clear();
+        for gi in 0..count.div_ceil(10) {
+            let mut group = Group::new(format!("cache {gi}"));
+            group.op = if gi > 0 && gi % 4 == 0 { Op::Subtract } else { Op::Add };
+            group.blend = 1.0;
+            for si in 0..10 {
+                let i = gi * 10 + si;
+                if i >= count {
+                    break;
+                }
+                let kind = match i % 5 {
+                    0 => Kind::Sphere,
+                    1 => Kind::Box,
+                    2 => Kind::Extrude,
+                    3 => Kind::Curve,
+                    _ => Kind::Cylinder,
+                };
+                let mut sh = Shape::new(kind, [(i % 20) as f32 * 24.0, (i / 20) as f32 * 24.0, 10.0], Material::default());
+                if i % 3 == 0 {
+                    sh.shell = 0.8;
+                }
+                if i % 7 == 0 && si != 0 {
+                    sh.op = Op::Subtract;
+                }
+                if kind == Kind::Curve {
+                    sh.path = vec![[0.0, 0.0, 0.0, 2.0], [8.0, 0.0, 0.0, 2.0], [15.0, 8.0, 0.0, 2.0]];
+                }
+                group.shapes.push(sh);
+            }
+            scene.groups.push(group);
+        }
+        scene
+    }
+
+    fn same_field_samples(a: &Field, b: &Field) {
+        let bits = |bound: &crate::accel::Bound| (bound.c.map(f32::to_bits), bound.r.to_bits());
+        assert_eq!(a.sources.len(), b.sources.len());
+        for (left, right) in a.sources.iter().zip(&b.sources) {
+            assert_eq!(left.bounds.iter().map(bits).collect::<Vec<_>>(), right.bounds.iter().map(bits).collect::<Vec<_>>());
+            assert_eq!(bits(&left.info.bound), bits(&right.info.bound));
+            assert_eq!(left.info.blocks, right.info.blocks);
+        }
+        let mut points = Vec::new();
+        for x in [-15.0, 0.0, 12.0, 45.0, 96.0, 230.0] {
+            for z in [0.0, 9.6, 10.0, 14.0, 22.0] {
+                points.push([x, 0.0, z]);
+            }
+        }
+        // Exercise every source, rather than repeatedly sampling only the first row of a
+        // 300-shape scene. Instance placement is checked separately below.
+        for source in &a.sources {
+            for (shape, bound) in source.shapes.iter().zip(&source.bounds) {
+                points.push(shape.pos);
+                for axis in 0..3 {
+                    for sign in [-1.0, 1.0] {
+                        let mut p = shape.pos;
+                        p[axis] += sign * bound.r.clamp(0.5, 40.0) * 0.6;
+                        points.push(p);
+                    }
+                }
+            }
+        }
+        for group in &a.groups {
+            if let Some(source) = a.sources.get(group.src) {
+                for inst in &group.insts {
+                    for shape in &source.shapes {
+                        points.push(inst.apply(shape.pos));
+                    }
+                }
+            }
+        }
+        for p in points {
+            let left = a.sample(p);
+            let right = b.sample(p);
+            assert_eq!(left.dist.to_bits(), right.dist.to_bits(), "distance at {p:?}");
+            assert_eq!(left.color, right.color, "material at {p:?}");
+            assert_eq!(left.nearest, right.nearest, "pick at {p:?}");
+        }
+    }
+
+    #[test]
+    fn incremental_field_rebuilds_only_changed_geometry_and_never_stales_on_undo() {
+        for n in [10, 100, 300] {
+            let original = cache_test_scene(n);
+            let before = Field::reusing(&original, None);
+            assert_eq!(before.prepared_built, n);
+            let mut changed = original.clone();
+            changed.groups[0].shapes[0].pos[0] += 1.75;
+            let after = Field::reusing(&changed, Some(&before));
+            assert_eq!(after.prepared_built, 1, "{n} shapes");
+            assert_eq!(after.prepared_reused, n - 1, "{n} shapes");
+            if n > 10 {
+                assert!(Arc::ptr_eq(&before.sources[1], &after.sources[1]), "unchanged source group must be shared");
+            }
+            assert!(!before.sources[0].shapes[1].outline.is_empty());
+            assert!(Arc::ptr_eq(&before.sources[0].shapes[1].outline, &after.sources[0].shapes[1].outline));
+            assert!(!before.sources[0].shapes[3].path.is_empty());
+            assert!(Arc::ptr_eq(&before.sources[0].shapes[3].path, &after.sources[0].shapes[3].path));
+            assert!(
+                Arc::ptr_eq(&before.sources[0].inputs[1], &after.sources[0].inputs[1]),
+                "unchanged outlines/path inputs must not be cloned per edit"
+            );
+            same_field_samples(&after, &Field::new(&changed));
+
+            // Undo returns exactly to the old SDF, not the modified prepared shape.
+            let undone = Field::reusing(&original, Some(&after));
+            assert_eq!(undone.prepared_built, 1);
+            same_field_samples(&undone, &before);
+        }
+    }
+
+    #[test]
+    fn melt_material_visibility_and_group_link_dependencies_invalidate_safely() {
+        let original = cache_test_scene(20);
+        let old = Field::reusing(&original, None);
+        let mut changed = original.clone();
+        changed.melt.amount = 0.25;
+        changed.melt.mode = BlendMode::Gooey;
+        let melt = Field::reusing(&changed, Some(&old));
+        assert_eq!(melt.prepared_built, 0, "melt does not alter individual shape preparation");
+        assert!(!Arc::ptr_eq(&old.sources[0], &melt.sources[0]), "blend-dependent acceleration bounds must be rebuilt");
+        same_field_samples(&melt, &Field::new(&changed));
+
+        changed.groups[0].shapes[1].material.color = [0.1, 0.9, 0.4];
+        changed.groups[1].shapes[2].visible = false;
+        changed.groups[1].op = Op::Intersect;
+        let edited = Field::reusing(&changed, Some(&melt));
+        assert_eq!(edited.prepared_built, 1);
+        same_field_samples(&edited, &Field::new(&changed));
+    }
+
+    #[test]
+    fn incremental_field_follows_hidden_link_sources_retargets_and_reordering() {
+        let mut original = cache_test_scene(20);
+        let uid = original.ensure_group_uid(0).unwrap();
+        let other_uid = original.ensure_group_uid(1).unwrap();
+        original.groups[0].visible = false;
+        let mut linked = Group::new("linked hidden source");
+        linked.instance_of = Some(uid);
+        original.groups.push(linked);
+        let before = Field::reusing(&original, None);
+        let mut changed = original.clone();
+        changed.groups[0].shapes[0].pos[1] += 5.0;
+        let edited = Field::reusing(&changed, Some(&before));
+        assert_eq!(edited.prepared_built, 1);
+        same_field_samples(&edited, &Field::new(&changed));
+
+        changed.groups[2].xform.pos = [35.0, -12.0, 8.0];
+        changed.groups[2].xform.rot = [10.0, 0.0, 25.0];
+        changed.groups[2].xform.scale = 1.2;
+        let transformed = Field::reusing(&changed, Some(&edited));
+        assert_eq!(transformed.prepared_built, 0);
+        same_field_samples(&transformed, &Field::new(&changed));
+
+        changed.groups[2].instance_of = Some(other_uid);
+        let retargeted = Field::reusing(&changed, Some(&transformed));
+        same_field_samples(&retargeted, &Field::new(&changed));
+        changed.groups.swap(0, 1);
+        let reordered = Field::reusing(&changed, Some(&retargeted));
+        same_field_samples(&reordered, &Field::new(&changed));
+
+        changed.groups[2].instance_of = Some(u32::MAX);
+        let broken = Field::reusing(&changed, Some(&reordered));
+        same_field_samples(&broken, &Field::new(&changed));
+        assert_eq!(broken.groups.len(), 1, "a broken link must not resurrect an old source");
+    }
+
+    #[test]
+    fn export_fields_do_not_keep_interactive_input_snapshots() {
+        let scene = cache_test_scene(20);
+        let cold = Field::new(&scene);
+        assert!(cold.sources.iter().all(|source| source.inputs.is_empty()));
+        let interactive = Field::reusing(&scene, Some(&cold));
+        same_field_samples(&interactive, &cold);
+        assert_eq!(interactive.prepared_built, 20, "an uncached export field is a safe cold fallback");
+        let unchanged = Field::reusing(&scene, Some(&interactive));
+        assert_eq!(unchanged.prepared_built, 0);
+        assert!(Arc::ptr_eq(&interactive.sources[0], &unchanged.sources[0]));
+    }
+
+    /// Run explicitly with: cargo test -p meltcad incremental_field_timing_10_100_300 -- --ignored --nocapture
+    /// Both versions rebuild the Boolean graph on each edit; only the incremental one keeps
+    /// unchanged prepared geometry. Never interpret these as GPU frame timings.
+    #[test]
+    #[ignore]
+    fn incremental_field_timing_10_100_300() {
+        use std::time::{Duration, Instant};
+        for n in [10, 100, 300] {
+            let mut scene = cache_test_scene(n);
+            let mut previous = Field::reusing(&scene, None);
+            let mut old_ms = Duration::ZERO;
+            let mut new_ms = Duration::ZERO;
+            const REPEATS: usize = 30;
+            for k in 0..REPEATS {
+                let mut edited = scene.clone();
+                let si = k % n;
+                edited.groups[si / 10].shapes[si % 10].pos[0] += 0.4;
+                let started = Instant::now();
+                let cold = Field::new(&edited);
+                old_ms += started.elapsed();
+                let started = Instant::now();
+                let incremental = Field::reusing(&edited, Some(&previous));
+                new_ms += started.elapsed();
+                assert_eq!(incremental.prepared_built, 1);
+                same_field_samples(&cold, &incremental);
+                std::hint::black_box(&cold);
+                scene = edited;
+                previous = incremental;
+            }
+            eprintln!(
+                "SDF field {:>3} shapes: cold {:.3}ms/edit, incremental {:.3}ms/edit, speedup {:.2}x ({} edits)",
+                n,
+                old_ms.as_secs_f64() * 1000.0 / REPEATS as f64,
+                new_ms.as_secs_f64() * 1000.0 / REPEATS as f64,
+                old_ms.as_secs_f64() / new_ms.as_secs_f64().max(1e-12),
+                REPEATS
+            );
+        }
     }
 
     #[test]
@@ -679,7 +1046,15 @@ mod tests {
                 s.size = [4.0 + rnd() * 12.0, 4.0 + rnd() * 12.0, 4.0 + rnd() * 12.0];
                 s.rot = [rnd() * 90.0, rnd() * 90.0, rnd() * 90.0];
                 s.blend = rnd() * 12.0;
-                s.op = if si > 0 && rnd() < 0.2 { Op::Subtract } else if si > 0 && rnd() < 0.08 { Op::Intersect } else if si > 0 && rnd() < 0.08 { Op::Paint } else { Op::Add };
+                s.op = if si > 0 && rnd() < 0.2 {
+                    Op::Subtract
+                } else if si > 0 && rnd() < 0.08 {
+                    Op::Intersect
+                } else if si > 0 && rnd() < 0.08 {
+                    Op::Paint
+                } else {
+                    Op::Add
+                };
                 g.shapes.push(s);
             }
             sc.groups.push(g);
@@ -950,11 +1325,24 @@ mod tests {
                     let b = crate::accel::shape_bound(s);
                     let p = Prepared::new(s);
                     for _ in 0..200 {
-                        let q = [s.pos[0] + (rnd() - 0.5) * 2.0 * b.r * 1.5, s.pos[1] + (rnd() - 0.5) * 2.0 * b.r * 1.5, s.pos[2] + (rnd() - 0.5) * 2.0 * b.r * 1.5];
+                        let q = [
+                            s.pos[0] + (rnd() - 0.5) * 2.0 * b.r * 1.5,
+                            s.pos[1] + (rnd() - 0.5) * 2.0 * b.r * 1.5,
+                            s.pos[2] + (rnd() - 0.5) * 2.0 * b.r * 1.5,
+                        ];
                         let d = p.distance(q);
                         let lb = b.lower(q);
                         if d < lb - 1e-3 {
-                            let e = kinds.entry(format!("{:?} round {} shell {} chamfer {:?} scale {:?}", s.kind, s.round > 0.0, s.shell > 0.0, s.corner, s.scale)).or_insert((0, 0.0));
+                            let e = kinds
+                                .entry(format!(
+                                    "{:?} round {} shell {} chamfer {:?} scale {:?}",
+                                    s.kind,
+                                    s.round > 0.0,
+                                    s.shell > 0.0,
+                                    s.corner,
+                                    s.scale
+                                ))
+                                .or_insert((0, 0.0));
                             e.0 += 1;
                             e.1 = e.1.max(lb - d);
                         }
@@ -982,7 +1370,8 @@ mod tests {
             state = state.wrapping_mul(1664525).wrapping_add(1013904223);
             (state >> 8) as f32 / (1u32 << 24) as f32
         };
-        let pts: Vec<V3> = (0..20000).map(|_| [c[0] + (rnd() - 0.5) * 2.0 * r, c[1] + (rnd() - 0.5) * 2.0 * r, c[2] + (rnd() - 0.5) * 2.0 * r * 0.4]).collect();
+        let pts: Vec<V3> =
+            (0..20000).map(|_| [c[0] + (rnd() - 0.5) * 2.0 * r, c[1] + (rnd() - 0.5) * 2.0 * r, c[2] + (rnd() - 0.5) * 2.0 * r * 0.4]).collect();
         let time = |f: &Field| {
             let t = std::time::Instant::now();
             let mut acc = 0.0;
@@ -993,7 +1382,12 @@ mod tests {
         };
         let (a, sa) = time(&fast);
         let (b, sb) = time(&slow);
-        eprintln!("{} shapes: Field::new {:.1} ms; 20000 distances: {a:.0} ms with skips, {b:.0} ms without ({:.1}x); sums {sa:.1} {sb:.1}", sc.shape_count(), prep.as_secs_f64() * 1000.0, b / a);
+        eprintln!(
+            "{} shapes: Field::new {:.1} ms; 20000 distances: {a:.0} ms with skips, {b:.0} ms without ({:.1}x); sums {sa:.1} {sb:.1}",
+            sc.shape_count(),
+            prep.as_secs_f64() * 1000.0,
+            b / a
+        );
     }
 
     fn graded(kind: Kind, mat: Material) -> Shape {
