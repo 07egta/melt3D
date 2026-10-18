@@ -1094,6 +1094,7 @@ impl App {
                                 self.curve_button(ui);
                                 self.pipe_button(ui);
                                 self.sketch_button(ui);
+                                self.sketch_make_buttons(ui);
                                 style::menu_button(ui, "…", false, |ui| {
                                     ui.set_min_width(190.0);
                                     ui.label(egui::RichText::new("Other shapes").size(12.0).color(style::DIM));

@@ -135,3 +135,37 @@ pub fn snap(p: &Painter, r: Rect, ink: Color32) {
         .collect();
     p.add(egui::Shape::line(pts, pen(r, ink.gamma_multiply(0.7))));
 }
+
+/// Extrude: an outline pushed up into a prism.
+pub fn extrude(p: &Painter, r: Rect, ink: Color32) {
+    let st = pen(r, ink);
+    poly(p, r, &[(0.18, 0.86), (0.62, 0.86), (0.62, 0.5), (0.18, 0.5)], None, st);
+    p.line_segment([at(r, 0.18, 0.5), at(r, 0.38, 0.28)], st);
+    p.line_segment([at(r, 0.62, 0.5), at(r, 0.82, 0.28)], st);
+    p.line_segment([at(r, 0.62, 0.86), at(r, 0.82, 0.64)], st);
+    p.line_segment([at(r, 0.38, 0.28), at(r, 0.82, 0.28)], st);
+    p.line_segment([at(r, 0.82, 0.28), at(r, 0.82, 0.64)], st);
+}
+
+/// Loft: a wide outline below blending into a small one above.
+pub fn loft(p: &Painter, r: Rect, ink: Color32) {
+    let st = pen(r, ink);
+    p.add(egui::Shape::closed_line(vec![at(r, 0.1, 0.82), at(r, 0.9, 0.82), at(r, 0.78, 0.96), at(r, 0.22, 0.96)], st));
+    p.add(egui::Shape::closed_line(vec![at(r, 0.34, 0.1), at(r, 0.66, 0.1), at(r, 0.6, 0.2), at(r, 0.4, 0.2)], st));
+    p.line_segment([at(r, 0.1, 0.82), at(r, 0.34, 0.1)], st);
+    p.line_segment([at(r, 0.9, 0.82), at(r, 0.66, 0.1)], st);
+}
+
+/// Sweep: a small outline pulled along a bending path.
+pub fn sweep(p: &Painter, r: Rect, ink: Color32) {
+    let st = pen(r, ink);
+    p.circle_stroke(at(r, 0.2, 0.8), r.width() * 0.13, st);
+    let pts: Vec<Pos2> = (0..=14)
+        .map(|i| {
+            let t = i as f32 / 14.0;
+            at(r, 0.2 + 0.7 * t, 0.8 - 0.62 * (t * std::f32::consts::FRAC_PI_2).sin().powi(2) * 1.0 - 0.0 * t)
+        })
+        .collect();
+    p.add(egui::Shape::line(pts, st));
+    dots(p, r, &[(0.9, 0.18)], ink);
+}
