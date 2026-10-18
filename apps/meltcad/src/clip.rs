@@ -38,11 +38,11 @@ pub fn paste_text(app: &mut App, text: &str) -> Result<String, String> {
     let _guard = crate::mesh::LoadGuard::begin();
     if let Ok(clip) = serde_json::from_str::<Clip>(text) {
         if clip.yuracad_clip != 1 {
-            return Err("このコピーは新しいバージョンのものです".into());
+            return Err("This copy is from a newer version".into());
         }
         let mut sc = Scene { groups: vec![clip.group], ..Scene::default() };
         sc.sanitize();
-        let group = sc.groups.pop().ok_or("空でした")?;
+        let group = sc.groups.pop().ok_or("It was empty")?;
         return if clip.whole { add_group(app, group, true) } else { add_shapes(app, group.shapes) };
     }
     // a whole scene file pasted as text: its groups are added
@@ -52,9 +52,9 @@ pub fn paste_text(app: &mut App, text: &str) -> Result<String, String> {
             add_group(app, g, false)?;
             n += 1;
         }
-        return Ok(format!("グループを{n}個貼りつけました"));
+        return Ok(format!("Pasted {n} groups"));
     }
-    Err("貼りつけられるものがありません".into())
+    Err("Nothing to paste".into())
 }
 
 fn shifted(shapes: &mut [Shape], d: f32) {
@@ -66,13 +66,13 @@ fn shifted(shapes: &mut [Shape], d: f32) {
 
 fn add_shapes(app: &mut App, mut shapes: Vec<Shape>) -> Result<String, String> {
     if shapes.is_empty() {
-        return Err("空でした".into());
+        return Err("It was empty".into());
     }
     if app.scene.shape_count() + shapes.len() > MAX_SHAPES {
-        return Err(format!("形は{MAX_SHAPES}個までです"));
+        return Err(format!("Up to {MAX_SHAPES} shapes"));
     }
     if app.scene.groups.is_empty() {
-        app.scene.groups.push(Group::new("グループ 1"));
+        app.scene.groups.push(Group::new("Group 1"));
     }
     let g = match app.sel {
         Some(Pick::Shape(g, _)) | Some(Pick::Group(g)) if g < app.scene.groups.len() => g,
@@ -81,20 +81,20 @@ fn add_shapes(app: &mut App, mut shapes: Vec<Shape>) -> Result<String, String> {
     crate::mesh::can_add(&app.scene, shapes.iter())?;
     shifted(&mut shapes, STEP);
     for s in &mut shapes {
-        s.name = format!("{} コピー", s.name.trim_end_matches(" コピー"));
+        s.name = format!("{} copy", s.name.trim_end_matches(" copy"));
     }
     let group = &mut app.scene.groups[g];
     group.shapes.extend(shapes);
     app.sel = Some(Pick::Shape(g, group.shapes.len() - 1));
-    Ok("貼りつけました".into())
+    Ok("Pasted".into())
 }
 
 fn add_group(app: &mut App, mut group: Group, offset: bool) -> Result<String, String> {
     if app.scene.groups.len() >= MAX_GROUPS {
-        return Err(format!("グループは{MAX_GROUPS}個までです"));
+        return Err(format!("Up to {MAX_GROUPS} groups"));
     }
     if app.scene.shape_count() + group.shapes.len() > MAX_SHAPES {
-        return Err(format!("形は{MAX_SHAPES}個までです"));
+        return Err(format!("Up to {MAX_SHAPES} shapes"));
     }
     crate::mesh::can_add(&app.scene, group.shapes.iter())?;
     if offset {
@@ -109,7 +109,7 @@ fn add_group(app: &mut App, mut group: Group, offset: bool) -> Result<String, St
     app.scene.groups.insert(at, group);
     app.scene.normalize_depths();
     app.sel = Some(Pick::Group(at));
-    Ok("貼りつけました".into())
+    Ok("Pasted".into())
 }
 
 impl App {
@@ -119,9 +119,9 @@ impl App {
             Some(t) => {
                 ctx.copy_text(t.clone());
                 self.clipboard = Some(t);
-                self.say(ctx, "コピーしました");
+                self.say(ctx, "Copied");
             }
-            None => self.say(ctx, "コピーするものをえらんでください"),
+            None => self.say(ctx, "Select something to copy"),
         }
     }
 
@@ -135,7 +135,7 @@ impl App {
     /// Paste the given text (a Ctrl+V), or the app's own copy when `text` is None (the menu).
     pub fn paste(&mut self, ctx: &egui::Context, text: Option<String>) {
         let Some(t) = text.or_else(|| self.clipboard.clone()) else {
-            self.say(ctx, "コピーしたものがありません");
+            self.say(ctx, "Nothing copied yet");
             return;
         };
         match paste_text(self, &t) {

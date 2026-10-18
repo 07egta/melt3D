@@ -28,7 +28,7 @@ pub const MAX_SIDE: u32 = 64;
 const COORD: f32 = 5000.0;
 
 /// What `Scene` says when the instances do not all fit.
-pub const TOO_MANY: &str = "パターンのこすうが多すぎます（シーン全体で256こまで）";
+pub const TOO_MANY: &str = "Too many pattern copies (up to 256 in the whole scene)";
 
 // ---------------------------------------------------------------------------------------------
 // The transform of one instance
@@ -207,20 +207,20 @@ impl PatternKind {
     pub const ALL: [PatternKind; 5] = [PatternKind::Mirror, PatternKind::Rect, PatternKind::Circular, PatternKind::Path, PatternKind::Geometry];
     pub fn label(self) -> &'static str {
         match self {
-            PatternKind::Mirror => "ミラー",
-            PatternKind::Rect => "矩形状",
-            PatternKind::Circular => "円形状",
-            PatternKind::Path => "パス上",
-            PatternKind::Geometry => "ジオメトリ",
+            PatternKind::Mirror => "Mirror",
+            PatternKind::Rect => "Rectangle",
+            PatternKind::Circular => "Circular",
+            PatternKind::Path => "Along path",
+            PatternKind::Geometry => "Geometry",
         }
     }
     pub fn hint(self) -> &'static str {
         match self {
-            PatternKind::Mirror => "X・Y・Zの面で左右（上下・前後）に写します",
-            PatternKind::Rect => "たて・よこ・高さに、同じ間かくでならべます",
-            PatternKind::Circular => "ある軸のまわりに、ぐるっとならべます",
-            PatternKind::Path => "線（カーブ・スイープ・かたち）にそってならべます",
-            PatternKind::Geometry => "ほかの形の点（ふし・かど）ごとに 1こずつおきます",
+            PatternKind::Mirror => "Mirrors across the X, Y or Z plane",
+            PatternKind::Rect => "Repeats evenly along length, width and height",
+            PatternKind::Circular => "Repeats in a circle around an axis",
+            PatternKind::Path => "Repeats along a line (curve, sweep or shape)",
+            PatternKind::Geometry => "Puts one copy at each point (node or corner) of another shape",
         }
     }
 }

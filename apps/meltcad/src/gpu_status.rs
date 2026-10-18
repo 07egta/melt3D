@@ -54,7 +54,7 @@ impl AdapterInfo {
     /// "Vulkan / NVIDIA GeForce ..." for cards and menus.
     pub fn short(&self) -> String {
         match (self.backend.is_empty(), self.name.is_empty()) {
-            (true, true) => "（不明）".to_string(),
+            (true, true) => "(unknown)".to_string(),
             (false, true) => self.backend.clone(),
             (true, false) => self.name.clone(),
             (false, false) => format!("{} / {}", self.backend, self.name),
@@ -171,7 +171,7 @@ impl GpuStatus {
         let message = message.into();
         g.last_error = Some(message.clone());
         if early && matches!(g.state, State::Ready { .. }) && g.runtime_errors >= RUNTIME_ERROR_LIMIT {
-            g.state = State::Failed { message: format!("描画中にエラーが {} 回おきました: {}", g.runtime_errors, message) };
+            g.state = State::Failed { message: format!("Error while drawing, {} times: {}", g.runtime_errors, message) };
             return true;
         }
         false
@@ -205,14 +205,14 @@ impl Snapshot {
     }
 }
 
-/// "12 秒" / "1 分 05 秒" for the waiting card.
+/// "12 s" / "1 min 05 s" for the waiting card.
 pub fn elapsed_text(secs: u64) -> String {
-    if secs < 60 { format!("{secs} 秒") } else { format!("{} 分 {:02} 秒", secs / 60, secs % 60) }
+    if secs < 60 { format!("{secs} s") } else { format!("{} min {:02} s", secs / 60, secs % 60) }
 }
 
 /// The line of the waiting card.
 pub fn compiling_text(secs: u64) -> String {
-    format!("描画の準備中… 初回は時間がかかることがあります（経過 {}）", elapsed_text(secs))
+    format!("Preparing graphics… the first run can take a while (elapsed {})", elapsed_text(secs))
 }
 
 /// Seconds of waiting after which the card also offers the ways out (simple view, other backend).
@@ -222,9 +222,9 @@ pub const OFFER_WAYS_OUT_AFTER_SECS: u64 = 20;
 pub fn describe_wgpu_error(stage: &str, err: &egui_wgpu::wgpu::Error) -> String {
     use egui_wgpu::wgpu::Error;
     let (kind, text) = match err {
-        Error::OutOfMemory { .. } => ("メモリが足りません (OutOfMemory)", err.to_string()),
-        Error::Validation { description, .. } => ("検証エラー (Validation)", description.clone()),
-        Error::Internal { description, .. } => ("内部エラー (Internal)", description.clone()),
+        Error::OutOfMemory { .. } => ("Out of memory (OutOfMemory)", err.to_string()),
+        Error::Validation { description, .. } => ("Validation error (Validation)", description.clone()),
+        Error::Internal { description, .. } => ("Internal error (Internal)", description.clone()),
     };
     let mut out = format!("{stage}: {kind}: {}", text.trim());
     // the lower-level causes often carry the compiler's own message
@@ -386,11 +386,11 @@ mod tests {
 
     #[test]
     fn the_waiting_text_counts_the_seconds() {
-        assert_eq!(compiling_text(12), "描画の準備中… 初回は時間がかかることがあります（経過 12 秒）");
-        assert_eq!(elapsed_text(0), "0 秒");
-        assert_eq!(elapsed_text(59), "59 秒");
-        assert_eq!(elapsed_text(60), "1 分 00 秒");
-        assert_eq!(elapsed_text(245), "4 分 05 秒");
+        assert_eq!(compiling_text(12), "Preparing graphics… the first run can take a while (elapsed 12 s)");
+        assert_eq!(elapsed_text(0), "0 s");
+        assert_eq!(elapsed_text(59), "59 s");
+        assert_eq!(elapsed_text(60), "1 min 00 s");
+        assert_eq!(elapsed_text(245), "4 min 05 s");
     }
 
     #[test]
@@ -398,7 +398,7 @@ mod tests {
         let a = AdapterInfo { backend: "Vulkan".into(), name: "Test GPU".into(), driver: "d 1".into(), device_type: "DiscreteGpu".into() };
         assert_eq!(a.short(), "Vulkan / Test GPU");
         assert_eq!(AdapterInfo { backend: "Gl".into(), ..Default::default() }.short(), "Gl");
-        assert_eq!(AdapterInfo::default().short(), "（不明）");
+        assert_eq!(AdapterInfo::default().short(), "(unknown)");
         let mut w = egui_wgpu::wgpu::AdapterInfo::new(egui_wgpu::wgpu::DeviceType::Cpu, egui_wgpu::wgpu::Backend::Vulkan);
         w.name = "W".into();
         w.vendor = 1;
@@ -413,11 +413,11 @@ mod tests {
     fn wgpu_errors_read_with_their_stage_and_cause() {
         use egui_wgpu::wgpu::Error;
         let v = Error::Validation { source: "inner cause".into(), description: "Shader error: bad".into() };
-        let t = describe_wgpu_error("シェーダー", &v);
-        assert!(t.starts_with("シェーダー: 検証エラー (Validation): Shader error: bad"), "{t}");
+        let t = describe_wgpu_error("Shader", &v);
+        assert!(t.starts_with("Shader: Validation error (Validation): Shader error: bad"), "{t}");
         assert!(t.contains("caused by: inner cause"), "{t}");
         let m = Error::OutOfMemory { source: "no room".into() };
-        let t = describe_wgpu_error("テクスチャ", &m);
+        let t = describe_wgpu_error("Texture", &m);
         assert!(t.contains("OutOfMemory") && t.contains("Out of Memory"), "{t}");
         let i = Error::Internal { source: "x".into(), description: "driver said no".into() };
         assert!(describe_wgpu_error("pipeline", &i).contains("driver said no"));

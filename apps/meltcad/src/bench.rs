@@ -1,4 +1,4 @@
-//! The speed test (`meltcad --bench [out.txt]`, or "速さをはかる…" in the がしつ menu).
+//! The speed test (`meltcad --bench [out.txt]`, or "Speed test…" in the がしつ menu).
 //!
 //! It draws a fixed set of scenes (a pipe like the ones people trace, a 20-shape library model, a
 //! 100-shape and a 300-shape scene, and a scene of rounded shapes with gradients and glass) at
@@ -36,7 +36,7 @@ fn tidy_env(scene: &mut Scene) {
 pub fn pipe_scene() -> Scene {
     let mut scene = Scene::default();
     scene.groups.clear();
-    let mut g = Group::new("パイプ");
+    let mut g = Group::new("Pipe");
     let nodes: Vec<[f32; 4]> = (0..12)
         .map(|i| {
             let t = i as f32 / 11.0;
@@ -44,7 +44,7 @@ pub fn pipe_scene() -> Scene {
         })
         .collect();
     let mut s = Shape::new(Kind::Curve, [0.0, 0.0, 0.0], Material::plain([0.62, 0.38, 0.92], 0.4, 0.0));
-    s.name = "パイプ".to_string();
+    s.name = "Pipe".to_string();
     s.path = nodes;
     s.params = [0.0, 1.0, 0.0, 1.0];
     s.blend = 2.0;
@@ -59,7 +59,7 @@ pub fn pipe_scene() -> Scene {
 pub fn gradient_scene() -> Scene {
     let mut scene = Scene::default();
     scene.groups.clear();
-    let mut g = Group::new("やわらか");
+    let mut g = Group::new("Soft");
     let mut a = Shape::new(Kind::Box, [-24.0, 0.0, 16.0], Material::plain([0.95, 0.4, 0.5], 0.3, 0.0));
     a.size = [30.0, 30.0, 30.0];
     a.round = 9.0;
@@ -373,7 +373,7 @@ pub fn run_with(
     source: Option<&str>,
     backends: Option<egui_wgpu::wgpu::Backends>,
 ) -> Result<Report, String> {
-    progress("グラフィックスを準備しています…");
+    progress("Preparing graphics…");
     let mut gpu = crate::gpu::offscreen::Offscreen::open_with(source, backends)?;
     let mut report = Report {
         version: env!("CARGO_PKG_VERSION").to_string(),
@@ -516,9 +516,9 @@ pub fn cli(args: &[std::ffi::OsString]) -> bool {
                 Err(e) => format!("\n\n(could not save {}: {e})", path.display()),
             };
             println!("{text}");
-            ("MELTCAD 速さのテスト", format!("{text}{note}"), Some(path))
+            ("MELTCAD speed test", format!("{text}{note}"), Some(path))
         }
-        Err(e) => ("MELTCAD 速さのテスト", format!("測れませんでした:\n{e}"), None),
+        Err(e) => ("MELTCAD speed test", format!("Could not measure:\n{e}"), None),
     };
     eprintln!("[bench] done {}", path.map(|p| p.display().to_string()).unwrap_or_default());
     // (a release build on Windows has no console: the answer is shown in a dialog too)
@@ -534,7 +534,7 @@ pub fn cli(args: &[std::ffi::OsString]) -> bool {
 }
 
 // ---------------------------------------------------------------------------------------------
-// The window ("速さをはかる…")
+// The window ("Speed test…")
 
 use std::sync::{Arc, Mutex};
 
@@ -568,7 +568,7 @@ impl Job {
         if self.lock().running {
             return;
         }
-        *self.lock() = JobState { running: true, progress: "はじめています…".to_string(), ..Default::default() };
+        *self.lock() = JobState { running: true, progress: "Starting…".to_string(), ..Default::default() };
         self.stop.store(false, std::sync::atomic::Ordering::Relaxed);
         let shared = self.shared.clone();
         let stop = self.stop.clone();
@@ -595,13 +595,13 @@ impl Job {
                     (
                         Ok(text),
                         Some(match saved {
-                            Ok(p) => format!("保存しました: {p}"),
-                            Err(e) => format!("保存できませんでした: {e}"),
+                            Ok(p) => format!("Saved: {p}"),
+                            Err(e) => format!("Could not save: {e}"),
                         }),
                     )
                 }
                 Ok(Err(e)) => (Err(e), None),
-                Err(_) => (Err("テスト中にエラーがおきました (panic)".to_string()), None),
+                Err(_) => (Err("An error happened during the test (panic)".to_string()), None),
             };
             tell(&|st| {
                 st.running = false;
@@ -610,7 +610,7 @@ impl Job {
             });
         });
         if spawned.is_err() {
-            *self.lock() = JobState { result: Some(Err("スレッドを作れませんでした".to_string())), ..Default::default() };
+            *self.lock() = JobState { result: Some(Err("Could not start a thread".to_string())), ..Default::default() };
         }
     }
 
@@ -622,12 +622,12 @@ impl Job {
         let st = self.lock().clone();
         let mut open = self.open;
         let mut restart = false;
-        egui::Window::new("速さをはかる").open(&mut open).default_width(640.0).default_height(480.0).show(ctx, |ui| {
+        egui::Window::new("Speed test").open(&mut open).default_width(640.0).default_height(480.0).show(ctx, |ui| {
             if st.running {
-                ui.label("測っています。終わるまで、この窓や絵にさわらないでください。");
+                ui.label("Measuring. Please don't touch this window or the view until it finishes.");
                 ui.label(egui::RichText::new(&st.progress).monospace());
                 ui.add(egui::Spinner::new());
-                if ui.button("やめる").clicked() {
+                if ui.button("Stop").clicked() {
                     self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
                 }
                 return;
@@ -635,10 +635,10 @@ impl Job {
             match &st.result {
                 Some(Ok(text)) => {
                     ui.horizontal(|ui| {
-                        if ui.button("コピー").on_hover_text("表をクリップボードに").clicked() {
+                        if ui.button("Copy").on_hover_text("Copy the table to the clipboard").clicked() {
                             ui.ctx().copy_text(text.clone());
                         }
-                        if ui.button("もう一度").clicked() {
+                        if ui.button("Try again").clicked() {
                             restart = true;
                         }
                         if let Some(s) = &st.saved {
@@ -651,15 +651,15 @@ impl Job {
                     });
                 }
                 Some(Err(e)) => {
-                    ui.label(egui::RichText::new("測れませんでした").strong());
+                    ui.label(egui::RichText::new("Could not measure").strong());
                     ui.label(e);
-                    if ui.button("もう一度").clicked() {
+                    if ui.button("Try again").clicked() {
                         restart = true;
                     }
                 }
                 None => {
-                    ui.label("まだ測っていません。");
-                    if ui.button("はじめる").clicked() {
+                    ui.label("Not measured yet.");
+                    if ui.button("Start").clicked() {
                         restart = true;
                     }
                 }

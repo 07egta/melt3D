@@ -30,8 +30,8 @@ pub const MAX_VOLUME_SHAPES: usize = 8;
 /// below 2^24 so a node number is exact in a float.
 pub const MAX_TOTAL_NODES: usize = 16_000_000;
 
-pub const ERR_TOO_MANY_SHAPES: &str = "読み込んだメッシュは1つのシーンに8個までです";
-pub const ERR_TOO_BIG: &str = "メッシュのデータが多すぎます。ほかのメッシュを消すか、細かさをさげてください";
+pub const ERR_TOO_MANY_SHAPES: &str = "Up to 8 loaded meshes per scene";
+pub const ERR_TOO_BIG: &str = "Too much mesh data. Delete other meshes or lower the detail";
 
 /// A baked distance volume shared between shapes. Equal when it is the very same volume.
 #[derive(Clone)]
@@ -467,7 +467,7 @@ pub(crate) mod tests {
     fn a_scene_with_a_mesh_round_trips_and_one_without_data_is_dropped_with_a_note() {
         let v = SharedVolume::new(ball_volume(24));
         let mut m = mesh_shape(&v);
-        m.name = "ボール".into();
+        m.name = "Ball".into();
         m.source = "ball.stl".into();
         m.size = [20.0; 3];
         let sc = scene_with(vec![m]);
@@ -475,10 +475,10 @@ pub(crate) mod tests {
         assert!(notes.is_empty(), "{notes:?}");
         assert_eq!(back, sc, "equal, and the volume is the very same one");
         let s = &back.groups[0].shapes[1];
-        assert_eq!((s.kind, s.name.as_str(), s.source.as_str(), s.size), (Kind::Mesh, "ボール", "ball.stl", [20.0; 3]));
+        assert_eq!((s.kind, s.name.as_str(), s.source.as_str(), s.size), (Kind::Mesh, "Ball", "ball.stl", [20.0; 3]));
         // a mesh shape that has lost its data cannot be drawn: it is dropped, the rest of the scene opens
         let mut empty = Shape::new(Kind::Mesh, [0.0; 3], Material::default());
-        empty.name = "からっぽ".into();
+        empty.name = "empty".into();
         let sc2 = scene_with(vec![empty]);
         let (back2, notes2) = Scene::from_json_notes(&sc2.to_json()).unwrap_or_default();
         assert_eq!(back2.shape_count(), 1, "only the default sphere is left");

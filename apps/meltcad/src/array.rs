@@ -62,13 +62,13 @@ impl App {
     fn make_array(&mut self, d: &Dlg) -> Result<usize, String> {
         let copies = d.count.clamp(1, 64) - 1;
         if copies == 0 {
-            return Err("2こ以上にしてください".into());
+            return Err("Please use 2 or more".into());
         }
         match self.sel {
             Some(Pick::Shape(g, s)) => {
-                let base = self.scene.shape(g, s).cloned().ok_or("形がありません")?;
+                let base = self.scene.shape(g, s).cloned().ok_or("No shape")?;
                 if self.scene.shape_count() + copies as usize > MAX_SHAPES {
-                    return Err(format!("形は{MAX_SHAPES}個までです"));
+                    return Err(format!("Up to {MAX_SHAPES} shapes"));
                 }
                 let more: Vec<Shape> = (0..copies).map(|_| base.clone()).collect();
                 crate::mesh::can_add(&self.scene, more.iter())?;
@@ -82,11 +82,11 @@ impl App {
                 Ok(copies as usize)
             }
             Some(Pick::Group(g)) => {
-                let base: Group = self.scene.groups.get(g).cloned().ok_or("グループがありません")?;
+                let base: Group = self.scene.groups.get(g).cloned().ok_or("No group")?;
                 if self.scene.groups.len() + copies as usize > MAX_GROUPS
                     || self.scene.shape_count() + base.shapes.len() * copies as usize > MAX_SHAPES
                 {
-                    return Err("ふやせる数をこえます".into());
+                    return Err("That goes over the limit".into());
                 }
                 crate::mesh::can_add(&self.scene, (0..copies).flat_map(|_| base.shapes.iter()))?;
                 let end = self.scene.subtree_end(g);
@@ -101,7 +101,7 @@ impl App {
                 self.sel = Some(Pick::Group(end + copies as usize - 1));
                 Ok(copies as usize)
             }
-            None => Err("ならべるものをえらんでください".into()),
+            None => Err("Select something to arrange".into()),
         }
     }
 }
@@ -112,31 +112,31 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
     egui::Area::new(egui::Id::new("array_area")).order(egui::Order::Foreground).anchor(Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
         style::card().show(ui, |ui| {
             ui.set_width(300.0);
-            ui.label(RichText::new("ならべてコピー").strong().size(15.0));
-            ui.label(RichText::new("えらんでいる形（グループ）を、いくつもならべます").size(11.5).color(style::DIM));
+            ui.label(RichText::new("Array copy").strong().size(15.0));
+            ui.label(RichText::new("Repeats the selected shape (group) many times").size(11.5).color(style::DIM));
             ui.add_space(4.0);
             ui.horizontal(|ui| {
-                if style::pill(ui, "まっすぐ", d.mode == Mode::Line).clicked() {
+                if style::pill(ui, "Straight", d.mode == Mode::Line).clicked() {
                     d.mode = Mode::Line;
                 }
-                if style::pill(ui, "ぐるっと（Z軸のまわり）", d.mode == Mode::Circle).clicked() {
+                if style::pill(ui, "Circle (around Z)", d.mode == Mode::Circle).clicked() {
                     d.mode = Mode::Circle;
                 }
             });
             egui::Grid::new("array_grid").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
-                ui.label(RichText::new("ぜんぶで").color(style::DIM));
-                ui.add(egui::DragValue::new(&mut d.count).range(2..=64).suffix(" こ"));
+                ui.label(RichText::new("Total").color(style::DIM));
+                ui.add(egui::DragValue::new(&mut d.count).range(2..=64).suffix(" pcs"));
                 ui.end_row();
                 match d.mode {
                     Mode::Line => {
-                        for (i, n) in ["よこ X", "おく Y", "たて Z"].iter().enumerate() {
+                        for (i, n) in ["Width X", "Depth Y", "Height Z"].iter().enumerate() {
                             ui.label(RichText::new(*n).color(style::DIM));
                             ui.add(egui::DragValue::new(&mut d.step[i]).speed(0.5).range(-1000.0..=1000.0).suffix(" mm").max_decimals(1));
                             ui.end_row();
                         }
                     }
                     Mode::Circle => {
-                        ui.label(RichText::new("角度").color(style::DIM));
+                        ui.label(RichText::new("Angle").color(style::DIM));
                         ui.add(egui::DragValue::new(&mut d.angle).speed(1.0).range(10.0..=360.0).suffix(" °"));
                         ui.end_row();
                     }
@@ -146,7 +146,7 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
             ui.horizontal(|ui| {
                 if ui
                     .add(
-                        egui::Button::new(RichText::new("ならべる").strong().color(egui::Color32::WHITE))
+                        egui::Button::new(RichText::new("Array").strong().color(egui::Color32::WHITE))
                             .fill(style::ACCENT_SOFT)
                             .stroke(egui::Stroke::new(1.0, style::ACCENT)),
                     )
@@ -154,7 +154,7 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
                 {
                     go = true;
                 }
-                if ui.button("やめる").clicked() {
+                if ui.button("Cancel").clicked() {
                     close = true;
                 }
             });
@@ -163,7 +163,7 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
     if go {
         match app.make_array(&d) {
             Ok(n) => {
-                app.say(ctx, format!("{n}こふやしました"));
+                app.say(ctx, format!("Added {n} copies"));
                 close = true;
             }
             Err(e) => app.say(ctx, e),

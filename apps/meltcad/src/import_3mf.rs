@@ -30,7 +30,7 @@ const MAX_VISITS: usize = 200_000;
 const MAX_OBJECTS: usize = 100_000;
 const MAX_DOCS: usize = 64;
 
-const BAD_XML: &str = "3MF のモデルファイル（XML）がこわれています";
+const BAD_XML: &str = "The 3MF model file (XML) is broken";
 
 // ---------------------------------------------------------------- a tiny XML tag reader
 
@@ -240,7 +240,7 @@ fn parse_doc(src: &[u8], total_verts: &mut usize, total_tris: &mut usize) -> Res
                     cur = Some((id, obj));
                 }
                 if doc.objects.len() > MAX_OBJECTS {
-                    return Err("3MF の中の形が多すぎます".into());
+                    return Err("Too many shapes in the 3MF".into());
                 }
             }
             (b"object", true) => {
@@ -272,7 +272,7 @@ fn parse_doc(src: &[u8], total_verts: &mut usize, total_tris: &mut usize) -> Res
             (b"component", false) => {
                 if let Some((_, obj)) = cur.as_mut() {
                     if obj.comps.len() >= 100_000 {
-                        return Err("3MF の部品が多すぎます".into());
+                        return Err("Too many parts in the 3MF".into());
                     }
                     let m = match t.attr("transform") {
                         Some(s) => parse_transform(s)?,
@@ -289,7 +289,7 @@ fn parse_doc(src: &[u8], total_verts: &mut usize, total_tris: &mut usize) -> Res
                     None => Affine::IDENTITY,
                 };
                 if doc.build.len() >= 100_000 {
-                    return Err("3MF の配置が多すぎます".into());
+                    return Err("Too many placements in the 3MF".into());
                 }
                 doc.build.push((id_attr(&t, "objectid")?, t.attr("p:path").map(str::to_string), m));
             }
@@ -319,9 +319,9 @@ impl Package<'_> {
             return Ok(());
         }
         if self.docs.len() >= MAX_DOCS {
-            return Err("3MF のモデルファイルが多すぎます".into());
+            return Err("Too many model files in the 3MF".into());
         }
-        let e = self.zip.find(path).ok_or_else(|| format!("3MF の中にモデルファイル {path} がありません"))?.clone();
+        let e = self.zip.find(path).ok_or_else(|| format!("The 3MF has no model file {path}"))?.clone();
         if self.xml_bytes + e.size() > MAX_TOTAL_XML {
             return Err(crate::import_inflate::InflateError::TooBig.to_string());
         }
@@ -334,18 +334,18 @@ impl Package<'_> {
 
     fn emit(&mut self, file: &str, id: u32, m: &Affine, depth: usize, out: &mut ImportedMesh) -> Result<(), String> {
         if depth > MAX_DEPTH {
-            return Err("3MF の部品が深く入れ子になりすぎています".into());
+            return Err("The 3MF parts are nested too deeply".into());
         }
         self.visits += 1;
         if self.visits > MAX_VISITS {
-            return Err("3MF の部品が多すぎます".into());
+            return Err("Too many parts in the 3MF".into());
         }
         self.load(file)?;
         let key = file.trim_start_matches('/').to_ascii_lowercase();
         // copy what is needed so that the package can be borrowed again for the components
         let (unit, comps, part) = {
             let Some(doc) = self.docs.get(&key) else { return Ok(()) };
-            let Some(obj) = doc.objects.get(&id) else { return Err(format!("3MF に番号 {id} の形がありません")) };
+            let Some(obj) = doc.objects.get(&id) else { return Err(format!("The 3MF has no shape with number {id}")) };
             if obj.skip {
                 return Ok(());
             }
@@ -397,7 +397,7 @@ fn model_path(zip: &Zip) -> Result<String, String> {
         .iter()
         .find(|e| e.name.to_ascii_lowercase().ends_with(".model"))
         .map(|e| e.name.clone())
-        .ok_or_else(|| "3MF の中にモデル（3D/3dmodel.model）が見つかりません".to_string())
+        .ok_or_else(|| "No model (3D/3dmodel.model) found in the 3MF".to_string())
 }
 
 /// Inspect base materials without affecting the safety-critical geometry reader.
@@ -496,10 +496,10 @@ pub(crate) fn appearance_3mf(bytes: &[u8]) -> crate::import_mesh::AppearanceInfo
     }
     out.material = distinct.first().copied();
     if unsupported {
-        out.notes.push("3MF に未対応または不正な色・材質指定があります。一部の外観は保持されません".into());
+        out.notes.push("The 3MF has unsupported or invalid colour/material settings. Some looks will not be kept".into());
     }
     if textures {
-        out.notes.push("3MF の画像テクスチャは読み込めません".into());
+        out.notes.push("Image textures in the 3MF can't be loaded".into());
     }
     out
 }

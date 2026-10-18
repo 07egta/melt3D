@@ -105,9 +105,9 @@ pub fn parse_choice(text: Option<&str>) -> Result<Choice, String> {
     match text.map(str::trim) {
         None | Some("") => Ok(Choice::Auto),
         Some(t) if t.eq_ignore_ascii_case("auto") => Ok(Choice::Auto),
-        Some(t) => {
-            Backend::parse(t).map(Choice::Fixed).ok_or_else(|| format!("MELTCAD_BACKEND={t} は知らない値です (vulkan / dx12 / gl / metal / auto)"))
-        }
+        Some(t) => Backend::parse(t)
+            .map(Choice::Fixed)
+            .ok_or_else(|| format!("MELTCAD_BACKEND={t} is not a known value (vulkan / dx12 / gl / metal / auto)")),
     }
 }
 
@@ -119,7 +119,7 @@ pub struct Settings {
     pub last_ok: Option<Backend>,
     /// Backends that failed (no device, or the shader did not compile) since.
     pub failed: Vec<Backend>,
-    /// The person chose the simple view ("かんたん表示").
+    /// The person chose the simple view ("Simple view").
     pub easy: bool,
 }
 
@@ -317,7 +317,7 @@ pub fn relaunch_args(r: &Relaunch) -> (Vec<OsString>, Vec<(String, String)>) {
 
 /// Start this program again. The caller then closes its own window.
 pub fn relaunch(r: &Relaunch) -> Result<(), String> {
-    let exe = std::env::current_exe().map_err(|e| format!("プログラムの場所がわかりません: {e}"))?;
+    let exe = std::env::current_exe().map_err(|e| format!("Cannot find where the program is: {e}"))?;
     let (args, envs) = relaunch_args(r);
     let mut cmd = std::process::Command::new(&exe);
     cmd.args(args);
@@ -329,7 +329,7 @@ pub fn relaunch(r: &Relaunch) -> Result<(), String> {
         }
     }
     crate::gpu_log::log(&format!("restarting {} with {r:?}", exe.display()));
-    cmd.spawn().map(|_| ()).map_err(|e| format!("もういちど起動できませんでした: {e}"))
+    cmd.spawn().map(|_| ()).map_err(|e| format!("Could not restart: {e}"))
 }
 
 /// The backends tried before this run, from the environment.

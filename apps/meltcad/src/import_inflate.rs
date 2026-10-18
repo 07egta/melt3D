@@ -19,9 +19,9 @@ pub enum InflateError {
 impl std::fmt::Display for InflateError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            InflateError::Truncated => write!(f, "圧縮データが途中で切れています"),
-            InflateError::Corrupt(why) => write!(f, "圧縮データがこわれています（{why}）"),
-            InflateError::TooBig => write!(f, "展開すると大きすぎます"),
+            InflateError::Truncated => write!(f, "Compressed data is cut off partway through"),
+            InflateError::Corrupt(why) => write!(f, "Compressed data is broken ({why})"),
+            InflateError::TooBig => write!(f, "Too big when unpacked"),
         }
     }
 }
@@ -105,7 +105,7 @@ impl Huff {
         for &l in lengths {
             let l = usize::from(l);
             if l > 15 {
-                return Err(InflateError::Corrupt("符号の長さ"));
+                return Err(InflateError::Corrupt("code length"));
             }
             if let Some(c) = count.get_mut(l) {
                 *c += 1;
@@ -121,7 +121,7 @@ impl Huff {
         for c in count.iter().skip(1) {
             left = (left << 1) - i64::from(*c);
             if left < 0 {
-                return Err(InflateError::Corrupt("符号が多すぎます"));
+                return Err(InflateError::Corrupt("Too many codes"));
             }
         }
         let bits = max.max(1) as u32;
@@ -164,7 +164,7 @@ impl Huff {
         let e = self.table.get((b.acc & ((1u64 << self.bits) - 1)) as usize).copied().unwrap_or(0);
         let len = u32::from(e & 15);
         if len == 0 {
-            return Err(InflateError::Corrupt("符号"));
+            return Err(InflateError::Corrupt("code"));
         }
         b.acc >>= len;
         b.n -= len;
@@ -190,7 +190,7 @@ fn dynamic_tables(b: &mut Bits) -> Result<(Huff, Huff), InflateError> {
     let hdist = b.take(5) as usize + 1;
     let hclen = b.take(4) as usize + 4;
     if hlit > 286 || hdist > 30 {
-        return Err(InflateError::Corrupt("符号の数"));
+        return Err(InflateError::Corrupt("code count"));
     }
     let mut cl = [0u8; 19];
     for &o in CL_ORDER.iter().take(hclen) {
@@ -210,14 +210,14 @@ fn dynamic_tables(b: &mut Bits) -> Result<(Huff, Huff), InflateError> {
         let (value, rep) = match sym {
             0..=15 => (sym as u8, 1usize),
             16 => {
-                let prev = if i > 0 { lens.get(i - 1).copied().unwrap_or(0) } else { return Err(InflateError::Corrupt("くり返し")) };
+                let prev = if i > 0 { lens.get(i - 1).copied().unwrap_or(0) } else { return Err(InflateError::Corrupt("repeat code")) };
                 (prev, 3 + b.take(2) as usize)
             }
             17 => (0, 3 + b.take(3) as usize),
             _ => (0, 11 + b.take(7) as usize),
         };
         if i + rep > total {
-            return Err(InflateError::Corrupt("くり返し"));
+            return Err(InflateError::Corrupt("repeat code"));
         }
         for k in 0..rep {
             if let Some(v) = lens.get_mut(i + k) {
@@ -227,10 +227,10 @@ fn dynamic_tables(b: &mut Bits) -> Result<(Huff, Huff), InflateError> {
         i += rep;
     }
     if lens.get(256).copied().unwrap_or(0) == 0 {
-        return Err(InflateError::Corrupt("終わりの符号がありません"));
+        return Err(InflateError::Corrupt("No end code"));
     }
-    let lit = Huff::build(lens.get(..hlit).ok_or(InflateError::Corrupt("符号"))?)?;
-    let dist = Huff::build(lens.get(hlit..total).ok_or(InflateError::Corrupt("符号"))?)?;
+    let lit = Huff::build(lens.get(..hlit).ok_or(InflateError::Corrupt("code"))?)?;
+    let dist = Huff::build(lens.get(hlit..total).ok_or(InflateError::Corrupt("code"))?)?;
     Ok((lit, dist))
 }
 
@@ -257,7 +257,7 @@ pub fn inflate_counted(data: &[u8], max_out: usize) -> Result<(Vec<u8>, usize), 
                 let l = usize::from(u16::from_le_bytes([len[0], len[1]]));
                 let nl = usize::from(u16::from_le_bytes([len[2], len[3]]));
                 if l != (!nl & 0xFFFF) {
-                    return Err(InflateError::Corrupt("ブロックの長さ"));
+                    return Err(InflateError::Corrupt("block length"));
                 }
                 let start = b.pos + 4;
                 let body = data.get(start..start + l).ok_or(InflateError::Truncated)?;
@@ -275,7 +275,7 @@ pub fn inflate_counted(data: &[u8], max_out: usize) -> Result<(Vec<u8>, usize), 
                     }
                     match fixed.as_ref() {
                         Some(t) => (&t.0, &t.1),
-                        None => return Err(InflateError::Corrupt("固定の符号")),
+                        None => return Err(InflateError::Corrupt("fixed code")),
                     }
                 } else {
                     dynamic = dynamic_tables(&mut b)?;
@@ -296,16 +296,16 @@ pub fn inflate_counted(data: &[u8], max_out: usize) -> Result<(Vec<u8>, usize), 
                     } else {
                         let k = sym - 257;
                         let (Some(&base), Some(&extra)) = (LEN_BASE.get(k), LEN_EXTRA.get(k)) else {
-                            return Err(InflateError::Corrupt("長さの符号"));
+                            return Err(InflateError::Corrupt("length code"));
                         };
                         let len = usize::from(base) + b.take(u32::from(extra)) as usize;
                         let ds = dist.decode(&mut b)?;
                         let (Some(&dbase), Some(&dextra)) = (DIST_BASE.get(ds), DIST_EXTRA.get(ds)) else {
-                            return Err(InflateError::Corrupt("距離の符号"));
+                            return Err(InflateError::Corrupt("distance code"));
                         };
                         let d = usize::from(dbase) + b.take(u32::from(dextra)) as usize;
                         if d > out.len() {
-                            return Err(InflateError::Corrupt("距離が先頭を越えています"));
+                            return Err(InflateError::Corrupt("distance goes past the start"));
                         }
                         if out.len() + len > max_out {
                             return Err(InflateError::TooBig);
@@ -322,7 +322,7 @@ pub fn inflate_counted(data: &[u8], max_out: usize) -> Result<(Vec<u8>, usize), 
                     }
                 }
             }
-            _ => return Err(InflateError::Corrupt("ブロックの種類")),
+            _ => return Err(InflateError::Corrupt("block type")),
         }
         if last == 1 {
             break;
@@ -354,13 +354,13 @@ pub fn adler32(data: &[u8]) -> u32 {
 pub fn inflate_zlib(data: &[u8], max_out: usize) -> Result<Vec<u8>, InflateError> {
     let (Some(&cmf), Some(&flg)) = (data.first(), data.get(1)) else { return Err(InflateError::Truncated) };
     if cmf & 15 != 8 || (u32::from(cmf) * 256 + u32::from(flg)) % 31 != 0 || flg & 0x20 != 0 {
-        return Err(InflateError::Corrupt("zlib のヘッダー"));
+        return Err(InflateError::Corrupt("zlib header"));
     }
     let body = data.get(2..).ok_or(InflateError::Truncated)?;
     let (out, used) = inflate_counted(body, max_out)?;
     let tail = body.get(used..used + 4).ok_or(InflateError::Truncated)?;
     if u32::from_be_bytes([tail[0], tail[1], tail[2], tail[3]]) != adler32(&out) {
-        return Err(InflateError::Corrupt("チェックサム"));
+        return Err(InflateError::Corrupt("checksum"));
     }
     Ok(out)
 }
@@ -405,7 +405,7 @@ fn u32at(d: &[u8], o: usize) -> Option<u32> {
     Some(u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
 }
 
-const BAD_ZIP: &str = "ZIP ファイルがこわれています";
+const BAD_ZIP: &str = "The ZIP file is broken";
 
 impl<'a> Zip<'a> {
     pub fn open(data: &'a [u8]) -> Result<Zip<'a>, String> {
@@ -431,10 +431,10 @@ impl<'a> Zip<'a> {
         let cd_size = u32at(data, eocd + 12).ok_or_else(|| BAD_ZIP.to_string())? as usize;
         let cd_off = u32at(data, eocd + 16).ok_or_else(|| BAD_ZIP.to_string())? as usize;
         if count == 0xFFFF || cd_size == 0xFFFF_FFFF || cd_off == 0xFFFF_FFFF {
-            return Err("ZIP64 の大きなファイルには対応していません".into());
+            return Err("Large ZIP64 files are not supported".into());
         }
         if count > MAX_ZIP_ENTRIES {
-            return Err("ZIP の中のファイルが多すぎます".into());
+            return Err("Too many files in the ZIP".into());
         }
         let mut entries = Vec::with_capacity(count);
         let mut off = cd_off;
@@ -467,7 +467,7 @@ impl<'a> Zip<'a> {
     /// Unpack one file; it may not be bigger than `max` bytes.
     pub fn read(&self, e: &ZipEntry, max: usize) -> Result<Vec<u8>, String> {
         if e.flags & 1 != 0 {
-            return Err("パスワードつきの ZIP には対応していません".into());
+            return Err("Password-protected ZIPs are not supported".into());
         }
         if e.usize_ > max {
             return Err(InflateError::TooBig.to_string());
@@ -489,13 +489,13 @@ impl<'a> Zip<'a> {
                 body.to_vec()
             }
             8 => inflate(body, e.usize_).map_err(|x| x.to_string())?,
-            _ => return Err("この圧縮方法の ZIP には対応していません".into()),
+            _ => return Err("This ZIP compression method is not supported".into()),
         };
         if out.len() != e.usize_ {
             return Err(BAD_ZIP.into());
         }
         if crc32(&out) != e.crc {
-            return Err(format!("{BAD_ZIP}（チェックサム）"));
+            return Err(format!("{BAD_ZIP} (checksum)"));
         }
         Ok(out)
     }
