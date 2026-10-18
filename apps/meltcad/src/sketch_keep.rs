@@ -164,7 +164,10 @@ impl App {
 pub fn guide_points(sh: &Shape) -> Vec<V3> {
     let (closed, ..) = curve::settings(&sh.params);
     let mut pts: Vec<V3> = curve::build(&sh.path, &sh.params).iter().map(|n| crate::curve_tool::to_world(sh, [n[0], n[1], n[2]])).collect();
-    if closed && let (Some(first), Some(last)) = (pts.first().copied(), pts.last().copied()) && sdf::dot(sdf::sub(first, last), sdf::sub(first, last)) > 1e-6 {
+    if closed
+        && let (Some(first), Some(last)) = (pts.first().copied(), pts.last().copied())
+        && sdf::dot(sdf::sub(first, last), sdf::sub(first, last)) > 1e-6
+    {
         pts.push(first);
     }
     pts.retain(|p| p.iter().all(|x| x.is_finite()));
@@ -287,9 +290,14 @@ mod tests {
         assert!(sh.solid());
         sh.guide = true;
         assert!(!sh.solid());
-        let back: Shape = serde_json::from_str(&serde_json::to_string(&sh).unwrap_or_default()).unwrap_or_else(|_| Shape::new(Kind::Box, [0.0; 3], Material::default()));
+        let back: Shape = serde_json::from_str(&serde_json::to_string(&sh).unwrap_or_default())
+            .unwrap_or_else(|_| Shape::new(Kind::Box, [0.0; 3], Material::default()));
         assert!(back.guide, "the flag is saved");
-        let pts = guide_points(&Shape { path: vec![[0.0, 0.0, 0.0, 1.0], [10.0, 0.0, 0.0, 1.0], [10.0, 10.0, 0.0, 1.0]], params: [1.0, 0.0, 0.0, 1.0], ..sh });
+        let pts = guide_points(&Shape {
+            path: vec![[0.0, 0.0, 0.0, 1.0], [10.0, 0.0, 0.0, 1.0], [10.0, 10.0, 0.0, 1.0]],
+            params: [1.0, 0.0, 0.0, 1.0],
+            ..sh
+        });
         assert!(pts.len() >= 4 && pts.first() == pts.last(), "a loop is closed again");
         assert!(seg_dist(egui::pos2(5.0, 3.0), egui::pos2(0.0, 0.0), egui::pos2(10.0, 0.0)) - 3.0 < 1e-4);
     }

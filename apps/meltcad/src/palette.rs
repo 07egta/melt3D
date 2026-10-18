@@ -279,7 +279,8 @@ fn dots(p: &egui::Painter, c: egui::Pos2, color: Color32) {
 impl App {
     /// Run the entry whose custom shortcut was pressed. True when one ran.
     pub fn custom_shortcuts(&mut self, ctx: &egui::Context) -> bool {
-        let hit = self.prefs.bindings().into_iter().find(|(sc, _)| ctx.input_mut(|i| i.consume_key(sc.modifiers(), sc.key))).map(|(_, id)| id.to_string());
+        let hit =
+            self.prefs.bindings().into_iter().find(|(sc, _)| ctx.input_mut(|i| i.consume_key(sc.modifiers(), sc.key))).map(|(_, id)| id.to_string());
         let Some(hit) = hit else { return false };
         match all_entries().iter().find(|e| e.id() == hit) {
             Some(e) => {
@@ -344,11 +345,12 @@ impl App {
     pub fn palette_ui(&mut self, ctx: &egui::Context) {
         let Some(mut st) = ctx.data(|m| m.get_temp::<State>(id())) else { return };
         let all = all_entries();
-        let hits = search(all, &st.query, 9);
+        let hits = search(all, &st.query, 80);
         st.sel = st.sel.min(hits.len().saturating_sub(1));
         let (mut close, mut run) = (false, None);
         let assigning = st.assign.clone();
         let mut pressed = None;
+        let mut moved = false;
         ctx.input_mut(|i| {
             if i.consume_key(egui::Modifiers::NONE, Key::Escape) {
                 if st.assign.is_some() {
@@ -367,9 +369,11 @@ impl App {
             }
             if i.consume_key(egui::Modifiers::NONE, Key::ArrowDown) {
                 st.sel = (st.sel + 1).min(hits.len().saturating_sub(1));
+                moved = true;
             }
             if i.consume_key(egui::Modifiers::NONE, Key::ArrowUp) {
                 st.sel = st.sel.saturating_sub(1);
+                moved = true;
             }
             if i.consume_key(egui::Modifiers::NONE, Key::Enter) {
                 run = hits.get(st.sel).copied();
@@ -457,70 +461,86 @@ impl App {
                     if hits.is_empty() {
                         ui.label(RichText::new("No results").color(style::DIM));
                     }
-                    for (n, &i) in hits.iter().enumerate() {
-                        let Some(e) = all.get(i) else { continue };
-                        let eid = e.id();
-                        let (rc, resp) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 28.0), egui::Sense::click());
-                        let hot = n == st.sel || resp.hovered();
-                        if n == st.sel {
-                            ui.painter().rect_filled(rc, 6.0, Color32::from_rgba_unmultiplied(52, 178, 120, 80));
-                        } else if resp.hovered() {
-                            ui.painter().rect_filled(rc, 6.0, Color32::from_white_alpha(16));
+                    egui::ScrollArea::vertical().max_height(340.0).auto_shrink([false, true]).show(ui, |ui| {
+                        for (n, &i) in hits.iter().enumerate() {
+                            let Some(e) = all.get(i) else { continue };
+                            let eid = e.id();
+                            let (rc, resp) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 28.0), egui::Sense::click());
+                            let hot = n == st.sel || resp.hovered();
+                            if moved && n == st.sel {
+                                ui.scroll_to_rect(rc, None);
+                            }
+                            if n == st.sel {
+                                ui.painter().rect_filled(rc, 6.0, Color32::from_rgba_unmultiplied(52, 178, 120, 80));
+                            } else if resp.hovered() {
+                                ui.painter().rect_filled(rc, 6.0, Color32::from_white_alpha(16));
+                            }
+                            // right to left: [...] pin shortcut-badge tag
+                            let more = egui::Rect::from_center_size(egui::pos2(rc.right() - 14.0, rc.center().y), Vec2::splat(22.0));
+                            let pin = more.translate(Vec2::new(-24.0, 0.0));
+                            let pinned = prefs.is_pinned(&eid);
+                            let more_r = ui.interact(more, egui::Id::new(("pal_more", i)), egui::Sense::click()).on_hover_text("Set shortcut");
+                            let pin_r = ui.interact(pin, egui::Id::new(("pal_pin", i)), egui::Sense::click()).on_hover_text(if pinned {
+                                "Unpin"
+                            } else {
+                                "Pin to the top"
+                            });
+                            let dim = |hover: bool| if hover { style::TEXT } else { style::DIM };
+                            if hot || pinned {
+                                star(ui.painter(), pin.center(), 6.0, if pinned { style::KEEP } else { dim(pin_r.hovered()) }, pinned);
+                            }
+                            if hot {
+                                dots(ui.painter(), more.center(), dim(more_r.hovered()));
+                            }
+                            let mut x = pin.left() - 6.0;
+                            let tag = ui.painter().text(
+                                egui::pos2(x, rc.center().y),
+                                Align2::RIGHT_CENTER,
+                                e.tag,
+                                egui::FontId::proportional(11.5),
+                                style::DIM,
+                            );
+                            x = tag.left() - 8.0;
+                            if let Some(sc) = prefs.shortcut(&eid) {
+                                let g = ui.painter().layout_no_wrap(sc.badge(), egui::FontId::proportional(11.0), style::TEXT);
+                                let b = egui::Rect::from_min_max(
+                                    egui::pos2(x - g.size().x - 10.0, rc.center().y - 9.0),
+                                    egui::pos2(x, rc.center().y + 9.0),
+                                );
+                                ui.painter().rect_filled(b, 5.0, Color32::from_white_alpha(22));
+                                ui.painter().galley(b.center() - g.size() / 2.0, g, style::TEXT);
+                                x = b.left() - 8.0;
+                            }
+                            let label_clip = egui::Rect::from_min_max(rc.min, egui::pos2(x.max(rc.left() + 40.0), rc.max.y));
+                            ui.painter().with_clip_rect(label_clip).text(
+                                rc.left_center() + Vec2::new(10.0, 0.0),
+                                Align2::LEFT_CENTER,
+                                &e.label,
+                                egui::FontId::proportional(13.5),
+                                style::TEXT,
+                            );
+                            if resp.hovered() && ui.input(|i| i.pointer.delta().length() > 0.5) {
+                                st.sel = n;
+                            }
+                            if pin_r.clicked() {
+                                prefs.toggle_pin(&eid);
+                                changed = true;
+                            } else if more_r.clicked() {
+                                st.assign = Some(eid.clone());
+                                st.msg.clear();
+                            } else if resp.clicked() {
+                                run = Some(i);
+                            }
                         }
-                        // right to left: [...] pin shortcut-badge tag
-                        let more = egui::Rect::from_center_size(egui::pos2(rc.right() - 14.0, rc.center().y), Vec2::splat(22.0));
-                        let pin = more.translate(Vec2::new(-24.0, 0.0));
-                        let pinned = prefs.is_pinned(&eid);
-                        let more_r = ui.interact(more, egui::Id::new(("pal_more", i)), egui::Sense::click()).on_hover_text("Set shortcut");
-                        let pin_r = ui
-                            .interact(pin, egui::Id::new(("pal_pin", i)), egui::Sense::click())
-                            .on_hover_text(if pinned { "Unpin" } else { "Pin to the top" });
-                        let dim = |hover: bool| if hover { style::TEXT } else { style::DIM };
-                        if hot || pinned {
-                            star(ui.painter(), pin.center(), 6.0, if pinned { style::KEEP } else { dim(pin_r.hovered()) }, pinned);
-                        }
-                        if hot {
-                            dots(ui.painter(), more.center(), dim(more_r.hovered()));
-                        }
-                        let mut x = pin.left() - 6.0;
-                        let tag = ui.painter().text(egui::pos2(x, rc.center().y), Align2::RIGHT_CENTER, e.tag, egui::FontId::proportional(11.5), style::DIM);
-                        x = tag.left() - 8.0;
-                        if let Some(sc) = prefs.shortcut(&eid) {
-                            let g = ui.painter().layout_no_wrap(sc.badge(), egui::FontId::proportional(11.0), style::TEXT);
-                            let b = egui::Rect::from_min_max(egui::pos2(x - g.size().x - 10.0, rc.center().y - 9.0), egui::pos2(x, rc.center().y + 9.0));
-                            ui.painter().rect_filled(b, 5.0, Color32::from_white_alpha(22));
-                            ui.painter().galley(b.center() - g.size() / 2.0, g, style::TEXT);
-                            x = b.left() - 8.0;
-                        }
-                        let label_clip = egui::Rect::from_min_max(rc.min, egui::pos2(x.max(rc.left() + 40.0), rc.max.y));
-                        ui.painter().with_clip_rect(label_clip).text(
-                            rc.left_center() + Vec2::new(10.0, 0.0),
-                            Align2::LEFT_CENTER,
-                            &e.label,
-                            egui::FontId::proportional(13.5),
-                            style::TEXT,
-                        );
-                        if resp.hovered() && ui.input(|i| i.pointer.delta().length() > 0.5) {
-                            st.sel = n;
-                        }
-                        if pin_r.clicked() {
-                            prefs.toggle_pin(&eid);
-                            changed = true;
-                        } else if more_r.clicked() {
-                            st.assign = Some(eid.clone());
-                            st.msg.clear();
-                        } else if resp.clicked() {
-                            run = Some(i);
-                        }
-                    }
+                    });
                 });
             });
         if changed {
             self.prefs.save();
         }
         // a click anywhere outside the palette closes it
-        let outside = !was_fresh
-            && ctx.input(|i| i.pointer.any_pressed() && i.pointer.interact_pos().is_some_and(|p| !area.response.rect.contains(p)));
+        let outside =
+            !was_fresh && ctx.input(|i| i.pointer.any_pressed() && i.pointer.interact_pos().is_some_and(|p| !area.response.rect.contains(p)));
         if outside {
             close = true;
         }

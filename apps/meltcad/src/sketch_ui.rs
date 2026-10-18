@@ -693,7 +693,8 @@ impl App {
             (Make::Revolve, "Revolve", "Draw a half outline beside the axis, then spin it into a solid", crate::sketch_icons::revolve),
             (Make::Loft, "Loft", "Draw an outline and blend it into a second outline", crate::sketch_icons::loft),
             (Make::Extrude, "Extrude", "Draw an outline, then push it into a solid", crate::sketch_icons::extrude),
-            (Make::Sweep, "Sweep", "Draw an outline, then pull it along a path", crate::sketch_icons::sweep),];
+            (Make::Sweep, "Sweep", "Draw an outline, then pull it along a path", crate::sketch_icons::sweep),
+        ];
         for (m, name, tip, icon) in items {
             let on = self.sk.on && self.sk.make == m;
             if style::wide_button(ui, name, tip, on, None, icon).clicked() {
@@ -2289,8 +2290,15 @@ impl App {
                         quick = Some(pl);
                     }
                 }
-                if style::wide_button(ui, "Pick plane", "Click a face of a shape or the ground to draw on it", self.sk.picking, None, crate::sketch_icons::pick_plane)
-                    .clicked()
+                if style::wide_button(
+                    ui,
+                    "Pick plane",
+                    "Click a face of a shape or the ground to draw on it",
+                    self.sk.picking,
+                    None,
+                    crate::sketch_icons::pick_plane,
+                )
+                .clicked()
                 {
                     self.sketch_repick();
                 }
@@ -2356,7 +2364,11 @@ impl App {
                     let usable = !((stage == Stage::LoftTop || stage == Stage::Hole) && pen == Pen::Line);
                     let on = self.sk.pen == pen;
                     let tip = format!("{}\n{}", pen.tip(), pen_hint(pen, stage));
-                    let r = ui.add_enabled_ui(usable, |ui| style::wide_button(ui, pen.label(), &tip, on, None, |p, r, ink| crate::sketch_icons::pen_tool(p, r, pen, ink))).inner;
+                    let r = ui
+                        .add_enabled_ui(usable, |ui| {
+                            style::wide_button(ui, pen.label(), &tip, on, None, |p, r, ink| crate::sketch_icons::pen_tool(p, r, pen, ink))
+                        })
+                        .inner;
                     if r.clicked() {
                         self.sk.pen = pen;
                         self.sk.clear_drawing();

@@ -1086,8 +1086,45 @@ impl App {
                             ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("logo_tex"), h.clone()));
                             h
                         });
-                    ui.add(egui::Image::new(&tex).fit_to_exact_size(egui::vec2(30.0, 30.0 * 131.0 / 192.0)).tint(style::TEXT));
-                    ui.label(RichText::new("Melt 3D").size(14.0).strong().color(style::TEXT));
+                    // the mark and the name are one button: it opens the app menu
+                    let logo = ui
+                        .horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 6.0;
+                            ui.add(egui::Image::new(&tex).fit_to_exact_size(egui::vec2(30.0, 30.0 * 131.0 / 192.0)).tint(style::TEXT));
+                            ui.label(RichText::new("Melt 3D").size(14.0).strong().color(style::TEXT));
+                        })
+                        .response
+                        .interact(egui::Sense::click())
+                        .on_hover_cursor(egui::CursorIcon::PointingHand)
+                        .on_hover_text("Menu");
+                    egui::Popup::menu(&logo).show(|ui| {
+                        if ui.button("New").clicked() {
+                            self.new_scene(Scene::default());
+                            ui.close();
+                        }
+                        if ui.button("Open…  Ctrl+O").clicked() {
+                            self.open_dialog(&ctx);
+                            ui.close();
+                        }
+                        if ui.button("Save  Ctrl+S").clicked() {
+                            self.save(&ctx, false);
+                            ui.close();
+                        }
+                        if ui.button("Save as…").clicked() {
+                            self.save(&ctx, true);
+                            ui.close();
+                        }
+                        ui.separator();
+                        if ui.button("Export…").clicked() {
+                            crate::export_dialog::open(&ctx, None);
+                            ui.close();
+                        }
+                        ui.separator();
+                        if ui.button("About Melt 3D").clicked() {
+                            self.say(&ctx, format!("Melt 3D {}", env!("CARGO_PKG_VERSION")));
+                            ui.close();
+                        }
+                    });
                     style::vsep(ui);
                     style::menu_button(ui, "File", false, |ui| {
                         if ui.button("New").clicked() {
@@ -1193,7 +1230,14 @@ impl App {
                     });
                     style::menu_button(ui, "View", false, |ui| {
                         let pi = std::f32::consts::PI;
-                        for (name, yaw, pitch) in [("Front  1", 0.0, 0.0), ("Right  3", pi / 2.0, 0.0), ("Top  7", self.cam.yaw, pi / 2.0), ("Back  Ctrl+1", pi, 0.0), ("Left  Ctrl+3", -pi / 2.0, 0.0), ("Bottom  Ctrl+7", self.cam.yaw, -pi / 2.0)] {
+                        for (name, yaw, pitch) in [
+                            ("Front  1", 0.0, 0.0),
+                            ("Right  3", pi / 2.0, 0.0),
+                            ("Top  7", self.cam.yaw, pi / 2.0),
+                            ("Back  Ctrl+1", pi, 0.0),
+                            ("Left  Ctrl+3", -pi / 2.0, 0.0),
+                            ("Bottom  Ctrl+7", self.cam.yaw, -pi / 2.0),
+                        ] {
                             if ui.button(name).clicked() {
                                 self.fly_look(yaw, pitch);
                                 ui.close();
@@ -1240,8 +1284,16 @@ impl App {
                     }
                     // box selection: only what is completely inside, or everything the box touches
                     for (mode, tip, icon) in [
-                        (crate::marquee::Marquee::Inside, "Box select: drag a box, take only shapes completely inside (Shift adds)", crate::glyphs_more::box_inside as fn(&egui::Painter, egui::Rect, Color32)),
-                        (crate::marquee::Marquee::Touching, "Box select: drag a box, take every shape it touches (Shift adds)", crate::glyphs_more::box_touching as fn(&egui::Painter, egui::Rect, Color32)),
+                        (
+                            crate::marquee::Marquee::Inside,
+                            "Box select: drag a box, take only shapes completely inside (Shift adds)",
+                            crate::glyphs_more::box_inside as fn(&egui::Painter, egui::Rect, Color32),
+                        ),
+                        (
+                            crate::marquee::Marquee::Touching,
+                            "Box select: drag a box, take every shape it touches (Shift adds)",
+                            crate::glyphs_more::box_touching as fn(&egui::Painter, egui::Rect, Color32),
+                        ),
                     ] {
                         let on = self.marquee == Some(mode);
                         if style::icon_button(ui, 32.0, tip, on, icon).clicked() {
@@ -1330,19 +1382,21 @@ impl App {
             |ui| {
                 style::strip().show(ui, |ui| {
                     ui.spacing_mut().item_spacing = egui::vec2(0.0, 4.0);
-                    // a tall strip scrolls instead of running off a small window
-                    egui::ScrollArea::vertical()
-                        .max_height((rect.height().min(ctx.content_rect().bottom() - rect.top()) - 56.0).max(120.0))
-                        .auto_shrink([true, true])
-                        .show(ui, |ui| {
-                            ui.set_max_width(style::STRIP_W);
-                            ui.horizontal_wrapped(|ui| {
-                                ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
-                                self.solid_mode_button(ui);
-                                if self.solid_mode {
-                                    self.sketch_button(ui);
-                                    self.sketch_make_buttons(ui);
-                                } else {
+                    // a strip that would not fit grows a second column so everything shows at once;
+                    // only when even that is too tall does it scroll
+                    let max_h = (rect.height().min(ctx.content_rect().bottom() - rect.top()) - 56.0).max(120.0);
+                    let narrow_h = ctx.data(|d| d.get_temp::<f32>(egui::Id::new("strip_narrow_h"))).unwrap_or(0.0);
+                    let wide = narrow_h > max_h;
+                    let strip_w = if wide { style::STRIP_W * 2.0 + 4.0 } else { style::STRIP_W };
+                    let out = egui::ScrollArea::vertical().max_height(max_h).auto_shrink([true, true]).show(ui, |ui| {
+                        ui.set_max_width(strip_w);
+                        ui.horizontal_wrapped(|ui| {
+                            ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
+                            self.solid_mode_button(ui);
+                            if self.solid_mode {
+                                self.sketch_button(ui);
+                                self.sketch_make_buttons(ui);
+                            } else {
                                 for k in Kind::MAIN {
                                     let r = style::wide_button(ui, k.label(), k.label(), false, None, |p, r, ink| {
                                         glyphs::kind(p, r, k, ink, Color32::from_white_alpha(18))
@@ -1353,8 +1407,8 @@ impl App {
                                 }
                                 self.curve_button(ui);
                                 self.pipe_button(ui);
-                                }
-                                if !self.solid_mode {
+                            }
+                            if !self.solid_mode {
                                 style::menu_button(ui, "…", false, |ui| {
                                     ui.set_min_width(190.0);
                                     ui.label(egui::RichText::new("Other shapes").size(12.0).color(style::DIM));
@@ -1383,62 +1437,77 @@ impl App {
                                         }
                                     }
                                 });
+                            }
+                            ui.end_row();
+                            style::hsep_w(ui, strip_w);
+                            ui.end_row();
+                            for op in [Op::Add, Op::Subtract, Op::Paint, Op::Intersect] {
+                                let on = self.new_op == op;
+                                let (name, tip) = match op {
+                                    Op::Add => ("Add", "Join: the new shape is added to the model (Tab flips Add / Cut)"),
+                                    Op::Subtract => ("Cut", "Cut: the new shape carves a hole out of the model"),
+                                    Op::Paint => ("Paint", "Paint: the new shape only changes the colour where it touches"),
+                                    Op::Intersect => ("Overlap", "Overlap: keep only the part where the new shape and the model meet"),
+                                };
+                                if style::wide_button(ui, name, tip, on, Some(style::op_color(op)), |p, r, ink| glyphs::op(p, r, op, ink)).clicked() {
+                                    self.new_op = op;
                                 }
-                                ui.end_row();
-                                style::hsep_w(ui, style::STRIP_W);
-                                ui.end_row();
-                                for op in [Op::Add, Op::Subtract, Op::Paint, Op::Intersect] {
-                                    let on = self.new_op == op;
-                                    let (name, tip) = match op {
-                                        Op::Add => ("Add", "Join: the new shape is added to the model (Tab flips Add / Cut)"),
-                                        Op::Subtract => ("Cut", "Cut: the new shape carves a hole out of the model"),
-                                        Op::Paint => ("Paint", "Paint: the new shape only changes the colour where it touches"),
-                                        Op::Intersect => ("Overlap", "Overlap: keep only the part where the new shape and the model meet"),
-                                    };
-                                    if style::wide_button(ui, name, tip, on, Some(style::op_color(op)), |p, r, ink| glyphs::op(p, r, op, ink))
-                                        .clicked()
-                                    {
-                                        self.new_op = op;
-                                    }
-                                }
-                                ui.end_row();
-                                style::hsep_w(ui, style::STRIP_W);
-                                ui.end_row();
-                                if style::wide_button(ui, "New group", "New group", false, None, glyphs::group).clicked() {
-                                    self.add_group();
-                                }
-                                let melting = self.selection_melts();
-                                if style::wide_button(ui, "Melt", "Melt the selected shapes together in one click (again to un-melt). Nothing selected: the whole scene", melting, None, crate::glyphs_more::melt).clicked() {
-                                    self.toggle_melt_selected();
-                                }
-                                let pr = style::wide_button(ui, "Pattern", "Repeat the selected group: mirror, grid, circle, along a path", false, None, |p, r, ink| {
-                                    crate::pattern_ui::icon(crate::pattern::PatternKind::Circular, p, r, ink)
-                                });
-                                egui::Popup::menu(&pr).show(|ui| {
-                                    ui.set_min_width(170.0);
-                                    for k in crate::pattern::PatternKind::ALL {
-                                        let r = ui.horizontal(|ui| {
-                                            let (rc, _) = ui.allocate_exact_size(egui::vec2(24.0, 24.0), egui::Sense::hover());
-                                            crate::pattern_ui::icon(k, ui.painter(), rc, ui.visuals().text_color());
-                                            ui.selectable_label(false, k.label())
-                                        });
-                                        if r.inner.clicked() {
-                                            self.set_pattern_kind(&ctx, k);
-                                            ui.close();
-                                        }
-                                    }
-                                    ui.separator();
-                                    if ui.selectable_label(false, "Linked copy").clicked() {
-                                        self.make_instance(&ctx);
+                            }
+                            ui.end_row();
+                            style::hsep_w(ui, strip_w);
+                            ui.end_row();
+                            if style::wide_button(ui, "New group", "New group", false, None, glyphs::group).clicked() {
+                                self.add_group();
+                            }
+                            let melting = self.selection_melts();
+                            if style::wide_button(
+                                ui,
+                                "Melt",
+                                "Melt the selected shapes together in one click (again to un-melt). Nothing selected: the whole scene",
+                                melting,
+                                None,
+                                crate::glyphs_more::melt,
+                            )
+                            .clicked()
+                            {
+                                self.toggle_melt_selected();
+                            }
+                            let pr = style::wide_button(
+                                ui,
+                                "Pattern",
+                                "Repeat the selected group: mirror, grid, circle, along a path",
+                                false,
+                                None,
+                                |p, r, ink| crate::pattern_ui::icon(crate::pattern::PatternKind::Circular, p, r, ink),
+                            );
+                            egui::Popup::menu(&pr).show(|ui| {
+                                ui.set_min_width(170.0);
+                                for k in crate::pattern::PatternKind::ALL {
+                                    let r = ui.horizontal(|ui| {
+                                        let (rc, _) = ui.allocate_exact_size(egui::vec2(24.0, 24.0), egui::Sense::hover());
+                                        crate::pattern_ui::icon(k, ui.painter(), rc, ui.visuals().text_color());
+                                        ui.selectable_label(false, k.label())
+                                    });
+                                    if r.inner.clicked() {
+                                        self.set_pattern_kind(&ctx, k);
                                         ui.close();
                                     }
-                                    if ui.selectable_label(false, "Remove pattern").clicked() {
-                                        self.clear_pattern();
-                                        ui.close();
-                                    }
-                                });
+                                }
+                                ui.separator();
+                                if ui.selectable_label(false, "Linked copy").clicked() {
+                                    self.make_instance(&ctx);
+                                    ui.close();
+                                }
+                                if ui.selectable_label(false, "Remove pattern").clicked() {
+                                    self.clear_pattern();
+                                    ui.close();
+                                }
                             });
                         });
+                    });
+                    if !wide {
+                        ctx.data_mut(|d| d.insert_temp(egui::Id::new("strip_narrow_h"), out.content_size.y));
+                    }
                 });
             },
         );

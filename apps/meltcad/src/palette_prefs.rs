@@ -363,7 +363,9 @@ mod tests {
             "null".to_string(),
             "{\"pins\": 5, \"keys\": []}".to_string(),
             "{\"pins\": [1, null, {}], \"keys\": {\"a\": 7}}".to_string(),
-            format!("{{\"pins\":[\"{long}\",\"\",\"a\",\"a\"],\"keys\":{{\"{long}\":\"Alt+K\",\"b\":\"Ctrl+Z\",\"c\":\"💥\",\"d\":\"Escape\",\"e\":\"Alt+K\",\"f\":\"Alt+K\"}}}}"),
+            format!(
+                "{{\"pins\":[\"{long}\",\"\",\"a\",\"a\"],\"keys\":{{\"{long}\":\"Alt+K\",\"b\":\"Ctrl+Z\",\"c\":\"💥\",\"d\":\"Escape\",\"e\":\"Alt+K\",\"f\":\"Alt+K\"}}}}"
+            ),
             format!("{{\"keys\":{{{many}\"z\":\"Alt+Q\"}}}}"),
             "\u{0}\u{1}{{{{".to_string(),
         ];

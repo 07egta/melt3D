@@ -246,7 +246,13 @@ impl App {
             let col = if on { style::ACCENT } else { style::DIM };
             ui.painter().circle_stroke(c, 5.0, Stroke::new(1.5, col));
             let text = format!("Ball {}   r {:.1}", i + 1, r);
-            ui.painter().text(egui::pos2(c.x + 14.0, c.y), Align2::LEFT_CENTER, text, FontId::proportional(12.0), if on { style::TEXT } else { style::DIM });
+            ui.painter().text(
+                egui::pos2(c.x + 14.0, c.y),
+                Align2::LEFT_CENTER,
+                text,
+                FontId::proportional(12.0),
+                if on { style::TEXT } else { style::DIM },
+            );
             if resp.clicked() {
                 self.ct.node = Some((gi, si, i));
             }
@@ -387,7 +393,9 @@ impl App {
     fn actions(&mut self, ui: &mut Ui) {
         if self.picks().len() > 1 {
             ui.label(RichText::new(format!("{} selected (Shift + click adds or removes)", self.picks().len())).size(12.0).color(style::ACCENT));
-            if style::pill(ui, "Group them (Ctrl+G)", false).on_hover_text("Put the selected shapes or groups inside one new group (groups can nest)").clicked()
+            if style::pill(ui, "Group them (Ctrl+G)", false)
+                .on_hover_text("Put the selected shapes or groups inside one new group (groups can nest)")
+                .clicked()
             {
                 self.group_selected();
             }
@@ -747,7 +755,9 @@ impl App {
         let mut light_sel = false;
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
-            light_sel = style::pill(ui, "Lighter", false).on_hover_text("Switch off see-through, soaking, coat and sheen on the selected shapes: much faster").clicked();
+            light_sel = style::pill(ui, "Lighter", false)
+                .on_hover_text("Switch off see-through, soaking, coat and sheen on the selected shapes: much faster")
+                .clicked();
             all_light = style::pill(ui, "All lighter", false).on_hover_text("Make every material in the scene light").clicked();
             rand_sel = style::pill(ui, "Random color", false).on_hover_text("A new random color for each selected shape").clicked();
             rand_all = style::pill(ui, "Random all", false).on_hover_text("A random color for every shape").clicked();

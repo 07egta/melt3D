@@ -27,7 +27,6 @@ mod fonts;
 #[cfg(test)]
 mod frame_bench;
 mod gizmo;
-mod marquee;
 mod glyphs;
 mod glyphs_more;
 mod gpu;
@@ -45,6 +44,7 @@ mod import_mesh;
 mod input_tests;
 mod library;
 mod library_ui;
+mod marquee;
 mod materials;
 mod mesh;
 mod mesh_dialog;
@@ -61,7 +61,6 @@ mod prims;
 mod recovery;
 mod sdf;
 mod sdf_volume;
-mod view_mode;
 #[cfg(test)]
 mod shader_portability;
 mod sketch;
@@ -79,6 +78,7 @@ mod style;
 mod svg;
 mod svg_dialog;
 mod view;
+mod view_mode;
 
 /// Tell the person why the program cannot start (there is no console in a Windows release build).
 fn fatal(message: &str) {
