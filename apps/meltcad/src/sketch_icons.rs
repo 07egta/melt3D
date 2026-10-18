@@ -147,6 +147,16 @@ pub fn extrude(p: &Painter, r: Rect, ink: Color32) {
     p.line_segment([at(r, 0.82, 0.28), at(r, 0.82, 0.64)], st);
 }
 
+/// Solid mode: a cube with three shaded faces (top light, left mid, right dark), so it reads as a
+/// filled body rather than an outline.
+pub fn solid(p: &Painter, r: Rect, ink: Color32) {
+    let st = pen(r, ink);
+    let face = |a: u8| ink.gamma_multiply(a as f32 / 255.0);
+    poly(p, r, &[(0.5, 0.1), (0.88, 0.3), (0.5, 0.5), (0.12, 0.3)], Some(face(210)), st);
+    poly(p, r, &[(0.12, 0.3), (0.5, 0.5), (0.5, 0.92), (0.12, 0.7)], Some(face(110)), st);
+    poly(p, r, &[(0.5, 0.5), (0.88, 0.3), (0.88, 0.7), (0.5, 0.92)], Some(face(50)), st);
+}
+
 /// Revolve: a profile beside an axis, with an arc turning around it.
 pub fn revolve(p: &Painter, r: Rect, ink: Color32) {
     let st = pen(r, ink);
