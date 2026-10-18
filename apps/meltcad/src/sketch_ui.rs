@@ -673,7 +673,7 @@ impl App {
     pub fn solid_mode_button(&mut self, ui: &mut Ui) {
         let on = self.solid_mode;
         let tip = "Solid mode: only the tools that make a solid from a sketch (Sketch, Revolve, Loft, Extrude, Sweep). Press again to go back";
-        if style::wide_button(ui, "Solid", tip, on, Some(SOLID_COLOR), |p, r, ink| crate::glyphs::kind(p, r, crate::model::Kind::Box, ink, Color32::from_white_alpha(18))).clicked() {
+        if style::wide_button(ui, "Solid", tip, on, Some(SOLID_COLOR), crate::sketch_icons::solid).clicked() {
             self.solid_mode = !on;
             if !self.solid_mode && self.sk.on {
                 self.set_sketch_tool(false);

@@ -91,6 +91,22 @@ impl App {
         (sh.kind == Kind::Curve && sh.path.len() >= 3 && curve::settings(&sh.params).0).then_some((g, s))
     }
 
+    /// The newest closed sketch line in the scene: what a make button uses when nothing is selected.
+    pub(crate) fn last_closed_guide(&self) -> Option<(usize, usize)> {
+        let mut found = None;
+        for (gi, g) in self.scene.groups.iter().enumerate() {
+            if !g.visible {
+                continue;
+            }
+            for (si, sh) in g.shapes.iter().enumerate() {
+                if sh.guide && sh.visible && sh.path.len() >= 3 && curve::settings(&sh.params).0 {
+                    found = Some((gi, si));
+                }
+            }
+        }
+        found
+    }
+
     /// The plane and the flat outline of a closed line (its nodes, as they are).
     pub(crate) fn curve_profile(&self, g: usize, s: usize) -> Option<(Frame, Vec<[f32; 2]>)> {
         let sh = self.scene.shape(g, s)?;
@@ -118,7 +134,9 @@ impl App {
         if m == Make::Sweep || self.sk.live.is_some() {
             return false;
         }
-        let Some((g, s)) = self.selected_closed_curve() else { return false };
+        let found = self.selected_closed_curve().or_else(|| self.last_closed_guide());
+        let Some((g, s)) = found else { return false };
+        self.sel = Some(Pick::Shape(g, s));
         let Some((frame, profile)) = self.curve_profile(g, s) else { return false };
         if !self.sk.on {
             self.set_sketch_tool(true);
@@ -209,8 +227,54 @@ impl App {
                 }
             }
         }
+        if best.is_none() {
+            // inside a closed sketch counts as well (the smallest one under the point wins)
+            let mut area_best: Option<(f32, (usize, usize))> = None;
+            for (gi, g) in self.scene.groups.iter().enumerate() {
+                if !g.visible {
+                    continue;
+                }
+                for (si, sh) in g.shapes.iter().enumerate() {
+                    if !sh.guide || !sh.visible || !curve::settings(&sh.params).0 {
+                        continue;
+                    }
+                    let px: Vec<egui::Pos2> = guide_points(sh).iter().filter_map(|q| self.cam.project(rect, *q)).collect();
+                    if px.len() >= 3 && inside(p, &px) {
+                        let a = area(&px);
+                        if area_best.is_none_or(|b| a < b.0) {
+                            area_best = Some((a, (gi, si)));
+                        }
+                    }
+                }
+            }
+            best = area_best.map(|b| (0.0, b.1));
+        }
         best.map(|b| b.1)
     }
+}
+
+/// Whether a screen point is inside a polygon (even-odd rule).
+fn inside(p: egui::Pos2, poly: &[egui::Pos2]) -> bool {
+    let mut c = false;
+    let mut j = poly.len().saturating_sub(1);
+    for i in 0..poly.len() {
+        let (a, b) = (poly[i], poly[j]);
+        if (a.y > p.y) != (b.y > p.y) && p.x < (b.x - a.x) * (p.y - a.y) / (b.y - a.y) + a.x {
+            c = !c;
+        }
+        j = i;
+    }
+    c
+}
+
+/// Area of a polygon on the screen (shoelace).
+fn area(poly: &[egui::Pos2]) -> f32 {
+    let mut s = 0.0;
+    for i in 0..poly.len() {
+        let (a, b) = (poly[i], poly[(i + 1) % poly.len()]);
+        s += a.x * b.y - b.x * a.y;
+    }
+    s.abs() * 0.5
 }
 
 #[cfg(test)]
@@ -244,6 +308,14 @@ mod tests {
         scene.groups[0].shapes[0].guide = false;
         let some = crate::sdf::Field::new(&scene).sample([0.0, 0.0, 0.0]).nearest;
         assert_eq!(some, Some((0, 0)), "the same box as a solid is");
+    }
+
+    #[test]
+    fn a_point_inside_a_loop_is_found() {
+        let sq = [egui::pos2(0.0, 0.0), egui::pos2(10.0, 0.0), egui::pos2(10.0, 10.0), egui::pos2(0.0, 10.0)];
+        assert!(inside(egui::pos2(5.0, 5.0), &sq));
+        assert!(!inside(egui::pos2(15.0, 5.0), &sq));
+        assert!((area(&sq) - 100.0).abs() < 1e-3);
     }
 
     #[test]
