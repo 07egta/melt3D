@@ -112,13 +112,13 @@ const BUILT_IN: &[(&str, &str)] = &[
     ("Shift+F", "Frame selection"),
     ("Home", "Frame all"),
     ("Enter", "Confirm"),
-    ("Num1", "Front view"),
-    ("Num3", "Right view"),
-    ("Num5", "Perspective"),
-    ("Num7", "Top view"),
-    ("Ctrl+Num1", "Back view"),
-    ("Ctrl+Num3", "Left view"),
-    ("Ctrl+Num7", "Bottom view"),
+    ("1", "Front view"),
+    ("3", "Right view"),
+    ("5", "Perspective"),
+    ("7", "Top view"),
+    ("Ctrl+1", "Back view"),
+    ("Ctrl+3", "Left view"),
+    ("Ctrl+7", "Bottom view"),
     ("Alt+ArrowLeft", "Turn view"),
     ("Alt+ArrowRight", "Turn view"),
     ("Alt+ArrowUp", "Turn view"),
@@ -288,7 +288,7 @@ mod tests {
         assert_eq!(s, Shortcut::new(true, true, false, Key::K));
         assert_eq!(s.to_text(), "Ctrl+Shift+K");
         assert_eq!(sc(&s.to_text()), s);
-        assert_eq!(sc("Cmd+Alt+Num4").to_text(), "Ctrl+Alt+Num4");
+        assert_eq!(sc("Cmd+Alt+4").to_text(), "Ctrl+Alt+4");
         assert_eq!(sc("F7"), Shortcut::new(false, false, false, Key::F7));
         for bad in ["", "+", "Ctrl+", "Ctrl+Shift", "K+L", "Ctrl+Nope", "++K", "💥"] {
             assert!(Shortcut::parse(bad).is_none(), "{bad}");
