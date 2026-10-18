@@ -3545,7 +3545,8 @@ mod tests {
         ctx.input_mut(|i| i.events.clear());
         key(egui::Key::Escape);
         app.keys(&ctx);
-        assert!(app.sk.on && app.sk.dimension.as_ref().is_some_and(|d| !d.editing));
+        // Tab began a new segment; Esc takes that provisional point away again
+        assert!(app.sk.on && app.sk.dimension.is_none());
         assert_eq!(app.sk.pts, vec![[0.0, 0.0], [10.0, 0.0]]);
     }
 
