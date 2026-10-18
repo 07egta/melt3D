@@ -696,6 +696,8 @@ impl App {
             materials::swatch(&ui.painter_at(rect), rect.center(), 28.0, &m);
             ui.vertical(|ui| {
                 ui.label(RichText::new(current.unwrap_or("Custom")).strong().size(14.0));
+                ui.label(RichText::new(format!("Weight: {}", materials::weight_word(&m))).size(11.5).color(style::DIM))
+                    .on_hover_text("How hard this material is for the graphics card. Glass, soaking light, coat and sheen are heavy");
                 ui.horizontal(|ui| {
                     let save_reason = if self.scene.saved.contains(&m) {
                         Some("Already saved under ★ My")
@@ -719,6 +721,50 @@ impl App {
         });
         ui.add_space(4.0);
 
+        // lighter, and random colours
+        let mut all_light = false;
+        let mut rand_sel = false;
+        let mut rand_all = false;
+        let mut light_sel = false;
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
+            light_sel = style::pill(ui, "Lighter", false).on_hover_text("Switch off see-through, soaking, coat and sheen on the selected shapes: much faster").clicked();
+            all_light = style::pill(ui, "All lighter", false).on_hover_text("Make every material in the scene light").clicked();
+            rand_sel = style::pill(ui, "Random color", false).on_hover_text("A new random color for each selected shape").clicked();
+            rand_all = style::pill(ui, "Random all", false).on_hover_text("A random color for every shape").clicked();
+        });
+        let mut seed = materials::fresh_seed();
+        if light_sel || rand_sel {
+            for &(g, s) in &tg {
+                if let Some(sh) = self.scene.shape_mut(g, s) {
+                    if light_sel {
+                        sh.material = materials::lighter(&sh.material);
+                    }
+                    if rand_sel {
+                        sh.material.color = materials::random_color(&mut seed);
+                    }
+                }
+            }
+        }
+        if all_light || rand_all {
+            for gr in &mut self.scene.groups {
+                for sh in &mut gr.shapes {
+                    if all_light {
+                        sh.material = materials::lighter(&sh.material);
+                    }
+                    if rand_all {
+                        sh.material.color = materials::random_color(&mut seed);
+                    }
+                }
+            }
+        }
+        if light_sel || rand_sel || all_light || rand_all {
+            if let Some(sh) = self.scene.shape(g0, s0) {
+                m = sh.material;
+            }
+        }
+        let first = m;
+
         // categories
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
@@ -729,6 +775,9 @@ impl App {
             }
             if style::pill(ui, "★ My", self.mat_cat.is_none()).clicked() {
                 self.mat_cat = None;
+            }
+            if style::pill(ui, "Light first", self.mat_sort).on_hover_text("Order the materials from lightest to heaviest").clicked() {
+                self.mat_sort = !self.mat_sort;
             }
         });
         ui.add_space(2.0);
@@ -747,8 +796,13 @@ impl App {
             };
             match self.mat_cat {
                 Some(cat) => {
-                    for pr in presets.iter().filter(|p| p.category == cat) {
-                        if cell(ui, pr.name, &pr.material, pr.material == m).clicked() {
+                    let mut list: Vec<&materials::Preset> = presets.iter().filter(|p| p.category == cat).collect();
+                    if self.mat_sort {
+                        list.sort_by(|a, b| materials::cost(&a.material).total_cmp(&materials::cost(&b.material)));
+                    }
+                    for pr in list {
+                        let name = format!("{} ({})", pr.name, materials::weight_word(&pr.material));
+                        if cell(ui, &name, &pr.material, pr.material == m).clicked() {
                             chosen = Some(pr.material);
                         }
                     }

@@ -103,6 +103,8 @@ pub struct App {
     pub mat_cat: Option<crate::materials::Category>,
     /// A material picked from the list goes to the whole group.
     pub mat_group: bool,
+    /// Show the materials lightest first.
+    pub mat_sort: bool,
     /// The curve tool (nodes, drawing).
     pub ct: crate::curve_tool::State,
     /// The pipe (trace) tool.
@@ -184,6 +186,7 @@ impl App {
             tab: Tab::Shape,
             mat_cat: Some(crate::materials::Category::Basic),
             mat_group: false,
+            mat_sort: false,
             ct: Default::default(),
             pt: Default::default(),
             sk: Default::default(),
