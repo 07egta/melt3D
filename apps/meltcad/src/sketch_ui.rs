@@ -110,6 +110,9 @@ impl Pen {
     }
 }
 
+/// The colour of the Solid-mode button.
+pub const SOLID_COLOR: Color32 = Color32::from_rgb(255, 176, 64);
+
 /// What the finished profile becomes.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Make {
@@ -662,15 +665,27 @@ impl App {
         }
     }
 
+    /// The coloured strip button that switches to the solid-making tools (and back).
+    pub fn solid_mode_button(&mut self, ui: &mut Ui) {
+        let on = self.solid_mode;
+        let tip = "Solid mode: only the tools that make a solid from a sketch (Sketch, Revolve, Loft, Extrude, Sweep). Press again to go back";
+        if style::wide_button(ui, "Solid", tip, on, Some(SOLID_COLOR), |p, r, ink| crate::glyphs::kind(p, r, crate::model::Kind::Box, ink, Color32::from_white_alpha(18))).clicked() {
+            self.solid_mode = !on;
+            if !self.solid_mode && self.sk.on {
+                self.set_sketch_tool(false);
+            }
+        }
+    }
+
     /// Strip buttons for Extrude, Loft and Sweep: start the sketch with that way of making chosen
     /// (or switch to it while sketching). Draw the outline, then press "Make".
     pub fn sketch_make_buttons(&mut self, ui: &mut Ui) {
         type Icon = fn(&egui::Painter, egui::Rect, Color32);
-        let items: [(Make, &str, &str, Icon); 3] = [
-            (Make::Extrude, "Extrude", "Draw an outline, then push it into a solid", crate::sketch_icons::extrude),
+        let items: [(Make, &str, &str, Icon); 4] = [
+            (Make::Revolve, "Revolve", "Draw a half outline beside the axis, then spin it into a solid", crate::sketch_icons::revolve),
             (Make::Loft, "Loft", "Draw an outline and blend it into a second outline", crate::sketch_icons::loft),
-            (Make::Sweep, "Sweep", "Draw an outline, then pull it along a path", crate::sketch_icons::sweep),
-        ];
+            (Make::Extrude, "Extrude", "Draw an outline, then push it into a solid", crate::sketch_icons::extrude),
+            (Make::Sweep, "Sweep", "Draw an outline, then pull it along a path", crate::sketch_icons::sweep),];
         for (m, name, tip, icon) in items {
             let on = self.sk.on && self.sk.make == m;
             if style::wide_button(ui, name, tip, on, None, icon).clicked() {
@@ -679,6 +694,12 @@ impl App {
                 } else {
                     if !self.sk.on {
                         self.set_sketch_tool(true);
+                    }
+                    if m == Make::Revolve && matches!(self.sk.plane, PlaneSel::Floor | PlaneSel::OnShape | PlaneSel::Height) {
+                        // a revolve stands on the Front plane
+                        self.sk.plane = PlaneSel::Front;
+                        let f = self.sketch_plane();
+                        self.sketch_fly(&f);
                     }
                     self.sketch_choose_make(m);
                 }

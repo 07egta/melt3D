@@ -147,6 +147,20 @@ pub fn extrude(p: &Painter, r: Rect, ink: Color32) {
     p.line_segment([at(r, 0.82, 0.28), at(r, 0.82, 0.64)], st);
 }
 
+/// Revolve: a profile beside an axis, with an arc turning around it.
+pub fn revolve(p: &Painter, r: Rect, ink: Color32) {
+    let st = pen(r, ink);
+    p.line_segment([at(r, 0.3, 0.08), at(r, 0.3, 0.8)], Stroke::new(st.width * 0.7, ink.gamma_multiply(0.55)));
+    p.add(egui::Shape::closed_line(vec![at(r, 0.3, 0.14), at(r, 0.56, 0.26), at(r, 0.46, 0.46), at(r, 0.58, 0.66), at(r, 0.3, 0.72)], st));
+    let arc: Vec<Pos2> = (0..=10)
+        .map(|i| {
+            let a = std::f32::consts::PI * (0.05 + 0.9 * i as f32 / 10.0);
+            at(r, 0.3 + 0.26 * a.cos(), 0.86 + 0.07 * a.sin())
+        })
+        .collect();
+    p.add(egui::Shape::line(arc, st));
+}
+
 /// Loft: a wide outline below blending into a small one above.
 pub fn loft(p: &Painter, r: Rect, ink: Color32) {
     let st = pen(r, ink);

@@ -115,6 +115,8 @@ pub struct App {
     pub mat_sort: bool,
     /// The curve tool (nodes, drawing).
     pub ct: crate::curve_tool::State,
+    /// The strip shows only the tools that make solids from a sketch.
+    pub solid_mode: bool,
     /// The pipe (trace) tool.
     pub pt: crate::pipe_tool::State,
     /// The sketch tool (plane, pen, finished profile) and the outline editing.
@@ -184,6 +186,7 @@ impl App {
             marquee_from: None,
             marquee_to: egui::Pos2::ZERO,
             input_dev: crate::view::InputDev::Auto,
+            solid_mode: false,
             input_seen: crate::view::Device::Mouse,
             folded: HashSet::new(),
             layer_drag: None,
@@ -1271,21 +1274,21 @@ impl App {
                         {
                             let eff = self.input_dev.device(self.input_seen);
                             let items = [
-                                ("Auto", if eff == crate::view::Device::Mouse { "Follow the device you use (now: Mouse)" } else { "Follow the device you use (now: Trackpad)" }),
                                 ("Mouse", "Wheel zooms, middle-drag turns, right-drag slides"),
                                 ("Trackpad", "Two fingers turn (Shift: slide), pinch zooms"),
                             ];
+                            // nothing is chosen yet: the highlighted one is what the scrolling looked like
+                            let cur = match eff {
+                                crate::view::Device::Mouse => 0,
+                                crate::view::Device::Trackpad => 1,
+                            };
                             let cur = match self.input_dev {
-                                crate::view::InputDev::Auto => 0,
-                                crate::view::InputDev::Mouse => 1,
-                                crate::view::InputDev::Trackpad => 2,
+                                crate::view::InputDev::Mouse => 0,
+                                crate::view::InputDev::Trackpad => 1,
+                                crate::view::InputDev::Auto => cur,
                             };
                             if let Some(i) = style::segmented(ui, "input_dev", &items, Some(cur), false) {
-                                self.input_dev = match i {
-                                    1 => crate::view::InputDev::Mouse,
-                                    2 => crate::view::InputDev::Trackpad,
-                                    _ => crate::view::InputDev::Auto,
-                                };
+                                self.input_dev = if i == 0 { crate::view::InputDev::Mouse } else { crate::view::InputDev::Trackpad };
                             }
                         }
                         let mut menu = crate::perf::MenuState { quality: self.perf.quality, hud: self.perf.hud, bench: false };
@@ -1335,6 +1338,11 @@ impl App {
                             ui.set_max_width(style::STRIP_W);
                             ui.horizontal_wrapped(|ui| {
                                 ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
+                                self.solid_mode_button(ui);
+                                if self.solid_mode {
+                                    self.sketch_button(ui);
+                                    self.sketch_make_buttons(ui);
+                                } else {
                                 for k in Kind::MAIN {
                                     let r = style::wide_button(ui, k.label(), k.label(), false, None, |p, r, ink| {
                                         glyphs::kind(p, r, k, ink, Color32::from_white_alpha(18))
@@ -1345,8 +1353,8 @@ impl App {
                                 }
                                 self.curve_button(ui);
                                 self.pipe_button(ui);
-                                self.sketch_button(ui);
-                                self.sketch_make_buttons(ui);
+                                }
+                                if !self.solid_mode {
                                 style::menu_button(ui, "…", false, |ui| {
                                     ui.set_min_width(190.0);
                                     ui.label(egui::RichText::new("Other shapes").size(12.0).color(style::DIM));
@@ -1375,6 +1383,7 @@ impl App {
                                         }
                                     }
                                 });
+                                }
                                 ui.end_row();
                                 style::hsep_w(ui, style::STRIP_W);
                                 ui.end_row();
