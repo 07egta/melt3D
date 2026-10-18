@@ -1384,7 +1384,7 @@ impl App {
                     ui.spacing_mut().item_spacing = egui::vec2(0.0, 4.0);
                     // a strip that would not fit grows a second column so everything shows at once;
                     // only when even that is too tall does it scroll
-                    let max_h = (rect.height().min(ctx.content_rect().bottom() - rect.top()) - 56.0).max(120.0);
+                    let max_h = (rect.height().min(ctx.content_rect().bottom() - rect.top()) - 30.0).max(120.0);
                     let narrow_h = ctx.data(|d| d.get_temp::<f32>(egui::Id::new("strip_narrow_h"))).unwrap_or(0.0);
                     let wide = narrow_h > max_h;
                     let strip_w = if wide { style::STRIP_W * 2.0 + 4.0 } else { style::STRIP_W };
