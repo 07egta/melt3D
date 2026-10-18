@@ -274,9 +274,87 @@ pub fn swatch(painter: &Painter, centre: Pos2, radius: f32, m: &Material) {
     }
 }
 
+
+/// How heavy a material is for the graphics card (0 = light). Glass bends rays and soaks light, the
+/// clear coat and rainbow sheen add taps, metal and glow add a little.
+pub fn cost(m: &Material) -> f32 {
+    m.glass.clamp(0.0, 1.0) * 3.0
+        + m.translucency.clamp(0.0, 1.0) * 1.5
+        + m.coat.clamp(0.0, 1.0)
+        + m.iridescence.clamp(0.0, 1.0)
+        + (m.glow.clamp(0.0, 4.0) / 4.0) * 0.5
+        + m.metallic.clamp(0.0, 1.0) * 0.4
+}
+
+/// "Light", "Medium" or "Heavy", for the label next to a material.
+pub fn weight_word(m: &Material) -> &'static str {
+    let c = cost(m);
+    if c < 0.6 {
+        "Light"
+    } else if c < 2.0 {
+        "Medium"
+    } else {
+        "Heavy"
+    }
+}
+
+/// The same look with the expensive parts switched off (see-through, soaking, coat, sheen).
+pub fn lighter(m: &Material) -> Material {
+    Material { glass: 0.0, translucency: 0.0, coat: 0.0, iridescence: 0.0, ..*m }
+}
+
+/// A pleasant random colour (soft, not muddy), stepping the generator `seed`.
+pub fn random_color(seed: &mut u32) -> [f32; 3] {
+    let mut next = || {
+        // xorshift32: small, fine for picking colours
+        let mut x = if *seed == 0 { 0x9E37_79B9 } else { *seed };
+        x ^= x << 13;
+        x ^= x >> 17;
+        x ^= x << 5;
+        *seed = x;
+        (x >> 8) as f32 / (1u32 << 24) as f32
+    };
+    let h = next();
+    let s = 0.35 + next() * 0.4;
+    let v = 0.78 + next() * 0.2;
+    let (i, f) = ((h * 6.0).floor(), h * 6.0 - (h * 6.0).floor());
+    let (p, q, t) = (v * (1.0 - s), v * (1.0 - s * f), v * (1.0 - s * (1.0 - f)));
+    match (i as i32).rem_euclid(6) {
+        0 => [v, t, p],
+        1 => [q, v, p],
+        2 => [p, v, t],
+        3 => [p, q, v],
+        4 => [t, p, v],
+        _ => [v, p, q],
+    }
+}
+
+/// A starting value for `random_color` that differs on every press.
+pub fn fresh_seed() -> u32 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.subsec_nanos() ^ (d.as_secs() as u32).rotate_left(16)).unwrap_or(0x1234_5678) | 1
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lighter_materials_cost_less_and_random_colours_are_valid() {
+        let glass = presets().iter().find(|p| p.name == "Clear glass").map(|p| p.material).unwrap_or_default();
+        assert!(cost(&lighter(&glass)) < cost(&glass));
+        assert_eq!(weight_word(&lighter(&glass)), "Light");
+        assert_eq!(weight_word(&glass), "Heavy");
+        let mut seed = 0;
+        let mut seen = Vec::new();
+        for _ in 0..50 {
+            let c = random_color(&mut seed);
+            assert!(c.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v)), "{c:?}");
+            seen.push((c[0] * 255.0) as u8);
+        }
+        seen.sort_unstable();
+        seen.dedup();
+        assert!(seen.len() > 10, "colours vary");
+    }
 
     #[test]
     fn the_library_is_big_and_valid() {
