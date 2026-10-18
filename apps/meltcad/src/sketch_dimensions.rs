@@ -23,6 +23,8 @@ pub struct Dimensions {
     pub error: Option<String>,
     /// True for a drawn loft top instead of the main outline.
     pub top_profile: bool,
+    /// The point was added by Tab for this edit: Esc takes it away again.
+    pub provisional: bool,
     before_fields: [String; 2],
     before_profile: Vec<[f32; 2]>,
     before_point: Option<[f32; 2]>,
@@ -60,6 +62,7 @@ impl Dimensions {
             needs_focus: true,
             error: None,
             top_profile: top,
+            provisional: false,
             before_profile: profile.to_vec(),
             before_point: None,
         })
@@ -85,6 +88,32 @@ impl Dimensions {
             needs_focus: true,
             error: None,
             top_profile: false,
+            provisional: false,
+            before_profile: Vec::new(),
+            before_point: Some(last),
+        })
+    }
+
+    /// Length and angle of the segment that ends at the last point (a polygon or a line).
+    pub fn for_new_segment(points: &[[f32; 2]]) -> Option<Self> {
+        let index = points.len().checked_sub(1)?;
+        if index == 0 {
+            return None;
+        }
+        let last = *points.get(index)?;
+        let start = *points.get(index - 1)?;
+        let (dx, dy) = (last[0] - start[0], last[1] - start[1]);
+        let fields = [number(dx.hypot(dy)), number(dy.atan2(dx).to_degrees())];
+        Some(Self {
+            target: Target::Segment { index, start },
+            before_fields: fields.clone(),
+            fields,
+            selected: 0,
+            editing: true,
+            needs_focus: true,
+            error: None,
+            top_profile: false,
+            provisional: true,
             before_profile: Vec::new(),
             before_point: Some(last),
         })
@@ -233,7 +262,9 @@ impl Dimensions {
 
     /// Esc cancels the in-progress changes and restores the state at the last Enter.
     pub fn cancel(&mut self, points: &mut Vec<[f32; 2]>, profile: &mut Vec<[f32; 2]>) {
-        if self.is_profile() {
+        if self.provisional {
+            points.pop();
+        } else if self.is_profile() {
             profile.clone_from(&self.before_profile);
         } else if let Some(old) = self.before_point
             && let Target::Segment { index, .. } | Target::Point { index } = self.target
@@ -375,5 +406,29 @@ mod tests {
         d.update(&mut pts, &mut vec![], 1, true);
         assert!(d.error.is_some());
         assert_eq!(pts[3], [0.0, 20.0]);
+    }
+}
+
+#[cfg(test)]
+mod tab_segment_tests {
+    use super::*;
+
+    #[test]
+    fn a_tab_segment_types_length_and_angle_and_esc_takes_it_away() {
+        let mut points = vec![[0.0, 0.0], [10.0, 0.0]];
+        let Some(mut d) = Dimensions::for_new_segment(&points) else { panic!("segment") };
+        assert_eq!(d.labels(), ["Length", "Angle"]);
+        d.fields = ["20".into(), "90".into()];
+        let mut profile = Vec::new();
+        d.update(&mut points, &mut profile, 0, false);
+        let p = points[1];
+        assert!(p[0].abs() < 1e-3 && (p[1] - 20.0).abs() < 1e-3, "{p:?}");
+        assert!(d.accept(&points, &profile));
+        // a second one, cancelled: the point goes away again
+        points.push([5.0, 20.0]);
+        let Some(mut d2) = Dimensions::for_new_segment(&points) else { panic!("segment") };
+        d2.cancel(&mut points, &mut profile);
+        assert_eq!(points.len(), 2);
+        assert!(Dimensions::for_new_segment(&[[0.0, 0.0]]).is_none(), "one point has no segment");
     }
 }

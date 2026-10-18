@@ -68,6 +68,7 @@ mod sketch;
 mod sketch_dimensions;
 mod sketch_edit_ops;
 mod sketch_icons;
+mod sketch_keep;
 mod sketch_live;
 #[cfg(test)]
 mod sketch_live_tests;

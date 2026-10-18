@@ -267,6 +267,8 @@ pub struct State {
     /// The last line drawn, in the world (kept for sweeps).
     pub path: Vec<V3>,
     pub make: Make,
+    /// The plain Sketch button was used: a closed outline stays a line in the scene.
+    pub keep_sketch: bool,
     pub height: f32,
     /// Grow against the plane's normal.
     pub flip: bool,
@@ -327,6 +329,7 @@ impl Default for State {
             holes: Vec::new(),
             path: Vec::new(),
             make: Make::Extrude,
+            keep_sketch: false,
             height: 20.0,
             flip: false,
             loft_top: LoftTop::Scaled,
@@ -662,6 +665,7 @@ impl App {
         let on = self.sk.on;
         if style::wide_button(ui, "Sketch", "Sketch (draw on a plane, then Extrude, Revolve, Loft or Sweep)", on, None, glyph).clicked() {
             self.set_sketch_tool(!on);
+            self.sk.keep_sketch = !on;
         }
     }
 
@@ -680,6 +684,7 @@ impl App {
     /// Strip buttons for Extrude, Loft and Sweep: start the sketch with that way of making chosen
     /// (or switch to it while sketching). Draw the outline, then press "Make".
     pub fn sketch_make_buttons(&mut self, ui: &mut Ui) {
+        let ctx = ui.ctx().clone();
         type Icon = fn(&egui::Painter, egui::Rect, Color32);
         let items: [(Make, &str, &str, Icon); 4] = [
             (Make::Revolve, "Revolve", "Draw a half outline beside the axis, then spin it into a solid", crate::sketch_icons::revolve),
@@ -689,6 +694,9 @@ impl App {
         for (m, name, tip, icon) in items {
             let on = self.sk.on && self.sk.make == m;
             if style::wide_button(ui, name, tip, on, None, icon).clicked() {
+                if self.make_from_selected_line(&ctx, m) {
+                    continue;
+                }
                 if on {
                     self.set_sketch_tool(false);
                 } else {
@@ -964,6 +972,10 @@ impl App {
                     if self.sk.make == Make::Revolve && !self.sk.pframe.is_vertical() {
                         self.sk.make = Make::Extrude;
                     }
+                    // the plain Sketch button: the outline stays a line (select it, then Extrude)
+                    if self.sk.keep_sketch && self.sketch_keep_outline() {
+                        return;
+                    }
                     // Extrude and Loft: the solid appears right away
                     if matches!(self.sk.make, Make::Extrude | Make::Loft) && self.live_begin() {
                         return;
@@ -1210,11 +1222,18 @@ impl App {
                 if let Some(d) = self.sk.dimension.as_mut() {
                     let profile = if d.top_profile { &mut self.sk.profile2 } else { &mut self.sk.profile };
                     d.cancel(&mut self.sk.pts, profile);
+                    if d.provisional {
+                        self.sk.dimension = None;
+                    }
                 }
             } else if hit(Key::Enter) {
                 if let Some(d) = self.sk.dimension.as_mut() {
                     let profile = if d.top_profile { &self.sk.profile2 } else { &self.sk.profile };
-                    d.accept(&self.sk.pts, profile);
+                    let ok = d.accept(&self.sk.pts, profile);
+                    // a segment typed with Tab is placed: the next Tab starts the next one
+                    if ok && d.provisional {
+                        self.sk.dimension = None;
+                    }
                 }
             }
             // Stop all global shortcuts, including the numeric view keys.
@@ -1223,6 +1242,19 @@ impl App {
         if self.sk.edit.is_none() && (self.sk.dimension.is_some() || !self.sk.pts.is_empty()) && hit(Key::Tab) {
             if let Some(d) = self.sk.dimension.as_mut() {
                 d.begin_again();
+            } else if matches!(self.sk.active_pen(), Pen::Line | Pen::Polygon) && !self.sk.pts.is_empty() {
+                // Tab while drawing: type the length and the angle of the next segment
+                let limit = if self.sk.active_pen() == Pen::Line { MAX_PATH } else { MAX_OUTLINE };
+                if let Some(start) = self.sk.pts.last().copied()
+                    && self.sk.pts.len() < limit
+                {
+                    let mut p = self.sk.cursor.unwrap_or([start[0] + 10.0, start[1]]);
+                    if !p.iter().all(|v| v.is_finite()) || (p[0] - start[0]).hypot(p[1] - start[1]) < 1.0 {
+                        p = [start[0] + 10.0, start[1]];
+                    }
+                    self.sk.pts.push(p);
+                    self.sk.dimension = Dimensions::for_new_segment(&self.sk.pts);
+                }
             } else if let Some(d) = Dimensions::for_last_point(&self.sk.pts, self.sk.active_pen()) {
                 self.sk.dimension = Some(d);
             }
@@ -2503,6 +2535,7 @@ impl App {
                 };
                 if style::pill_enabled(ui, m.label(), self.sk.make == m, usable).on_hover_text(tip).clicked() {
                     self.sk.make = m;
+                    self.sk.keep_sketch = false;
                     self.sk.msg.clear();
                 }
             }
