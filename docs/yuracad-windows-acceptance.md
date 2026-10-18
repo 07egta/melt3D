@@ -9,9 +9,9 @@ exact binaries produced by one successful CI workflow. Do not label the release
 Normal pushes and pull requests run checks and retain their build artifacts. They
 do not replace the published download. In Actions, run **Build** on
 `easy-layout-and-melt` with **prepare_draft** enabled only when a candidate is
-wanted. After the Windows, Tests and Web jobs all succeed, the workflow creates a
-new unpublished draft with a unique commit/run/attempt tag, both executables and
-`SHA256SUMS.txt`. A branch-head check skips superseded runs.
+wanted. After the Windows, Tests, Web and Full workspace quality jobs all succeed,
+the workflow creates a new unpublished draft with a unique commit/run/attempt tag,
+both executables and `SHA256SUMS.txt`. A branch-head check skips superseded runs.
 
 Download both executables and their checksum file from that one draft, complete
 the checks below, then obtain release authorization before publishing it. The

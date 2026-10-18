@@ -226,6 +226,23 @@ struct RowMetrics {
     height: f32,
 }
 
+/// Font definitions keep immutable font payloads behind `Arc`. Their derived
+/// equality still scans those payloads because `FontData` has floating-point
+/// tweaks and only implements `PartialEq`. Check the small settings normally,
+/// then reuse shared bytes; independently allocated definitions keep value
+/// equality, including the original NaN behavior of font tweaks.
+fn same_fonts(a: &egui::FontDefinitions, b: &egui::FontDefinitions) -> bool {
+    a.families == b.families
+        && a.font_data.len() == b.font_data.len()
+        && a.font_data.iter().zip(&b.font_data).all(|((name, data), (other_name, other))| {
+            // Exhaustive destructuring makes additions to FontData require a
+            // review of this cache key instead of silently omitting a field.
+            let egui::FontData { font, index, tweak } = data.as_ref();
+            let egui::FontData { font: other_font, index: other_index, tweak: other_tweak } = other.as_ref();
+            name == other_name && index == other_index && tweak == other_tweak && (Arc::ptr_eq(data, other) || font == other_font)
+        })
+}
+
 /// Measure full wrapping labels once per result/font configuration. Scrolling
 /// and thumbnail arrivals reuse the height without laying out offscreen names.
 fn row_height(ui: &egui::Ui, results: &Arc<SearchResults>) -> f32 {
@@ -236,7 +253,7 @@ fn row_height(ui: &egui::Ui, results: &Arc<SearchResults>) -> f32 {
         && Arc::ptr_eq(&saved.results, results)
         && saved.pixels_per_point == pixels_per_point
         && saved.spacing == spacing
-        && ui.fonts(|fonts| fonts.definitions() == &saved.fonts && fonts.options() == &saved.text_options)
+        && ui.fonts(|fonts| same_fonts(fonts.definitions(), &saved.fonts) && fonts.options() == &saved.text_options)
     {
         return saved.height;
     }
@@ -552,5 +569,67 @@ mod tests {
         assert_eq!(app.scene.groups.len(), before.groups.len() + 1);
         app.undo();
         assert_eq!(app.scene, before);
+    }
+
+    fn font_definitions(bytes: Vec<u8>) -> egui::FontDefinitions {
+        let mut fonts = egui::FontDefinitions::empty();
+        fonts.font_data.insert("test".into(), Arc::new(egui::FontData::from_owned(bytes)));
+        fonts.families.insert(egui::FontFamily::Proportional, vec!["test".into()]);
+        fonts
+    }
+
+    #[test]
+    fn font_cache_equality_matches_value_equality_for_every_font_setting() {
+        let original = font_definitions(vec![1, 2, 3, 4]);
+        let mut cases = vec![original.clone(), font_definitions(vec![1, 2, 3, 4]), font_definitions(vec![1, 2, 3, 5])];
+        let mut changed = original.clone();
+        Arc::make_mut(changed.font_data.get_mut("test").expect("font")).index = 1;
+        cases.push(changed);
+        let mut changed = original.clone();
+        Arc::make_mut(changed.font_data.get_mut("test").expect("font")).tweak.scale = 1.125;
+        cases.push(changed);
+        let mut changed = original.clone();
+        changed.families.insert(egui::FontFamily::Monospace, vec!["test".into()]);
+        cases.push(changed);
+        let mut changed = original.clone();
+        let data = changed.font_data.remove("test").expect("font");
+        changed.font_data.insert("renamed".into(), data);
+        cases.push(changed);
+        let mut changed = original.clone();
+        changed.font_data.clear();
+        cases.push(changed);
+        for candidate in cases {
+            assert_eq!(same_fonts(&original, &candidate), original == candidate);
+            assert_eq!(same_fonts(&candidate, &original), candidate == original);
+        }
+        let mut nan = original;
+        Arc::make_mut(nan.font_data.get_mut("test").expect("font")).tweak.scale = f32::NAN;
+        let shared = nan.clone();
+        assert!(!same_fonts(&nan, &shared), "shared allocations must not change NaN equality");
+    }
+
+    #[test]
+    #[ignore = "manual benchmark: unchanged Japanese font cache comparison"]
+    fn japanese_font_cache_bench() {
+        let font = include_bytes!("../../../assets/fonts/biz-udp-gothic/BIZUDPGothic-Regular.ttf");
+        let mut definitions = egui::FontDefinitions::default();
+        definitions.font_data.insert("cjk_benchmark".into(), Arc::new(egui::FontData::from_static(font)));
+        let saved = definitions.clone();
+        let iterations = 2_000;
+        for round in 0..5 {
+            for fast in if round % 2 == 0 { [false, true] } else { [true, false] } {
+                let start = std::time::Instant::now();
+                for _ in 0..iterations {
+                    let a = std::hint::black_box(&definitions);
+                    let b = std::hint::black_box(&saved);
+                    assert!(std::hint::black_box(if fast { same_fonts(a, b) } else { a == b }));
+                }
+                println!(
+                    "font_cache round={round} fast={fast} bytes={} iterations={iterations} ns_per_check={:.1}",
+                    font.len(),
+                    start.elapsed().as_nanos() as f64 / iterations as f64
+                );
+            }
+        }
     }
 }

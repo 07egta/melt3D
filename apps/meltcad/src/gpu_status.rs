@@ -37,7 +37,12 @@ pub struct AdapterInfo {
 impl AdapterInfo {
     pub fn from_wgpu(info: &egui_wgpu::wgpu::AdapterInfo) -> AdapterInfo {
         let driver = if info.driver_info.is_empty() { info.driver.clone() } else { format!("{} {}", info.driver, info.driver_info) };
-        AdapterInfo { backend: format!("{:?}", info.backend), name: info.name.clone(), driver: driver.trim().to_string(), device_type: format!("{:?}", info.device_type) }
+        AdapterInfo {
+            backend: format!("{:?}", info.backend),
+            name: info.name.clone(),
+            driver: driver.trim().to_string(),
+            device_type: format!("{:?}", info.device_type),
+        }
     }
 
     /// True when nothing is known (no adapter yet).
@@ -90,7 +95,14 @@ impl Default for GpuStatus {
 impl GpuStatus {
     /// Nothing started yet.
     pub fn new() -> GpuStatus {
-        GpuStatus(Arc::new(Mutex::new(Inner { state: State::Off, info: AdapterInfo::default(), generation: 0, runtime_errors: 0, last_error: None, ready_at: None })))
+        GpuStatus(Arc::new(Mutex::new(Inner {
+            state: State::Off,
+            info: AdapterInfo::default(),
+            generation: 0,
+            runtime_errors: 0,
+            last_error: None,
+            ready_at: None,
+        })))
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Inner> {

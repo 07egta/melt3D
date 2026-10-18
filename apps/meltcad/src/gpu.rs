@@ -155,6 +155,10 @@ pub struct ScenePack {
     /// Exact inputs of packed shapes only. An edit clones only the changed input;
     /// cold/offscreen packs do not retain another scene snapshot.
     inputs: Vec<Arc<crate::model::Shape>>,
+    /// Exact `view::radius_of` values for curves, sorted by source group/shape.
+    /// Camera-only frames must not resample their paths. Limited to MAX_SHAPES
+    /// entries; any additional source shape keeps the ordinary uncached path.
+    curve_radii: Vec<(usize, usize, f32)>,
     melt_key: (crate::model::BlendMode, u32),
     offs: [f32; 4],
     offs2: [f32; 2],
@@ -200,6 +204,7 @@ impl ScenePack {
         let mut shapes_repacked = 0;
         let mut source_infos: std::collections::HashMap<usize, Arc<crate::accel::GroupInfo>> = std::collections::HashMap::new();
         let mut inputs = Vec::new();
+        let mut curve_radii = Vec::new();
         let melt_key = (scene.melt.mode, scene.melt.amount.to_bits());
         // every group whose shapes are drawn (itself, or as the source of a linked copy) is packed once
         let mut srcs: Vec<usize> = resolved.iter().map(|r| r.src).collect();
@@ -218,12 +223,24 @@ impl ScenePack {
             let mut members: Vec<&crate::model::Shape> = Vec::new();
             let mut same_members = true;
             for (si, s) in g.shapes.iter().enumerate() {
-                if !s.visible || shape_n >= MAX_SHAPES {
+                if !s.visible {
                     continue;
                 }
                 let old_slot = old_slots.get(&(gi, si)).copied();
                 let old_input =
                     previous.and_then(|old| old_slot.and_then(|slot| old.inputs.get(slot))).filter(|old| crate::perf::same_shape_for_cache(old, s));
+                // Global view bounds include every resolved shape, even past the packed
+                // shape limit. Retain only a bounded number of their expensive radii;
+                // missing entries are computed normally when bounds are requested.
+                if s.kind == crate::model::Kind::Curve && curve_radii.len() < MAX_SHAPES {
+                    let radius = old_input
+                        .and_then(|_| previous.and_then(|old| cached_curve_radius(&old.curve_radii, gi, si)))
+                        .unwrap_or_else(|| crate::view::radius_of(s));
+                    curve_radii.push((gi, si, radius));
+                }
+                if shape_n >= MAX_SHAPES {
+                    continue;
+                }
                 same_members &= old_input.is_some();
                 let reused = old_input.is_some()
                     && previous.is_some_and(|old_pack| {
@@ -260,7 +277,20 @@ impl ScenePack {
                     let old_count = old_pack.ranges.iter().find(|&&(source, _, _)| source == gi)?.2;
                     (same_members && old_count == count && old_pack.melt_key == melt_key).then(|| old_pack.source_infos.get(&gi).cloned()).flatten()
                 })
-                .unwrap_or_else(|| Arc::new(crate::accel::group_info(&members, &scene.melt)));
+                .unwrap_or_else(|| {
+                    // Every admitted shape already has these exact bounds in its packed
+                    // record. Collect them only when this group's acceleration data changed;
+                    // unchanged groups reuse their GroupInfo without a temporary bounds Vec.
+                    let bounds: Vec<crate::accel::Bound> = shapes
+                        .as_chunks::<{ S_STRIDE * 4 }>()
+                        .0
+                        .iter()
+                        .skip(first)
+                        .take(count)
+                        .map(|data| crate::accel::Bound { c: [data[0], data[1], data[2]], r: data[3] })
+                        .collect();
+                    Arc::new(crate::accel::group_info_with_bounds(&members, &bounds, &scene.melt))
+                });
             if keep_inputs {
                 source_infos.insert(gi, Arc::clone(&info));
             }
@@ -303,7 +333,7 @@ impl ScenePack {
         let block_base = v4(&groups);
         let inst_base = block_base + v4(&blocks);
         let shape_base = inst_base + v4(&insts);
-        while poly.len() % 4 != 0 {
+        while !poly.len().is_multiple_of(4) {
             poly.push(0.0);
         }
         let poly_base = shape_base + v4(&shapes);
@@ -330,6 +360,7 @@ impl ScenePack {
             shapes_repacked,
             source_infos,
             inputs,
+            curve_radii,
             melt_key,
             offs: [0.0, block_base as f32, inst_base as f32, shape_base as f32],
             offs2: [poly_base as f32, path_base as f32],
@@ -341,7 +372,25 @@ impl ScenePack {
 
     /// The packed number of a shape (hidden shapes have none).
     fn slot_of(&self, gi: usize, si: usize) -> Option<usize> {
-        self.slots.iter().find(|(g, s, _)| *g == gi && *s == si).map(|(_, _, n)| *n)
+        // Sources and their shape indices are packed in sorted order.
+        self.slots.binary_search_by_key(&(gi, si), |&(g, s, _)| (g, s)).ok().and_then(|index| self.slots.get(index)).map(|entry| entry.2)
+    }
+
+    fn selection_sphere(&self, scene: &Scene, selected: Option<Pick>) -> [f32; 4] {
+        let targets = crate::view::targets(scene, selected);
+        if self.curve_radii.is_empty() {
+            return crate::perf::sphere_of(scene, &targets);
+        }
+        crate::perf::sphere_of_with_radius(scene, &targets, |(gi, si), shape| {
+            if shape.kind == crate::model::Kind::Curve
+                && let Some(radius) = self.slot_of(gi, si).and_then(|slot| self.list.get((self.offs[3] as usize + slot * S_STRIDE) * 4 + 3))
+            {
+                return *radius;
+            }
+            // Invisible shapes and shapes beyond the GPU limit still contribute
+            // to a selected group exactly as they did before.
+            crate::perf::shape_radius(shape)
+        })
     }
 
     /// The per-frame numbers (`GLOBAL_V4` vec4): camera, light, counts, where the lists start, the
@@ -384,10 +433,10 @@ impl ScenePack {
         put(&mut u, 6, [self.group_n as f32, self.shape_n as f32, sel_first, sel_count]);
         put(&mut u, V4_OFFS, self.offs);
         put(&mut u, V4_OFFS2, [self.offs2[0], self.offs2[1], if self.overlaps { 1.0 } else { 0.0 }, 0.0]);
-        let (bc, br) = bounds_of(scene, selected, &self.resolved);
+        let (bc, br) = bounds_with_curve_radii(scene, selected, &self.resolved, &self.curve_radii);
         put(&mut u, V4_BOUND, [bc[0], bc[1], bc[2], br]);
         put(&mut u, V4_HOVER, [hover_first, hover_count, 0.0, 0.0]);
-        put(&mut u, V4_SELSPH, crate::perf::sphere_of(scene, &crate::view::targets(scene, selected)));
+        put(&mut u, V4_SELSPH, self.selection_sphere(scene, selected));
         let e = &scene.env;
         let flags = (if e.grid { 1.0 } else { 0.0 }) + (if e.floor { 2.0 } else { 0.0 });
         put(&mut u, V4_ENV, [e.exposure, e.ambient, e.shadow, flags]);
@@ -517,7 +566,7 @@ fn pack_shape(s: &crate::model::Shape, out: &mut Vec<f32>, poly: &mut Vec<f32>, 
     let (start, count) = if s.kind.uses_outline() { pack_outline(&p.outline, poly) } else { (0, 0) };
     let (start2, count2) = if s.kind.uses_outline2() { pack_outline(&p.outline2, poly) } else { (0, 0) };
     let (pstart, pcount) = if s.kind == crate::model::Kind::Curve {
-        pack_curve(s, path)
+        pack_curve(s, &p.path, path)
     } else if s.kind.uses_path() && path.len() / 4 + s.path.len() <= PATH_V4 {
         let st = path.len() / 4;
         for pt in &s.path {
@@ -569,13 +618,19 @@ fn pack_shape(s: &crate::model::Shape, out: &mut Vec<f32>, poly: &mut Vec<f32>, 
 /// the tube's thickness) for every `curve::GROUP_SEGMENTS` segments: the shader looks at those
 /// first and measures only the groups that can hold the nearest piece. Returns (first point,
 /// count); (0, 0) when there is no room.
-fn pack_curve(s: &crate::model::Shape, path: &mut Vec<f32>) -> (usize, usize) {
+fn pack_curve(s: &crate::model::Shape, prepared: &[[f32; 4]], path: &mut Vec<f32>) -> (usize, usize) {
     let used = path.len() / 4;
     let room = PATH_V4.saturating_sub(used + 2);
     let need = |n: usize| n + n.saturating_sub(1).div_ceil(crate::curve::GROUP_SEGMENTS);
-    let mut pts = crate::curve::build(&s.path, &s.params);
+    // Prepared::new already sampled the full curve. Borrow those exact nodes;
+    // only a pool-budget reduction needs a separate adaptive build.
+    let mut pts = std::borrow::Cow::Borrowed(prepared);
     if need(pts.len()) > room {
-        pts = crate::curve::build_max(&s.path, &s.params, (room * crate::curve::GROUP_SEGMENTS / (crate::curve::GROUP_SEGMENTS + 1)).max(4));
+        pts = std::borrow::Cow::Owned(crate::curve::build_max(
+            &s.path,
+            &s.params,
+            (room * crate::curve::GROUP_SEGMENTS / (crate::curve::GROUP_SEGMENTS + 1)).max(4),
+        ));
     }
     if pts.len() < 2 || need(pts.len()) > room {
         return (0, 0);
@@ -585,7 +640,7 @@ fn pack_curve(s: &crate::model::Shape, path: &mut Vec<f32>) -> (usize, usize) {
     push(path, [lo[0], lo[1], lo[2], crate::curve::max_joint_blend(&pts, closed)]);
     push(path, [hi[0], hi[1], hi[2], crate::curve::closed_joint_blend(&pts, closed)]);
     let st = used + 2;
-    for pt in &pts {
+    for pt in pts.iter() {
         push(path, *pt);
     }
     for g in crate::curve::group_spheres(&pts) {
@@ -602,6 +657,22 @@ pub fn bounds(scene: &Scene, selected: Option<Pick>) -> ([f32; 3], f32) {
 
 /// `bounds` for groups that are already resolved (`pattern::resolve`).
 fn bounds_of(scene: &Scene, selected: Option<Pick>, resolved: &[crate::pattern::RGroup]) -> ([f32; 3], f32) {
+    bounds_with_curve_radii(scene, selected, resolved, &[])
+}
+
+fn cached_curve_radius(radii: &[(usize, usize, f32)], group: usize, shape: usize) -> Option<f32> {
+    radii.binary_search_by_key(&(group, shape), |&(gi, si, _)| (gi, si)).ok().and_then(|i| radii.get(i)).map(|entry| entry.2)
+}
+
+/// The same bounds calculation with only curve resampling replaced by an exact lookup.
+/// Selection, hidden linked sources, Boolean operations and instance transforms still use
+/// the complete resolved scene, including shapes not admitted to the GPU data pool.
+fn bounds_with_curve_radii(
+    scene: &Scene,
+    selected: Option<Pick>,
+    resolved: &[crate::pattern::RGroup],
+    radii: &[(usize, usize, f32)],
+) -> ([f32; 3], f32) {
     use crate::accel::{Bound, enclose};
     let mut items: Vec<Bound> = Vec::new();
     for rg in resolved {
@@ -619,7 +690,12 @@ fn bounds_of(scene: &Scene, selected: Option<Pick>, resolved: &[crate::pattern::
             // a lamp's glow reaches a good way out
             let halo = if s.material.glow > 0.0 { 30.0 } else { 0.0 };
             let reach = (s.blend + g.blend) * scene.melt.amount * 1.5 + scene.melt.drip + 2.0 + halo;
-            parts.push(Bound { c: s.pos, r: crate::view::radius_of(s) + reach });
+            let radius = if s.kind == crate::model::Kind::Curve {
+                cached_curve_radius(radii, rg.src, si).unwrap_or_else(|| crate::view::radius_of(s))
+            } else {
+                crate::view::radius_of(s)
+            };
+            parts.push(Bound { c: s.pos, r: radius + reach });
         }
         if parts.is_empty() {
             continue;
@@ -1802,6 +1878,61 @@ mod tests {
     use super::*;
     use crate::model::{Material, Shape};
 
+    /// The earlier packer always rebuilt the full curve before applying the pool budget.
+    /// Keep that independent input path to verify exact point/header bytes at the limits.
+    fn reference_pack_curve(s: &Shape, path: &mut Vec<f32>) -> (usize, usize) {
+        let used = path.len() / 4;
+        let room = PATH_V4.saturating_sub(used + 2);
+        let need = |n: usize| n + n.saturating_sub(1).div_ceil(crate::curve::GROUP_SEGMENTS);
+        let mut pts = crate::curve::build(&s.path, &s.params);
+        if need(pts.len()) > room {
+            pts = crate::curve::build_max(&s.path, &s.params, (room * crate::curve::GROUP_SEGMENTS / (crate::curve::GROUP_SEGMENTS + 1)).max(4));
+        }
+        if pts.len() < 2 || need(pts.len()) > room {
+            return (0, 0);
+        }
+        let (lo, hi) = crate::curve::bounds(&pts);
+        let closed = s.params[0] > 0.5;
+        push(path, [lo[0], lo[1], lo[2], crate::curve::max_joint_blend(&pts, closed)]);
+        push(path, [hi[0], hi[1], hi[2], crate::curve::closed_joint_blend(&pts, closed)]);
+        let st = used + 2;
+        for pt in &pts {
+            push(path, *pt);
+        }
+        for g in crate::curve::group_spheres(&pts) {
+            push(path, g);
+        }
+        (st, pts.len())
+    }
+
+    #[test]
+    fn prepared_curve_packing_preserves_full_and_budget_limited_payloads() {
+        let mut shape = Shape::new(crate::model::Kind::Curve, [0.0; 3], Material::default());
+        let paths = [
+            Vec::new(),
+            vec![[0.0, 0.0, 0.0, 2.0]],
+            vec![[0.0, 0.0, 0.0, 2.0], [0.1, 15.0, 0.0, 3.0], [20.0, 16.0, 8.0, 1.0], [21.0, -8.0, 2.0, 4.0], [-3.0, -0.0, 7.0, 2.0]],
+        ];
+        for nodes in paths {
+            shape.path = nodes;
+            for params in [[0.0, 0.0, 0.0, 1.0], [0.0, 0.8, 0.0, 1.75], [1.0, 1.0, 0.0, 0.7]] {
+                shape.params = params;
+                let prepared = Prepared::new(&shape);
+                for used in [0, 3, PATH_V4 - 384, PATH_V4 - 48, PATH_V4 - 10, PATH_V4 - 1, PATH_V4, PATH_V4 + 1] {
+                    let mut expected = vec![-0.0; used * 4];
+                    let mut actual = expected.clone();
+                    let old_slots = reference_pack_curve(&shape, &mut expected);
+                    let new_slots = pack_curve(&shape, &prepared.path, &mut actual);
+                    assert_eq!(new_slots, old_slots, "same adaptive admission at {used} nodes with {params:?}");
+                    assert_eq!(actual.len(), expected.len());
+                    for (i, (a, b)) in actual.iter().zip(&expected).enumerate() {
+                        assert_eq!(a.to_bits(), b.to_bits(), "curve/header/prefix bit {i}, pool prefix {used}, {params:?}");
+                    }
+                }
+            }
+        }
+    }
+
     #[test]
     fn streamed_volume_bytes_match_whole_upload_at_texel_and_chunk_boundaries() {
         for len in [
@@ -1957,6 +2088,7 @@ mod tests {
         assert!(fast.vols.same_as(&cold.vols));
         assert_eq!(fast.glow, cold.glow);
         assert_eq!(fast.overlaps, cold.overlaps);
+        assert_global_bounds_match_fresh(scene, &fast);
         let cam = Camera::default();
         for selected in [None, Some(Pick::Group(0)), Some(Pick::Shape(0, 0))] {
             let a = fast.globals(scene, &cam, [800.0, 600.0], selected, Some(Pick::Shape(0, 0)), true);
@@ -1966,6 +2098,159 @@ mod tests {
             }
         }
         fast
+    }
+
+    fn assert_global_bounds_match_fresh(scene: &Scene, pack: &ScenePack) {
+        let last_group = scene.groups.len().saturating_sub(1);
+        let first_last = scene.groups.first().map_or(0, |group| group.shapes.len().saturating_sub(1));
+        let last_shape = scene.groups.last().map_or(0, |group| group.shapes.len().saturating_sub(1));
+        for selected in [
+            None,
+            Some(Pick::Shape(0, 0)),
+            Some(Pick::Shape(0, first_last)),
+            Some(Pick::Group(0)),
+            Some(Pick::Shape(last_group, last_shape)),
+            Some(Pick::Group(last_group)),
+        ] {
+            let (center, radius) = bounds_of(scene, selected, &pack.resolved);
+            let expected = [center[0], center[1], center[2], radius].map(f32::to_bits);
+            let globals = pack.globals(scene, &Camera::default(), [800.0, 600.0], selected, None, true);
+            assert_eq!(globals[V4_BOUND * 4..V4_BOUND * 4 + 4].iter().map(|value| value.to_bits()).collect::<Vec<_>>(), expected);
+            let sphere = crate::perf::sphere_of(scene, &crate::view::targets(scene, selected));
+            assert_eq!(globals[V4_SELSPH * 4..V4_SELSPH * 4 + 4].iter().map(|value| value.to_bits()).collect::<Vec<_>>(), sphere.map(f32::to_bits));
+        }
+    }
+
+    fn curve_bounds_scene(count: usize) -> Scene {
+        let mut scene = Scene::default();
+        scene.groups[0].shapes = (0..count)
+            .map(|i| {
+                let mut shape = Shape::new(crate::model::Kind::Curve, [(i % 20) as f32 * 31.0, (i / 20) as f32 * 29.0, 10.0], Material::default());
+                shape.path = (0..8).map(|j| [j as f32 * 2.7, (j as f32 * 0.9).sin() * 8.0, j as f32 * 0.5, 1.5 + j as f32 * 0.1]).collect();
+                shape.params = [0.0, 1.0, 0.0, 1.0];
+                shape
+            })
+            .collect();
+        scene
+    }
+
+    #[test]
+    fn curve_view_and_selection_bounds_cover_hidden_links_and_unpacked_shapes() {
+        let mut scene = curve_bounds_scene(MAX_SHAPES + 3);
+        // A cheap, straight fixture still exceeds both the data and radius-cache caps.
+        for shape in &mut scene.groups[0].shapes {
+            shape.path.truncate(2);
+            shape.params[1] = 0.0;
+        }
+        scene.groups[0].shapes[MAX_SHAPES + 2].pos = [2500.0, -30.0, 40.0];
+        let first = same_pack_as_cold(&scene, None);
+        assert_eq!(first.shape_n, MAX_SHAPES);
+        assert_eq!(first.curve_radii.len(), MAX_SHAPES);
+        assert!(cached_curve_radius(&first.curve_radii, 0, MAX_SHAPES + 2).is_none());
+
+        scene.groups[0].shapes[0].visible = false;
+        scene.groups[0].shapes[MAX_SHAPES + 2].path[1][2] = 125.0;
+        scene.groups[0].shapes[1].scale = [2.0, 0.7, 1.3];
+        scene.groups[0].shapes[1].op = crate::model::Op::Subtract;
+        scene.groups[0].shapes[2].material.glow = 1.0;
+        scene.melt.drip = 6.0;
+        let edited = same_pack_as_cold(&scene, Some(&first));
+
+        let uid = scene.ensure_group_uid(0).expect("source id");
+        scene.groups[0].visible = false;
+        let mut copy = crate::model::Group::new("visible transformed copy");
+        copy.instance_of = Some(uid);
+        copy.xform.pos = [45.0, -12.0, 30.0];
+        copy.xform.rot = [17.0, 34.0, -26.0];
+        copy.xform.scale = 1.4;
+        copy.pattern = Some(crate::pattern::Pattern::Rect { counts: [2, 1, 1], spacing: [60.0, 0.0, 0.0] });
+        scene.groups.push(copy);
+        let linked = same_pack_as_cold(&scene, Some(&edited));
+        assert_eq!(linked.curve_radii.len(), MAX_SHAPES);
+        scene.groups[1].op = crate::model::Op::Subtract;
+        let subtracted = same_pack_as_cold(&scene, Some(&linked));
+        scene.groups[1].instance_of = Some(u32::MAX);
+        let broken = same_pack_as_cold(&scene, Some(&subtracted));
+        assert!(broken.curve_radii.is_empty());
+    }
+
+    #[test]
+    fn curve_bound_cache_keeps_degenerate_and_nonfinite_inputs_on_the_exact_path() {
+        let mut scene = curve_bounds_scene(1);
+        let paths = [
+            Vec::new(),
+            vec![[0.0, -0.0, 0.0, 2.0]],
+            vec![[1.0, 1.0, 1.0, 0.0]; 3],
+            vec![[f32::NAN, 0.0, 0.0, 2.0], [0.0, f32::INFINITY, 0.0, 3.0]],
+            vec![[1.0e30, -1.0e30, 0.0, -3.0], [0.0, 2.0, -0.0, f32::INFINITY]],
+        ];
+        let mut previous = None;
+        for path in paths {
+            scene.groups[0].shapes[0].path = path;
+            for params in [[0.0, 0.0, 0.0, 1.0], [1.0, 1.0, 0.0, 0.7], [f32::NAN, f32::INFINITY, 0.0, -1.0]] {
+                scene.groups[0].shapes[0].params = params;
+                let packed = same_pack_as_cold(&scene, previous.as_ref());
+                previous = Some(packed);
+            }
+        }
+    }
+
+    /// CPU uniform-update work only: the same real globals/orbit loop with and without
+    /// retained curve radii. No GPU timing or presented-frame-rate claim is implied.
+    #[test]
+    #[ignore = "timing report"]
+    fn curve_orbit_globals_benchmark() {
+        use std::hint::black_box;
+        use std::time::Instant;
+        const FRAMES: usize = 128;
+        const RUNS: usize = 5;
+        for count in [10, 100, 300] {
+            let scene = curve_bounds_scene(count);
+            let mut pack = ScenePack::new(&scene, VolumeSet::of(&scene));
+            let mut held_radii = Vec::new();
+            for (label, selected) in [("none", None), ("shape", Some(Pick::Shape(0, count - 1))), ("group", Some(Pick::Group(0)))] {
+                let run = |pack: &ScenePack| {
+                    let mut cam = Camera::default();
+                    let mut frames = Vec::with_capacity(FRAMES);
+                    let start = Instant::now();
+                    for _ in 0..FRAMES {
+                        cam.orbit(0.7, 0.1);
+                        frames.push(black_box(pack).globals(black_box(&scene), &cam, [1280.0, 800.0], selected, None, true).map(f32::to_bits));
+                    }
+                    (start.elapsed().as_secs_f64() * 1e6 / FRAMES as f64, frames)
+                };
+                let mut fresh_times = Vec::new();
+                let mut cached_times = Vec::new();
+                for trial in 0..RUNS {
+                    let (fresh, cached) = if trial % 2 == 0 {
+                        std::mem::swap(&mut pack.curve_radii, &mut held_radii);
+                        let fresh = run(&pack);
+                        std::mem::swap(&mut pack.curve_radii, &mut held_radii);
+                        (fresh, run(&pack))
+                    } else {
+                        let cached = run(&pack);
+                        std::mem::swap(&mut pack.curve_radii, &mut held_radii);
+                        let fresh = run(&pack);
+                        std::mem::swap(&mut pack.curve_radii, &mut held_radii);
+                        (fresh, cached)
+                    };
+                    assert_eq!(fresh.1, cached.1, "every uniform bit in every orbit frame");
+                    fresh_times.push(fresh.0);
+                    cached_times.push(cached.0);
+                }
+                fresh_times.sort_by(f64::total_cmp);
+                cached_times.sort_by(f64::total_cmp);
+                println!(
+                    "CURVE_ORBIT_GLOBALS {}",
+                    serde_json::json!({
+                        "curves": count, "selection": label, "frames": FRAMES, "runs": RUNS,
+                        "fresh_us_per_update": fresh_times[RUNS / 2], "cached_us_per_update": cached_times[RUNS / 2],
+                        "cache_bytes": pack.curve_radii.capacity() * std::mem::size_of::<(usize, usize, f32)>(),
+                        "uniforms_bit_identical": true
+                    })
+                );
+            }
+        }
     }
 
     #[test]
@@ -2186,7 +2471,7 @@ mod tests {
         assert_eq!(f.counts()[1] as usize, crate::model::MAX_SHAPES);
         // every shape has its record, with its position, and every block points at real shapes
         for i in 0..crate::model::MAX_SHAPES {
-            assert_eq!(f.shape(i, 0)[3] > 0.0, true, "shape {i} has a radius");
+            assert!(f.shape(i, 0)[3] > 0.0, "shape {i} has a radius");
             assert_eq!(f.shape(i, 4)[0], f.shape(i, 0)[0]);
         }
         let mut covered = 0;
@@ -2300,7 +2585,7 @@ mod instance_tests {
         let u = pack(&sc, &Camera::default(), [800.0, 600.0], None, None, true);
         let f = Frame::new(&u);
         let total: usize = (0..crate::model::MAX_GROUPS).map(|g| instances_of(&f, g).len()).sum();
-        assert!(total >= crate::pattern::MAX_INSTANCES && total <= crate::pattern::MAX_INSTANCES + crate::model::MAX_GROUPS, "{total} instances");
+        assert!((crate::pattern::MAX_INSTANCES..=crate::pattern::MAX_INSTANCES + crate::model::MAX_GROUPS).contains(&total), "{total} instances");
         assert!(f.list_len() <= MAX_POOL_V4, "{} <= {MAX_POOL_V4}", f.list_len());
         // and the CPU field copes with the same scene
         let field = crate::sdf::Field::new(&sc);
@@ -2445,7 +2730,7 @@ mod shader_tests {
         let src = shader_source();
         assert!(src.contains("textureLoad(DT"), "scene data is read from the list texture");
         assert!(!src.contains("array<Shape"), "no shape array in the uniform");
-        assert!(GLOBAL_BYTES <= 16384, "the globals fit the smallest uniform limit (WebGL2/GL: 16 KB), {GLOBAL_BYTES}");
+        const { assert!(GLOBAL_BYTES <= 16384, "the globals fit the smallest uniform limit (WebGL2/GL: 16 KB)") };
         assert!(ROW.is_power_of_two() && src.contains("& 1023") && src.contains(">> 10"), "ROW matches the shader's row width");
     }
 
@@ -2460,9 +2745,11 @@ mod shader_tests {
 
     #[test]
     fn the_limits_are_what_the_readme_says() {
-        assert!(crate::model::MAX_SHAPES >= 512 && crate::model::MAX_GROUPS >= 96);
-        assert!(MAX_POOL_V4 <= 2048 * ROW);
-        assert!(POLY_PTS >= 16 * 1024 && PATH_V4 >= 16 * 1024, "much bigger outline and path pools");
+        const {
+            assert!(crate::model::MAX_SHAPES >= 512 && crate::model::MAX_GROUPS >= 96);
+            assert!(MAX_POOL_V4 <= 2048 * ROW);
+            assert!(POLY_PTS >= 16 * 1024 && PATH_V4 >= 16 * 1024, "much bigger outline and path pools");
+        }
     }
 }
 

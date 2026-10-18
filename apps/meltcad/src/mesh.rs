@@ -151,8 +151,10 @@ impl Serialize for SharedVolume {
 
 /// Volumes that are alive somewhere in the program, by the hash of their text, so that pasting a
 /// copied shape gives the original's volume back instead of a second copy.
-fn registry() -> &'static Mutex<HashMap<(u64, usize), Weak<Volume>>> {
-    static REG: OnceLock<Mutex<HashMap<(u64, usize), Weak<Volume>>>> = OnceLock::new();
+type VolumeRegistry = Mutex<HashMap<(u64, usize), Weak<Volume>>>;
+
+fn registry() -> &'static VolumeRegistry {
+    static REG: OnceLock<VolumeRegistry> = OnceLock::new();
     REG.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
@@ -451,8 +453,8 @@ mod tests {
 
     #[test]
     fn the_node_cap_fits_the_graphics_pool_and_a_float() {
-        assert!(MAX_TOTAL_NODES < (1 << 24), "a node number is exact in an f32");
-        assert!(MAX_TOTAL_NODES <= crate::gpu::VOL_W * crate::gpu::VOL_H * 4);
+        const { assert!(MAX_TOTAL_NODES < (1 << 24), "a node number is exact in an f32") };
+        const { assert!(MAX_TOTAL_NODES <= crate::gpu::VOL_W * crate::gpu::VOL_H * 4) };
     }
 
     // ------------------------------------------------------------ the model's file form
@@ -528,7 +530,13 @@ mod tests {
     #[test]
     fn a_scene_keeps_at_most_eight_mesh_shapes_and_a_total_of_data() {
         let v = SharedVolume::new(ball_volume(12));
-        let many: Vec<Shape> = (0..MAX_VOLUME_SHAPES + 4).map(|i| mesh_shape(&v)).map(|mut s| { s.pos[0] += 1.0; s }).collect();
+        let many: Vec<Shape> = (0..MAX_VOLUME_SHAPES + 4)
+            .map(|_| mesh_shape(&v))
+            .map(|mut s| {
+                s.pos[0] += 1.0;
+                s
+            })
+            .collect();
         let mut sc = scene_with(many);
         let notes = sc.sanitize_notes();
         let kept = sc.groups[0].shapes.iter().filter(|s| s.kind == Kind::Mesh).count();
@@ -672,7 +680,9 @@ mod tests {
     fn report_scene_file_size() {
         use crate::import_mesh::tests::sphere_mesh;
         use crate::sdf_volume::{BakeControl, BakeOptions, bake_with};
-        for (name, mesh) in [("ball", sphere_mesh(30.0, 60, 120)), ("flat plate", crate::import_mesh::tests::box_mesh([-50.0, -50.0, 0.0], [50.0, 50.0, 4.0]))] {
+        for (name, mesh) in
+            [("ball", sphere_mesh(30.0, 60, 120)), ("flat plate", crate::import_mesh::tests::box_mesh([-50.0, -50.0, 0.0], [50.0, 50.0, 4.0]))]
+        {
             let t0 = std::time::Instant::now();
             let (vol, _) = bake_with(&mesh, &BakeOptions { res: 128, ..BakeOptions::default() }, &BakeControl::new()).unwrap();
             let bake_s = t0.elapsed().as_secs_f64();
@@ -690,7 +700,11 @@ mod tests {
             drop(sv);
             let back = Scene::from_json(&json).unwrap_or_default();
             let load_s = t2.elapsed().as_secs_f64();
-            eprintln!("{name}: {nodes} nodes, bake {bake_s:.2} s, scene file {:.2} MB, save {save_s:.2} s, load {load_s:.2} s, {} shapes back", json.len() as f64 / 1e6, back.shape_count());
+            eprintln!(
+                "{name}: {nodes} nodes, bake {bake_s:.2} s, scene file {:.2} MB, save {save_s:.2} s, load {load_s:.2} s, {} shapes back",
+                json.len() as f64 / 1e6,
+                back.shape_count()
+            );
         }
     }
 }

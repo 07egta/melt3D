@@ -3,9 +3,11 @@
 //!
 //! Supported: `<path>` (all commands, curves and arcs are flattened), `<polygon>`, `<polyline>`,
 //! `<rect>` (with rx/ry), `<circle>`, `<ellipse>`, nested `<g>`, `transform`, `viewBox`, `width` and
-//! `height` with units, `fill-rule`, `display:none`. Strokes, text, images, gradients and `<use>`
-//! are ignored. Hostile files never panic: the size, the number of commands, points, outlines and
-//! the nesting are all capped.
+//! `height` with units, `fill-rule`, `display:none`, and bounded local `<defs>/<use>` references.
+//! Strokes, text, images and gradients are ignored and reported. Hostile files never panic:
+//! input size, commands, points, outlines, nesting and reference expansion are capped.
+
+use std::collections::HashMap;
 
 use crate::model::{Group, Kind, MAX_OUTLINE, Material, Op, Shape};
 
@@ -15,6 +17,9 @@ const MAX_COMMANDS: usize = 20_000;
 const MAX_POINTS: usize = 400_000;
 const MAX_ELEMENTS: usize = 6_000;
 const MAX_DEPTH: usize = 64;
+const MAX_USE_DEPTH: usize = 16;
+const MAX_REFERENCE_VISITS: usize = 48_000;
+const MAX_REFERENCE_BYTES: usize = MAX_BYTES * 16;
 /// Outlines kept after throwing out the tiniest ones.
 const MAX_CONTOURS: usize = 300;
 /// How deep outlines may sit inside each other.
@@ -50,6 +55,8 @@ pub struct Artwork {
     pub natural_mm: [f32; 2],
     /// How many outlines were thrown away (too tiny, too many, too deeply nested).
     pub dropped: usize,
+    /// Nonfatal omissions: the user must not mistake a partial import for an exact SVG.
+    pub warnings: Vec<String>,
 }
 
 impl Artwork {
@@ -99,8 +106,14 @@ pub fn parse(text: &str) -> Result<Artwork, String> {
         return Err("SVGファイルではないようです".into());
     }
     // pass 1: rough, only to learn the size of the picture
-    let rough = walk(text, None);
+    let (rough, rough_budget) = walk(text, None);
     let Some((lo, hi)) = bounds(rough.iter().flat_map(|r| r.polys.iter().flatten())) else {
+        if rough_budget.unsupported_viewport {
+            return Err("表示領域やサイズ指定を持つSVGシンボル参照には未対応です。SVG側で参照を図形に展開してください".into());
+        }
+        if rough_budget.unresolved_reference {
+            return Err("SVGの参照先が見つからないか、参照が循環しています。SVG側で参照を図形に展開してください".into());
+        }
         return Err("塗りつぶしの図形が見つかりませんでした（線だけの絵は読めません）".into());
     };
     let side = (hi.0 - lo.0).max(hi.1 - lo.1);
@@ -109,8 +122,49 @@ pub fn parse(text: &str) -> Result<Artwork, String> {
     }
     // pass 2: curves flattened to ~0.05 mm for a 60 mm picture
     let tol = FLAT_TOL_MM / (REF_MM / side);
-    let raws = walk(text, Some(tol));
-    build_artwork(&raws, side)
+    let (raws, fine_budget) = walk(text, Some(tol));
+    let mut art = build_artwork(&raws, side)?;
+    art.warnings = unsupported_features(text);
+    if rough_budget.reference_limited || fine_budget.reference_limited {
+        art.warnings.push("SVGの参照図形の展開が多すぎるため、一部を読みとばしました".into());
+    }
+    if rough_budget.unsupported_viewport || fine_budget.unsupported_viewport {
+        art.warnings.push("表示領域やサイズ指定を持つSVGシンボル参照を読みとばしました。SVG側で参照を図形に展開してください".into());
+    }
+    if rough_budget.unresolved_reference || fine_budget.unresolved_reference {
+        art.warnings.push("参照先が見つからない、または循環しているSVG参照を読みとばしました".into());
+    }
+    Ok(art)
+}
+
+/// Report features we deliberately do not rasterize or convert into geometry.
+/// This pass parses only tags; it never resolves external resources.
+fn unsupported_features(src: &str) -> Vec<String> {
+    let mut tags = std::collections::BTreeSet::new();
+    let mut pos = 0;
+    let mut scanned = 0;
+    while let Some(tag) = next_tag(src, &mut pos) {
+        scanned += 1;
+        if scanned > MAX_ELEMENTS * 2 {
+            break;
+        }
+        if tag.closing {
+            continue;
+        }
+        match tag.name.as_str() {
+            "text" | "image" | "foreignobject" | "filter" | "clippath" | "mask" | "lineargradient" | "radialgradient" | "pattern" | "marker" => {
+                tags.insert(tag.name.clone());
+            }
+            "use" if tag.attr("href").or_else(|| tag.attr("xlink:href")).is_some_and(|s| !s.starts_with('#')) => {
+                tags.insert("external use".into());
+            }
+            _ => {}
+        }
+        if tag.prop("stroke").is_some_and(|s| s != "none") {
+            tags.insert("stroke".into());
+        }
+    }
+    tags.into_iter().map(|t| format!("未対応のSVG要素/指定: {t}（読み込みません）")).collect()
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -216,7 +270,7 @@ fn interior_point(p: &[(f64, f64)]) -> (f64, f64) {
             }
         }
         xs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        for w in xs.chunks_exact(2) {
+        for w in xs.as_chunks::<2>().0 {
             let span = w[1] - w[0];
             if best.is_none_or(|(s, _)| span > s) {
                 best = Some((span, ((w[0] + w[1]) * 0.5, y)));
@@ -249,11 +303,7 @@ fn rdp_closed(p: &[(f64, f64)], tol: f64) -> Vec<(f64, f64)> {
         let len2 = dx * dx + dy * dy;
         let mut worst = (0.0_f64, 0usize);
         for (i, q) in p.iter().enumerate().take(b).skip(a + 1) {
-            let d = if len2 < 1e-30 {
-                (q.0 - pa.0).hypot(q.1 - pa.1)
-            } else {
-                ((q.0 - pa.0) * dy - (q.1 - pa.1) * dx).abs() / len2.sqrt()
-            };
+            let d = if len2 < 1e-30 { (q.0 - pa.0).hypot(q.1 - pa.1) } else { ((q.0 - pa.0) * dy - (q.1 - pa.1) * dx).abs() / len2.sqrt() };
             if d > worst.0 {
                 worst = (d, i);
             }
@@ -468,13 +518,14 @@ fn parse_color(s: &str) -> Option<[f32; 3]> {
 // XML
 
 struct Tag<'a> {
+    start: usize,
     name: String,
     attrs: Vec<(&'a str, &'a str)>,
     closing: bool,
     selfclose: bool,
 }
 
-impl Tag<'_> {
+impl<'a> Tag<'a> {
     /// The value of a property: the `style` attribute wins over the plain attribute.
     fn prop(&self, key: &str) -> Option<&str> {
         if let Some((_, st)) = self.attrs.iter().find(|(k, _)| *k == "style") {
@@ -488,7 +539,7 @@ impl Tag<'_> {
         }
         self.attrs.iter().find(|(k, _)| *k == key).map(|(_, v)| v.trim())
     }
-    fn attr(&self, key: &str) -> Option<&str> {
+    fn attr(&self, key: &str) -> Option<&'a str> {
         self.attrs.iter().find(|(k, _)| *k == key).map(|(_, v)| *v)
     }
     fn len(&self, key: &str) -> Option<f64> {
@@ -606,7 +657,7 @@ fn next_tag<'a>(src: &'a str, pos: &mut usize) -> Option<Tag<'a>> {
         if closing {
             selfclose = false;
         }
-        return Some(Tag { name, attrs, closing, selfclose });
+        return Some(Tag { start: s, name, attrs, closing, selfclose });
     }
 }
 
@@ -618,6 +669,11 @@ struct Budget {
     commands: usize,
     points: usize,
     elements: usize,
+    reference_visits: usize,
+    reference_bytes: usize,
+    reference_limited: bool,
+    unsupported_viewport: bool,
+    unresolved_reference: bool,
 }
 
 struct Raw {
@@ -874,7 +930,7 @@ impl Pen<'_> {
     }
 
     fn polygon(&mut self, pts: &[f64]) {
-        for p in pts.chunks_exact(2) {
+        for p in pts.as_chunks::<2>().0 {
             if self.pt(p[0], p[1]).is_none() {
                 break;
             }
@@ -957,7 +1013,6 @@ fn skipped(name: &str) -> bool {
             | "foreignobject"
             | "text"
             | "image"
-            | "use"
             | "switch"
             | "animate"
             | "animatetransform"
@@ -965,17 +1020,96 @@ fn skipped(name: &str) -> bool {
     )
 }
 
-/// Walk the document and flatten every filled shape. `tol` = allowed error in document units
-/// (None = rough pass, only for measuring).
-fn walk(src: &str, tol: Option<f64>) -> Vec<Raw> {
-    let mut budget = Budget { commands: 0, points: 0, elements: 0 };
-    let mut out: Vec<Raw> = Vec::new();
-    let mut stack = vec![State { xf: Affine::ID, fill_none: false, evenodd: false, hidden: false, color: None }];
+/// Index id-bearing elements without executing scripts, loading URLs or expanding entities.
+/// Referencing a subtree is bounded by both a recursion limit and the shared geometry budget.
+fn collect_ids(src: &str) -> HashMap<&str, (usize, usize)> {
+    let mut ids = HashMap::new();
+    let mut open: Vec<(Option<&str>, usize)> = Vec::new();
+    let mut pos = 0;
+    while let Some(tag) = next_tag(src, &mut pos) {
+        if tag.closing {
+            if let Some((Some(id), begin)) = open.pop()
+                && ids.len() < MAX_ELEMENTS
+            {
+                ids.entry(id).or_insert((begin, pos));
+            }
+            continue;
+        }
+        let id = tag.attr("id").filter(|v| !v.is_empty() && v.len() <= 128);
+        if tag.selfclose {
+            if let Some(id) = id
+                && ids.len() < MAX_ELEMENTS
+            {
+                ids.entry(id).or_insert((tag.start, pos));
+            }
+        } else {
+            if open.len() >= MAX_DEPTH {
+                break;
+            }
+            open.push((id, tag.start));
+        }
+    }
+    ids
+}
+
+/// Walk the document. Local #id references are expanded in the same paint order as <use>;
+/// external hrefs are never read or fetched.
+fn walk(src: &str, tol: Option<f64>) -> (Vec<Raw>, Budget) {
+    let ids = collect_ids(src);
+    let mut budget = Budget {
+        commands: 0,
+        points: 0,
+        elements: 0,
+        reference_visits: 0,
+        reference_bytes: 0,
+        reference_limited: false,
+        unsupported_viewport: false,
+        unresolved_reference: false,
+    };
+    let mut out = Vec::new();
+    let initial = State { xf: Affine::ID, fill_none: false, evenodd: false, hidden: false, color: None };
+    walk_part(src, src, tol, &ids, &mut budget, &mut out, initial, false, false, &mut Vec::new());
+    (out, budget)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn walk_part<'a>(
+    document: &'a str,
+    fragment: &'a str,
+    tol: Option<f64>,
+    ids: &HashMap<&'a str, (usize, usize)>,
+    budget: &mut Budget,
+    out: &mut Vec<Raw>,
+    inherited: State,
+    referenced: bool,
+    reference_has_size: bool,
+    active: &mut Vec<String>,
+) {
+    if referenced {
+        // Charge the entire fragment before entering it. This also bounds work
+        // scanning repeated comments/style text, not just emitted geometry.
+        if budget.reference_limited || fragment.len() > MAX_REFERENCE_BYTES.saturating_sub(budget.reference_bytes) {
+            budget.reference_limited = true;
+            return;
+        }
+        budget.reference_bytes += fragment.len();
+    }
+    let mut stack = vec![inherited];
     let mut skip = 0usize;
     let mut over = 0usize;
-    let mut seen_root = false;
+    let mut seen_root = referenced;
     let mut pos = 0usize;
-    while let Some(tag) = next_tag(src, &mut pos) {
+    while let Some(tag) = next_tag(fragment, &mut pos) {
+        if referenced {
+            if budget.reference_visits >= MAX_REFERENCE_VISITS {
+                budget.reference_limited = true;
+                break;
+            }
+            budget.reference_visits += 1;
+        }
+        if budget.elements >= MAX_ELEMENTS || budget.points >= MAX_POINTS || budget.commands >= MAX_COMMANDS {
+            break;
+        }
         if tag.closing {
             if skip > 0 {
                 skip -= 1;
@@ -997,14 +1131,31 @@ fn walk(src: &str, tol: Option<f64>) -> Vec<Raw> {
             continue;
         }
         let name = tag.name.as_str();
+        // A symbol acts as a definition unless it is the root being instanced.
+        // Viewport-dependent references need sizing/clipping rules we do not yet
+        // implement; omit them visibly instead of importing wrong dimensions.
+        let symbol_root = referenced && tag.start == 0 && name == "symbol";
+        let unsupported_viewport = referenced
+            && (name == "svg"
+                || (symbol_root
+                    && (reference_has_size
+                        || ["viewBox", "x", "y", "width", "height", "refX", "refY", "preserveAspectRatio", "overflow"]
+                            .iter()
+                            .any(|key| tag.prop(key).is_some()))));
+        if unsupported_viewport {
+            budget.unsupported_viewport = true;
+            if !tag.selfclose {
+                skip = 1;
+            }
+            continue;
+        }
         let hide = tag.prop("display").is_some_and(|v| v == "none") || tag.prop("opacity").and_then(length).is_some_and(|o| o <= 0.0);
-        if skipped(name) || hide {
+        if (skipped(name) && !symbol_root) || hide {
             if !tag.selfclose {
                 skip = 1;
                 if name == "style" || name == "script" {
-                    // raw text: jump over it
                     let close = format!("</{name}");
-                    if let Some(i) = src.get(pos..).and_then(|r| r.find(&close)) {
+                    if let Some(i) = fragment.get(pos..).and_then(|r| r.find(&close)) {
                         pos += i;
                     }
                 }
@@ -1035,19 +1186,48 @@ fn walk(src: &str, tol: Option<f64>) -> Vec<Raw> {
         if let Some(r) = tag.prop("fill-rule") {
             st.evenodd = r == "evenodd";
         }
-        let own_fill = tag.prop("fill");
-        if let Some(f) = own_fill {
+        if let Some(f) = tag.prop("fill") {
             if f != "none" {
                 st.color = parse_color(f).or(st.color);
             }
             st.fill_none = f == "none";
+        }
+        if name == "use" {
+            if !st.hidden && active.len() >= MAX_USE_DEPTH {
+                budget.reference_limited = true;
+            }
+            if !st.hidden
+                && active.len() < MAX_USE_DEPTH
+                && let Some(id) = tag.attr("href").or_else(|| tag.attr("xlink:href")).and_then(|v| v.strip_prefix('#'))
+            {
+                if active.iter().any(|v| v == id) {
+                    budget.unresolved_reference = true;
+                } else if let Some(&(begin, end)) = ids.get(id)
+                    && let Some(part) = document.get(begin..end)
+                {
+                    // x/y is a translation inside the use element's own transform.
+                    st.xf = st.xf.mul(&Affine([1.0, 0.0, 0.0, 1.0, tag.len("x").unwrap_or(0.0), tag.len("y").unwrap_or(0.0)]));
+                    if st.xf.ok() {
+                        active.push(id.to_owned());
+                        let reference_has_size = tag.prop("width").is_some() || tag.prop("height").is_some();
+                        walk_part(document, part, tol, ids, budget, out, st, true, reference_has_size, active);
+                        active.pop();
+                    }
+                } else {
+                    budget.unresolved_reference = true;
+                }
+            }
+            if !tag.selfclose {
+                skip = 1;
+            }
+            continue;
         }
         let drawable = matches!(name, "path" | "rect" | "circle" | "ellipse" | "polygon" | "polyline");
         if drawable {
             if !st.hidden && !st.fill_none && budget.elements < MAX_ELEMENTS && budget.points < MAX_POINTS && budget.commands < MAX_COMMANDS {
                 budget.elements += 1;
                 let sf = xf.scale().max(1e-12);
-                let mut pen = Pen { xf, tol: tol.map(|t| t / sf), out: Vec::new(), sub: Vec::new(), budget: &mut budget };
+                let mut pen = Pen { xf, tol: tol.map(|t| t / sf), out: Vec::new(), sub: Vec::new(), budget };
                 let n = |k: &str| tag.len(k);
                 match name {
                     "path" => {
@@ -1059,7 +1239,14 @@ fn walk(src: &str, tol: Option<f64>) -> Vec<Raw> {
                         let v = numbers(tag.attr("points").unwrap_or(""), 100_000);
                         pen.polygon(&v);
                     }
-                    "rect" => pen.rect(n("x").unwrap_or(0.0), n("y").unwrap_or(0.0), n("width").unwrap_or(0.0), n("height").unwrap_or(0.0), n("rx"), n("ry")),
+                    "rect" => pen.rect(
+                        n("x").unwrap_or(0.0),
+                        n("y").unwrap_or(0.0),
+                        n("width").unwrap_or(0.0),
+                        n("height").unwrap_or(0.0),
+                        n("rx"),
+                        n("ry"),
+                    ),
                     "circle" => pen.ellipse(n("cx").unwrap_or(0.0), n("cy").unwrap_or(0.0), n("r").unwrap_or(0.0), n("r").unwrap_or(0.0)),
                     _ => {
                         let (rx, ry) = (n("rx"), n("ry"));
@@ -1071,7 +1258,6 @@ fn walk(src: &str, tol: Option<f64>) -> Vec<Raw> {
                     out.push(Raw { polys, evenodd: st.evenodd, color: st.color });
                 }
             }
-            // a shape has no children worth reading
             if !tag.selfclose {
                 skip = 1;
             }
@@ -1085,7 +1271,6 @@ fn walk(src: &str, tol: Option<f64>) -> Vec<Raw> {
             }
         }
     }
-    out
 }
 
 /// The matrix from the `<svg>` element's viewBox to its width and height (px).
@@ -1153,11 +1338,7 @@ fn build_artwork(raws: &[Raw], side: f64) -> Result<Artwork, String> {
     let mut containers: Vec<Vec<usize>> = vec![Vec::new(); n];
     for i in 0..n {
         for j in 0..n {
-            if i != j
-                && cands[i].element == cands[j].element
-                && cands[j].area.abs() > cands[i].area.abs()
-                && inside(&cands[j].pts, cands[i].point)
-            {
+            if i != j && cands[i].element == cands[j].element && cands[j].area.abs() > cands[i].area.abs() && inside(&cands[j].pts, cands[i].point) {
                 containers[i].push(j);
             }
         }
@@ -1184,7 +1365,9 @@ fn build_artwork(raws: &[Raw], side: f64) -> Result<Artwork, String> {
     }
     // parents (the smallest container), then solid-then-its-holes order
     let parent: Vec<Option<usize>> = (0..n)
-        .map(|i| containers[i].iter().copied().min_by(|&a, &b| cands[a].area.abs().partial_cmp(&cands[b].area.abs()).unwrap_or(std::cmp::Ordering::Equal)))
+        .map(|i| {
+            containers[i].iter().copied().min_by(|&a, &b| cands[a].area.abs().partial_cmp(&cands[b].area.abs()).unwrap_or(std::cmp::Ordering::Equal))
+        })
         .collect();
     let mut order = Vec::new();
     let mut stack: Vec<usize> = (0..n).rev().filter(|&i| parent[i].is_none()).collect();
@@ -1230,6 +1413,7 @@ fn build_artwork(raws: &[Raw], side: f64) -> Result<Artwork, String> {
         aspect: [(hi[0] - lo[0]) / w, (hi[1] - lo[1]) / w],
         natural_mm: [((hi[0] - lo[0]) as f64 * px_to_mm) as f32, ((hi[1] - lo[1]) as f64 * px_to_mm) as f32],
         dropped,
+        warnings: Vec::new(),
     })
 }
 
@@ -1341,7 +1525,8 @@ mod tests {
 
     #[test]
     fn rounded_rect_circle_and_ellipse() {
-        let a = parse(&wrap(r#"<rect width="80" height="40" rx="10"/><circle cx="50" cy="50" r="10"/><ellipse cx="50" cy="50" rx="20" ry="5"/>"#)).unwrap();
+        let a = parse(&wrap(r#"<rect width="80" height="40" rx="10"/><circle cx="50" cy="50" r="10"/><ellipse cx="50" cy="50" rx="20" ry="5"/>"#))
+            .unwrap();
         assert_eq!(a.solids(), 3);
         let c = parse(&wrap(r#"<circle cx="50" cy="50" r="30"/>"#)).unwrap();
         assert!(c.contours[0].pts.len() <= MAX_OUTLINE && c.contours[0].pts.len() >= 16);
@@ -1367,7 +1552,8 @@ mod tests {
 
     #[test]
     fn paths_with_every_command_work() {
-        let d = "M10 10 h30 v10 H10 z M60,60 l10,0 l0,10 l-10,0 Z M10 80 C 10 60, 30 60, 30 80 S 50 100, 50 80 Q 60 60 70 80 T 90 80 L 90 95 L 10 95 Z";
+        let d =
+            "M10 10 h30 v10 H10 z M60,60 l10,0 l0,10 l-10,0 Z M10 80 C 10 60, 30 60, 30 80 S 50 100, 50 80 Q 60 60 70 80 T 90 80 L 90 95 L 10 95 Z";
         let a = parse(&wrap(&format!(r#"<path d="{d}"/>"#))).unwrap();
         assert_eq!(a.solids(), 3);
         // relative curves land where absolute ones would
@@ -1397,7 +1583,8 @@ mod tests {
 
     #[test]
     fn transforms_and_nested_groups() {
-        let a = parse(&wrap(r#"<g transform="translate(50 50) scale(2)"><rect x="-10" y="-5" width="20" height="10" transform="rotate(90)"/></g>"#)).unwrap();
+        let a = parse(&wrap(r#"<g transform="translate(50 50) scale(2)"><rect x="-10" y="-5" width="20" height="10" transform="rotate(90)"/></g>"#))
+            .unwrap();
         // 20x10 rotated 90 and doubled: 20 wide x 40 tall
         let (lo, hi) = extent(&a);
         let (w, h) = (hi[0] - lo[0], hi[1] - lo[1]);
@@ -1494,6 +1681,174 @@ mod tests {
         assert_eq!(a.contours[0].color.map(|c| (c[0] * 255.0).round() as u32), Some(0x33));
         assert!(parse("not an svg").is_err());
         assert!(parse(&wrap(r#"<line x1="0" y1="0" x2="5" y2="5"/>"#)).is_err());
+    }
+
+    #[test]
+    fn unsupported_features_are_reported() {
+        let a = parse(&wrap(r#"<rect width="20" height="20" stroke="red"/><text>hello</text><image href="data:abc"/>"#)).unwrap();
+        assert!(a.warnings.iter().any(|s| s.contains("stroke")));
+        assert!(a.warnings.iter().any(|s| s.contains("text")));
+        assert!(a.warnings.iter().any(|s| s.contains("image")));
+    }
+
+    #[test]
+    fn local_use_repeats_defs_and_preserves_instance_transform() {
+        let doc = wrap(
+            r##"<defs><g id="motif"><rect width="10" height="20" fill="#336699"/></g></defs>
+            <use href="#motif" x="10" y="5"/>
+            <use href="#motif" transform="translate(40 5) scale(2)"/>"##,
+        );
+        let a = parse(&doc).unwrap();
+        assert_eq!((a.solids(), a.holes()), (2, 0));
+        assert!(a.contours.iter().all(|c| c.color.is_some()));
+        let (lo, hi) = extent(&a);
+        assert!((hi[0] - lo[0] - 60.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn local_use_cycles_and_external_references_do_not_expand() {
+        let doc = wrap(
+            r##"<defs><g id="a"><use href="#b"/></g>
+             <g id="b"><use href="#a"/><rect width="8" height="8"/></g></defs>
+             <use href="#a"/><use href="https://example.com/evil.svg#x"/>"##,
+        );
+        let a = parse(&doc).unwrap();
+        assert_eq!(a.solids(), 1);
+        assert!(parse(&wrap(r##"<use href="file:///etc/passwd#s"/>"##)).is_err());
+    }
+
+    #[test]
+    fn referenced_hole_has_matching_extrusion() {
+        let a = parse(&wrap(
+            r##"<defs><path id="ring" fill-rule="evenodd"
+          d="M0 0 H80 V80 H0 Z M20 20 H60 V60 H20 Z"/></defs>
+          <use href="#ring"/>"##,
+        ))
+        .unwrap();
+        assert_eq!((a.solids(), a.holes()), (1, 1));
+        let (g, _) = build_group(&a, "ring", &BuildOpts::default(), 64);
+        assert_eq!(g.shapes.iter().map(|s| s.op).collect::<Vec<_>>(), vec![Op::Add, Op::Subtract]);
+    }
+
+    #[test]
+    fn reference_geometry_matches_manually_expanded_transforms_and_holes() {
+        for (reference, inline) in [
+            (
+                r##"<defs><rect id="r" width="10" height="20"/></defs><use href="#r" x="3" y="7" transform="translate(5 6) scale(2)"/>"##,
+                r#"<g transform="translate(5 6) scale(2) translate(3 7)"><rect width="10" height="20"/></g>"#,
+            ),
+            (
+                r##"<defs><g id="r"><rect width="10" height="20"/></g></defs><use href="#r" fill="#ff0000"/><use href="#r" fill="#0000ff" transform="translate(30 0) rotate(90)"/>"##,
+                r##"<g fill="#ff0000"><rect width="10" height="20"/></g><g fill="#0000ff" transform="translate(30 0) rotate(90)"><rect width="10" height="20"/></g>"##,
+            ),
+            (
+                r##"<defs><path id="ring" fill-rule="evenodd" d="M0 0 H80 V80 H0 Z M20 20 H60 V60 H20 Z"/></defs><use xlink:href="#ring" transform="scale(0.5)"/>"##,
+                r#"<path transform="scale(0.5)" fill-rule="evenodd" d="M0 0 H80 V80 H0 Z M20 20 H60 V60 H20 Z"/>"#,
+            ),
+            (
+                r##"<use href="#r"/><defs><g id="r" fill="#00ff00"><rect width="10" height="20"/></g></defs>"##,
+                r##"<g fill="#00ff00"><rect width="10" height="20"/></g>"##,
+            ),
+            (
+                r##"<defs><g id="outer"><use href="#inner" transform="scale(2)"/></g><rect id="inner" width="10" height="20"/></defs><use href="#outer" transform="rotate(90)"/>"##,
+                r#"<g transform="rotate(90)"><g transform="scale(2)"><rect width="10" height="20"/></g></g>"#,
+            ),
+        ] {
+            assert_eq!(parse(&wrap(reference)).unwrap(), parse(&wrap(inline)).unwrap());
+        }
+    }
+
+    #[test]
+    fn empty_reference_fanout_stops_without_dropping_later_direct_shapes() {
+        let mut body = String::from(r#"<rect width="10" height="10"/><defs>"#);
+        for depth in 0..15 {
+            body.push_str(&format!(r#"<g id="g{depth}">"#));
+            if depth < 14 {
+                for _ in 0..8 {
+                    body.push_str(&format!(r##"<use href="#g{}"/>"##, depth + 1));
+                }
+            }
+            body.push_str("</g>");
+        }
+        body.push_str(r##"</defs><use href="#g0"/><rect x="40" width="10" height="10"/>"##);
+        let source = wrap(&body);
+        let (raws, budget) = walk(&source, None);
+        assert_eq!(raws.len(), 2, "normal geometry after the reference remains available");
+        assert!(budget.reference_limited);
+        assert!(budget.reference_visits <= MAX_REFERENCE_VISITS);
+        assert!(budget.reference_bytes <= MAX_REFERENCE_BYTES);
+        let artwork = parse(&source).unwrap();
+        assert_eq!(artwork.solids(), 2);
+        assert!(artwork.warnings.iter().any(|warning| warning.contains("参照図形")));
+    }
+
+    #[test]
+    fn reference_budget_counts_repeated_non_geometry_bytes() {
+        let source = wrap(&format!(
+            r##"<rect width="10" height="10"/><defs><g id="payload"><!-- {} --></g></defs>{}<rect x="40" width="10" height="10"/>"##,
+            "x".repeat(250_000),
+            r##"<use href="#payload"/>"##.repeat(180)
+        ));
+        let (raws, budget) = walk(&source, None);
+        assert_eq!(raws.len(), 2);
+        assert!(budget.reference_limited);
+        assert!(budget.reference_visits < MAX_REFERENCE_VISITS, "the byte budget handles large comments with few tags");
+        assert!(budget.reference_bytes <= MAX_REFERENCE_BYTES);
+        let artwork = parse(&source).unwrap();
+        assert_eq!(artwork.solids(), 2);
+        assert!(artwork.warnings.iter().any(|warning| warning.contains("参照図形")));
+    }
+
+    #[test]
+    fn plain_symbol_instances_work_and_nested_definitions_stay_hidden() {
+        let source =
+            wrap(r##"<defs><symbol id="shape"><rect width="10" height="20"/></symbol></defs><use href="#shape" x="30" transform="rotate(30)"/>"##);
+        let inline = wrap(r#"<g transform="rotate(30) translate(30 0)"><rect width="10" height="20"/></g>"#);
+        assert_eq!(parse(&source).unwrap(), parse(&inline).unwrap());
+        let source = wrap(
+            r##"<defs><g id="group"><symbol id="definition"><rect width="50" height="50"/></symbol><circle r="10"/></g></defs><use href="#group"/>"##,
+        );
+        assert_eq!(parse(&source).unwrap(), parse(&wrap(r#"<circle r="10"/>"#)).unwrap());
+    }
+
+    #[test]
+    fn viewport_dependent_references_are_reported_instead_of_wrongly_sized() {
+        for source in [
+            r##"<defs><symbol id="s" viewBox="10 20 10 20"><rect x="10" y="20" width="10" height="20"/></symbol></defs><use href="#s" width="20" height="40"/><use href="#s" x="50" width="40" height="80"/>"##,
+            r##"<defs><symbol id="s"><rect width="10" height="20"/></symbol></defs><use href="#s" width="5" height="5"/>"##,
+            r##"<defs><symbol id="s" x="20"><rect width="10" height="20"/></symbol></defs><use href="#s"/>"##,
+            r##"<defs><svg id="s" viewBox="0 0 10 20"><rect width="10" height="20"/></svg></defs><use href="#s"/>"##,
+        ] {
+            assert!(parse(&wrap(source)).unwrap_err().contains("表示領域"));
+            let mixed = parse(&wrap(&format!(r#"{source}<rect width="3" height="7"/>"#))).unwrap();
+            assert_eq!(mixed.solids(), 1);
+            assert!(mixed.warnings.iter().any(|warning| warning.contains("表示領域")));
+        }
+    }
+
+    #[test]
+    fn reference_budget_does_not_limit_normal_empty_groups() {
+        let source = wrap(&format!(r#"{}<rect width="10" height="20"/>"#, "<g/>".repeat(MAX_REFERENCE_VISITS + 1)));
+        let artwork = parse(&source).unwrap();
+        assert_eq!(artwork.solids(), 1);
+        assert!(artwork.warnings.is_empty());
+    }
+
+    #[test]
+    fn missing_and_cyclic_references_report_partial_imports() {
+        for reference in
+            [r##"<use href="#missing"/>"##, r##"<defs><g id="a"><use href="#b"/></g><g id="b"><use href="#a"/></g></defs><use href="#a"/>"##]
+        {
+            assert!(parse(&wrap(reference)).unwrap_err().contains("参照"));
+            let source = wrap(&format!(r#"{reference}<rect width="10" height="20"/>"#));
+            let artwork = parse(&source).unwrap();
+            assert_eq!(artwork.solids(), 1);
+            assert_eq!(artwork.warnings.len(), 1, "one bounded warning covers either omission");
+            assert!(artwork.warnings[0].contains("循環"));
+        }
+        let unused =
+            wrap(r##"<defs><g id="unused"><use href="#missing"/></g><g id="empty"/></defs><use href="#empty"/><rect width="10" height="20"/>"##);
+        assert!(parse(&unused).unwrap().warnings.is_empty(), "unused definitions and valid empty groups omit no requested shape");
     }
 
     #[test]

@@ -227,7 +227,6 @@ pub fn open(ctx: &egui::Context) {
 }
 
 #[allow(dead_code)]
-#[allow(dead_code)]
 pub fn is_open(ctx: &egui::Context) -> bool {
     ctx.data(|m| m.get_temp::<State>(id())).is_some()
 }

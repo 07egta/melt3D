@@ -14,14 +14,14 @@ fn app_preview() {
     ctx.set_pixels_per_point(ppp);
     let mut app = App::new(false, None);
     // `YURA_BOX=1` previews a box with a chamfer and a gradient (the inspector's rounding and the gradient controls)
-    if std::env::var("YURA_BOX").is_ok() {
-        if let Some(sh) = app.scene.groups.first_mut().and_then(|g| g.shapes.first_mut()) {
-            sh.kind = Kind::Box;
-            sh.size = Kind::Box.default_size();
-            sh.round = 6.0;
-            sh.corner = crate::model::Corner::Chamfer;
-            sh.material.gradient = 1.0;
-        }
+    if std::env::var("YURA_BOX").is_ok()
+        && let Some(sh) = app.scene.groups.first_mut().and_then(|g| g.shapes.first_mut())
+    {
+        sh.kind = Kind::Box;
+        sh.size = Kind::Box.default_size();
+        sh.round = 6.0;
+        sh.corner = crate::model::Corner::Chamfer;
+        sh.material.gradient = 1.0;
     }
     // `YURA_PATTERN=mirror|rect|circular|path|geometry|link` previews the group inspector's pattern section
     if let Ok(which) = std::env::var("YURA_PATTERN") {
@@ -91,9 +91,16 @@ fn app_preview() {
     let gpu_state = std::env::var("YURA_GPU").ok();
     if let Some(which) = gpu_state.as_deref() {
         use crate::gpu_status::AdapterInfo;
-        let info = AdapterInfo { backend: "Dx12".into(), name: "NVIDIA GeForce RTX 3060".into(), driver: "NVIDIA 551.23".into(), device_type: "DiscreteGpu".into() };
+        let info = AdapterInfo {
+            backend: "Dx12".into(),
+            name: "NVIDIA GeForce RTX 3060".into(),
+            driver: "NVIDIA 551.23".into(),
+            device_type: "DiscreteGpu".into(),
+        };
         app.gpu.status.set_info(info);
-        let start = std::time::Instant::now().checked_sub(std::time::Duration::from_secs(std::env::var("YURA_GPU_SECS").ok().and_then(|v| v.parse().ok()).unwrap_or(12))).unwrap_or_else(std::time::Instant::now);
+        let start = std::time::Instant::now()
+            .checked_sub(std::time::Duration::from_secs(std::env::var("YURA_GPU_SECS").ok().and_then(|v| v.parse().ok()).unwrap_or(12)))
+            .unwrap_or_else(std::time::Instant::now);
         let g = app.gpu.status.begin(start);
         match which {
             "failed" | "failed_easy" => {

@@ -13,6 +13,8 @@
 //! `curve::MAX_POINTS` (96) resampled points per curve (CPU, GPU and mesher alike), so 24 nodes still
 //! get about four pieces per span. The GPU path list (`gpu::PATH_V4`) holds those for hundreds of curves.
 
+use std::cmp::Ordering;
+
 use crate::model::MAX_PATH;
 use crate::sdf::{Field, V3, add, dot, len, mul, sub};
 
@@ -63,7 +65,7 @@ impl Plane {
 pub fn plane_point(o: V3, d: V3, plane: Plane, radius: f32) -> Option<V3> {
     let n = plane.normal();
     let den = dot(d, n);
-    if !(den.abs() > 1e-4) || !o.iter().chain(d.iter()).all(|v| v.is_finite()) {
+    if den.abs().partial_cmp(&1e-4) != Some(Ordering::Greater) || !o.iter().chain(d.iter()).all(|v| v.is_finite()) {
         return None;
     }
     let t = -dot(o, n) / den;
@@ -195,9 +197,9 @@ pub fn smooth(points: &[V3], passes: usize) -> Vec<V3> {
             break;
         }
         let prev = cur.clone();
-        for i in 1..prev.len() - 1 {
+        for (i, point) in cur.iter_mut().enumerate().take(prev.len() - 1).skip(1) {
             if let (Some(a), Some(b), Some(c)) = (prev.get(i - 1), prev.get(i), prev.get(i + 1)) {
-                cur[i] = [(a[0] + 2.0 * b[0] + c[0]) * 0.25, (a[1] + 2.0 * b[1] + c[1]) * 0.25, (a[2] + 2.0 * b[2] + c[2]) * 0.25];
+                *point = [(a[0] + 2.0 * b[0] + c[0]) * 0.25, (a[1] + 2.0 * b[1] + c[1]) * 0.25, (a[2] + 2.0 * b[2] + c[2]) * 0.25];
             }
         }
     }
@@ -281,7 +283,7 @@ pub struct Options {
 /// halves keep their corners; its last node is never a repeat of the first.
 pub fn pipe_nodes(raw: &[V3], o: &Options) -> Option<Vec<V3>> {
     let mut pts = clean(raw, 1e-3);
-    if pts.len() < 2 || !(path_length(&pts) >= o.min_len.max(1e-3)) {
+    if pts.len() < 2 || !matches!(path_length(&pts).partial_cmp(&o.min_len.max(1e-3)), Some(Ordering::Equal | Ordering::Greater)) {
         return None;
     }
     let max_nodes = o.max_nodes.clamp(2, MAX_PATH);
@@ -357,11 +359,12 @@ mod tests {
 
     /// A sine wave drawn with many tiny steps.
     fn wave(n: usize) -> Vec<V3> {
-        (0..n).map(|i| {
-            let x = i as f32 * 100.0 / (n - 1) as f32;
-            [x, 10.0 * (x * 0.1).sin(), 0.0]
-        })
-        .collect()
+        (0..n)
+            .map(|i| {
+                let x = i as f32 * 100.0 / (n - 1) as f32;
+                [x, 10.0 * (x * 0.1).sin(), 0.0]
+            })
+            .collect()
     }
 
     #[test]
@@ -516,11 +519,12 @@ mod tests {
     #[test]
     fn a_closed_stroke_becomes_a_loop_without_a_repeated_node() {
         // a circle of radius 30 drawn once round, ending where it began
-        let raw: Vec<V3> = (0..=200).map(|i| {
-            let a = i as f32 / 200.0 * std::f32::consts::TAU;
-            [30.0 * a.cos(), 30.0 * a.sin(), 5.0]
-        })
-        .collect();
+        let raw: Vec<V3> = (0..=200)
+            .map(|i| {
+                let a = i as f32 / 200.0 * std::f32::consts::TAU;
+                [30.0 * a.cos(), 30.0 * a.sin(), 5.0]
+            })
+            .collect();
         let o = Options { closed: true, ..opts() };
         let n = pipe_nodes(&raw, &o).expect("a loop");
         assert!((4..=PIPE_NODES).contains(&n.len()), "{}", n.len());

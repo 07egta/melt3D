@@ -89,10 +89,14 @@ impl Frame {
     pub fn is_vertical(&self) -> bool {
         self.normal()[2].abs() < 0.02
     }
+    // Keep this established instance-transform name; the receiver supplies the sketch plane.
+    #[allow(clippy::wrong_self_convention)]
     pub fn to_world(&self, p: [f32; 2]) -> V3 {
         add(self.origin, add(mul(self.u, p[0]), mul(self.v, p[1])))
     }
     /// The sketch coordinates of a world point (its distance from the plane is dropped).
+    // Keep this established instance-transform name; the receiver supplies the sketch plane.
+    #[allow(clippy::wrong_self_convention)]
     pub fn from_world(&self, w: V3) -> [f32; 2] {
         let d = sub(w, self.origin);
         [dot(d, self.u) / dot(self.u, self.u).max(1e-12), dot(d, self.v) / dot(self.v, self.v).max(1e-12)]
@@ -257,7 +261,10 @@ pub fn segments_meet(p1: [f32; 2], p2: [f32; 2], p3: [f32; 2], p4: [f32; 2]) -> 
     if ((d1 > EPS && d2 < -EPS) || (d1 < -EPS && d2 > EPS)) && ((d3 > EPS && d4 < -EPS) || (d3 < -EPS && d4 > EPS)) {
         return true;
     }
-    (d1.abs() <= EPS && within(p3, p4, p1)) || (d2.abs() <= EPS && within(p3, p4, p2)) || (d3.abs() <= EPS && within(p1, p2, p3)) || (d4.abs() <= EPS && within(p1, p2, p4))
+    (d1.abs() <= EPS && within(p3, p4, p1))
+        || (d2.abs() <= EPS && within(p3, p4, p2))
+        || (d3.abs() <= EPS && within(p1, p2, p3))
+        || (d4.abs() <= EPS && within(p1, p2, p4))
 }
 
 /// Is the closed outline free of crossings, touching edges and sharp fold-backs?
@@ -270,7 +277,9 @@ pub fn is_simple(pts: &[[f32; 2]]) -> bool {
         let (a, b) = (pts[i], pts[(i + 1) % n]);
         // two neighbouring edges that run back over each other
         let c = pts[(i + 2) % n];
-        if orient(a, b, c).abs() <= 1e-5 * dist(a, b).max(1.0) * dist(b, c).max(1.0) && (b[0] - a[0]) * (c[0] - b[0]) + (b[1] - a[1]) * (c[1] - b[1]) < 0.0 {
+        if orient(a, b, c).abs() <= 1e-5 * dist(a, b).max(1.0) * dist(b, c).max(1.0)
+            && (b[0] - a[0]) * (c[0] - b[0]) + (b[1] - a[1]) * (c[1] - b[1]) < 0.0
+        {
             return false;
         }
         for j in i + 2..n {
@@ -308,7 +317,9 @@ pub fn crosses_polyline(pts: &[[f32; 2]], a: [f32; 2], b: [f32; 2], closing: boo
     // folding straight back over the last segment
     if let Some(prev) = pts.get(n - 2) {
         let o = orient(*prev, a, b);
-        if o.abs() <= 1e-5 * dist(*prev, a).max(1.0) * dist(a, b).max(1.0) && (a[0] - prev[0]) * (b[0] - a[0]) + (a[1] - prev[1]) * (b[1] - a[1]) < 0.0 {
+        if o.abs() <= 1e-5 * dist(*prev, a).max(1.0) * dist(a, b).max(1.0)
+            && (a[0] - prev[0]) * (b[0] - a[0]) + (a[1] - prev[1]) * (b[1] - a[1]) < 0.0
+        {
             return true;
         }
     }
@@ -413,9 +424,9 @@ pub fn spline_open(ctrl: &[[f32; 2]], max_points: usize) -> Vec<[f32; 2]> {
         }
     };
     let mut out = Vec::with_capacity((n - 1) * k + 1);
-    for i in 0..n - 1 {
+    for (i, point) in c.iter().enumerate().take(n - 1) {
         let ii = i as isize;
-        out.push(c[i]);
+        out.push(*point);
         for j in 1..k {
             out.push(catmull(at(ii - 1), at(ii), at(ii + 1), at(ii + 2), j as f32 / k as f32));
         }
@@ -542,6 +553,7 @@ pub fn remove_point(pts: &mut Vec<[f32; 2]>, i: usize) -> Result<(), SketchError
 }
 
 /// The nearest point on the closed outline to `p`: (edge index, point on it, distance).
+#[cfg(test)]
 pub fn nearest_on_edges(pts: &[[f32; 2]], p: [f32; 2]) -> Option<(usize, [f32; 2], f32)> {
     let n = pts.len();
     if n < 2 {
@@ -869,8 +881,7 @@ mod tests {
         assert_eq!(rect_profile([0.0, 0.0], [10.0, 10.0]).map(|p| p.len()), Ok(4));
         assert_eq!(circle_profile([0.0; 2], [0.1, 0.0]), Err(SketchError::TooSmall));
         assert_eq!(circle_profile([0.0; 2], [4.0, 0.0]).map(|p| p.len()), Ok(32));
-        assert_eq!(circle(
-            [0.0; 2], 1.0, 10_000).len(), MAX_OUTLINE, "a circle never exceeds the outline limit");
+        assert_eq!(circle([0.0; 2], 1.0, 10_000).len(), MAX_OUTLINE, "a circle never exceeds the outline limit");
     }
 
     #[test]
@@ -1162,7 +1173,8 @@ mod tests {
         let q = ef.hit(ray_o, mul(f.normal(), -1.0)).expect("hit");
         assert!(near(q[0], 5.0) && near(q[1], 2.0), "{q:?}");
         // a loft's top frame is one height higher
-        let l = shape_from(&loft(&Frame::floor(), &rect([-10.0, -10.0], [10.0, 10.0]), &rect([-5.0, -5.0], [5.0, 5.0]), 20.0, false).expect("builds"));
+        let l =
+            shape_from(&loft(&Frame::floor(), &rect([-10.0, -10.0], [10.0, 10.0]), &rect([-5.0, -5.0], [5.0, 5.0]), 20.0, false).expect("builds"));
         let (lo, hi) = (edit_frame(&l, Which::Main).expect("f"), edit_frame(&l, Which::Top).expect("f"));
         assert!(near(lo.origin[2], 0.0) && near(hi.origin[2], 20.0));
         // a revolve's outline stands on the XZ plane, x = distance from the axis

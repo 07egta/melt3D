@@ -170,8 +170,8 @@ fn blend(a: &Body, a_at: Vec3, b: &Body, b_at: Vec3, opts: &BlendOptions) -> Res
         EdgeSampler::new(&sa.edge).ok_or_else(|| KernelError::Invalid("the first edge has no parameter range".into()))?,
         EdgeSampler::new(&sb.edge).ok_or_else(|| KernelError::Invalid("the second edge has no parameter range".into()))?,
     );
-    let (a0, a1) = (point_of(&sa.edge.front()), point_of(&sa.edge.back()));
-    let (b0, b1) = (point_of(&sb.edge.front()), point_of(&sb.edge.back()));
+    let (a0, a1) = (point_of(sa.edge.front()), point_of(sa.edge.back()));
+    let (b0, b1) = (point_of(sb.edge.front()), point_of(sb.edge.back()));
     // The second edge is walked the way that keeps the blend from twisting.
     let reversed = a0.dist(b1) + a1.dist(b0) < a0.dist(b0) + a1.dist(b1);
     let pa = edge_points(&mut ea, a0, a1, n, false)?;
@@ -269,8 +269,8 @@ fn blend(a: &Body, a_at: Vec3, b: &Body, b_at: Vec3, opts: &BlendOptions) -> Res
     let (Some(first), Some(last)) = (columns.first(), columns.last()) else { return Err(KernelError::Failed("no samples".into())) };
     let (va0, va1) = (sa.edge.front(), sa.edge.back());
     let (vb_start, vb_end) = if reversed { (sb.edge.back(), sb.edge.front()) } else { (sb.edge.front(), sb.edge.back()) };
-    let side_end = mt::Edge::try_new(&va1, &vb_end, across(last, false)?).map_err(|e| KernelError::Failed(format!("blend edge: {e}")))?;
-    let side_start = mt::Edge::try_new(&vb_start, &va0, across(first, true)?).map_err(|e| KernelError::Failed(format!("blend edge: {e}")))?;
+    let side_end = mt::Edge::try_new(va1, vb_end, across(last, false)?).map_err(|e| KernelError::Failed(format!("blend edge: {e}")))?;
+    let side_start = mt::Edge::try_new(vb_start, va0, across(first, true)?).map_err(|e| KernelError::Failed(format!("blend edge: {e}")))?;
     // The second edge runs from the end to the start of the sampling.
     let back = if reversed { sb.edge.clone() } else { sb.edge.inverse() };
     let wire: mt::Wire = vec![sa.edge.clone(), side_end, back, side_start].into();

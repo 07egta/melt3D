@@ -605,8 +605,7 @@ mod tests {
     fn a_shape_is_drawn_solid_in_its_colour_and_the_sky_colour_follows_the_room() {
         let mut sc = Scene::default();
         sc.groups[0].shapes[0] = Shape::new(Kind::Sphere, [0.0, 0.0, 20.0], Material { color: [0.9, 0.1, 0.1], ..Material::default() });
-        let mut cam = Camera::default();
-        cam.target = [0.0, 0.0, 20.0];
+        let cam = Camera { target: [0.0, 0.0, 20.0], ..Camera::default() };
         let (w, h) = (80, 60);
         let img = render(&sc, &cam, [w, h], true, 2, &never).expect("drawn");
         let mid = px(&img, w, w / 2, h / 2);
@@ -624,8 +623,7 @@ mod tests {
         sc.groups[0].shapes[0].pos = [f32::NAN, f32::INFINITY, 1e30];
         sc.groups[0].shapes[0].size = [f32::NAN; 3];
         sc.env.exposure = f32::NAN;
-        let mut cam = Camera::default();
-        cam.dist = f32::NAN;
+        let cam = Camera { dist: f32::NAN, ..Camera::default() };
         let img = render(&sc, &cam, [16, 16], true, 2, &never);
         assert_eq!(img.map(|i| i.len()), Some(16 * 16 * 4));
         let img = render(&Scene::default(), &Camera::default(), [100000, 0], false, 0, &never);
