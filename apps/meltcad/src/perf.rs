@@ -254,6 +254,7 @@ pub fn view_flags(srgb: bool, fast: bool, glow: bool) -> f32 {
 
 /// Does any *rendered* source contain a visible lamp? A visible linked copy can draw a
 /// hidden source, but an unrelated hidden lamp must not force the expensive halo march.
+#[cfg(test)]
 pub fn scene_has_glow(scene: &Scene) -> bool {
     let resolved = crate::pattern::resolve(scene);
     scene_has_glow_resolved(scene, &resolved)

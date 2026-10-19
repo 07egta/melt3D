@@ -132,6 +132,7 @@ pub fn segment_point(nodes: &[[f32; 4]], seg: usize, t: f32, smooth: f32, closed
 /// Turn the nodes into at most `MAX_POINTS` points along the smooth curve (a loop ends on its
 /// first point again). Hostile input (NaN, huge numbers, thousands of nodes) gives a short, finite
 /// list; no nodes gives none; one node gives a (zero-length) pair, which draws as a ball.
+#[cfg(test)]
 pub fn resample(path: &[[f32; 4]], smooth: f32, closed: bool) -> Vec<[f32; 4]> {
     resample_max(path, smooth, closed, MAX_POINTS)
 }
@@ -226,6 +227,7 @@ pub fn segment_shape(shape: &crate::model::Shape, seg: usize, t: f32) -> [f32; 4
 
 /// Detect planar crossings of the centreline after subdivision (useful for
 /// self-intersecting sketch paths; crossings in 3D projections are advisory).
+#[cfg(test)]
 pub fn self_intersections_xy(points: &[[f32; 4]], closed: bool) -> Vec<(usize, usize)> {
     fn orient(a: [f32; 4], b: [f32; 4], c: [f32; 4]) -> f32 {
         (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
@@ -278,11 +280,10 @@ pub fn build_shape_max(shape: &crate::model::Shape, cap: usize) -> Vec<[f32; 4]>
     for _ in 0..cap.saturating_sub(segs + 1) {
         let mut best = None;
         let mut score = 0.0_f32;
-        for seg in 0..segs {
-            if divisions[seg] >= 64 {
+        for (seg, &count) in divisions.iter().enumerate() {
+            if count >= 64 {
                 continue;
             }
-            let count = divisions[seg];
             let mut worst = 0.0_f32;
             for j in 0..count {
                 let a = j as f32 / count as f32;
@@ -311,9 +312,9 @@ pub fn build_shape_max(shape: &crate::model::Shape, cap: usize) -> Vec<[f32; 4]>
         divisions[seg] += 1;
     }
     let mut out = Vec::with_capacity(cap);
-    for seg in 0..segs {
-        for step in 0..divisions[seg] {
-            out.push(segment_shape(shape, seg, step as f32 / divisions[seg] as f32));
+    for (seg, &count) in divisions.iter().enumerate() {
+        for step in 0..count {
+            out.push(segment_shape(shape, seg, step as f32 / count as f32));
         }
     }
     out.push(if closed && n >= 3 { shape.path[0] } else { shape.path[n - 1] });
@@ -323,6 +324,8 @@ pub fn build_shape_max(shape: &crate::model::Shape, cap: usize) -> Vec<[f32; 4]>
     out
 }
 
+/// Half the box around the sampled curve, centred on the shape and at least 1 mm.
+/// Uses the full shape so explicit curve handles and node modes are respected.
 pub fn half_extent_shape(shape: &crate::model::Shape) -> V3 {
     let mut h = [1.0_f32; 3];
     for p in build_shape(shape) {
@@ -375,17 +378,6 @@ pub fn group_spheres(points: &[[f32; 4]]) -> Vec<[f32; 4]> {
         .collect()
 }
 
-/// Half the size of the box around the curve (centred on the shape), at least 1 mm.
-pub fn half_extent(path: &[[f32; 4]], params: &[f32; 4]) -> V3 {
-    let mut h = [1.0_f32; 3];
-    for p in build(path, params) {
-        for (i, hi) in h.iter_mut().enumerate() {
-            *hi = hi.max(p[i].abs() + p[3] * 1.25);
-        }
-    }
-    h
-}
-
 /// Distance to the round cone from `a` (radius `ra`) to `b` (radius `rb`).
 pub fn round_cone(q: V3, a: V3, ra: f32, b: V3, rb: f32) -> f32 {
     let ba = sub(b, a);
@@ -416,6 +408,7 @@ pub fn round_cone(q: V3, a: V3, ra: f32, b: V3, rb: f32) -> f32 {
 }
 
 /// Distance to the tube through already-resampled `points`; `flat` cuts the two ends flat.
+#[cfg(test)]
 pub fn tube(points: &[[f32; 4]], q: V3, flat: bool) -> f32 {
     let mut d = 1.0e6_f32;
     for w in points.windows(2) {

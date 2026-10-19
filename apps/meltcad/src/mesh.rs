@@ -151,8 +151,9 @@ impl Serialize for SharedVolume {
 
 /// Volumes that are alive somewhere in the program, by the hash of their text, so that pasting a
 /// copied shape gives the original's volume back instead of a second copy.
-fn registry() -> &'static Mutex<HashMap<(u64, usize), Weak<Volume>>> {
-    static REG: OnceLock<Mutex<HashMap<(u64, usize), Weak<Volume>>>> = OnceLock::new();
+type VolumeRegistry = Mutex<HashMap<(u64, usize), Weak<Volume>>>;
+fn registry() -> &'static VolumeRegistry {
+    static REG: OnceLock<VolumeRegistry> = OnceLock::new();
     REG.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
@@ -451,8 +452,10 @@ pub(crate) mod tests {
 
     #[test]
     fn the_node_cap_fits_the_graphics_pool_and_a_float() {
-        assert!(MAX_TOTAL_NODES < (1 << 24), "a node number is exact in an f32");
-        assert!(MAX_TOTAL_NODES <= crate::gpu::VOL_W * crate::gpu::VOL_H * 4);
+        const {
+            assert!(MAX_TOTAL_NODES < (1 << 24), "a node number is exact in an f32");
+            assert!(MAX_TOTAL_NODES <= crate::gpu::VOL_W * crate::gpu::VOL_H * 4);
+        }
     }
 
     // ------------------------------------------------------------ the model's file form
@@ -529,7 +532,7 @@ pub(crate) mod tests {
     fn a_scene_keeps_at_most_eight_mesh_shapes_and_a_total_of_data() {
         let v = SharedVolume::new(ball_volume(12));
         let many: Vec<Shape> = (0..MAX_VOLUME_SHAPES + 4)
-            .map(|i| mesh_shape(&v))
+            .map(|_| mesh_shape(&v))
             .map(|mut s| {
                 s.pos[0] += 1.0;
                 s

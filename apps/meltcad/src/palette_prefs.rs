@@ -48,7 +48,7 @@ impl Shortcut {
     }
 
     /// The text stored in the file (round-trips through `parse`).
-    pub fn to_text(&self) -> String {
+    pub fn to_text(self) -> String {
         self.text(self.key.name())
     }
 
@@ -71,13 +71,13 @@ impl Shortcut {
     pub fn modifiers(&self) -> Modifiers {
         let mut m = Modifiers::NONE;
         if self.cmd {
-            m = m | Modifiers::COMMAND;
+            m |= Modifiers::COMMAND;
         }
         if self.shift {
-            m = m | Modifiers::SHIFT;
+            m |= Modifiers::SHIFT;
         }
         if self.alt {
-            m = m | Modifiers::ALT;
+            m |= Modifiers::ALT;
         }
         m
     }

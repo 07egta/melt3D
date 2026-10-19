@@ -60,6 +60,9 @@ fn place(s: &mut Shape, d: &Dlg, k: u32) {
 impl App {
     /// Make `d.count - 1` more copies of the selection. Returns how many were made.
     fn make_array(&mut self, d: &Dlg) -> Result<usize, String> {
+        if !self.allow_scene_structure_change() {
+            return Err(self.sk.msg.clone());
+        }
         let copies = d.count.clamp(1, 64) - 1;
         if copies == 0 {
             return Err("Please use 2 or more".into());
@@ -145,7 +148,8 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
             ui.add_space(4.0);
             ui.horizontal(|ui| {
                 if ui
-                    .add(
+                    .add_enabled(
+                        !app.scene_structure_locked(),
                         egui::Button::new(RichText::new("Array").strong().color(egui::Color32::WHITE))
                             .fill(style::ACCENT_SOFT)
                             .stroke(egui::Stroke::new(1.0, style::ACCENT)),

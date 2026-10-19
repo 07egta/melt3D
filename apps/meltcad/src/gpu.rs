@@ -242,7 +242,7 @@ impl ScenePack {
         let block_base = v4(&groups);
         let inst_base = block_base + v4(&blocks);
         let shape_base = inst_base + v4(&insts);
-        while poly.len() % 4 != 0 {
+        while !poly.len().is_multiple_of(4) {
             poly.push(0.0);
         }
         let poly_base = shape_base + v4(&shapes);
@@ -1496,12 +1496,7 @@ pub(crate) mod offscreen {
     }
 
     impl Offscreen {
-        #[cfg_attr(not(test), allow(dead_code))]
-        pub fn open() -> Result<Offscreen, String> {
-            Offscreen::open_with(None, None)
-        }
-
-        /// `open`, with the scene shader's source given (the tests count work with an instrumented copy)
+        /// Open with the scene shader's source given (the tests count work with an instrumented copy)
         /// and the backend the window uses (`None`: what the environment says, else the usual set).
         pub fn open_with(source: Option<&str>, backends: Option<wgpu::Backends>) -> Result<Offscreen, String> {
             let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
@@ -1711,7 +1706,7 @@ mod tests {
         assert_eq!(f.counts()[1] as usize, crate::model::MAX_SHAPES);
         // every shape has its record, with its position, and every block points at real shapes
         for i in 0..crate::model::MAX_SHAPES {
-            assert_eq!(f.shape(i, 0)[3] > 0.0, true, "shape {i} has a radius");
+            assert!(f.shape(i, 0)[3] > 0.0, "shape {i} has a radius");
             assert_eq!(f.shape(i, 4)[0], f.shape(i, 0)[0]);
         }
         let mut covered = 0;
@@ -1825,7 +1820,7 @@ mod instance_tests {
         let u = pack(&sc, &Camera::default(), [800.0, 600.0], None, None, true);
         let f = Frame::new(&u);
         let total: usize = (0..crate::model::MAX_GROUPS).map(|g| instances_of(&f, g).len()).sum();
-        assert!(total >= crate::pattern::MAX_INSTANCES && total <= crate::pattern::MAX_INSTANCES + crate::model::MAX_GROUPS, "{total} instances");
+        assert!((crate::pattern::MAX_INSTANCES..=crate::pattern::MAX_INSTANCES + crate::model::MAX_GROUPS).contains(&total), "{total} instances");
         assert!(f.list_len() <= MAX_POOL_V4, "{} <= {MAX_POOL_V4}", f.list_len());
         // and the CPU field copes with the same scene
         let field = crate::sdf::Field::new(&sc);
@@ -1970,7 +1965,7 @@ mod shader_tests {
         let src = shader_source();
         assert!(src.contains("textureLoad(DT"), "scene data is read from the list texture");
         assert!(!src.contains("array<Shape"), "no shape array in the uniform");
-        assert!(GLOBAL_BYTES <= 16384, "the globals fit the smallest uniform limit (WebGL2/GL: 16 KB), {GLOBAL_BYTES}");
+        const { assert!(GLOBAL_BYTES <= 16384, "the globals fit the smallest uniform limit (WebGL2/GL: 16 KB)") };
         assert!(ROW.is_power_of_two() && src.contains("& 1023") && src.contains(">> 10"), "ROW matches the shader's row width");
     }
 
@@ -1985,9 +1980,11 @@ mod shader_tests {
 
     #[test]
     fn the_limits_are_what_the_readme_says() {
-        assert!(crate::model::MAX_SHAPES >= 512 && crate::model::MAX_GROUPS >= 96);
-        assert!(MAX_POOL_V4 <= 2048 * ROW);
-        assert!(POLY_PTS >= 16 * 1024 && PATH_V4 >= 16 * 1024, "much bigger outline and path pools");
+        const {
+            assert!(crate::model::MAX_SHAPES >= 512 && crate::model::MAX_GROUPS >= 96);
+            assert!(MAX_POOL_V4 <= 2048 * ROW);
+            assert!(POLY_PTS >= 16 * 1024 && PATH_V4 >= 16 * 1024, "much bigger outline and path pools");
+        }
     }
 }
 

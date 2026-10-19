@@ -1,5 +1,6 @@
-//! The one-gesture solid: when the outline closes, the solid is already in the scene (a "live"
-//! shape) with a height handle and a small card. Accept keeps it (one undo step), discard removes it.
+//! A solid command previews a saved sketch with a height handle and a small card.
+//! Accept keeps the preview (one undo step); discard restores the source selection.
+//! Internal legacy callers can also create a live preview from a drawing gesture.
 //!
 //!  - Extrude / Loft: drag the arrow over the top face (or type the height). Dragging below the
 //!    plane flips the solid. Shift = 10 mm, Ctrl = 0.1 mm.
@@ -119,7 +120,7 @@ impl App {
         sketch::apply(&built, &mut sh);
         sh.name = make.label().to_string();
         sh.op = self.new_op;
-        sh.blend = 2.0;
+        sh.blend = if self.sk.separate || self.solid_mode { 0.0 } else { 2.0 };
         let created = self.scene.groups.len() > groups_before;
         let Some(group) = self.scene.groups.get_mut(g) else { return false };
         group.shapes.push(sh);
@@ -144,8 +145,14 @@ impl App {
         match self.build_shape() {
             Ok(b) => {
                 let label = self.sk.make.label();
+                let op = self.new_op;
+                let color = if op == Op::Subtract { [0.9, 0.35, 0.4] } else { COLORS[self.scene.shape_count().saturating_sub(1) % COLORS.len()] };
                 if let Some(sh) = self.scene.shape_mut(g, s) {
                     sketch::apply(&b, sh);
+                    if sh.op != op {
+                        sh.op = op;
+                        sh.material.color = color;
+                    }
                     if Make::ALL.iter().any(|m| m.label() == sh.name) {
                         sh.name = label.to_string();
                     }
@@ -165,9 +172,17 @@ impl App {
             self.sk.reset();
             return;
         }
+        if let Err(e) = self.build_shape() {
+            self.sk.msg = e.message();
+            return;
+        }
+        self.live_update();
         let make = self.sk.make;
+        let separate = self.sk.separate;
         self.sk.reset();
-        if make == Make::Sweep {
+        if separate {
+            self.sk.on = false;
+        } else if make == Make::Sweep {
             self.sk.path.clear();
             self.sk.stage = Stage::SweepPath;
         }
@@ -192,9 +207,12 @@ impl App {
             self.fix_selection();
         }
         let make = self.sk.make;
+        let separate = self.sk.separate;
         self.sk.reset();
         self.sk.path.clear();
-        if make == Make::Sweep {
+        if separate {
+            self.sk.on = false;
+        } else if make == Make::Sweep {
             self.sk.stage = Stage::SweepPath;
         }
     }
@@ -205,12 +223,14 @@ impl App {
         if self.sk.live.is_none() {
             return;
         }
-        let (profile, pframe) = (self.sk.profile.clone(), self.sk.pframe);
+        let (profile, pframe, separate) = (self.sk.profile.clone(), self.sk.pframe, self.sk.separate);
         self.live_discard();
         self.sk.profile = profile;
         self.sk.pframe = pframe;
         self.sk.frame = pframe;
         self.sk.make = Make::Extrude;
+        self.sk.on = true;
+        self.sk.separate = separate;
         self.sk.stage = Stage::Ready;
     }
 
@@ -229,14 +249,13 @@ impl App {
         self.sk.keep_sketch = false;
         self.sk.msg.clear();
         match (m, self.sk.stage) {
+            (Make::Sweep, Stage::Draw | Stage::SweepPath) if self.sweep_from_curve() => {}
             (Make::Sweep, Stage::Draw | Stage::SweepPath) => {
-                if !self.sweep_from_curve() {
-                    self.sk.clear_drawing();
-                    self.sk.profile.clear();
-                    self.sk.path.clear();
-                    self.sk.stage = Stage::SweepPath;
-                    self.sk.frame = self.sketch_plane();
-                }
+                self.sk.clear_drawing();
+                self.sk.profile.clear();
+                self.sk.path.clear();
+                self.sk.stage = Stage::SweepPath;
+                self.sk.frame = self.sketch_plane();
             }
             (_, Stage::SweepPath) => {
                 self.sk.clear_drawing();
@@ -253,6 +272,7 @@ impl App {
         let path: Vec<V3> = sh.path.iter().map(|n| crate::curve_tool::to_world(sh, [n[0], n[1], n[2]])).collect();
         self.sk.clear_drawing();
         self.sk.path = path;
+        self.sk.sweep_round = true;
         self.sk.profile = sketch::circle([0.0, 0.0], SWEEP_RADIUS, sketch::CIRCLE_POINTS);
         self.sk.pframe = self.sk.frame;
         self.sk.make = Make::Sweep;
@@ -268,6 +288,7 @@ impl App {
     /// A sweep path was drawn first: a round tube follows it.
     pub(crate) fn sweep_path_done(&mut self) {
         self.sk.make = Make::Sweep;
+        self.sk.sweep_round = true;
         self.sk.profile = sketch::circle([0.0, 0.0], SWEEP_RADIUS, sketch::CIRCLE_POINTS);
         self.sk.pframe = self.sk.frame;
         if !self.live_begin() {
@@ -281,7 +302,11 @@ impl App {
 
     /// The foot and the tip of the height arrow (world), for a prism being shaped.
     fn handle_world(&self) -> Option<(V3, V3)> {
-        if self.sk.live.is_none() || self.sk.stage != Stage::Shape || !matches!(self.sk.make, Make::Extrude | Make::Loft) {
+        if self.sk.live.is_none()
+            || self.sk.stage != Stage::Shape
+            || !matches!(self.sk.make, Make::Extrude | Make::Loft)
+            || (self.sk.make == Make::Loft && self.sk.secondary_sketch.is_some())
+        {
             return None;
         }
         let f = &self.sk.pframe;
@@ -318,13 +343,12 @@ impl App {
                 let n = self.sk.pframe.normal();
                 let both = self.sk.both && self.sk.make == Make::Extrude;
                 if let Some((h, flip)) =
-                    along_line(o, d, base, n).and_then(|t| height_from(t, step)).map(|(h, f)| (if both { h * 2.0 } else { h }, f))
+                    along_line(o, d, base, n).and_then(|t| height_from(t, step)).map(|(h, f)| (if both { (h * 2.0).min(2000.0) } else { h }, f))
+                    && (h != self.sk.height || flip != self.sk.flip)
                 {
-                    if h != self.sk.height || flip != self.sk.flip {
-                        self.sk.height = h;
-                        self.sk.flip = flip;
-                        self.live_update();
-                    }
+                    self.sk.height = h;
+                    self.sk.flip = flip;
+                    self.live_update();
                 }
             }
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
@@ -333,8 +357,8 @@ impl App {
         {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
         }
-        if resp.secondary_clicked() && pos.is_some() {
-            self.live_accept(ui.ctx());
+        if resp.secondary_clicked() && resp.hovered() && pos.is_some() && !mods.alt {
+            self.sketch_confirm(ui.ctx());
         }
         // nothing else to draw: clicks must not pick things behind the card
         if pos.is_some()
@@ -382,9 +406,19 @@ impl App {
         let make = self.sk.make;
         let mut changed = false;
         let (mut accept, mut discard, mut hole, mut top) = (false, false, false, false);
-        ui.horizontal(|ui| {
+        ui.label(egui::RichText::new(make.label()).strong().color(style::ACCENT));
+        ui.add(
+            egui::Label::new(egui::RichText::new("Adjust the preview  ·  Right-click / Enter: confirm  ·  Esc: cancel").size(11.0).color(style::DIM))
+                .wrap(),
+        );
+        changed |= self.saved_sketch_inputs(ui);
+        let saved_loft = make == Make::Loft && self.sk.secondary_sketch.is_some();
+        if saved_loft {
+            ui.label(format!("{:.2} mm between sketch planes", self.sk.height));
+        }
+        ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
-            if matches!(make, Make::Extrude | Make::Loft) {
+            if matches!(make, Make::Extrude | Make::Loft) && !saved_loft {
                 let (rc, _) = ui.allocate_exact_size(vec2(20.0, 20.0), egui::Sense::hover());
                 crate::sketch_icons::height(ui.painter(), rc, style::TEXT);
                 let mut h = if self.sk.height.is_finite() { self.sk.height } else { 10.0 };
@@ -408,7 +442,7 @@ impl App {
                     changed = true;
                 }
             }
-            if make == Make::Sweep {
+            if make == Make::Sweep && self.sk.sweep_round {
                 let mut r = if self.sk.sweep_scale.is_finite() { self.sk.sweep_scale * SWEEP_RADIUS } else { SWEEP_RADIUS };
                 if ui
                     .add(egui::DragValue::new(&mut r).speed(0.1).range(0.4..=SWEEP_RADIUS * 4.0).prefix("r ").suffix(" mm"))
@@ -419,7 +453,13 @@ impl App {
                     changed = true;
                 }
             }
-            if make == Make::Loft {
+            if make == Make::Sweep && !self.sk.sweep_round {
+                ui.label("Profile scale");
+                if ui.add(egui::DragValue::new(&mut self.sk.sweep_scale).speed(0.01).range(0.2..=4.0).suffix(" ×")).changed() {
+                    changed = true;
+                }
+            }
+            if make == Make::Loft && !self.sk.separate {
                 top = style::wide_button(
                     ui,
                     "Top outline",
@@ -444,11 +484,13 @@ impl App {
                     self.sk.both = !self.sk.both;
                     changed = true;
                 }
-                hole = style::wide_button(ui, "Holes", "Cut holes into this solid", false, None, crate::sketch_icons::hole).clicked();
+                if !self.sk.separate {
+                    hole = style::wide_button(ui, "Holes", "Cut holes into this solid", false, None, crate::sketch_icons::hole).clicked();
+                }
             }
             accept =
-                style::wide_button(ui, "Done", "Keep it (Enter or right-click)", false, Some(style::ACCENT), crate::sketch_icons::check).clicked();
-            discard = style::wide_button(ui, "Discard", "Throw it away (Esc)", false, None, crate::sketch_icons::cross).clicked();
+                style::wide_button(ui, "Confirm", "Keep it (Enter or right-click)", false, Some(style::ACCENT), crate::sketch_icons::check).clicked();
+            discard = style::wide_button(ui, "Cancel", "Cancel this operation (Esc)", false, None, crate::sketch_icons::cross).clicked();
         });
         if !self.sk.msg.is_empty() {
             ui.label(egui::RichText::new(&self.sk.msg).size(11.5).color(style::CUT));
