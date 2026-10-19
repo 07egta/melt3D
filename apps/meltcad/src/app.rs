@@ -97,6 +97,7 @@ pub struct App {
     /// A picture being taken: the overlays are hidden until it arrives.
     pub capture: Option<Capture>,
     /// Commands from `--control` (an AI or a script), run on the window thread.
+    pub an: crate::anim_ui::State,
     pub control: Option<std::sync::mpsc::Receiver<crate::control::Request>>,
     /// The shape under the mouse.
     pub hover: Option<Pick>,
@@ -197,6 +198,7 @@ impl App {
             view_rect: egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0)),
             capture: None,
             control: None,
+            an: Default::default(),
             hover: None,
             fly: None,
             orbiting: false,
@@ -347,6 +349,11 @@ impl App {
         if !ok {
             self.sel = None;
         }
+    }
+
+    /// Take the scene as the finished state (no undo step), after the program itself changed it.
+    pub(crate) fn committed_sync(&mut self) {
+        self.committed = self.scene.clone();
     }
 
     pub fn undo(&mut self) {
@@ -1618,6 +1625,9 @@ impl App {
                     let hint = crate::gizmo::hint(self.tool);
                     ui.label(RichText::new(if note.is_empty() { hint.to_string() } else { note }).size(12.0).color(style::DIM));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.selectable_label(self.an.open, "Animation").on_hover_text("Timeline: pose, play, melt over time, export a GIF").clicked() {
+                            self.an.open = !self.an.open;
+                        }
                         let name = self
                             .path
                             .as_ref()
@@ -1814,6 +1824,7 @@ impl App {
         }
         self.top_bar(ui);
         self.status_bar(ui);
+        self.anim_bar(ui);
         self.left_dock(ui);
         self.side(ui);
         egui::CentralPanel::default().frame(egui::Frame::new().fill(Color32::from_rgb(52, 52, 56))).show(ui, |ui| {

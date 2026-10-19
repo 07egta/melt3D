@@ -631,7 +631,7 @@ mod tests {
     fn scene_of(shapes: Vec<Shape>) -> Scene {
         let mut g = Group::new("g");
         g.shapes = shapes;
-        Scene { groups: vec![g], melt: Default::default(), env: Default::default(), saved: Vec::new() }
+        Scene { groups: vec![g], melt: Default::default(), env: Default::default(), saved: Vec::new(), anim: Default::default() }
     }
 
     #[test]
@@ -693,7 +693,7 @@ mod tests {
     fn a_subtract_inside_a_group_only_cuts_that_group() {
         // top: two balls apart; the second ball's group holds a hole at the first ball's place
         let cut = ball(-30.0, 8.0);
-        let mut sc = Scene { groups: vec![], melt: Default::default(), env: Default::default(), saved: Vec::new() };
+        let mut sc = Scene { groups: vec![], melt: Default::default(), env: Default::default(), saved: Vec::new(), anim: Default::default() };
         sc.groups.clear();
         sc.groups.push(group_of("a", 0, vec![ball(-30.0, 10.0)]));
         sc.groups.push(group_of("b", 0, vec![ball(30.0, 10.0)]));
@@ -706,7 +706,7 @@ mod tests {
         assert!(f.distance([-30.0, 0.0, 0.0]) < -5.0, "a is whole");
         assert!(f.distance([30.0, 0.0, 0.0]) > 0.0, "b has its hole");
         // a group nested in a: its subtract cuts a (its parent), and b stays whole
-        let mut sc = Scene { groups: vec![], melt: Default::default(), env: Default::default(), saved: Vec::new() };
+        let mut sc = Scene { groups: vec![], melt: Default::default(), env: Default::default(), saved: Vec::new(), anim: Default::default() };
         sc.groups.clear();
         sc.groups.push(group_of("a", 0, vec![ball(-30.0, 10.0)]));
         let mut inner = group_of("a-cut", 1, vec![cut]);
@@ -725,7 +725,7 @@ mod tests {
     #[test]
     fn nested_groups_melt_inside_before_they_melt_outside() {
         // two balls 18 apart melt in one group; a third group far away stays separate
-        let mut sc = Scene { groups: vec![], melt: Default::default(), env: Default::default(), saved: Vec::new() };
+        let mut sc = Scene { groups: vec![], melt: Default::default(), env: Default::default(), saved: Vec::new(), anim: Default::default() };
         sc.groups.clear();
         let mut parent = group_of("parent", 0, vec![]);
         parent.blend = 0.0;
@@ -747,7 +747,7 @@ mod tests {
 
     #[test]
     fn the_outline_helpers_keep_it_valid() {
-        let mut sc = Scene { groups: vec![], melt: Default::default(), env: Default::default(), saved: Vec::new() };
+        let mut sc = Scene { groups: vec![], melt: Default::default(), env: Default::default(), saved: Vec::new(), anim: Default::default() };
         sc.groups.clear();
         for (n, d) in [("a", 0), ("b", 1), ("c", 2), ("d", 0)] {
             sc.groups.push(group_of(n, d, vec![]));
@@ -765,7 +765,7 @@ mod tests {
         let names: Vec<&str> = sc.groups.iter().map(|g| g.name.as_str()).collect();
         assert_eq!(names, vec!["a", "c", "d"]);
         assert_eq!(sc.groups[1].depth, 1, "c moved up one level with b gone");
-        let mut bad = Scene { groups: vec![], melt: Default::default(), env: Default::default(), saved: Vec::new() };
+        let mut bad = Scene { groups: vec![], melt: Default::default(), env: Default::default(), saved: Vec::new(), anim: Default::default() };
         bad.groups.clear();
         for d in [3, 3, 0, 2] {
             bad.groups.push(group_of("x", d, vec![]));
