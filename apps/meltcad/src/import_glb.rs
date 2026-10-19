@@ -63,12 +63,12 @@ pub(crate) fn appearance_glb(bytes: &[u8]) -> crate::import_mesh::AppearanceInfo
         let pbr = mat.get("pbrMetallicRoughness");
         let v = pbr.and_then(|p| p.get("baseColorFactor")).and_then(Value::as_array);
         let mut rgba = [1.0f32; 4];
-        if let Some(a) = v {
-            if a.len() == 4 {
-                for (i, slot) in rgba.iter_mut().enumerate() {
-                    let Some(x) = a[i].as_f64() else { return out };
-                    *slot = x as f32;
-                }
+        if let Some(a) = v
+            && a.len() == 4
+        {
+            for (i, slot) in rgba.iter_mut().enumerate() {
+                let Some(x) = a[i].as_f64() else { return out };
+                *slot = x as f32;
             }
         }
         let rough = pbr.and_then(|p| p.get("roughnessFactor")).and_then(Value::as_f64).unwrap_or(1.0) as f32;

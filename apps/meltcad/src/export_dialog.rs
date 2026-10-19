@@ -782,8 +782,7 @@ mod tests {
     #[test]
     fn saved_custom_options_open_with_details_visible() {
         let ctx = egui::Context::default();
-        let mut o = Options::default();
-        o.scale_pct = 125.0;
+        let o = Options { scale_pct: 125.0, ..Options::default() };
         ctx.data_mut(|m| m.insert_temp(last_id(), o));
         let d = new_dlg(&ctx, None);
         assert!(d.advanced);

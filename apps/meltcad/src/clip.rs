@@ -34,6 +34,9 @@ pub fn copy_text(app: &App) -> Option<String> {
 
 /// Put the text into the scene. Returns what was added ("" when the text is not something MELTCAD knows).
 pub fn paste_text(app: &mut App, text: &str) -> Result<String, String> {
+    if !app.allow_scene_structure_change() {
+        return Err(app.sk.msg.clone());
+    }
     let text = text.trim();
     let _guard = crate::mesh::LoadGuard::begin();
     if let Ok(clip) = serde_json::from_str::<Clip>(text) {
@@ -126,6 +129,9 @@ impl App {
     }
 
     pub fn cut(&mut self, ctx: &egui::Context) {
+        if !self.allow_scene_structure_change() {
+            return;
+        }
         if self.sel.is_some() {
             self.copy(ctx);
             self.delete_selected();

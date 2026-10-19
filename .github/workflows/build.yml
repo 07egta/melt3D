@@ -1,13 +1,13 @@
 name: Build
 
 # Windows app (.exe), the web app, and the main tests. Run by hand from the Actions tab
-# ("Run workflow"), on pushes to main / easy-layout-and-melt, or on PRs into the working
-# branch. Upstream release, store and Pages workflows are parked to save Actions minutes.
+# ("Run workflow"), on pushes to main / the working branches, or on PRs into them.
+# Upstream release, store and Pages workflows are parked to save Actions minutes.
 on:
   push:
-    branches: [main, easy-layout-and-melt]
+    branches: [main, easy-layout-and-melt, integration/yuracad-20261017]
   pull_request:
-    branches: [easy-layout-and-melt]
+    branches: [easy-layout-and-melt, integration/yuracad-20261017]
   workflow_dispatch:
 
 permissions:
@@ -122,6 +122,25 @@ jobs:
           grep -hE "^test .* FAILED|panicked at|^error(\[|:)" test1.log test2.log test3.log | head -30 | while read -r line; do echo "::error::$line"; done
           grep -hE "test result" test1.log test2.log test3.log | while read -r line; do echo "::notice::$line"; done
           exit $((s1 + s2 + s3))
+
+      - name: Render Melt3D workflow screenshots
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/melt3d-ui"
+          for dimensions in 960x600 1920x1080; do
+            for stage in ready extrude edit; do
+              YURA_WIDTH="${dimensions%x*}" YURA_HEIGHT="${dimensions#*x}" YURA_PPP=1 \
+              YURA_SKETCH="$stage" YURA_PREVIEW="$RUNNER_TEMP/melt3d-ui/$stage-$dimensions.png" \
+                cargo test --profile ci --locked -p meltcad app::app_preview::app_preview -- --ignored --exact --test-threads=1
+            done
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: melt3d-ui-previews
+          if-no-files-found: error
+          retention-days: 7
+          path: ${{ runner.temp }}/melt3d-ui/*.png
 
   # Never replace the download with a build that failed tests, and never publish
   # from a pull request or a branch other than the YURACAD working branch.
