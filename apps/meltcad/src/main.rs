@@ -6,6 +6,7 @@ mod accel;
 mod adapt;
 mod app;
 mod array;
+mod automation;
 mod backend;
 mod bench;
 mod cad;
@@ -116,7 +117,7 @@ fn no_graphics(choice: backend::Choice, plan: backend::Plan, tried: &[backend::B
 
 fn main() -> eframe::Result {
     let args: Vec<std::ffi::OsString> = std::env::args_os().collect();
-    if cpu_render::cli(&args) || bench::cli(&args) {
+    if cpu_render::cli(&args) || bench::cli(&args) || automation::cli(&args) {
         return Ok(());
     }
     perf::init();
