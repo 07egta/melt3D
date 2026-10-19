@@ -7,7 +7,6 @@ use crate::app::{App, Tab};
 use crate::materials::{self, Category};
 use crate::model::{BlendMode, Corner, Kind, Light, MAX_LIGHTS, MAX_OUTLINE, MAX_SAVED, Material, Melt, Op, Pick, ROUND_MAX};
 use crate::sdf;
-use crate::view::targets;
 use crate::{glyphs, style};
 
 /// (label, mode, amount, drip, ripple)
@@ -51,7 +50,16 @@ impl App {
                 }
                 ui.add_space(4.0);
                 egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| match self.tab {
-                    Tab::Shape => self.inspector(ui),
+                    Tab::Shape => {
+                        let locked = self.scene_structure_locked();
+                        if locked {
+                            ui.label(
+                                RichText::new("Use the active command card. Finish or cancel to edit other shapes.").size(12.0).color(style::DIM),
+                            );
+                            ui.add_space(6.0);
+                        }
+                        ui.add_enabled_ui(!locked, |ui| self.inspector(ui));
+                    }
                     Tab::Material => self.material_tab(ui),
                     Tab::Melt => self.melt_panel(ui),
                     Tab::Room => self.room_panel(ui),
@@ -65,7 +73,8 @@ impl App {
             ui.label(RichText::new("Nothing selected").color(style::DIM));
             return;
         }
-        if ui.button("Duplicate  Ctrl+D").clicked() {
+        let editable = !self.scene_structure_locked();
+        if ui.add_enabled(editable, egui::Button::new("Duplicate  Ctrl+D")).clicked() {
             self.duplicate();
             ui.close();
         }
@@ -82,7 +91,7 @@ impl App {
             ui.close();
         }
         ui.separator();
-        if ui.button(RichText::new("Delete  Del").color(style::CUT)).clicked() {
+        if ui.add_enabled(editable, egui::Button::new(RichText::new("Delete  Del").color(style::CUT))).clicked() {
             self.delete_selected();
             ui.close();
         }
@@ -201,10 +210,12 @@ impl App {
                     {
                         s.visible = !visible;
                     }
-                    if row.op
-                        && let Some(s) = self.scene.shape_mut(gi, si)
-                    {
-                        s.op = op.next();
+                    if row.op {
+                        if self.sk.live == Some((gi, si)) {
+                            self.flip_op();
+                        } else if let Some(s) = self.scene.shape_mut(gi, si) {
+                            s.op = op.next();
+                        }
                     }
                     self.curve_ball_rows(ui, gi, si, 36.0 + indent_px);
                 }
@@ -227,13 +238,14 @@ impl App {
         self.layer_drop(ui);
     }
 
-    /// A selected curve is a group of balls: one small row per ball, to pick it from the list.
+    /// A selected solid curve is a group of balls: one small row per ball, to pick it from the list.
+    /// Saved sketches use Edit Sketch and do not expose their display stroke as radius-bearing balls.
     fn curve_ball_rows(&mut self, ui: &mut Ui, gi: usize, si: usize, indent: f32) {
         if self.sel != Some(Pick::Shape(gi, si)) {
             return;
         }
         let Some(sh) = self.scene.shape(gi, si) else { return };
-        if !sh.kind.uses_path() {
+        if sh.guide || !sh.kind.uses_path() {
             return;
         }
         let radii: Vec<f32> = sh.path.iter().take(256).map(|p| p[3]).collect();
@@ -261,6 +273,10 @@ impl App {
 
     /// While a row is being dragged: show where it would land, and put it there on release.
     fn layer_drop(&mut self, ui: &mut Ui) {
+        if self.scene_structure_locked() {
+            self.layer_drag = None;
+            return;
+        }
         let Some(from) = self.layer_drag else { return };
         let (pos, down) = ui.input(|i| (i.pointer.interact_pos(), i.pointer.primary_down()));
         let target =
@@ -297,12 +313,21 @@ impl App {
         has_chevron: bool,
         badge: &str,
     ) -> RowResult {
-        let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 30.0), Sense::click_and_drag());
+        let locked = self.scene_structure_locked();
+        let sense = if locked { Sense::click() } else { Sense::click_and_drag() };
+        let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 30.0), sense);
+        let resp = if locked { resp.on_hover_text("Finish or cancel the active command before reordering") } else { resp };
         self.row_rects.push((pick, rect));
         let mut out = RowResult::default();
         style::row_bg(ui, &resp, rect, selected);
         // the grip says "drag me"
-        let grip = Color32::from_white_alpha(if resp.hovered() || selected { 120 } else { 44 });
+        let grip = Color32::from_white_alpha(if locked {
+            16
+        } else if resp.hovered() || selected {
+            120
+        } else {
+            44
+        });
         style::gfx::grip(ui.painter(), egui::pos2(rect.left() + 11.0, rect.center().y), grip);
         let mut x = rect.left() + 18.0 + indent;
         if has_chevron {
@@ -370,7 +395,7 @@ impl App {
         out.eye = er.clicked();
         out.op = orr.clicked();
         out.select = resp.clicked() && !out.eye && !out.op;
-        out.drag_started = resp.drag_started() && !out.eye && !out.op;
+        out.drag_started = !locked && resp.drag_started() && !out.eye && !out.op;
         if resp.double_clicked() && !out.eye && !out.op {
             self.renaming = Some(pick);
         }
@@ -516,6 +541,10 @@ impl App {
     }
 
     fn shape_inspector(&mut self, ui: &mut Ui, g: usize, s: usize) {
+        if self.scene.shape(g, s).is_some_and(|shape| shape.guide) {
+            self.guide_inspector(ui, g, s);
+            return;
+        }
         style::title(ui, "Shape");
         let ngroups = self.scene.groups.len();
         let nshapes = self.scene.groups[g].shapes.len();
@@ -676,16 +705,53 @@ impl App {
             }
         });
         if let Some(t) = reorder {
-            self.scene.groups[g].shapes.swap(s, t);
-            self.sel = Some(Pick::Shape(g, t));
+            self.move_layer(Pick::Shape(g, s), Pick::Shape(g, t), t > s);
         }
-        if let Some(t) = move_to
-            && self.scene.groups[g].shapes.len() > s
+        if let Some(t) = move_to {
+            self.move_layer(Pick::Shape(g, s), Pick::Group(t), false);
+        }
+        self.actions(ui);
+    }
+
+    /// A sketch is a source for solid tools, so its inspector shows those actions
+    /// and its planar size instead of solid-only radius, shell and melt controls.
+    fn guide_inspector(&mut self, ui: &mut Ui, g: usize, s: usize) {
+        style::title(ui, "Sketch");
+        let profile = self.curve_profile(g, s);
+        let closed = profile.is_some();
+        if let Some(sh) = self.scene.shape_mut(g, s) {
+            ui.text_edit_singleline(&mut sh.name);
+            style::checkbox(ui, &mut sh.visible, "Visible");
+            ui.label(RichText::new(if closed { "Closed profile" } else { "Open path" }).color(style::DIM));
+            style::xyz(ui, "Position", &mut sh.pos, 0.5, -5000.0..=5000.0, "");
+            style::xyz(ui, "Rotation", &mut sh.rot, 1.0, -3600.0..=3600.0, "°");
+            style::xyz(ui, "Scale", &mut sh.scale, 0.01, 0.01..=100.0, "×");
+        }
+        if let Some((_, points)) = &profile
+            && let Some((lo, hi)) = crate::sketch::bbox(points)
         {
-            let sh = self.scene.groups[g].shapes.remove(s);
-            self.scene.groups[t].shapes.push(sh);
-            self.sel = Some(Pick::Shape(t, self.scene.groups[t].shapes.len() - 1));
+            ui.label(format!("{:.2} × {:.2} mm  ·  {} points", hi[0] - lo[0], hi[1] - lo[1], points.len()));
         }
+        if style::pill_enabled(ui, "Edit Sketch", false, closed && !self.sketch_active())
+            .on_hover_text("Edit dimensions; right-click saves the sketch, Esc cancels the draft")
+            .clicked()
+        {
+            self.edit_saved_sketch(g, s);
+        }
+        ui.separator();
+        ui.label(RichText::new("Create solid").strong());
+        let ctx = ui.ctx().clone();
+        ui.horizontal_wrapped(|ui| {
+            for make in crate::sketch_ui::Make::ALL {
+                let enabled = !self.sketch_active() && (closed || make == crate::sketch_ui::Make::Sweep);
+                if style::pill_enabled(ui, make.label(), false, enabled).on_hover_text("Adjust the preview, then right-click to confirm").clicked() {
+                    self.sel = Some(Pick::Shape(g, s));
+                    self.make_from_selected_line(&ctx, make);
+                }
+            }
+        });
+        ui.add_space(6.0);
+        egui::CollapsingHeader::new("Edit path points").show(ui, |ui| self.curve_inspector(ui, g, s));
         self.actions(ui);
     }
 
@@ -787,10 +853,10 @@ impl App {
                 }
             }
         }
-        if light_sel || rand_sel || all_light || rand_all {
-            if let Some(sh) = self.scene.shape(g0, s0) {
-                m = sh.material;
-            }
+        if (light_sel || rand_sel || all_light || rand_all)
+            && let Some(sh) = self.scene.shape(g0, s0)
+        {
+            m = sh.material;
         }
         let first = m;
 

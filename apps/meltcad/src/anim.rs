@@ -30,7 +30,14 @@ impl Vals {
     fn lerp(a: &Vals, b: &Vals, t: f32) -> Vals {
         let l = |x: f32, y: f32| x + (y - x) * t;
         let v3 = |x: [f32; 3], y: [f32; 3]| [l(x[0], y[0]), l(x[1], y[1]), l(x[2], y[2])];
-        Vals { pos: v3(a.pos, b.pos), rot: v3(a.rot, b.rot), size: v3(a.size, b.size), scale: v3(a.scale, b.scale), color: v3(a.color, b.color), round: l(a.round, b.round) }
+        Vals {
+            pos: v3(a.pos, b.pos),
+            rot: v3(a.rot, b.rot),
+            size: v3(a.size, b.size),
+            scale: v3(a.scale, b.scale),
+            color: v3(a.color, b.color),
+            round: l(a.round, b.round),
+        }
     }
     fn of(s: &crate::model::Shape) -> Vals {
         Vals { pos: s.pos, rot: s.rot, size: s.size, scale: s.scale, color: s.material.color, round: s.round }
@@ -299,10 +306,25 @@ mod tests {
     #[test]
     fn hostile_numbers_are_tamed() {
         let mut a = Anim { fps: 0, length: u32::MAX, ..Anim::default() };
-        a.tracks.push(Track { uid: 1, keys: vec![(u32::MAX, Vals { pos: [f32::NAN, 1e30, 0.0], rot: [0.0; 3], size: [f32::INFINITY, 1.0, 1.0], scale: [1.0; 3], color: [9.0, 0.0, 0.0], round: -4.0 })] });
+        a.tracks.push(Track {
+            uid: 1,
+            keys: vec![(
+                u32::MAX,
+                Vals {
+                    pos: [f32::NAN, 1e30, 0.0],
+                    rot: [0.0; 3],
+                    size: [f32::INFINITY, 1.0, 1.0],
+                    scale: [1.0; 3],
+                    color: [9.0, 0.0, 0.0],
+                    round: -4.0,
+                },
+            )],
+        });
         a.sanitize();
         assert_eq!((a.fps, a.length), (1, MAX_FRAMES));
         let v = a.tracks[0].keys[0];
-        assert!(v.0 < MAX_FRAMES && v.1.pos.iter().chain(&v.1.size).all(|x| x.is_finite() && x.abs() <= 1.0e5) && v.1.color[0] == 1.0 && v.1.round == 0.0);
+        assert!(
+            v.0 < MAX_FRAMES && v.1.pos.iter().chain(&v.1.size).all(|x| x.is_finite() && x.abs() <= 1.0e5) && v.1.color[0] == 1.0 && v.1.round == 0.0
+        );
     }
 }

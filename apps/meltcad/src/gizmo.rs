@@ -11,7 +11,6 @@ use crate::camera::Camera;
 use crate::model::{Kind, Pick, Scene};
 use crate::sdf::{Prepared, V3, add, cross, dot, mul, sub};
 use crate::style;
-use crate::view::targets;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Tool {
@@ -151,6 +150,7 @@ fn arc_points(cam: &Camera, rect: Rect, c: V3, axis: usize, r: f32, span: (f32, 
 }
 
 /// The handles for the current selection, placed on screen.
+#[cfg(test)]
 pub fn build(cam: &Camera, rect: Rect, scene: &Scene, sel: Option<Pick>, tool: Tool) -> Option<Geom> {
     build_multi(cam, rect, scene, sel.as_slice(), tool)
 }

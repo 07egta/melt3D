@@ -155,20 +155,20 @@ impl Kind {
     /// What the size numbers mean, for the inspector.
     pub fn size_labels(self) -> [&'static str; 3] {
         match self {
-            Kind::Sphere => ["半径", "", ""],
-            Kind::Box => ["幅", "奥行", "高さ"],
-            Kind::Cylinder => ["半径", "高さ", ""],
-            Kind::Torus => ["大半径", "小半径", ""],
-            Kind::Cone => ["半径", "高さ", ""],
-            Kind::Extrude => ["高さ", "", ""],
-            Kind::Prism3 | Kind::PrismN | Kind::Star => ["外半径", "高さ", ""],
-            Kind::Octa | Kind::Tetra | Kind::Hemi => ["半径", "", ""],
-            Kind::Pyramid => ["底の半径", "高さ", ""],
-            Kind::Capsule => ["半径", "長さ", ""],
-            Kind::Tube => ["外半径", "肉厚", "高さ"],
-            Kind::Wedge => ["幅", "奥行", "高さ"],
+            Kind::Sphere => ["Radius", "", ""],
+            Kind::Box => ["Width", "Depth", "Height"],
+            Kind::Cylinder => ["Radius", "Height", ""],
+            Kind::Torus => ["Major radius", "Minor radius", ""],
+            Kind::Cone => ["Radius", "Height", ""],
+            Kind::Extrude => ["Height", "", ""],
+            Kind::Prism3 | Kind::PrismN | Kind::Star => ["Outer radius", "Height", ""],
+            Kind::Octa | Kind::Tetra | Kind::Hemi => ["Radius", "", ""],
+            Kind::Pyramid => ["Base radius", "Height", ""],
+            Kind::Capsule => ["Radius", "Length", ""],
+            Kind::Tube => ["Outer radius", "Wall", "Height"],
+            Kind::Wedge => ["Width", "Depth", "Height"],
             Kind::Revolve => ["", "", ""],
-            Kind::Loft => ["高さ", "", ""],
+            Kind::Loft => ["Height", "", ""],
             Kind::Curve => ["", "", ""],
             Kind::Sweep => ["", "", ""],
             // (the size is the model's size in mm, shown by the mesh inspector, not edited)
@@ -203,10 +203,10 @@ impl Kind {
     /// Labels of the four extra numbers (`Shape::params`); empty = unused.
     pub fn param_labels(self) -> [&'static str; 4] {
         match self {
-            Kind::PrismN => ["辺の数", "", "", ""],
-            Kind::Pyramid => ["辺の数", "", "", ""],
-            Kind::Star => ["とがり数", "内側の比", "", ""],
-            Kind::Revolve => ["回す角度", "", "", ""],
+            Kind::PrismN => ["Sides", "", "", ""],
+            Kind::Pyramid => ["Sides", "", "", ""],
+            Kind::Star => ["Points", "Inner ratio", "", ""],
+            Kind::Revolve => ["Angle", "", "", ""],
             _ => ["", "", "", ""],
         }
     }
@@ -330,6 +330,9 @@ impl Material {
     /// shape's size; the flip is already in `t`). The range `grad_from..grad_to` is stretched over
     /// 0..1 and `grad_soft` decides how wide the blend is around its middle. The GPU copy is
     /// `shape_color` in `shader.wgsl`.
+    // max/min deliberately give the shader-compatible zero weight for NaN;
+    // f32::clamp would propagate it into the material and rendered pixels.
+    #[allow(clippy::manual_clamp)]
     pub fn gradient_weight(&self, t: f32) -> f32 {
         let span = (self.grad_to - self.grad_from).max(0.02);
         let u = ((t - self.grad_from) / span).max(0.0).min(1.0);
@@ -419,6 +422,10 @@ pub struct Shape {
     /// exported, not measured). Extrude, Loft or Revolve turn it into a solid.
     #[serde(default, skip_serializing_if = "is_false")]
     pub guide: bool,
+    /// Original sketch axes in the shape's local space. Keeping the origin and axes
+    /// makes a saved sketch usable for Revolve without moving its axis to its centre.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guide_plane: Option<GuidePlane>,
     /// Corners of an `Extrude` outline, in the shape's own XY plane.
     pub outline: Vec<[f32; 2]>,
     /// Kind-specific extra numbers (`Kind::param_labels`).
@@ -458,6 +465,16 @@ pub struct Shape {
     /// Melt only one face: the rest of the shape keeps its exact size.
     #[serde(default, skip_serializing_if = "FaceMelt::is_off")]
     pub face_melt: FaceMelt,
+}
+
+/// A saved sketch's two plane axes and inner contours. The outer contour remains
+/// in `Shape::path`, so moving or editing its nodes does not leave a stale copy.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct GuidePlane {
+    pub u: [f32; 3],
+    pub v: [f32; 3],
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub holes: Vec<Vec<[f32; 2]>>,
 }
 
 /// A melt that touches just one face of a shape (and a little way into it).
@@ -533,6 +550,7 @@ impl Shape {
             material,
             visible: true,
             guide: false,
+            guide_plane: None,
             outline: kind.default_outline(),
             params: kind.default_params(),
             path: kind.default_path(),
@@ -550,6 +568,7 @@ impl Shape {
 
     /// Grid widths in actual model millimetres after nonuniform scaling.
     /// A stored SDF has one cell size; on screen it may have three different pitches.
+    #[cfg(test)]
     pub fn mesh_cell_mm(&self) -> Option<[f32; 3]> {
         let v = self.volume.as_ref()?;
         (self.kind == Kind::Mesh).then(|| [0, 1, 2].map(|a| v.cell * self.scale[a].abs()))
@@ -963,6 +982,7 @@ impl Scene {
     pub fn shape_count(&self) -> usize {
         self.groups.iter().map(|g| g.shapes.len()).sum()
     }
+    #[cfg(test)]
     pub fn to_json(&self) -> String {
         self.try_to_json().unwrap_or_default()
     }
@@ -1207,7 +1227,9 @@ impl Scene {
                 if s.kind.uses_outline2() && s.outline2.len() < 3 {
                     s.outline2 = s.kind.default_outline2();
                 }
-                s.path.truncate(MAX_PATH);
+                // A finished sketch already contains its sampled outline. Do not
+                // silently drop its last 16 vertices when reopening the document.
+                s.path.truncate(if s.guide { MAX_OUTLINE } else { MAX_PATH });
                 for p in &mut s.path {
                     fix(&mut p[0], -5000.0, 5000.0, 0.0);
                     fix(&mut p[1], -5000.0, 5000.0, 0.0);
@@ -1216,6 +1238,24 @@ impl Scene {
                 }
                 if s.kind.uses_path() && s.path.len() < 2 {
                     s.path = s.kind.default_path();
+                }
+                if !s.guide || s.kind != Kind::Curve {
+                    s.guide_plane = None;
+                } else if let Some(plane) = &mut s.guide_plane {
+                    if let Some(frame) = crate::sketch::Frame::from_axes([0.0; 3], plane.u, plane.v) {
+                        plane.u = frame.u;
+                        plane.v = frame.v;
+                        plane.holes.truncate(crate::sketch::MAX_HOLES);
+                        for hole in &mut plane.holes {
+                            hole.truncate(MAX_OUTLINE);
+                        }
+                        plane.holes.retain(|hole| {
+                            hole.iter().flatten().all(|v| v.is_finite() && v.abs() <= crate::sketch::COORD_MAX)
+                                && crate::sketch::validate_profile(hole).is_ok()
+                        });
+                    } else {
+                        s.guide_plane = None;
+                    }
                 }
                 if s.kind != Kind::Mesh {
                     s.volume = None;
@@ -1451,7 +1491,9 @@ mod tests {
 
     #[test]
     fn a_file_with_too_much_is_cut_to_the_new_limits() {
-        assert!(MAX_SHAPES >= 512 && MAX_GROUPS >= 96);
+        const {
+            assert!(MAX_SHAPES >= 512 && MAX_GROUPS >= 96);
+        }
         let mut sc = Scene::default();
         let one = sc.groups[0].shapes[0].clone();
         sc.groups.clear();

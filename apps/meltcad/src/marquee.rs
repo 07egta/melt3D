@@ -26,10 +26,11 @@ fn screen_box(app: &App, rect: Rect, g: usize, s: usize) -> Option<(Rect, bool)>
     for k in 0..8usize {
         let sign = |bit: usize| if (k >> bit) & 1 == 1 { 1.0 } else { -1.0 };
         let off = add(add(mul(local[0], sign(0) * ext[0]), mul(local[1], sign(1) * ext[1])), mul(local[2], sign(2) * ext[2]));
-        if let Some(p) = app.cam.project(rect, add(sh.pos, off)) {
-            if p.x.is_finite() && p.y.is_finite() {
-                pts.push(p);
-            }
+        if let Some(p) = app.cam.project(rect, add(sh.pos, off))
+            && p.x.is_finite()
+            && p.y.is_finite()
+        {
+            pts.push(p);
         }
     }
     let first = *pts.first()?;

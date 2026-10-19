@@ -225,7 +225,7 @@ pub fn fillet_corner(p: &[Pt], corner: usize, radius: f32) -> Result<Vec<Pt>, Ed
     }
     let theta0 = rs[1].atan2(rs[0]);
     let mut result = Vec::with_capacity(n + steps);
-    for i in 0..n {
+    for (i, existing) in p.iter().enumerate() {
         if i == corner {
             for j in 0..=steps {
                 if j == 0 {
@@ -238,7 +238,7 @@ pub fn fillet_corner(p: &[Pt], corner: usize, radius: f32) -> Result<Vec<Pt>, Ed
                 }
             }
         } else {
-            result.push(p[i]);
+            result.push(*existing);
         }
     }
     checked(p, result)

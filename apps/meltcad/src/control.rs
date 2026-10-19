@@ -42,10 +42,10 @@ pub fn file_arg(args: &[std::ffi::OsString]) -> Option<std::path::PathBuf> {
 
 /// A fresh secret for this launch (or the one in `MELT3D_CONTROL_TOKEN`).
 pub fn make_token() -> String {
-    if let Ok(t) = std::env::var("MELT3D_CONTROL_TOKEN") {
-        if t.len() >= 8 {
-            return t;
-        }
+    if let Ok(t) = std::env::var("MELT3D_CONTROL_TOKEN")
+        && t.len() >= 8
+    {
+        return t;
     }
     use std::hash::{BuildHasher, Hasher};
     let mut out = String::new();
@@ -156,7 +156,9 @@ mod tests {
         let mut authed = false;
         let bad = handle_line(r#"{"id":1,"cmd":"scene.summary"}"#, "secret-token", &mut authed, |c| crate::automation::execute(&mut sc, c));
         assert!(bad.contains("\"ok\":false") && !authed);
-        let ok = handle_line(r#"{"id":2,"token":"secret-token","cmd":"scene.summary"}"#, "secret-token", &mut authed, |c| crate::automation::execute(&mut sc, c));
+        let ok = handle_line(r#"{"id":2,"token":"secret-token","cmd":"scene.summary"}"#, "secret-token", &mut authed, |c| {
+            crate::automation::execute(&mut sc, c)
+        });
         assert!(ok.contains("\"ok\":true") && ok.contains("\"id\":2") && authed);
         let junk = handle_line("not json", "secret-token", &mut authed, |_| Ok(Value::Null));
         assert!(junk.contains("Not JSON"));
