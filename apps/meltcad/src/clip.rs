@@ -7,8 +7,8 @@ use serde::{Deserialize, Serialize};
 use crate::app::App;
 use crate::model::{Group, MAX_GROUPS, MAX_SHAPES, Pick, Scene, Shape};
 
-/// How far a pasted copy sits from the original, so it can be seen.
-const STEP: f32 = 8.0;
+/// A pasted copy sits exactly where the original was (no shift).
+const STEP: f32 = 0.0;
 
 #[derive(Serialize, Deserialize)]
 struct Clip {
