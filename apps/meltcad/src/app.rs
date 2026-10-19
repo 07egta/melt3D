@@ -73,6 +73,10 @@ pub struct App {
     /// How many times the field was built (tests and the HUD look at it).
     pub(crate) field_builds: std::cell::Cell<u64>,
     pub path: Option<PathBuf>,
+    /// The name typed into the title for a design that has no file yet (empty = none).
+    doc_title: String,
+    /// The title being typed (Some while the name box in the top bar is open).
+    title_edit: Option<String>,
     pub dirty: bool,
     recovery: crate::recovery::Store,
     pending_file_action: Option<PendingFileAction>,
@@ -182,6 +186,8 @@ impl App {
             view_mode: crate::view_mode::ViewMode::Normal,
             last_view_height: 600.0,
             path: None,
+            doc_title: String::new(),
+            title_edit: None,
             dirty: false,
             recovery: crate::recovery::Store::new(crate::recovery::default_directory(), std::time::Instant::now()),
             pending_file_action: None,
@@ -1048,6 +1054,37 @@ impl App {
         }
     }
 
+    /// The design's name: the file's name, else the one typed into the title, else "Untitled".
+    pub(crate) fn doc_name(&self) -> String {
+        if let Some(stem) = self.path.as_ref().and_then(|p| p.file_stem()) {
+            return stem.to_string_lossy().into_owned();
+        }
+        if self.doc_title.is_empty() { "Untitled".into() } else { self.doc_title.clone() }
+    }
+
+    /// A new name typed into the title. Without a file it is only remembered (the first save
+    /// offers it); with a file, the file is renamed next to where it is. Nothing is overwritten.
+    fn rename_doc(&mut self, ctx: &egui::Context, typed: &str) {
+        let name = clean_title(typed);
+        if name.is_empty() || name == self.doc_name() {
+            return;
+        }
+        let Some(old) = self.path.clone() else {
+            self.doc_title = name;
+            return;
+        };
+        let ext = old.extension().map(|e| e.to_string_lossy().into_owned()).unwrap_or_else(|| "meltcad".into());
+        let new = old.with_file_name(format!("{name}.{ext}"));
+        if new.exists() {
+            self.say(ctx, format!("There is already a file named {name}"));
+            return;
+        }
+        match std::fs::rename(&old, &new) {
+            Ok(()) => self.path = Some(new),
+            Err(e) => self.say(ctx, format!("Could not rename: {e}")),
+        }
+    }
+
     fn save(&mut self, ctx: &egui::Context, ask: bool) {
         self.try_save(ctx, ask);
     }
@@ -1060,12 +1097,13 @@ impl App {
         }
         let path = match (&self.path, ask) {
             (Some(p), false) => Some(p.clone()),
-            _ => rfd::FileDialog::new().add_filter("Melt 3D", &["meltcad"]).set_file_name("Untitled.meltcad").save_file(),
+            _ => rfd::FileDialog::new().add_filter("Melt 3D", &["meltcad"]).set_file_name(format!("{}.meltcad", self.doc_name())).save_file(),
         };
         let Some(path) = path else { return false };
         match crate::recovery::save_project(&path, &self.scene) {
             Ok(()) => {
                 self.path = Some(path);
+                self.doc_title.clear();
                 self.dirty = false;
                 let revision = self.track_scene();
                 if let Err(e) = self.recovery.document_saved(revision) {
@@ -1515,24 +1553,45 @@ impl App {
                         self.perf.hud = menu.hud;
                         self.perf.bench_requested |= menu.bench;
                     });
-                    // the file name in the middle of the bar
-                    let name =
-                        self.path.as_ref().and_then(|p| p.file_stem()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "Untitled".into());
-                    let label = format!("{}{}", name, if self.dirty { " *" } else { "" });
+                    // the design's name in the middle of the bar: click it to type a new one
                     let cx = bar.center().x.clamp(left_end + 60.0, (right_start - 220.0).max(left_end + 60.0));
-                    let shown = ui.painter().text(
-                        egui::pos2(cx, bar.center().y),
-                        egui::Align2::CENTER_CENTER,
-                        label,
-                        egui::FontId::proportional(13.0),
-                        style::DIM,
-                    );
-                    // click the name to give the design a name (Save As)
-                    let hit = ui.interact(shown.expand2(egui::vec2(8.0, 6.0)), egui::Id::new("doc_name"), egui::Sense::click());
-                    let hit = hit.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text("Click to name and save this design");
-                    if hit.clicked() {
+                    let mut commit = false;
+                    let mut cancel = false;
+                    if let Some(text) = self.title_edit.as_mut() {
+                        let r = egui::Rect::from_center_size(egui::pos2(cx, bar.center().y), egui::vec2(220.0, 24.0));
+                        let edit = ui.put(
+                            r,
+                            egui::TextEdit::singleline(text).char_limit(MAX_TITLE_CHARS).horizontal_align(egui::Align::Center).desired_width(220.0),
+                        );
+                        if !edit.has_focus() && !edit.lost_focus() {
+                            edit.request_focus();
+                        }
+                        if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                            cancel = true;
+                        } else if edit.lost_focus() {
+                            commit = true;
+                        }
+                    } else {
+                        let label = format!("{}{}", self.doc_name(), if self.dirty { " *" } else { "" });
+                        let shown = ui.painter().text(
+                            egui::pos2(cx, bar.center().y),
+                            egui::Align2::CENTER_CENTER,
+                            label,
+                            egui::FontId::proportional(13.0),
+                            style::DIM,
+                        );
+                        let hit = ui.interact(shown.expand2(egui::vec2(8.0, 6.0)), egui::Id::new("doc_name"), egui::Sense::click());
+                        let hit = hit.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text("Click to rename this design");
+                        if hit.clicked() {
+                            self.title_edit = Some(self.doc_name());
+                        }
+                    }
+                    if cancel {
+                        self.title_edit = None;
+                    } else if commit {
+                        let typed = self.title_edit.take().unwrap_or_default();
                         let ctx = ui.ctx().clone();
-                        self.save(&ctx, true);
+                        self.rename_doc(&ctx, &typed);
                     }
                 });
             },
@@ -2125,11 +2184,7 @@ impl App {
             }
         }
         self.test_hooks(&ctx);
-        let title = format!(
-            "Melt 3D — {}{}",
-            self.path.as_ref().and_then(|p| p.file_stem()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "Untitled".into()),
-            if self.dirty { " *" } else { "" }
-        );
+        let title = format!("Melt 3D — {}{}", self.doc_name(), if self.dirty { " *" } else { "" });
         // Only when it changed: every viewport command wakes the event loop for another frame,
         // which used to keep the window drawing all the time.
         if title != self.perf.last_title {
@@ -2631,5 +2686,28 @@ mod tests {
         app.sel = Some(Pick::Group(0));
         app.duplicate();
         assert_eq!(app.scene.groups[1].shapes[0].pos, at);
+    }
+}
+
+/// The longest title that can be typed.
+const MAX_TITLE_CHARS: usize = 80;
+
+/// A typed title made safe to use as a file name: no path characters, trimmed, not too long.
+fn clean_title(typed: &str) -> String {
+    let kept: String = typed.chars().filter(|c| !c.is_control() && !"\\/:*?\"<>|".contains(*c)).collect();
+    kept.trim().trim_matches('.').trim().chars().take(MAX_TITLE_CHARS).collect()
+}
+
+#[cfg(test)]
+mod title_tests {
+    use super::clean_title;
+
+    #[test]
+    fn titles_are_made_safe_for_file_names() {
+        assert_eq!(clean_title("  My vase  "), "My vase");
+        assert_eq!(clean_title("a/b\\c:d"), "abcd");
+        assert_eq!(clean_title("..."), "");
+        assert_eq!(clean_title("\n\t"), "");
+        assert_eq!(clean_title(&"x".repeat(500)).chars().count(), 80);
     }
 }

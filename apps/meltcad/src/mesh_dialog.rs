@@ -276,11 +276,13 @@ struct Dlg {
     msg: String,
     open: bool,
     path: Option<PathBuf>,
+    /// Start the bake as soon as the file is read (a solid sent from the precise view): no Load click.
+    auto: bool,
 }
 
 impl Default for Dlg {
     fn default() -> Dlg {
-        Dlg { reading: None, loaded: None, st: Settings::new([60.0; 3]), bake: None, msg: String::new(), open: false, path: None }
+        Dlg { reading: None, loaded: None, st: Settings::new([60.0; 3]), bake: None, msg: String::new(), open: false, path: None, auto: false }
     }
 }
 
@@ -298,6 +300,15 @@ pub fn open(ctx: &egui::Context) {
 
 /// Show the card for this file (a dropped file, or the one just chosen).
 pub fn open_path(ctx: &egui::Context, path: PathBuf) {
+    open_path_with(ctx, path, false);
+}
+
+/// Like `open_path`, but bakes at once with the default settings, so the solid is simply there.
+pub fn open_path_auto(ctx: &egui::Context, path: PathBuf) {
+    open_path_with(ctx, path, true);
+}
+
+fn open_path_with(ctx: &egui::Context, path: PathBuf, auto: bool) {
     let mut d = ctx.data_mut(|m| m.remove_temp::<Dlg>(id())).filter(|d| d.open).unwrap_or_default();
     if let Some(b) = &d.bake {
         b.ctl.cancel.store(true, Ordering::Relaxed);
@@ -306,6 +317,7 @@ pub fn open_path(ctx: &egui::Context, path: PathBuf) {
     d.loaded = None;
     d.msg.clear();
     d.open = true;
+    d.auto = auto;
     let p = path.clone();
     d.path = Some(path.clone());
     d.reading = Some((Job::spawn("meltcad-mesh-read", move || mesh_import::load(&p)), path));
@@ -415,6 +427,9 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
                 d.msg.clear();
                 d.loaded = Some(Arc::new(l));
                 d.reading = None;
+                if d.auto {
+                    start_bake(&mut d);
+                }
             }
             Some(Err(e)) => {
                 d.msg = format!("{}: {}", path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), e);
