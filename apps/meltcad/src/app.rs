@@ -1832,6 +1832,7 @@ impl App {
         let ctx = ui.ctx().clone();
         let frame_began = std::time::Instant::now();
         self.perf.stats.begin(ctx.input(|i| i.time));
+        self.run_control(&ctx);
         if self.precise_frame(ui) {
             return;
         }
@@ -1841,7 +1842,6 @@ impl App {
             self.say(&ctx, n);
         }
         self.keys(&ctx);
-        self.run_control(&ctx);
         let dt = ctx.input(|i| i.stable_dt);
         if self.step_fly(dt) {
             ctx.request_repaint();
