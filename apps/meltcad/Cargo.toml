@@ -25,6 +25,8 @@ rfd = { workspace = true }
 pollster = { workspace = true }
 log = { workspace = true }
 solidcraft-geom = { workspace = true }
+solidcraft-engine = { workspace = true }
+solidcraft-ui-egui = { workspace = true }
 ttf-parser = { workspace = true }
 
 [dev-dependencies]

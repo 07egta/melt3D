@@ -98,6 +98,9 @@ pub struct App {
     pub capture: Option<Capture>,
     /// Commands from `--control` (an AI or a script), run on the window thread.
     pub an: crate::anim_ui::State,
+    /// SolidCraft's solid modeller, shown instead of the melt view while it is on.
+    pub precise: Option<crate::precise::Precise>,
+    pub precise_on: bool,
     pub control: Option<std::sync::mpsc::Receiver<crate::control::Request>>,
     /// The shape under the mouse.
     pub hover: Option<Pick>,
@@ -199,6 +202,8 @@ impl App {
             capture: None,
             control: None,
             an: Default::default(),
+            precise: None,
+            precise_on: false,
             hover: None,
             fly: None,
             orbiting: false,
@@ -1309,6 +1314,13 @@ impl App {
                     let left_end = ui.cursor().left();
                     let right_start = ui.max_rect().right();
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui
+                            .button(RichText::new("Precise solid").color(style::ACCENT))
+                            .on_hover_text("SolidCraft's solid modeller: exact sketches and features, STEP export")
+                            .clicked()
+                        {
+                            self.open_precise(&ctx);
+                        }
                         style::menu_button(ui, "Export", true, |ui| {
                             if ui.button("Export…").on_hover_text("STL, 3MF, OBJ, PLY, GLB. Detail, units, color").clicked() {
                                 crate::export_dialog::open(&ctx, None);
@@ -1791,7 +1803,20 @@ impl App {
         let mut ran = false;
         for _ in 0..32 {
             let Ok(req) = rx.try_recv() else { break };
-            let _ = req.reply.send(crate::automation::execute(&mut self.scene, &req.cmd));
+            // commands about the window itself are handled here; the rest change the scene
+            let answer = match req.cmd.get("cmd").and_then(|c| c.as_str()) {
+                Some("ui.precise") => {
+                    let on = req.cmd.get("on").and_then(|v| v.as_bool()).unwrap_or(true);
+                    if on {
+                        self.open_precise(ctx);
+                    } else {
+                        self.precise_on = false;
+                    }
+                    Ok(serde_json::json!({"precise": self.precise_on}))
+                }
+                _ => crate::automation::execute(&mut self.scene, &req.cmd),
+            };
+            let _ = req.reply.send(answer);
             ran = true;
         }
         self.control = Some(rx);
@@ -1807,6 +1832,9 @@ impl App {
         let ctx = ui.ctx().clone();
         let frame_began = std::time::Instant::now();
         self.perf.stats.begin(ctx.input(|i| i.time));
+        if self.precise_frame(ui) {
+            return;
+        }
         self.fix_selection();
         self.handle_close_request(&ctx);
         if let Some(n) = self.notice.take() {
