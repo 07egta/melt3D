@@ -35,7 +35,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("anim.delete", "{frame}: forget the pose at this frame"),
     ("anim.clear", "Forget every pose"),
     ("anim.at", "{frame}: put the scene into its pose at this frame"),
-    ("anim.render", "{path, size?}: the animation as a GIF (CPU picture, slow)"),
+    ("anim.render", "{path, size?, gpu?}: the animation as a GIF (gpu: true draws it like the window does, when there is a graphics card)"),
     ("save", "{path}: write the scene file"),
     ("load", "{path}: read a scene file"),
     ("render", "{path, size?}: four views as a PNG (CPU picture)"),
@@ -138,7 +138,7 @@ pub fn execute(scene: &mut Scene, cmd: &Value) -> Result<Value, String> {
         "anim.render" => {
             let path = text(obj, "path")?;
             let size = obj.get("size").and_then(Value::as_u64).unwrap_or(240) as usize;
-            let bytes = crate::cpu_render::animation_gif(scene, None, size, |_, _| true)?;
+            let bytes = crate::cpu_render::animation_gif(scene, None, size, flag(obj, "gpu"), |_, _| true)?;
             std::fs::write(&path, bytes).map_err(|e| format!("Cannot write {path}: {e}"))?;
             Ok(json!({"gif": path}))
         }

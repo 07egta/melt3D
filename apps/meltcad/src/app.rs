@@ -552,7 +552,6 @@ impl App {
                         self.notice = Some(why.into());
                         return;
                     }
-                    c.pos = [c.pos[0] + 8.0, c.pos[1] + 8.0, c.pos[2]];
                     c.name = format!("{} copy", c.name);
                     self.scene.groups[g].shapes.insert(s + 1, c);
                     self.sel = Some(Pick::Shape(g, s + 1));
@@ -572,9 +571,6 @@ impl App {
                 for (i, mut c) in copies.into_iter().enumerate() {
                     if i == 0 {
                         c.name = format!("{} copy", c.name);
-                    }
-                    for s in &mut c.shapes {
-                        s.pos = [s.pos[0] + 8.0, s.pos[1] + 8.0, s.pos[2]];
                     }
                     self.scene.groups.insert(e + i, c);
                 }
@@ -2257,5 +2253,17 @@ mod tests {
         app.duplicate();
         assert_eq!(app.scene.groups.len(), 2);
         assert_eq!(app.sel, Some(Pick::Group(1)));
+    }
+
+    #[test]
+    fn a_duplicate_stays_exactly_where_the_original_is() {
+        let mut app = App::new(true, None);
+        app.sel = Some(Pick::Shape(0, 0));
+        let at = app.scene.groups[0].shapes[0].pos;
+        app.duplicate();
+        assert_eq!(app.scene.groups[0].shapes[1].pos, at);
+        app.sel = Some(Pick::Group(0));
+        app.duplicate();
+        assert_eq!(app.scene.groups[1].shapes[0].pos, at);
     }
 }

@@ -191,7 +191,7 @@ impl App {
         let wake = ctx.clone();
         std::thread::spawn(move || {
             let _guard = crate::mesh::LoadGuard::begin();
-            let r = crate::cpu_render::animation_gif(&scene, Some(cam), 360, |i, n| {
+            let r = crate::cpu_render::animation_gif(&scene, Some(cam), 480, true, |i, n| {
                 d2.store(i, Ordering::Relaxed);
                 t2.store(n, Ordering::Relaxed);
                 !c2.load(Ordering::Relaxed)
