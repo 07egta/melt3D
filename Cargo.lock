@@ -2008,7 +2008,9 @@ dependencies = [
  "rfd",
  "serde",
  "serde_json",
+ "solidcraft-engine",
  "solidcraft-geom",
+ "solidcraft-ui-egui",
  "ttf-parser",
  "wgpu",
 ]

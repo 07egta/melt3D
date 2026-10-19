@@ -61,6 +61,7 @@ mod panels;
 mod pattern;
 mod pattern_ui;
 mod perf;
+mod precise;
 mod pipe_tool;
 mod png;
 mod prims;
@@ -151,6 +152,9 @@ fn main() -> eframe::Result {
             .with_title("Melt 3D")
             .with_icon(icon::data()),
         wgpu_options: backend::wgpu_configuration(plan),
+        // the precise solid view (SolidCraft's) draws with depth
+        depth_buffer: 24,
+        stencil_buffer: 8,
         ..Default::default()
     };
     let tried_for_app = tried.clone();
