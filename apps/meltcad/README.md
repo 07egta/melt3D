@@ -339,3 +339,8 @@ Illustrator や Inkscape などで作った SVG の絵を、ぐーっと押し�
 - 「書き出し」メニュー: 書き出し…（カード）、前の設定でもう一度（Ctrl+E）、画像(PNG)、プリントチェック。
 - 「書き出し → プリントチェック」: 大きさ、体積、表面が閉じているか（穴がないか）を下の帯に出します。
 - えらんでいる形の大きさ（幅 × 奥行 × 高さ）は、下の帯の右に出ます。
+
+## AI・プログラムから操作する（命令の形）
+`meltcad --run script.json [--scene in.meltcad] [--out out.meltcad] [--png out.png]`
+スクリプトは命令の配列です。例: `[{"cmd":"shape.add","kind":"Sphere","pos":[0,0,20]},{"cmd":"melt.set","amount":1.5}]`。
+命令の一覧は `{"cmd":"commands"}`。
