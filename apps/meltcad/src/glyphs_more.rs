@@ -4,19 +4,18 @@
 
 use crate::model::Kind;
 use egui::epaint::Mesh;
-use egui::{Color32, Painter, Pos2, Rect, Shape, Stroke, pos2, vec2};
+use egui::{Color32, Painter, Pos2, Rect, Shape, Stroke, pos2};
 
 type P = (f32, f32);
 
 const PI: f32 = std::f32::consts::PI;
 
 fn frame(rect: Rect) -> Rect {
-    let s = rect.width().min(rect.height()) * 0.8;
-    Rect::from_center_size(rect.center(), vec2(s, s))
+    crate::glyphs::frame(rect)
 }
 
 fn pen(rect: Rect, ink: Color32) -> Stroke {
-    Stroke::new((rect.width() * 0.07).clamp(1.0, 2.5), ink)
+    crate::glyphs::pen(rect, ink)
 }
 
 fn at(f: Rect, u: f32, v: f32) -> Pos2 {
@@ -62,7 +61,9 @@ fn segment(p: &Painter, f: Rect, a: P, b: P, s: Stroke) {
 
 /// Convex filled polygon with an outline.
 fn poly(p: &Painter, f: Rect, pts: &[P], fill: Color32, s: Stroke) {
-    p.add(Shape::convex_polygon(px(f, pts), fill, Stroke::NONE));
+    if fill.a() > 0 {
+        p.add(Shape::convex_polygon(px(f, pts), fill, Stroke::NONE));
+    }
     if s.width > 0.0 {
         crate::glyphs::round_path(p, px(f, pts), s, true);
     }
@@ -70,21 +71,26 @@ fn poly(p: &Painter, f: Rect, pts: &[P], fill: Color32, s: Stroke) {
 
 /// Fill of any star-shaped polygon (seen from `c`) as a triangle fan, then its outline.
 fn fan(p: &Painter, f: Rect, pts: &[P], c: P, fill: Color32, s: Stroke) {
-    let mut m = Mesh::default();
-    m.colored_vertex(at(f, c.0, c.1), fill);
-    for &(u, v) in pts {
-        m.colored_vertex(at(f, u, v), fill);
+    if fill.a() > 0 {
+        let mut m = Mesh::default();
+        m.colored_vertex(at(f, c.0, c.1), fill);
+        for &(u, v) in pts {
+            m.colored_vertex(at(f, u, v), fill);
+        }
+        let n = pts.len() as u32;
+        for i in 0..n {
+            m.add_triangle(0, 1 + i, 1 + (i + 1) % n);
+        }
+        p.add(Shape::mesh(m));
     }
-    let n = pts.len() as u32;
-    for i in 0..n {
-        m.add_triangle(0, 1 + i, 1 + (i + 1) % n);
-    }
-    p.add(Shape::mesh(m));
     crate::glyphs::round_path(p, px(f, pts), s, true);
 }
 
 /// A strip of quads between two sides of equal length (for ribbons), no outline.
 fn strip(p: &Painter, f: Rect, a: &[P], b: &[P], fill: Color32) {
+    if fill.a() == 0 {
+        return;
+    }
     let mut m = Mesh::default();
     for (&pa, &pb) in a.iter().zip(b.iter()) {
         m.colored_vertex(at(f, pa.0, pa.1), fill);
@@ -309,31 +315,6 @@ pub fn kind_more(p: &Painter, rect: Rect, k: Kind, ink: Color32, fill: Color32) 
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Runs `kind_more` for every kind and returns the shapes it produced.
-    fn shapes_of(k: Kind) -> Vec<egui::epaint::ClippedShape> {
-        let ctx = egui::Context::default();
-        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
-            let painter = ui.painter().clone();
-            kind_more(&painter, Rect::from_min_size(pos2(0.0, 0.0), vec2(40.0, 40.0)), k, Color32::BLACK, Color32::LIGHT_BLUE);
-        });
-        out.textures_delta.clear();
-        out.shapes
-    }
-
-    #[test]
-    fn every_extra_and_cad_kind_draws_something() {
-        for &k in Kind::MORE.iter().chain(Kind::CAD.iter()) {
-            assert!(!shapes_of(k).is_empty(), "{k:?} drew nothing");
-        }
-        // the six main kinds are drawn by glyphs.rs, not here
-        assert!(shapes_of(Kind::Sphere).is_empty());
-    }
-}
-
 /// Melt: two round blobs joined by a smooth neck.
 pub fn melt(p: &Painter, rect: Rect, ink: Color32) {
     let f = Rect::from_center_size(rect.center(), egui::Vec2::splat(rect.width().min(rect.height()) * 0.8));
@@ -368,5 +349,31 @@ pub fn box_touching(p: &Painter, rect: Rect, ink: Color32) {
     let (a, b, c, d) = (at(0.04, 0.12), at(0.7, 0.12), at(0.7, 0.62), at(0.04, 0.62));
     for (u, v) in [(a, b), (b, c), (c, d), (d, a)] {
         p.add(Shape::dashed_line(&[u, v], s, 3.0, 2.5));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui::vec2;
+
+    /// Runs `kind_more` for every kind and returns the shapes it produced.
+    fn shapes_of(k: Kind) -> Vec<egui::epaint::ClippedShape> {
+        let ctx = egui::Context::default();
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let painter = ui.painter().clone();
+            kind_more(&painter, Rect::from_min_size(pos2(0.0, 0.0), vec2(40.0, 40.0)), k, Color32::BLACK, Color32::LIGHT_BLUE);
+        });
+        out.textures_delta.clear();
+        out.shapes
+    }
+
+    #[test]
+    fn every_extra_and_cad_kind_draws_something() {
+        for &k in Kind::MORE.iter().chain(Kind::CAD.iter()) {
+            assert!(!shapes_of(k).is_empty(), "{k:?} drew nothing");
+        }
+        // the six main kinds are drawn by glyphs.rs, not here
+        assert!(shapes_of(Kind::Sphere).is_empty());
     }
 }

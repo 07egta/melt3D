@@ -4,9 +4,9 @@
 
 mod accel;
 mod adapt;
-mod app;
 mod anim;
 mod anim_ui;
+mod app;
 mod array;
 mod automation;
 mod backend;
@@ -79,6 +79,7 @@ mod sketch_live;
 #[cfg(test)]
 mod sketch_live_tests;
 mod sketch_plane_pick;
+mod sketch_saved;
 mod sketch_ui;
 mod stroke;
 mod style;

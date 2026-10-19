@@ -83,8 +83,6 @@ pub struct Imported {
     pub mesh: ImportedMesh,
     /// One material when the imported surface is uniform; otherwise a representative colour.
     pub appearance: Option<crate::model::Material>,
-    /// The file contains more than one colour/material, which a single baked SDF cannot preserve.
-    pub appearance_varies: bool,
     pub format: MeshFormat,
     /// The mesh was turned from Y up to Z up.
     #[allow(dead_code)] // (the card turns the model itself, from the choice of 向き)
@@ -912,16 +910,7 @@ pub fn import_bytes(bytes: &[u8], name: &str, opts: &ImportOptions) -> Result<Im
     if longest > 0.0 && s.iter().any(|d| *d < longest * 1e-6) {
         notes.push("Flat shape (no thickness)".to_string());
     }
-    Ok(Imported {
-        mesh,
-        appearance: appearance_info.material,
-        appearance_varies: appearance_info.varies,
-        format,
-        turned_y_up: y_up,
-        dropped_triangles,
-        health,
-        notes,
-    })
+    Ok(Imported { mesh, appearance: appearance_info.material, format, turned_y_up: y_up, dropped_triangles, health, notes })
 }
 
 /// Read a mesh file (refusing anything over 256 MB).

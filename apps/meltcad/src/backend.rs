@@ -445,7 +445,7 @@ mod tests {
         assert_eq!(Settings::parse("not json at all"), Settings::default());
         assert_eq!(Settings::parse("{}"), Settings::default());
         assert_eq!(Settings::parse("{\"last_ok\":\"nonsense\"}"), Settings::default(), "an unknown backend word is dropped with the file");
-        assert_eq!(Settings::parse("{\"easy\":true,\"future_field\":1}").easy, true);
+        assert!(Settings::parse("{\"easy\":true,\"future_field\":1}").easy);
     }
 
     #[test]

@@ -400,10 +400,10 @@ impl App {
                 let Some(handles) = sh.curve_handles.get(i) else { return false };
                 let v = if outgoing { handles.outgoing } else { handles.incoming };
                 let w = to_world(sh, add([node[0], node[1], node[2]], v));
-                if let Some(origin) = origin {
-                    if let Some(hit) = unproject_on_plane(&cam, rect, origin, w, false) {
-                        drag.grab = sub(w, hit);
-                    }
+                if let Some(origin) = origin
+                    && let Some(hit) = unproject_on_plane(&cam, rect, origin, w, false)
+                {
+                    drag.grab = sub(w, hit);
                 }
             }
             Hit::Radius(i) => {
@@ -483,19 +483,20 @@ impl App {
                 if mods.ctrl {
                     offset = snap(offset, 1.0);
                 }
-                if offset.iter().all(|v| v.is_finite()) && len(offset) <= 10000.0 {
-                    if let Some(h) = sh.curve_handles.get_mut(d.i) {
+                if offset.iter().all(|v| v.is_finite())
+                    && len(offset) <= 10000.0
+                    && let Some(h) = sh.curve_handles.get_mut(d.i)
+                {
+                    if outgoing {
+                        h.outgoing = offset;
+                    } else {
+                        h.incoming = offset;
+                    }
+                    if h.mode == CurveNodeMode::Smooth {
                         if outgoing {
-                            h.outgoing = offset;
+                            h.incoming = offset.map(|v| -v);
                         } else {
-                            h.incoming = offset;
-                        }
-                        if h.mode == CurveNodeMode::Smooth {
-                            if outgoing {
-                                h.incoming = offset.map(|v| -v);
-                            } else {
-                                h.outgoing = offset.map(|v| -v);
-                            }
+                            h.outgoing = offset.map(|v| -v);
                         }
                     }
                 }
@@ -878,32 +879,32 @@ impl App {
                 sh.curve_handles.resize(sh.path.len(), CurveHandles::default());
             }
             align_handles(sh);
-            if let Some(i) = chosen {
-                if let Some(h) = sh.curve_handles.get_mut(i) {
-                    ui.horizontal(|ui| {
-                        ui.label("Tangent");
-                        for (mode, label) in [(CurveNodeMode::Auto, "Auto"), (CurveNodeMode::Smooth, "Smooth"), (CurveNodeMode::Corner, "Corner")] {
-                            if ui.selectable_label(h.mode == mode, label).clicked() {
-                                if h.mode == CurveNodeMode::Auto && mode != CurveNodeMode::Auto {
-                                    let direction = if i > 0 && i + 1 < sh.path.len() {
-                                        sub(
-                                            [sh.path[i + 1][0], sh.path[i + 1][1], sh.path[i + 1][2]],
-                                            [sh.path[i - 1][0], sh.path[i - 1][1], sh.path[i - 1][2]],
-                                        )
-                                    } else {
-                                        [3.0, 0.0, 0.0]
-                                    };
-                                    h.outgoing = mul(direction, 1.0 / 6.0);
-                                    h.incoming = mul(h.outgoing, -1.0);
-                                }
-                                if mode == CurveNodeMode::Smooth {
-                                    h.incoming = mul(h.outgoing, -1.0);
-                                }
-                                h.mode = mode;
+            if let Some(i) = chosen
+                && let Some(h) = sh.curve_handles.get_mut(i)
+            {
+                ui.horizontal(|ui| {
+                    ui.label("Tangent");
+                    for (mode, label) in [(CurveNodeMode::Auto, "Auto"), (CurveNodeMode::Smooth, "Smooth"), (CurveNodeMode::Corner, "Corner")] {
+                        if ui.selectable_label(h.mode == mode, label).clicked() {
+                            if h.mode == CurveNodeMode::Auto && mode != CurveNodeMode::Auto {
+                                let direction = if i > 0 && i + 1 < sh.path.len() {
+                                    sub(
+                                        [sh.path[i + 1][0], sh.path[i + 1][1], sh.path[i + 1][2]],
+                                        [sh.path[i - 1][0], sh.path[i - 1][1], sh.path[i - 1][2]],
+                                    )
+                                } else {
+                                    [3.0, 0.0, 0.0]
+                                };
+                                h.outgoing = mul(direction, 1.0 / 6.0);
+                                h.incoming = mul(h.outgoing, -1.0);
                             }
+                            if mode == CurveNodeMode::Smooth {
+                                h.incoming = mul(h.outgoing, -1.0);
+                            }
+                            h.mode = mode;
                         }
-                    });
-                }
+                    }
+                });
             }
             style::labeled_slider(ui, "Smoothness", &mut sh.params[1], 0.0..=1.0, "0 = sharp / 1 = smooth");
             ui.horizontal(|ui| {

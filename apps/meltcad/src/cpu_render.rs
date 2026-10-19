@@ -180,23 +180,15 @@ pub fn cli(args: &[std::ffi::OsString]) -> bool {
     true
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_default_scene_draws_something() {
-        let (w, img) = sheet(&Scene::default(), 40);
-        assert_eq!(img.len(), w * w * 4);
-        // not just one flat colour
-        let first = [img[0], img[1], img[2]];
-        assert!(img.chunks(4).any(|p| [p[0], p[1], p[2]] != first));
-    }
-}
-
 /// The whole animation as a GIF: every frame (or every `step`-th) drawn from `cam`, or from a
 /// camera that fits the piece at all its poses. `size` is the width in pixels.
-pub fn animation_gif(scene: &Scene, cam: Option<Camera>, size: usize, use_gpu: bool, mut progress: impl FnMut(u32, u32) -> bool) -> Result<Vec<u8>, String> {
+pub fn animation_gif(
+    scene: &Scene,
+    cam: Option<Camera>,
+    size: usize,
+    use_gpu: bool,
+    mut progress: impl FnMut(u32, u32) -> bool,
+) -> Result<Vec<u8>, String> {
     let a = &scene.anim;
     if a.is_empty() {
         return Err("No poses yet. Set a pose first".into());
@@ -216,7 +208,8 @@ pub fn animation_gif(scene: &Scene, cam: Option<Camera>, size: usize, use_gpu: b
             .collect();
         let n = spheres.len().max(1) as f32;
         let c = spheres.iter().fold([0.0f32; 3], |m, (c, _)| [m[0] + c[0] / n, m[1] + c[1] / n, m[2] + c[2] / n]);
-        let r = spheres.iter().map(|(p, r)| ((p[0] - c[0]).powi(2) + (p[1] - c[1]).powi(2) + (p[2] - c[2]).powi(2)).sqrt() + r).fold(0.0f32, f32::max);
+        let r =
+            spheres.iter().map(|(p, r)| ((p[0] - c[0]).powi(2) + (p[1] - c[1]).powi(2) + (p[2] - c[2]).powi(2)).sqrt() + r).fold(0.0f32, f32::max);
         let (c, r) = if spheres.is_empty() { ([0.0, 0.0, 20.0], 40.0) } else { (c, r) };
         let mut cam = Camera::default();
         cam.look(0.6, 0.42);
@@ -227,7 +220,7 @@ pub fn animation_gif(scene: &Scene, cam: Option<Camera>, size: usize, use_gpu: b
     let frames: Vec<u32> = (0..a.length).step_by(step as usize).collect();
     let total = frames.len() as u32;
     // the same picture as the window when there is a graphics card to ask (else the plain CPU one)
-    let mut gpu = if use_gpu { crate::gpu::offscreen::Offscreen::open().ok() } else { None };
+    let mut gpu = if use_gpu { crate::gpu::offscreen::Offscreen::open_with(None, None).ok() } else { None };
     let pic = gpu.as_ref().map(|g| g.picture([w as u32, h as u32]));
     let mut pics = Vec::new();
     for (i, &f) in frames.iter().enumerate() {
@@ -250,4 +243,18 @@ pub fn animation_gif(scene: &Scene, cam: Option<Camera>, size: usize, use_gpu: b
     }
     let delay = (100.0 * step as f32 / a.fps.max(1) as f32).round().clamp(2.0, 6000.0) as u16;
     crate::gif::encode(w, h, &pics, delay)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_default_scene_draws_something() {
+        let (w, img) = sheet(&Scene::default(), 40);
+        assert_eq!(img.len(), w * w * 4);
+        // not just one flat colour
+        let first = [img[0], img[1], img[2]];
+        assert!(img.chunks(4).any(|p| [p[0], p[1], p[2]] != first));
+    }
 }

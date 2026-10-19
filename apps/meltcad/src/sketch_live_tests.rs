@@ -1,4 +1,5 @@
-//! Tests of the one-gesture solid (`sketch_live.rs`): the live shape, accept, discard, hostile numbers.
+//! Tests of live solids (`sketch_live.rs`): separate sketch confirmation, the internal direct
+//! solid path, accept, discard, and hostile numbers.
 
 use egui::{Rect, pos2, vec2};
 
@@ -6,7 +7,7 @@ use crate::app::App;
 use crate::model::Kind;
 use crate::sketch::{self, Frame};
 use crate::sketch_live::{along_line, height_from};
-use crate::sketch_ui::{Finished, Make, Stage};
+use crate::sketch_ui::{Finished, Make, PlaneSel, Stage};
 
 fn app() -> App {
     let mut app = App::new(true, None);
@@ -14,7 +15,14 @@ fn app() -> App {
     app
 }
 
-/// Close an outline: the solid appears at once.
+/// Use the retained internal path for tests of live solid mechanics. The public Sketch command
+/// defaults to a saved guide; real input tests cover that two-command workflow.
+fn direct_solid_tool(app: &mut App) {
+    app.set_sketch_tool(true);
+    app.sk.keep_sketch = false;
+}
+
+/// Complete the drawing gesture; its active command decides whether it is a draft or a solid.
 fn closed_outline(app: &mut App, w: f32) {
     app.sketch_done(Finished::Profile(sketch::rect([0.0, 0.0], [w, 20.0])));
 }
@@ -37,11 +45,11 @@ fn height_and_line_maths_survive_hostile_numbers() {
 }
 
 #[test]
-fn closing_the_outline_puts_the_solid_in_the_scene() {
+fn direct_solid_closing_the_outline_puts_the_solid_in_the_scene() {
     let ctx = egui::Context::default();
     let mut app = app();
     let n = app.scene.shape_count();
-    app.set_sketch_tool(true);
+    direct_solid_tool(&mut app);
     closed_outline(&mut app, 30.0);
     assert!(app.sk.live.is_some() && app.sk.stage == Stage::Shape, "the solid is live");
     assert_eq!(app.scene.shape_count(), n + 1);
@@ -57,11 +65,11 @@ fn closing_the_outline_puts_the_solid_in_the_scene() {
 }
 
 #[test]
-fn accept_is_exactly_one_undo_step_and_discard_is_none() {
+fn direct_solid_accept_is_exactly_one_undo_step_and_discard_is_none() {
     let ctx = egui::Context::default();
     let mut app = app();
     let n0 = app.scene.shape_count();
-    app.set_sketch_tool(true);
+    direct_solid_tool(&mut app);
     // A: accepted
     closed_outline(&mut app, 30.0);
     app.sk.height = 8.0;
@@ -98,9 +106,9 @@ fn accept_is_exactly_one_undo_step_and_discard_is_none() {
 }
 
 #[test]
-fn hostile_heights_never_panic_and_never_leave_a_broken_solid() {
+fn direct_solid_hostile_heights_never_panic_and_never_leave_a_broken_solid() {
     let mut app = app();
-    app.set_sketch_tool(true);
+    direct_solid_tool(&mut app);
     closed_outline(&mut app, 30.0);
     for h in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -5.0, 0.0, 1e-9, 1e30, 2000.0, 2001.0] {
         app.sk.height = h;
@@ -139,11 +147,11 @@ fn a_sweep_path_makes_a_round_tube_that_discard_removes() {
 }
 
 #[test]
-fn the_hole_icon_goes_back_to_the_ready_card_with_the_same_outline() {
+fn direct_solid_hole_icon_goes_back_to_the_ready_card_with_the_same_outline() {
     let ctx = egui::Context::default();
     let mut app = app();
     let n = app.scene.shape_count();
-    app.set_sketch_tool(true);
+    direct_solid_tool(&mut app);
     closed_outline(&mut app, 30.0);
     app.live_to_ready();
     assert_eq!(app.sk.stage, Stage::Ready);
@@ -169,15 +177,18 @@ fn a_loft_gets_a_scaled_copy_on_top() {
 }
 
 #[test]
-fn a_plain_sketch_stays_a_line_until_extrude_is_pressed() {
+fn a_plain_sketch_is_confirmed_as_a_line_before_extrude_is_pressed() {
     let ctx = egui::Context::default();
     let mut app = app();
     let n = app.scene.shape_count();
     app.set_sketch_tool(true);
-    app.sk.keep_sketch = true;
+    app.sketch_set_plane(PlaneSel::Floor);
+    assert!(app.sk.keep_sketch, "Sketch defaults to a separate drawing command");
     closed_outline(&mut app, 30.0);
-    // a line, not a solid: nothing is live, the sketch tool goes on
-    assert!(app.sk.live.is_none() && app.sk.stage == Stage::Draw);
+    assert!(app.sk.live.is_none() && app.sk.stage == Stage::Ready);
+    assert_eq!(app.scene.shape_count(), n, "dimensions can still change before the sketch is saved");
+    assert!(app.sketch_confirm(&ctx));
+    assert!(!app.sk.on && app.sk.live.is_none(), "Finish Sketch returns to selection");
     assert_eq!(app.scene.shape_count(), n + 1);
     let Some(crate::model::Pick::Shape(g, s)) = app.sel else { panic!("the line is selected") };
     assert_eq!(app.scene.shape(g, s).map(|sh| sh.kind), Some(Kind::Curve));
@@ -187,8 +198,11 @@ fn a_plain_sketch_stays_a_line_until_extrude_is_pressed() {
     assert!(app.sk.live.is_some() && app.sk.stage == Stage::Shape);
     assert_eq!(app.scene.shape_count(), n + 2);
     let Some((lg, ls)) = app.sk.live else { panic!("live") };
-    let sh = app.scene.shape(lg, ls).map(|sh| (sh.kind, sh.size[0]));
-    assert!(sh.is_some_and(|(k, w)| k == Kind::Extrude && (w - 30.0).abs() < 1.5 || w > 0.0), "{sh:?}");
+    let sh = app.scene.shape(lg, ls).expect("the live extrusion exists");
+    assert_eq!(sh.kind, Kind::Extrude);
+    assert_eq!(sh.outline, sketch::rect([-15.0, -10.0], [15.0, 10.0]), "the original 30 × 20 mm outline is preserved");
+    assert_eq!(sh.size[0], app.sk.height, "the extrusion's first size parameter is its height");
+    assert_eq!(sh.pos, [15.0, 10.0, app.sk.height * 0.5], "the extrusion stays over the original sketch");
 }
 
 #[test]
