@@ -29,6 +29,13 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("group.delete", "{group}"),
     ("melt.set", "{amount?, drip?, ripple?, mode?}: how shapes melt together"),
     ("extrude", "{points: [[x,y],...], height, plane?: floor|front|side, z?, name?, op?, color?}: push an outline into a solid"),
+    ("anim.get", "The animation: fps, length, clay, poses (frames that hold a pose)"),
+    ("anim.set", "{fps?, length?, clay?}: speed, number of frames, hold each pose 3 frames (stop motion look)"),
+    ("anim.key", "{frame}: store the scene as it is now as the pose at this frame. Pose, move things, store again: the frames between are made for you (melt too)"),
+    ("anim.delete", "{frame}: forget the pose at this frame"),
+    ("anim.clear", "Forget every pose"),
+    ("anim.at", "{frame}: put the scene into its pose at this frame"),
+    ("anim.render", "{path, size?}: the animation as a GIF (CPU picture, slow)"),
     ("save", "{path}: write the scene file"),
     ("load", "{path}: read a scene file"),
     ("render", "{path, size?}: four views as a PNG (CPU picture)"),
@@ -93,6 +100,48 @@ pub fn execute(scene: &mut Scene, cmd: &Value) -> Result<Value, String> {
             Ok(json!({"amount": scene.melt.amount, "drip": scene.melt.drip, "ripple": scene.melt.ripple}))
         }
         "extrude" => extrude(scene, obj),
+        "anim.get" => Ok(json!({"fps": scene.anim.fps, "length": scene.anim.length, "clay": scene.anim.clay, "poses": scene.anim.key_frames()})),
+        "anim.set" => {
+            if let Some(v) = obj.get("fps") {
+                scene.anim.fps = v.as_u64().ok_or("fps is a number")?.min(60) as u32;
+            }
+            if let Some(v) = obj.get("length") {
+                scene.anim.length = v.as_u64().ok_or("length is a number")?.min(u64::from(crate::anim::MAX_FRAMES)) as u32;
+            }
+            if let Some(v) = obj.get("clay") {
+                scene.anim.clay = v.as_bool().ok_or("clay is true or false")?;
+            }
+            scene.anim.sanitize();
+            Ok(json!({"fps": scene.anim.fps, "length": scene.anim.length, "clay": scene.anim.clay}))
+        }
+        "anim.key" => {
+            let f = frame_arg(obj)?;
+            let mut anim = std::mem::take(&mut scene.anim);
+            let r = anim.capture(scene, f);
+            scene.anim = anim;
+            r?;
+            Ok(json!({"poses": scene.anim.key_frames()}))
+        }
+        "anim.delete" => {
+            scene.anim.remove(frame_arg(obj)?);
+            Ok(json!({"poses": scene.anim.key_frames()}))
+        }
+        "anim.clear" => {
+            scene.anim.clear();
+            Ok(json!({"poses": []}))
+        }
+        "anim.at" => {
+            let anim = scene.anim.clone();
+            anim.apply(scene, frame_arg(obj)?);
+            Ok(summary(scene))
+        }
+        "anim.render" => {
+            let path = text(obj, "path")?;
+            let size = obj.get("size").and_then(Value::as_u64).unwrap_or(240) as usize;
+            let bytes = crate::cpu_render::animation_gif(scene, None, size, |_, _| true)?;
+            std::fs::write(&path, bytes).map_err(|e| format!("Cannot write {path}: {e}"))?;
+            Ok(json!({"gif": path}))
+        }
         "save" => {
             let path = text(obj, "path")?;
             std::fs::write(&path, scene.try_to_json()?).map_err(|e| format!("Cannot write {path}: {e}"))?;
@@ -135,6 +184,11 @@ fn summary(scene: &Scene) -> Value {
         })
         .collect();
     json!({"groups": groups, "shape_count": scene.shape_count(), "melt": {"amount": scene.melt.amount}})
+}
+
+fn frame_arg(obj: &Map<String, Value>) -> Result<u32, String> {
+    let n = obj.get("frame").and_then(Value::as_u64).ok_or("Missing \"frame\" (a whole number)")?;
+    u32::try_from(n).map_err(|_| "frame is too big".to_string())
 }
 
 fn flag(obj: &Map<String, Value>, key: &str) -> bool {
@@ -385,6 +439,27 @@ mod tests {
             let _ = run(&mut sc, json!({"cmd": "shape.add", "kind": "Sphere"}));
         }
         assert!(sc.shape_count() <= MAX_SHAPES);
+    }
+
+    #[test]
+    fn animation_commands_pose_blend_and_render() {
+        let mut sc = Scene::default();
+        run(&mut sc, json!({"cmd": "anim.set", "length": 10, "fps": 10})).unwrap();
+        run(&mut sc, json!({"cmd": "anim.key", "frame": 0})).unwrap();
+        run(&mut sc, json!({"cmd": "shape.set", "group": 0, "shape": 0, "pos": [40, 0, 20]})).unwrap();
+        run(&mut sc, json!({"cmd": "melt.set", "amount": 3})).unwrap();
+        run(&mut sc, json!({"cmd": "anim.key", "frame": 8})).unwrap();
+        run(&mut sc, json!({"cmd": "anim.at", "frame": 4})).unwrap();
+        assert!((sc.groups[0].shapes[0].pos[0] - 20.0).abs() < 1e-3);
+        assert_eq!(run(&mut sc, json!({"cmd": "anim.get"})).unwrap()["poses"], json!([0, 8]));
+        assert!(run(&mut sc, json!({"cmd": "anim.key"})).is_err());
+        let p = std::env::temp_dir().join(format!("melt-anim-{}.gif", std::process::id()));
+        run(&mut sc, json!({"cmd": "anim.render", "path": p.to_string_lossy(), "size": 64})).unwrap();
+        let bytes = std::fs::read(&p).unwrap();
+        assert_eq!(&bytes[..6], b"GIF89a");
+        let _ = std::fs::remove_file(&p);
+        run(&mut sc, json!({"cmd": "anim.clear"})).unwrap();
+        assert!(run(&mut sc, json!({"cmd": "anim.render", "path": "x.gif"})).is_err());
     }
 
     #[test]

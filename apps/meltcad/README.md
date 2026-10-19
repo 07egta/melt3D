@@ -350,3 +350,10 @@ Illustrator や Inkscape などで作った SVG の絵を、ぐーっと押し�
 - `meltcad --mcp` … MCP サーバー（画面なし）。`meltcad --mcp --control 7777` なら開いている画面を操作します。
 - Claude Code: `claude mcp add melt3d -- /path/to/meltcad --mcp --control 7777`
 - 道具は2つ: `melt3d_run`（命令を実行）と `melt3d_view`（絵を見る）。
+
+### アニメーション（クレイアニメ風・メルトも動く）
+- 右下の **Animation** を押すと、下に時間の帯（タイムライン）が出ます。
+- やり方: 形を置く → **Set pose**（今の形を覚える）→ 別のコマに動かす → 形を動かす（自動で覚える）→ **Play**。ポーズの間は自動でつながります。溶け具合（Melt）も動きます。
+- **Clay** をオンにすると、ポーズを3コマずつ止めてコマ撮りの感じになります。
+- **Export GIF** で動く絵として保存。
+- AI からは `anim.set / anim.key / anim.delete / anim.at / anim.render`（`{"cmd":"commands"}` で一覧）。

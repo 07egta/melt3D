@@ -5,6 +5,8 @@
 mod accel;
 mod adapt;
 mod app;
+mod anim;
+mod anim_ui;
 mod array;
 mod automation;
 mod backend;
@@ -28,6 +30,7 @@ mod export_mesh;
 mod fonts;
 #[cfg(test)]
 mod frame_bench;
+mod gif;
 mod gizmo;
 mod glyphs;
 mod glyphs_more;
