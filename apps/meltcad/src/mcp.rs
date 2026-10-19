@@ -144,10 +144,10 @@ pub fn cli(args: &[std::ffi::OsString]) -> bool {
     let mut out = std::io::stdout();
     for line in stdin.lock().lines().map_while(Result::ok) {
         let Ok(msg) = serde_json::from_str::<Value>(&line) else { continue };
-        if let Some(reply) = handle(&mut backend, &msg) {
-            if writeln!(out, "{reply}").and_then(|_| out.flush()).is_err() {
-                break;
-            }
+        if let Some(reply) = handle(&mut backend, &msg)
+            && writeln!(out, "{reply}").and_then(|_| out.flush()).is_err()
+        {
+            break;
         }
     }
     true
@@ -194,7 +194,10 @@ mod tests {
         assert!(handle(&mut b, &json!({"jsonrpc":"2.0","method":"notifications/initialized"})).is_none());
         let list = handle(&mut b, &json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}));
         assert_eq!(list.as_ref().and_then(|v| v["result"]["tools"].as_array()).map(Vec::len), Some(2));
-        let run = handle(&mut b, &json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"melt3d_run","arguments":{"commands":[{"cmd":"shape.add","kind":"Sphere"},{"cmd":"scene.summary"}]}}}));
+        let run = handle(
+            &mut b,
+            &json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"melt3d_run","arguments":{"commands":[{"cmd":"shape.add","kind":"Sphere"},{"cmd":"scene.summary"}]}}}),
+        );
         let t = run.as_ref().and_then(|v| v["result"]["content"][0]["text"].as_str()).unwrap_or("");
         assert!(t.contains("\"shape_count\":1"), "{t}");
         let bad = handle(&mut b, &json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"melt3d_run","arguments":{}}}));

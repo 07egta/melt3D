@@ -251,10 +251,8 @@ fn rebake_panel(app: &mut App, ctx: &egui::Context) {
             ui.colored_label(style::CUT, &req.msg);
         }
     });
-    if pick {
-        if let Some(path) = rfd::FileDialog::new().add_filter("Mesh", &mesh_import::EXTENSIONS).pick_file() {
-            req.path = Some(path);
-        }
+    if pick && let Some(path) = rfd::FileDialog::new().add_filter("Mesh", &mesh_import::EXTENSIONS).pick_file() {
+        req.path = Some(path);
     }
     if start {
         launch_rebake(&mut req);
@@ -366,6 +364,9 @@ fn start_bake(d: &mut Dlg) {
 
 /// The shape and group of a baked mesh go into the scene. Returns whether the card can close.
 fn finish(app: &mut App, ctx: &egui::Context, b: &BakeJob, baked: &Baked) -> bool {
+    if !app.allow_scene_structure_change() {
+        return false;
+    }
     if app.scene.groups.len() >= MAX_GROUPS {
         app.say(ctx, format!("Up to {MAX_GROUPS} groups"));
         return false;
@@ -469,7 +470,7 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
                         b.ctl.cancel.store(true, Ordering::Relaxed);
                     }
                 } else {
-                    ui.add_enabled_ui(d.loaded.is_some(), |ui| {
+                    ui.add_enabled_ui(d.loaded.is_some() && !app.scene_structure_locked(), |ui| {
                         let b = egui::Button::new(RichText::new("Load").strong().color(Color32::WHITE))
                             .fill(style::ACCENT_SOFT)
                             .stroke(Stroke::new(1.0, style::ACCENT));

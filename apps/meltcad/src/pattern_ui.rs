@@ -101,6 +101,9 @@ impl App {
     /// A new pattern of `kind` on the selected group (Path and Geometry start on the first shape
     /// that has something to follow).
     pub fn set_pattern_kind(&mut self, ctx: &egui::Context, kind: PatternKind) {
+        if !self.allow_scene_structure_change() {
+            return;
+        }
         let Some(g) = self.selected_group() else {
             self.say(ctx, "Select a group or shape first");
             return;
@@ -148,6 +151,9 @@ impl App {
 
     /// Turn the mirror about world axis `axis` (0 X, 1 Y, 2 Z) on or off for the selected group.
     pub fn toggle_mirror(&mut self, ctx: &egui::Context, axis: usize) {
+        if !self.allow_scene_structure_change() {
+            return;
+        }
         let Some(g) = self.selected_group() else {
             self.say(ctx, "Select a group or shape first");
             return;
@@ -179,6 +185,9 @@ impl App {
 
     /// Take the pattern off the selected group.
     pub fn clear_pattern(&mut self) {
+        if !self.allow_scene_structure_change() {
+            return;
+        }
         if let Some(g) = self.selected_group()
             && let Some(gr) = self.scene.groups.get_mut(g)
         {
@@ -188,6 +197,9 @@ impl App {
 
     /// A linked copy of the selected group: it shows the same shapes, and follows every edit of them.
     pub fn make_instance(&mut self, ctx: &egui::Context) {
+        if !self.allow_scene_structure_change() {
+            return;
+        }
         let Some(g) = self.selected_group() else {
             self.say(ctx, "Select a group or shape first");
             return;
@@ -214,6 +226,9 @@ impl App {
 
     /// Make a linked copy a group of its own again (its shapes are copied, placed where the copy stood).
     fn unlink_group(&mut self, g: usize) {
+        if !self.allow_scene_structure_change() {
+            return;
+        }
         let Some(src) = pattern::link_source(&self.scene, g) else { return };
         let Some(x) = self.scene.groups.get(g).map(|gr| gr.xform) else { return };
         let Some(source) = self.scene.groups.get(src) else { return };

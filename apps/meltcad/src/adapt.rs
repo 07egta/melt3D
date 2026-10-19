@@ -145,11 +145,6 @@ impl BandPacer {
             self.rows = (self.rows * 1.25).min(1.0e5);
         }
     }
-
-    #[cfg(test)]
-    pub fn reset(&mut self) {
-        *self = BandPacer::default();
-    }
 }
 
 /// Which rows of the sharp picture are done: bands are drawn top to bottom.

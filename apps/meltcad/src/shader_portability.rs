@@ -11,7 +11,7 @@ use std::cell::RefCell;
 use naga::back::{glsl, hlsl, msl, spv};
 use naga::valid::{Capabilities, ValidationFlags, Validator};
 
-/// Warnings that naga writes through the `log` crate while translating on this thread.
+// Warnings that naga writes through the `log` crate while translating on this thread.
 thread_local! {
     static WARNINGS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
 }

@@ -192,10 +192,16 @@ pub fn pill_enabled(ui: &mut Ui, text: &str, on: bool, enabled: bool) -> Respons
 }
 
 fn text_button(ui: &mut Ui, text: &str, on: bool, enabled: bool, color: Option<Color32>) -> Response {
+    let enabled = enabled && ui.is_enabled();
     let galley = ui.painter().layout_no_wrap(text.to_string(), FontId::proportional(13.5), Color32::PLACEHOLDER);
     let size = vec2((galley.size().x + 24.0).max(30.0), 30.0);
     let (rect, resp) = ui.allocate_exact_size(size, if enabled { Sense::click() } else { Sense::hover() });
-    let shift = paint_button(ui, &resp, rect, 9.0, on);
+    let shift = if enabled {
+        paint_button(ui, &resp, rect, 9.0, on)
+    } else {
+        raised(ui.painter(), rect, 9.0, 0.0, if on { 1.0 } else { 0.0 }, false);
+        Vec2::ZERO
+    };
     let hot = ui.ctx().animate_value_with_time(resp.id.with("hot"), if resp.hovered() && enabled { 1.0 } else { 0.0 }, FAST);
     let base = color.unwrap_or(TEXT);
     let col = if !enabled {
@@ -212,8 +218,19 @@ fn text_button(ui: &mut Ui, text: &str, on: bool, enabled: bool, color: Option<C
 
 /// A menu button that looks like the other buttons. `accent` colours its text; the menu opens below it.
 pub fn menu_button<R>(ui: &mut Ui, text: &str, accent: bool, add_contents: impl FnOnce(&mut Ui) -> R) -> Option<egui::InnerResponse<R>> {
+    menu_button_enabled(ui, text, accent, true, add_contents)
+}
+
+/// Disable a menu anchor without adding a layout scope around its button.
+pub fn menu_button_enabled<R>(
+    ui: &mut Ui,
+    text: &str,
+    accent: bool,
+    enabled: bool,
+    add_contents: impl FnOnce(&mut Ui) -> R,
+) -> Option<egui::InnerResponse<R>> {
     use egui::containers::menu::MenuConfig;
-    let resp = text_button(ui, text, false, true, if accent { Some(ACCENT) } else { None });
+    let resp = text_button(ui, text, false, enabled, if accent { Some(ACCENT) } else { None });
     let config = MenuConfig::find(ui);
     egui::Popup::menu(&resp)
         .close_behavior(config.close_behavior)
@@ -238,10 +255,12 @@ pub fn segmented(ui: &mut Ui, salt: &str, items: &[(&str, &str)], selected: Opti
     let mut widths: Vec<f32> = galleys.iter().map(|g| g.size().x + pad * 2.0).collect();
     if stretch && !widths.is_empty() {
         let total: f32 = widths.iter().sum();
-        let avail = ui.available_width() - gap * 2.0;
+        let avail = (ui.available_width() - gap * 2.0).max(0.0);
         if avail > total {
             let extra = (avail - total) / widths.len() as f32;
             widths.iter_mut().for_each(|w| *w += extra);
+        } else if total > avail && total > 0.0 {
+            widths.iter_mut().for_each(|w| *w *= avail / total);
         }
     }
     let total = widths.iter().sum::<f32>() + gap * 2.0;
@@ -273,16 +292,28 @@ pub fn segmented(ui: &mut Ui, salt: &str, items: &[(&str, &str)], selected: Opti
         ctx.animate_value_with_time(id.with("vis"), 0.0, MEDIUM);
     }
     let mut clicked = None;
-    for (i, ((label_galley, rect), (_, tip))) in galleys.into_iter().zip(&rects).zip(items).enumerate() {
+    for (i, ((mut label_galley, rect), (label, tip))) in galleys.into_iter().zip(&rects).zip(items).enumerate() {
         let resp = ui.interact(*rect, id.with(("item", i)), Sense::click());
         let hot = ctx.animate_value_with_time(id.with(("hot", i)), if resp.hovered() { 1.0 } else { 0.0 }, FAST);
         let col = if selected == Some(i) { Color32::WHITE } else { mix(DIM, TEXT, 0.35 + 0.65 * hot) };
+        let text_width = (rect.width() - 8.0).max(0.0);
+        let truncated = label_galley.size().x > text_width;
+        if truncated {
+            label_galley = egui::WidgetText::from(egui::RichText::new(*label).color(Color32::PLACEHOLDER)).into_galley(
+                ui,
+                Some(egui::TextWrapMode::Truncate),
+                text_width,
+                font.clone(),
+            );
+        }
         let pos = rect.center() - label_galley.size() * 0.5;
-        ui.painter().galley(pos, label_galley, col);
+        ui.painter().with_clip_rect(rect.intersect(ui.clip_rect())).galley(pos, label_galley, col);
         if resp.clicked() {
             clicked = Some(i);
         }
-        if !tip.is_empty() {
+        if truncated {
+            resp.on_hover_text(if tip.is_empty() { (*label).to_owned() } else { format!("{label}\n{tip}") });
+        } else if !tip.is_empty() {
             resp.on_hover_text(*tip);
         }
     }
@@ -337,7 +368,6 @@ pub fn xyz(ui: &mut Ui, label: &str, v: &mut [f32; 3], speed: f64, range: std::o
 
 /// A triangle that turns from pointing right to pointing down when `open`.
 #[allow(dead_code)]
-#[allow(dead_code)]
 pub fn chevron(ui: &mut Ui, open: bool) -> Response {
     let (rect, resp) = ui.allocate_exact_size(Vec2::splat(22.0), Sense::click());
     let ctx = ui.ctx();
@@ -380,12 +410,6 @@ pub fn hsep_w(ui: &mut Ui, w: f32) {
     ui.painter().line_segment([pos2(rect.left(), y), pos2(rect.right(), y)], Stroke::new(1.0, Color32::from_white_alpha(34)));
 }
 
-pub fn hsep(ui: &mut Ui) {
-    let (rect, _) = ui.allocate_exact_size(vec2(26.0, 9.0), Sense::hover());
-    let y = rect.center().y;
-    ui.painter().line_segment([pos2(rect.left(), y), pos2(rect.right(), y)], Stroke::new(1.0, Color32::from_white_alpha(34)));
-}
-
 /// Reserves a paint slot behind the content, lays the content out, then fills the slot.
 fn plated<R>(ui: &mut Ui, margin: Margin, paint: impl FnOnce(&Buf, Rect), add_contents: impl FnOnce(&mut Ui) -> R) -> egui::InnerResponse<R> {
     let slot = ui.painter().add(Shape::Noop);
@@ -419,12 +443,10 @@ fn paint_card(out: &Buf, rect: Rect) {
 
 /// A recessed tray for a group of buttons.
 #[allow(dead_code)]
-#[allow(dead_code)]
 pub fn tray<R>(ui: &mut Ui, add_contents: impl FnOnce(&mut Ui) -> R) -> egui::InnerResponse<R> {
     plated(ui, Margin::same(3), paint_tray, add_contents)
 }
 
-#[allow(dead_code)]
 #[allow(dead_code)]
 fn paint_tray(out: &Buf, rect: Rect) {
     out.put(Shape::rect_filled(rect, 9.0, Color32::from_rgb(32, 32, 32)));
@@ -717,6 +739,18 @@ mod tests {
         assert_eq!(value_at(500.0, 10.0, 100.0, 1.0, 3.0), 3.0);
         assert_eq!(value_at(f32::NAN, 10.0, 100.0, 1.0, 3.0), 1.0);
         assert!(value_at(5.0, 0.0, 0.0, -1.0, 1.0).is_finite());
+    }
+
+    #[test]
+    fn long_segment_labels_fit_a_narrow_inspector() {
+        let ctx = egui::Context::default();
+        apply(&ctx);
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            ui.set_width(160.0);
+            segmented(ui, "narrow", &[("Shape settings", ""), ("Surface material", ""), ("Light and background", "")], Some(2), true);
+            assert!(ui.min_rect().width() <= 160.1, "the inspector must not expand into the canvas: {:?}", ui.min_rect());
+        });
+        out.textures_delta.clear();
     }
 
     #[test]

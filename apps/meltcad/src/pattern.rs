@@ -64,6 +64,7 @@ fn transpose(a: &Mat) -> Mat {
     [[a[0][0], a[1][0], a[2][0]], [a[0][1], a[1][1], a[2][1]], [a[0][2], a[1][2], a[2][2]]]
 }
 
+#[cfg(test)]
 fn det(a: &Mat) -> f32 {
     dot(a[0], cross(a[1], a[2]))
 }
@@ -110,6 +111,7 @@ impl Inst {
     }
 
     /// Does it mirror (turn a right hand into a left one)?
+    #[cfg(test)]
     pub fn flips(&self) -> bool {
         det(&self.m) < 0.0
     }

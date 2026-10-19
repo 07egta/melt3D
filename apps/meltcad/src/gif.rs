@@ -62,24 +62,22 @@ fn make_palette(frames: &[Vec<u8>]) -> Vec<[u8; 3]> {
     let mut order: Vec<usize> = (0..32768).filter(|&k| count.get(k).copied().unwrap_or(0) > 0).collect();
     order.sort_by_key(|&k| std::cmp::Reverse(count.get(k).copied().unwrap_or(0)));
     order.truncate(256);
-    let mut pal: Vec<[u8; 3]> = order.iter().map(|&k| [(((k >> 10) & 31) << 3 | 4) as u8, (((k >> 5) & 31) << 3 | 4) as u8, ((k & 31) << 3 | 4) as u8]).collect();
+    let mut pal: Vec<[u8; 3]> =
+        order.iter().map(|&k| [(((k >> 10) & 31) << 3 | 4) as u8, (((k >> 5) & 31) << 3 | 4) as u8, ((k & 31) << 3 | 4) as u8]).collect();
     pal.resize(256, [0, 0, 0]);
     pal
 }
 
 fn index_of(pal: &[[u8; 3]], lut: &mut [u16], p: &[u8]) -> u8 {
     let k = key(p);
-    if let Some(&v) = lut.get(k) {
-        if v != u16::MAX {
-            return v as u8;
-        }
+    if let Some(&v) = lut.get(k)
+        && v != u16::MAX
+    {
+        return v as u8;
     }
     let rgb = [p.first().copied().unwrap_or(0), p.get(1).copied().unwrap_or(0), p.get(2).copied().unwrap_or(0)];
-    let best = pal
-        .iter()
-        .enumerate()
-        .min_by_key(|(_, c)| (0..3).map(|i| (i32::from(c[i]) - i32::from(rgb[i])).pow(2)).sum::<i32>())
-        .map_or(0, |(i, _)| i);
+    let best =
+        pal.iter().enumerate().min_by_key(|(_, c)| (0..3).map(|i| (i32::from(c[i]) - i32::from(rgb[i])).pow(2)).sum::<i32>()).map_or(0, |(i, _)| i);
     if let Some(slot) = lut.get_mut(k) {
         *slot = best as u16;
     }
