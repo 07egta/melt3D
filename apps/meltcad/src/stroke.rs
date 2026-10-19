@@ -353,7 +353,7 @@ mod tests {
         s.blend = 0.0;
         let mut g = Group::new("g");
         g.shapes = vec![s];
-        Field::new(&Scene { groups: vec![g], melt: Default::default(), env: Default::default(), saved: Vec::new() })
+        Field::new(&Scene { groups: vec![g], melt: Default::default(), env: Default::default(), saved: Vec::new(), anim: Default::default() })
     }
 
     /// A sine wave drawn with many tiny steps.
@@ -414,7 +414,8 @@ mod tests {
         right.size[0] = 10.0;
         let mut g = Group::new("two balls");
         g.shapes = vec![left, right];
-        let field = Field::new(&Scene { groups: vec![g], melt: Default::default(), env: Default::default(), saved: Vec::new() });
+        let field =
+            Field::new(&Scene { groups: vec![g], melt: Default::default(), env: Default::default(), saved: Vec::new(), anim: Default::default() });
         let mut points = Vec::new();
         let mut on_skin = Vec::new();
         let mut floor = Vec::new();

@@ -53,6 +53,21 @@ impl Rig {
         }
     }
 
+    /// Use the real window-thread control queue, including commands batched in one frame.
+    fn control(&mut self, commands: &[serde_json::Value]) -> Vec<Result<serde_json::Value, String>> {
+        let (send, requests) = std::sync::mpsc::channel();
+        let (reply, answers) = std::sync::mpsc::channel();
+        self.app.control = Some(requests);
+        for cmd in commands {
+            send.send(crate::control::Request { cmd: cmd.clone(), reply: reply.clone() }).expect("queue the control command");
+        }
+        let full_ui = self.full_ui;
+        self.full_ui = true;
+        self.frame(vec![]);
+        self.full_ui = full_ui;
+        commands.iter().map(|_| answers.try_recv().expect("the frame replied to every command")).collect()
+    }
+
     fn right_click(&mut self, p: Pos2) {
         self.mv(p);
         for pressed in [true, false] {
@@ -1015,4 +1030,390 @@ fn solid_outline_undo_of_scene_reordering_does_not_rebind_the_editor() {
     r.app.redo();
     assert_eq!(r.app.scene, after);
     assert!(r.app.sk.edit.is_none(), "redo must not resurrect a stale editor reference");
+}
+
+#[test]
+fn control_preserves_live_sketch_drafts_and_outline_edits() {
+    use serde_json::json;
+
+    for mode in ["live", "saved sketch", "ready draft", "outline"] {
+        let mut r = Rig::new();
+        let source = r.saved_rectangle();
+        let saved = r.app.scene.clone();
+        match mode {
+            "live" => assert!(r.app.make_from_selected_line(&r.ctx, crate::sketch_ui::Make::Extrude)),
+            "saved sketch" => assert!(r.app.edit_saved_sketch(source.0, source.1)),
+            "ready draft" => {
+                r.sketch(Pen::Rect);
+                r.click(r.on_plane([-20.0, -15.0]));
+                r.click(r.on_plane([20.0, 15.0]));
+                assert_eq!(r.app.sk.stage, Stage::Ready);
+            }
+            "outline" => {
+                r.app.add_shape(&r.ctx, Kind::Extrude);
+                r.frame(vec![]);
+                let Some(Pick::Shape(g, s)) = r.app.sel else { panic!("new extrusion") };
+                r.app.sketch_edit_begin(g, s);
+                assert!(r.app.sk.edit.is_some());
+            }
+            _ => unreachable!(),
+        }
+        r.frame(vec![]);
+        let before = r.app.scene.clone();
+        let (undo, dirty) = (r.app.undo_depth(), r.app.dirty);
+        let refs = (r.app.sk.live, r.app.sk.source_sketch, r.app.sk.guide_edit, r.app.sk.edit.as_ref().map(|e| (e.g, e.s)));
+        let (profile, points) = (r.app.sk.profile.clone(), r.app.sk.pts.clone());
+        let dir = std::env::temp_dir().join(format!("meltcad-control-edit-{}-{mode}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("test folder");
+        let load = dir.join("input.meltcad");
+        let save = dir.join("draft.meltcad");
+        let render = dir.join("view.png");
+        std::fs::write(&load, saved.try_to_json().expect("saved scene JSON")).expect("test scene");
+        let _ = std::fs::remove_file(&save);
+        let commands = [
+            json!({"cmd": "commands"}),
+            json!({"cmd": "scene.get"}),
+            json!({"cmd": "scene.summary"}),
+            json!({"cmd": "render", "path": render, "size": 40}),
+            json!({"cmd": "scene.new"}),
+            json!({"cmd": "scene.set", "scene": crate::model::Scene::default()}),
+            json!({"cmd": "load", "path": load}),
+            json!({"cmd": "shape.add", "kind": "Box"}),
+            json!({"cmd": "shape.set", "group": 0, "shape": 0, "pos": [4, 5, 6]}),
+            json!({"cmd": "shape.delete", "group": 0, "shape": 0}),
+            json!({"cmd": "group.delete", "group": 0}),
+            json!({"cmd": "melt.set", "amount": 12}),
+            json!({"cmd": "save", "path": save}),
+        ];
+        let replies = r.control(&commands);
+        for (command, reply) in commands.iter().zip(&replies).take(4) {
+            assert!(reply.is_ok(), "{mode}: {command}: {reply:?}");
+        }
+        for (command, reply) in commands.iter().zip(&replies).skip(4) {
+            assert!(reply.as_ref().is_err_and(|e| e.contains("Finish or cancel")), "{mode}: {command}: {reply:?}");
+        }
+        assert!(!save.exists(), "an unfinished edit must not be silently saved");
+        assert!(render.exists(), "read-only rendering remains available while editing");
+        assert_eq!(r.app.scene, before, "{mode}: control commands cannot change active geometry");
+        assert_eq!((r.app.undo_depth(), r.app.dirty), (undo, dirty), "{mode}: rejected and read-only commands do not commit");
+        assert_eq!(
+            (r.app.sk.live, r.app.sk.source_sketch, r.app.sk.guide_edit, r.app.sk.edit.as_ref().map(|e| (e.g, e.s))),
+            refs,
+            "{mode}: editing targets stay bound to the same objects"
+        );
+        assert_eq!((r.app.sk.profile.clone(), r.app.sk.pts.clone()), (profile, points));
+        if mode == "live" {
+            r.app.sk.height = 63.0;
+            r.app.live_update();
+            r.app.sketch_off();
+            assert_eq!(r.app.scene, saved, "cancelling afterwards still removes only the preview");
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
+#[test]
+fn control_batches_commit_one_undo_per_changed_command() {
+    use serde_json::json;
+
+    let mut r = Rig::new();
+    let before = r.app.scene.clone();
+    let undo = r.app.undo_depth();
+    let replies = r.control(&[
+        json!({"cmd": "shape.add", "kind": "Box", "name": "First command"}),
+        json!({"cmd": "shape.add", "kind": "Cone", "name": "Second command"}),
+    ]);
+    assert!(replies.iter().all(Result::is_ok), "{replies:?}");
+    assert_eq!(r.app.undo_depth(), undo + 2, "two queued changes are independently undoable");
+    assert!(r.app.dirty);
+    assert_eq!(r.app.sel, Some(Pick::Shape(0, 2)));
+    let after = r.app.scene.clone();
+    r.app.undo();
+    assert_eq!(r.app.scene.shape_count(), before.shape_count() + 1);
+    assert_eq!(r.app.scene.shape(0, 1).expect("first command remains").name, "First command");
+    r.app.undo();
+    assert_eq!(r.app.scene, before);
+    r.app.redo();
+    r.app.redo();
+    assert_eq!(r.app.scene, after);
+}
+
+#[test]
+fn control_reads_errors_and_noops_preserve_dirty_undo_and_redo() {
+    use serde_json::json;
+
+    let mut r = Rig::new();
+    r.app.add_shape(&r.ctx, Kind::Box);
+    r.frame(vec![]);
+    let redo = r.app.scene.clone();
+    r.app.undo();
+    r.app.dirty = false;
+    let before = r.app.scene.clone();
+    let undo = r.app.undo_depth();
+    let path = std::env::temp_dir().join(format!("meltcad-control-settled-save-{}.meltcad", std::process::id()));
+    let replies = r.control(&[
+        json!({"cmd": "commands"}),
+        json!({"cmd": "scene.get"}),
+        json!({"cmd": "scene.summary"}),
+        json!({"cmd": "melt.set", "amount": before.melt.amount}),
+        json!({"cmd": "save", "path": path}),
+        json!({"cmd": "unknown"}),
+        json!({"cmd": "shape.set", "group": 0, "shape": 0, "kind": "not a shape"}),
+    ]);
+    assert!(replies.iter().take(5).all(Result::is_ok), "{replies:?}");
+    assert!(replies.iter().skip(5).all(Result::is_err), "{replies:?}");
+    assert_eq!(r.app.scene, before);
+    assert_eq!(r.app.undo_depth(), undo);
+    assert!(!r.app.dirty);
+    assert!(path.exists(), "saving a settled scene remains available");
+    r.app.redo();
+    assert_eq!(r.app.scene, redo, "failed, read-only and no-op commands preserve redo");
+    let _ = std::fs::remove_file(path);
+
+    // shape.add used to create a group before failing its requested group lookup.
+    // An error must discard even this partial change in the command implementation.
+    let mut empty = Rig::new();
+    empty.app.new_scene(crate::model::Scene { groups: Vec::new(), ..crate::model::Scene::default() });
+    empty.frame(vec![]);
+    let before = empty.app.scene.clone();
+    let reply = empty.control(&[json!({"cmd": "shape.add", "kind": "Box", "group": 999})]);
+    assert!(reply[0].is_err());
+    assert_eq!(empty.app.scene, before);
+    assert_eq!(empty.app.undo_depth(), 0);
+    assert!(!empty.app.dirty);
+}
+
+#[test]
+fn control_scene_replacement_and_deletion_clear_idle_index_state() {
+    use serde_json::json;
+
+    let mut replacement = crate::model::Scene { groups: vec![crate::model::Group::new("Replacement")], ..crate::model::Scene::default() };
+    replacement.groups[0].shapes.push(Shape::new(Kind::Cylinder, [10.0, 15.0, 20.0], Material::default()));
+    let path = std::env::temp_dir().join(format!("meltcad-control-replace-{}.meltcad", std::process::id()));
+    std::fs::write(&path, replacement.try_to_json().expect("replacement JSON")).expect("replacement file");
+    for command in [
+        json!({"cmd": "scene.new"}),
+        json!({"cmd": "scene.set", "scene": replacement}),
+        json!({"cmd": "load", "path": path}),
+        json!({"cmd": "shape.delete", "group": 0, "shape": 0}),
+        json!({"cmd": "group.delete", "group": 0}),
+    ] {
+        let mut r = Rig::new();
+        r.app.add_shape(&r.ctx, Kind::Box);
+        r.frame(vec![]);
+        let before = r.app.scene.clone();
+        let undo = r.app.undo_depth();
+        r.app.dirty = false;
+        r.app.sel = Some(Pick::Shape(0, 0));
+        r.app.multi = vec![Pick::Shape(0, 1)];
+        r.app.multi_for = r.app.sel;
+        r.app.ct.node = Some((0, 0, 0));
+        r.app.pt.last = Some((0, 0));
+        let replies = r.control(std::slice::from_ref(&command));
+        assert!(replies[0].is_ok(), "{command}: {replies:?}");
+        assert_eq!(r.app.undo_depth(), undo + 1, "{command}: exactly one undo step");
+        assert!(r.app.dirty);
+        assert!(r.app.ct.node.is_none() && r.app.pt.last.is_none(), "{command}: old node/pipe indices must be forgotten");
+        assert!(r.app.multi.is_empty() && r.app.multi_for.is_none(), "{command}: old multiselection must not bind to replacement shapes");
+        if matches!(command["cmd"].as_str(), Some("scene.set" | "load")) {
+            assert_eq!(r.app.sel, Some(Pick::Shape(0, 0)));
+            assert_eq!(r.app.scene.shape(0, 0).expect("newly loaded shape").kind, Kind::Cylinder);
+        } else {
+            assert!(r.app.sel.is_none(), "{command}: deletion cannot select another object at the same old index");
+        }
+        let after = r.app.scene.clone();
+        r.app.undo();
+        assert_eq!(r.app.scene, before, "{command}: undo restores the previous document geometry");
+        r.app.redo();
+        assert_eq!(r.app.scene, after);
+        assert!(r.app.ct.node.is_none() && r.app.pt.last.is_none());
+    }
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn control_rejects_changes_during_an_actual_node_drag() {
+    use serde_json::json;
+
+    let mut r = Rig::new();
+    r.full_ui = true;
+    r.app.scene.groups[0].shapes.push(curve_shape());
+    r.app.sel = Some(Pick::Shape(0, 1));
+    r.frame(vec![]);
+    r.frame(vec![]);
+    let shape = r.app.scene.shape(0, 1).expect("curve");
+    let nodes = layout(&r.app.cam, r.app.view_rect, shape);
+    let from = nodes.nodes[1].expect("visible middle node").c;
+    let to = from + vec2(22.0, -9.0);
+    r.mv(from);
+    r.button(from, true);
+    r.mv(to);
+    let drag = r.app.ct.drag.expect("the pointer owns a node drag");
+    let during = r.app.scene.clone();
+    let undo = r.app.undo_depth();
+    let replies = r.control(&[json!({"cmd": "shape.delete", "group": 0, "shape": 1}), json!({"cmd": "scene.get"})]);
+    assert!(replies[0].is_err());
+    assert_eq!(replies[1], Ok(serde_json::to_value(&during).expect("scene at the control boundary")));
+    // The rest of the frame continues the pointer drag and initializes its
+    // inspector handles; those normal UI updates are separate from the commands.
+    assert_eq!(r.app.scene.shape_count(), during.shape_count());
+    assert_eq!(r.app.scene.shape(0, 0), during.shape(0, 0));
+    assert_eq!(r.app.undo_depth(), undo);
+    assert_eq!(r.app.ct.drag.as_ref().map(|d| (d.g, d.s, d.i)), Some((drag.g, drag.s, drag.i)));
+    r.button(to, false);
+    assert!(r.app.ct.drag.is_none());
+    assert_eq!(r.app.undo_depth(), undo + 1, "releasing the original drag still commits exactly that gesture");
+    let replies = r.control(&[json!({"cmd": "shape.delete", "group": 0, "shape": 1})]);
+    assert!(replies[0].is_ok(), "the command works after the user finishes dragging");
+    assert_eq!(r.app.scene.shape_count(), 1);
+    assert_eq!(r.app.undo_depth(), undo + 2);
+}
+
+#[test]
+fn control_preserves_an_inspector_textedit_until_its_input_is_finished() {
+    use serde_json::json;
+
+    let mut r = Rig::new();
+    r.full_ui = true;
+    r.frame(vec![]);
+    r.frame(vec![]);
+    r.time += 0.016;
+    let input = RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, r.size)), time: Some(r.time), ..Default::default() };
+    let out = r.ctx.run_ui(input, |ui| r.app.frame_body(ui));
+    // Locate the actual inspector's name TextEdit from its painted text, so the
+    // test clicks the real field without hard-coding panel or font coordinates.
+    let name = &r.app.scene.shape(0, 0).expect("selected shape").name;
+    let field = out
+        .shapes
+        .iter()
+        .find_map(|s| match &s.shape {
+            egui::Shape::Text(t) if t.galley.job.text == *name && t.pos.x > r.size.x - 312.0 => Some(t.visual_bounding_rect()),
+            _ => None,
+        })
+        .expect("the selected shape's name is visible in the inspector");
+    r.click(field.center());
+    r.replace_text("Edited before control");
+    assert_eq!(r.app.scene.shape(0, 0).expect("edited shape").name, "Edited before control");
+    assert!(r.ctx.egui_wants_keyboard_input());
+    assert!(!r.ctx.input(|i| i.pointer.any_down()));
+    assert!(!r.app.sketch_active() && r.app.renaming.is_none(), "the inspector TextEdit is the only protected input");
+    let before = r.app.scene.clone();
+    let undo = r.app.undo_depth();
+    let path = std::env::temp_dir().join(format!("meltcad-control-focused-{}.meltcad", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    let replies = r.control(&[json!({"cmd": "shape.add", "kind": "Box"}), json!({"cmd": "scene.summary"}), json!({"cmd": "save", "path": path})]);
+    assert!(replies[0].is_err() && replies[1].is_ok() && replies[2].is_err(), "{replies:?}");
+    assert_eq!(r.app.scene, before);
+    assert_eq!(r.app.sel, Some(Pick::Shape(0, 0)));
+    assert_eq!(r.app.undo_depth(), undo);
+    assert!(r.ctx.egui_wants_keyboard_input());
+    assert!(!path.exists(), "saving waits for the field edit too");
+    r.key(egui::Key::Enter);
+    assert!(!r.ctx.egui_wants_keyboard_input());
+    let replies = r.control(&[json!({"cmd": "shape.add", "kind": "Box"})]);
+    assert!(replies[0].is_ok());
+    assert_eq!(r.app.sel, Some(Pick::Shape(0, 1)));
+    assert_eq!(r.app.scene.shape(0, 0).expect("original shape").name, "Edited before control");
+    assert_eq!(r.app.scene.shape(0, 1).expect("new shape").name, "Box", "the previous field's text must not carry into the new selection");
+}
+
+#[test]
+fn control_animation_changes_keep_the_explicit_pose_and_one_undo_step() {
+    use serde_json::json;
+
+    for was_playing in [false, true] {
+        let mut r = Rig::new();
+        r.full_ui = true;
+        let replies = r.control(&[
+            json!({"cmd": "anim.set", "length": 9, "fps": 1}),
+            json!({"cmd": "anim.key", "frame": 0}),
+            json!({"cmd": "shape.set", "group": 0, "shape": 0, "pos": [80, 0, 20]}),
+            json!({"cmd": "anim.key", "frame": 8}),
+            json!({"cmd": "anim.at", "frame": 0}),
+        ]);
+        assert!(replies.iter().all(Result::is_ok), "{replies:?}");
+        let animation = r.app.scene.anim.clone();
+        assert_eq!(animation.key_frames(), [0, 8]);
+        r.app.an.open = true;
+        r.app.an.playing = was_playing;
+        let undo = r.app.undo_depth();
+        let replies = r.control(&[json!({"cmd": "anim.at", "frame": 4})]);
+        assert_eq!(replies[0].as_ref().expect("pose was applied")["frame"], 4);
+        assert_eq!(r.app.an.frame, 4);
+        assert!(!r.app.an.playing);
+        assert_eq!(r.app.scene.shape(0, 0).expect("interpolated shape").pos[0], 40.0);
+        assert_eq!(r.app.scene.anim, animation, "a control pose must not be captured into the old UI frame");
+        assert_eq!(r.app.undo_depth(), undo + 1);
+        r.frame(vec![]);
+        r.frame(vec![]);
+        assert_eq!(r.app.scene.anim, animation);
+        assert_eq!(r.app.undo_depth(), undo + 1, "later UI frames must not add a second auto-key undo");
+
+        // The clock, not just the displayed frame, must follow a control seek.
+        r.app.an.playing = true;
+        r.frame(vec![]);
+        assert_eq!(r.app.an.frame, 4, "resuming at 1 fps starts from the requested frame");
+        assert_eq!(r.app.scene.shape(0, 0).expect("resumed shape").pos[0], 40.0);
+
+        let undo = r.app.undo_depth();
+        let replies = r.control(&[json!({"cmd": "shape.set", "group": 0, "shape": 0, "pos": [60, 0, 20]})]);
+        assert!(replies[0].is_ok());
+        assert!(!r.app.an.playing, "playback cannot immediately overwrite an external edit");
+        assert_eq!(r.app.scene.shape(0, 0).expect("explicitly edited shape").pos[0], 60.0);
+        assert_eq!(r.app.scene.anim, animation, "shape.set has the same explicit effect as in a CLI script");
+        assert_eq!(r.app.undo_depth(), undo + 1);
+
+        assert!(r.control(&[json!({"cmd": "anim.at", "frame": 8})])[0].is_ok());
+        r.app.an.playing = true;
+        let undo = r.app.undo_depth();
+        assert!(r.control(&[json!({"cmd": "anim.delete", "frame": 8})])[0].is_ok());
+        assert!(!r.app.an.playing);
+        assert_eq!(r.app.scene.anim.key_frames(), [0], "UI auto-capture cannot recreate a deleted pose");
+        assert_eq!(r.app.scene.shape(0, 0).expect("delete keeps the current geometry").pos[0], 80.0);
+        assert_eq!(r.app.undo_depth(), undo + 1);
+        r.frame(vec![]);
+        assert_eq!(r.app.scene.anim.key_frames(), [0]);
+        assert_eq!(r.app.undo_depth(), undo + 1);
+        r.app.undo();
+        assert_eq!(r.app.scene.anim, animation, "one undo restores the deleted pose");
+    }
+}
+
+#[test]
+fn control_animation_noop_seek_syncs_time_and_readonly_works_during_sketch() {
+    use serde_json::json;
+
+    let mut r = Rig::new();
+    r.full_ui = true;
+    let replies = r.control(&[json!({"cmd": "anim.set", "length": 6, "fps": 1}), json!({"cmd": "anim.key", "frame": 0})]);
+    assert!(replies.iter().all(Result::is_ok));
+    let before = r.app.scene.clone();
+    let (undo, dirty) = (r.app.undo_depth(), r.app.dirty);
+    r.app.an.open = true;
+    r.app.an.playing = true;
+    let replies = r.control(&[json!({"cmd": "anim.at", "frame": 9999})]);
+    assert_eq!(replies[0].as_ref().expect("clamped seek")["frame"], 5);
+    assert_eq!(r.app.scene, before, "a single stored pose is constant across the timeline");
+    assert_eq!((r.app.undo_depth(), r.app.dirty), (undo, dirty), "a seek with no scene change creates no edit");
+    assert_eq!(r.app.an.frame, 5, "the UI follows the command even without a scene difference");
+    assert!(!r.app.an.playing);
+    r.app.an.playing = true;
+    r.frame(vec![]);
+    assert_eq!(r.app.an.frame, 5, "the playback clock also moved to the clamped frame");
+    r.app.an.playing = false;
+
+    r.app.set_sketch_tool(true);
+    let path = std::env::temp_dir().join(format!("meltcad-control-anim-read-{}.gif", std::process::id()));
+    let replies = r.control(&[
+        json!({"cmd": "anim.get"}),
+        json!({"cmd": "anim.render", "path": path, "size": 64, "gpu": false}),
+        json!({"cmd": "anim.at", "frame": 2}),
+    ]);
+    assert!(replies[0].is_ok() && replies[1].is_ok() && replies[2].is_err(), "{replies:?}");
+    assert!(path.exists());
+    assert!(r.app.sketch_active());
+    assert_eq!(r.app.scene, before);
+    assert_eq!((r.app.undo_depth(), r.app.dirty), (undo, dirty));
+    assert_eq!(r.app.an.frame, 5, "a rejected pose command cannot move the playhead");
+    let _ = std::fs::remove_file(path);
 }

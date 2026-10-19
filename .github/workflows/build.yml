@@ -124,6 +124,8 @@ jobs:
           exit $((s1 + s2 + s3))
 
       - name: Render Melt3D workflow screenshots
+        # Keep review evidence available after a test failure; the job still fails.
+        if: ${{ !cancelled() }}
         shell: bash
         run: |
           set -euo pipefail
@@ -132,10 +134,12 @@ jobs:
             for stage in ready extrude edit; do
               YURA_WIDTH="${dimensions%x*}" YURA_HEIGHT="${dimensions#*x}" YURA_PPP=1 \
               YURA_SKETCH="$stage" YURA_PREVIEW="$RUNNER_TEMP/melt3d-ui/$stage-$dimensions.png" \
-                cargo test --profile ci --locked -p meltcad app::app_preview::app_preview -- --ignored --exact --test-threads=1
+                cargo test --profile ci --locked -p meltcad app::preview::app_preview -- --ignored --exact --test-threads=1
+              test -s "$RUNNER_TEMP/melt3d-ui/$stage-$dimensions.png"
             done
           done
       - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
         with:
           name: melt3d-ui-previews
           if-no-files-found: error

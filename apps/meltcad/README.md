@@ -344,3 +344,56 @@ Illustrator や Inkscape などで作った SVG の絵を、ぐーっと押し�
 `meltcad --run script.json [--scene in.meltcad] [--out out.meltcad] [--png out.png]`
 スクリプトは命令の配列です。例: `[{"cmd":"shape.add","kind":"Sphere","pos":[0,0,20]},{"cmd":"melt.set","amount":1.5}]`。
 命令の一覧は `{"cmd":"commands"}`。
+
+### Sketch を保存してから Solid を作る
+
+`sketch.create` は完成した輪郭や開いた線を保存します。画面やダイアログは開きません。
+返り値の `group` と `shape` は 0 から始まる番号です。その組を `sketch`、`top`、`path` に渡します。
+Solid の命令は新しい形を追加し、参照した Sketch は残します。`scene.summary` の `sketch:true` でも見分けられます。
+
+```json
+[
+  {"cmd":"sketch.create","name":"Plate outline","points":[[-10,-10],[10,-10],[10,10],[-10,10]],"holes":[[[-3,-3],[3,-3],[3,3],[-3,3]]]},
+  {"cmd":"solid.extrude","sketch":{"group":0,"shape":0},"height":12,"both":true}
+]
+```
+
+| 命令 | 主な入力 |
+|---|---|
+| `sketch.create` | `points:[[x,y],…]`、任意で `closed`（既定 `true`）、`holes`、`plane`、追加先 `group`、`name` |
+| `sketch.set` | `group`、`shape`、新しい `points`。省略した `closed`、`holes`、`plane`、名前・ID・材質・可視性・変換は保持 |
+| `solid.extrude` | `sketch:{group,shape}`、`height`（既定 20 mm）、`both`、`flip` |
+| `solid.revolve` | 立っている平面に保存した `sketch`。平面原点を通る縦軸の周りに回転 |
+| `solid.loft` | `sketch` と `top:{group,shape}`。平行な2平面の実際の距離と横ずれを使用。`top` を省略すると `height`（20 mm）と `top_scale`（0.5）のコピーを使用 |
+| `solid.sweep` | 閉じた `sketch` と開いた `path:{group,shape}`、`scale`（1）。開いた Sketch を `sketch` に渡すと `radius`（4 mm）の丸い管 |
+
+`plane` の既定は `"floor"`。`"front"`、`"side"`、または
+`{"origin":[0,0,30],"u":[1,0,0],"v":[0,1,0]}` のように原点と2方向を指定できます。
+`points` と穴の座標はこの平面内の mm です。`sketch.set` は現在の変換後の平面内の mm を受け取り、
+形の回転や倍率も保持します。穴を消すときは `"holes":[]` を明示します。
+
+閉じた輪郭は最大64点、開いた線は最大48点、穴は最大12個です。座標は平面内 ±2000 mm、
+平面原点は各軸 ±5000 mm。高さは 0.1–2000 mm、`top_scale` は 0.1–3、
+閉輪郭 Sweep の `scale` は 0.2–4、丸い Sweep の `radius` は 0.4–16 mm です。
+各 Solid 命令には `op:"Add"|"Subtract"`、`name`、`color:[r,g,b]`（各 0–1）も指定できます。
+穴付き輪郭は Extrude に使えます。穴を含む形は専用グループとして追加されます。
+保存済み `top` がある Loft では `height`・`top_scale`・`flip` は指定せず、
+丸い Sweep は `radius`、閉輪郭 Sweep は `scale` を使います。
+数値や輪郭、参照先、容量が不正なら、これらの命令はシーンを変えずにエラーを返します。
+従来の `extrude` 命令も引き続き利用できます。
+
+### 開いているアプリを動かす／MCP
+- `meltcad --control 7777` … アプリを開いたまま、127.0.0.1:7777 に JSON を1行ずつ送って操作できます。最初の1回だけ `"token"` が必要（中身は一時フォルダの `melt3d-control-7777.token`）。
+- `meltcad --mcp` … MCP サーバー（画面なし）。`meltcad --mcp --control 7777` なら開いている画面を操作します。
+- Claude Code: `claude mcp add melt3d -- /path/to/meltcad --mcp --control 7777`
+- 道具は2つ: `melt3d_run`（命令を実行）と `melt3d_view`（絵を見る）。
+- スケッチ・ドラッグ・文字入力の途中では、外部からの変更と保存は現在の編集が終わるまで拒否します。読み取りと画像出力は使えます。成功した変更は1命令ずつ Undo でき、失敗した命令では画面のシーンを変更しません。
+
+### アニメーション（クレイアニメ風・メルトも動く）
+- 右下の **Animation** を押すと、下に時間の帯（タイムライン）が出ます。
+- やり方: 形を置く → **Set pose**（今の形を覚える）→ 別のコマに動かす → 形を動かす（自動で覚える）→ **Play**。ポーズの間は自動でつながります。溶け具合（Melt）も動きます。
+- **Clay** をオンにすると、ポーズを3コマずつ止めてコマ撮りの感じになります。
+- **Export GIF** で動く絵として保存。
+- AI からは `anim.set / anim.key / anim.delete / anim.at / anim.render`（`{"cmd":"commands"}` で一覧）。
+- スケッチや立体のプレビューを編集中は再生・コマ移動・ポーズ記録を止めます。確定後の編集だけを記録し、編集と記録を同じ Undo にまとめます。
+- `anim.at` の `frame` は 0 から始まり、最後のコマを超えた場合は末尾に収めて、実際の `frame` を返します。開いている画面への変更命令は再生を止め、タイムラインの自動記録で命令の結果を上書きしません。

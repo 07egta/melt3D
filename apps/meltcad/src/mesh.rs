@@ -79,6 +79,9 @@ thread_local! {
     static SAVE: RefCell<Option<Vec<usize>>> = const { RefCell::new(None) };
     /// While a scene is being read.
     static LOAD: RefCell<Option<LoadCtx>> = const { RefCell::new(None) };
+    /// Prefer the volume this thread wrote. Background work may write the same
+    /// text from a different Arc; it must not replace a UI round-trip's identity.
+    static RECENT: RefCell<HashMap<(u64, usize), Weak<Volume>>> = RefCell::new(HashMap::new());
 }
 
 #[derive(Default)]
@@ -168,11 +171,19 @@ fn fnv1a(bytes: &[u8]) -> u64 {
 
 /// Remember that `v` was made from the text `text` (so a later copy of that text finds it).
 pub fn remember_text(text: &str, v: &SharedVolume) {
+    let key = (fnv1a(text.as_bytes()), text.len());
+    RECENT.with(|c| {
+        let mut r = c.borrow_mut();
+        if r.len() > 64 {
+            r.retain(|_, w| w.strong_count() > 0);
+        }
+        r.insert(key, Arc::downgrade(v.arc()));
+    });
     if let Ok(mut r) = registry().lock() {
         if r.len() > 64 {
             r.retain(|_, w| w.strong_count() > 0);
         }
-        r.insert((fnv1a(text.as_bytes()), text.len()), Arc::downgrade(v.arc()));
+        r.insert(key, Arc::downgrade(v.arc()));
     }
 }
 
@@ -182,7 +193,9 @@ fn volume_from_text(text: &str) -> Option<SharedVolume> {
         return None;
     }
     let key = (fnv1a(text.as_bytes()), text.len());
-    let alive = registry().lock().ok().and_then(|r| r.get(&key).and_then(Weak::upgrade));
+    let alive = RECENT
+        .with(|r| r.borrow().get(&key).and_then(Weak::upgrade))
+        .or_else(|| registry().lock().ok().and_then(|r| r.get(&key).and_then(Weak::upgrade)));
     if let Some(a) = alive {
         return Some(SharedVolume(a));
     }
@@ -384,6 +397,33 @@ pub(crate) mod tests {
         let _g = LoadGuard::begin();
         let back: Shape = serde_json::from_str(&text).unwrap_or_else(|_| Shape::new(Kind::Sphere, [0.0; 3], Material::default()));
         assert_eq!(back.volume.as_ref().map(SharedVolume::key), Some(v.key()), "decoded from the registry, not a second copy");
+    }
+
+    #[test]
+    fn a_background_round_trip_cannot_replace_this_threads_shared_volume() {
+        let v = SharedVolume::new(ball_volume(25));
+        let scene = scene_with(vec![mesh_shape(&v)]);
+        let json = scene.to_json();
+        let background_json = json.clone();
+        let original_key = v.key();
+        let (other, same_json) = std::thread::spawn(move || {
+            // A new thread still finds the already alive volume through the
+            // shared registry, without decoding a second buffer.
+            let loaded = Scene::from_json(&background_json).expect("background load");
+            let original = loaded.groups[0].shapes[1].volume.as_ref().expect("shared mesh");
+            assert_eq!(original.key(), original_key, "cross-thread reuse still finds the existing buffer");
+            let other = SharedVolume::new(ball_volume(25));
+            assert_ne!(original, &other);
+            let same_json = scene_with(vec![mesh_shape(&other)]).to_json();
+            (other, same_json)
+        })
+        .join()
+        .expect("background serialization");
+        assert_eq!(same_json, json, "the background thread wrote indistinguishable file text");
+        assert_ne!(v, other, "keep both independently created volumes alive during the reload");
+        let back = Scene::from_json(&json).expect("foreground reload");
+        assert_eq!(back, scene, "background serialization must not steal this thread's original volume handle");
+        assert!(Arc::ptr_eq(back.groups[0].shapes[1].volume.as_ref().expect("mesh survives").arc(), v.arc()));
     }
 
     #[test]

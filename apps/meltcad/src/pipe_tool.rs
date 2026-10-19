@@ -507,6 +507,7 @@ mod tests {
             melt: Default::default(),
             env: Default::default(),
             saved: Vec::new(),
+            anim: Default::default(),
         });
         assert!(field.distance([30.0, 0.0, 4.0]) < -3.9, "the centre of the connector is solid");
         assert!(field.distance([-2.0, 0.0, 4.0]) < -1.9, "the first end is rounded");
@@ -695,6 +696,7 @@ mod tests {
             melt: Default::default(),
             env: Default::default(),
             saved: Vec::new(),
+            anim: Default::default(),
         });
         // the pipe lies along x from 0 to 59 at y = 0, z = 4
         let d = |x: f32, y: f32, z: f32| field.distance([x, y, z]);

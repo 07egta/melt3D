@@ -96,6 +96,9 @@ pub struct App {
     pub view_rect: egui::Rect,
     /// A picture being taken: the overlays are hidden until it arrives.
     pub capture: Option<Capture>,
+    /// Commands from `--control` (an AI or a script), run on the window thread.
+    pub an: crate::anim_ui::State,
+    pub control: Option<std::sync::mpsc::Receiver<crate::control::Request>>,
     /// The shape under the mouse.
     pub hover: Option<Pick>,
     /// Where the camera is gliding to.
@@ -194,6 +197,8 @@ impl App {
             shot: std::env::var_os("MELTCAD_TEST_DIR").map(PathBuf::from),
             view_rect: egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0)),
             capture: None,
+            control: None,
+            an: Default::default(),
             hover: None,
             fly: None,
             orbiting: false,
@@ -394,6 +399,11 @@ impl App {
         }
     }
 
+    /// Take the scene as the finished state (no undo step), after the program itself changed it.
+    pub(crate) fn committed_sync(&mut self) {
+        self.committed = self.scene.clone();
+    }
+
     pub fn undo(&mut self) {
         if self.sk.live.is_some() {
             // undo while shaping = throw the live solid away
@@ -412,6 +422,7 @@ impl App {
             self.redo.push(std::mem::replace(&mut self.scene, prev.clone()));
             self.committed = prev;
             self.fix_selection();
+            self.animation_at_applied(self.an.frame);
         }
     }
 
@@ -433,6 +444,7 @@ impl App {
             self.undo.push(std::mem::replace(&mut self.scene, next.clone()));
             self.committed = next;
             self.fix_selection();
+            self.animation_at_applied(self.an.frame);
         }
     }
 
@@ -649,7 +661,6 @@ impl App {
                         self.notice = Some(why.into());
                         return;
                     }
-                    c.pos = [c.pos[0] + 8.0, c.pos[1] + 8.0, c.pos[2]];
                     c.name = format!("{} copy", c.name);
                     self.scene.groups[g].shapes.insert(s + 1, c);
                     self.sel = Some(Pick::Shape(g, s + 1));
@@ -669,9 +680,6 @@ impl App {
                 for (i, mut c) in copies.into_iter().enumerate() {
                     if i == 0 {
                         c.name = format!("{} copy", c.name);
-                    }
-                    for s in &mut c.shapes {
-                        s.pos = [s.pos[0] + 8.0, s.pos[1] + 8.0, s.pos[2]];
                     }
                     self.scene.groups.insert(e + i, c);
                 }
@@ -1785,6 +1793,13 @@ impl App {
                     let hint = crate::gizmo::hint(self.tool);
                     ui.label(RichText::new(if note.is_empty() { hint.to_string() } else { note }).size(12.0).color(style::DIM));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui
+                            .selectable_label(self.an.open, "Animation")
+                            .on_hover_text("Timeline: pose, play, melt over time, export a GIF")
+                            .clicked()
+                        {
+                            self.an.open = !self.an.open;
+                        }
                         let name = self
                             .path
                             .as_ref()
@@ -1946,6 +1961,83 @@ impl eframe::App for App {
 }
 
 impl App {
+    /// Runs the commands that arrived on the control channel (at most a few per frame).
+    fn run_control(&mut self, ctx: &egui::Context) {
+        let Some(rx) = self.control.take() else { return };
+        let mut ran = false;
+        for _ in 0..32 {
+            let Ok(req) = rx.try_recv() else { break };
+            let name = req.cmd.get("cmd").and_then(serde_json::Value::as_str);
+            let read_only = matches!(name, Some("commands" | "scene.get" | "scene.summary" | "render" | "anim.get" | "anim.render"));
+            let busy = self.scene_structure_locked()
+                || self.sketch_active()
+                || self.drag.is_some()
+                || self.ct.drag.is_some()
+                || self.ct.drawing
+                || self.ct.draw_shape.is_some()
+                || self.pt.tracing
+                || self.layer_drag.is_some()
+                || self.marquee_from.is_some()
+                || self.renaming.is_some()
+                || self.pending_file_action.is_some()
+                || ctx.egui_wants_keyboard_input()
+                || ctx.input(|i| i.pointer.any_down());
+            let result = if !read_only && busy {
+                Err("Finish or cancel the active edit before changing or saving the scene".into())
+            } else {
+                // Commands may sanitize even a read, or partially change a scene before
+                // returning an error. Only successful mutations reach the live document.
+                let mut next = self.scene.clone();
+                let result = crate::automation::execute(&mut next, &req.cmd);
+                if let Ok(value) = &result
+                    && !read_only
+                    && name != Some("save")
+                    && next != self.scene
+                {
+                    // Keep a completed UI edit separate from each queued command's undo
+                    // step, even when several commands arrive in the same frame.
+                    self.settle(ctx);
+                    self.clear_document_gestures();
+                    self.scene = next;
+                    self.sel = if let Some(g) = value.get("group").and_then(serde_json::Value::as_u64) {
+                        Some(match value.get("shape").and_then(serde_json::Value::as_u64) {
+                            Some(s) => Pick::Shape(g as usize, s as usize),
+                            None => Pick::Group(g as usize),
+                        })
+                    } else if matches!(name, Some("scene.new" | "scene.set" | "load")) {
+                        self.scene.shape(0, 0).map(|_| Pick::Shape(0, 0))
+                    } else if matches!(name, Some("shape.delete" | "group.delete")) {
+                        None
+                    } else {
+                        self.sel
+                    };
+                    self.fix_selection();
+                    self.settle(ctx);
+                }
+                if let Ok(value) = &result
+                    && !read_only
+                    && name != Some("save")
+                {
+                    // Control commands have the same explicit effect as CLI commands:
+                    // playback and UI auto-capture must not replace or recapture them.
+                    let frame = if name == Some("anim.at") {
+                        value.get("frame").and_then(serde_json::Value::as_u64).and_then(|f| u32::try_from(f).ok()).unwrap_or(self.an.frame)
+                    } else {
+                        self.an.frame
+                    };
+                    self.animation_at_applied(frame);
+                }
+                result
+            };
+            let _ = req.reply.send(result);
+            ran = true;
+        }
+        self.control = Some(rx);
+        if ran {
+            ctx.request_repaint();
+        }
+    }
+
     /// One frame of the window (what `eframe::App::ui` does; a method of its own so that tests can run it).
     pub(crate) fn frame_body(&mut self, ui: &mut Ui) {
         static FIRST: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -1959,12 +2051,14 @@ impl App {
             self.say(&ctx, n);
         }
         self.keys(&ctx);
+        self.run_control(&ctx);
         let dt = ctx.input(|i| i.stable_dt);
         if self.step_fly(dt) {
             ctx.request_repaint();
         }
         self.top_bar(ui);
         self.status_bar(ui);
+        self.anim_bar(ui);
         self.left_dock(ui);
         self.side(ui);
         egui::CentralPanel::default().frame(egui::Frame::new().fill(Color32::from_rgb(52, 52, 56))).show(ui, |ui| {
@@ -1991,6 +2085,7 @@ impl App {
         self.pending_file_dialog(&ctx);
         self.recovery_dialog(&ctx);
         self.capture_step(&ctx);
+        self.animation_capture_finished(&ctx);
         self.settle(&ctx);
         if !cfg!(test) {
             ctx.request_repaint_after(crate::recovery::INTERVAL);
@@ -2497,5 +2592,17 @@ mod tests {
             app.resolve_pending_file_action(&ctx, PendingFileDecision::Cancel);
             assert!(app.pending_file_action.is_none());
         }
+    }
+
+    #[test]
+    fn a_duplicate_stays_exactly_where_the_original_is() {
+        let mut app = App::new(true, None);
+        app.sel = Some(Pick::Shape(0, 0));
+        let at = app.scene.groups[0].shapes[0].pos;
+        app.duplicate();
+        assert_eq!(app.scene.groups[0].shapes[1].pos, at);
+        app.sel = Some(Pick::Group(0));
+        app.duplicate();
+        assert_eq!(app.scene.groups[1].shapes[0].pos, at);
     }
 }
