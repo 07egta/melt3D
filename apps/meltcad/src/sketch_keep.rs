@@ -3,35 +3,10 @@
 
 use crate::app::App;
 use crate::curve;
-use crate::model::{GuidePlane, Kind, MAX_OUTLINE, MAX_PATH, MAX_SHAPES, Material, Op, Pick, Shape};
+use crate::model::{Kind, MAX_SHAPES, Pick, Shape};
 use crate::sdf::{self, V3};
 use crate::sketch::{self, Frame};
 use crate::sketch_ui::{Make, Stage};
-
-/// Radius of the line a kept sketch is drawn with (mm).
-const LINE_RADIUS: f32 = 0.6;
-/// The unit normal of the (nearly flat) loop of points, by Newell's method. None when the loop has
-/// no area or the numbers are not finite. It points up when the loop is not standing.
-pub fn loop_normal(pts: &[V3]) -> Option<V3> {
-    if pts.len() < 3 || !pts.iter().all(|p| p.iter().all(|x| x.is_finite())) {
-        return None;
-    }
-    let mut n = [0.0f32; 3];
-    for (i, a) in pts.iter().enumerate() {
-        let b = pts.get((i + 1) % pts.len())?;
-        n[0] += (a[1] - b[1]) * (a[2] + b[2]);
-        n[1] += (a[2] - b[2]) * (a[0] + b[0]);
-        n[2] += (a[0] - b[0]) * (a[1] + b[1]);
-    }
-    let l = sdf::dot(n, n).sqrt();
-    if !l.is_finite() || l < 1e-6 {
-        return None;
-    }
-    let n = sdf::mul(n, 1.0 / l);
-    // up when level; for a standing loop keep a fixed side so that the result does not flip
-    let up = if n[2].abs() >= 0.02 { n[2] >= 0.0 } else { n[1] < -1e-3 || (n[1].abs() <= 1e-3 && n[0] >= 0.0) };
-    Some(if up { n } else { sdf::mul(n, -1.0) })
-}
 
 impl App {
     /// Commit the completed outline as a guide. Numeric edits still live in the
@@ -61,30 +36,14 @@ impl App {
             self.sk.msg = format!("Up to {MAX_SHAPES} shapes");
             return false;
         }
-        if points.len() < if closed { 3 } else { 2 } || points.len() > if closed { MAX_OUTLINE } else { MAX_PATH } {
-            self.sk.msg = "Draw a valid sketch before finishing".to_string();
-            return false;
-        }
-        let f = self.sk.pframe;
-        let world: Vec<V3> = points.iter().map(|p| f.to_world(*p)).collect();
-        if !world.iter().all(|p| p.iter().all(|x| x.is_finite())) {
-            return false;
-        }
+        let mut sh = match crate::sketch_saved::create(self.sk.pframe, points, &self.sk.holes, closed) {
+            Ok(sh) => sh,
+            Err(e) => {
+                self.sk.msg = e;
+                return false;
+            }
+        };
         let Some(g) = editing.map(|(g, _)| g).or_else(|| self.target_group()) else { return false };
-        let mut sh = Shape::new(Kind::Curve, f.origin, Material { color: [0.98, 0.78, 0.3], ..Material::default() });
-        sh.path = world.iter().map(|w| [w[0] - f.origin[0], w[1] - f.origin[1], w[2] - f.origin[2], LINE_RADIUS]).collect();
-        sh.params = Kind::Curve.default_params();
-        sh.params[0] = if closed { 1.0 } else { 0.0 };
-        // Circles and splines are already sampled by the sketch tool. Smoothing
-        // them a second time changes the outline; many-sided polygons must keep corners.
-        sh.params[1] = 0.0;
-        sh.params[2] = 0.0;
-        sh.params[3] = 1.0;
-        sh.name = if closed { "Sketch" } else { "Sketch path" }.to_string();
-        sh.op = Op::Add;
-        sh.blend = 0.0;
-        sh.guide = true;
-        sh.guide_plane = Some(GuidePlane { u: f.u, v: f.v, holes: if closed { self.sk.holes.clone() } else { Vec::new() } });
         let Some(group) = self.scene.groups.get_mut(g) else { return false };
         let idx = if let Some((_, s)) = editing {
             let Some(original) = group.shapes.get_mut(s) else { return false };
@@ -179,32 +138,7 @@ impl App {
 
     /// The plane and the flat outline of a closed line (its nodes, as they are).
     pub(crate) fn curve_profile(&self, g: usize, s: usize) -> Option<(Frame, Vec<[f32; 2]>)> {
-        let sh = self.scene.shape(g, s)?;
-        if sh.kind != Kind::Curve || sh.path.len() < 3 || !curve::settings(&sh.params).0 {
-            return None;
-        }
-        let world: Vec<V3> = sh.path.iter().map(|n| crate::curve_tool::to_world(sh, [n[0], n[1], n[2]])).collect();
-        let f = if let Some(plane) = &sh.guide_plane {
-            let origin = crate::curve_tool::to_world(sh, [0.0; 3]);
-            let u = sdf::sub(crate::curve_tool::to_world(sh, plane.u), origin);
-            let v = sdf::sub(crate::curve_tool::to_world(sh, plane.v), origin);
-            Frame::from_axes(origin, u, v)?
-        } else {
-            // Legacy sketch files still retain their original plane origin in pos.
-            Frame::from_hit(sh.pos, loop_normal(&world)?)
-        };
-        let tolerance = 0.001_f32.max(world.iter().map(|p| sdf::len(sdf::sub(*p, f.origin))).fold(0.0, f32::max) * 1e-5);
-        if world.iter().any(|p| !p.iter().all(|v| v.is_finite()) || sdf::dot(sdf::sub(*p, f.origin), f.normal()).abs() > tolerance) {
-            return None;
-        }
-        let flat: Vec<[f32; 2]> = world
-            .iter()
-            .map(|w| {
-                let d = sdf::sub(*w, f.origin);
-                [sdf::dot(d, f.u), sdf::dot(d, f.v)]
-            })
-            .collect();
-        Some((f, sketch::validate_profile(&flat).ok()?))
+        crate::sketch_saved::profile(self.scene.shape(g, s)?)
     }
 
     /// A strip button (Extrude, Loft, Revolve) with a closed line selected: make the solid from it
@@ -269,19 +203,7 @@ impl App {
 
     pub(crate) fn curve_holes(&self, g: usize, s: usize, frame: &Frame) -> Vec<Vec<[f32; 2]>> {
         let Some(sh) = self.scene.shape(g, s) else { return Vec::new() };
-        let Some(plane) = &sh.guide_plane else { return Vec::new() };
-        plane
-            .holes
-            .iter()
-            .map(|hole| {
-                hole.iter()
-                    .map(|p| {
-                        let local = sdf::add(sdf::mul(plane.u, p[0]), sdf::mul(plane.v, p[1]));
-                        frame.from_world(crate::curve_tool::to_world(sh, local))
-                    })
-                    .collect()
-            })
-            .collect()
+        crate::sketch_saved::holes(sh, frame)
     }
 
     /// Use another finished sketch without entering a new drawing gesture. Loft
@@ -301,45 +223,26 @@ impl App {
         };
         match self.sk.make {
             Make::Loft => {
-                let Some((frame, profile)) = self.curve_profile(g, s) else {
-                    self.sk.msg = "The top sketch must be a closed, planar outline".into();
-                    return false;
+                let (top, height, flip) = match crate::sketch_saved::loft_top(&self.sk.pframe, &self.sk.profile, sh) {
+                    Ok(top) => top,
+                    Err(e) => {
+                        self.sk.msg = e;
+                        return false;
+                    }
                 };
-                if !self.curve_holes(g, s, &frame).is_empty() {
-                    self.sk.msg = "Loft needs an outline without holes".into();
-                    return false;
-                }
-                let base = self.sk.pframe;
-                let normal = base.normal();
-                if sdf::dot(normal, frame.normal()).abs() < 0.9999 {
-                    self.sk.msg = "Choose a top sketch on a parallel plane".into();
-                    return false;
-                }
-                let height = sdf::dot(sdf::sub(frame.origin, base.origin), normal);
-                if !height.is_finite() || !(0.1..=2000.0).contains(&height.abs()) {
-                    self.sk.msg = "Place the second sketch 0.1–2000 mm from the first plane".into();
-                    return false;
-                }
-                let top: Vec<_> = profile.iter().map(|p| base.from_world(frame.to_world(*p))).collect();
-                if let Err(e) = sketch::loft(&base, &self.sk.profile, &top, height.abs(), height < 0.0) {
-                    self.sk.msg = e.message();
-                    return false;
-                }
                 self.sk.profile2 = top;
-                self.sk.height = height.abs();
-                self.sk.flip = height < 0.0;
+                self.sk.height = height;
+                self.sk.flip = flip;
                 self.sk.loft_top = crate::sketch_ui::LoftTop::Drawn;
             }
             Make::Sweep => {
-                if curve::settings(&sh.params).0 {
-                    self.sk.msg = "Choose an open sketch path".into();
-                    return false;
-                }
-                let path: Vec<_> = sh.path.iter().map(|n| crate::curve_tool::to_world(sh, [n[0], n[1], n[2]])).collect();
-                if path.len() > MAX_PATH {
-                    self.sk.msg = format!("A sweep path can have up to {MAX_PATH} points");
-                    return false;
-                }
+                let path = match crate::sketch_saved::open_path(sh) {
+                    Ok(path) => path,
+                    Err(e) => {
+                        self.sk.msg = e;
+                        return false;
+                    }
+                };
                 if let Err(e) = sketch::sweep(&self.sk.profile, &path, self.sk.sweep_scale) {
                     self.sk.msg = e.message();
                     return false;
@@ -591,6 +494,8 @@ fn area(poly: &[egui::Pos2]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::{MAX_OUTLINE, Material, Op};
+    use crate::sketch_saved::loop_normal;
 
     fn save_profile(app: &mut App, frame: Frame, points: Vec<[f32; 2]>) -> (usize, usize) {
         app.set_sketch_tool(true);

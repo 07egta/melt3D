@@ -41,3 +41,6 @@ describe SolidCraft; where they conflict with this file, **this file wins for wo
 - UI text is Japanese and plain (no jargon) unless the owner says otherwise.
 - Esc always cancels only the current gesture; undo is always one step per gesture.
 - Nothing may crash or lose work: saves are atomic, recovery must keep working.
+
+## AI からの操作
+画面でできることは `automation.rs` の命令にもする（`--run` / `--control` / `--mcp` は全部ここを通る）。命令を足したら `COMMANDS` と README を更新し、`hostile_commands_return_errors_and_never_panic` に悪い入力を足す。

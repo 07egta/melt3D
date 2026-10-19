@@ -294,7 +294,8 @@ impl Painter {
         // a stain alone: the whole scene with everything hidden but that group (so that patterns and
         // linked copies still find what they follow)
         let alone = |gi: usize, g: crate::model::Group| {
-            let mut sc = Scene { groups: scene.groups.clone(), melt: scene.melt, env: scene.env.clone(), saved: Vec::new() };
+            let mut sc =
+                Scene { groups: scene.groups.clone(), melt: scene.melt, env: scene.env.clone(), saved: Vec::new(), anim: Default::default() };
             for other in &mut sc.groups {
                 other.visible = false;
             }
@@ -875,7 +876,7 @@ mod tests {
     pub fn scene_of(shapes: Vec<Shape>) -> Scene {
         let mut g = Group::new("g");
         g.shapes = shapes;
-        Scene { groups: vec![g], melt: Default::default(), env: Default::default(), saved: Vec::new() }
+        Scene { groups: vec![g], melt: Default::default(), env: Default::default(), saved: Vec::new(), anim: Default::default() }
     }
 
     fn sphere_at(x: f32, r: f32, m: Material) -> Shape {
@@ -1123,7 +1124,8 @@ mod tests {
         let tiny = Options { tolerance: 0.0, ..Options::default() };
         assert_eq!(tiny.sanitized().tolerance, MIN_TOLERANCE);
         // an empty scene
-        let empty = Scene { groups: vec![Group::new("e")], melt: Default::default(), env: Default::default(), saved: Vec::new() };
+        let empty =
+            Scene { groups: vec![Group::new("e")], melt: Default::default(), env: Default::default(), saved: Vec::new(), anim: Default::default() };
         assert!(build(&empty, None, &Options::default(), &Progress::new()).is_err());
         assert!(build(&Scene { groups: vec![], ..empty.clone() }, None, &Options::default(), &Progress::new()).is_err());
         // a shape with broken numbers

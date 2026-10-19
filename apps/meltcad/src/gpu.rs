@@ -1855,7 +1855,7 @@ mod curve_tests {
             s.path = (0..32).map(|k| [k as f32 * 2.0, (k * k) as f32 * 0.1, 0.0, 3.0]).collect();
             g.shapes.push(s);
         }
-        Scene { groups: vec![g], melt: Default::default(), env: Default::default(), saved: Vec::new() }
+        Scene { groups: vec![g], melt: Default::default(), env: Default::default(), saved: Vec::new(), anim: Default::default() }
     }
 
     #[test]
@@ -1908,7 +1908,7 @@ mod curve_tests {
             s.outline2 = s.outline.clone();
             g.shapes.push(s);
         }
-        let scene = Scene { groups: vec![g], melt: Default::default(), env: Default::default(), saved: Vec::new() };
+        let scene = Scene { groups: vec![g], melt: Default::default(), env: Default::default(), saved: Vec::new(), anim: Default::default() };
         let u = pack(&scene, &Camera::default(), [800.0, 600.0], None, None, true);
         let f = Frame::new(&u);
         let mut points = 0;
@@ -2226,6 +2226,7 @@ mod headless_tests {
                 melt: Default::default(),
                 env: Default::default(),
                 saved: Vec::new(),
+                anim: Default::default(),
             };
             let data = pack(&scene, &Camera::default(), [size[0] as f32, size[1] as f32], None, None, false);
             let (pixels, _) = gpu.render(&data, size);

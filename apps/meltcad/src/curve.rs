@@ -557,7 +557,8 @@ mod tests {
         s.path = vec![[-10.0, 0.0, 0.0, 3.0], [10.0, 0.0, 0.0, 3.0]];
         s.blend = 0.0;
         let g = crate::model::Group { shapes: vec![s], ..crate::model::Group::new("g") };
-        let scene = crate::model::Scene { groups: vec![g], melt: Default::default(), env: Default::default(), saved: Vec::new() };
+        let scene =
+            crate::model::Scene { groups: vec![g], melt: Default::default(), env: Default::default(), saved: Vec::new(), anim: Default::default() };
         let f = crate::sdf::Field::new(&scene);
         assert!((f.distance([5.0, 10.0, 0.0]) - 7.0).abs() < 1e-3);
         assert!((f.distance([20.0, 0.0, 0.0]) - 2.0).abs() < 1e-3);
