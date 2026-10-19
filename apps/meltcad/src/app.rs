@@ -1441,7 +1441,9 @@ impl App {
                             ui.end_row();
                             style::hsep_w(ui, strip_w);
                             ui.end_row();
-                            for op in [Op::Add, Op::Subtract, Op::Paint, Op::Intersect] {
+                            let ops: &[Op] =
+                                if self.solid_mode { &[Op::Add, Op::Subtract] } else { &[Op::Add, Op::Subtract, Op::Paint, Op::Intersect] };
+                            for &op in ops {
                                 let on = self.new_op == op;
                                 let (name, tip) = match op {
                                     Op::Add => ("Add", "Join: the new shape is added to the model (Tab flips Add / Cut)"),
@@ -1454,6 +1456,10 @@ impl App {
                                 }
                             }
                             ui.end_row();
+                            // solid mode keeps only what makes a solid: the rest hides until you leave it
+                            if self.solid_mode {
+                                return;
+                            }
                             style::hsep_w(ui, strip_w);
                             ui.end_row();
                             if style::wide_button(ui, "New group", "New group", false, None, glyphs::group).clicked() {
