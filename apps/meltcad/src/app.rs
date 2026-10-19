@@ -96,6 +96,8 @@ pub struct App {
     pub view_rect: egui::Rect,
     /// A picture being taken: the overlays are hidden until it arrives.
     pub capture: Option<Capture>,
+    /// Commands from `--control` (an AI or a script), run on the window thread.
+    pub control: Option<std::sync::mpsc::Receiver<crate::control::Request>>,
     /// The shape under the mouse.
     pub hover: Option<Pick>,
     /// Where the camera is gliding to.
@@ -194,6 +196,7 @@ impl App {
             shot: std::env::var_os("MELTCAD_TEST_DIR").map(PathBuf::from),
             view_rect: egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0)),
             capture: None,
+            control: None,
             hover: None,
             fly: None,
             orbiting: false,
@@ -1776,6 +1779,21 @@ impl eframe::App for App {
 }
 
 impl App {
+    /// Runs the commands that arrived on the control channel (at most a few per frame).
+    fn run_control(&mut self, ctx: &egui::Context) {
+        let Some(rx) = self.control.take() else { return };
+        let mut ran = false;
+        for _ in 0..32 {
+            let Ok(req) = rx.try_recv() else { break };
+            let _ = req.reply.send(crate::automation::execute(&mut self.scene, &req.cmd));
+            ran = true;
+        }
+        self.control = Some(rx);
+        if ran {
+            ctx.request_repaint();
+        }
+    }
+
     /// One frame of the window (what `eframe::App::ui` does; a method of its own so that tests can run it).
     pub(crate) fn frame_body(&mut self, ui: &mut Ui) {
         static FIRST: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -1789,6 +1807,7 @@ impl App {
             self.say(&ctx, n);
         }
         self.keys(&ctx);
+        self.run_control(&ctx);
         let dt = ctx.input(|i| i.stable_dt);
         if self.step_fly(dt) {
             ctx.request_repaint();

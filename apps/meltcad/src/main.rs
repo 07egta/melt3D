@@ -12,6 +12,7 @@ mod bench;
 mod cad;
 mod camera;
 mod clip;
+mod control;
 mod corner;
 mod cpu_render;
 mod curve;
@@ -47,6 +48,7 @@ mod library;
 mod library_ui;
 mod marquee;
 mod materials;
+mod mcp;
 mod mesh;
 mod mesh_dialog;
 mod mesh_import;
@@ -106,7 +108,7 @@ fn no_graphics(choice: backend::Choice, plan: backend::Plan, tried: &[backend::B
             all.push(b);
         }
         gpu_log::log(&format!("starting again with {next:?}"));
-        let r = backend::Relaunch { choice: None, tried: all, file: std::env::args_os().nth(1).map(std::path::PathBuf::from) };
+        let r = backend::Relaunch { choice: None, tried: all, file: control::file_arg(&std::env::args_os().collect::<Vec<_>>()) };
         if backend::relaunch(&r).is_ok() {
             std::process::exit(0);
         }
@@ -117,7 +119,7 @@ fn no_graphics(choice: backend::Choice, plan: backend::Plan, tried: &[backend::B
 
 fn main() -> eframe::Result {
     let args: Vec<std::ffi::OsString> = std::env::args_os().collect();
-    if cpu_render::cli(&args) || bench::cli(&args) || automation::cli(&args) {
+    if cpu_render::cli(&args) || bench::cli(&args) || automation::cli(&args) || mcp::cli(&args) {
         return Ok(());
     }
     perf::init();
@@ -162,7 +164,20 @@ fn main() -> eframe::Result {
                 no_graphics(choice, plan, &tried_for_app, "Could not create a graphics device (wgpu).");
             }
             let srgb = rs.as_ref().is_none_or(|rs| rs.target_format.is_srgb());
-            let mut app = app::App::new(srgb, std::env::args_os().nth(1).map(std::path::PathBuf::from));
+            let all: Vec<std::ffi::OsString> = std::env::args_os().collect();
+            let mut app = app::App::new(srgb, control::file_arg(&all));
+            if let Some(port) = control::port_arg(&all) {
+                let token = control::make_token();
+                let ctx = cc.egui_ctx.clone();
+                match control::start(port, token.clone(), move || ctx.request_repaint()) {
+                    Ok((rx, port)) => {
+                        app.control = Some(rx);
+                        let _ = std::fs::write(control::token_file(port), &token);
+                        eprintln!("control: 127.0.0.1:{port}, token file {}", control::token_file(port).display());
+                    }
+                    Err(e) => eprintln!("{e}"),
+                }
+            }
             // the shader compiles on its own thread: the window shows first, with the simple view
             // the GPU picture is the default every launch; the simple view is only a temporary choice
             app.attach_gpu(rs, &cc.egui_ctx, false);
