@@ -294,7 +294,8 @@ impl Painter {
         // a stain alone: the whole scene with everything hidden but that group (so that patterns and
         // linked copies still find what they follow)
         let alone = |gi: usize, g: crate::model::Group| {
-            let mut sc = Scene { groups: scene.groups.clone(), melt: scene.melt, env: scene.env.clone(), saved: Vec::new(), anim: Default::default() };
+            let mut sc =
+                Scene { groups: scene.groups.clone(), melt: scene.melt, env: scene.env.clone(), saved: Vec::new(), anim: Default::default() };
             for other in &mut sc.groups {
                 other.visible = false;
             }
@@ -334,8 +335,8 @@ impl Painter {
             if !w.is_finite() || w >= 1.0 {
                 continue;
             }
-            for a in 0..3 {
-                c[a] = b.color[a] + (c[a] - b.color[a]) * w;
+            for (a, value) in c.iter_mut().enumerate() {
+                *value = b.color[a] + (*value - b.color[a]) * w;
             }
             r = b.roughness + (r - b.roughness) * w;
             m = b.metallic + (m - b.metallic) * w;
@@ -1123,7 +1124,8 @@ mod tests {
         let tiny = Options { tolerance: 0.0, ..Options::default() };
         assert_eq!(tiny.sanitized().tolerance, MIN_TOLERANCE);
         // an empty scene
-        let empty = Scene { groups: vec![Group::new("e")], melt: Default::default(), env: Default::default(), saved: Vec::new(), anim: Default::default() };
+        let empty =
+            Scene { groups: vec![Group::new("e")], melt: Default::default(), env: Default::default(), saved: Vec::new(), anim: Default::default() };
         assert!(build(&empty, None, &Options::default(), &Progress::new()).is_err());
         assert!(build(&Scene { groups: vec![], ..empty.clone() }, None, &Options::default(), &Progress::new()).is_err());
         // a shape with broken numbers
@@ -1189,8 +1191,7 @@ mod tests {
         scenes.push(("r100 sphere".into(), scene_of(vec![round])));
         for (ci, ii) in [(0usize, 0usize), (7, 0), (10, 0), (10, 5), (8, 0), (2, 1)] {
             if let Some(item) = crate::library::all().get(ci).and_then(|c| c.items.get(ii)) {
-                let mut sc = Scene::default();
-                sc.groups = vec![item.group.clone()];
+                let sc = Scene { groups: vec![item.group.clone()], ..Scene::default() };
                 scenes.push((format!("lib {} / {}", crate::library::all()[ci].name, item.name), sc));
             }
         }

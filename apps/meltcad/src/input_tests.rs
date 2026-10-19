@@ -16,13 +16,14 @@ struct Rig {
     time: f64,
     size: Vec2,
     mods: egui::Modifiers,
+    full_ui: bool,
 }
 
 impl Rig {
     fn new() -> Rig {
         let ctx = egui::Context::default();
         crate::style::apply(&ctx);
-        let mut rig = Rig { ctx, app: App::new(true, None), time: 0.0, size: vec2(1100.0, 760.0), mods: egui::Modifiers::NONE };
+        let mut rig = Rig { ctx, app: App::new(true, None), time: 0.0, size: vec2(1100.0, 760.0), mods: egui::Modifiers::NONE, full_ui: false };
         rig.frame(vec![]);
         rig.frame(vec![]);
         rig
@@ -30,22 +31,41 @@ impl Rig {
 
     fn frame(&mut self, events: Vec<Event>) {
         self.time += 0.016;
-        let mut all = Vec::new();
-        if self.mods != egui::Modifiers::NONE {
-            all.push(Event::ModifiersChanged(self.mods));
-        }
+        let mut all = vec![Event::ModifiersChanged(self.mods)];
         all.extend(events);
         let input =
             RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, self.size)), events: all, time: Some(self.time), ..Default::default() };
         let app = &mut self.app;
+        let full_ui = self.full_ui;
         let mut out = self.ctx.run_ui(input, |ui| {
+            if full_ui {
+                app.frame_body(ui);
+                return;
+            }
             // Match frame_body ordering: keys, canvas, then the interactive overlay.
             app.keys(ui.ctx());
             egui::CentralPanel::default().frame(egui::Frame::new()).show(ui, |ui| app.viewport(ui));
             app.sketch_card(ui.ctx());
         });
         out.textures_delta.clear();
-        self.app.settle(&self.ctx);
+        if !full_ui {
+            self.app.settle(&self.ctx);
+        }
+    }
+
+    /// Use the real window-thread control queue, including commands batched in one frame.
+    fn control(&mut self, commands: &[serde_json::Value]) -> Vec<Result<serde_json::Value, String>> {
+        let (send, requests) = std::sync::mpsc::channel();
+        let (reply, answers) = std::sync::mpsc::channel();
+        self.app.control = Some(requests);
+        for cmd in commands {
+            send.send(crate::control::Request { cmd: cmd.clone(), reply: reply.clone() }).expect("queue the control command");
+        }
+        let full_ui = self.full_ui;
+        self.full_ui = true;
+        self.frame(vec![]);
+        self.full_ui = full_ui;
+        commands.iter().map(|_| answers.try_recv().expect("the frame replied to every command")).collect()
     }
 
     fn right_click(&mut self, p: Pos2) {
@@ -73,11 +93,42 @@ impl Rig {
 
     fn key(&mut self, key: egui::Key) {
         self.frame(vec![Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: self.mods }]);
+        self.frame(vec![Event::Key { key, physical_key: None, pressed: false, repeat: false, modifiers: self.mods }]);
         self.frame(vec![]);
     }
 
+    /// Enter through the same default as the visible Sketch button.
     fn sketch(&mut self, pen: Pen) {
         self.app.set_sketch_tool(true);
+        self.prepare_sketch(pen);
+    }
+
+    fn plain_sketch(&mut self, pen: Pen) {
+        self.sketch(pen);
+    }
+
+    fn saved_rectangle(&mut self) -> (usize, usize) {
+        self.plain_sketch(Pen::Rect);
+        self.click(self.on_plane([-25.0, -15.0]));
+        self.click(self.on_plane([5.0, 5.0]));
+        self.right_click(self.on_plane([5.0, 5.0]));
+        let Some(Pick::Shape(g, s)) = self.app.sel else { panic!("the saved sketch is selected") };
+        assert!(self.app.scene.shape(g, s).is_some_and(|sh| sh.guide));
+        (g, s)
+    }
+
+    fn row_rect(&self, pick: Pick) -> Rect {
+        self.app.row_rects.iter().find_map(|(id, rect)| (*id == pick).then_some(*rect)).expect("the scene row is visible")
+    }
+
+    /// Exercise the retained direct-solid path separately from the public Sketch workflow.
+    fn direct_solid_sketch(&mut self, pen: Pen) {
+        self.app.set_sketch_tool(true);
+        self.app.sk.keep_sketch = false;
+        self.prepare_sketch(pen);
+    }
+
+    fn prepare_sketch(&mut self, pen: Pen) {
         // (the plane is chosen by name: the pick-a-plane gesture has its own tests)
         self.app.sketch_set_plane(crate::sketch_ui::PlaneSel::Floor);
         self.app.sk.pen = pen;
@@ -87,6 +138,17 @@ impl Rig {
         self.app.fly = None;
         // Populate the card's hit-test layer before sending input events.
         self.frame(vec![]);
+        self.frame(vec![]);
+    }
+
+    /// Replace the focused field through the actual TextEdit input path.
+    fn replace_text(&mut self, text: &str) {
+        assert!(self.ctx.memory(|m| m.focused()).is_some(), "a numeric field must own the text input");
+        let previous = self.mods;
+        self.mods = egui::Modifiers { ctrl: true, command: true, ..egui::Modifiers::NONE };
+        self.key(egui::Key::A);
+        self.mods = previous;
+        self.frame(vec![Event::Text(text.to_string())]);
         self.frame(vec![]);
     }
 
@@ -244,9 +306,9 @@ fn drag_release_outside_viewport_clears_capture_and_keeps_undo() {
 }
 
 #[test]
-fn sketch_polygon_clicks_and_enter_complete_without_changing_selection() {
+fn direct_solid_polygon_clicks_and_enter_complete_without_changing_selection() {
     let mut r = Rig::new();
-    r.sketch(Pen::Polygon);
+    r.direct_solid_sketch(Pen::Polygon);
     let selected = r.app.sel;
     for q in [[-24.0, -17.0], [26.0, -17.0], [24.0, 18.0]] {
         let p = r.on_plane(q);
@@ -261,9 +323,9 @@ fn sketch_polygon_clicks_and_enter_complete_without_changing_selection() {
 }
 
 #[test]
-fn sketch_right_click_finishes_line_without_duplicate_endpoint() {
+fn direct_solid_sketch_right_click_finishes_line_without_duplicate_endpoint() {
     let mut r = Rig::new();
-    r.sketch(Pen::Line);
+    r.direct_solid_sketch(Pen::Line);
     r.app.sk.smooth = false;
     let a = r.on_plane([-30.0, -20.0]);
     let b = r.on_plane([25.0, 12.0]);
@@ -276,9 +338,9 @@ fn sketch_right_click_finishes_line_without_duplicate_endpoint() {
 }
 
 #[test]
-fn right_click_confirms_a_polygon_and_does_not_open_the_menu_or_pick() {
+fn direct_solid_right_click_confirms_a_polygon_and_does_not_open_the_menu_or_pick() {
     let mut r = Rig::new();
-    r.sketch(Pen::Polygon);
+    r.direct_solid_sketch(Pen::Polygon);
     for q in [[-24.0, -17.0], [26.0, -17.0], [24.0, 18.0]] {
         let p = r.on_plane(q);
         r.click(p);
@@ -302,7 +364,8 @@ fn sketch_rectangle_and_circle_drag_are_profiles_not_camera_orbits() {
         let a = r.on_plane([-25.0, -14.0]);
         let b = r.on_plane([25.0, 17.0]);
         r.drag(a, b);
-        assert_eq!(r.app.sk.stage, Stage::Shape, "{pen:?} drag must finish");
+        assert_eq!(r.app.sk.stage, Stage::Ready, "{pen:?} drag must finish the draft without extruding it");
+        assert!(r.app.sk.live.is_none());
         assert_eq!(r.app.sk.profile.len(), sides);
         assert!(!r.app.sk.dragging && r.app.sk.anchor.is_none());
         assert_eq!((r.app.cam.yaw, r.app.cam.pitch), (yaw, pitch), "sketch drag must not orbit");
@@ -318,9 +381,9 @@ fn delete_without_curve_node_selection_still_deletes_selected_shape() {
 }
 
 #[test]
-fn sketch_rectangle_enter_finishes_a_two_click_preview() {
+fn direct_solid_rectangle_enter_finishes_a_two_click_preview() {
     let mut r = Rig::new();
-    r.sketch(Pen::Rect);
+    r.direct_solid_sketch(Pen::Rect);
     let a = r.on_plane([-25.0, -15.0]);
     let b = r.on_plane([21.0, 18.0]);
     r.click(a);
@@ -486,7 +549,8 @@ fn a_rectangle_drag_on_the_ground_picks_the_plane_too() {
     let b = r.on_plane([62.0, 50.0]);
     r.drag(a, b);
     assert!(!r.app.picking_now());
-    assert_eq!(r.app.sk.stage, Stage::Shape, "the rectangle closed and its solid is live");
+    assert_eq!(r.app.sk.stage, Stage::Ready, "the rectangle is a draft until the sketch is confirmed");
+    assert!(r.app.sk.live.is_none());
     assert_eq!(r.app.sk.profile.len(), 4);
 }
 
@@ -514,4 +578,842 @@ fn sketch_alt_primary_drag_still_controls_the_camera() {
     r.mods = egui::Modifiers::NONE;
     assert_ne!((r.app.cam.yaw, r.app.cam.pitch), (yaw, pitch), "Alt+drag must still orbit");
     assert!(r.app.sk.pts.is_empty(), "orbit must not place sketch points");
+}
+
+#[test]
+fn solid_sketch_polygon_right_click_saves_only_the_sketch_and_returns_to_selection() {
+    let mut r = Rig::new();
+    r.plain_sketch(Pen::Polygon);
+    let before = r.app.scene.clone();
+    let undo_before = r.app.undo_depth();
+    for q in [[-24.0, -17.0], [26.0, -17.0], [24.0, 18.0]] {
+        r.click(r.on_plane(q));
+    }
+    assert_eq!(r.app.scene, before, "placing corners must not create a solid or a saved sketch");
+    r.right_click(r.on_plane([24.0, 18.0]));
+    assert!(!r.app.sketch_active(), "right click finishes the sketch and returns to selection");
+    assert!(r.app.sk.live.is_none(), "sketch confirmation must not begin an extrusion");
+    assert_eq!(r.app.scene.shape_count(), before.shape_count() + 1);
+    let Some(Pick::Shape(g, s)) = r.app.sel else { panic!("the saved sketch is selected") };
+    let guide = r.app.scene.shape(g, s).expect("saved sketch");
+    assert!(guide.guide && guide.kind == Kind::Curve && !guide.solid());
+    assert!(crate::curve::settings(&guide.params).0, "the polygon is closed");
+    assert!(!egui::Popup::is_any_open(&r.ctx), "the confirming right click must not open the viewport menu");
+    assert_eq!(r.app.undo_depth(), undo_before + 1, "the entire sketch is one undo step");
+    let saved = r.app.scene.clone();
+    r.app.undo();
+    r.frame(vec![]);
+    assert_eq!(r.app.scene, before);
+    r.app.redo();
+    r.frame(vec![]);
+    assert_eq!(r.app.scene, saved, "redo restores the same sketch without starting a drawing tool");
+}
+
+#[test]
+fn solid_sketch_rectangle_and_circle_wait_for_right_click_after_two_left_clicks() {
+    for (pen, points) in [(Pen::Rect, 4), (Pen::Circle, sketch::CIRCLE_POINTS)] {
+        let mut r = Rig::new();
+        r.plain_sketch(pen);
+        let before = r.app.scene.clone();
+        r.click(r.on_plane([-25.0, -15.0]));
+        r.click(r.on_plane([5.0, 5.0]));
+        assert_eq!(r.app.sk.stage, Stage::Ready, "{pen:?}: the second left click defines the draft");
+        assert_eq!(r.app.sk.profile.len(), points);
+        assert_eq!(r.app.scene, before, "{pen:?}: dimensions are still editable before confirmation");
+        assert!(r.app.sk.live.is_none());
+        assert!(r.app.sk.dimension.as_ref().is_some_and(|d| d.editing));
+        r.right_click(r.on_plane([5.0, 5.0]));
+        assert_eq!(r.app.scene.shape_count(), before.shape_count() + 1);
+        let Some(Pick::Shape(g, s)) = r.app.sel else { panic!("the saved sketch is selected") };
+        let guide = r.app.scene.shape(g, s).expect("saved sketch");
+        assert!(guide.guide && !guide.solid(), "{pen:?}: confirmation saves a guide, not a solid");
+        assert!(!r.app.sketch_active());
+        assert!(!egui::Popup::is_any_open(&r.ctx));
+    }
+}
+
+#[test]
+fn solid_sketch_open_line_is_saved_without_an_extra_endpoint() {
+    let mut r = Rig::new();
+    r.plain_sketch(Pen::Line);
+    r.app.sk.smooth = false;
+    let before = r.app.scene.shape_count();
+    r.click(r.on_plane([-30.0, -20.0]));
+    r.click(r.on_plane([25.0, 12.0]));
+    r.right_click(r.on_plane([35.0, 22.0]));
+    assert_eq!(r.app.scene.shape_count(), before + 1);
+    let Some(Pick::Shape(g, s)) = r.app.sel else { panic!("the saved line is selected") };
+    let guide = r.app.scene.shape(g, s).expect("saved line");
+    assert!(guide.guide && guide.kind == Kind::Curve && !guide.solid());
+    assert!(!crate::curve::settings(&guide.params).0, "the line must remain open");
+    assert_eq!(guide.path.len(), 2, "right click confirms the two left-clicked points without adding a third");
+    let world: Vec<_> = guide.path.iter().map(|p| crate::curve_tool::to_world(guide, [p[0], p[1], p[2]])).collect();
+    assert_eq!(world, [[-30.0, -20.0, 0.0], [25.0, 12.0, 0.0]]);
+    assert!(!r.app.sketch_active());
+    assert!(!egui::Popup::is_any_open(&r.ctx));
+}
+
+#[test]
+fn solid_sketch_dimension_enter_changes_the_draft_and_right_click_saves_exact_dimensions() {
+    let mut r = Rig::new();
+    r.plain_sketch(Pen::Rect);
+    let before = r.app.scene.clone();
+    r.click(r.on_plane([-25.0, -15.0]));
+    r.click(r.on_plane([5.0, 5.0]));
+    r.replace_text("100");
+    r.key(egui::Key::Tab);
+    r.replace_text("50");
+    r.key(egui::Key::Enter);
+    assert_eq!(r.app.scene, before, "Enter accepts dimensions without saving a sketch or creating a solid");
+    assert_eq!(r.app.sk.stage, Stage::Ready);
+    assert_eq!(r.app.sk.profile, sketch::rect([-25.0, -15.0], [75.0, 35.0]));
+    r.right_click(r.on_plane([5.0, 5.0]));
+    let Some(Pick::Shape(g, s)) = r.app.sel else { panic!("the saved sketch is selected") };
+    let (frame, outline) = r.app.curve_profile(g, s).expect("saved sketch keeps its exact outline");
+    let world: Vec<_> = outline.iter().map(|p| frame.to_world(*p)).collect();
+    assert_eq!(world, [[-25.0, -15.0, 0.0], [75.0, -15.0, 0.0], [75.0, 35.0, 0.0], [-25.0, 35.0, 0.0]]);
+    assert!(r.app.sk.live.is_none());
+}
+
+#[test]
+fn solid_sketch_invalid_dimension_blocks_right_click_and_escape_restores_the_draft() {
+    let mut r = Rig::new();
+    r.plain_sketch(Pen::Rect);
+    let before = r.app.scene.clone();
+    r.click(r.on_plane([-25.0, -15.0]));
+    r.click(r.on_plane([5.0, 5.0]));
+    let original = r.app.sk.profile.clone();
+    r.replace_text("NaN");
+    assert!(r.app.sk.dimension.as_ref().is_some_and(|d| d.error.is_some()));
+    r.right_click(r.on_plane([5.0, 5.0]));
+    assert_eq!(r.app.scene, before, "invalid text must not save the last valid geometry silently");
+    assert!(r.app.sketch_active());
+    assert_eq!(r.app.sk.stage, Stage::Ready);
+    r.key(egui::Key::Escape);
+    assert_eq!(r.app.sk.profile, original, "Escape cancels only the dimension edit");
+    assert_eq!(r.app.sk.stage, Stage::Ready);
+    r.right_click(r.on_plane([5.0, 5.0]));
+    assert_eq!(r.app.scene.shape_count(), before.shape_count() + 1);
+    assert!(!r.app.sketch_active());
+}
+
+#[test]
+fn solid_sketch_and_extrusion_are_separate_right_click_confirmations_and_undo_steps() {
+    let mut r = Rig::new();
+    r.plain_sketch(Pen::Rect);
+    let before = r.app.scene.clone();
+    r.click(r.on_plane([-25.0, -15.0]));
+    r.click(r.on_plane([5.0, 5.0]));
+    r.right_click(r.on_plane([5.0, 5.0]));
+    let sketch_scene = r.app.scene.clone();
+    let guide_pick = r.app.sel;
+    let undo_before_extrude = r.app.undo_depth();
+    assert!(r.app.make_from_selected_line(&r.ctx, crate::sketch_ui::Make::Extrude));
+    r.frame(vec![]);
+    let (g, s) = r.app.sk.live.expect("Extrude starts a separate solid preview");
+    let shape = r.app.scene.shape(g, s).expect("preview shape");
+    assert_eq!(shape.kind, Kind::Extrude);
+    assert_eq!(shape.outline, sketch::rect([-15.0, -10.0], [15.0, 10.0]));
+    assert_eq!(shape.pos, [-10.0, -5.0, r.app.sk.height * 0.5]);
+    assert_eq!(r.app.scene.shape_count(), sketch_scene.shape_count() + 1);
+    assert_eq!(r.app.undo_depth(), undo_before_extrude, "a live preview is not an accepted operation");
+    r.click(r.on_plane([35.0, -25.0]));
+    assert_eq!(r.app.sk.live, Some((g, s)), "left click must not confirm the extrusion");
+    r.right_click(r.on_plane([35.0, -25.0]));
+    assert!(r.app.sk.live.is_none());
+    assert!(!r.app.sketch_active(), "solid confirmation returns to selection");
+    assert_eq!(r.app.sel, Some(Pick::Shape(g, s)));
+    assert!(!egui::Popup::is_any_open(&r.ctx), "the confirming right click must not open the viewport menu");
+    assert_eq!(r.app.undo_depth(), undo_before_extrude + 1);
+    if let Some(Pick::Shape(gg, gs)) = guide_pick {
+        assert!(r.app.scene.shape(gg, gs).is_some_and(|sh| sh.guide), "the source sketch remains editable");
+    } else {
+        panic!("source sketch selection");
+    }
+    r.app.undo();
+    r.frame(vec![]);
+    assert_eq!(r.app.scene, sketch_scene, "first undo removes only the extrusion");
+    r.app.undo();
+    r.frame(vec![]);
+    assert_eq!(r.app.scene, before, "second undo removes the earlier sketch");
+}
+
+#[test]
+fn solid_sketch_extrusion_escape_keeps_the_saved_guide_and_adds_no_undo_step() {
+    let mut r = Rig::new();
+    r.plain_sketch(Pen::Polygon);
+    for q in [[-24.0, -17.0], [26.0, -17.0], [24.0, 18.0]] {
+        r.click(r.on_plane(q));
+    }
+    r.right_click(r.on_plane([24.0, 18.0]));
+    let sketch_scene = r.app.scene.clone();
+    let guide_pick = r.app.sel;
+    let undo_before = r.app.undo_depth();
+    assert!(r.app.make_from_selected_line(&r.ctx, crate::sketch_ui::Make::Extrude));
+    r.frame(vec![]);
+    assert!(r.app.sk.live.is_some());
+    r.key(egui::Key::Escape);
+    assert_eq!(r.app.scene, sketch_scene, "Escape discards only the unfinished solid");
+    assert_eq!(r.app.sel, guide_pick);
+    assert!(!r.app.sketch_active());
+    assert!(r.app.sk.live.is_none());
+    assert_eq!(r.app.undo_depth(), undo_before);
+}
+
+#[test]
+fn solid_sketch_typed_rectangle_survives_scene_roundtrip_then_extrudes_at_the_same_size() {
+    let mut r = Rig::new();
+    r.plain_sketch(Pen::Rect);
+    r.click(r.on_plane([-25.0, -15.0]));
+    r.click(r.on_plane([5.0, 5.0]));
+    r.replace_text("100");
+    r.key(egui::Key::Tab);
+    r.replace_text("50");
+    r.key(egui::Key::Enter);
+    r.right_click(r.on_plane([5.0, 5.0]));
+    let data = serde_json::to_string(&r.app.scene).expect("serialize the saved sketch");
+    let restored: crate::model::Scene = serde_json::from_str(&data).expect("reload the saved sketch");
+    assert_eq!(restored, r.app.scene);
+    let mut loaded = App::new(true, None);
+    loaded.scene = restored;
+    loaded.sel = r.app.sel;
+    assert!(loaded.make_from_selected_line(&r.ctx, crate::sketch_ui::Make::Extrude));
+    let (g, s) = loaded.sk.live.expect("the reloaded sketch can be extruded");
+    let shape = loaded.scene.shape(g, s).expect("extrusion after reload");
+    assert_eq!(shape.kind, Kind::Extrude);
+    assert_eq!(shape.outline, sketch::rect([-50.0, -25.0], [50.0, 25.0]), "use the accepted dimensions, not the initial mouse dimensions");
+    assert_eq!(shape.pos, [25.0, 10.0, loaded.sk.height * 0.5]);
+}
+
+#[test]
+fn solid_sketch_switching_to_pipe_discards_the_unconfirmed_extrusion() {
+    let mut r = Rig::new();
+    r.plain_sketch(Pen::Polygon);
+    for q in [[-24.0, -17.0], [26.0, -17.0], [24.0, 18.0]] {
+        r.click(r.on_plane(q));
+    }
+    r.right_click(r.on_plane([24.0, 18.0]));
+    let sketch_scene = r.app.scene.clone();
+    let guide_pick = r.app.sel;
+    let undo_before = r.app.undo_depth();
+    assert!(r.app.make_from_selected_line(&r.ctx, crate::sketch_ui::Make::Extrude));
+    r.frame(vec![]);
+    assert!(r.app.sk.live.is_some());
+    // The normal pipe activation path calls sketch_off; it must cancel the preview.
+    r.app.set_pipe_tool(true);
+    r.frame(vec![]);
+    r.frame(vec![]);
+    assert!(r.app.pt.on);
+    assert!(!r.app.sketch_active());
+    assert!(r.app.sk.live.is_none());
+    assert_eq!(r.app.sel, guide_pick);
+    assert_eq!(r.app.scene, sketch_scene, "switching tools must not silently keep the unconfirmed solid");
+    assert_eq!(r.app.undo_depth(), undo_before);
+}
+
+#[test]
+fn solid_sketch_circle_diameter_input_is_preserved_by_confirmation_and_extrusion() {
+    let mut r = Rig::new();
+    r.plain_sketch(Pen::Circle);
+    r.click(r.on_plane([-25.0, -15.0]));
+    r.click(r.on_plane([-5.0, -15.0]));
+    r.key(egui::Key::Tab);
+    r.replace_text("50");
+    r.key(egui::Key::Enter);
+    assert!(r.app.sk.dimension.as_ref().is_some_and(|d| d.fields == ["25".to_string(), "50".to_string()]));
+    r.right_click(r.on_plane([-5.0, -15.0]));
+    let Some(Pick::Shape(g, s)) = r.app.sel else { panic!("the saved circle is selected") };
+    let (frame, outline) = r.app.curve_profile(g, s).expect("saved circle profile");
+    assert_eq!(outline.len(), sketch::CIRCLE_POINTS, "saving must preserve all circle samples");
+    for point in outline {
+        let world = frame.to_world(point);
+        assert!(((world[0] + 25.0).hypot(world[1] + 15.0) - 25.0).abs() < 1e-4, "circle point {world:?}");
+        assert!(world[2].abs() < 1e-5);
+    }
+    assert!(r.app.make_from_selected_line(&r.ctx, crate::sketch_ui::Make::Extrude));
+    let (g, s) = r.app.sk.live.expect("circle extrusion preview");
+    let shape = r.app.scene.shape(g, s).expect("circle extrusion");
+    assert_eq!(shape.kind, Kind::Extrude);
+    assert_eq!(shape.outline.len(), sketch::CIRCLE_POINTS);
+    for point in &shape.outline {
+        assert!((point[0].hypot(point[1]) - 25.0).abs() < 1e-4, "extrusion point {point:?}");
+    }
+    assert_eq!(shape.pos, [-25.0, -15.0, r.app.sk.height * 0.5]);
+}
+
+#[test]
+fn solid_sketch_right_drag_does_not_confirm_the_ready_draft() {
+    let mut r = Rig::new();
+    r.plain_sketch(Pen::Rect);
+    let before = r.app.scene.clone();
+    r.click(r.on_plane([-25.0, -15.0]));
+    r.click(r.on_plane([5.0, 5.0]));
+    let start = r.on_plane([35.0, -25.0]);
+    r.mv(start);
+    r.frame(vec![Event::PointerButton { pos: start, button: PointerButton::Secondary, pressed: true, modifiers: r.mods }]);
+    let end = start + vec2(45.0, 20.0);
+    for step in 1..=5 {
+        r.mv(start + (end - start) * (step as f32 / 5.0));
+    }
+    r.frame(vec![Event::PointerButton { pos: end, button: PointerButton::Secondary, pressed: false, modifiers: r.mods }]);
+    r.frame(vec![]);
+    assert_eq!(r.app.scene, before, "camera navigation with the right button must not finish a sketch");
+    assert_eq!(r.app.sk.stage, Stage::Ready);
+    assert!(r.app.sketch_active());
+    assert!(!egui::Popup::is_any_open(&r.ctx));
+}
+
+#[test]
+fn solid_sketch_ready_delete_does_not_delete_the_previously_selected_body() {
+    let mut r = Rig::new();
+    r.app.sel = Some(Pick::Shape(0, 0));
+    r.plain_sketch(Pen::Rect);
+    let before = r.app.scene.clone();
+    r.click(r.on_plane([-25.0, -15.0]));
+    r.click(r.on_plane([5.0, 5.0]));
+    assert_eq!(r.app.sk.stage, Stage::Ready);
+    // Test the command's Delete path after leaving the dimension field, rather than
+    // merely deleting a character from the focused TextEdit.
+    r.app.sk.dimension = None;
+    r.ctx.memory_mut(|m| {
+        if let Some(id) = m.focused() {
+            m.surrender_focus(id);
+        }
+    });
+    r.key(egui::Key::Delete);
+    assert_eq!(r.app.scene, before, "Delete belongs to the ready draft, not the body's old selection");
+    assert!(r.app.sk.live.is_none());
+}
+
+#[test]
+fn solid_sketch_scene_drag_cannot_reindex_a_preview_and_works_again_after_cancel() {
+    let mut r = Rig::new();
+    let mut body = Shape::new(Kind::Extrude, [0.0, 0.0, 10.0], Material::default());
+    body.name = "Existing extrusion".into();
+    r.app.scene.groups[0].shapes[0] = body;
+    let source = r.saved_rectangle();
+    let saved = r.app.scene.clone();
+    r.app.solid_mode = true;
+    assert!(r.app.make_from_selected_line(&r.ctx, crate::sketch_ui::Make::Extrude));
+    let live = r.app.sk.live.expect("extrusion preview");
+    assert_eq!(live, (0, 2));
+    let frozen = r.app.scene.clone();
+
+    // Drive the same outliner rows a person drags, including the real panels and
+    // floating command card. Moving body 0 after preview 2 used to leave sk.live
+    // pointing at the existing extrusion, which Escape would then delete.
+    r.full_ui = true;
+    r.frame(vec![]);
+    r.frame(vec![]);
+    let body_row = r.row_rect(Pick::Shape(0, 0));
+    let preview_row = r.row_rect(Pick::Shape(live.0, live.1));
+    r.drag(pos2(body_row.left() + 75.0, body_row.center().y), pos2(preview_row.left() + 75.0, preview_row.bottom() - 3.0));
+    assert_eq!(r.app.scene, frozen, "dragging a scene row cannot reorder an active command's references");
+    assert_eq!(r.app.sk.live, Some(live));
+    assert_eq!(r.app.sk.source_sketch, Some(source));
+    r.app.sk.height = 61.0;
+    r.app.live_update();
+    assert_eq!(r.app.scene.shape(0, 0), saved.shape(0, 0), "changing preview height must leave the earlier extrusion intact");
+    assert_eq!(r.app.scene.shape(source.0, source.1), saved.shape(source.0, source.1));
+    r.key(egui::Key::Escape);
+    assert_eq!(r.app.scene, saved, "Escape removes only the preview");
+    assert!(!r.app.scene_structure_locked());
+
+    // A positive control proves that the pointer events reached draggable rows.
+    // The legacy in-place outline editor also safely ends before reordering;
+    // its already committed shape remains editable through ordinary commands.
+    r.app.sketch_edit_begin(0, 0);
+    assert!(r.app.sk.edit.is_some());
+    r.frame(vec![]);
+    r.frame(vec![]);
+    let body_row = r.row_rect(Pick::Shape(0, 0));
+    let guide_row = r.row_rect(Pick::Shape(source.0, source.1));
+    r.drag(pos2(body_row.left() + 75.0, body_row.center().y), pos2(guide_row.left() + 75.0, guide_row.bottom() - 3.0));
+    assert!(r.app.sk.edit.is_none(), "reordering ends the old outline editor before its target index changes");
+    assert_eq!(r.app.scene.shape(0, 0), saved.shape(source.0, source.1), "the guide moves before the original after the command ends");
+    assert_eq!(r.app.scene.shape(0, 1), saved.shape(0, 0));
+}
+
+#[test]
+fn solid_sketch_scene_actions_preserve_live_and_saved_edit_references() {
+    type Action = fn(&mut App, &egui::Context);
+    let actions: [(&str, Action); 10] = [
+        ("move layer", |app, _| app.move_layer(Pick::Shape(0, 0), Pick::Shape(0, 1), true)),
+        ("duplicate", |app, _| app.duplicate()),
+        ("mirror copy", |app, _| app.mirror_copy()),
+        ("delete", |app, _| app.delete_selected()),
+        ("group", |app, _| app.group_selected()),
+        ("add group", |app, _| app.add_group()),
+        ("add shape", |app, ctx| app.add_shape(ctx, Kind::Box)),
+        ("linked copy", |app, ctx| app.make_instance(ctx)),
+        ("pattern", |app, ctx| app.set_pattern_kind(ctx, crate::pattern::PatternKind::Rect)),
+        ("paste", |app, _| {
+            let text = crate::clip::copy_text(app).expect("selected source can be copied");
+            assert!(crate::clip::paste_text(app, &text).is_err());
+        }),
+    ];
+    for edit_saved in [false, true] {
+        let mut r = Rig::new();
+        let source = r.saved_rectangle();
+        let saved = r.app.scene.clone();
+        if edit_saved {
+            assert!(r.app.edit_saved_sketch(source.0, source.1));
+        } else {
+            assert!(r.app.make_from_selected_line(&r.ctx, crate::sketch_ui::Make::Extrude));
+        }
+        let scene = r.app.scene.clone();
+        let live = r.app.sk.live;
+        for (label, action) in actions {
+            r.app.sel = Some(Pick::Shape(0, 0));
+            r.app.multi = vec![Pick::Shape(source.0, source.1)];
+            r.app.multi_for = r.app.sel;
+            action(&mut r.app, &r.ctx);
+            assert_eq!(r.app.scene, scene, "{label} during saved edit={edit_saved} must keep all scene identities");
+            assert_eq!(r.app.sk.live, live);
+            if edit_saved {
+                assert_eq!(r.app.sk.guide_edit, Some(source));
+            } else {
+                assert_eq!(r.app.sk.source_sketch, Some(source));
+            }
+        }
+        if edit_saved {
+            r.app.undo();
+            assert_eq!(r.app.scene, saved, "Undo must not replace the scene under a saved sketch edit");
+        }
+        r.app.sketch_off();
+        assert_eq!(r.app.scene, saved);
+        r.app.sel = Some(Pick::Shape(0, 0));
+        r.app.multi.clear();
+        r.app.duplicate();
+        assert_eq!(r.app.scene.shape_count(), saved.shape_count() + 1, "scene editing resumes after leaving the command");
+    }
+}
+
+#[test]
+fn solid_sketch_tab_keeps_cut_through_preview_updates_and_confirmation() {
+    let mut r = Rig::new();
+    r.saved_rectangle();
+    r.app.new_op = crate::model::Op::Add;
+    assert!(r.app.make_from_selected_line(&r.ctx, crate::sketch_ui::Make::Extrude));
+    let live = r.app.sk.live.expect("extrusion preview");
+    assert_eq!(r.app.scene.shape(live.0, live.1).expect("preview").op, crate::model::Op::Add);
+    r.key(egui::Key::Tab);
+    assert_eq!(r.app.new_op, crate::model::Op::Subtract);
+    assert_eq!(r.app.scene.shape(live.0, live.1).expect("preview").op, crate::model::Op::Subtract);
+    r.app.sk.height = 61.0;
+    r.app.live_update();
+    assert_eq!(r.app.scene.shape(live.0, live.1).expect("resized preview").op, crate::model::Op::Subtract);
+    r.right_click(r.on_plane([35.0, -25.0]));
+    assert!(!r.app.sketch_active());
+    assert_eq!(r.app.scene.shape(live.0, live.1).expect("finished solid").op, crate::model::Op::Subtract);
+    assert_eq!(r.app.scene.shape(0, 0).expect("original body").op, crate::model::Op::Add, "Tab controls the new solid only");
+}
+
+#[test]
+fn solid_outline_undo_of_scene_reordering_does_not_rebind_the_editor() {
+    let mut r = Rig::new();
+    let mut original = Shape::new(Kind::Extrude, [0.0, 0.0, 10.0], Material::default());
+    original.name = "Original extrusion".into();
+    r.app.scene.groups[0].shapes[0] = original;
+    r.app.add_shape(&r.ctx, Kind::Extrude);
+    r.frame(vec![]);
+    let before = r.app.scene.clone();
+    r.app.move_layer(Pick::Shape(0, 0), Pick::Shape(0, 1), true);
+    r.frame(vec![]);
+    let after = r.app.scene.clone();
+    assert_ne!(before, after);
+    r.app.sketch_edit_begin(0, 0);
+    assert!(r.app.sk.edit.is_some());
+    r.app.undo();
+    assert_eq!(r.app.scene, before);
+    assert!(r.app.sk.edit.is_none(), "two same-kind shapes at the same index are not the same history target");
+    r.app.redo();
+    assert_eq!(r.app.scene, after);
+    assert!(r.app.sk.edit.is_none(), "redo must not resurrect a stale editor reference");
+}
+
+#[test]
+fn control_preserves_live_sketch_drafts_and_outline_edits() {
+    use serde_json::json;
+
+    for mode in ["live", "saved sketch", "ready draft", "outline"] {
+        let mut r = Rig::new();
+        let source = r.saved_rectangle();
+        let saved = r.app.scene.clone();
+        match mode {
+            "live" => assert!(r.app.make_from_selected_line(&r.ctx, crate::sketch_ui::Make::Extrude)),
+            "saved sketch" => assert!(r.app.edit_saved_sketch(source.0, source.1)),
+            "ready draft" => {
+                r.sketch(Pen::Rect);
+                r.click(r.on_plane([-20.0, -15.0]));
+                r.click(r.on_plane([20.0, 15.0]));
+                assert_eq!(r.app.sk.stage, Stage::Ready);
+            }
+            "outline" => {
+                r.app.add_shape(&r.ctx, Kind::Extrude);
+                r.frame(vec![]);
+                let Some(Pick::Shape(g, s)) = r.app.sel else { panic!("new extrusion") };
+                r.app.sketch_edit_begin(g, s);
+                assert!(r.app.sk.edit.is_some());
+            }
+            _ => unreachable!(),
+        }
+        r.frame(vec![]);
+        let before = r.app.scene.clone();
+        let (undo, dirty) = (r.app.undo_depth(), r.app.dirty);
+        let refs = (r.app.sk.live, r.app.sk.source_sketch, r.app.sk.guide_edit, r.app.sk.edit.as_ref().map(|e| (e.g, e.s)));
+        let (profile, points) = (r.app.sk.profile.clone(), r.app.sk.pts.clone());
+        let dir = std::env::temp_dir().join(format!("meltcad-control-edit-{}-{mode}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("test folder");
+        let load = dir.join("input.meltcad");
+        let save = dir.join("draft.meltcad");
+        let render = dir.join("view.png");
+        std::fs::write(&load, saved.try_to_json().expect("saved scene JSON")).expect("test scene");
+        let _ = std::fs::remove_file(&save);
+        let commands = [
+            json!({"cmd": "commands"}),
+            json!({"cmd": "scene.get"}),
+            json!({"cmd": "scene.summary"}),
+            json!({"cmd": "render", "path": render, "size": 40}),
+            json!({"cmd": "scene.new"}),
+            json!({"cmd": "scene.set", "scene": crate::model::Scene::default()}),
+            json!({"cmd": "load", "path": load}),
+            json!({"cmd": "shape.add", "kind": "Box"}),
+            json!({"cmd": "shape.set", "group": 0, "shape": 0, "pos": [4, 5, 6]}),
+            json!({"cmd": "shape.delete", "group": 0, "shape": 0}),
+            json!({"cmd": "group.delete", "group": 0}),
+            json!({"cmd": "melt.set", "amount": 12}),
+            json!({"cmd": "save", "path": save}),
+        ];
+        let replies = r.control(&commands);
+        for (command, reply) in commands.iter().zip(&replies).take(4) {
+            assert!(reply.is_ok(), "{mode}: {command}: {reply:?}");
+        }
+        for (command, reply) in commands.iter().zip(&replies).skip(4) {
+            assert!(reply.as_ref().is_err_and(|e| e.contains("Finish or cancel")), "{mode}: {command}: {reply:?}");
+        }
+        assert!(!save.exists(), "an unfinished edit must not be silently saved");
+        assert!(render.exists(), "read-only rendering remains available while editing");
+        assert_eq!(r.app.scene, before, "{mode}: control commands cannot change active geometry");
+        assert_eq!((r.app.undo_depth(), r.app.dirty), (undo, dirty), "{mode}: rejected and read-only commands do not commit");
+        assert_eq!(
+            (r.app.sk.live, r.app.sk.source_sketch, r.app.sk.guide_edit, r.app.sk.edit.as_ref().map(|e| (e.g, e.s))),
+            refs,
+            "{mode}: editing targets stay bound to the same objects"
+        );
+        assert_eq!((r.app.sk.profile.clone(), r.app.sk.pts.clone()), (profile, points));
+        if mode == "live" {
+            r.app.sk.height = 63.0;
+            r.app.live_update();
+            r.app.sketch_off();
+            assert_eq!(r.app.scene, saved, "cancelling afterwards still removes only the preview");
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
+#[test]
+fn control_batches_commit_one_undo_per_changed_command() {
+    use serde_json::json;
+
+    let mut r = Rig::new();
+    let before = r.app.scene.clone();
+    let undo = r.app.undo_depth();
+    let replies = r.control(&[
+        json!({"cmd": "shape.add", "kind": "Box", "name": "First command"}),
+        json!({"cmd": "shape.add", "kind": "Cone", "name": "Second command"}),
+    ]);
+    assert!(replies.iter().all(Result::is_ok), "{replies:?}");
+    assert_eq!(r.app.undo_depth(), undo + 2, "two queued changes are independently undoable");
+    assert!(r.app.dirty);
+    assert_eq!(r.app.sel, Some(Pick::Shape(0, 2)));
+    let after = r.app.scene.clone();
+    r.app.undo();
+    assert_eq!(r.app.scene.shape_count(), before.shape_count() + 1);
+    assert_eq!(r.app.scene.shape(0, 1).expect("first command remains").name, "First command");
+    r.app.undo();
+    assert_eq!(r.app.scene, before);
+    r.app.redo();
+    r.app.redo();
+    assert_eq!(r.app.scene, after);
+}
+
+#[test]
+fn control_reads_errors_and_noops_preserve_dirty_undo_and_redo() {
+    use serde_json::json;
+
+    let mut r = Rig::new();
+    r.app.add_shape(&r.ctx, Kind::Box);
+    r.frame(vec![]);
+    let redo = r.app.scene.clone();
+    r.app.undo();
+    r.app.dirty = false;
+    let before = r.app.scene.clone();
+    let undo = r.app.undo_depth();
+    let path = std::env::temp_dir().join(format!("meltcad-control-settled-save-{}.meltcad", std::process::id()));
+    let replies = r.control(&[
+        json!({"cmd": "commands"}),
+        json!({"cmd": "scene.get"}),
+        json!({"cmd": "scene.summary"}),
+        json!({"cmd": "melt.set", "amount": before.melt.amount}),
+        json!({"cmd": "save", "path": path}),
+        json!({"cmd": "unknown"}),
+        json!({"cmd": "shape.set", "group": 0, "shape": 0, "kind": "not a shape"}),
+    ]);
+    assert!(replies.iter().take(5).all(Result::is_ok), "{replies:?}");
+    assert!(replies.iter().skip(5).all(Result::is_err), "{replies:?}");
+    assert_eq!(r.app.scene, before);
+    assert_eq!(r.app.undo_depth(), undo);
+    assert!(!r.app.dirty);
+    assert!(path.exists(), "saving a settled scene remains available");
+    r.app.redo();
+    assert_eq!(r.app.scene, redo, "failed, read-only and no-op commands preserve redo");
+    let _ = std::fs::remove_file(path);
+
+    // shape.add used to create a group before failing its requested group lookup.
+    // An error must discard even this partial change in the command implementation.
+    let mut empty = Rig::new();
+    empty.app.new_scene(crate::model::Scene { groups: Vec::new(), ..crate::model::Scene::default() });
+    empty.frame(vec![]);
+    let before = empty.app.scene.clone();
+    let reply = empty.control(&[json!({"cmd": "shape.add", "kind": "Box", "group": 999})]);
+    assert!(reply[0].is_err());
+    assert_eq!(empty.app.scene, before);
+    assert_eq!(empty.app.undo_depth(), 0);
+    assert!(!empty.app.dirty);
+}
+
+#[test]
+fn control_scene_replacement_and_deletion_clear_idle_index_state() {
+    use serde_json::json;
+
+    let mut replacement = crate::model::Scene { groups: vec![crate::model::Group::new("Replacement")], ..crate::model::Scene::default() };
+    replacement.groups[0].shapes.push(Shape::new(Kind::Cylinder, [10.0, 15.0, 20.0], Material::default()));
+    let path = std::env::temp_dir().join(format!("meltcad-control-replace-{}.meltcad", std::process::id()));
+    std::fs::write(&path, replacement.try_to_json().expect("replacement JSON")).expect("replacement file");
+    for command in [
+        json!({"cmd": "scene.new"}),
+        json!({"cmd": "scene.set", "scene": replacement}),
+        json!({"cmd": "load", "path": path}),
+        json!({"cmd": "shape.delete", "group": 0, "shape": 0}),
+        json!({"cmd": "group.delete", "group": 0}),
+    ] {
+        let mut r = Rig::new();
+        r.app.add_shape(&r.ctx, Kind::Box);
+        r.frame(vec![]);
+        let before = r.app.scene.clone();
+        let undo = r.app.undo_depth();
+        r.app.dirty = false;
+        r.app.sel = Some(Pick::Shape(0, 0));
+        r.app.multi = vec![Pick::Shape(0, 1)];
+        r.app.multi_for = r.app.sel;
+        r.app.ct.node = Some((0, 0, 0));
+        r.app.pt.last = Some((0, 0));
+        let replies = r.control(std::slice::from_ref(&command));
+        assert!(replies[0].is_ok(), "{command}: {replies:?}");
+        assert_eq!(r.app.undo_depth(), undo + 1, "{command}: exactly one undo step");
+        assert!(r.app.dirty);
+        assert!(r.app.ct.node.is_none() && r.app.pt.last.is_none(), "{command}: old node/pipe indices must be forgotten");
+        assert!(r.app.multi.is_empty() && r.app.multi_for.is_none(), "{command}: old multiselection must not bind to replacement shapes");
+        if matches!(command["cmd"].as_str(), Some("scene.set" | "load")) {
+            assert_eq!(r.app.sel, Some(Pick::Shape(0, 0)));
+            assert_eq!(r.app.scene.shape(0, 0).expect("newly loaded shape").kind, Kind::Cylinder);
+        } else {
+            assert!(r.app.sel.is_none(), "{command}: deletion cannot select another object at the same old index");
+        }
+        let after = r.app.scene.clone();
+        r.app.undo();
+        assert_eq!(r.app.scene, before, "{command}: undo restores the previous document geometry");
+        r.app.redo();
+        assert_eq!(r.app.scene, after);
+        assert!(r.app.ct.node.is_none() && r.app.pt.last.is_none());
+    }
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn control_rejects_changes_during_an_actual_node_drag() {
+    use serde_json::json;
+
+    let mut r = Rig::new();
+    r.full_ui = true;
+    r.app.scene.groups[0].shapes.push(curve_shape());
+    r.app.sel = Some(Pick::Shape(0, 1));
+    r.frame(vec![]);
+    r.frame(vec![]);
+    let shape = r.app.scene.shape(0, 1).expect("curve");
+    let nodes = layout(&r.app.cam, r.app.view_rect, shape);
+    let from = nodes.nodes[1].expect("visible middle node").c;
+    let to = from + vec2(22.0, -9.0);
+    r.mv(from);
+    r.button(from, true);
+    r.mv(to);
+    let drag = r.app.ct.drag.expect("the pointer owns a node drag");
+    let during = r.app.scene.clone();
+    let undo = r.app.undo_depth();
+    let replies = r.control(&[json!({"cmd": "shape.delete", "group": 0, "shape": 1}), json!({"cmd": "scene.get"})]);
+    assert!(replies[0].is_err());
+    assert_eq!(replies[1], Ok(serde_json::to_value(&during).expect("scene at the control boundary")));
+    // The rest of the frame continues the pointer drag and initializes its
+    // inspector handles; those normal UI updates are separate from the commands.
+    assert_eq!(r.app.scene.shape_count(), during.shape_count());
+    assert_eq!(r.app.scene.shape(0, 0), during.shape(0, 0));
+    assert_eq!(r.app.undo_depth(), undo);
+    assert_eq!(r.app.ct.drag.as_ref().map(|d| (d.g, d.s, d.i)), Some((drag.g, drag.s, drag.i)));
+    r.button(to, false);
+    assert!(r.app.ct.drag.is_none());
+    assert_eq!(r.app.undo_depth(), undo + 1, "releasing the original drag still commits exactly that gesture");
+    let replies = r.control(&[json!({"cmd": "shape.delete", "group": 0, "shape": 1})]);
+    assert!(replies[0].is_ok(), "the command works after the user finishes dragging");
+    assert_eq!(r.app.scene.shape_count(), 1);
+    assert_eq!(r.app.undo_depth(), undo + 2);
+}
+
+#[test]
+fn control_preserves_an_inspector_textedit_until_its_input_is_finished() {
+    use serde_json::json;
+
+    let mut r = Rig::new();
+    r.full_ui = true;
+    r.frame(vec![]);
+    r.frame(vec![]);
+    r.time += 0.016;
+    let input = RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, r.size)), time: Some(r.time), ..Default::default() };
+    let out = r.ctx.run_ui(input, |ui| r.app.frame_body(ui));
+    // Locate the actual inspector's name TextEdit from its painted text, so the
+    // test clicks the real field without hard-coding panel or font coordinates.
+    let name = &r.app.scene.shape(0, 0).expect("selected shape").name;
+    let field = out
+        .shapes
+        .iter()
+        .find_map(|s| match &s.shape {
+            egui::Shape::Text(t) if t.galley.job.text == *name && t.pos.x > r.size.x - 312.0 => Some(t.visual_bounding_rect()),
+            _ => None,
+        })
+        .expect("the selected shape's name is visible in the inspector");
+    r.click(field.center());
+    r.replace_text("Edited before control");
+    assert_eq!(r.app.scene.shape(0, 0).expect("edited shape").name, "Edited before control");
+    assert!(r.ctx.egui_wants_keyboard_input());
+    assert!(!r.ctx.input(|i| i.pointer.any_down()));
+    assert!(!r.app.sketch_active() && r.app.renaming.is_none(), "the inspector TextEdit is the only protected input");
+    let before = r.app.scene.clone();
+    let undo = r.app.undo_depth();
+    let path = std::env::temp_dir().join(format!("meltcad-control-focused-{}.meltcad", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    let replies = r.control(&[json!({"cmd": "shape.add", "kind": "Box"}), json!({"cmd": "scene.summary"}), json!({"cmd": "save", "path": path})]);
+    assert!(replies[0].is_err() && replies[1].is_ok() && replies[2].is_err(), "{replies:?}");
+    assert_eq!(r.app.scene, before);
+    assert_eq!(r.app.sel, Some(Pick::Shape(0, 0)));
+    assert_eq!(r.app.undo_depth(), undo);
+    assert!(r.ctx.egui_wants_keyboard_input());
+    assert!(!path.exists(), "saving waits for the field edit too");
+    r.key(egui::Key::Enter);
+    assert!(!r.ctx.egui_wants_keyboard_input());
+    let replies = r.control(&[json!({"cmd": "shape.add", "kind": "Box"})]);
+    assert!(replies[0].is_ok());
+    assert_eq!(r.app.sel, Some(Pick::Shape(0, 1)));
+    assert_eq!(r.app.scene.shape(0, 0).expect("original shape").name, "Edited before control");
+    assert_eq!(r.app.scene.shape(0, 1).expect("new shape").name, "Box", "the previous field's text must not carry into the new selection");
+}
+
+#[test]
+fn control_animation_changes_keep_the_explicit_pose_and_one_undo_step() {
+    use serde_json::json;
+
+    for was_playing in [false, true] {
+        let mut r = Rig::new();
+        r.full_ui = true;
+        let replies = r.control(&[
+            json!({"cmd": "anim.set", "length": 9, "fps": 1}),
+            json!({"cmd": "anim.key", "frame": 0}),
+            json!({"cmd": "shape.set", "group": 0, "shape": 0, "pos": [80, 0, 20]}),
+            json!({"cmd": "anim.key", "frame": 8}),
+            json!({"cmd": "anim.at", "frame": 0}),
+        ]);
+        assert!(replies.iter().all(Result::is_ok), "{replies:?}");
+        let animation = r.app.scene.anim.clone();
+        assert_eq!(animation.key_frames(), [0, 8]);
+        r.app.an.open = true;
+        r.app.an.playing = was_playing;
+        let undo = r.app.undo_depth();
+        let replies = r.control(&[json!({"cmd": "anim.at", "frame": 4})]);
+        assert_eq!(replies[0].as_ref().expect("pose was applied")["frame"], 4);
+        assert_eq!(r.app.an.frame, 4);
+        assert!(!r.app.an.playing);
+        assert_eq!(r.app.scene.shape(0, 0).expect("interpolated shape").pos[0], 40.0);
+        assert_eq!(r.app.scene.anim, animation, "a control pose must not be captured into the old UI frame");
+        assert_eq!(r.app.undo_depth(), undo + 1);
+        r.frame(vec![]);
+        r.frame(vec![]);
+        assert_eq!(r.app.scene.anim, animation);
+        assert_eq!(r.app.undo_depth(), undo + 1, "later UI frames must not add a second auto-key undo");
+
+        // The clock, not just the displayed frame, must follow a control seek.
+        r.app.an.playing = true;
+        r.frame(vec![]);
+        assert_eq!(r.app.an.frame, 4, "resuming at 1 fps starts from the requested frame");
+        assert_eq!(r.app.scene.shape(0, 0).expect("resumed shape").pos[0], 40.0);
+
+        let undo = r.app.undo_depth();
+        let replies = r.control(&[json!({"cmd": "shape.set", "group": 0, "shape": 0, "pos": [60, 0, 20]})]);
+        assert!(replies[0].is_ok());
+        assert!(!r.app.an.playing, "playback cannot immediately overwrite an external edit");
+        assert_eq!(r.app.scene.shape(0, 0).expect("explicitly edited shape").pos[0], 60.0);
+        assert_eq!(r.app.scene.anim, animation, "shape.set has the same explicit effect as in a CLI script");
+        assert_eq!(r.app.undo_depth(), undo + 1);
+
+        assert!(r.control(&[json!({"cmd": "anim.at", "frame": 8})])[0].is_ok());
+        r.app.an.playing = true;
+        let undo = r.app.undo_depth();
+        assert!(r.control(&[json!({"cmd": "anim.delete", "frame": 8})])[0].is_ok());
+        assert!(!r.app.an.playing);
+        assert_eq!(r.app.scene.anim.key_frames(), [0], "UI auto-capture cannot recreate a deleted pose");
+        assert_eq!(r.app.scene.shape(0, 0).expect("delete keeps the current geometry").pos[0], 80.0);
+        assert_eq!(r.app.undo_depth(), undo + 1);
+        r.frame(vec![]);
+        assert_eq!(r.app.scene.anim.key_frames(), [0]);
+        assert_eq!(r.app.undo_depth(), undo + 1);
+        r.app.undo();
+        assert_eq!(r.app.scene.anim, animation, "one undo restores the deleted pose");
+    }
+}
+
+#[test]
+fn control_animation_noop_seek_syncs_time_and_readonly_works_during_sketch() {
+    use serde_json::json;
+
+    let mut r = Rig::new();
+    r.full_ui = true;
+    let replies = r.control(&[json!({"cmd": "anim.set", "length": 6, "fps": 1}), json!({"cmd": "anim.key", "frame": 0})]);
+    assert!(replies.iter().all(Result::is_ok));
+    let before = r.app.scene.clone();
+    let (undo, dirty) = (r.app.undo_depth(), r.app.dirty);
+    r.app.an.open = true;
+    r.app.an.playing = true;
+    let replies = r.control(&[json!({"cmd": "anim.at", "frame": 9999})]);
+    assert_eq!(replies[0].as_ref().expect("clamped seek")["frame"], 5);
+    assert_eq!(r.app.scene, before, "a single stored pose is constant across the timeline");
+    assert_eq!((r.app.undo_depth(), r.app.dirty), (undo, dirty), "a seek with no scene change creates no edit");
+    assert_eq!(r.app.an.frame, 5, "the UI follows the command even without a scene difference");
+    assert!(!r.app.an.playing);
+    r.app.an.playing = true;
+    r.frame(vec![]);
+    assert_eq!(r.app.an.frame, 5, "the playback clock also moved to the clamped frame");
+    r.app.an.playing = false;
+
+    r.app.set_sketch_tool(true);
+    let path = std::env::temp_dir().join(format!("meltcad-control-anim-read-{}.gif", std::process::id()));
+    let replies = r.control(&[
+        json!({"cmd": "anim.get"}),
+        json!({"cmd": "anim.render", "path": path, "size": 64, "gpu": false}),
+        json!({"cmd": "anim.at", "frame": 2}),
+    ]);
+    assert!(replies[0].is_ok() && replies[1].is_ok() && replies[2].is_err(), "{replies:?}");
+    assert!(path.exists());
+    assert!(r.app.sketch_active());
+    assert_eq!(r.app.scene, before);
+    assert_eq!((r.app.undo_depth(), r.app.dirty), (undo, dirty));
+    assert_eq!(r.app.an.frame, 5, "a rejected pose command cannot move the playhead");
+    let _ = std::fs::remove_file(path);
 }

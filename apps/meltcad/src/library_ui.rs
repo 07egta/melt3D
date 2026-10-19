@@ -46,32 +46,35 @@ struct Job {
     ctx: egui::Context,
 }
 
-fn worker() -> Option<&'static Worker> {
-    static W: std::sync::OnceLock<Option<Worker>> = std::sync::OnceLock::new();
-    W.get_or_init(|| {
-        let (tx, rx) = std::sync::mpsc::channel::<Job>();
-        let done: Done = Default::default();
-        let out = done.clone();
-        std::thread::Builder::new()
-            .name("meltcad-thumbs".into())
-            .spawn(move || {
-                for job in rx {
-                    let rgba = std::panic::catch_unwind(|| crate::cpu_render::thumb(&job.scene, THUMB)).unwrap_or_default();
-                    if rgba.len() == THUMB * THUMB * 4 {
-                        out.lock().unwrap_or_else(|e| e.into_inner()).push((job.cat, job.item, rgba));
-                    }
-                    job.ctx.request_repaint();
+fn spawn_worker() -> Option<Worker> {
+    let (tx, rx) = std::sync::mpsc::channel::<Job>();
+    let done: Done = Default::default();
+    let out = done.clone();
+    std::thread::Builder::new()
+        .name("meltcad-thumbs".into())
+        .spawn(move || {
+            for job in rx {
+                let rgba = std::panic::catch_unwind(|| crate::cpu_render::thumb(&job.scene, THUMB)).unwrap_or_default();
+                if rgba.len() == THUMB * THUMB * 4 {
+                    out.lock().unwrap_or_else(|e| e.into_inner()).push((job.cat, job.item, rgba));
                 }
-            })
-            .ok()?;
-        Some(Worker { tx: std::sync::Mutex::new(tx), done, asked: Default::default() })
-    })
-    .as_ref()
+                job.ctx.request_repaint();
+            }
+        })
+        .ok()?;
+    Some(Worker { tx: std::sync::Mutex::new(tx), done, asked: Default::default() })
+}
+
+/// Texture caches belong to a Context, so their requests and completed pictures must too.
+/// A process-global queue lets another window/test consume a picture while global
+/// deduplication then prevents its original Context from ever requesting it again.
+fn worker(ctx: &egui::Context) -> Option<std::sync::Arc<Worker>> {
+    ctx.data_mut(|data| data.get_temp_mut_or_insert_with(egui::Id::new("library_worker"), || spawn_worker().map(std::sync::Arc::new)).clone())
 }
 
 /// Turn the pictures the thread has finished into textures (a few per frame).
 fn collect(ctx: &egui::Context) {
-    let Some(w) = worker() else { return };
+    let Some(w) = worker(ctx) else { return };
     let ready: Vec<(usize, usize, Vec<u8>)> = {
         let mut g = w.done.lock().unwrap_or_else(|e| e.into_inner());
         let n = g.len().min(6);
@@ -89,7 +92,7 @@ fn collect(ctx: &egui::Context) {
 
 /// Ask the thread for a picture (once per model).
 fn ask(ctx: &egui::Context, cat: usize, i: usize, item: &Item) {
-    let Some(w) = worker() else { return };
+    let Some(w) = worker(ctx) else { return };
     if !w.asked.lock().unwrap_or_else(|e| e.into_inner()).insert((cat, i)) {
         return;
     }
@@ -128,6 +131,9 @@ pub fn free_spot(taken: &[([f32; 2], f32)], r: f32) -> Option<[f32; 2]> {
 
 /// Put an item into the scene. Returns false when the scene is full.
 pub fn insert(app: &mut App, ctx: &egui::Context, item: &Item) -> bool {
+    if !app.allow_scene_structure_change() {
+        return false;
+    }
     if !item.fits(app.scene.groups.len(), app.scene.shape_count()) {
         let why = if app.scene.groups.len() >= MAX_GROUPS { format!("Up to {MAX_GROUPS} groups") } else { format!("Up to {MAX_SHAPES} shapes") };
         app.say(ctx, why);
@@ -207,7 +213,7 @@ pub fn panel(app: &mut App, ui: &mut egui::Ui) {
                         // the pictures come from a thread of their own, so opening the tab never stalls
                         // (without a thread: one new picture per frame)
                         let tex = cached(ui.ctx(), ci, ii).or_else(|| {
-                            if worker().is_some() {
+                            if worker(ui.ctx()).is_some() {
                                 ask(ui.ctx(), ci, ii, it);
                                 return None;
                             }
@@ -325,6 +331,30 @@ mod tests {
             }
         }
         assert!(have, "a picture arrived");
+    }
+
+    #[test]
+    fn contexts_do_not_steal_thumbnails_or_suppress_each_others_requests() {
+        let first = egui::Context::default();
+        let second = egui::Context::default();
+        let first_worker = worker(&first).expect("first worker");
+        let second_worker = worker(&second).expect("second worker");
+        // A completed render is waiting for its owner. Let the other Context
+        // collect first: this used to drain the shared process-global queue.
+        first_worker.asked.lock().expect("requests").insert((99, 0));
+        first_worker.done.lock().expect("completed pictures").push((99, 0, vec![255; THUMB * THUMB * 4]));
+        collect(&second);
+        assert!(cached(&second, 99, 0).is_none(), "a different Context must not consume this picture");
+        collect(&first);
+        assert!(cached(&first, 99, 0).is_some(), "the requesting Context still receives its picture");
+        assert!(first_worker.done.lock().expect("completed pictures").is_empty());
+
+        // The same model needs its own texture in the other Context. A previous
+        // request from the first Context must not mark it as already requested.
+        assert!(!second_worker.asked.lock().expect("requests").contains(&(99, 0)), "requests belong to their own Context");
+        ask(&second, 99, 0, &item());
+        assert!(second_worker.asked.lock().expect("requests").contains(&(99, 0)));
+        assert!(cached(&second, 99, 0).is_none(), "requests stay asynchronous");
     }
 
     #[test]

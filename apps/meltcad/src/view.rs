@@ -63,10 +63,25 @@ pub fn targets(scene: &Scene, pick: Option<Pick>) -> Vec<(usize, usize)> {
 
 /// The shapes of all these picks, each once.
 pub fn targets_all(scene: &Scene, picks: &[Pick]) -> Vec<(usize, usize)> {
-    let mut out: Vec<(usize, usize)> = Vec::new();
+    if picks.len() <= 1 {
+        return targets(scene, picks.first().copied());
+    }
+    let mut out: Vec<(usize, usize)> = Vec::with_capacity(picks.len());
+    let mut seen = std::collections::HashSet::with_capacity(picks.len());
     for p in picks {
-        for t in targets(scene, Some(*p)) {
-            if !out.contains(&t) {
+        // Visit each selected range directly: no temporary Vec for each pick, and
+        // no growing linear scan of all earlier selections for every shape.
+        let (g, range) = match *p {
+            Pick::Shape(g, s) if scene.shape(g, s).is_some() => (g, s..s + 1),
+            Pick::Group(g) => {
+                let Some(group) = scene.groups.get(g) else { continue };
+                (g, 0..group.shapes.len())
+            }
+            _ => continue,
+        };
+        for s in range {
+            let t = (g, s);
+            if seen.insert(t) {
                 out.push(t);
             }
         }
@@ -310,7 +325,7 @@ impl App {
             {
                 self.apply_drag(&mut d, p, mods.ctrl);
             }
-            if !(resp.drag_stopped() || !ui.input(|i| i.pointer.primary_down())) {
+            if !resp.drag_stopped() && ui.input(|i| i.pointer.primary_down()) {
                 self.drag = Some(d);
             }
         }
@@ -340,7 +355,7 @@ impl App {
             }
         }
         // while a drawing tool is on, the right click belongs to the tool (it confirms)
-        let tool_busy = self.sketch_active() || self.ct.drawing || self.pt.on;
+        let tool_busy = ct.taken || self.sketch_active() || self.ct.drawing || self.pt.on;
         if resp.secondary_clicked()
             && !tool_busy
             && let Some(p) = pos
@@ -644,6 +659,111 @@ mod tests {
         s.groups[0].shapes.push(extra);
         assert_eq!(targets(&s, Some(Pick::Group(0))).len(), 2);
         assert_eq!(targets(&s, Some(Pick::Shape(0, 5))).len(), 0);
+    }
+
+    fn reference_targets(scene: &Scene, picks: &[Pick]) -> Vec<(usize, usize)> {
+        let mut out = Vec::new();
+        for pick in picks {
+            for target in targets(scene, Some(*pick)) {
+                if !out.contains(&target) {
+                    out.push(target);
+                }
+            }
+        }
+        out
+    }
+
+    fn selection_scene(count: usize) -> Scene {
+        let mut scene = Scene::default();
+        let base = scene.groups[0].shapes[0].clone();
+        scene.groups[0].shapes = (0..count)
+            .map(|i| {
+                let mut shape = base.clone();
+                shape.pos[0] = i as f32;
+                shape
+            })
+            .collect();
+        scene
+    }
+
+    #[test]
+    fn overlapping_group_and_shape_picks_preserve_first_encounter_order() {
+        let mut scene = selection_scene(4);
+        let mut other = scene.groups[0].clone();
+        other.shapes.truncate(2);
+        scene.groups.push(other);
+        let picks = [
+            Pick::Shape(0, 2),
+            Pick::Group(1),
+            Pick::Group(usize::MAX),
+            Pick::Group(0),
+            Pick::Shape(1, 0),
+            Pick::Shape(0, usize::MAX),
+            Pick::Group(1),
+        ];
+        let want = vec![(0, 2), (1, 0), (1, 1), (0, 0), (0, 1), (0, 3)];
+        assert_eq!(targets_all(&scene, &picks), want);
+        assert_eq!(targets_all(&scene, &picks), reference_targets(&scene, &picks));
+        assert_eq!(targets_all(&scene, &[]), Vec::new());
+        assert_eq!(targets_all(&scene, &[Pick::Group(0)]), targets(&scene, Some(Pick::Group(0))));
+        // The handle centre depends on the same once-only list, not on how many
+        // overlapping group and shape picks refer to each object.
+        let expected_x = want.iter().map(|&(g, s)| scene.groups[g].shapes[s].pos[0]).sum::<f32>() / want.len() as f32;
+        assert!(centre_of_picks(&scene, &picks).is_some_and(|p| (p[0] - expected_x).abs() < 1e-5));
+    }
+
+    #[test]
+    fn large_multi_selections_match_the_original_targets_exactly() {
+        for count in [10, 100, 300, 1000] {
+            let scene = selection_scene(count);
+            let mut picks: Vec<_> = (0..count).rev().map(|s| Pick::Shape(0, s)).collect();
+            picks.extend([Pick::Group(0), Pick::Shape(usize::MAX, 0), Pick::Group(0)]);
+            let selected = targets_all(&scene, &picks);
+            assert_eq!(selected.len(), count);
+            assert_eq!(selected, reference_targets(&scene, &picks));
+        }
+    }
+
+    /// CPU selection bookkeeping only, not viewport FPS. Compares the exact old
+    /// algorithm with the same picks and preserves the returned order.
+    #[test]
+    #[ignore]
+    fn multi_selection_speed() {
+        use std::hint::black_box;
+        eprintln!("CPU selection expansion; medians of 7 interleaved runs");
+        eprintln!("shapes,reference_us,optimized_us,ratio");
+        for count in [10, 100, 300, 1000] {
+            let scene = selection_scene(count);
+            let picks: Vec<_> = (0..count).map(|s| Pick::Shape(0, s)).collect();
+            assert_eq!(targets_all(&scene, &picks), reference_targets(&scene, &picks));
+            let repeat = 30000 / count;
+            let measure = |optimized| {
+                let started = std::time::Instant::now();
+                for _ in 0..repeat {
+                    black_box(if optimized {
+                        targets_all(black_box(&scene), black_box(&picks))
+                    } else {
+                        reference_targets(black_box(&scene), black_box(&picks))
+                    });
+                }
+                started.elapsed().as_secs_f64() * 1e6 / repeat as f64
+            };
+            let mut times: [Vec<f64>; 2] = Default::default();
+            for run in 0..8 {
+                for step in 0..2 {
+                    let which = (run + step) % 2;
+                    let elapsed = measure(which == 1);
+                    if run > 0 {
+                        times[which].push(elapsed);
+                    }
+                }
+            }
+            for row in &mut times {
+                row.sort_by(f64::total_cmp);
+            }
+            let [reference, optimized] = times.map(|row| row[3]);
+            eprintln!("{count},{reference:.3},{optimized:.3},{:.2}", reference / optimized);
+        }
     }
 
     #[test]

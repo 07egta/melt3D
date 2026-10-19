@@ -79,6 +79,9 @@ thread_local! {
     static SAVE: RefCell<Option<Vec<usize>>> = const { RefCell::new(None) };
     /// While a scene is being read.
     static LOAD: RefCell<Option<LoadCtx>> = const { RefCell::new(None) };
+    /// Prefer the volume this thread wrote. Background work may write the same
+    /// text from a different Arc; it must not replace a UI round-trip's identity.
+    static RECENT: RefCell<HashMap<(u64, usize), Weak<Volume>>> = RefCell::new(HashMap::new());
 }
 
 #[derive(Default)]
@@ -151,8 +154,9 @@ impl Serialize for SharedVolume {
 
 /// Volumes that are alive somewhere in the program, by the hash of their text, so that pasting a
 /// copied shape gives the original's volume back instead of a second copy.
-fn registry() -> &'static Mutex<HashMap<(u64, usize), Weak<Volume>>> {
-    static REG: OnceLock<Mutex<HashMap<(u64, usize), Weak<Volume>>>> = OnceLock::new();
+type VolumeRegistry = Mutex<HashMap<(u64, usize), Weak<Volume>>>;
+fn registry() -> &'static VolumeRegistry {
+    static REG: OnceLock<VolumeRegistry> = OnceLock::new();
     REG.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
@@ -167,11 +171,19 @@ fn fnv1a(bytes: &[u8]) -> u64 {
 
 /// Remember that `v` was made from the text `text` (so a later copy of that text finds it).
 pub fn remember_text(text: &str, v: &SharedVolume) {
+    let key = (fnv1a(text.as_bytes()), text.len());
+    RECENT.with(|c| {
+        let mut r = c.borrow_mut();
+        if r.len() > 64 {
+            r.retain(|_, w| w.strong_count() > 0);
+        }
+        r.insert(key, Arc::downgrade(v.arc()));
+    });
     if let Ok(mut r) = registry().lock() {
         if r.len() > 64 {
             r.retain(|_, w| w.strong_count() > 0);
         }
-        r.insert((fnv1a(text.as_bytes()), text.len()), Arc::downgrade(v.arc()));
+        r.insert(key, Arc::downgrade(v.arc()));
     }
 }
 
@@ -181,7 +193,9 @@ fn volume_from_text(text: &str) -> Option<SharedVolume> {
         return None;
     }
     let key = (fnv1a(text.as_bytes()), text.len());
-    let alive = registry().lock().ok().and_then(|r| r.get(&key).and_then(Weak::upgrade));
+    let alive = RECENT
+        .with(|r| r.borrow().get(&key).and_then(Weak::upgrade))
+        .or_else(|| registry().lock().ok().and_then(|r| r.get(&key).and_then(Weak::upgrade)));
     if let Some(a) = alive {
         return Some(SharedVolume(a));
     }
@@ -386,6 +400,33 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_background_round_trip_cannot_replace_this_threads_shared_volume() {
+        let v = SharedVolume::new(ball_volume(25));
+        let scene = scene_with(vec![mesh_shape(&v)]);
+        let json = scene.to_json();
+        let background_json = json.clone();
+        let original_key = v.key();
+        let (other, same_json) = std::thread::spawn(move || {
+            // A new thread still finds the already alive volume through the
+            // shared registry, without decoding a second buffer.
+            let loaded = Scene::from_json(&background_json).expect("background load");
+            let original = loaded.groups[0].shapes[1].volume.as_ref().expect("shared mesh");
+            assert_eq!(original.key(), original_key, "cross-thread reuse still finds the existing buffer");
+            let other = SharedVolume::new(ball_volume(25));
+            assert_ne!(original, &other);
+            let same_json = scene_with(vec![mesh_shape(&other)]).to_json();
+            (other, same_json)
+        })
+        .join()
+        .expect("background serialization");
+        assert_eq!(same_json, json, "the background thread wrote indistinguishable file text");
+        assert_ne!(v, other, "keep both independently created volumes alive during the reload");
+        let back = Scene::from_json(&json).expect("foreground reload");
+        assert_eq!(back, scene, "background serialization must not steal this thread's original volume handle");
+        assert!(Arc::ptr_eq(back.groups[0].shapes[1].volume.as_ref().expect("mesh survives").arc(), v.arc()));
+    }
+
+    #[test]
     fn hostile_volume_fields_become_none_and_never_panic() {
         let base = Shape::new(Kind::Mesh, [0.0; 3], Material::default());
         let json = serde_json::to_string(&base).unwrap_or_default();
@@ -451,8 +492,10 @@ pub(crate) mod tests {
 
     #[test]
     fn the_node_cap_fits_the_graphics_pool_and_a_float() {
-        assert!(MAX_TOTAL_NODES < (1 << 24), "a node number is exact in an f32");
-        assert!(MAX_TOTAL_NODES <= crate::gpu::VOL_W * crate::gpu::VOL_H * 4);
+        const {
+            assert!(MAX_TOTAL_NODES < (1 << 24), "a node number is exact in an f32");
+            assert!(MAX_TOTAL_NODES <= crate::gpu::VOL_W * crate::gpu::VOL_H * 4);
+        }
     }
 
     // ------------------------------------------------------------ the model's file form
@@ -529,7 +572,7 @@ pub(crate) mod tests {
     fn a_scene_keeps_at_most_eight_mesh_shapes_and_a_total_of_data() {
         let v = SharedVolume::new(ball_volume(12));
         let many: Vec<Shape> = (0..MAX_VOLUME_SHAPES + 4)
-            .map(|i| mesh_shape(&v))
+            .map(|_| mesh_shape(&v))
             .map(|mut s| {
                 s.pos[0] += 1.0;
                 s

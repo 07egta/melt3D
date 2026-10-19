@@ -56,6 +56,32 @@ pub enum Action {
     Help,
 }
 
+impl Action {
+    /// Keep stored sketch indices stable; Undo may still cancel a live solid.
+    fn blocked_during_sketch(self, live: bool) -> bool {
+        match self {
+            Self::Undo => !live,
+            Self::Redo
+            | Self::AddShape(_)
+            | Self::AddGroup
+            | Self::Insert(..)
+            | Self::Cut
+            | Self::Paste
+            | Self::Duplicate
+            | Self::MirrorCopy
+            | Self::Delete
+            | Self::Array
+            | Self::Pattern(_)
+            | Self::MirrorAxis(_)
+            | Self::ClearPattern
+            | Self::MakeInstance
+            | Self::ImportSvg
+            | Self::ImportMesh => true,
+            _ => false,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Entry {
     pub label: String,
@@ -293,6 +319,10 @@ impl App {
 
     /// Do what a palette entry says.
     pub fn run_action(&mut self, ctx: &egui::Context, a: Action) {
+        if self.scene_structure_locked() && a.blocked_during_sketch(self.sk.live.is_some()) {
+            self.allow_scene_structure_change();
+            return;
+        }
         let pi = std::f32::consts::PI;
         match a {
             Action::AddShape(k) => self.add_shape(ctx, k),
@@ -330,7 +360,10 @@ impl App {
             Action::FrameSelection => self.frame_view(true),
             Action::TogglePerspective => self.cam.ortho = !self.cam.ortho,
             Action::FlipOp => self.flip_op(),
-            Action::SetOp(o) => self.new_op = o,
+            Action::SetOp(o) => {
+                self.new_op = o;
+                self.live_update();
+            }
             Action::SetTool(t) => self.tool = t,
             Action::ViewFront => self.fly_look(0.0, 0.0),
             Action::ViewRight => self.fly_look(pi / 2.0, 0.0),
@@ -344,6 +377,9 @@ impl App {
     /// Draw the palette when it is open and run the chosen entry.
     pub fn palette_ui(&mut self, ctx: &egui::Context) {
         let Some(mut st) = ctx.data(|m| m.get_temp::<State>(id())) else { return };
+        let locked = self.scene_structure_locked();
+        let live = self.sk.live.is_some();
+        let enabled = |a: Action| !locked || !a.blocked_during_sketch(live);
         let all = all_entries();
         let hits = search(all, &st.query, 80);
         st.sel = st.sel.min(hits.len().saturating_sub(1));
@@ -376,7 +412,7 @@ impl App {
                 moved = true;
             }
             if i.consume_key(egui::Modifiers::NONE, Key::Enter) {
-                run = hits.get(st.sel).copied();
+                run = hits.get(st.sel).copied().filter(|&i| all.get(i).is_some_and(|e| enabled(e.action)));
             }
         });
         let mut changed = false;
@@ -446,7 +482,7 @@ impl App {
                             for pid in prefs.pins.clone() {
                                 let Some(i) = all.iter().position(|e| e.id() == pid) else { continue };
                                 let Some(e) = all.get(i) else { continue };
-                                let resp = style::pill(ui, &e.label, false).on_hover_text("Run  (right-click to unpin)");
+                                let resp = style::pill_enabled(ui, &e.label, false, enabled(e.action)).on_hover_text("Run  (right-click to unpin)");
                                 if resp.clicked() {
                                     run = Some(i);
                                 }
@@ -465,7 +501,9 @@ impl App {
                         for (n, &i) in hits.iter().enumerate() {
                             let Some(e) = all.get(i) else { continue };
                             let eid = e.id();
-                            let (rc, resp) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 28.0), egui::Sense::click());
+                            let can_run = enabled(e.action);
+                            let sense = if can_run { egui::Sense::click() } else { egui::Sense::hover() };
+                            let (rc, resp) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 28.0), sense);
                             let hot = n == st.sel || resp.hovered();
                             if moved && n == st.sel {
                                 ui.scroll_to_rect(rc, None);
@@ -517,7 +555,7 @@ impl App {
                                 Align2::LEFT_CENTER,
                                 &e.label,
                                 egui::FontId::proportional(13.5),
-                                style::TEXT,
+                                if can_run { style::TEXT } else { style::DIM },
                             );
                             if resp.hovered() && ui.input(|i| i.pointer.delta().length() > 0.5) {
                                 st.sel = n;

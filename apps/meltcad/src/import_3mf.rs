@@ -132,11 +132,8 @@ fn next_tag<'a>(src: &'a [u8], pos: &mut usize) -> Result<Option<Tag<'a>>, &'sta
         let end = loop {
             match rest.get(k) {
                 None => return Err(BAD_XML),
-                Some(&c) if quote != 0 => {
-                    if c == quote {
-                        quote = 0;
-                    }
-                }
+                Some(&c) if quote != 0 && c == quote => quote = 0,
+                Some(_) if quote != 0 => {}
                 Some(&c) if c == b'"' || c == b'\'' => quote = c,
                 Some(b'>') => break k,
                 _ => {}
@@ -489,10 +486,11 @@ pub(crate) fn appearance_3mf(bytes: &[u8]) -> crate::import_mesh::AppearanceInfo
         }
     }
     // Some files define exactly one base material without attaching it to the object.
-    if distinct.is_empty() && groups.len() == 1 {
-        if let Some(one) = groups.values().next().and_then(|a| (a.len() == 1).then(|| a[0])) {
-            distinct.push(one);
-        }
+    if distinct.is_empty()
+        && groups.len() == 1
+        && let Some(one) = groups.values().next().and_then(|a| (a.len() == 1).then(|| a[0]))
+    {
+        distinct.push(one);
     }
     out.material = distinct.first().copied();
     if unsupported {

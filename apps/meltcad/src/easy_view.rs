@@ -341,6 +341,7 @@ struct Job {
     scene: Scene,
     cam: Camera,
     sizes: Vec<[usize; 2]>,
+    moving: bool,
     mode: u32,
 }
 
@@ -349,7 +350,7 @@ pub struct Frame {
     pub id: u64,
     pub size: [usize; 2],
     pub rgba: Vec<u8>,
-    /// The last (finest) picture of its request.
+    /// The last pass of its request (a moving request has only a coarse pass).
     pub last: bool,
 }
 
@@ -380,13 +381,16 @@ fn spawn_worker(ctx: Option<egui::Context>) -> Option<Worker> {
                     if cancel() {
                         break;
                     }
-                    let fine = i + 1 == n;
+                    let last = i + 1 == n;
+                    // A moving request has one coarse pass: being the last pass
+                    // must not turn expensive shadows and fine normals back on.
+                    let fine = !job.moving && last;
                     let done = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         render_mode(&job.scene, &job.cam, *size, fine, threads, job.mode, &cancel)
                     }));
                     match done {
                         Ok(Some(rgba)) => {
-                            if frames_tx.send(Frame { id, size: *size, rgba, last: fine }).is_err() {
+                            if frames_tx.send(Frame { id, size: *size, rgba, last }).is_err() {
                                 return;
                             }
                             if let Some(c) = &ctx {
@@ -424,7 +428,7 @@ pub struct EasyView {
     texture: Option<egui::TextureHandle>,
     requested: Option<(u64, Key)>,
     next_id: u64,
-    /// Is the finest picture of the last request on screen?
+    /// Is the final pass of the last request on screen?
     pub settled: bool,
     /// The analysis view mode to draw (`ViewMode::id`).
     pub mode: u32,
@@ -462,7 +466,7 @@ impl EasyView {
         self.next_id += 1;
         let id = self.next_id;
         worker.latest.store(id, Ordering::Relaxed);
-        let job = Job { id, scene: key.scene.clone(), cam: *cam, sizes: sizes(view_px, moving), mode: self.mode };
+        let job = Job { id, scene: key.scene.clone(), cam: *cam, sizes: sizes(view_px, moving), moving, mode: self.mode };
         if worker.tx.send(job).is_ok() {
             self.requested = Some((id, key));
             self.settled = false;
@@ -609,8 +613,7 @@ mod tests {
     fn a_shape_is_drawn_solid_in_its_colour_and_the_sky_colour_follows_the_room() {
         let mut sc = Scene::default();
         sc.groups[0].shapes[0] = Shape::new(Kind::Sphere, [0.0, 0.0, 20.0], Material { color: [0.9, 0.1, 0.1], ..Material::default() });
-        let mut cam = Camera::default();
-        cam.target = [0.0, 0.0, 20.0];
+        let cam = Camera { target: [0.0, 0.0, 20.0], ..Camera::default() };
         let (w, h) = (80, 60);
         let img = render(&sc, &cam, [w, h], true, 2, &never).expect("drawn");
         let mid = px(&img, w, w / 2, h / 2);
@@ -628,8 +631,7 @@ mod tests {
         sc.groups[0].shapes[0].pos = [f32::NAN, f32::INFINITY, 1e30];
         sc.groups[0].shapes[0].size = [f32::NAN; 3];
         sc.env.exposure = f32::NAN;
-        let mut cam = Camera::default();
-        cam.dist = f32::NAN;
+        let cam = Camera { dist: f32::NAN, ..Camera::default() };
         let img = render(&sc, &cam, [16, 16], true, 2, &never);
         assert_eq!(img.map(|i| i.len()), Some(16 * 16 * 4));
         let img = render(&Scene::default(), &Camera::default(), [100000, 0], false, 0, &never);
@@ -664,6 +666,33 @@ mod tests {
         v.update(&ctx, &sc, &cam2, [120, 90], true);
         assert_ne!(v.requested.as_ref().map(|(i, _)| *i), id);
         assert!(!v.settled);
+    }
+
+    #[test]
+    fn the_moving_worker_finishes_a_coarse_pass_then_restores_full_quality_when_still() {
+        let worker = spawn_worker(None).expect("worker starts");
+        let scene = Scene::default();
+        let cam = Camera::default();
+        let size = [48, 30];
+        let coarse = render(&scene, &cam, size, false, 1, &never).expect("coarse reference");
+        let fine = render(&scene, &cam, size, true, 1, &never).expect("fine reference");
+        assert_ne!(coarse, fine, "the fixture must distinguish the two shading modes");
+
+        worker.latest.store(1, Ordering::Relaxed);
+        worker.tx.send(Job { id: 1, scene: scene.clone(), cam, sizes: vec![size], moving: true, mode: 0 }).expect("moving request");
+        let moving = worker.rx.recv_timeout(std::time::Duration::from_secs(10)).expect("moving frame");
+        assert_eq!(moving.id, 1);
+        assert!(moving.last, "a coarse moving pass still completes its request");
+        assert_eq!(moving.rgba, coarse, "moving must not spend work on fine shading");
+
+        worker.latest.store(2, Ordering::Relaxed);
+        worker.tx.send(Job { id: 2, scene, cam, sizes: vec![[24, 15], size], moving: false, mode: 0 }).expect("still request");
+        let first = worker.rx.recv_timeout(std::time::Duration::from_secs(10)).expect("first still frame");
+        let final_frame = worker.rx.recv_timeout(std::time::Duration::from_secs(10)).expect("fine still frame");
+        assert!(!first.last);
+        assert!(final_frame.last);
+        assert_eq!(final_frame.id, 2);
+        assert_eq!(final_frame.rgba, fine, "settling restores the original full-quality pixels");
     }
 
     #[test]

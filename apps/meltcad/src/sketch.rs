@@ -176,10 +176,11 @@ impl Frame {
     pub fn is_vertical(&self) -> bool {
         self.normal()[2].abs() < 0.02
     }
-    pub fn to_world(&self, p: [f32; 2]) -> V3 {
+    pub fn to_world(self, p: [f32; 2]) -> V3 {
         add(self.origin, add(mul(self.u, p[0]), mul(self.v, p[1])))
     }
     /// The sketch coordinates of a world point (its distance from the plane is dropped).
+    #[allow(clippy::wrong_self_convention)] // Paired forward/inverse frame transforms share one receiver.
     pub fn from_world(&self, w: V3) -> [f32; 2] {
         let d = sub(w, self.origin);
         [dot(d, self.u) / dot(self.u, self.u).max(1e-12), dot(d, self.v) / dot(self.v, self.v).max(1e-12)]
@@ -334,10 +335,12 @@ impl SnapGeometry {
             self.edges.push((a, b));
             self.points.push(SnapHit { at: [(a[0] + b[0]) * 0.5, (a[1] + b[1]) * 0.5], kind: SnapKind::Midpoint });
         }
-        if closed && n > 2 && omit.is_none() {
-            if let Some((lo, hi)) = bbox(pts) {
-                self.points.push(SnapHit { at: [(lo[0] + hi[0]) * 0.5, (lo[1] + hi[1]) * 0.5], kind: SnapKind::Center });
-            }
+        if closed
+            && n > 2
+            && omit.is_none()
+            && let Some((lo, hi)) = bbox(pts)
+        {
+            self.points.push(SnapHit { at: [(lo[0] + hi[0]) * 0.5, (lo[1] + hi[1]) * 0.5], kind: SnapKind::Center });
         }
     }
 }
@@ -688,9 +691,9 @@ pub fn spline_open(ctrl: &[[f32; 2]], max_points: usize) -> Vec<[f32; 2]> {
         }
     };
     let mut out = Vec::with_capacity((n - 1) * k + 1);
-    for i in 0..n - 1 {
+    for (i, point) in c.iter().enumerate().take(n - 1) {
         let ii = i as isize;
-        out.push(c[i]);
+        out.push(*point);
         for j in 1..k {
             out.push(catmull(at(ii - 1), at(ii), at(ii + 1), at(ii + 2), j as f32 / k as f32));
         }
@@ -1007,6 +1010,7 @@ pub fn remove_point(pts: &mut Vec<[f32; 2]>, i: usize) -> Result<(), SketchError
 }
 
 /// The nearest point on the closed outline to `p`: (edge index, point on it, distance).
+#[cfg(test)]
 pub fn nearest_on_edges(pts: &[[f32; 2]], p: [f32; 2]) -> Option<(usize, [f32; 2], f32)> {
     let n = pts.len();
     if n < 2 {
@@ -1111,8 +1115,8 @@ pub fn revolve(frame: &Frame, profile: &[[f32; 2]]) -> Result<Built, SketchError
     let outline = p.iter().map(|q| [q[0], q[1] - zc]).collect();
     Ok(Built {
         kind: Kind::Revolve,
-        pos: [0.0, 0.0, zc],
-        rot: [0.0; 3],
+        pos: frame.to_world([0.0, zc]),
+        rot: euler_from_columns(frame.u, mul(frame.normal(), -1.0), frame.v),
         size: Kind::Revolve.default_size(),
         outline,
         outline2: Vec::new(),
@@ -1387,6 +1391,7 @@ mod tests {
         assert!(Frame::oriented([1.0e9, 0.0, 0.0], [0.0; 3]).is_none());
     }
 
+    #[test]
     fn segment_snap_intersections_are_finite_and_reject_parallel_overlaps() {
         let cross = snap_intersection([0.0, 0.0], [10.0, 10.0], [0.0, 10.0], [10.0, 0.0]);
         assert_eq!(cross, Some([5.0, 5.0]));
@@ -1489,9 +1494,9 @@ mod tests {
         let centre = circle([0.0, 0.0], 6.0, CIRCLE_POINTS);
         let offset = circle([16.0, 0.0], 3.0, CIRCLE_POINTS);
         let rectangular = rect([-25.0, -4.0], [-16.0, 4.0]);
-        assert_eq!(validate_holes(&outer, &[centre.clone()]).unwrap().len(), 1);
-        assert_eq!(validate_holes(&outer, &[offset.clone()]).unwrap().len(), 1);
-        assert_eq!(validate_holes(&outer, &[rectangular.clone()]).unwrap().len(), 1);
+        assert_eq!(validate_holes(&outer, std::slice::from_ref(&centre)).unwrap().len(), 1);
+        assert_eq!(validate_holes(&outer, std::slice::from_ref(&offset)).unwrap().len(), 1);
+        assert_eq!(validate_holes(&outer, std::slice::from_ref(&rectangular)).unwrap().len(), 1);
         assert_eq!(validate_holes(&outer, &[centre, offset, rectangular]).unwrap().len(), 3);
     }
 

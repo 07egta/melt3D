@@ -4,34 +4,62 @@
 //! and mapped into the square centred inside the given rect.
 
 use crate::model::{Kind, Op};
-use crate::style::gfx;
-use egui::epaint::Mesh;
 use egui::{Color32, Painter, Pos2, Rect, Shape, Stroke, pos2, vec2};
 
 const PI: f32 = std::f32::consts::PI;
 const SEG: usize = 24;
 
 /// Square icon area centred in `rect` with a 10% margin on each side.
-fn frame(rect: Rect) -> Rect {
+pub(crate) fn frame(rect: Rect) -> Rect {
     let s = rect.width().min(rect.height()) * 0.8;
     Rect::from_center_size(rect.center(), vec2(s, s))
 }
 
-fn pen(rect: Rect, ink: Color32) -> Stroke {
-    Stroke::new((rect.width() * 0.058).clamp(1.15, 2.1), ink)
+pub(crate) fn pen(rect: Rect, ink: Color32) -> Stroke {
+    Stroke::new((rect.width().min(rect.height()) * 0.058).clamp(1.15, 2.1), ink)
 }
 
-/// A stroked path with round joins and ends (no mitre spikes at sharp corners), open or closed.
+/// A continuous stroke with rounded exposed ends and corners. Smooth curve samples do not need
+/// their own discs: they make the same line heavier and add many tiny draw shapes every frame.
 pub(crate) fn round_path(p: &Painter, mut pts: Vec<Pos2>, s: Stroke, closed: bool) {
-    if closed && let Some(&first) = pts.first() {
-        pts.push(first);
+    if pts.len() < 2 || s.is_empty() {
+        return;
     }
-    if s.width > 0.0 && s.color.a() == 255 {
-        for q in &pts {
+    if s.color.a() < 255 {
+        // Keep translucent strokes in one path so overlapping caps cannot darken them.
+        if closed {
+            pts.push(pts[0]);
+        }
+        p.add(Shape::line(pts, s));
+        return;
+    }
+    let n = pts.len();
+    let mut corners = Vec::new();
+    for (i, q) in pts.iter().enumerate() {
+        let endpoint = !closed && (i == 0 || i + 1 == n);
+        let before = *q - pts[(i + n - 1) % n];
+        let after = pts[(i + 1) % n] - *q;
+        // A shallow turn is already covered by egui's continuous path join.
+        let corner = before.dot(after) < 0.9 * (before.length_sq() * after.length_sq()).sqrt();
+        if endpoint || corner {
+            corners.push(i);
             p.circle_filled(*q, s.width * 0.5, s.color);
         }
     }
-    p.add(Shape::line(pts, s));
+    if corners.is_empty() {
+        p.add(if closed { Shape::closed_line(pts, s) } else { Shape::line(pts, s) });
+        return;
+    }
+    // Split only at sharp turns. The round cap joins the two butt-ended strokes without a
+    // miter protruding beyond it; curves between the turns stay a single continuous path.
+    for pair in corners.windows(2) {
+        p.add(Shape::line(pts[pair[0]..=pair[1]].to_vec(), s));
+    }
+    if closed {
+        let (Some(&first), Some(&last)) = (corners.first(), corners.last()) else { return };
+        let wrap = pts[last..].iter().chain(&pts[..=first]).copied().collect();
+        p.add(Shape::line(wrap, s));
+    }
 }
 
 /// Unit coordinates to screen points.
@@ -90,13 +118,15 @@ fn polyline(p: &Painter, f: Rect, pts: &[(f32, f32)], s: Stroke) {
     round_path(p, px(f, pts), s, false);
 }
 
-/// Closed outline (first point is repeated at the end).
+/// Closed outline, with a continuous join at the first point too.
 fn outline(p: &Painter, f: Rect, pts: &[(f32, f32)], s: Stroke) {
     round_path(p, px(f, pts), s, true);
 }
 
 fn polygon(p: &Painter, f: Rect, pts: &[(f32, f32)], fill: Color32, s: Stroke) {
-    p.add(Shape::convex_polygon(px(f, pts), fill, Stroke::NONE));
+    if fill.a() > 0 {
+        p.add(Shape::convex_polygon(px(f, pts), fill, Stroke::NONE));
+    }
     if s.width > 0.0 {
         round_path(p, px(f, pts), s, true);
     }
@@ -162,22 +192,16 @@ pub fn kind(p: &Painter, rect: Rect, k: Kind, ink: Color32, fill: Color32) {
 /// A plus, a minus or a drop of paint on a soft chip.
 pub fn op(p: &Painter, rect: Rect, o: Op, ink: Color32) {
     let f = frame(rect);
-    let w = (rect.width() * 0.1).clamp(1.8, 3.4);
+    let w = (rect.width().min(rect.height()) * 0.1).clamp(1.8, 3.4);
     let s = Stroke::new(w, ink);
     p.rect_filled(f, f.width() * 0.3, ink.gamma_multiply(0.09));
-    let cap = |a: (f32, f32)| p.circle_filled(at(f, a.0, a.1), w * 0.5, ink);
     match o {
         Op::Add => {
             segment(p, f, (0.27, 0.5), (0.73, 0.5), s);
             segment(p, f, (0.5, 0.27), (0.5, 0.73), s);
-            for a in [(0.27, 0.5), (0.73, 0.5), (0.5, 0.27), (0.5, 0.73)] {
-                cap(a);
-            }
         }
         Op::Subtract => {
             segment(p, f, (0.27, 0.5), (0.73, 0.5), s);
-            cap((0.27, 0.5));
-            cap((0.73, 0.5));
         }
         // a stain: a drop of paint with a shine
         Op::Paint => {
@@ -283,6 +307,34 @@ pub fn export(p: &Painter, rect: Rect, ink: Color32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn smooth_closed_icons_use_one_continuous_stroke() {
+        let ctx = egui::Context::default();
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let r = Rect::from_min_size(pos2(10.0, 10.0), vec2(34.0, 34.0));
+            outline(ui.painter(), r, &ellipse(0.5, 0.5, 0.4, 0.4), Stroke::new(1.5, Color32::WHITE));
+        });
+        assert_eq!(out.shapes.iter().filter(|s| matches!(s.shape, Shape::Circle(_))).count(), 0, "curve samples must not each add a disc");
+        assert_eq!(out.shapes.iter().filter(|s| matches!(&s.shape, Shape::Path(p) if p.closed)).count(), 1, "no open seam at the first point");
+        out.textures_delta.clear();
+    }
+
+    #[test]
+    fn sharp_icon_corners_do_not_grow_miter_spikes() {
+        let ctx = egui::Context::default();
+        let points = vec![pos2(10.0, 30.0), pos2(30.0, 29.0), pos2(50.0, 30.0), pos2(30.0, 31.0)];
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            round_path(ui.painter(), points.clone(), Stroke::new(2.0, Color32::WHITE), true);
+        });
+        out.textures_delta.clear();
+        let bounds = Rect::from_min_max(pos2(8.0, 27.0), pos2(52.0, 33.0));
+        for primitive in ctx.tessellate(out.shapes, 2.0) {
+            if let egui::epaint::Primitive::Mesh(mesh) = primitive.primitive {
+                assert!(mesh.vertices.iter().all(|v| bounds.contains(v.pos)), "a rounded tip must stay within the stroke radius and feathering");
+            }
+        }
+    }
 
     #[test]
     fn every_icon_draws() {

@@ -3,8 +3,9 @@
 //!
 //! Supported: `<path>` (all commands, curves and arcs are flattened), `<polygon>`, `<polyline>`,
 //! `<rect>` (with rx/ry), `<circle>`, `<ellipse>`, nested `<g>`, `transform`, `viewBox`, `width` and
-//! `height` with units, `fill-rule`, `display:none`. Strokes, text, images, gradients and `<use>`
-//! are ignored. Hostile files never panic: the size, the number of commands, points, outlines and
+//! `height` with units, `fill-rule`, `display:none`, and local `<use>` references including symbols.
+//! Strokes, text, images and gradients are reported as unsupported. Hostile files never panic:
+//! the size, the number of commands, visits, points, outlines and
 //! the nesting are all capped.
 
 use std::collections::HashMap;
@@ -16,6 +17,8 @@ pub const MAX_BYTES: usize = 2_000_000;
 const MAX_COMMANDS: usize = 20_000;
 const MAX_POINTS: usize = 400_000;
 const MAX_ELEMENTS: usize = 6_000;
+/// Includes empty groups and repeated references, which may generate no geometry at all.
+const MAX_VISITS: usize = MAX_ELEMENTS * 4;
 const MAX_DEPTH: usize = 64;
 /// Outlines kept after throwing out the tiniest ones.
 const MAX_CONTOURS: usize = 300;
@@ -99,11 +102,14 @@ pub fn parse(text: &str) -> Result<Artwork, String> {
     if text.len() > MAX_BYTES {
         return Err("File is too big (up to 2 MB)".into());
     }
-    if !text.contains("<svg") && !text.contains("<SVG") {
+    let mut pos = 0;
+    if next_tag(text, &mut pos).is_none_or(|tag| tag.closing || tag.name != "svg") {
         return Err("This doesn't look like an SVG file".into());
     }
+    let ids = collect_ids(text);
+    let mut limited = false;
     // pass 1: rough, only to learn the size of the picture
-    let rough = walk(text, None);
+    let rough = walk(text, None, &ids, &mut limited);
     let Some((lo, hi)) = bounds(rough.iter().flat_map(|r| r.polys.iter().flatten())) else {
         return Err("No filled shape found (line-only drawings can't be read)".into());
     };
@@ -113,9 +119,12 @@ pub fn parse(text: &str) -> Result<Artwork, String> {
     }
     // pass 2: curves flattened to ~0.05 mm for a 60 mm picture
     let tol = FLAT_TOL_MM / (REF_MM / side);
-    let raws = walk(text, Some(tol));
+    let raws = walk(text, Some(tol), &ids, &mut limited);
     let mut art = build_artwork(&raws, side)?;
     art.warnings = unsupported_features(text);
+    if limited {
+        art.warnings.push("SVG complexity limit reached; some details were not loaded".into());
+    }
     Ok(art)
 }
 
@@ -134,13 +143,12 @@ fn unsupported_features(src: &str) -> Vec<String> {
             continue;
         }
         match tag.name.as_str() {
-            "text" | "image" | "foreignobject" | "filter" | "clippath" | "mask" | "lineargradient" | "radialgradient" | "pattern" | "marker" => {
+            "text" | "image" | "foreignobject" | "filter" | "clippath" | "mask" | "lineargradient" | "radialgradient" | "pattern" | "marker"
+            | "style" => {
                 tags.insert(tag.name.clone());
             }
-            "use" => {
-                if tag.attr("href").or_else(|| tag.attr("xlink:href")).is_some_and(|s| !s.starts_with('#')) {
-                    tags.insert("external use".into());
-                }
+            "use" if tag.attr("href").or_else(|| tag.attr("xlink:href")).is_some_and(|s| !s.starts_with('#')) => {
+                tags.insert("external use".into());
             }
             _ => {}
         }
@@ -175,10 +183,13 @@ impl Affine {
         let m = &self.0;
         (m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5])
     }
-    /// About how much lengths grow.
+    /// Largest singular value: a conservative length scale even under skew.
     fn scale(&self) -> f64 {
         let m = &self.0;
-        (m[0].hypot(m[1])).max(m[2].hypot(m[3]))
+        let a = m[0] * m[0] + m[1] * m[1];
+        let b = m[0] * m[2] + m[1] * m[3];
+        let c = m[2] * m[2] + m[3] * m[3];
+        ((a + c + (a - c).hypot(2.0 * b)) * 0.5).sqrt()
     }
     fn ok(&self) -> bool {
         self.0.iter().all(|v| v.is_finite() && v.abs() < 1e9)
@@ -287,7 +298,8 @@ fn rdp_closed(p: &[(f64, f64)], tol: f64) -> Vec<(f64, f64)> {
         let len2 = dx * dx + dy * dy;
         let mut worst = (0.0_f64, 0usize);
         for (i, q) in p.iter().enumerate().take(b).skip(a + 1) {
-            let d = if len2 < 1e-30 { (q.0 - pa.0).hypot(q.1 - pa.1) } else { ((q.0 - pa.0) * dy - (q.1 - pa.1) * dx).abs() / len2.sqrt() };
+            let t = if len2 < 1e-30 { 0.0 } else { (((q.0 - pa.0) * dx + (q.1 - pa.1) * dy) / len2).clamp(0.0, 1.0) };
+            let d = (q.0 - pa.0 - t * dx).hypot(q.1 - pa.1 - t * dy);
             if d > worst.0 {
                 worst = (d, i);
             }
@@ -422,6 +434,18 @@ fn length(s: &str) -> Option<f64> {
     Some(v * k)
 }
 
+/// Opacity is a number or percentage, not a CSS length.
+fn opacity(s: &str) -> Option<f64> {
+    let mut sc = Scan::new(s.trim());
+    let v = sc.num()?;
+    let tail = s.trim().get(sc.i..)?.trim();
+    match tail {
+        "" => Some(v.clamp(0.0, 1.0)),
+        "%" => Some((v / 100.0).clamp(0.0, 1.0)),
+        _ => None,
+    }
+}
+
 fn numbers(s: &str, cap: usize) -> Vec<f64> {
     let mut sc = Scan::new(s);
     let mut v = Vec::new();
@@ -489,13 +513,46 @@ fn parse_color(s: &str) -> Option<[f32; 3]> {
             _ => None,
         };
     }
-    if let Some(r) = s.strip_prefix("rgb(") {
-        let n = numbers(r.split(')').next()?, 3);
-        if n.len() == 3 {
-            return Some([(n[0] / 255.0).clamp(0.0, 1.0) as f32, (n[1] / 255.0).clamp(0.0, 1.0) as f32, (n[2] / 255.0).clamp(0.0, 1.0) as f32]);
+    let lower = s.to_ascii_lowercase();
+    if let Some(r) = lower.strip_prefix("rgb(").and_then(|r| r.strip_suffix(')')) {
+        let mut sc = Scan::new(r);
+        let mut rgb = [0.0; 3];
+        for c in &mut rgb {
+            let v = sc.num()?;
+            let k = if sc.peek() == Some(b'%') {
+                sc.i += 1;
+                100.0
+            } else {
+                255.0
+            };
+            *c = (v / k).clamp(0.0, 1.0) as f32;
         }
+        sc.skip_sep();
+        return sc.peek().is_none().then_some(rgb);
     }
-    None
+    // The basic CSS palette is frequent in hand-written SVGs and diagram exports.
+    let rgb = match lower.as_str() {
+        "black" => [0, 0, 0],
+        "silver" => [192, 192, 192],
+        "gray" | "grey" => [128, 128, 128],
+        "white" => [255, 255, 255],
+        "maroon" => [128, 0, 0],
+        "red" => [255, 0, 0],
+        "purple" => [128, 0, 128],
+        "fuchsia" | "magenta" => [255, 0, 255],
+        "green" => [0, 128, 0],
+        "lime" => [0, 255, 0],
+        "olive" => [128, 128, 0],
+        "yellow" => [255, 255, 0],
+        "navy" => [0, 0, 128],
+        "blue" => [0, 0, 255],
+        "teal" => [0, 128, 128],
+        "aqua" | "cyan" => [0, 255, 255],
+        "orange" => [255, 165, 0],
+        "rebeccapurple" => [102, 51, 153],
+        _ => return None,
+    };
+    Some(rgb.map(|v| v as f32 / 255.0))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -513,7 +570,8 @@ impl<'a> Tag<'a> {
     /// The value of a property: the `style` attribute wins over the plain attribute.
     fn prop(&self, key: &str) -> Option<&str> {
         if let Some((_, st)) = self.attrs.iter().find(|(k, _)| *k == "style") {
-            for decl in st.split(';') {
+            // As in CSS, the last declaration wins (exports often append overrides).
+            for decl in st.split(';').rev() {
                 if let Some((k, v)) = decl.split_once(':')
                     && k.trim() == key
                 {
@@ -653,6 +711,8 @@ struct Budget {
     commands: usize,
     points: usize,
     elements: usize,
+    visits: usize,
+    limited: bool,
 }
 
 struct Raw {
@@ -675,6 +735,7 @@ impl Pen<'_> {
     fn pt(&mut self, x: f64, y: f64) -> Option<()> {
         self.budget.points += 1;
         if self.budget.points > MAX_POINTS {
+            self.budget.limited = true;
             return None;
         }
         let (px, py) = self.xf.apply(x, y);
@@ -811,6 +872,7 @@ impl Pen<'_> {
                     }
                     self.budget.commands += 1;
                     if self.budget.commands > MAX_COMMANDS {
+                        self.budget.limited = true;
                         return None;
                     }
                     self.finish();
@@ -834,6 +896,7 @@ impl Pen<'_> {
             }
             self.budget.commands += 1;
             if self.budget.commands > MAX_COMMANDS {
+                self.budget.limited = true;
                 return None;
             }
             let rel = cmd.is_ascii_lowercase();
@@ -968,6 +1031,7 @@ struct State {
     fill_none: bool,
     evenodd: bool,
     hidden: bool,
+    fill_hidden: bool,
     color: Option<[f32; 3]>,
 }
 
@@ -1007,19 +1071,19 @@ fn collect_ids(src: &str) -> HashMap<&str, (usize, usize)> {
     let mut pos = 0;
     while let Some(tag) = next_tag(src, &mut pos) {
         if tag.closing {
-            if let Some((Some(id), begin)) = open.pop() {
-                if ids.len() < MAX_ELEMENTS {
-                    ids.entry(id).or_insert((begin, pos));
-                }
+            if let Some((Some(id), begin)) = open.pop()
+                && ids.len() < MAX_ELEMENTS
+            {
+                ids.entry(id).or_insert((begin, pos));
             }
             continue;
         }
         let id = tag.attr("id").filter(|v| !v.is_empty() && v.len() <= 128);
         if tag.selfclose {
-            if let Some(id) = id {
-                if ids.len() < MAX_ELEMENTS {
-                    ids.entry(id).or_insert((tag.start, pos));
-                }
+            if let Some(id) = id
+                && ids.len() < MAX_ELEMENTS
+            {
+                ids.entry(id).or_insert((tag.start, pos));
             }
         } else {
             if open.len() >= MAX_DEPTH {
@@ -1033,12 +1097,12 @@ fn collect_ids(src: &str) -> HashMap<&str, (usize, usize)> {
 
 /// Walk the document. Local #id references are expanded in the same paint order as <use>;
 /// external hrefs are never read or fetched.
-fn walk(src: &str, tol: Option<f64>) -> Vec<Raw> {
-    let ids = collect_ids(src);
-    let mut budget = Budget { commands: 0, points: 0, elements: 0 };
+fn walk(src: &str, tol: Option<f64>, ids: &HashMap<&str, (usize, usize)>, limited: &mut bool) -> Vec<Raw> {
+    let mut budget = Budget { commands: 0, points: 0, elements: 0, visits: 0, limited: false };
     let mut out = Vec::new();
-    let initial = State { xf: Affine::ID, fill_none: false, evenodd: false, hidden: false, color: None };
-    walk_part(src, src, tol, &ids, &mut budget, &mut out, initial, false, &mut Vec::new());
+    let initial = State { xf: Affine::ID, fill_none: false, evenodd: false, hidden: false, fill_hidden: false, color: None };
+    walk_part(src, src, tol, ids, &mut budget, &mut out, initial, None, &mut Vec::new());
+    *limited |= budget.limited;
     out
 }
 
@@ -1051,18 +1115,20 @@ fn walk_part<'a>(
     budget: &mut Budget,
     out: &mut Vec<Raw>,
     inherited: State,
-    referenced: bool,
+    reference_viewport: Option<[Option<f64>; 2]>,
     active: &mut Vec<String>,
 ) {
     let mut stack = vec![inherited];
     let mut skip = 0usize;
     let mut over = 0usize;
-    let mut seen_root = referenced;
+    let mut first = true;
     let mut pos = 0usize;
     while let Some(tag) = next_tag(fragment, &mut pos) {
-        if budget.elements >= MAX_ELEMENTS || budget.points >= MAX_POINTS || budget.commands >= MAX_COMMANDS {
+        if budget.visits >= MAX_VISITS || budget.elements >= MAX_ELEMENTS || budget.points >= MAX_POINTS || budget.commands >= MAX_COMMANDS {
+            budget.limited = true;
             break;
         }
+        budget.visits += 1;
         if tag.closing {
             if skip > 0 {
                 skip -= 1;
@@ -1084,8 +1150,10 @@ fn walk_part<'a>(
             continue;
         }
         let name = tag.name.as_str();
-        let hide = tag.prop("display").is_some_and(|v| v == "none") || tag.prop("opacity").and_then(length).is_some_and(|o| o <= 0.0);
-        if (skipped(name) && !(referenced && name == "symbol")) || hide {
+        let reference_root = first && reference_viewport.is_some();
+        first = false;
+        let hide = tag.prop("display").is_some_and(|v| v == "none") || tag.prop("opacity").and_then(opacity).is_some_and(|o| o <= 0.0);
+        if (skipped(name) && !(reference_root && name == "symbol")) || hide {
             if !tag.selfclose {
                 skip = 1;
                 if name == "style" || name == "script" {
@@ -1100,32 +1168,40 @@ fn walk_part<'a>(
         let Some(parent) = stack.last().cloned() else { break };
         let mut st = parent;
         let mut xf = st.xf;
-        if name == "svg" && !seen_root {
-            seen_root = true;
-            xf = xf.mul(&root_transform(&tag));
-        } else if name == "svg" {
-            xf = xf.mul(&Affine([1.0, 0.0, 0.0, 1.0, tag.len("x").unwrap_or(0.0), tag.len("y").unwrap_or(0.0)]));
-        }
         if let Some(t) = tag.attr("transform") {
             xf = xf.mul(&parse_transform(t));
         }
-        st.xf = xf;
-        if !xf.ok() {
-            st.hidden = true;
+        if name == "svg" || (reference_root && name == "symbol") {
+            if name == "svg" {
+                xf = xf.mul(&Affine([1.0, 0.0, 0.0, 1.0, tag.len("x").unwrap_or(0.0), tag.len("y").unwrap_or(0.0)]));
+            }
+            xf = xf.mul(&root_transform(&tag, if reference_root { reference_viewport } else { None }));
         }
+        st.xf = xf;
         match tag.prop("visibility") {
             Some("hidden") | Some("collapse") => st.hidden = true,
             Some("visible") => st.hidden = false,
             _ => {}
         }
         if let Some(r) = tag.prop("fill-rule") {
-            st.evenodd = r == "evenodd";
+            match r {
+                "evenodd" => st.evenodd = true,
+                "nonzero" => st.evenodd = false,
+                _ => {}
+            }
+        }
+        if let Some(o) = tag.prop("fill-opacity").and_then(opacity) {
+            st.fill_hidden = o <= 0.0;
         }
         if let Some(f) = tag.prop("fill") {
-            if f != "none" {
-                st.color = parse_color(f).or(st.color);
+            match f {
+                "inherit" | "unset" => {}
+                "none" | "transparent" => st.fill_none = true,
+                _ => {
+                    st.color = parse_color(f).or(st.color);
+                    st.fill_none = false;
+                }
             }
-            st.fill_none = f == "none";
         }
         if name == "use" {
             if !st.hidden
@@ -1139,9 +1215,12 @@ fn walk_part<'a>(
                 st.xf = st.xf.mul(&Affine([1.0, 0.0, 0.0, 1.0, tag.len("x").unwrap_or(0.0), tag.len("y").unwrap_or(0.0)]));
                 if st.xf.ok() {
                     active.push(id.to_owned());
-                    walk_part(document, part, tol, ids, budget, out, st, true, active);
+                    walk_part(document, part, tol, ids, budget, out, st, Some([tag.len("width"), tag.len("height")]), active);
                     active.pop();
                 }
+            }
+            if active.len() >= 16 {
+                budget.limited = true;
             }
             if !tag.selfclose {
                 skip = 1;
@@ -1150,7 +1229,7 @@ fn walk_part<'a>(
         }
         let drawable = matches!(name, "path" | "rect" | "circle" | "ellipse" | "polygon" | "polyline");
         if drawable {
-            if !st.hidden && !st.fill_none && budget.elements < MAX_ELEMENTS && budget.points < MAX_POINTS && budget.commands < MAX_COMMANDS {
+            if !st.hidden && !st.fill_none && !st.fill_hidden && xf.ok() {
                 budget.elements += 1;
                 let sf = xf.scale().max(1e-12);
                 let mut pen = Pen { xf, tol: tol.map(|t| t / sf), out: Vec::new(), sub: Vec::new(), budget };
@@ -1179,7 +1258,8 @@ fn walk_part<'a>(
                         pen.ellipse(n("cx").unwrap_or(0.0), n("cy").unwrap_or(0.0), rx.or(ry).unwrap_or(0.0), ry.or(rx).unwrap_or(0.0));
                     }
                 }
-                let polys = std::mem::take(&mut pen.out);
+                // Do not retain only the beginning of a compound path: later subpaths may be holes.
+                let polys = if pen.budget.limited { Vec::new() } else { std::mem::take(&mut pen.out) };
                 if !polys.is_empty() {
                     out.push(Raw { polys, evenodd: st.evenodd, color: st.color });
                 }
@@ -1191,6 +1271,7 @@ fn walk_part<'a>(
         }
         if !tag.selfclose {
             if stack.len() >= MAX_DEPTH {
+                budget.limited = true;
                 over = 1;
             } else {
                 stack.push(st);
@@ -1200,9 +1281,10 @@ fn walk_part<'a>(
 }
 
 /// The matrix from the `<svg>` element's viewBox to its width and height (px).
-fn root_transform(tag: &Tag) -> Affine {
+fn root_transform(tag: &Tag, viewport: Option<[Option<f64>; 2]>) -> Affine {
     let vb = tag.attr("viewBox").map(|v| numbers(v, 4)).filter(|v| v.len() == 4 && v[2] > 0.0 && v[3] > 0.0);
-    let (w, h) = (tag.len("width"), tag.len("height"));
+    let [uw, uh] = viewport.unwrap_or([None, None]);
+    let (w, h) = (uw.or_else(|| tag.len("width")), uh.or_else(|| tag.len("height")));
     let Some(vb) = vb else { return Affine::ID };
     let (vw, vh) = match (w, h) {
         (Some(w), Some(h)) => (w, h),
@@ -1214,11 +1296,31 @@ fn root_transform(tag: &Tag) -> Affine {
         return Affine::ID;
     }
     let (sx, sy) = (vw / vb[2], vh / vb[3]);
-    if tag.attr("preserveAspectRatio").is_some_and(|p| p.trim_start().starts_with("none")) {
+    let mut aspect = tag.attr("preserveAspectRatio").unwrap_or("xMidYMid meet").split_ascii_whitespace();
+    let align = match aspect.next() {
+        Some("defer") => aspect.next().unwrap_or("xMidYMid"),
+        Some(a) => a,
+        None => "xMidYMid",
+    };
+    if align == "none" {
         return Affine([sx, 0.0, 0.0, sy, -vb[0] * sx, -vb[1] * sy]);
     }
-    let s = sx.min(sy);
-    Affine([s, 0.0, 0.0, s, (vw - vb[2] * s) * 0.5 - vb[0] * s, (vh - vb[3] * s) * 0.5 - vb[1] * s])
+    let s = if aspect.next() == Some("slice") { sx.max(sy) } else { sx.min(sy) };
+    let ax = if align.starts_with("xMin") {
+        0.0
+    } else if align.starts_with("xMax") {
+        1.0
+    } else {
+        0.5
+    };
+    let ay = if align.ends_with("YMin") {
+        0.0
+    } else if align.ends_with("YMax") {
+        1.0
+    } else {
+        0.5
+    };
+    Affine([s, 0.0, 0.0, s, (vw - vb[2] * s) * ax - vb[0] * s, (vh - vb[3] * s) * ay - vb[1] * s])
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1233,12 +1335,13 @@ struct Cand {
 }
 
 fn build_artwork(raws: &[Raw], side: f64) -> Result<Artwork, String> {
-    let all: Vec<&(f64, f64)> = raws.iter().flat_map(|r| r.polys.iter().flatten()).collect();
-    let (lo, hi) = bounds(all.into_iter()).ok_or("No shape found")?;
+    let (lo, hi) = bounds(raws.iter().flat_map(|r| r.polys.iter().flatten())).ok_or("No shape found")?;
     let centre = ((lo.0 + hi.0) * 0.5, (lo.1 + hi.1) * 0.5);
     let mut dropped = 0usize;
     let mut cands: Vec<Cand> = Vec::new();
     for (ei, r) in raws.iter().enumerate() {
+        let element_start = cands.len();
+        let mut over_limit = false;
         for poly in &r.polys {
             // to Y up, centred
             let p: Vec<(f64, f64)> = poly.iter().map(|q| (q.0 - centre.0, -(q.1 - centre.1))).collect();
@@ -1249,11 +1352,17 @@ fn build_artwork(raws: &[Raw], side: f64) -> Result<Artwork, String> {
                 continue;
             }
             if cands.len() >= MAX_CONTOURS {
+                over_limit = true;
                 dropped += 1;
                 continue;
             }
             let point = interior_point(&s);
             cands.push(Cand { pts: s, area: a, point, element: ei, color: r.color });
+        }
+        if over_limit {
+            // Dropping just the last contours can erase a compound path's holes.
+            dropped += cands.len() - element_start;
+            cands.truncate(element_start);
         }
     }
     if cands.is_empty() {
@@ -1366,7 +1475,8 @@ impl Default for BuildOpts {
 }
 
 /// One group named `name` with an `Extrude` for every solid and a taller minus `Extrude` right after
-/// it for every hole. At most `room` shapes; the second value says when some were left out.
+/// it for every hole. At most `room` shapes; a solid and its holes always stay together.
+/// The second value says when complete components were left out.
 pub fn build_group(art: &Artwork, name: &str, o: &BuildOpts, room: usize) -> (Group, Option<String>) {
     let fin = |v: f32, d: f32, lo: f32, hi: f32| if v.is_finite() { v.clamp(lo, hi) } else { d };
     let h = fin(o.height_mm, 10.0, 0.2, 500.0);
@@ -1375,29 +1485,37 @@ pub fn build_group(art: &Artwork, name: &str, o: &BuildOpts, room: usize) -> (Gr
     let mut group = Group::new(name);
     let mut left_out = 0usize;
     let (mut ns, mut nh) = (0usize, 0usize);
-    for c in art.placed(o.target_mm, o.flip) {
-        if group.shapes.len() >= room {
-            left_out += 1;
+    let mut contours = art.placed(o.target_mm, o.flip).into_iter();
+    while let Some(first) = contours.next() {
+        let holes = contours.as_slice().iter().take_while(|c| c.hole).count();
+        let count = 1 + holes;
+        if first.hole || count > room.saturating_sub(group.shapes.len()) {
+            left_out += count;
+            for _ in 0..holes {
+                contours.next();
+            }
             continue;
         }
-        let mut sh = Shape::new(Kind::Extrude, [at[0], at[1], h * 0.5], Material::plain(c.color.unwrap_or([0.93, 0.56, 0.45]), 0.45, 0.0));
-        sh.outline = c.pts;
-        sh.round = round;
-        sh.blend = 0.0;
-        if c.hole {
-            nh += 1;
-            sh.name = format!("{name} hole {nh}");
-            sh.op = Op::Subtract;
-            sh.size[0] = h + 2.0;
-            sh.material = Material::plain([0.9, 0.35, 0.4], 0.6, 0.0);
-        } else {
-            ns += 1;
-            sh.name = format!("{name} {ns}");
-            sh.size[0] = h;
+        for c in std::iter::once(first).chain(contours.by_ref().take(holes)) {
+            let mut sh = Shape::new(Kind::Extrude, [at[0], at[1], h * 0.5], Material::plain(c.color.unwrap_or([0.93, 0.56, 0.45]), 0.45, 0.0));
+            sh.outline = c.pts;
+            sh.round = round;
+            sh.blend = 0.0;
+            if c.hole {
+                nh += 1;
+                sh.name = format!("{name} hole {nh}");
+                sh.op = Op::Subtract;
+                sh.size[0] = h + 2.0;
+                sh.material = Material::plain([0.9, 0.35, 0.4], 0.6, 0.0);
+            } else {
+                ns += 1;
+                sh.name = format!("{name} {ns}");
+                sh.size[0] = h;
+            }
+            group.shapes.push(sh);
         }
-        group.shapes.push(sh);
     }
-    let note = (left_out > 0).then(|| format!("Shapes are limited to {}, so the other {} were not added", crate::model::MAX_SHAPES, left_out));
+    let note = (left_out > 0).then(|| format!("{left_out} SVG outlines did not fit. Solids and their holes are kept together"));
     (group, note)
 }
 
@@ -1570,7 +1688,7 @@ mod tests {
         assert!(a.contours.iter().any(|c| !c.hole && c.pts.len() == 10));
         // limits
         let (g2, note2) = build_group(&a, "sample", &BuildOpts::default(), 2);
-        assert!(g2.shapes.len() == 2 && note2.is_some());
+        assert!(g2.shapes.len() == 1 && note2.is_some(), "the ring is omitted together with its hole");
         // a scene with it stays valid
         let mut s = crate::model::Scene::default();
         s.groups.push(g);
@@ -1654,6 +1772,99 @@ mod tests {
         assert_eq!((a.solids(), a.holes()), (1, 1));
         let (g, _) = build_group(&a, "ring", &BuildOpts::default(), 64);
         assert_eq!(g.shapes.iter().map(|s| s.op).collect::<Vec<_>>(), vec![Op::Add, Op::Subtract]);
+    }
+
+    #[test]
+    fn namespaced_root_is_accepted_but_an_unrelated_xml_root_is_not() {
+        let a = parse(r#"<?xml version="1.0"?><s:svg xmlns:s="http://www.w3.org/2000/svg"><s:rect width="10" height="20"/></s:svg>"#).unwrap();
+        assert_eq!(a.solids(), 1);
+        assert!(parse(r#"<svg-thumbnail><rect width="10" height="20"/></svg-thumbnail>"#).is_err());
+    }
+
+    #[test]
+    fn nested_svg_and_symbol_viewports_keep_their_dimensions() {
+        let nested = parse(r#"<svg viewBox="0 0 100 100" width="100mm" height="100mm"><svg x="10" y="20" width="40" height="20" viewBox="0 0 10 10" preserveAspectRatio="none"><rect width="10" height="10"/></svg></svg>"#).unwrap();
+        assert!((nested.natural_mm[0] - 40.0).abs() < 0.01 && (nested.natural_mm[1] - 20.0).abs() < 0.01);
+        let symbol = parse(r##"<svg viewBox="0 0 100 100" width="100mm" height="100mm"><defs><symbol id="tile" viewBox="0 0 10 10" preserveAspectRatio="none"><rect width="10" height="10"/></symbol></defs><use href="#tile" x="10" y="20" width="40" height="20"/></svg>"##).unwrap();
+        assert_eq!(nested, symbol);
+    }
+
+    #[test]
+    fn viewport_alignment_and_slice_are_respected() {
+        let tag = next_tag(r#"<svg viewBox="0 0 10 10" width="40" height="20" preserveAspectRatio="xMaxYMin meet"/>"#, &mut 0).unwrap();
+        let t = root_transform(&tag, None);
+        assert_eq!(t.apply(0.0, 0.0), (20.0, 0.0));
+        assert_eq!(t.apply(10.0, 10.0), (40.0, 20.0));
+        let tag = next_tag(r#"<svg viewBox="0 0 10 10" width="40" height="20" preserveAspectRatio="xMinYMax slice"/>"#, &mut 0).unwrap();
+        let t = root_transform(&tag, None);
+        assert_eq!(t.apply(0.0, 0.0), (0.0, -20.0));
+        assert_eq!(t.apply(10.0, 10.0), (40.0, 20.0));
+    }
+
+    #[test]
+    fn style_overrides_percent_colors_and_inherited_fill_are_kept() {
+        let a = parse(&wrap(r##"<g fill="none"><rect width="8" height="8" fill="inherit"/><rect x="10" width="8" height="8" style="fill:none; fill:rgb(100%, 50%, 0%)"/></g><rect x="30" width="8" height="8" fill="BLUE"/>"##)).unwrap();
+        assert_eq!(a.solids(), 2, "fill=inherit must not turn fill=none into a solid");
+        assert_eq!(a.contours[0].color, Some([1.0, 0.5, 0.0]));
+        assert_eq!(a.contours[1].color, Some([0.0, 0.0, 1.0]));
+        let ring = parse(&wrap(r#"<g fill-rule="evenodd"><path fill-rule="inherit" d="M0 0 H80 V80 H0 Z M20 20 H60 V60 H20 Z"/></g>"#)).unwrap();
+        assert_eq!((ring.solids(), ring.holes()), (1, 1));
+    }
+
+    #[test]
+    fn transparent_fills_stay_hidden_and_descendants_can_override_fill_opacity() {
+        let a = parse(&wrap(r#"<g opacity="0%"><rect width="8" height="8" opacity="1"/></g><rect width="8" height="8" fill="transparent"/><g fill-opacity="0"><rect width="8" height="8"/><rect x="20" width="8" height="8" fill-opacity="100%"/></g>"#)).unwrap();
+        assert_eq!(a.solids(), 1);
+        let bad =
+            parse(&wrap(r#"<g transform="scale(1000000000)"><rect width="8" height="8" visibility="visible"/></g><rect width="8" height="8"/>"#))
+                .unwrap();
+        assert_eq!(bad.solids(), 1, "visibility cannot make an invalid transform safe");
+    }
+
+    #[test]
+    fn empty_use_trees_are_bounded_even_when_they_generate_no_points() {
+        let mut body = String::from(r#"<rect width="10" height="10"/><defs><g id="n0"/>"#);
+        for i in 1..=8 {
+            let refs = format!(r##"<use href="#n{}"/>"##, i - 1).repeat(8);
+            body.push_str(&format!(r#"<g id="n{i}">{refs}</g>"#));
+        }
+        body.push_str(r##"</defs><use href="#n8"/>"##);
+        let a = parse(&wrap(&body)).unwrap();
+        assert_eq!(a.solids(), 1);
+        assert!(a.warnings.iter().any(|w| w.contains("complexity limit")));
+    }
+
+    #[test]
+    fn contour_limit_never_keeps_a_compound_path_without_all_of_its_holes() {
+        let mut path = String::from("M0 0 H1000 V1000 H0Z");
+        for i in 0..MAX_CONTOURS {
+            let (x, y) = (10 + i % 20 * 20, 10 + i / 20 * 20);
+            path.push_str(&format!(" M{x} {y} h2 v2 h-2 Z"));
+        }
+        let a = parse(&wrap(&format!(r#"<rect x="-20" width="10" height="10"/><path fill-rule="evenodd" d="{path}"/>"#))).unwrap();
+        assert_eq!((a.solids(), a.holes()), (1, 0));
+        assert_eq!(a.dropped, MAX_CONTOURS + 1);
+    }
+
+    #[test]
+    fn scene_capacity_never_fills_a_missing_hole() {
+        let ring = parse(&wrap(r#"<path fill-rule="evenodd" d="M0 0 H80 V80 H0 Z M20 20 H60 V60 H20 Z"/>"#)).unwrap();
+        let (g, note) = build_group(&ring, "ring", &BuildOpts::default(), 1);
+        assert!(g.shapes.is_empty() && note.is_some());
+        let (g, note) = build_group(&ring, "ring", &BuildOpts::default(), 2);
+        assert_eq!(g.shapes.iter().map(|s| s.op).collect::<Vec<_>>(), vec![Op::Add, Op::Subtract]);
+        assert!(note.is_none());
+    }
+
+    #[test]
+    fn skew_scale_bounds_curve_error_in_every_direction() {
+        let t = Affine([1.0, 0.0, 1.0, 1.0, 0.0, 0.0]);
+        assert!((t.scale() - (1.0 + 5.0_f64.sqrt()) * 0.5).abs() < 1e-12);
+        for i in 0..360 {
+            let a = (i as f64).to_radians();
+            let q = t.apply(a.cos(), a.sin());
+            assert!(q.0.hypot(q.1) <= t.scale() + 1e-12);
+        }
     }
 
     #[test]

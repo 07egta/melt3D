@@ -158,6 +158,8 @@ impl Prepared {
         [q[0] / self.scale[0], q[1] / self.scale[1], q[2] / self.scale[2]]
     }
     /// The surface colour at `p`: the material's colour, or its gradient (see `Material::gradient_weight`).
+    // max/min deliberately maps a NaN coordinate to the first colour, unlike clamp.
+    #[allow(clippy::manual_clamp)]
     pub fn color_at(&self, p: V3) -> V3 {
         let m = &self.material;
         if !m.has_gradient() {
@@ -337,6 +339,8 @@ pub fn face_melt_distance(d: f32, q: V3, ax: usize, sg: f32, amount: f32, reach:
     }
     let w = w * w * (3.0 - 2.0 * w);
     let (u, v) = (q[(ax + 1) % 3], q[(ax + 2) % 3]);
+    // Match shader.wgsl exactly; replacing this literal with TAU changes the field.
+    #[allow(clippy::approx_constant)]
     let f = 6.2832 / (reach * 1.6);
     let wave = 0.5 + 0.5 * (u * f + (v * f * 1.3).sin()).sin() * (v * f * 0.8 + (u * f * 0.6).cos()).cos();
     let slope = amount.abs() * (1.6 * k + 1.32 * f);
@@ -411,7 +415,7 @@ impl Field {
 
     /// The shapes of one group melted together at `p`. A shape or a whole block that is far from
     /// `p` (see accel.rs) is left out: that changes nothing, it only saves the measuring.
-    fn group(&self, g: &PreparedGroup, p: V3) -> Option<Sample> {
+    fn group<const MATERIAL: bool>(&self, g: &PreparedGroup, p: V3) -> Option<Sample> {
         use crate::accel::{block_far, far_enough, paint_far};
         let mut acc: Option<Sample> = None;
         let multi = g.info.blocks.len() > 1;
@@ -425,6 +429,11 @@ impl Field {
             }
             for i in blk.first..blk.first + blk.count {
                 let Some(s) = g.shapes.get(i) else { continue };
+                // Stains have no geometry. Normals, shadows and export samples do not
+                // need their distance, gradient or material at all.
+                if !MATERIAL && s.op == Op::Paint {
+                    continue;
+                }
                 let k = s.blend * self.amount;
                 if let Some(a) = &acc {
                     let lb = g.bounds.get(i).map_or(f32::NEG_INFINITY, |b| b.lower(p));
@@ -440,10 +449,10 @@ impl Field {
                 }
                 let me = Sample {
                     dist: s.distance(p),
-                    color: s.color_at(p),
-                    roughness: s.material.roughness,
-                    metallic: s.material.metallic,
-                    nearest: g.origin.get(i).copied(),
+                    color: if MATERIAL { s.color_at(p) } else { [0.0; 3] },
+                    roughness: if MATERIAL { s.material.roughness } else { 0.0 },
+                    metallic: if MATERIAL { s.material.metallic } else { 0.0 },
+                    nearest: if MATERIAL { g.origin.get(i).copied() } else { None },
                 };
                 acc = Some(match acc {
                     None => {
@@ -452,7 +461,7 @@ impl Field {
                         }
                         me
                     }
-                    Some(a) => combine(a, me, s.op, k, self.mode),
+                    Some(a) => combine_field::<MATERIAL>(a, me, s.op, k, self.mode),
                 });
             }
         }
@@ -462,6 +471,13 @@ impl Field {
     /// Measure the scene at `p`. Every instance of a group melts into the groups before it, one
     /// after the other, as if it were a group of its own.
     pub fn sample(&self, p: V3) -> Sample {
+        self.sample_field::<true>(p)
+    }
+
+    /// The same ordered field evaluation for both geometry and surface materials. The
+    /// distance-only specialization leaves out colour/gradient work without changing
+    /// transforms, blending, nesting, culling or the order of floating-point operations.
+    fn sample_field<const MATERIAL: bool>(&self, p: V3) -> Sample {
         use crate::accel::{far_enough, paint_far};
         let p = warp(p, self.drip, self.ripple);
         // groups nest: a group melts into the group it sits in, and that group (with all it holds)
@@ -472,7 +488,7 @@ impl Field {
             k: f32,
             acc: Option<Sample>,
         }
-        fn fold(target: &mut Option<Sample>, gs: Sample, op: Op, k: f32, mode: BlendMode) {
+        fn fold<const MATERIAL: bool>(target: &mut Option<Sample>, gs: Sample, op: Op, k: f32, mode: BlendMode) {
             *target = match target.take() {
                 None => {
                     if op != Op::Add {
@@ -480,67 +496,82 @@ impl Field {
                     }
                     Some(gs)
                 }
-                Some(a) => Some(combine(a, gs, op, k, mode)),
+                Some(a) => Some(combine_field::<MATERIAL>(a, gs, op, k, mode)),
             };
         }
-        fn close(stack: &mut Vec<Open>, root: &mut Option<Sample>, mode: BlendMode) {
-            if let Some(done) = stack.pop() {
-                if let Some(gs) = done.acc {
-                    let parent = match stack.last_mut() {
-                        Some(o) => &mut o.acc,
-                        None => root,
-                    };
-                    fold(parent, gs, done.op, done.k, mode);
-                }
+        fn close<const MATERIAL: bool>(stack: &mut Vec<Open>, root: &mut Option<Sample>, mode: BlendMode) {
+            if let Some(done) = stack.pop()
+                && let Some(gs) = done.acc
+            {
+                let parent = match stack.last_mut() {
+                    Some(o) => &mut o.acc,
+                    None => root,
+                };
+                fold::<MATERIAL>(parent, gs, done.op, done.k, mode);
             }
         }
         let mut root: Option<Sample> = None;
         let mut stack: Vec<Open> = Vec::new();
-        for fg in &self.groups {
+        for (group_index, fg) in self.groups.iter().enumerate() {
             let Some(src) = self.sources.get(fg.src) else { continue };
             let k = fg.blend * self.amount;
             for j in 0..fg.insts.len().max(1) {
                 let inst = fg.insts.get(j);
                 while stack.last().is_some_and(|o| o.depth >= fg.depth) {
-                    close(&mut stack, &mut root, self.mode);
+                    close::<MATERIAL>(&mut stack, &mut root, self.mode);
                 }
                 let parent_acc = match stack.last() {
                     Some(o) => o.acc.as_ref(),
                     None => root.as_ref(),
                 };
-                if let Some(a) = parent_acc {
-                    if fg.leaf {
-                        let lb = match inst {
-                            Some(i) => i.bound(src.info.bound).lower(p),
-                            None => src.info.bound.lower(p),
-                        };
-                        let far = match fg.op {
-                            Op::Intersect => false,
-                            Op::Add => lb >= far_enough(a.dist, k, self.mode),
-                            Op::Subtract => lb >= far_enough(-a.dist, k, self.mode),
-                            Op::Paint => lb >= paint_far(k),
-                        };
-                        if far {
-                            continue;
-                        }
+                if let Some(a) = parent_acc
+                    && fg.leaf
+                {
+                    let lb = match inst {
+                        Some(i) => i.bound(src.info.bound).lower(p),
+                        None => src.info.bound.lower(p),
+                    };
+                    let far = match fg.op {
+                        Op::Intersect => false,
+                        Op::Add => lb >= far_enough(a.dist, k, self.mode),
+                        Op::Subtract => lb >= far_enough(-a.dist, k, self.mode),
+                        Op::Paint => lb >= paint_far(k),
+                    };
+                    if far {
+                        continue;
                     }
                 }
                 let (q, scale) = match inst {
                     Some(i) => (i.back(p), i.s),
                     None => (p, 1.0),
                 };
-                let mut own = self.group(src, q);
+                let mut own = self.group::<MATERIAL>(src, q);
                 if let Some(gs) = own.as_mut() {
                     gs.dist *= scale;
-                    if fg.linked && gs.nearest.is_some() {
+                    if MATERIAL && fg.linked && gs.nearest.is_some() {
                         gs.nearest = Some((fg.gi, LINKED));
                     }
                 }
-                stack.push(Open { depth: fg.depth, op: fg.op, k, acc: own });
+                if fg.leaf && self.groups.get(group_index + 1).is_none_or(|next| next.depth <= fg.depth) {
+                    // A leaf has no children to collect. Fold it immediately instead of
+                    // pushing and popping it on the next iteration. Flat scenes thus
+                    // allocate no nesting stack for each ray step or mesh sample.
+                    // Check the resolved order too: a missing linked group can
+                    // leave a deeper visible group after a nominal scene leaf.
+                    if let Some(gs) = own {
+                        let parent = match stack.last_mut() {
+                            Some(o) => &mut o.acc,
+                            None => &mut root,
+                        };
+                        fold::<MATERIAL>(parent, gs, fg.op, k, self.mode);
+                    }
+                } else {
+                    stack.push(Open { depth: fg.depth, op: fg.op, k, acc: own });
+                }
             }
         }
         while !stack.is_empty() {
-            close(&mut stack, &mut root, self.mode);
+            close::<MATERIAL>(&mut stack, &mut root, self.mode);
         }
         let acc = root;
         let mut out = acc.unwrap_or(Sample { dist: 1e6, color: [0.8; 3], roughness: 0.5, metallic: 0.0, nearest: None });
@@ -551,24 +582,41 @@ impl Field {
     }
 
     pub fn distance(&self, p: V3) -> f32 {
-        self.sample(p).dist
+        self.sample_field::<false>(p).dist
     }
 
     /// The first hit along a ray, if any (sphere tracing), for picking.
     pub fn ray(&self, origin: V3, dir: V3, max: f32) -> Option<(f32, Sample)> {
         let mut t = 0.0;
         for _ in 0..256 {
-            let s = self.sample(add(origin, mul(dir, t)));
-            if s.dist < 0.02 * (1.0 + t * 0.002) {
-                return Some((t, s));
+            let p = add(origin, mul(dir, t));
+            let d = self.distance(p);
+            if d < 0.02 * (1.0 + t * 0.002) {
+                // Only a visible hit needs its colour and the identity used for picking.
+                return Some((t, self.sample(p)));
             }
-            t += s.dist.max(0.01);
+            t += d.max(0.01);
             if t > max {
                 return None;
             }
         }
         None
     }
+}
+
+/// Blend geometry with the same signed-distance arithmetic as the material evaluator.
+/// Keeping this choice static removes unused colour work from the inner distance loop.
+fn combine_field<const MATERIAL: bool>(a: Sample, b: Sample, op: Op, k: f32, mode: BlendMode) -> Sample {
+    if MATERIAL {
+        return combine(a, b, op, k, mode);
+    }
+    let dist = match op {
+        Op::Add => smin(a.dist, b.dist, k, mode).0,
+        Op::Subtract => -smin(-a.dist, b.dist, k, mode).0,
+        Op::Intersect => -smin(-a.dist, -b.dist, k, mode).0,
+        Op::Paint => a.dist,
+    };
+    Sample { dist, ..a }
 }
 
 /// Add `b` to `a`, or carve `b` out of it.
@@ -622,6 +670,10 @@ fn combine(a: Sample, b: Sample, op: Op, k: f32, mode: BlendMode) -> Sample {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "sdf_sampling_tests.rs"]
+mod sampling_tests;
 
 #[cfg(test)]
 mod tests {

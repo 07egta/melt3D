@@ -177,8 +177,9 @@ impl Dimensions {
 
     /// Apply on each TextEdit change, never only after Enter. Invalid intermediate strings
     /// leave the last valid geometry visible and disable confirmation.
-    pub fn update(&mut self, points: &mut Vec<[f32; 2]>, profile: &mut Vec<[f32; 2]>, changed: usize, prevent_cross: bool) {
-        let result: Result<(Option<Vec<[f32; 2]>>, Option<(usize, [f32; 2])>, Option<String>), String> = (|| match self.target {
+    pub fn update(&mut self, points: &mut [[f32; 2]], profile: &mut Vec<[f32; 2]>, changed: usize, prevent_cross: bool) {
+        type DimensionChange = (Option<Vec<[f32; 2]>>, Option<(usize, [f32; 2])>, Option<String>);
+        let result: Result<DimensionChange, String> = (|| match self.target {
             Target::Rectangle { anchor, edge } => {
                 let (w, h) = (self.parse(0)?, self.parse(1)?);
                 if w <= sketch::MIN_SIDE || h <= sketch::MIN_SIDE {
@@ -331,7 +332,7 @@ mod tests {
         let mut d = Dimensions::for_shape(Pen::Rect, [10.0, 20.0], [-15.0, 8.0], &old, false).expect("fields");
         let mut p = old.clone();
         d.fields = ["36.25".into(), "17.5".into()];
-        d.update(&mut vec![], &mut p, 1, false);
+        d.update(&mut [], &mut p, 1, false);
         assert!(d.error.is_none());
         let (min, max) = sketch::bbox(&p).expect("box");
         assert!(approximately(min[0], -26.25) && approximately(max[1], 20.0));
@@ -346,11 +347,11 @@ mod tests {
         let mut d = Dimensions::for_shape(Pen::Circle, [0.0, 0.0], [4.0, 0.0], &old, false).expect("fields");
         let mut p = old;
         d.fields[1] = "30".into();
-        d.update(&mut vec![], &mut p, 1, false);
+        d.update(&mut [], &mut p, 1, false);
         assert_eq!(d.fields[0], "15");
         assert!(approximately(p[0][0].hypot(p[0][1]), 15.0));
         d.fields[0] = "8".into();
-        d.update(&mut vec![], &mut p, 0, false);
+        d.update(&mut [], &mut p, 0, false);
         assert_eq!(d.fields[1], "16");
         assert!(approximately(p[0][0].hypot(p[0][1]), 8.0));
     }
@@ -396,7 +397,7 @@ mod tests {
         let mut d = Dimensions::for_shape(Pen::Rect, [0.0, 0.0], [10.0, 5.0], &old, false).expect("fields");
         let mut profile = old.clone();
         d.fields[0] = "30000".into();
-        d.update(&mut vec![], &mut profile, 0, false);
+        d.update(&mut [], &mut profile, 0, false);
         assert_eq!(profile, old);
         assert!(d.error.is_some());
 

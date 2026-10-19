@@ -16,7 +16,7 @@ use egui::{Align2, Color32, FontId, Painter, Pos2, Rect, Shape as Gfx, Stroke, U
 
 use crate::app::App;
 use crate::curve_tool::Input;
-use crate::model::{Kind, MAX_OUTLINE, MAX_PATH, MAX_SHAPES, Material, Op, Pick, Scene, Shape};
+use crate::model::{Kind, MAX_OUTLINE, MAX_PATH, MAX_SHAPES, Material, Op, Pick, Shape};
 use crate::sdf::V3;
 use crate::sketch::{self, Frame, SketchError, SnapGeometry, SnapHit, SnapKind, Which};
 use crate::sketch_dimensions::Dimensions;
@@ -269,6 +269,16 @@ pub struct State {
     pub make: Make,
     /// The plain Sketch button was used: a closed outline stays a line in the scene.
     pub keep_sketch: bool,
+    /// A command started from a saved sketch. Confirm/cancel returns to selection
+    /// instead of starting another drawing gesture.
+    pub separate: bool,
+    /// Saved guide being edited as a draft. It is replaced only on confirmation.
+    pub guide_edit: Option<(usize, usize)>,
+    /// Saved input sketches for a separate operation (never the live preview).
+    pub source_sketch: Option<(usize, usize)>,
+    pub secondary_sketch: Option<(usize, usize)>,
+    /// A path-only sweep uses a round section; profile sweeps expose a scale instead.
+    pub sweep_round: bool,
     pub height: f32,
     /// Grow against the plane's normal.
     pub flip: bool,
@@ -332,6 +342,11 @@ impl Default for State {
             path: Vec::new(),
             make: Make::Extrude,
             keep_sketch: false,
+            separate: false,
+            guide_edit: None,
+            source_sketch: None,
+            secondary_sketch: None,
+            sweep_round: false,
             height: 20.0,
             flip: false,
             both: false,
@@ -401,6 +416,11 @@ impl State {
         self.live = None;
         self.live_group = false;
         self.handle_drag = false;
+        self.separate = false;
+        self.guide_edit = None;
+        self.source_sketch = None;
+        self.secondary_sketch = None;
+        self.sweep_round = false;
     }
 
     /// Corners (not a smooth curve) with the live crossing check?
@@ -624,13 +644,17 @@ impl App {
 
     /// Switch the sketch tool on or off. It excludes the other drawing tools.
     pub fn set_sketch_tool(&mut self, on: bool) {
+        if self.sk.live.is_some() {
+            self.live_discard();
+        }
         self.edit_cancel_drag();
         self.sk.edit = None;
         self.sk.edit_op = None;
         self.sk.edit_index = None;
-        // (leaving the tool keeps a live solid that is on the screen)
+        // Changing tools cancels any unconfirmed live preview before resetting.
         self.sk.reset();
         self.sk.on = on;
+        self.sk.keep_sketch = on;
         if on {
             // the plane follows the selection until one is chosen by hand
             if !self.sk.plane_manual {
@@ -656,6 +680,9 @@ impl App {
 
     /// Called by the other drawing tools when they start.
     pub fn sketch_off(&mut self) {
+        if self.sk.live.is_some() {
+            self.live_discard();
+        }
         if self.sk.on || self.sk.edit.is_some() {
             self.sk.edit = None;
             self.sk.reset();
@@ -665,8 +692,17 @@ impl App {
 
     /// The button in the tool strip.
     pub fn sketch_button(&mut self, ui: &mut Ui) {
-        let on = self.sk.on;
-        if style::wide_button(ui, "Sketch", "Sketch (draw on a plane, then Extrude, Revolve, Loft or Sweep)", on, None, glyph).clicked() {
+        let on = self.sk.on && self.sk.keep_sketch;
+        if style::wide_button(
+            ui,
+            "Sketch",
+            "Draw a sketch. Left-click places points; right-click finishes. Choose a solid operation afterwards",
+            on,
+            None,
+            glyph,
+        )
+        .clicked()
+        {
             self.set_sketch_tool(!on);
             self.sk.keep_sketch = !on;
         }
@@ -684,37 +720,40 @@ impl App {
         }
     }
 
-    /// Strip buttons for Extrude, Loft and Sweep: start the sketch with that way of making chosen
-    /// (or switch to it while sketching). Draw the outline, then press "Make".
+    /// Solid commands start from an already finished sketch. They never turn a
+    /// sketch gesture into a solid without the explicit command choice.
     pub fn sketch_make_buttons(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
         type Icon = fn(&egui::Painter, egui::Rect, Color32);
         let items: [(Make, &str, &str, Icon); 4] = [
-            (Make::Revolve, "Revolve", "Draw a half outline beside the axis, then spin it into a solid", crate::sketch_icons::revolve),
-            (Make::Loft, "Loft", "Draw an outline and blend it into a second outline", crate::sketch_icons::loft),
-            (Make::Extrude, "Extrude", "Draw an outline, then push it into a solid", crate::sketch_icons::extrude),
-            (Make::Sweep, "Sweep", "Draw an outline, then pull it along a path", crate::sketch_icons::sweep),
+            (
+                Make::Revolve,
+                "Revolve",
+                "Select a finished sketch on a standing plane, then revolve it around its original axis",
+                crate::sketch_icons::revolve,
+            ),
+            (Make::Loft, "Loft", "Select a finished sketch, then blend it into a top outline", crate::sketch_icons::loft),
+            (Make::Extrude, "Extrude", "Select a finished sketch, set its depth, then right-click to confirm", crate::sketch_icons::extrude),
+            (Make::Sweep, "Sweep", "Select a saved path for a round tube, or a closed sketch for a profile sweep", crate::sketch_icons::sweep),
         ];
         for (m, name, tip, icon) in items {
-            let on = self.sk.on && self.sk.make == m;
+            let on = self.sk.on && !self.sk.keep_sketch && self.sk.make == m;
             if style::wide_button(ui, name, tip, on, None, icon).clicked() {
+                if self.sk.live.is_some() {
+                    if on {
+                        self.live_discard();
+                    } else if self.sk.separate {
+                        self.live_discard();
+                        self.make_from_selected_line(&ctx, m);
+                    } else {
+                        self.sketch_choose_make(m);
+                    }
+                    continue;
+                }
                 if self.make_from_selected_line(&ctx, m) {
                     continue;
                 }
-                if on {
-                    self.set_sketch_tool(false);
-                } else {
-                    if !self.sk.on {
-                        self.set_sketch_tool(true);
-                    }
-                    if m == Make::Revolve && matches!(self.sk.plane, PlaneSel::Floor | PlaneSel::OnShape | PlaneSel::Height) {
-                        // a revolve stands on the Front plane
-                        self.sk.plane = PlaneSel::Front;
-                        let f = self.sketch_plane();
-                        self.sketch_fly(&f);
-                    }
-                    self.sketch_choose_make(m);
-                }
+                self.say(&ctx, "Select a finished sketch first. Use Sketch to draw one; right-click to finish it".to_string());
             }
         }
     }
@@ -829,6 +868,7 @@ impl App {
     }
 
     /// Where the screen position `p` is on the plane `f` (snapped to `step`).
+    #[cfg(test)]
     pub fn sketch_cursor(&self, rect: Rect, p: Pos2, step: f32, f: &Frame) -> Option<[f32; 2]> {
         let (o, d) = self.cam.ray_at(rect, p);
         f.hit(o, d).map(|q| sketch::snap(q, step))
@@ -977,7 +1017,8 @@ impl App {
                         self.sk.make = Make::Extrude;
                     }
                     // the plain Sketch button: the outline stays a line (select it, then Extrude)
-                    if self.sk.keep_sketch && self.sketch_keep_outline() {
+                    if self.sk.keep_sketch {
+                        self.sk.stage = Stage::Ready;
                         return;
                     }
                     // Extrude and Loft: the solid appears right away
@@ -990,6 +1031,12 @@ impl App {
             Finished::Line(l) => {
                 let f = self.sk.frame;
                 self.sk.path = l.iter().map(|q| f.to_world(*q)).collect();
+                if self.sk.keep_sketch && self.sk.stage == Stage::Draw {
+                    self.sk.pframe = f;
+                    self.sk.profile.clear();
+                    self.sk.stage = Stage::Ready;
+                    return;
+                }
                 if self.sk.stage == Stage::SweepPath && self.sk.profile.is_empty() {
                     // path first: a round tube follows it
                     self.sweep_path_done();
@@ -1007,9 +1054,8 @@ impl App {
     /// Make the shape the card is set to. True when it was made.
     pub fn sketch_make(&mut self, ctx: &egui::Context) -> bool {
         if self.sk.live.is_some() {
-            let ok = self.live_alive();
             self.live_accept(ctx);
-            return ok;
+            return self.sk.live.is_none();
         }
         if self.scene.shape_count().saturating_add(1 + self.sk.holes.len()) > MAX_SHAPES {
             self.sk.msg = format!("Up to {MAX_SHAPES} shapes");
@@ -1035,16 +1081,7 @@ impl App {
             }
         };
         let make = self.sk.make;
-        let Some(g) = (if self.sk.holes.is_empty() {
-            self.target_group()
-        } else {
-            let mut group = crate::model::Group::new("Extrude with holes");
-            group.sketch_holes = true;
-            self.scene.groups.push(group);
-            Some(self.scene.groups.len() - 1)
-        }) else {
-            return false;
-        };
+        let separate = self.sk.separate;
         let mut color = COLORS[self.scene.shape_count() % COLORS.len()];
         if self.new_op == Op::Subtract {
             color = [0.9, 0.35, 0.4];
@@ -1053,13 +1090,16 @@ impl App {
         sketch::apply(&built, &mut sh);
         sh.name = make.label().to_string();
         sh.op = if self.sk.holes.is_empty() { self.new_op } else { Op::Add };
-        sh.blend = if self.sk.holes.is_empty() { 2.0 } else { 0.0 };
+        sh.blend = if self.sk.holes.is_empty() && !separate && !self.solid_mode { 2.0 } else { 0.0 };
         let mut cutouts = Vec::new();
         for (i, contour) in self.sk.holes.iter().enumerate() {
-            let Ok(hole) = sketch::extrude(&self.sk.pframe, contour, self.sk.height, self.sk.flip) else {
+            let Ok(mut hole) = sketch::extrude(&self.sk.pframe, contour, self.sk.height, self.sk.flip) else {
                 self.sk.msg = "Failed to extrude holes".to_string();
                 return false;
             };
+            if self.sk.both {
+                hole.pos = self.sk.pframe.to_world(sketch::centre(contour));
+            }
             let mut cutter = Shape::new(Kind::Extrude, hole.pos, sh.material);
             sketch::apply(&hole, &mut cutter);
             cutter.name = format!("Hole {}", i + 1);
@@ -1067,12 +1107,27 @@ impl App {
             cutter.blend = 0.0;
             cutouts.push(cutter);
         }
+        // Validate and build the whole operation before adding even an empty group.
+        let Some(g) = (if self.sk.holes.is_empty() {
+            self.target_group()
+        } else {
+            let mut group = crate::model::Group::new("Extrude with holes");
+            group.sketch_holes = true;
+            group.op = self.new_op;
+            self.scene.groups.push(group);
+            Some(self.scene.groups.len() - 1)
+        }) else {
+            return false;
+        };
         let Some(group) = self.scene.groups.get_mut(g) else { return false };
+        let idx = group.shapes.len();
         group.shapes.push(sh);
         group.shapes.extend(cutouts);
-        let idx = group.shapes.len() - 1;
         self.sel = Some(Pick::Shape(g, idx));
         self.sk.reset();
+        if separate {
+            self.sk.on = false;
+        }
         self.sk.frame = self.sketch_plane();
         self.say(ctx, format!("Created {} (use Edit Sketch to change the outline)", make.label()));
         true
@@ -1124,14 +1179,14 @@ impl App {
         out.over = self.sk.cursor.is_some();
         if self.sk.stage == Stage::Shape {
             let shaped = self.live_input(ui, resp, rect, pos, mods);
-            return Input { over: out.over || shaped.over, taken: shaped.taken, busy: shaped.busy, ..out };
+            return Input { over: out.over || shaped.over, taken: shaped.taken, busy: shaped.busy };
         }
         if self.sk.stage == Stage::Ready {
             // nothing to draw: clicks must not pick things behind the card
             out.taken = mouse.is_some() && (resp.clicked_by(egui::PointerButton::Primary) || resp.secondary_clicked());
             if resp.secondary_clicked() && mouse.is_some() {
                 // right click confirms here too
-                self.sketch_make(ui.ctx());
+                self.sketch_confirm(ui.ctx());
             }
             return out;
         }
@@ -1182,7 +1237,7 @@ impl App {
         }
         // left click places, right click confirms (the same in every drawing tool)
         if resp.secondary_clicked() && mouse.is_some() {
-            done = done.or_else(|| self.sk.enter());
+            self.sketch_confirm(ui.ctx());
             out.taken = true;
         }
         if let Some(d) = done {
@@ -1220,11 +1275,11 @@ impl App {
         use egui::{Key, Modifiers};
         let hit = |k: Key| ctx.input_mut(|i| i.consume_key(Modifiers::NONE, k));
         if self.sk.dimension.as_ref().is_some_and(|d| d.editing) {
-            if hit(Key::Tab) {
-                if let Some(d) = self.sk.dimension.as_mut() {
-                    d.selected = (d.selected + 1) % 2;
-                    d.needs_focus = true;
-                }
+            if hit(Key::Tab)
+                && let Some(d) = self.sk.dimension.as_mut()
+            {
+                d.selected = (d.selected + 1) % 2;
+                d.needs_focus = true;
             }
             if hit(Key::Escape) {
                 if let Some(d) = self.sk.dimension.as_mut() {
@@ -1234,14 +1289,14 @@ impl App {
                         self.sk.dimension = None;
                     }
                 }
-            } else if hit(Key::Enter) {
-                if let Some(d) = self.sk.dimension.as_mut() {
-                    let profile = if d.top_profile { &self.sk.profile2 } else { &self.sk.profile };
-                    let ok = d.accept(&self.sk.pts, profile);
-                    // a segment typed with Tab is placed: the next Tab starts the next one
-                    if ok && d.provisional {
-                        self.sk.dimension = None;
-                    }
+            } else if hit(Key::Enter)
+                && let Some(d) = self.sk.dimension.as_mut()
+            {
+                let profile = if d.top_profile { &self.sk.profile2 } else { &self.sk.profile };
+                let ok = d.accept(&self.sk.pts, profile);
+                // a segment typed with Tab is placed: the next Tab starts the next one
+                if ok && d.provisional {
+                    self.sk.dimension = None;
                 }
             }
             // Stop all global shortcuts, including the numeric view keys.
@@ -1272,7 +1327,10 @@ impl App {
         if ctx.egui_wants_keyboard_input() {
             return false;
         }
-        let sketch_uses_delete = self.sk.edit.is_some() || !self.sk.pts.is_empty() || self.sk.anchor.is_some();
+        let sketch_uses_delete = self.sk.edit.is_some()
+            || !self.sk.pts.is_empty()
+            || self.sk.anchor.is_some()
+            || (self.sk.on && (self.sk.stage == Stage::Ready || self.sk.guide_edit.is_some()));
         let del = (sketch_uses_delete && hit(Key::Delete)) | hit(Key::Backspace);
         let enter = hit(Key::Enter);
         let esc = hit(Key::Escape);
@@ -1309,13 +1367,13 @@ impl App {
             }
             return del || enter || esc || delete;
         }
-        if enter && let Some(d) = self.sk.enter() {
-            self.sketch_done(d);
+        if enter {
+            self.sketch_confirm(ctx);
         }
         if del {
             self.sk.back();
         }
-        if esc && self.sk.escape() {
+        if esc && ((self.sk.separate && self.sk.stage == Stage::Ready) || self.sk.escape()) {
             self.set_sketch_tool(false);
         }
         del || enter || esc
@@ -1328,6 +1386,9 @@ impl App {
         let ok = self.scene.shape(g, s).is_some_and(sketch::editable);
         if !ok {
             return;
+        }
+        if self.sk.live.is_some() {
+            self.live_discard();
         }
         self.finish_drawing();
         self.ct.drawing = false;
@@ -1667,20 +1728,20 @@ impl App {
             return out;
         }
         if let Some(op) = self.sk.edit_op {
-            let mouse = pos.filter(|p| resp.hovered() && !mods.alt);
+            let mouse = pos.filter(|_| resp.hovered() && !mods.alt);
             let hit = mouse.and_then(|m| self.edit_hit(rect, m));
             if let Some(e) = self.sk.edit.as_mut() {
                 e.hover = hit;
             }
-            if let Some(m) = mouse {
-                if resp.clicked_by(egui::PointerButton::Primary) {
-                    self.sk.edit_index = match (op, self.edit_hit(rect, m)) {
-                        (EditOp::Trim, Some(Hover::Edge(i, _))) => Some(i),
-                        (EditOp::Fillet, Some(Hover::Point(i))) => Some(i),
-                        _ => None,
-                    };
-                    out.taken = true;
-                }
+            if let Some(m) = mouse
+                && resp.clicked_by(egui::PointerButton::Primary)
+            {
+                self.sk.edit_index = match (op, self.edit_hit(rect, m)) {
+                    (EditOp::Trim, Some(Hover::Edge(i, _))) => Some(i),
+                    (EditOp::Fillet, Some(Hover::Point(i))) => Some(i),
+                    _ => None,
+                };
+                out.taken = true;
             }
             if resp.secondary_clicked() && mouse.is_some() {
                 self.edit_commit_operation();
@@ -1826,12 +1887,12 @@ impl App {
 
     /// A polyline on a frame with a dark halo, so it reads on any background.
     fn paint_outline(&self, p: &Painter, rect: Rect, f: &Frame, pts: &[[f32; 2]], color: Color32, w: f32) {
-        self.paint_poly(p, rect, f, pts, true, color, w);
+        self.paint_poly(p, rect, f, pts, true, Stroke::new(w, color));
     }
 
-    fn paint_poly(&self, p: &Painter, rect: Rect, f: &Frame, pts: &[[f32; 2]], closed: bool, color: Color32, w: f32) {
+    fn paint_poly(&self, p: &Painter, rect: Rect, f: &Frame, pts: &[[f32; 2]], closed: bool, stroke: Stroke) {
         let px: Vec<Pos2> = pts.iter().filter_map(|q| self.sketch_px(rect, f, *q)).collect();
-        halo_line(p, px, closed && pts.len() >= 3, color, w);
+        halo_line(p, px, closed && pts.len() >= 3, stroke.color, stroke.width);
     }
 
     pub(crate) fn paint_world_poly(&self, p: &Painter, rect: Rect, pts: &[V3], closed: bool, color: Color32, w: f32) {
@@ -1939,7 +2000,7 @@ impl App {
                 };
                 let closed = pen == Pen::Spline && st.smooth && ctrl.len() >= 3;
                 let col = if bad { style::CUT } else { color };
-                self.paint_poly(p, rect, f, &shown, closed, col, 1.7);
+                self.paint_poly(p, rect, f, &shown, closed, Stroke::new(1.7, col));
                 // the way back to the first point
                 if pen != Pen::Line
                     && !closed
@@ -1970,7 +2031,7 @@ impl App {
                     } else {
                         sketch::circle(a, (a[0] - c[0]).hypot(a[1] - c[1]), sketch::CIRCLE_POINTS)
                     };
-                    self.paint_poly(p, rect, f, &shape, true, color, 1.7);
+                    self.paint_poly(p, rect, f, &shape, true, Stroke::new(1.7, color));
                     if let (Some(pa), Some(pc)) = (self.sketch_px(rect, f, a), self.sketch_px(rect, f, c)) {
                         point_dot(p, pa, 4.0, true);
                         if pen == Pen::Circle {
@@ -2004,6 +2065,12 @@ impl App {
         self.paint_outline(p, rect, f, &st.profile, style::ACCENT, 2.0);
         for h in &st.holes {
             self.paint_outline(p, rect, f, h, style::CUT, 2.0);
+        }
+        if st.keep_sketch {
+            if st.profile.is_empty() {
+                self.paint_saved_path(p, rect);
+            }
+            return;
         }
         let n = f.normal();
         let up = |h: f32| crate::sdf::mul(n, if st.flip { -h } else { h });
@@ -2046,12 +2113,12 @@ impl App {
                 let every = st.profile.len().div_ceil(8).max(1);
                 for i in (0..st.profile.len()).step_by(every) {
                     let q = st.profile[i];
-                    let w = f.to_world(q);
                     let r = q[0].max(0.0);
                     let ring: Vec<V3> = (0..=40)
                         .map(|k| {
                             let a = std::f32::consts::TAU * k as f32 / 40.0;
-                            [r * a.cos(), r * a.sin(), w[2]]
+                            let centre = f.to_world([0.0, q[1]]);
+                            crate::sdf::add(centre, crate::sdf::add(crate::sdf::mul(f.u, r * a.cos()), crate::sdf::mul(f.normal(), -r * a.sin())))
                         })
                         .collect();
                     self.paint_world_poly(p, rect, &ring, false, ghost.gamma_multiply(0.8), 1.0);
@@ -2069,13 +2136,13 @@ impl App {
         if sh.kind == Kind::Loft {
             let other = if e.which == Which::Main { Which::Top } else { Which::Main };
             if let Some(of) = sketch::edit_frame(sh, other) {
-                self.paint_poly(p, rect, &of, sketch::outline_of(sh, other), true, Color32::from_white_alpha(70), 1.2);
+                self.paint_poly(p, rect, &of, sketch::outline_of(sh, other), true, Stroke::new(1.2, Color32::from_white_alpha(70)));
             }
         }
         let ol = e.drag.as_ref().map(|d| &d.candidate).unwrap_or_else(|| sketch::outline_of(sh, e.which));
-        self.paint_poly(p, rect, &f, ol, true, style::ACCENT, 2.0);
+        self.paint_poly(p, rect, &f, ol, true, Stroke::new(2.0, style::ACCENT));
         if let Some(Ok(preview)) = self.edit_preview() {
-            self.paint_poly(p, rect, &f, &preview, true, Color32::from_rgb(90, 228, 160), 2.8);
+            self.paint_poly(p, rect, &f, &preview, true, Stroke::new(2.8, Color32::from_rgb(90, 228, 160)));
         }
         self.paint_snap_marker(p, rect, &f);
         for (i, q) in ol.iter().enumerate() {
@@ -2114,27 +2181,71 @@ impl App {
         if !self.sketch_active() {
             return;
         }
-        let rect = self.view_rect;
-        egui::Area::new(egui::Id::new("sketch_card"))
+        let bounds = self.view_rect.intersect(ctx.content_rect()).shrink(12.0);
+        let mut width = bounds.width().clamp(48.0, 464.0);
+        let mut pos = pos2(bounds.center().x - width * 0.5, bounds.top());
+        if let Some(strip) = ctx.data(|d| d.get_temp::<Rect>(egui::Id::new("tool_strip_rect"))) {
+            let beside = strip.right() + 12.0;
+            if pos.x < beside && strip.intersects(bounds) {
+                let room = bounds.right() - beside;
+                // Numeric field rows still need a modest natural width, even when
+                // wrapped. Remember a larger measured minimum if a card asks for it
+                // so egui's viewport constraint cannot push it back over the strip.
+                let minimum = ctx.data(|d| d.get_temp::<f32>(egui::Id::new("sketch_card_min_width"))).unwrap_or(300.0);
+                if room >= minimum {
+                    // Narrow windows keep both the tools and the card visible. Its rows
+                    // wrap within this width instead of growing across the side panels.
+                    pos.x = beside;
+                    width = room.min(464.0);
+                } else {
+                    // When even a compact card cannot fit beside the strip, use the space
+                    // below it. The scroll area keeps every control reachable vertically.
+                    pos.y = (strip.bottom() + 12.0).min(bounds.bottom() - 64.0).max(bounds.top());
+                }
+            }
+        }
+        let content_width = (width - 24.0).max(24.0);
+        let content_height = (bounds.bottom() - pos.y - 20.0).max(32.0);
+        let card = egui::Area::new(egui::Id::new("sketch_card"))
             .order(egui::Order::Middle)
-            .pivot(Align2::CENTER_TOP)
-            .fixed_pos(pos2(rect.center().x, rect.top() + 12.0))
+            .pivot(Align2::LEFT_TOP)
+            .fixed_pos(pos)
+            .constrain_to(bounds)
             .show(ctx, |ui| {
                 style::card().show(ui, |ui| {
-                    ui.set_max_width(440.0);
-                    if self.sk.edit.is_some() {
-                        self.edit_card(ui);
-                    } else {
-                        self.draw_card_body(ui, ctx);
-                    }
+                    ui.set_width(content_width);
+                    egui::ScrollArea::vertical().id_salt("sketch_card_scroll").max_height(content_height).auto_shrink([false, true]).show(ui, |ui| {
+                        ui.set_max_width(ui.available_width());
+                        if self.sk.edit.is_some() {
+                            self.edit_card(ui);
+                        } else {
+                            self.draw_card_body(ui, ctx);
+                        }
+                    });
                 });
             });
+        ctx.data_mut(|d| d.insert_temp(egui::Id::new("sketch_card_rect"), card.response.rect));
+        if card.response.rect.width() > width + 0.5 {
+            let measured = card.response.rect.width().ceil();
+            let grew = ctx.data_mut(|d| {
+                let minimum = d.get_temp::<f32>(egui::Id::new("sketch_card_min_width")).unwrap_or(300.0);
+                if measured > minimum {
+                    d.insert_temp(egui::Id::new("sketch_card_min_width"), measured);
+                    true
+                } else {
+                    false
+                }
+            });
+            if grew {
+                ctx.request_repaint();
+            }
+        }
     }
 
     fn edit_card(&mut self, ui: &mut Ui) {
         let mut done = false;
         let loft = self.sk.edit.as_ref().and_then(|e| self.scene.shape(e.g, e.s)).is_some_and(|s| s.kind == Kind::Loft);
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.label(egui::RichText::new("Edit Sketch").strong().color(style::ACCENT));
             if style::pill(ui, "Done", false).on_hover_text("Finish editing (Enter / Esc)").clicked() {
                 done = true;
@@ -2142,7 +2253,7 @@ impl App {
         });
         if loft {
             let cur = self.sk.edit.as_ref().map(|e| e.which);
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 for (w, label) in [(Which::Main, "Bottom outline"), (Which::Top, "Top outline")] {
                     if style::pill(ui, label, cur == Some(w)).clicked()
                         && let Some(e) = self.sk.edit.as_mut()
@@ -2172,7 +2283,7 @@ impl App {
         });
         if let Some(op) = self.sk.edit_op {
             if op != EditOp::Trim {
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     ui.label(if op == EditOp::Offset { "Distance (mm, negative = inward)" } else { "Radius (mm)" });
                     ui.add(egui::DragValue::new(&mut self.sk.edit_value).speed(0.1));
                 });
@@ -2188,7 +2299,7 @@ impl App {
             if let Some(Err(err)) = self.edit_preview() {
                 hint(ui, err.message());
             }
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 if style::pill_enabled(ui, "Apply", false, self.edit_preview().is_some_and(|p| p.is_ok())).clicked() {
                     self.edit_commit_operation();
                 }
@@ -2211,7 +2322,7 @@ impl App {
             if let Some(i) = selected.filter(|i| *i < outline.len()) {
                 let mut x = outline[i][0];
                 let mut y = outline[i][1];
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     ui.label("Point X / Y (mm)");
                     let changed_x = ui.add(egui::DragValue::new(&mut x).speed(0.1).max_decimals(3)).changed();
                     let changed_y = ui.add(egui::DragValue::new(&mut y).speed(0.1).max_decimals(3)).changed();
@@ -2223,7 +2334,7 @@ impl App {
             if let Some(size) = sketch::rectangle_size(&outline) {
                 let mut w = size[0];
                 let mut h = size[1];
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     ui.label("Width / Height (mm)");
                     let cw = ui.add(egui::DragValue::new(&mut w).speed(0.1).range(0.5..=2000.0).max_decimals(3)).changed();
                     let ch = ui.add(egui::DragValue::new(&mut h).speed(0.1).range(0.5..=2000.0).max_decimals(3)).changed();
@@ -2233,7 +2344,7 @@ impl App {
                 });
             } else if let Some(diameter) = sketch::circle_diameter(&outline) {
                 let mut d = diameter;
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     ui.label("Diameter (mm)");
                     if ui.add(egui::DragValue::new(&mut d).speed(0.1).range(1.0..=2000.0).max_decimals(3)).changed() {
                         self.precision_circle(d);
@@ -2244,7 +2355,7 @@ impl App {
                 let p = outline[i];
                 let q = outline[(i + 1) % outline.len()];
                 let mut length = (q[0] - p[0]).hypot(q[1] - p[1]);
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     ui.label("Segment length (mm)");
                     if ui.add(egui::DragValue::new(&mut length).speed(0.1).range(0.5..=2000.0).max_decimals(3)).changed() {
                         self.precision_edge_length(i, length);
@@ -2270,16 +2381,20 @@ impl App {
             self.shape_card(ui, ctx);
             return;
         }
-        ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("Sketch").strong().color(style::ACCENT));
-            if style::pill(ui, "Exit", false).on_hover_text("Exit sketch (Esc)").clicked() {
+        ui.horizontal_wrapped(|ui| {
+            let title = if self.sk.keep_sketch { "Sketch" } else { self.sk.make.label() };
+            ui.label(egui::RichText::new(title).strong().color(style::ACCENT));
+            if style::pill(ui, "Cancel", false).on_hover_text("Cancel the current sketch or operation (Esc)").clicked() {
                 off = true;
             }
         });
+        if self.sk.keep_sketch {
+            hint(ui, "Left-click: place points  ·  Right-click: finish sketch  ·  Esc: cancel");
+        }
         // the plane: one small icon, the choices behind it
         let plane_free = matches!(stage, Stage::Draw | Stage::SweepPath);
         if plane_free {
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
                 let cur = self.sk.plane;
                 // the quick planes, then "pick on screen": one click each
@@ -2316,7 +2431,7 @@ impl App {
                     for pl in PlaneSel::ALL {
                         let usable = pl != PlaneSel::OnShape || self.sel.is_some();
                         let row = ui.add_enabled_ui(usable, |ui| {
-                            ui.horizontal(|ui| {
+                            ui.horizontal_wrapped(|ui| {
                                 let (rc, _) = ui.allocate_exact_size(egui::vec2(24.0, 24.0), egui::Sense::hover());
                                 crate::sketch_icons::plane(ui.painter(), rc, pl, ui.visuals().text_color());
                                 ui.selectable_label(cur == pl, pl.label()).on_hover_text(pl.tip())
@@ -2358,7 +2473,7 @@ impl App {
         }
         // the pens
         if matches!(stage, Stage::Draw | Stage::LoftTop | Stage::Hole) {
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
                 for pen in Pen::ALL {
                     let usable = !((stage == Stage::LoftTop || stage == Stage::Hole) && pen == Pen::Line);
@@ -2378,7 +2493,7 @@ impl App {
         }
         if matches!(stage, Stage::Draw | Stage::LoftTop | Stage::SweepPath | Stage::Hole) {
             let pen = self.sk.active_pen();
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
                 if matches!(pen, Pen::Spline | Pen::Line) {
                     let on = self.sk.smooth;
@@ -2395,7 +2510,7 @@ impl App {
             });
         }
         self.dimension_card(ui);
-        if stage == Stage::Ready {
+        if stage == Stage::Ready && !self.sk.profile.is_empty() && !self.sk.separate {
             ui.horizontal_wrapped(|ui| {
                 hint(ui, &format!("Holes: {} / {}", self.sk.holes.len(), sketch::MAX_HOLES));
                 if style::pill_enabled(ui, "+ Draw hole", false, self.sk.holes.len() < sketch::MAX_HOLES).clicked() {
@@ -2411,6 +2526,22 @@ impl App {
                     self.sk.msg.clear();
                 }
             });
+        }
+        if self.sk.keep_sketch {
+            ui.horizontal_wrapped(|ui| {
+                let valid = self.sk.dimension.as_ref().is_none_or(|d| d.error.is_none());
+                let can_finish = valid && (stage == Stage::Ready || !self.sk.pts.is_empty() || self.sk.anchor.is_some());
+                if style::pill_enabled(ui, "Finish Sketch", true, can_finish)
+                    .on_hover_text("Save this sketch (right-click). Select it afterwards for Extrude, Revolve, Loft or Sweep")
+                    .clicked()
+                {
+                    self.sketch_confirm(ctx);
+                }
+                if stage == Stage::Ready && style::pill(ui, "Redraw", false).on_hover_text("Discard this draft and draw again").clicked() {
+                    self.sk.reset();
+                }
+            });
+        } else if stage == Stage::Ready {
             self.make_card(ui, ctx);
         }
         if !self.sk.msg.is_empty() {
@@ -2506,18 +2637,21 @@ impl App {
         let units = d.units();
         let mut changed = None;
         let mut focus = None;
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             for index in 0..2 {
-                ui.label(labels[index]);
                 let id = ui.make_persistent_id(("sketch_dimension", index));
-                let response = ui.add(egui::TextEdit::singleline(&mut d.fields[index]).id(id).desired_width(75.0));
-                if response.changed() {
-                    changed = Some(index);
-                }
-                if d.needs_focus && d.selected == index {
-                    focus = Some(id);
-                }
-                ui.label(units[index]);
+                // Keep each label, value and unit together when the next field wraps.
+                ui.horizontal(|ui| {
+                    ui.label(labels[index]);
+                    let response = ui.add(egui::TextEdit::singleline(&mut d.fields[index]).id(id).desired_width(75.0));
+                    if response.changed() {
+                        changed = Some(index);
+                    }
+                    if d.needs_focus && d.selected == index {
+                        focus = Some(id);
+                    }
+                    ui.label(units[index]);
+                });
             }
         });
         if let Some(id) = focus {
@@ -2541,35 +2675,43 @@ impl App {
     fn make_card(&mut self, ui: &mut Ui, ctx: &egui::Context) {
         let vertical = self.sk.pframe.is_vertical();
         ui.separator();
-        ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("Create").size(11.0).color(style::DIM));
-            for m in Make::ALL {
-                let usable = (m != Make::Revolve || vertical) && (self.sk.holes.is_empty() || m == Make::Extrude);
-                let tip = match m {
-                    Make::Extrude => "Extrude the outline straight into a prism",
-                    Make::Revolve if vertical => "Revolve the outline around the vertical center axis to make a vase-like shape",
-                    Make::Revolve => "Revolve works on sketches drawn on the Front or Side plane",
-                    Make::Loft => "Blend smoothly from the bottom outline to the top outline",
-                    Make::Sweep => "Pull the outline along the drawn path",
-                };
-                if style::pill_enabled(ui, m.label(), self.sk.make == m, usable).on_hover_text(tip).clicked() {
-                    self.sk.make = m;
-                    self.sk.keep_sketch = false;
-                    self.sk.msg.clear();
-                }
-            }
-        });
-        let make = self.sk.make;
-        if matches!(make, Make::Extrude | Make::Loft) {
-            style::labeled_slider(ui, "Height", &mut self.sk.height, 0.5..=300.0, "Extrude height (mm)");
-            ui.horizontal(|ui| {
-                if style::pill(ui, "Flip", self.sk.flip).on_hover_text("Extrude to the opposite side of the plane").clicked() {
-                    self.sk.flip = !self.sk.flip;
+        if !self.sk.separate {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(egui::RichText::new("Create").size(11.0).color(style::DIM));
+                for m in Make::ALL {
+                    let usable = (m != Make::Revolve || vertical) && (self.sk.holes.is_empty() || m == Make::Extrude);
+                    let tip = match m {
+                        Make::Extrude => "Extrude the outline straight into a prism",
+                        Make::Revolve if vertical => "Revolve the outline around the vertical center axis to make a vase-like shape",
+                        Make::Revolve => "Revolve works on sketches drawn on the Front or Side plane",
+                        Make::Loft => "Blend smoothly from the bottom outline to the top outline",
+                        Make::Sweep => "Pull the outline along the drawn path",
+                    };
+                    if style::pill_enabled(ui, m.label(), self.sk.make == m, usable).on_hover_text(tip).clicked() {
+                        self.sk.make = m;
+                        self.sk.keep_sketch = false;
+                        self.sk.msg.clear();
+                    }
                 }
             });
         }
-        if make == Make::Loft {
-            ui.horizontal(|ui| {
+        let make = self.sk.make;
+        self.saved_sketch_inputs(ui);
+        let saved_loft = make == Make::Loft && self.sk.secondary_sketch.is_some();
+        if matches!(make, Make::Extrude | Make::Loft) && !saved_loft {
+            ui.horizontal_wrapped(|ui| {
+                ui.label("Height");
+                ui.add(egui::DragValue::new(&mut self.sk.height).speed(0.5).range(0.1..=2000.0).suffix(" mm"));
+                if style::pill(ui, "Flip", self.sk.flip).on_hover_text("Extrude to the opposite side of the plane").clicked() {
+                    self.sk.flip = !self.sk.flip;
+                }
+                if make == Make::Extrude && style::pill(ui, "Both sides", self.sk.both).clicked() {
+                    self.sk.both = !self.sk.both;
+                }
+            });
+        }
+        if make == Make::Loft && !self.sk.separate {
+            ui.horizontal_wrapped(|ui| {
                 ui.label(egui::RichText::new("Top outline").size(11.0).color(style::DIM));
                 if style::pill(ui, "Scaled copy", self.sk.loft_top == LoftTop::Scaled).clicked() {
                     self.sk.loft_top = LoftTop::Scaled;
@@ -2582,33 +2724,41 @@ impl App {
                     }
                 }
             });
-            if self.sk.loft_top == LoftTop::Scaled {
-                style::labeled_slider(ui, "Top scale", &mut self.sk.loft_scale, 0.1..=3.0, "Top outline size (ratio, bottom = 1)");
-            } else if style::pill(ui, if self.sk.profile2.is_empty() { "Draw top outline" } else { "Redraw top outline" }, false).clicked() {
+            if self.sk.loft_top == LoftTop::Drawn
+                && style::pill(ui, if self.sk.profile2.is_empty() { "Draw top outline" } else { "Redraw top outline" }, false).clicked()
+            {
                 self.sk.stage = Stage::LoftTop;
                 self.sk.profile2.clear();
                 self.sk.clear_drawing();
             }
         }
-        if make == Make::Sweep {
-            style::labeled_slider(ui, "Thickness", &mut self.sk.sweep_scale, 0.2..=4.0, "Outline size scale");
-            ui.horizontal(|ui| {
-                let have = !self.sk.path.is_empty();
-                ui.label(
-                    egui::RichText::new(if have { format!("Path: {} points", self.sk.path.len()) } else { "No path yet".to_string() })
-                        .size(11.5)
-                        .color(style::DIM),
-                );
-                if style::pill(ui, if have { "Redraw path" } else { "Draw path" }, false).on_hover_text("Draw the path (Enter to finish)").clicked() {
-                    self.sk.stage = Stage::SweepPath;
-                    self.sk.clear_drawing();
-                    self.sk.frame = self.sketch_plane();
-                    let f = self.sk.frame;
-                    self.sketch_fly(&f);
-                }
-            });
+        if make == Make::Loft && self.sk.loft_top == LoftTop::Scaled {
+            style::labeled_slider(ui, "Top scale", &mut self.sk.loft_scale, 0.1..=3.0, "Top outline size (ratio, bottom = 1)");
         }
-        ui.horizontal(|ui| {
+        if make == Make::Sweep {
+            style::labeled_slider(ui, "Profile scale", &mut self.sk.sweep_scale, 0.2..=4.0, "Outline size scale");
+            if !self.sk.separate {
+                ui.horizontal_wrapped(|ui| {
+                    let have = !self.sk.path.is_empty();
+                    ui.label(
+                        egui::RichText::new(if have { format!("Path: {} points", self.sk.path.len()) } else { "No path yet".to_string() })
+                            .size(11.5)
+                            .color(style::DIM),
+                    );
+                    if style::pill(ui, if have { "Redraw path" } else { "Draw path" }, false)
+                        .on_hover_text("Draw the path (Enter to finish)")
+                        .clicked()
+                    {
+                        self.sk.stage = Stage::SweepPath;
+                        self.sk.clear_drawing();
+                        self.sk.frame = self.sketch_plane();
+                        let f = self.sk.frame;
+                        self.sketch_fly(&f);
+                    }
+                });
+            }
+        }
+        ui.horizontal_wrapped(|ui| {
             let ready = match make {
                 Make::Sweep => !self.sk.path.is_empty(),
                 Make::Loft => self.sk.loft_top == LoftTop::Scaled || !self.sk.profile2.is_empty(),
@@ -2618,9 +2768,9 @@ impl App {
                 .fill(style::ACCENT_SOFT)
                 .stroke(Stroke::new(1.0, style::ACCENT));
             if ui.add_enabled(ready, b).clicked() {
-                self.sketch_make(ctx);
+                self.sketch_confirm(ctx);
             }
-            if style::pill(ui, "Redo", false).on_hover_text("Discard the outline and draw again (Esc)").clicked() {
+            if !self.sk.separate && style::pill(ui, "Redo", false).on_hover_text("Discard the outline and draw again (Esc)").clicked() {
                 self.sk.reset();
             }
         });
@@ -2697,8 +2847,19 @@ fn point_dot(p: &Painter, c: Pos2, r: f32, lit: bool) {
 pub(crate) fn tag(p: &Painter, at: Pos2, text: &str) {
     let g = p.layout_no_wrap(text.to_string(), FontId::proportional(11.5), style::TEXT);
     let r = Rect::from_min_size(at, g.size()).expand2(vec2(5.0, 2.0));
-    p.rect_filled(r, 4.0, Color32::from_black_alpha(160));
-    p.galley(at, g, style::TEXT);
+    let clip = p.clip_rect().shrink(2.0);
+    if !clip.is_positive() {
+        return;
+    }
+    // Keep the original point-relative position wherever it fits. Near a view
+    // edge, move the whole plate and text together instead of clipping the value.
+    let inside = pos2(
+        r.left().clamp(clip.left(), (clip.right() - r.width()).max(clip.left())),
+        r.top().clamp(clip.top(), (clip.bottom() - r.height()).max(clip.top())),
+    );
+    let shift = inside - r.min;
+    p.rect_filled(r.translate(shift), 4.0, Color32::from_black_alpha(160));
+    p.galley(at + shift, g, style::TEXT);
 }
 
 /// The icon of the sketch tool: an outline with its corner points, and a pencil.
@@ -2791,8 +2952,7 @@ mod tests {
 
     #[test]
     fn a_polygon_is_closed_by_clicking_the_first_point_or_enter() {
-        let mut st = State::default();
-        st.pen = Pen::Polygon;
+        let mut st = State { pen: Pen::Polygon, ..State::default() };
         click_all(&mut st, &[[0.0, 0.0], [20.0, 0.0], [20.0, 10.0]]);
         let p = profile_of(st.click([0.0, 10.0], false).or_else(|| st.click([0.0, 0.0], true)));
         // the fourth point was only added; clicking the first one closed it
@@ -2812,8 +2972,7 @@ mod tests {
 
     #[test]
     fn a_point_that_would_cross_the_outline_is_refused() {
-        let mut st = State::default();
-        st.pen = Pen::Polygon;
+        let mut st = State { pen: Pen::Polygon, ..State::default() };
         click_all(&mut st, &[[0.0, 0.0], [20.0, 0.0], [20.0, 20.0], [10.0, 20.0]]);
         assert!(st.would_cross([10.0, -10.0]));
         assert!(!st.would_cross([0.0, 20.0]));
@@ -2825,16 +2984,14 @@ mod tests {
         st.click([0.0, 20.0], false);
         assert_eq!(st.pts.len(), 5);
         // a bow tie can never be finished
-        let mut bow = State::default();
-        bow.pts = vec![[0.0, 0.0], [10.0, 10.0], [10.0, 0.0], [0.0, 15.0]];
+        let mut bow = State { pts: vec![[0.0, 0.0], [10.0, 10.0], [10.0, 0.0], [0.0, 15.0]], ..State::default() };
         assert!(bow.enter().is_none());
         assert_eq!(bow.msg, SketchError::SelfIntersect.message());
     }
 
     #[test]
     fn rectangles_and_circles_are_dragged_or_clicked_out() {
-        let mut st = State::default();
-        st.pen = Pen::Rect;
+        let mut st = State { pen: Pen::Rect, ..State::default() };
         st.press([5.0, 5.0]);
         assert!(st.dragging && st.anchor == Some([5.0, 5.0]));
         let p = profile_of(st.release([25.0, 15.0]));
@@ -2865,9 +3022,7 @@ mod tests {
 
     #[test]
     fn a_spline_is_smooth_within_the_limit_and_corners_can_be_chosen() {
-        let mut st = State::default();
-        st.pen = Pen::Spline;
-        st.smooth = true;
+        let mut st = State { pen: Pen::Spline, smooth: true, ..State::default() };
         click_all(&mut st, &[[0.0, 0.0], [30.0, 0.0], [30.0, 20.0], [0.0, 20.0]]);
         let p = profile_of(st.enter());
         assert!(p.len() > 8 && p.len() <= MAX_OUTLINE, "{} points", p.len());
@@ -2909,8 +3064,7 @@ mod tests {
 
     #[test]
     fn backspace_and_escape_step_back() {
-        let mut st = State::default();
-        st.pen = Pen::Polygon;
+        let mut st = State { pen: Pen::Polygon, ..State::default() };
         click_all(&mut st, &[[0.0, 0.0], [10.0, 0.0], [10.0, 10.0]]);
         st.back();
         assert_eq!(st.pts.len(), 2);
@@ -3498,7 +3652,13 @@ mod tests {
         ctx.input_mut(|i| i.events.clear());
         key(egui::Key::Enter);
         app.sketch_keys(&ctx);
-        assert_eq!(app.sk.stage, Stage::Shape, "the closed outline is a live solid");
+        assert!(!app.sk.on && app.sk.live.is_none(), "Enter finishes the sketch and returns to selection");
+        assert_eq!(app.scene.shape_count(), n + 1);
+        let Some(Pick::Shape(g, s)) = app.sel else { panic!("saved sketch selected") };
+        assert!(
+            app.scene.shape(g, s).is_some_and(|sh| sh.guide && sh.kind == Kind::Curve),
+            "the saved outline is a guide for a separate solid operation"
+        );
     }
 
     #[test]
