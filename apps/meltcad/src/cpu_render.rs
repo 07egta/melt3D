@@ -196,7 +196,7 @@ mod tests {
 
 /// The whole animation as a GIF: every frame (or every `step`-th) drawn from `cam`, or from a
 /// camera that fits the piece at all its poses. `size` is the width in pixels.
-pub fn animation_gif(scene: &Scene, cam: Option<Camera>, size: usize, mut progress: impl FnMut(u32, u32) -> bool) -> Result<Vec<u8>, String> {
+pub fn animation_gif(scene: &Scene, cam: Option<Camera>, size: usize, use_gpu: bool, mut progress: impl FnMut(u32, u32) -> bool) -> Result<Vec<u8>, String> {
     let a = &scene.anim;
     if a.is_empty() {
         return Err("No poses yet. Set a pose first".into());
@@ -226,6 +226,9 @@ pub fn animation_gif(scene: &Scene, cam: Option<Camera>, size: usize, mut progre
     let step = (a.length / 240 + 1).max(1);
     let frames: Vec<u32> = (0..a.length).step_by(step as usize).collect();
     let total = frames.len() as u32;
+    // the same picture as the window when there is a graphics card to ask (else the plain CPU one)
+    let mut gpu = if use_gpu { crate::gpu::offscreen::Offscreen::open().ok() } else { None };
+    let pic = gpu.as_ref().map(|g| g.picture([w as u32, h as u32]));
     let mut pics = Vec::new();
     for (i, &f) in frames.iter().enumerate() {
         if !progress(i as u32, total) {
@@ -233,7 +236,17 @@ pub fn animation_gif(scene: &Scene, cam: Option<Camera>, size: usize, mut progre
         }
         let mut s = scene.clone();
         a.apply(&mut s, f);
-        pics.push(view(&s, &cam, w, h));
+        match (gpu.as_mut(), pic.as_ref()) {
+            (Some(g), Some(pic)) => {
+                let pack = crate::gpu::ScenePack::new(&s, crate::gpu::VolumeSet::of(&s));
+                g.load(&pack);
+                let mut globals = pack.globals(&s, &cam, [w as f32, h as f32], None, None, false);
+                crate::gpu::set_view_flags(&mut globals, crate::perf::view_flags(false, false, pack.glow));
+                g.frame(pic, &globals, false);
+                pics.push(g.read(pic));
+            }
+            _ => pics.push(view(&s, &cam, w, h)),
+        }
     }
     let delay = (100.0 * step as f32 / a.fps.max(1) as f32).round().clamp(2.0, 6000.0) as u16;
     crate::gif::encode(w, h, &pics, delay)
