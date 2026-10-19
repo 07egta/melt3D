@@ -667,13 +667,22 @@ fn triangle_pipeline(
     layout: &wgpu::PipelineLayout,
     module: &wgpu::ShaderModule,
     format: wgpu::TextureFormat,
+    // drawn inside the window's own pass, which carries a depth buffer (the precise solid view needs one)
+    in_window: bool,
 ) -> wgpu::RenderPipeline {
+    let depth = in_window.then(|| wgpu::DepthStencilState {
+        format: wgpu::TextureFormat::Depth24PlusStencil8,
+        depth_write_enabled: Some(false),
+        depth_compare: Some(wgpu::CompareFunction::Always),
+        stencil: wgpu::StencilState::default(),
+        bias: wgpu::DepthBiasState::default(),
+    });
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some(label),
         layout: Some(layout),
         vertex: wgpu::VertexState { module, entry_point: Some("vs"), buffers: &[], compilation_options: Default::default() },
         primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, ..Default::default() },
-        depth_stencil: None,
+        depth_stencil: depth,
         multisample: wgpu::MultisampleState::default(),
         fragment: Some(wgpu::FragmentState {
             module,
@@ -728,7 +737,7 @@ pub(crate) fn try_build_from(device: &wgpu::Device, queue: &wgpu::Queue, format:
         (bgl, layout)
     })?;
     // (the slow one: the driver compiles the shader here)
-    let pipeline = step(device, "Scene render pipeline (create_render_pipeline)", || triangle_pipeline(device, "meltcad", &layout, &module, format))?;
+    let pipeline = step(device, "Scene render pipeline (create_render_pipeline)", || triangle_pipeline(device, "meltcad", &layout, &module, format, false))?;
     crate::perf::mark("scene pipeline created");
     let buffer = step(device, "uniform buffer", || {
         device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -766,7 +775,7 @@ pub(crate) fn try_build_from(device: &wgpu::Device, queue: &wgpu::Queue, format:
             bind_group_layouts: &[Some(&blit_layout)],
             immediate_size: 0,
         });
-        let blit = triangle_pipeline(device, "meltcad blit", &blit_pl, &blit_module, format);
+        let blit = triangle_pipeline(device, "meltcad blit", &blit_pl, &blit_module, format, true);
         (blit_layout, blit)
     })?;
     let blit_params = step(device, "blit parameters", || {
