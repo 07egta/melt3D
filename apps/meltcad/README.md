@@ -344,3 +344,9 @@ Illustrator や Inkscape などで作った SVG の絵を、ぐーっと押し�
 `meltcad --run script.json [--scene in.meltcad] [--out out.meltcad] [--png out.png]`
 スクリプトは命令の配列です。例: `[{"cmd":"shape.add","kind":"Sphere","pos":[0,0,20]},{"cmd":"melt.set","amount":1.5}]`。
 命令の一覧は `{"cmd":"commands"}`。
+
+### 開いているアプリを動かす／MCP
+- `meltcad --control 7777` … アプリを開いたまま、127.0.0.1:7777 に JSON を1行ずつ送って操作できます。最初の1回だけ `"token"` が必要（中身は一時フォルダの `melt3d-control-7777.token`）。
+- `meltcad --mcp` … MCP サーバー（画面なし）。`meltcad --mcp --control 7777` なら開いている画面を操作します。
+- Claude Code: `claude mcp add melt3d -- /path/to/meltcad --mcp --control 7777`
+- 道具は2つ: `melt3d_run`（命令を実行）と `melt3d_view`（絵を見る）。
