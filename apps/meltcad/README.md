@@ -8,11 +8,12 @@ MELTCAD は、やわらかい形を かんたんに作れる 3D モデリング�
 - 色や つやを決める（ざいしつ）
 - STL・3MF・OBJ・PLY・GLB に書き出して、3D プリンターで印刷したり ほかのソフトで使う
 
-## ダウンロード（Windows / Mac）
+## ダウンロード（Windows / Mac / Linux）
 
 [Releases ページ](https://github.com/07egta/melt3D/releases/latest) から、自分のパソコンのファイルをダウンロードして、zip をひらくだけです。
 
 - **Windows**: `Melt3D-…-windows-x64.zip` → ひらいて `Melt3D.exe` をダブルクリック。「PCが保護されました」と出たら「詳細情報」→「実行」。
+- **Linux**: `Melt3D-…-linux-x64.tar.gz` → ひらいて `./Melt3D` を実行。
 - **Mac（M1 以降）**: `Melt3D-…-macos-arm64.zip` / **Mac（Intel）**: `Melt3D-…-macos-intel.zip` → ひらいて「Melt 3D」を アプリケーション に入れる。はじめの 1 回だけ、右クリック → 「開く」。
 
 ## はじめかた（ソースから）
