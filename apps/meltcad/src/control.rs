@@ -61,8 +61,63 @@ pub fn make_token() -> String {
     out
 }
 
-pub fn token_file(port: u16) -> std::path::PathBuf {
-    std::env::temp_dir().join(format!("melt3d-control-{port}.token"))
+/// A token must never be placed in a shared /tmp directory. Use
+/// the operating system's private per-user app-state folder and a per-process
+/// filename so another local login cannot predict or read it.
+pub fn token_file(port: u16) -> Result<std::path::PathBuf, String> {
+    let state: Option<std::path::PathBuf> = if cfg!(windows) {
+        std::env::var_os("LOCALAPPDATA")
+            .or_else(|| std::env::var_os("APPDATA"))
+            .map(std::path::PathBuf::from)
+    } else {
+        std::env::var_os("XDG_STATE_HOME")
+            .map(std::path::PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(|home| std::path::PathBuf::from(home).join(".local/state")))
+    };
+    let state = state.ok_or("Cannot start control mode: no private user directory is available")?;
+    Ok(state.join("Melt3D").join("control").join(format!("melt3d-{port}-{}.token", std::process::id())))
+}
+
+/// Publish a control token only after creating its private directory and an
+/// exclusively owned file. Never silently ignore an error and never follow a
+/// pre-existing token-file symlink.
+pub fn write_token(port: u16, token: &str) -> Result<std::path::PathBuf, String> {
+    let path = token_file(port)?;
+    write_token_to(&path, token)?;
+    Ok(path)
+}
+
+fn write_token_to(path: &std::path::Path, token: &str) -> Result<(), String> {
+    let parent = path.parent().ok_or("The token path has no parent")?;
+    std::fs::create_dir_all(parent).map_err(|e| format!("Cannot create control directory: {e}"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        let metadata = std::fs::symlink_metadata(parent).map_err(|e| format!("Cannot inspect control directory: {e}"))?;
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            return Err("The control directory must be a real private directory".into());
+        }
+        std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))
+            .map_err(|e| format!("Cannot secure control directory: {e}"))?;
+        let mut file = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(path)
+            .map_err(|e| format!("Cannot exclusively create control token: {e}"))?;
+        if let Err(e) = file.write_all(token.as_bytes()).and_then(|_| file.sync_all()) {
+            let _ = std::fs::remove_file(path);
+            return Err(format!("Cannot publish control token: {e}"));
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        // Windows LOCALAPPDATA is per-user and carries the user's ACL.
+        // create_new refuses any pre-existing file or link.
+        let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(path)
+            .map_err(|e| format!("Cannot exclusively create control token: {e}"))?;
+        if let Err(e) = file.write_all(token.as_bytes()).and_then(|_| file.sync_all()) {
+            let _ = std::fs::remove_file(path);
+            return Err(format!("Cannot publish control token: {e}"));
+        }
+    }
+    Ok(())
 }
 
 /// Start listening. Returns the requests channel and the port really used (0 = pick one).
@@ -188,6 +243,25 @@ mod tests {
         assert!(lines[0].contains("\"ok\":true"), "{lines:?}");
         assert!(lines[1].contains("\"shape_count\":1"), "{lines:?}");
         assert!(lines[2].contains("\"ok\":false"), "{lines:?}");
+    }
+
+    #[test]
+    fn control_token_is_exclusive_and_user_private() {
+        let folder = std::env::temp_dir().join(format!("melt3d-token-test-{}", std::process::id()));
+        let path = folder.join("control").join("test.token");
+        write_token_to(&path, "secret-1234").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "secret-1234");
+        assert!(write_token_to(&path, "replaced").is_err(), "do not overwrite an existing token");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "secret-1234");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let dir_mode = std::fs::metadata(path.parent().unwrap()).unwrap().permissions().mode() & 0o777;
+            let file_mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(dir_mode, 0o700);
+            assert_eq!(file_mode, 0o600);
+        }
+        let _ = std::fs::remove_dir_all(folder);
     }
 
     #[test]
