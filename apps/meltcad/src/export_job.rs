@@ -716,7 +716,13 @@ pub fn print_check(scene: &Scene, sel: Option<Pick>, o: &Options, prog: &Progres
     let cell = f64::from(o.tolerance.clamp(MIN_TOLERANCE, MAX_TOLERANCE)).max(extent / 350.0).max(0.05);
     let meshed = mesh_scene(&scene, cell, th, &prog.slice(0.0, 0.8))?;
     let mesh = &meshed.mesh;
-    let size = size_of(mesh);
+    // Uniform export scaling changes real-world thickness and volume, not just
+    // the coordinates written to disk. File units do not change physical mm.
+    let physical_scale = f64::from(o.sanitized().scale_pct) / 100.0;
+    let size = size_of(mesh).map(|v| v * physical_scale);
+    let thin_limit_source = THIN_MM / physical_scale;
+    let thin_step_source = 0.1 / physical_scale;
+    let inside_source = 0.03_f64.min(thin_limit_source * 0.1);
     let (mut zmin, mut area, mut over) = (f64::INFINITY, 0.0, 0.0);
     for p in &mesh.positions {
         zmin = zmin.min(p[2]);
@@ -761,19 +767,20 @@ pub fn print_check(scene: &Scene, sel: Option<Pick>, o: &Options, prog: &Progres
             }
             let d = [n[0] / l, n[1] / l, n[2] / l];
             total += *a;
-            // just inside, then in 0.1 mm steps until the solid ends
+            // Ray march in source coordinates, but test the *exported*
+            // physical 0.8 mm wall threshold (and report the exported mm).
             let at = |t: f64| field.distance([(p[0] - d[0] * t) as f32, (p[1] - d[1] * t) as f32, (p[2] - d[2] * t) as f32]);
-            if at(0.03) >= 0.0 {
+            if at(inside_source) >= 0.0 {
                 continue;
             }
-            let mut t = 0.1;
-            while t < THIN_MM {
+            let mut t = thin_step_source;
+            while t < thin_limit_source {
                 if at(t) >= 0.0 {
                     thin += *a;
-                    thinnest = thinnest.min(t);
+                    thinnest = thinnest.min(t * physical_scale);
                     break;
                 }
-                t += 0.1;
+                t += thin_step_source;
             }
         }
         Ok((thin, total, thinnest))
@@ -781,13 +788,13 @@ pub fn print_check(scene: &Scene, sel: Option<Pick>, o: &Options, prog: &Progres
     let (thin, total, thinnest) = parts.iter().fold((0.0, 0.0, f64::INFINITY), |a, p| (a.0 + p.0, a.1 + p.1, a.2.min(p.2)));
     Ok(PrintCheck {
         size,
-        volume_cm3: melt::volume(mesh).abs() / 1000.0,
+        volume_cm3: melt::volume(mesh).abs() * physical_scale.powi(3) / 1000.0,
         closed: melt::is_watertight(mesh),
         thin_pct: if total > 0.0 { 100.0 * thin / total } else { 0.0 },
         thinnest: thinnest.is_finite().then_some(thinnest),
         overhang_pct: if area > 0.0 { 100.0 * over / area } else { 0.0 },
         tris: mesh.triangles.len(),
-        cell,
+        cell: cell * physical_scale,
     })
 }
 
@@ -1147,6 +1154,20 @@ mod tests {
         block.blend = 0.0;
         let c = print_check(&scene_of(vec![block]), None, &Options { tolerance: 0.2, ..Options::default() }, &Progress::new()).unwrap();
         assert!(c.thin_pct < 2.0 && c.overhang_pct < 1.0, "{} {}", c.thin_pct, c.overhang_pct);
+    }
+
+    #[test]
+    fn print_check_measures_the_physical_wall_after_export_scale() {
+        let mut plate = Shape::new(Kind::Box, [0.0, 0.0, 1.0], Material::default());
+        plate.size = [20.0, 20.0, 2.0];
+        plate.blend = 0.0;
+        let sc = scene_of(vec![plate]);
+        let opts = Options { scale_pct: 10.0, tolerance: 0.15, ..Options::default() };
+        let check = print_check(&sc, None, &opts, &Progress::new()).unwrap();
+        assert!((check.size[0] - 2.0).abs() < 0.1, "{:?}", check.size);
+        assert!((check.size[2] - 0.2).abs() < 0.1, "{:?}", check.size);
+        assert!(check.thin_pct > 5.0, "a scaled 0.2 mm wall must be thin: {:?}", check.thin_pct);
+        assert!(check.thinnest.is_some_and(|t| t < THIN_MM), "{:?}", check.thinnest);
     }
 
     #[test]
