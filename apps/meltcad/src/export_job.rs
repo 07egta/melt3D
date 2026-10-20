@@ -670,14 +670,11 @@ fn run(
     writing.store(true, std::sync::atomic::Ordering::Relaxed);
     prog.set(0.95);
     let files = serialize(&built, &o.sanitized(), path)?;
-    let mut bytes = 0u64;
-    for (p, data) in &files {
-        if prog.cancelled() {
-            return Err(export_mesh::CANCELLED.into());
-        }
-        std::fs::write(p, data).map_err(|e| format!("could not save {}: {e}", p.display()))?;
-        bytes += data.len() as u64;
-    }
+    let bytes: u64 = files.iter().map(|(_, data)| data.len() as u64).sum();
+    // OBJ+MTL must commit as one logical output. A failure on the second
+    // file can no longer silently leave the first output overwritten.
+    crate::export_transaction::write_many(&files, || prog.cancelled())
+        .map_err(|e| format!("could not save export: {e}"))?;
     prog.set(1.0);
     Ok(Report {
         path: path.to_path_buf(),
