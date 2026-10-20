@@ -35,6 +35,19 @@ fn bar(app: &mut App, ctx: &egui::Context) {
 }
 
 #[test]
+fn late_cancel_does_not_overwrite_preexisting_gif() {
+    let path = std::env::temp_dir().join(format!("melt3d_cancel_{}_test.gif", std::process::id()));
+    std::fs::write(&path, b"old contents").unwrap();
+    let cancel = AtomicBool::new(true);
+    assert!(save_gif_if_active(&path, b"new contents".to_vec(), &cancel).is_err());
+    assert_eq!(std::fs::read(&path).unwrap(), b"old contents");
+    cancel.store(false, Ordering::Release);
+    assert!(save_gif_if_active(&path, b"new contents".to_vec(), &cancel).is_ok());
+    assert_eq!(std::fs::read(&path).unwrap(), b"new contents");
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
 fn disconnected_gif_worker_releases_job_even_when_timeline_is_hidden() {
     let ctx = egui::Context::default();
     let mut app = animated();
