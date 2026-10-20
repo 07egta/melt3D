@@ -2,8 +2,26 @@
 
 use std::collections::HashMap;
 
-/// `frames` are RGBA pictures of `w` x `h`; `delay_cs` is the time of one frame in 1/100 s.
+/// `frames` are RGBA pictures of `w` x `h`; `delay_cs` is the time of every frame in 1/100 s.
 pub fn encode(w: usize, h: usize, frames: &[Vec<u8>], delay_cs: u16) -> Result<Vec<u8>, String> {
+    encode_timed(w, h, frames, &vec![delay_cs; frames.len()])
+}
+
+/// The delay of each of `count` frames (1/100 s) when a frame lasts `cs` hundredths on average.
+/// A GIF counts whole hundredths, so the rounding error is handed on from frame to frame: the
+/// whole animation lasts as long as it should. (Viewers play a delay under 2 as 10, so callers
+/// keep `cs` at 2 or more.)
+pub fn delays(count: usize, cs: f32) -> Vec<u16> {
+    let cs = if cs.is_finite() { cs.clamp(2.0, 6000.0) } else { 2.0 };
+    let at = |i: usize| (f64::from(cs) * i as f64).round();
+    (0..count).map(|i| (at(i + 1) - at(i)).clamp(2.0, 6000.0) as u16).collect()
+}
+
+/// Like [`encode`], with a delay for every frame.
+pub fn encode_timed(w: usize, h: usize, frames: &[Vec<u8>], delays: &[u16]) -> Result<Vec<u8>, String> {
+    if delays.len() != frames.len() {
+        return Err("Every frame needs a delay".into());
+    }
     if w == 0 || h == 0 || w > 4096 || h > 4096 || frames.is_empty() {
         return Err("Bad picture size".into());
     }
@@ -23,7 +41,7 @@ pub fn encode(w: usize, h: usize, frames: &[Vec<u8>], delay_cs: u16) -> Result<V
     out.extend_from_slice(&[0x21, 0xFF, 0x0B]);
     out.extend_from_slice(b"NETSCAPE2.0");
     out.extend_from_slice(&[3, 1, 0, 0, 0]); // loop forever
-    for f in frames {
+    for (f, delay_cs) in frames.iter().zip(delays) {
         out.extend_from_slice(&[0x21, 0xF9, 4, 0]);
         out.extend_from_slice(&delay_cs.to_le_bytes());
         out.extend_from_slice(&[0, 0]);
@@ -206,5 +224,17 @@ mod tests {
         assert_eq!(g.last(), Some(&0x3B));
         assert!(encode(0, 4, &[], 8).is_err());
         assert!(encode(2, 2, &[vec![0; 3]], 8).is_err());
+    }
+
+    #[test]
+    fn delays_add_up_to_the_real_time() {
+        // 60 fps, 48 frames: 0.8 s, not the 0.96 s that 2 cs for each frame would give
+        let d = delays(48, 100.0 / 60.0 * 2.0);
+        assert!(d.iter().all(|c| *c >= 2));
+        // two frames per picture here: 24 pictures of 3.33 cs
+        let d = delays(24, 100.0 * 2.0 / 60.0);
+        assert_eq!(d.iter().map(|c| u32::from(*c)).sum::<u32>(), 80);
+        assert!(d.iter().all(|c| *c == 3 || *c == 4));
+        assert!(delays(3, f32::NAN).iter().all(|c| *c == 2));
     }
 }
