@@ -18,6 +18,16 @@ pub struct Job {
     cancel: Arc<AtomicBool>,
 }
 
+/// A cancelled GIF must not overwrite a previous export when its final
+/// image has already rendered. Check cancellation again at the I/O boundary.
+fn save_gif_if_active(path: &std::path::Path, bytes: Vec<u8>, cancel: &AtomicBool) -> Result<String, String> {
+    if cancel.load(Ordering::Acquire) {
+        return Err("Stopped".into());
+    }
+    std::fs::write(path, bytes).map_err(|e| e.to_string())?;
+    Ok(path.display().to_string())
+}
+
 #[derive(Default)]
 pub struct State {
     pub open: bool,
@@ -278,7 +288,7 @@ impl App {
                 t2.store(n, Ordering::Relaxed);
                 !c2.load(Ordering::Relaxed)
             })
-            .and_then(|bytes| std::fs::write(&path, bytes).map_err(|e| e.to_string()).map(|()| path.display().to_string()));
+            .and_then(|bytes| save_gif_if_active(&path, bytes, &c2));
             let _ = tx.send(r);
             wake.request_repaint();
         });
