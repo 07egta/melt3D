@@ -108,6 +108,31 @@ fn rebake_id() -> egui::Id {
     egui::Id::new("mesh_rebake_card")
 }
 
+/// Older MeshSource records have no fingerprint. Fall back to their original
+/// filename rather than accepting an arbitrary replacement silently.
+fn check_rebake_source(original: &Shape, file_name: &str, mesh_hash: u64) -> Result<(), String> {
+    if let Some(src) = &original.mesh_source {
+        if src.mesh_hash != 0 {
+            if src.mesh_hash != mesh_hash {
+                return Err("The original file has changed. Can't overwrite with a different model".into());
+            }
+            return Ok(());
+        }
+        let expected = Path::new(&src.path)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .filter(|s| !s.is_empty())
+            .or_else(|| (!original.source.is_empty()).then_some(original.source.as_str()))
+            .ok_or("This old mesh has no identifiable source. Please import the original mesh again")?;
+        if expected != file_name {
+            return Err("File name doesn't match the original mesh. Pick the original file".into());
+        }
+    } else if original.source.is_empty() || original.source != file_name {
+        return Err("File name doesn't match. Pick the original file".into());
+    }
+    Ok(())
+}
+
 fn launch_rebake(req: &mut RebakeRequest) {
     let Some(path) = req.path.clone() else {
         req.msg = "Please pick the original mesh file again".into();
@@ -122,13 +147,7 @@ fn launch_rebake(req: &mut RebakeRequest) {
         let began = Instant::now();
         let loaded = mesh_import::load(&path)?;
         let hash = mesh_import::mesh_hash(&loaded.imported.mesh);
-        if let Some(src) = &orig.mesh_source {
-            if src.mesh_hash != 0 && src.mesh_hash != hash {
-                return Err("The original file has changed. Can't overwrite with a different model".into());
-            }
-        } else if !orig.source.is_empty() && loaded.file_name != orig.source {
-            return Err("File name doesn't match. Pick the file with the same name".into());
-        }
+        check_rebake_source(&orig, &loaded.file_name, hash)?;
         if c.cancel.load(Ordering::Relaxed) {
             return Err(ERR_CANCEL.into());
         }
@@ -794,6 +813,21 @@ pub fn reads(path: &Path) -> bool {
 mod tests {
     use super::*;
     use crate::model::Kind;
+
+    #[test]
+    fn old_mesh_sources_never_accept_an_unrelated_file_silently() {
+        let mut shape = Shape::new(Kind::Mesh, [0.0; 3], Material::default());
+        shape.mesh_source = Some(MeshSource { path: "models/original.obj".into(), y_up: false, mesh_hash: 0 });
+        assert!(check_rebake_source(&shape, "another.obj", 123).is_err());
+        assert!(check_rebake_source(&shape, "original.obj", 123).is_ok());
+
+        shape.mesh_source.as_mut().unwrap().mesh_hash = 456;
+        assert!(check_rebake_source(&shape, "original.obj", 123).is_err());
+        assert!(check_rebake_source(&shape, "renamed.obj", 456).is_ok(), "new sources use the fingerprint");
+        shape.mesh_source = Some(MeshSource { path: String::new(), y_up: false, mesh_hash: 0 });
+        shape.source.clear();
+        assert!(check_rebake_source(&shape, "any.obj", 123).is_err());
+    }
 
     fn loaded_box(lo: [f32; 3], hi: [f32; 3]) -> Loaded {
         let mesh = crate::import_mesh::tests::box_mesh(lo, hi);
