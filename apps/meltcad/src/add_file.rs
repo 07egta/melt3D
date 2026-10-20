@@ -136,18 +136,28 @@ pub fn save_piece(scene: &mut Scene, gi: usize, path: &Path) -> Result<(), Strin
         return Err("This group is not a piece of a file".into());
     }
     let end = scene.subtree_end(gi);
-    let top = u16::from(g.depth) + 1;
-    let inside: Vec<Group> = scene
+    // When shapes were added directly to the Piece wrapper, preserve that
+    // wrapper as the file's root. Without it, Save as file silently loses them.
+    // Empty wrappers retain the original layout (their children become roots).
+    let include_parent = !g.shapes.is_empty();
+    let first = if include_parent { gi } else { gi + 1 };
+    let relative_depth = u16::from(g.depth) + u16::from(!include_parent);
+    let mut inside: Vec<Group> = scene
         .groups
-        .get(gi + 1..end)
+        .get(first..end)
         .unwrap_or_default()
         .iter()
         .cloned()
         .map(|mut x| {
-            x.depth = (u16::from(x.depth).saturating_sub(top)) as u8;
+            x.depth = u16::from(x.depth).saturating_sub(relative_depth) as u8;
             x
         })
         .collect();
+    if include_parent {
+        if let Some(parent) = inside.first_mut() {
+            parent.piece = None; // The exported file must not refer back to itself.
+        }
+    }
     let file = Scene { groups: inside, melt: scene.melt, ..Scene::default() };
     crate::recovery::save_project(path, &file)?;
     if let Some(p) = scene.groups.get_mut(gi).and_then(|g| g.piece.as_mut()) {
@@ -330,6 +340,30 @@ mod tests {
         assert_eq!(loaded.groups[at].piece, mine.groups[at].piece);
         let _ = std::fs::remove_file(&first);
         let _ = std::fs::remove_file(&second);
+    }
+
+    #[test]
+    fn saving_a_piece_preserves_shapes_added_directly_to_the_wrapper() {
+        let original = temp("piece-original");
+        let output = temp("piece-wrapper-shapes");
+        crate::recovery::save_project(&original, &scene_with(vec![group("inside", 0, vec![ball(30.0)])])).unwrap();
+        let mut scene = scene_with(vec![group("mine", 0, vec![ball(0.0)])]);
+        let at = add_file(&mut scene, &original).unwrap();
+        let mut box_shape = Shape::new(Kind::Box, [70.0, 0.0, 10.0], Material::default());
+        box_shape.blend = 0.0;
+        scene.groups[at].shapes.push(box_shape);
+        assert_eq!(scene.groups[at].depth, 0);
+        assert_eq!(scene.shape_count(), 3);
+        save_piece(&mut scene, at, &output).unwrap();
+        let (saved, _) = crate::recovery::read_project(&output).unwrap();
+        assert_eq!(saved.shape_count(), 2, "the Piece's own box must survive export");
+        assert_eq!(saved.groups[0].shapes[0].kind, Kind::Box);
+        assert_eq!(saved.groups[0].depth, 0);
+        assert!(saved.groups[0].piece.is_none());
+        assert_eq!(saved.groups[1].depth, 1);
+        assert_eq!(saved.groups[1].shapes[0].kind, Kind::Sphere);
+        let _ = std::fs::remove_file(original);
+        let _ = std::fs::remove_file(output);
     }
 
     #[test]
