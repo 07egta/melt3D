@@ -151,33 +151,42 @@ pub fn thumb(scene: &Scene, size: usize) -> Vec<u8> {
     img
 }
 
-/// Handles `--render in.yura out.png [size]`; true when it did (the caller then exits).
-pub fn cli(args: &[std::ffi::OsString]) -> bool {
+/// Keep headless image sizes within the same bounds as the automation API.
+fn render_cli_size(value: Option<&std::ffi::OsString>) -> usize {
+    value.and_then(|a| a.to_str()).and_then(|a| a.parse::<usize>().ok()).unwrap_or(220).clamp(40, 600)
+}
+
+/// Handles `--render in.yura out.png [size]`.
+/// None = another command; Some(true) = success; Some(false) = failure.
+pub fn cli(args: &[std::ffi::OsString]) -> Option<bool> {
     if args.get(1).and_then(|a| a.to_str()) != Some("--render") {
-        return false;
+        return None;
     }
     let (Some(input), Some(output)) = (args.get(2), args.get(3)) else {
         eprintln!("usage: meltcad --render in.yura out.png [size]");
-        return true;
+        return Some(false);
     };
-    let size = args.get(4).and_then(|a| a.to_str()).and_then(|a| a.parse().ok()).unwrap_or(220);
+    let size = render_cli_size(args.get(4));
     let scene = match std::fs::read_to_string(input).map_err(|e| e.to_string()).and_then(|t| Scene::from_json(&t)) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("cannot read the scene: {e}");
-            return true;
+            return Some(false);
         }
     };
     let (w, rgba) = sheet(&scene, size);
-    match crate::png::encode_rgba(w as u32, w as u32, &rgba) {
-        Ok(bytes) => {
-            if let Err(e) = std::fs::write(output, bytes) {
-                eprintln!("cannot write the picture: {e}");
-            }
+    let bytes = match crate::png::encode_rgba(w as u32, w as u32, &rgba) {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            eprintln!("cannot encode the picture: {e}");
+            return Some(false);
         }
-        Err(e) => eprintln!("cannot encode the picture: {e}"),
+    };
+    if let Err(e) = std::fs::write(output, bytes) {
+        eprintln!("cannot write the picture: {e}");
+        return Some(false);
     }
-    true
+    Some(true)
 }
 
 /// The whole animation as a GIF: every frame (or every `step`-th) drawn from `cam`, or from a
@@ -250,6 +259,17 @@ pub fn animation_gif(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn render_cli_reports_input_errors_and_clamps_untrusted_dimensions() {
+        let args = |v: &[&str]| -> Vec<std::ffi::OsString> { v.iter().copied().map(Into::into).collect() };
+        assert_eq!(cli(&args(&["meltcad"])), None);
+        assert_eq!(cli(&args(&["meltcad", "--render"])), Some(false));
+        assert_eq!(cli(&args(&["meltcad", "--render", "nonexistent-scene.yura", "out.png"])), Some(false));
+        assert_eq!(render_cli_size(Some(&"999999999".into())), 600);
+        assert_eq!(render_cli_size(Some(&"1".into())), 40);
+        assert_eq!(render_cli_size(Some(&"bad".into())), 220);
+    }
 
     #[test]
     fn the_default_scene_draws_something() {
