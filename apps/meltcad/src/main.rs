@@ -28,6 +28,7 @@ mod export_dialog;
 mod export_formats;
 mod export_job;
 mod export_mesh;
+mod export_transaction;
 mod fonts;
 #[cfg(test)]
 mod frame_bench;
