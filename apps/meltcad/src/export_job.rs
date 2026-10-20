@@ -889,6 +889,95 @@ mod tests {
     }
 
     #[test]
+    fn exporting_a_parent_includes_children_and_exporting_a_child_keeps_its_ancestors() {
+        let mut parent = Group::new("parent");
+        parent.shapes.push(sphere_at(0.0, 5.0, red()));
+        let mut child = Group::new("child");
+        child.depth = 1;
+        child.shapes.push(sphere_at(40.0, 5.0, blue()));
+        let sc = Scene { groups: vec![parent, child], ..Scene::default() };
+
+        let both = prepare(&sc, Some(Pick::Group(0)), Scope::Selected, false).unwrap();
+        assert!(Field::new(&both).distance([0.0, 0.0, 20.0]) < 0.0);
+        assert!(Field::new(&both).distance([40.0, 0.0, 20.0]) < 0.0);
+
+        let only_child = prepare(&sc, Some(Pick::Group(1)), Scope::Selected, false).unwrap();
+        assert!(only_child.groups[0].visible && !only_child.groups[0].shapes[0].visible);
+        assert!(Field::new(&only_child).distance([40.0, 0.0, 20.0]) < 0.0);
+        assert!(Field::new(&only_child).distance([0.0, 0.0, 20.0]) > 0.0);
+    }
+
+    #[test]
+    fn ignoring_paint_keeps_nested_masks_out_of_geometry() {
+        let mut base = Group::new("base");
+        base.shapes.push(sphere_at(0.0, 3.0, red()));
+        let mut mask = Group::new("paint mask");
+        mask.op = Op::Paint;
+        let mut child = Group::new("paint child");
+        child.depth = 1;
+        child.shapes.push(sphere_at(30.0, 3.0, blue()));
+        let sc = Scene { groups: vec![base, mask, child], ..Scene::default() };
+        let without_stain = prepare(&sc, None, Scope::Visible, true).unwrap();
+        assert_eq!(without_stain.groups.len(), 3, "paint parents must not be deleted out from under children");
+        assert!(!without_stain.groups[1].visible);
+        assert!(Field::new(&without_stain).distance([30.0, 0.0, 20.0]) > 0.0);
+    }
+
+    #[test]
+    fn export_palette_handles_256_distinct_looks_without_a_shift_panic() {
+        let mut looks = Vec::new();
+        for red in [0, 64, 128, 192] {
+            for green in [0, 64, 128, 192] {
+                for blue in [0, 64, 128, 192] {
+                    for rough in [0, 128] {
+                        for metal in [0, 128] {
+                            looks.push(Mat8 { rgb: [red, green, blue], rough, metal });
+                        }
+                    }
+                }
+            }
+        }
+        assert_eq!(looks.len(), 256);
+        let (classes, n) = classify(&looks, 250);
+        assert_eq!(classes.len(), looks.len());
+        assert!((1..=250).contains(&n), "palette size {n}");
+    }
+
+    #[test]
+    fn export_samples_gradient_colours_instead_of_treating_them_as_uniform() {
+        let mut mat = red();
+        mat.gradient = 1.0;
+        mat.color2 = [0.0, 0.0, 1.0];
+        let mut shape = Shape::new(Kind::Sphere, [0.0; 3], mat);
+        shape.size[0] = 10.0;
+        shape.blend = 0.0;
+        let sc = scene_of(vec![shape]);
+        assert!(single_look(&sc).is_none());
+        let painter = Painter::new(&sc);
+        let bottom = painter.look([0.0, 0.0, -9.0]).rgb;
+        let top = painter.look([0.0, 0.0, 9.0]).rgb;
+        assert_ne!(bottom, top, "the two ends of the sphere need different vertex colours");
+    }
+
+    #[test]
+    fn paint_only_colours_the_surface_inside_its_mask() {
+        let mut base = Shape::new(Kind::Box, [0.0; 3], red());
+        base.size = [20.0, 20.0, 20.0];
+        base.blend = 0.0;
+        let mut stain = Shape::new(Kind::Sphere, [0.0, -10.0, 0.0], Material::plain([0.0, 1.0, 0.0], 0.3, 0.0));
+        stain.size[0] = 3.0;
+        stain.blend = 0.0;
+        stain.op = Op::Paint;
+        let sc = scene_of(vec![base, stain]);
+        assert!(single_look(&sc).is_none());
+        let painter = Painter::new(&sc);
+        let inside = painter.look([0.0, -10.0, 0.0]);
+        let outside = painter.look([8.0, -10.0, 0.0]);
+        assert_eq!(inside.rgb, [0, 255, 0]);
+        assert_eq!(outside.rgb, [255, 0, 0], "mask outside should keep the base colour");
+    }
+
+    #[test]
     fn the_default_sphere_is_closed_has_the_right_volume_and_few_triangles() {
         let b = build(&Scene::default(), None, &opts(Format::Stl, 0.25), &Progress::new()).unwrap();
         assert!(b.closed);
