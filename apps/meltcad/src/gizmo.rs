@@ -663,7 +663,7 @@ mod tests {
     }
 
     #[test]
-    fn x_ring_rotates_a_preturned_box_about_world_x_not_local_x() {
+    fn x_ring_rotates_a_previously_rotated_box_about_world_x_not_local_x() {
         let mut app = App::new(true, None);
         let sh = app.scene.shape_mut(0, 0).expect("initial shape");
         sh.kind = Kind::Box;
