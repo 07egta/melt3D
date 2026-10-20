@@ -210,15 +210,21 @@ impl Accessor {
         if view_off.checked_add(view_len).is_none_or(|e| e > bin.len()) {
             return Err(CUT_OFF.into());
         }
-        let elem = csize * ncomp;
+        let elem = csize.checked_mul(ncomp).ok_or(BAD_GLB)?;
         let stride = usz(view.get("byteStride")).filter(|s| *s != 0).unwrap_or(elem);
         if stride < elem || stride > 252 {
             return Err(BAD_GLB.into());
         }
-        let offset = view_off + usz(a.get("byteOffset")).unwrap_or(0);
+        let view_end = view_off.checked_add(view_len).ok_or(CUT_OFF)?;
+        let offset = view_off.checked_add(usz(a.get("byteOffset")).unwrap_or(0)).ok_or(CUT_OFF)?;
+        // A wrapped offset may land *before* the view's beginning; checking
+        // only the last byte against the upper bound is insufficient.
+        if offset < view_off || offset > view_end {
+            return Err(CUT_OFF.into());
+        }
         if count > 0 {
             let last = (count - 1).checked_mul(stride).and_then(|x| x.checked_add(offset)).and_then(|x| x.checked_add(elem)).ok_or(BAD_GLB)?;
-            if last > view_off + view_len {
+            if last > view_end {
                 return Err(CUT_OFF.into());
             }
         }
@@ -231,8 +237,8 @@ impl Accessor {
             return None;
         }
         let csize = Self::comp_size(self.ctype)?;
-        let o = self.offset + i * self.stride + c * csize;
-        let b = bin.get(o..o + csize)?;
+        let o = self.offset.checked_add(i.checked_mul(self.stride)?)?.checked_add(c.checked_mul(csize)?)?;
+        let b = bin.get(o..o.checked_add(csize)?)?;
         let v = match self.ctype {
             5120 => {
                 let x = f64::from(b[0] as i8);
@@ -569,6 +575,22 @@ mod tests {
             "bufferViews": [{"buffer": 0, "byteOffset": 0, "byteLength": 36}, {"buffer": 0, "byteOffset": 36, "byteLength": 6}],
             "buffers": [{"byteLength": 42}]
         })
+    }
+
+    #[test]
+    fn accessor_offsets_cannot_wrap_or_escape_the_buffer_view() {
+        let mut bin = vec![0u8; 20];
+        bin[8..12].copy_from_slice(&1.25f32.to_le_bytes());
+        let make = |offset: u64, count: usize| json!({
+            "accessors":[{"bufferView":0,"byteOffset":offset,"componentType":5126,"count":count,"type":"VEC3"}],
+            "bufferViews":[{"buffer":0,"byteOffset":8,"byteLength":12}]
+        });
+        let good = Accessor::open(&make(0, 1), &bin, 0).expect("valid accessor at view start");
+        assert_eq!(good.get(&bin, 0, 0), Some(1.25));
+        assert!(Accessor::open(&make(1, 1), &bin, 0).is_err(), "unaligned overrun is out of the view");
+        assert!(Accessor::open(&make(usize::MAX as u64 - 7, 1), &bin, 0).is_err(), "checked sum must reject overflow");
+        assert!(Accessor::open(&make(13, 0), &bin, 0).is_err(), "even an empty accessor may not point beyond the view");
+        assert!(Accessor::open(&make(12, 0), &bin, 0).is_ok(), "empty accessor at the view end is allowed");
     }
 
     #[test]
