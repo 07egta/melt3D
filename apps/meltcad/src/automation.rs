@@ -184,13 +184,17 @@ fn run(scene: &mut Scene, cmd: &Value) -> Result<Value, String> {
         }
         "save" => {
             let path = text(obj, "path")?;
-            std::fs::write(&path, scene.try_to_json()?).map_err(|e| format!("Cannot write {path}: {e}"))?;
+            crate::recovery::save_project(std::path::Path::new(&path), scene)
+                .map_err(|e| format!("Cannot write {path}: {e}"))?;
             Ok(json!({"saved": path}))
         }
         "load" => {
             let path = text(obj, "path")?;
-            let t = std::fs::read_to_string(&path).map_err(|e| format!("Cannot read {path}: {e}"))?;
-            *scene = Scene::from_json(&t)?;
+            // Share the GUI's size limit and guarded project parser: hostile
+            // automation inputs must not bypass the file safety boundary.
+            let (loaded, _) = crate::recovery::read_project(std::path::Path::new(&path))
+                .map_err(|e| format!("Cannot read {path}: {e}"))?;
+            *scene = loaded;
             Ok(summary(scene))
         }
         "piece.reload" => {
@@ -682,8 +686,8 @@ pub fn run_cli(args: &[std::ffi::OsString]) -> Option<bool> {
         return Some(false);
     };
     let mut scene = match arg("--scene") {
-        Some(p) => match std::fs::read_to_string(&p).map_err(|e| e.to_string()).and_then(|t| Scene::from_json(&t)) {
-            Ok(s) => s,
+        Some(p) => match crate::recovery::read_project(std::path::Path::new(&p)) {
+            Ok((s, _)) => s,
             Err(e) => {
                 eprintln!("cannot read the scene: {e}");
                 return Some(false);
@@ -716,11 +720,17 @@ pub fn run_cli(args: &[std::ffi::OsString]) -> Option<bool> {
             Err(e) => {
                 ok = false;
                 println!("{}", json!({"error": e}));
+                break;
             }
         }
     }
+    if !ok {
+        // --out/--png are final outputs, not a partial side effect. A failed
+        // script must never overwrite a previously successful project.
+        return Some(false);
+    }
     if let Some(p) = arg("--out") {
-        match scene.try_to_json().and_then(|t| std::fs::write(&p, t).map_err(|e| e.to_string())) {
+        match crate::recovery::save_project(std::path::Path::new(&p), &scene) {
             Ok(()) => {}
             Err(e) => {
                 ok = false;
@@ -743,6 +753,60 @@ mod tests {
 
     fn run(scene: &mut Scene, v: Value) -> Result<Value, String> {
         execute(scene, &v)
+    }
+
+    #[test]
+    fn failed_script_never_overwrites_a_completed_output_file() {
+        let folder = std::env::temp_dir().join(format!("melt3d-failed-cli-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).unwrap();
+        let script = folder.join("bad-script.json");
+        let output = folder.join("previous-good.meltcad");
+        let png = folder.join("previous-good.png");
+        std::fs::write(&script, r#"[{"cmd":"shape.add","kind":"Box"},{"cmd":"not.a.command"}]"#).unwrap();
+        std::fs::write(&output, b"previous valid data").unwrap();
+        std::fs::write(&png, b"previous image").unwrap();
+        let args: Vec<std::ffi::OsString> = vec![
+            "meltcad".into(), "--run".into(), script.as_os_str().to_os_string(),
+            "--out".into(), output.as_os_str().to_os_string(),
+            "--png".into(), png.as_os_str().to_os_string()
+        ];
+        assert_eq!(run_cli(&args), Some(false));
+        assert_eq!(std::fs::read(&output).unwrap(), b"previous valid data");
+        assert_eq!(std::fs::read(&png).unwrap(), b"previous image");
+        let _ = std::fs::remove_dir_all(folder);
+    }
+
+    #[test]
+    fn successful_script_out_is_a_reopenable_project() {
+        let folder = std::env::temp_dir().join(format!("melt3d-good-cli-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).unwrap();
+        let script = folder.join("script.json");
+        let output = folder.join("completed.meltcad");
+        std::fs::write(&script, r#"[{"cmd":"shape.add","kind":"Box"}]"#).unwrap();
+        let args: Vec<std::ffi::OsString> = vec![
+            "meltcad".into(), "--run".into(), script.as_os_str().to_os_string(),
+            "--out".into(), output.as_os_str().to_os_string()
+        ];
+        assert_eq!(run_cli(&args), Some(true));
+        let (scene, _) = crate::recovery::read_project(&output).unwrap();
+        assert_eq!(scene.shape_count(), 1);
+        assert_eq!(scene.groups[0].shapes[0].kind, Kind::Box);
+        let _ = std::fs::remove_dir_all(folder);
+    }
+
+    #[test]
+    fn automation_load_rejects_files_larger_than_gui_limit() {
+        let folder = std::env::temp_dir().join(format!("melt3d-oversized-load-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).unwrap();
+        let huge = folder.join("oversized.meltcad");
+        let file = std::fs::File::create(&huge).unwrap();
+        file.set_len(129 * 1024 * 1024).unwrap();
+        let mut scene = Scene::default();
+        let before = scene.clone();
+        let result = execute(&mut scene, &json!({"cmd":"load","path":huge}));
+        assert!(result.is_err());
+        assert_eq!(scene, before);
+        let _ = std::fs::remove_dir_all(folder);
     }
 
     #[test]
