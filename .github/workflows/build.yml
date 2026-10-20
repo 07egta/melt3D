@@ -137,6 +137,12 @@ jobs:
                 cargo test --profile ci --locked -p meltcad app::preview::app_preview -- --ignored --exact --test-threads=1
               test -s "$RUNNER_TEMP/melt3d-ui/$stage-$dimensions.png"
             done
+            for stage in solid sketch melt; do
+              YURA_WIDTH="${dimensions%x*}" YURA_HEIGHT="${dimensions#*x}" YURA_PPP=1 \
+              YURA_PRECISE="$stage" YURA_PREVIEW="$RUNNER_TEMP/melt3d-ui/solidcraft-$stage-$dimensions.png" \
+                cargo test --profile ci --locked -p meltcad app::preview::app_preview -- --ignored --exact --test-threads=1
+              test -s "$RUNNER_TEMP/melt3d-ui/solidcraft-$stage-$dimensions.png"
+            done
           done
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() }}

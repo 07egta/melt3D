@@ -561,8 +561,41 @@ impl App {
     }
 
     fn handle_close_request(&mut self, ctx: &egui::Context) {
+        if self.precise.as_ref().is_some_and(|p| p.app.quit_requested) {
+            if let Some(p) = self.precise.as_mut() {
+                p.app.quit_requested = false;
+            }
+            self.precise_on = false;
+            style::apply(ctx);
+            if self.has_unsaved_work() {
+                self.pending_file_action = Some(PendingFileAction::Close);
+            } else {
+                self.close_approved = true;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            ctx.request_repaint();
+        }
+        if ctx.input(|i| i.viewport().close_requested()) && !self.close_approved {
+            if self.precise_transfer_pending() {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                self.say(ctx, "立体の取り込みが終わるか、取り消してから閉じてください");
+                return;
+            }
+            if let Some(p) = self.precise.as_mut()
+                && solidcraft_ui_egui::documents::any_dirty(&p.app)
+            {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                solidcraft_ui_egui::documents::request_quit(&mut p.app);
+                self.precise_on = true;
+                solidcraft_ui_egui::theme::apply(ctx);
+                ctx.request_repaint();
+                return;
+            }
+        }
         if ctx.input(|i| i.viewport().close_requested()) && !self.close_approved && (self.has_unsaved_work() || self.pending_file_action.is_some()) {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.precise_on = false;
+            style::apply(ctx);
             if self.pending_file_action.is_none() {
                 self.pending_file_action = Some(PendingFileAction::Close);
             }
@@ -1509,8 +1542,8 @@ impl App {
                     let right_start = ui.max_rect().right();
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui
-                            .button(RichText::new("Precise solid").color(style::ACCENT))
-                            .on_hover_text("SolidCraft's solid modeller: exact sketches and features, STEP export")
+                            .button(RichText::new("SolidCraft").color(style::ACCENT))
+                            .on_hover_text("精密なスケッチと立体を作る。戻ると自動で Melt に取り込み、とけあう形にできます")
                             .clicked()
                         {
                             self.open_precise(&ctx);
@@ -2030,6 +2063,9 @@ impl App {
 
 impl eframe::App for App {
     fn on_exit(&mut self) {
+        if let Some(p) = self.precise.as_mut() {
+            solidcraft_ui_egui::recovery_ui::close(&mut p.app);
+        }
         if let Err(e) = self.recovery.normal_exit() {
             crate::gpu_log::log(&format!("recovery cleanup failed: {e}"));
         }
@@ -2040,6 +2076,21 @@ impl eframe::App for App {
 }
 
 impl App {
+    pub(crate) fn scene_edit_in_progress(&self) -> bool {
+        self.scene_structure_locked()
+            || self.sketch_active()
+            || self.drag.is_some()
+            || self.ct.drag.is_some()
+            || self.ct.drawing
+            || self.ct.draw_shape.is_some()
+            || self.pt.tracing
+            || self.layer_drag.is_some()
+            || self.marquee_from.is_some()
+            || self.renaming.is_some()
+            || self.title_edit.is_some()
+            || self.pending_file_action.is_some()
+    }
+
     /// Runs the commands that arrived on the control channel (at most a few per frame).
     fn run_control(&mut self, ctx: &egui::Context) {
         let Some(rx) = self.control.take() else { return };
@@ -2048,31 +2099,25 @@ impl App {
             let Ok(req) = rx.try_recv() else { break };
             // commands about the window itself are handled here; the rest change the scene
             if req.cmd.get("cmd").and_then(serde_json::Value::as_str) == Some("ui.precise") {
-                let on = req.cmd.get("on").and_then(serde_json::Value::as_bool).unwrap_or(true);
-                if on {
-                    self.open_precise(ctx);
-                } else {
-                    self.precise_on = false;
+                let result = match req.cmd.get("on") {
+                    None => Ok(true),
+                    Some(serde_json::Value::Bool(on)) => Ok(*on),
+                    Some(_) => Err("on は true または false で指定してください".to_owned()),
                 }
-                let _ = req.reply.send(Ok(serde_json::json!({"precise": self.precise_on})));
+                .and_then(|on| {
+                    if ctx.egui_wants_keyboard_input() || ctx.input(|i| i.pointer.any_down()) {
+                        return Err("入力やドラッグを終えてから画面を切り替えてください".into());
+                    }
+                    self.set_precise_mode(ctx, on)?;
+                    Ok(serde_json::json!({"precise": self.precise_on, "importing": self.precise_transfer_pending()}))
+                });
+                let _ = req.reply.send(result);
                 ran = true;
                 continue;
             }
             let name = req.cmd.get("cmd").and_then(serde_json::Value::as_str);
             let read_only = matches!(name, Some("commands" | "scene.get" | "scene.summary" | "render" | "anim.get" | "anim.render"));
-            let busy = self.scene_structure_locked()
-                || self.sketch_active()
-                || self.drag.is_some()
-                || self.ct.drag.is_some()
-                || self.ct.drawing
-                || self.ct.draw_shape.is_some()
-                || self.pt.tracing
-                || self.layer_drag.is_some()
-                || self.marquee_from.is_some()
-                || self.renaming.is_some()
-                || self.pending_file_action.is_some()
-                || ctx.egui_wants_keyboard_input()
-                || ctx.input(|i| i.pointer.any_down());
+            let busy = self.precise_on || self.scene_edit_in_progress() || ctx.egui_wants_keyboard_input() || ctx.input(|i| i.pointer.any_down());
             let result = if !read_only && busy {
                 Err("Finish or cancel the active edit before changing or saving the scene".into())
             } else {
@@ -2136,12 +2181,13 @@ impl App {
         let ctx = ui.ctx().clone();
         let frame_began = std::time::Instant::now();
         self.perf.stats.begin(ctx.input(|i| i.time));
+        self.sync_precise_transfer(&ctx);
         self.run_control(&ctx);
+        self.handle_close_request(&ctx);
         if self.precise_frame(ui) {
             return;
         }
         self.fix_selection();
-        self.handle_close_request(&ctx);
         if let Some(n) = self.notice.take() {
             self.say(&ctx, n);
         }
@@ -2426,6 +2472,63 @@ mod tests {
         app.resolve_pending_file_action(&ctx, PendingFileDecision::Cancel);
         assert!(app.pending_file_action.is_none());
         assert_eq!(app.scene.shape_count(), 2);
+    }
+
+    #[test]
+    fn control_mode_exit_uses_the_automatic_solid_import_and_rejects_invalid_input() {
+        use serde_json::json;
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        let (sender, receiver) = std::sync::mpsc::channel();
+        app.control = Some(receiver);
+        let (reply, results) = std::sync::mpsc::channel();
+        sender.send(crate::control::Request { cmd: json!({"cmd":"ui.precise","on":"false"}), reply: reply.clone() }).unwrap();
+        app.run_control(&ctx);
+        assert!(results.recv().unwrap().is_err());
+        assert!(!app.precise_on);
+        sender.send(crate::control::Request { cmd: json!({"cmd":"ui.precise","on":true}), reply: reply.clone() }).unwrap();
+        app.run_control(&ctx);
+        assert_eq!(results.recv().unwrap().unwrap()["precise"], true);
+        let p = app.precise.as_mut().unwrap();
+        assert_eq!(p.app.preferences.language, "ja");
+        assert!(!p.app.show_easy_top_bar);
+        p.app.run("solid.box", json!({"length":24,"width":12,"height":6})).unwrap();
+        let scene = app.scene.clone();
+        sender.send(crate::control::Request { cmd: json!({"cmd":"scene.new"}), reply: reply.clone() }).unwrap();
+        app.run_control(&ctx);
+        assert!(results.recv().unwrap().is_err(), "do not change a hidden Melt scene while SolidCraft is active");
+        assert_eq!(app.scene, scene);
+        sender.send(crate::control::Request { cmd: json!({"cmd":"ui.precise","on":false}), reply }).unwrap();
+        app.run_control(&ctx);
+        let answer = results.recv().unwrap().unwrap();
+        assert_eq!(answer["precise"], false);
+        assert_eq!(answer["importing"], true);
+        assert!(app.precise_transfer_pending());
+        assert!(crate::mesh_dialog::cancel(&ctx));
+        app.sync_precise_transfer(&ctx);
+    }
+
+    #[test]
+    fn closing_from_either_mode_protects_the_unsaved_exact_document() {
+        for precise_on in [true, false] {
+            let ctx = egui::Context::default();
+            let mut app = App::new(true, None);
+            app.open_precise(&ctx);
+            let p = app.precise.as_mut().unwrap();
+            p.app.viewport.no_pixels = true;
+            p.app.run("solid.box", serde_json::json!({"length":24,"width":12,"height":6})).unwrap();
+            app.precise_on = precise_on;
+            let mut input =
+                egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(960.0, 600.0))), ..Default::default() };
+            input.viewports.get_mut(&egui::ViewportId::ROOT).unwrap().events.push(egui::ViewportEvent::Close);
+            let mut output = ctx.run_ui(input, |ui| app.frame_body(ui));
+            assert!(output.viewport_output.get(&egui::ViewportId::ROOT).is_some_and(|v| v.commands.contains(&egui::ViewportCommand::CancelClose)));
+            assert!(app.precise_on, "show the precise document's save prompt even when it was hidden");
+            let p = app.precise.as_ref().unwrap();
+            assert!(p.app.docs.quitting.is_some() && p.app.docs.closing.is_some());
+            assert!(!p.app.quit_requested && p.app.session.is_dirty());
+            output.textures_delta.clear();
+        }
     }
 
     #[test]
