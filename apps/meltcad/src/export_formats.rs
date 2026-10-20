@@ -169,13 +169,17 @@ fn facet_normal(t: &[[f64; 3]; 3]) -> [f64; 3] {
     if l > 1e-30 { [c[0] / l, c[1] / l, c[2] / l] } else { [0.0, 0.0, 1.0] }
 }
 
-fn check(mesh: &TriMesh) -> Result<(), String> {
+/// Validate geometry once before any writer can drop or rewrite damaged faces.
+pub(crate) fn check(mesh: &TriMesh) -> Result<(), String> {
     if mesh.triangles.is_empty() || mesh.positions.is_empty() {
         return Err("there is nothing to write".into());
     }
     let n = mesh.positions.len();
     if n > u32::MAX as usize - 1 || mesh.triangles.len() > u32::MAX as usize / 4 {
         return Err("the model has too many triangles for this file".into());
+    }
+    if mesh.triangles.iter().any(|t| t.iter().any(|&i| i as usize >= n)) {
+        return Err("the model has a triangle with an invalid vertex index".into());
     }
     Ok(())
 }
@@ -798,6 +802,18 @@ pub mod tests {
         assert!(doc["meshes"][0]["primitives"][0]["attributes"]["COLOR_0"].is_null());
         assert_eq!(doc["materials"][0]["pbrMetallicRoughness"]["baseColorFactor"], json!([1.0, 1.0, 1.0, 1.0]));
         assert!(glb(&Surface { mesh: TriMesh::default(), look: Look::none() }, "t").is_err());
+    }
+
+    #[test]
+    fn formats_reject_invalid_triangle_vertex_indices_instead_of_silently_losing_faces() {
+        let mut m = tetra(10.0);
+        m.triangles[0][2] = 12345;
+        let surface = Surface { mesh: m, look: Look::uniform(Mat8 { rgb: [255, 0, 0], rough: 128, metal: 0 }) };
+        assert!(check(&surface.mesh).is_err());
+        assert!(obj_files(&surface, "bad", "bad.mtl").is_err());
+        assert!(ply(&surface, "bad").is_err());
+        assert!(threemf(&surface, "bad", Units::Mm).is_err());
+        assert!(glb(&surface, "bad").is_err());
     }
 
     #[test]
