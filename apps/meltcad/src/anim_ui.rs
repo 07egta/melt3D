@@ -117,6 +117,7 @@ impl App {
 
         if !self.an.open {
             self.an.playing = false;
+            let mut reopen_timeline = false;
             if let Some(job) = &self.an.job {
                 egui::Panel::bottom("gif_background_progress")
                     .exact_size(32.0)
@@ -129,10 +130,13 @@ impl App {
                                 job.cancel.store(true, Ordering::Relaxed);
                             }
                             if ui.button("Show timeline").clicked() {
-                                self.an.open = true;
+                                reopen_timeline = true;
                             }
                         });
                     });
+            }
+            if reopen_timeline {
+                self.an.open = true;
             }
             return;
         }
