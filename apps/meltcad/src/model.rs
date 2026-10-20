@@ -1032,6 +1032,23 @@ impl Scene {
             let _guard = crate::mesh::LoadGuard::begin();
             serde_json::from_str(text).map_err(|e| e.to_string())?
         };
+        // Sanitization still truncates impossible in-memory scenes as a
+        // defensive last resort. File Open must be stricter: accepting an
+        // oversized design and then silently discarding its groups or shapes
+        // makes the next Save permanently destroy the original work.
+        if s.groups.len() > MAX_GROUPS {
+            return Err(format!(
+                "This project contains {} groups (maximum {MAX_GROUPS}). Nothing was loaded; the original file was preserved.",
+                s.groups.len()
+            ));
+        }
+        let shapes = s.groups.iter().try_fold(0usize, |total, g| total.checked_add(g.shapes.len()))
+            .ok_or("This project has too many shapes; the original file was preserved")?;
+        if shapes > MAX_SHAPES {
+            return Err(format!(
+                "This project contains {shapes} shapes (maximum {MAX_SHAPES}). Nothing was loaded; the original file was preserved."
+            ));
+        }
         let notes = s.sanitize_notes();
         Ok((s, notes))
     }
@@ -1536,9 +1553,12 @@ mod tests {
             gr.shapes = vec![one.clone(); 8];
             sc.groups.push(gr);
         }
-        let back = Scene::from_json(&sc.to_json()).unwrap_or_default();
-        assert_eq!(back.groups.len(), MAX_GROUPS);
-        assert_eq!(back.shape_count(), MAX_SHAPES, "{} groups of 8 shapes are cut at {MAX_SHAPES}", MAX_GROUPS);
+        let original = sc.to_json();
+        assert!(Scene::from_json(&original).is_err(), "oversized projects must not silently lose groups");
+        // In-memory hardening still clamps programmatic hostile scenes.
+        sc.sanitize();
+        assert_eq!(sc.groups.len(), MAX_GROUPS);
+        assert_eq!(sc.shape_count(), MAX_SHAPES, "{} groups of 8 shapes are cut at {MAX_SHAPES}", MAX_GROUPS);
         // a file with a hostile pattern keeps only safe numbers
         let hostile = r#"{"groups":[{"name":"g","op":"Add","blend":0,"visible":true,"shapes":[],"pattern":{"Rect":{"counts":[4000000000,0,9],"spacing":[1e30,-1e30,0]}},"xform":{"pos":[1e30,0,0],"rot":[0,0,0],"scale":-4}}]}"#;
         let h = Scene::from_json(hostile).unwrap_or_default();
@@ -1554,6 +1574,30 @@ mod tests {
         let linked = r#"{"groups":[{"name":"g","op":"Add","blend":0,"visible":true,"uid":3,"shapes":[]},{"name":"c","op":"Add","blend":0,"visible":true,"instance_of":3,"shapes":[{"name":"s","kind":"Sphere","size":[20,1,1],"round":0,"pos":[0,0,20],"rot":[0,0,0],"scale":[1,1,1],"op":"Add","blend":6,"material":{"color":[1,0,0],"roughness":0.3,"metallic":1},"visible":true,"outline":[]}]}]}"#;
         let l = Scene::from_json(linked).unwrap_or_default();
         assert!(l.groups[1].shapes.is_empty() && l.groups[1].instance_of == Some(3));
+    }
+
+    #[test]
+    fn opening_one_group_with_513_shapes_fails_without_truncation() {
+        let mut sc = Scene::default();
+        let shape = sc.groups[0].shapes[0].clone();
+        sc.groups[0].shapes = vec![shape; MAX_SHAPES + 1];
+        let text = sc.to_json();
+        let failure = Scene::from_json_notes(&text).expect_err("must reject a 513-shape document");
+        assert!(failure.contains("maximum") && failure.contains("preserved"), "{failure}");
+        assert!(serde_json::from_str::<Scene>(&text).is_ok(), "the source itself is recoverable");
+    }
+
+    #[test]
+    fn opening_97_groups_fails_instead_of_discarding_the_last_group() {
+        let mut sc = Scene { groups: Vec::new(), ..Scene::default() };
+        for i in 0..=MAX_GROUPS {
+            sc.groups.push(Group::new(format!("Group {}", i + 1)));
+        }
+        let text = sc.to_json();
+        assert!(Scene::from_json_notes(&text).unwrap_err().contains("groups"));
+        assert!(serde_json::from_str::<Scene>(&text).is_ok());
+        sc.groups.truncate(MAX_GROUPS);
+        assert!(Scene::from_json(&sc.to_json()).is_ok());
     }
 
     #[test]
