@@ -74,7 +74,7 @@ impl App {
             return;
         }
         let editable = !self.scene_structure_locked();
-        if ui.add_enabled(editable, egui::Button::new("Duplicate  Ctrl+D")).clicked() {
+        if ui.add_enabled(editable, egui::Button::new(style::keys("Duplicate  Ctrl+D"))).clicked() {
             self.duplicate();
             ui.close();
         }
@@ -419,7 +419,7 @@ impl App {
     fn actions(&mut self, ui: &mut Ui) {
         if self.picks().len() > 1 {
             ui.label(RichText::new(format!("{} selected (Shift + click adds or removes)", self.picks().len())).size(12.0).color(style::ACCENT));
-            if style::pill(ui, "Group them (Ctrl+G)", false)
+            if style::pill(ui, &style::keys("Group them (Ctrl+G)"), false)
                 .on_hover_text("Put the selected shapes or groups inside one new group (groups can nest)")
                 .clicked()
             {
@@ -427,7 +427,7 @@ impl App {
             }
         }
         ui.horizontal(|ui| {
-            if style::icon_button(ui, 34.0, "Duplicate (Ctrl+D)", false, glyphs::dup).clicked() {
+            if style::icon_button(ui, 34.0, &style::keys("Duplicate (Ctrl+D)"), false, glyphs::dup).clicked() {
                 self.duplicate();
             }
             if style::icon_button(ui, 34.0, "Delete (Del)", false, glyphs::trash).clicked() {

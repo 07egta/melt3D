@@ -54,7 +54,7 @@ impl Shortcut {
 
     /// The short form shown on the badge ("Ctrl+K", "Ctrl+←").
     pub fn badge(&self) -> String {
-        self.text(self.key.symbol_or_name())
+        crate::style::keys(&self.text(self.key.symbol_or_name()))
     }
 
     fn text(&self, key: &str) -> String {

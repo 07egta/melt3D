@@ -13,7 +13,7 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 
 use crate::camera::Camera;
 use crate::model::{Environment, Scene};
-use crate::sdf::{Field, V3, add, dot, len, mul, norm, sub};
+use crate::sdf::{Field, V3, add, dot, mul, norm, sub};
 
 /// The viewport is drawn at 1/FINE_DIV of its size when still...
 pub const FINE_DIV: usize = 3;
