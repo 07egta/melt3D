@@ -10,6 +10,9 @@ use crate::perf::Gate;
 use crate::sdf::{V3, add, dot, len, mul, sub};
 use crate::style;
 
+/// The home button under the axis ball.
+const HOME_RADIUS: f32 = 12.0;
+
 /// The pointing device the view controls are tuned for.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Device {
@@ -177,7 +180,7 @@ impl App {
         } else {
             gizmo::build_multi(&self.cam, rect, &self.scene, &self.picks(), tool)
         };
-        let over_gnomon = !clean && pos.is_some_and(|p| self.gnomon_hit(rect, p).is_some());
+        let over_gnomon = !clean && pos.is_some_and(|p| self.gnomon_hit(rect, p).is_some() || Self::home_hit(rect, p));
         let hover_handle = match (&geom, pos, &self.drag) {
             (Some(g), Some(p), None) if resp.hovered() && !over_gnomon && !ct.over => gizmo::hit(g, tool, p),
             _ => None,
@@ -302,7 +305,7 @@ impl App {
                 self.drag = Some(self.begin_drag(h, g, rect, o, tool, mods.shift));
                 self.orbiting = false;
             } else {
-                self.orbiting = origin.is_some_and(|o| self.gnomon_hit(rect, o).is_none());
+                self.orbiting = origin.is_some_and(|o| self.gnomon_hit(rect, o).is_none() && !Self::home_hit(rect, o));
             }
         }
         if self.sketch_active() {
@@ -343,7 +346,9 @@ impl App {
             && !self.sketch_active()
             && let Some(p) = pos
         {
-            if let Some(axis) = self.gnomon_hit(rect, p) {
+            if Self::home_hit(rect, p) {
+                self.go_home();
+            } else if let Some(axis) = self.gnomon_hit(rect, p) {
                 self.look_along(axis);
             } else {
                 if mods.shift {
@@ -371,6 +376,7 @@ impl App {
             && !self.sketch_active()
             && let Some(p) = pos
             && self.gnomon_hit(rect, p).is_none()
+            && !Self::home_hit(rect, p)
         {
             match self.shape_at(rect, p) {
                 Some((g, s)) if self.scene.shape(g, s).is_some_and(crate::sketch::editable) => {
@@ -525,7 +531,42 @@ impl App {
             .or_else(|| self.gnomon_items(rect).into_iter().find(|(_, c, _)| (*c - p).length() < 8.0).map(|(d, _, _)| d))
     }
 
+    /// The home button sits just under the axis ball.
+    fn home_centre(rect: Rect) -> Pos2 {
+        pos2(rect.right() - 62.0, rect.top() + 62.0 + 48.0 + 20.0)
+    }
+
+    fn home_hit(rect: Rect, p: Pos2) -> bool {
+        (Self::home_centre(rect) - p).length() < HOME_RADIUS + 2.0
+    }
+
+    /// The home view: the first angle, everything in sight (gliding there).
+    pub fn go_home(&mut self) {
+        self.frame_view(false);
+        let home = Camera::default();
+        if let Some(goal) = self.fly.as_mut() {
+            goal.yaw = home.yaw;
+            goal.pitch = home.pitch;
+        }
+    }
+
+    fn draw_home(&self, p: &egui::Painter, rect: Rect, mouse: Option<Pos2>) {
+        let c = Self::home_centre(rect);
+        let hot = mouse.is_some_and(|m| Self::home_hit(rect, m));
+        p.circle_filled(c, HOME_RADIUS, Color32::from_black_alpha(if hot { 90 } else { 54 }));
+        let ink = if hot { style::TEXT } else { style::DIM };
+        let s = Stroke::new(1.6, ink);
+        // a little house: roof and walls
+        let roof = [c + vec2(-6.5, -0.5), c + vec2(0.0, -6.5), c + vec2(6.5, -0.5)];
+        p.line_segment([roof[0], roof[1]], s);
+        p.line_segment([roof[1], roof[2]], s);
+        p.line_segment([c + vec2(-4.5, -1.0), c + vec2(-4.5, 5.5)], s);
+        p.line_segment([c + vec2(4.5, -1.0), c + vec2(4.5, 5.5)], s);
+        p.line_segment([c + vec2(-4.5, 5.5), c + vec2(4.5, 5.5)], s);
+    }
+
     fn draw_gnomon(&self, p: &egui::Painter, rect: Rect, mouse: Option<Pos2>) {
+        self.draw_home(p, rect, mouse);
         let origin = pos2(rect.right() - 62.0, rect.top() + 62.0);
         p.circle_filled(origin, 48.0, Color32::from_black_alpha(36));
         let mut items = self.gnomon_items(rect);
@@ -800,5 +841,32 @@ mod device_tests {
         assert_eq!(InputDev::Auto.device(Device::Trackpad), Device::Trackpad);
         assert_eq!(InputDev::Mouse.device(Device::Trackpad), Device::Mouse);
         assert_eq!(InputDev::Trackpad.device(Device::Mouse), Device::Trackpad);
+    }
+}
+
+#[cfg(test)]
+mod home_tests {
+    use super::*;
+
+    #[test]
+    fn home_goes_to_the_first_angle_and_frames_everything() {
+        let mut app = App::new(true, None);
+        app.cam.yaw = 2.0;
+        app.cam.pitch = -0.4;
+        app.go_home();
+        let goal = app.fly.expect("the view glides home");
+        let first = Camera::default();
+        assert_eq!((goal.yaw, goal.pitch), (first.yaw, first.pitch));
+        assert!(goal.dist > 0.0 && goal.dist.is_finite());
+    }
+
+    #[test]
+    fn the_home_button_is_under_the_axis_ball_and_only_hits_itself() {
+        let rect = Rect::from_min_size(Pos2::ZERO, vec2(900.0, 600.0));
+        let c = App::home_centre(rect);
+        assert!(App::home_hit(rect, c));
+        assert!(!App::home_hit(rect, c + vec2(40.0, 0.0)));
+        assert!(c.y > rect.top() + 62.0 + 48.0, "below the ball, not on it");
+        assert!(rect.contains(c));
     }
 }
