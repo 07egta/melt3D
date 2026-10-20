@@ -132,8 +132,15 @@ fn main() -> eframe::Result {
         }
         return Ok(());
     }
-    if cpu_render::cli(&args) || bench::cli(&args) || mcp::cli(&args) {
-        return Ok(());
+    // The CLI handlers distinguish "not my command" from success/failure.
+    // Build systems must never treat failed renders, benchmarks or MCP startup as exit 0.
+    for handled in [cpu_render::cli(&args), bench::cli(&args), mcp::cli(&args)] {
+        if let Some(success) = handled {
+            if !success {
+                std::process::exit(1);
+            }
+            return Ok(());
+        }
     }
     perf::init();
     let tried = backend::tried_now();
