@@ -64,6 +64,7 @@ mod pattern_ui;
 mod perf;
 mod pipe_tool;
 mod png;
+mod polygon;
 mod precise;
 mod prims;
 mod recovery;

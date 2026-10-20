@@ -305,9 +305,14 @@ fn read_stl(b: &[u8]) -> Result<ImportedMesh, String> {
 
 // ---------------------------------------------------------------- OBJ
 
+/// The most corners one OBJ face may have.
+const MAX_FACE_CORNERS: usize = 100_000;
+
 fn read_obj(b: &[u8]) -> Result<ImportedMesh, String> {
     let mut m = ImportedMesh::default();
     for raw in b.split(|c| *c == b'\n') {
+        // everything after a # is a comment, also at the end of a line
+        let raw = raw.split(|c| *c == b'#').next().unwrap_or(&[]);
         let mut it = words(raw);
         match it.next() {
             Some(b"v") => {
@@ -325,36 +330,33 @@ fn read_obj(b: &[u8]) -> Result<ImportedMesh, String> {
             }
             Some(b"f") => {
                 let n = m.positions.len() as i64;
-                let mut first = 0u32;
-                let mut prev = 0u32;
-                let mut count = 0usize;
+                let mut idx: Vec<u32> = Vec::new();
                 for tok in it {
                     let head = tok.split(|c| *c == b'/').next().unwrap_or(&[]);
                     let i: i64 = std::str::from_utf8(head).ok().and_then(|s| s.parse().ok()).ok_or(BAD_INDEX)?;
-                    let idx = if i > 0 {
+                    let at = if i > 0 {
                         i - 1
                     } else if i < 0 {
                         n + i
                     } else {
                         return Err(BAD_INDEX.into());
                     };
-                    if idx < 0 || idx >= i64::from(u32::MAX) {
+                    if at < 0 || at >= i64::from(u32::MAX) {
                         return Err(BAD_INDEX.into());
                     }
-                    let idx = idx as u32;
-                    if count == 0 {
-                        first = idx;
-                    } else if count >= 2 {
-                        if m.triangles.len() >= MAX_TRIANGLES {
-                            return Err(TOO_MANY_TRIS.into());
-                        }
-                        m.triangles.push([first, prev, idx]);
+                    if idx.len() >= MAX_FACE_CORNERS {
+                        return Err("A face has too many vertices".into());
                     }
-                    prev = idx;
-                    count += 1;
+                    idx.push(at as u32);
                 }
-                if count < 3 {
+                if idx.len() < 3 {
                     return Err("A face has fewer than 3 vertices".into());
+                }
+                for t in crate::polygon::triangulate(&m.positions, &idx) {
+                    if m.triangles.len() >= MAX_TRIANGLES {
+                        return Err(TOO_MANY_TRIS.into());
+                    }
+                    m.triangles.push(t);
                 }
             }
             _ => {}
@@ -593,13 +595,11 @@ fn read_ply(b: &[u8]) -> Result<ImportedMesh, String> {
                 }
                 m.positions.push(q);
             } else if is_face {
-                for k in 2..idx.len() {
+                for t in crate::polygon::triangulate(&m.positions, &idx) {
                     if m.triangles.len() >= MAX_TRIANGLES {
                         return Err(TOO_MANY_TRIS.into());
                     }
-                    if let (Some(&a), Some(&b2), Some(&c)) = (idx.first(), idx.get(k - 1), idx.get(k)) {
-                        m.triangles.push([a, b2, c]);
-                    }
+                    m.triangles.push(t);
                 }
             }
         }
@@ -1103,6 +1103,25 @@ pub mod tests {
         assert!((r.mesh.surface_area() - 1.25).abs() < 1e-6);
         // windows line ends and a missing final newline
         assert_eq!(load("v 0 0 0\r\nv 1 0 0\r\nv 0 1 0\r\nf 1 2 3".as_bytes(), "t.obj").mesh.triangles.len(), 1);
+    }
+
+    #[test]
+    fn obj_comments_may_end_a_line_and_a_concave_face_keeps_its_hole() {
+        let r = load("v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3 # triangle\n".as_bytes(), "c.obj");
+        assert_eq!(r.mesh.triangles.len(), 1);
+        // the U of the report: the notch is outside the face (area 4*4 - 2*3 = 10)
+        let u = "v 0 0 0\nv 4 0 0\nv 4 4 0\nv 3 4 0\nv 3 1 0\nv 1 1 0\nv 1 4 0\nv 0 4 0\nf 1 2 3 4 5 6 7 8\n";
+        let r = load(u.as_bytes(), "u.obj");
+        assert_eq!(r.mesh.triangles.len(), 6);
+        assert!((r.mesh.surface_area() - 10.0).abs() < 1e-4, "{}", r.mesh.surface_area());
+    }
+
+    #[test]
+    fn a_concave_ply_face_is_cut_inside_its_outline_too() {
+        let ply = "ply\nformat ascii 1.0\nelement vertex 8\nproperty float x\nproperty float y\nproperty float z\nelement face 1\nproperty list uchar int vertex_indices\nend_header\n\
+            0 0 0\n4 0 0\n4 4 0\n3 4 0\n3 1 0\n1 1 0\n1 4 0\n0 4 0\n8 0 1 2 3 4 5 6 7\n";
+        let r = load(ply.as_bytes(), "u.ply");
+        assert!((r.mesh.surface_area() - 10.0).abs() < 1e-4, "{}", r.mesh.surface_area());
     }
 
     #[test]
