@@ -7,6 +7,15 @@ use egui::{
     Align2, Color32, CornerRadius, FontId, Margin, Painter, Rect, Response, Sense, Shape, Stroke, StrokeKind, TextStyle, Ui, Vec2, pos2, vec2,
 };
 
+/// A shortcut as the person should read it: the main key is Command on a Mac, Ctrl elsewhere.
+pub fn keys(text: &str) -> String {
+    keys_for(text, cfg!(target_os = "macos"))
+}
+
+fn keys_for(text: &str, mac: bool) -> String {
+    if mac { text.replace("Ctrl", "Cmd") } else { text.to_owned() }
+}
+
 #[path = "style_gfx.rs"]
 pub mod gfx;
 
@@ -823,5 +832,17 @@ mod tests {
             &mut v,
         );
         assert!((v - 5.0).abs() < 0.5, "pressing in the middle sets about half: {v}");
+    }
+}
+
+#[cfg(test)]
+mod keys_tests {
+    use super::keys_for;
+
+    #[test]
+    fn a_mac_reads_command_where_others_read_ctrl() {
+        assert_eq!(keys_for("Save  Ctrl+S", true), "Save  Cmd+S");
+        assert_eq!(keys_for("Redo (Ctrl+Shift+Z)", true), "Redo (Cmd+Shift+Z)");
+        assert_eq!(keys_for("Save  Ctrl+S", false), "Save  Ctrl+S");
     }
 }

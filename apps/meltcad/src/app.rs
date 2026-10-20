@@ -1331,11 +1331,11 @@ impl App {
                             self.new_scene(Scene::default());
                             ui.close();
                         }
-                        if ui.button("Open…  Ctrl+O").clicked() {
+                        if ui.button(style::keys("Open…  Ctrl+O")).clicked() {
                             self.open_dialog(&ctx);
                             ui.close();
                         }
-                        if ui.button("Save  Ctrl+S").clicked() {
+                        if ui.button(style::keys("Save  Ctrl+S")).clicked() {
                             self.save(&ctx, false);
                             ui.close();
                         }
@@ -1360,7 +1360,7 @@ impl App {
                             self.new_scene(Scene::default());
                             ui.close();
                         }
-                        if ui.button("Open…  Ctrl+O").clicked() {
+                        if ui.button(style::keys("Open…  Ctrl+O")).clicked() {
                             self.open_dialog(&ctx);
                             ui.close();
                         }
@@ -1384,7 +1384,7 @@ impl App {
                             crate::mesh_dialog::open(&ctx);
                             ui.close();
                         }
-                        if ui.button("Save  Ctrl+S").clicked() {
+                        if ui.button(style::keys("Save  Ctrl+S")).clicked() {
                             self.save(&ctx, false);
                             ui.close();
                         }
@@ -1397,7 +1397,7 @@ impl App {
                             crate::export_dialog::open(&ctx, None);
                             ui.close();
                         }
-                        if ui.button("Export again with last settings  Ctrl+E").clicked() {
+                        if ui.button(style::keys("Export again with last settings  Ctrl+E")).clicked() {
                             self.export_stl(&ctx);
                             ui.close();
                         }
@@ -1407,21 +1407,21 @@ impl App {
                         }
                     });
                     style::menu_button(ui, "Edit", false, |ui| {
-                        if ui.button("Copy  Ctrl+C").clicked() {
+                        if ui.button(style::keys("Copy  Ctrl+C")).clicked() {
                             self.copy(&ctx);
                             ui.close();
                         }
                         ui.add_enabled_ui(!self.scene_structure_locked(), |ui| {
-                            if ui.button("Cut  Ctrl+X").clicked() {
+                            if ui.button(style::keys("Cut  Ctrl+X")).clicked() {
                                 self.cut(&ctx);
                                 ui.close();
                             }
-                            if ui.button("Paste  Ctrl+V").clicked() {
+                            if ui.button(style::keys("Paste  Ctrl+V")).clicked() {
                                 self.paste(&ctx, None);
                                 ui.close();
                             }
                             ui.separator();
-                            if ui.button("Duplicate  Ctrl+D").clicked() {
+                            if ui.button(style::keys("Duplicate  Ctrl+D")).clicked() {
                                 self.duplicate();
                                 ui.close();
                             }
@@ -1481,7 +1481,7 @@ impl App {
                             ("Left  Ctrl+3", -pi / 2.0, 0.0),
                             ("Bottom  Ctrl+7", self.cam.yaw, -pi / 2.0),
                         ] {
-                            if ui.button(name).clicked() {
+                            if ui.button(style::keys(name)).clicked() {
                                 self.fly_look(yaw, pitch);
                                 ui.close();
                             }
@@ -1517,7 +1517,7 @@ impl App {
                     style::vsep(ui);
                     if ui
                         .add_enabled(!self.scene_structure_locked() || self.sk.live.is_some(), |ui: &mut Ui| {
-                            style::icon_button(ui, 32.0, "Undo (Ctrl+Z)", false, glyphs::undo)
+                            style::icon_button(ui, 32.0, &style::keys("Undo (Ctrl+Z)"), false, glyphs::undo)
                         })
                         .clicked()
                     {
@@ -1525,7 +1525,7 @@ impl App {
                     }
                     if ui
                         .add_enabled(!self.scene_structure_locked(), |ui: &mut Ui| {
-                            style::icon_button(ui, 32.0, "Redo (Ctrl+Shift+Z)", false, glyphs::redo)
+                            style::icon_button(ui, 32.0, &style::keys("Redo (Ctrl+Shift+Z)"), false, glyphs::redo)
                         })
                         .clicked()
                     {
@@ -1568,7 +1568,7 @@ impl App {
                                 crate::export_dialog::open(&ctx, None);
                                 ui.close();
                             }
-                            if ui.button("Export again").on_hover_text("Ctrl+E").clicked() {
+                            if ui.button("Export again").on_hover_text(style::keys("Ctrl+E")).clicked() {
                                 self.export_stl(&ctx);
                                 ui.close();
                             }
@@ -1844,7 +1844,7 @@ impl App {
                         ui.label(RichText::new(format!("{} shapes", self.scene.shape_count())).size(12.0).color(style::DIM));
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if style::pill_enabled(ui, "+ Group", false, !self.scene_structure_locked())
-                                .on_hover_text("New empty group.\nTo nest: Shift+click several shapes or groups in the list, then press Ctrl+G")
+                                .on_hover_text(style::keys("New empty group.\nTo nest: Shift+click several shapes or groups in the list, then press Ctrl+G"))
                                 .clicked()
                             {
                                 self.add_group();
@@ -1896,7 +1896,7 @@ impl App {
                         ("Ctrl+Z / Ctrl+Shift+Z", "Undo / Redo"),
                     ] {
                         ui.horizontal(|ui| {
-                            ui.add_sized([150.0, 18.0], egui::Label::new(RichText::new(k).size(12.0).color(style::ACCENT)));
+                            ui.add_sized([150.0, 18.0], egui::Label::new(RichText::new(style::keys(k)).size(12.0).color(style::ACCENT)));
                             ui.label(RichText::new(v).size(12.0).color(style::TEXT));
                         });
                     }
