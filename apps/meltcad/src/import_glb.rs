@@ -10,6 +10,51 @@ use crate::import_mesh::{
     Affine, BAD_INDEX, BAD_NUMBER, CUT_OFF, ImportedMesh, MAX_TRIANGLES, MAX_VERTICES, NO_SHAPE, TOO_MANY_TRIS, TOO_MANY_VERTS, append_transformed,
 };
 
+/// The meshes that `read_glb` would place: those of the nodes of the active scene (or, with no
+/// scene, of the root nodes; with no nodes at all, every mesh).
+fn reachable_meshes(json: &Value) -> Vec<usize> {
+    let nodes = json.get("nodes").and_then(Value::as_array);
+    let roots: Vec<usize> = match json.get("scenes").and_then(|s| s.get(usz(json.get("scene")).unwrap_or(0))).and_then(|s| s.get("nodes")).and_then(Value::as_array) {
+        Some(a) => a.iter().filter_map(|v| usz(Some(v))).collect(),
+        None => match nodes {
+            Some(nodes) => {
+                let mut is_child = vec![false; nodes.len()];
+                for n in nodes {
+                    for c in n.get("children").and_then(Value::as_array).into_iter().flatten() {
+                        if let Some(slot) = usz(Some(c)).and_then(|i| is_child.get_mut(i)) {
+                            *slot = true;
+                        }
+                    }
+                }
+                (0..nodes.len()).filter(|i| !is_child[*i]).collect()
+            }
+            None => return (0..json.get("meshes").and_then(Value::as_array).map_or(0, Vec::len)).collect(),
+        },
+    };
+    let mut out = Vec::new();
+    let mut stack: Vec<(usize, usize)> = roots.into_iter().map(|r| (r, 0)).collect();
+    let mut visits = 0usize;
+    while let Some((i, depth)) = stack.pop() {
+        visits += 1;
+        if visits > MAX_NODE_VISITS || depth > MAX_DEPTH {
+            break;
+        }
+        let Some(n) = nodes.and_then(|a| a.get(i)) else { continue };
+        if let Some(m) = usz(n.get("mesh"))
+            && !out.contains(&m)
+        {
+            out.push(m);
+        }
+        for c in n.get("children").and_then(Value::as_array).into_iter().flatten() {
+            if let Some(c) = usz(Some(c)) {
+                stack.push((c, depth + 1));
+            }
+        }
+    }
+    out.sort_unstable();
+    out
+}
+
 /// Read only appearance metadata; never changes geometry decoding or allocates image pixels.
 pub(crate) fn appearance_glb(bytes: &[u8]) -> crate::import_mesh::AppearanceInfo {
     use crate::import_mesh::AppearanceInfo;
@@ -38,7 +83,9 @@ pub(crate) fn appearance_glb(bytes: &[u8]) -> crate::import_mesh::AppearanceInfo
     let mut used: Vec<usize> = Vec::new();
     let mut vertex_colours = false;
     if let Some(meshes) = doc.get("meshes").and_then(Value::as_array) {
-        for mesh in meshes {
+        // only the meshes the model really takes from the file (the active scene), as read_glb does
+        let reached = reachable_meshes(&doc);
+        for mesh in reached.iter().filter_map(|i| meshes.get(*i)) {
             if let Some(primitives) = mesh.get("primitives").and_then(Value::as_array) {
                 for p in primitives {
                     if p.get("mode").and_then(Value::as_u64).unwrap_or(4) < 4 {
@@ -364,8 +411,8 @@ impl Walk<'_> {
     }
 }
 
-/// Read a GLB file. glTF is metres by definition but the numbers are taken as they are (they are
-/// scaled to the wanted size afterwards, and our own exporter writes millimetres).
+/// Read a GLB file. glTF is metres by definition: the numbers are turned into millimetres (and
+/// our own exporter writes metres, so a part keeps its real size in other programs).
 pub fn read_glb(b: &[u8]) -> Result<ImportedMesh, String> {
     if b.get(..4) != Some(b"glTF") {
         return Err(BAD_GLB.into());
@@ -452,6 +499,15 @@ pub fn read_glb(b: &[u8]) -> Result<ImportedMesh, String> {
     if w.out.triangles.is_empty() {
         return Err(NO_SHAPE.into());
     }
+    // glTF coordinates are metres; the model is in millimetres
+    for p in &mut w.out.positions {
+        for c in p.iter_mut() {
+            *c *= 1000.0;
+            if !c.is_finite() || c.abs() > crate::import_mesh::MAX_COORD {
+                return Err("The GLB is too large".into());
+            }
+        }
+    }
     Ok(w.out)
 }
 
@@ -519,21 +575,21 @@ mod tests {
         let bin = tri_bin();
         let m = read_glb(&glb(&tri_doc(json!([{"mesh": 0}]), json!([0])), &bin)).unwrap();
         assert_eq!((m.positions.len(), m.triangles.len()), (3, 1));
-        assert!((m.surface_area() - 3.0).abs() < 1e-6);
+        assert!((m.surface_area() - 3.0e6).abs() < 10.0, "metres become millimetres");
         // translation + scale + rotation by 90 degrees about z (quaternion), parent and child
         let s = 0.5f64.sqrt();
         let nodes = json!([{"children": [1], "translation": [10.0, 0.0, 0.0], "scale": [2.0, 2.0, 2.0]}, {"mesh": 0, "rotation": [0.0, 0.0, s, s]}]);
         let m = read_glb(&glb(&tri_doc(nodes, json!([0])), &bin)).unwrap();
-        assert!((m.surface_area() - 12.0).abs() < 1e-4);
+        assert!((m.surface_area() - 12.0e6).abs() < 500.0);
         let (lo, hi) = m.bounds().unwrap();
-        // x' = 10 + 2*(-y): [-6, 10]; y' = 2*x: [0, 4]
-        assert!((lo[0] - 4.0).abs() < 1e-4 && (hi[0] - 10.0).abs() < 1e-4, "{lo:?} {hi:?}");
-        assert!(lo[1].abs() < 1e-4 && (hi[1] - 4.0).abs() < 1e-4);
+        // x' = 10 + 2*(-y): [4, 10]; y' = 2*x: [0, 4] (metres, read as millimetres)
+        assert!((lo[0] - 4000.0).abs() < 0.1 && (hi[0] - 10000.0).abs() < 0.1, "{lo:?} {hi:?}");
+        assert!(lo[1].abs() < 0.1 && (hi[1] - 4000.0).abs() < 0.1);
         // a matrix (column major): mirror x -> the winding is flipped so the area stays positive
         let nodes = json!([{"mesh": 0, "matrix": [-1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 5.0, 0.0, 0.0, 1.0]}]);
         let m = read_glb(&glb(&tri_doc(nodes, json!([0])), &bin)).unwrap();
         let (lo, hi) = m.bounds().unwrap();
-        assert!((lo[0] - 3.0).abs() < 1e-5 && (hi[0] - 5.0).abs() < 1e-5);
+        assert!((lo[0] - 3000.0).abs() < 0.1 && (hi[0] - 5000.0).abs() < 0.1);
         let t = m.triangles[0];
         let p = |i: u32| m.positions[i as usize];
         let (a, b, c) = (p(t[0]), p(t[1]), p(t[2]));
@@ -563,7 +619,7 @@ mod tests {
                 "bufferViews": [{"buffer": 0, "byteLength": 48}], "buffers": [{"byteLength": 48}]});
             let m = read_glb(&glb(&doc, &quad)).unwrap();
             assert_eq!(m.triangles.len(), 2);
-            assert!((m.surface_area() - 1.0).abs() < 1e-6);
+            assert!((m.surface_area() - 1.0e6).abs() < 10.0);
         }
     }
 
@@ -581,7 +637,36 @@ mod tests {
             "accessors": [{"bufferView": 0, "componentType": 5122, "normalized": true, "count": 3, "type": "VEC3"}],
             "bufferViews": [{"buffer": 0, "byteLength": 24, "byteStride": 8}], "buffers": [{"byteLength": 24}]});
         let m = read_glb(&glb(&doc, &bin)).unwrap();
-        assert!((m.surface_area() - 0.5).abs() < 1e-6);
+        assert!((m.surface_area() - 0.5e6).abs() < 10.0);
+    }
+
+    #[test]
+    fn the_colour_comes_from_the_mesh_that_is_placed_not_from_an_unused_one() {
+        let bin = tri_bin();
+        let mut doc = tri_doc(json!([{"mesh": 1}]), json!([0]));
+        let prim = doc["meshes"][0]["primitives"][0].clone();
+        let mut red = prim.clone();
+        red["material"] = json!(0);
+        let mut blue = prim;
+        blue["material"] = json!(1);
+        doc["meshes"] = json!([{"primitives": [red]}, {"primitives": [blue]}]);
+        doc["materials"] = json!([
+            {"pbrMetallicRoughness": {"baseColorFactor": [1.0, 0.0, 0.0, 1.0]}},
+            {"pbrMetallicRoughness": {"baseColorFactor": [0.0, 0.0, 1.0, 1.0]}}
+        ]);
+        let a = appearance_glb(&glb(&doc, &bin));
+        let c = a.material.expect("a colour").color;
+        assert!(c[2] > 0.5 && c[0] < 0.5, "blue expected, got {c:?}");
+        assert!(!a.varies, "the unused red mesh must not make the file look multi-coloured");
+    }
+
+    #[test]
+    fn a_one_metre_cube_is_a_thousand_millimetres() {
+        let bin = tri_bin();
+        let m = read_glb(&glb(&tri_doc(json!([{"mesh": 0}]), json!([0])), &bin)).unwrap();
+        // tri_bin is 2 x 3 metres: the size is in millimetres
+        let s = m.size();
+        assert!(s.iter().any(|x| *x >= 999.0), "{s:?}");
     }
 
     #[test]
