@@ -48,6 +48,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("anim.render", "{path, size?, gpu?}: the animation as a GIF (gpu: true draws it like the window does, when there is a graphics card)"),
     ("save", "{path}: write the scene file"),
     ("load", "{path}: read a scene file"),
+    ("scene.add_file", "{path}: add another scene file to this one, in a new group that melts with what is there"),
     ("render", "{path, size?}: four views as a PNG (CPU picture)"),
 ];
 
@@ -169,6 +170,11 @@ pub fn execute(scene: &mut Scene, cmd: &Value) -> Result<Value, String> {
             let path = text(obj, "path")?;
             let t = std::fs::read_to_string(&path).map_err(|e| format!("Cannot read {path}: {e}"))?;
             *scene = Scene::from_json(&t)?;
+            Ok(summary(scene))
+        }
+        "scene.add_file" => {
+            let path = text(obj, "path")?;
+            crate::add_file::add_file(scene, std::path::Path::new(&path))?;
             Ok(summary(scene))
         }
         "render" => {
@@ -965,6 +971,9 @@ mod tests {
             json!({}),
             json!({"cmd": 3}),
             json!({"cmd": "nope"}),
+            json!({"cmd": "scene.add_file"}),
+            json!({"cmd": "scene.add_file", "path": 7}),
+            json!({"cmd": "scene.add_file", "path": "/nonexistent/meltcad-add-file.meltcad"}),
             json!({"cmd": "shape.add"}),
             json!({"cmd": "shape.add", "kind": "Banana"}),
             json!({"cmd": "shape.add", "kind": "Box", "size": "big"}),
