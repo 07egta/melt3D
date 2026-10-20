@@ -119,7 +119,12 @@ fn grid(col: V3, gp: V3, footprint: f32, fade: f32, below: bool) -> V3 {
             [((gp[0] / scale - 0.5).rem_euclid(1.0) - 0.5).abs() / (w / scale), ((gp[1] / scale - 0.5).rem_euclid(1.0) - 0.5).abs() / (w / scale)];
         1.0 - a[0].min(a[1]).min(1.0)
     };
-    let line = line_of(gs);
+    // endless plane: a level of lines fades only when it gets too dense to tell apart
+    let dense = |spacing: f32| {
+        let t = ((footprint / spacing - 0.12) / (0.45 - 0.12)).clamp(0.0, 1.0);
+        1.0 - t * t * (3.0 - 2.0 * t)
+    };
+    let line = line_of(gs) * dense(gs);
     let axis_x = 1.0 - (gp[1].abs() / w).min(1.0);
     let axis_y = 1.0 - (gp[0].abs() / w).min(1.0);
     let mut c = col;
@@ -127,7 +132,7 @@ fn grid(col: V3, gp: V3, footprint: f32, fade: f32, below: bool) -> V3 {
         let fade = fade * 0.6;
         c = mix(c, add(c, [0.04; 3]), line * 0.5 * fade);
     } else {
-        let major = line_of(gs * 10.0);
+        let major = line_of(gs * 10.0) * dense(gs * 10.0);
         c = mix(c, add(c, [0.03; 3]), line * 0.5 * fade);
         c = mix(c, add(c, [0.05; 3]), major * 0.6 * fade);
     }
@@ -233,9 +238,8 @@ fn pixel(s: &Setup, x: usize, y: usize) -> [u8; 4] {
     let footprint = |gp: V3| s.cam.mm_per_px(gp, h);
     if above && t_ground < 1e8 && hit.as_ref().is_none_or(|(t, _)| t_ground < *t) && (grid_on || floor_on) {
         let gp = add(o, mul(rd, t_ground));
-        let fade = (1.0 - len([gp[0], gp[1], 0.0]) / 600.0).clamp(0.0, 1.0);
         if grid_on {
-            col = grid(col, gp, footprint(gp), fade, false);
+            col = grid(col, gp, footprint(gp), 1.0, false);
         }
         if floor_on && env.shadow > 0.0 {
             // the blob's shadow on the ground
@@ -258,8 +262,7 @@ fn pixel(s: &Setup, x: usize, y: usize) -> [u8; 4] {
     // seen from below the ground is see-through: only its lines are drawn
     if !above && t_ground < 1e8 && hit.as_ref().is_none_or(|(t, _)| t_ground < *t) && grid_on {
         let gp = add(o, mul(rd, t_ground));
-        let fade = (1.0 - len([gp[0], gp[1], 0.0]) / 600.0).clamp(0.0, 1.0);
-        col = grid(col, gp, footprint(gp), fade, true);
+        col = grid(col, gp, footprint(gp), 1.0, true);
     }
     let [mut r, mut g, mut b] = encode(col, env.exposure);
     if let Some(n) = surf_n {
