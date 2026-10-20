@@ -13,13 +13,25 @@ const ADDED_BLEND: f32 = 12.0;
 /// The longest name the new group takes from a file name.
 const MAX_NAME_CHARS: usize = 60;
 
-fn max_uid(sc: &Scene) -> u32 {
-    sc.groups.iter().flat_map(|g| g.shapes.iter().map(|s| s.uid).chain(std::iter::once(g.uid))).max().unwrap_or(0)
+pub(crate) fn max_uid(sc: &Scene) -> u32 {
+    // Every local identifier and reference must be rebased together on import.
+    // Also reserve IDs of deleted shapes with persistent animation tracks.
+    let mut max = sc.groups.iter().flat_map(|g| g.shapes.iter().map(|s| s.uid).chain(std::iter::once(g.uid)))
+        .chain(sc.anim.tracks.iter().map(|t| t.uid)).max().unwrap_or(0);
+    for g in &sc.groups {
+        max = max.max(g.instance_of.unwrap_or(0));
+        match &g.pattern {
+            Some(Pattern::Path { source, .. }) => max = max.max(*source),
+            Some(Pattern::Geometry { source: Source::Shape(uid) | Source::Group(uid), .. }) => max = max.max(*uid),
+            _ => {}
+        }
+    }
+    max
 }
 
 /// Give every number the added file links things by (copies, patterns) a place of its own, so
 /// nothing it points at can be a group or shape of the scene it is added to.
-fn shift_uids(sc: &mut Scene, by: u32) {
+pub(crate) fn shift_uids(sc: &mut Scene, by: u32) {
     let bump = |u: &mut u32| {
         if *u != 0 {
             *u = u.saturating_add(by);
@@ -64,7 +76,11 @@ fn merge_at(scene: &mut Scene, mut other: Scene, name: &str, path: Option<&Path>
         return Err(format!("Up to {MAX_SHAPES} shapes"));
     }
     crate::mesh::can_add(scene, other.groups.iter().flat_map(|g| g.shapes.iter()))?;
-    shift_uids(&mut other, max_uid(scene));
+    let offset = max_uid(scene);
+    if offset.checked_add(max_uid(&other)).is_none() {
+        return Err("Too many identifiers to add this file safely".into());
+    }
+    shift_uids(&mut other, offset);
     let at = at.min(scene.groups.len());
     let mut block: Vec<Group> = Vec::new();
     if wrap {
