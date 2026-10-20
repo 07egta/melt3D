@@ -74,7 +74,7 @@ impl<T: Clone + Send + 'static> Task<T> {
 struct Dlg {
     opts: Options,
     /// What the estimate and the check were made for.
-    snap: Option<(Scene, Option<Pick>, Scope, bool)>,
+    snap: Option<(Scene, Option<Pick>, Scope, bool, f32)>,
     est: Task<Estimate>,
     check: Task<PrintCheck>,
     /// The check should start by itself on the next frame.
@@ -364,8 +364,10 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
     running_card(app, ctx);
     let Some(mut d) = ctx.data_mut(|m| m.remove_temp::<Dlg>(id())).filter(|d| d.open) else { return };
     // the estimate and the check are about the scene as it is now
-    let key = (app.scene.clone(), app.sel, d.opts.scope, d.opts.ignore_paint);
-    let stale = d.snap.as_ref().is_none_or(|s| s.0 != key.0 || s.1 != key.1 || s.2 != key.2 || s.3 != key.3);
+    // The print check reports physical mm, so changing export scale
+    // invalidates it even when the scene's geometry is unchanged.
+    let key = (app.scene.clone(), app.sel, d.opts.scope, d.opts.ignore_paint, d.opts.scale_pct);
+    let stale = d.snap.as_ref().is_none_or(|s| s.0 != key.0 || s.1 != key.1 || s.2 != key.2 || s.3 != key.3 || s.4 != key.4);
     if stale {
         d.snap = Some(key);
         d.check.reset();
