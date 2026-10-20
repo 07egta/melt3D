@@ -766,6 +766,29 @@ impl App {
                 p[0] = -p[0];
             }
             c.outline.reverse();
+            // Reflect every representation of the model, not just the main
+            // 2D outline. Curve/Sweep use path nodes and optional Bezier
+            // handles; Loft uses an independent upper outline.
+            for p in &mut c.outline2 {
+                p[0] = -p[0];
+            }
+            c.outline2.reverse();
+            for p in &mut c.path {
+                p[0] = -p[0];
+            }
+            for h in &mut c.curve_handles {
+                h.incoming[0] = -h.incoming[0];
+                h.outgoing[0] = -h.outgoing[0];
+            }
+            if let Some(plane) = &mut c.guide_plane {
+                for hole in &mut plane.holes {
+                    for p in hole.iter_mut() {
+                        p[0] = -p[0];
+                    }
+                    hole.reverse();
+                }
+            }
+            c.uid = 0; // The mirrored copy needs its own animation/pattern identity.
             c.name = format!("{} (mirror)", c.name);
             self.scene.groups[g].shapes.insert(s + 1, c);
             self.sel = Some(Pick::Shape(g, s + 1));
@@ -2832,6 +2855,41 @@ mod tests {
             assert_eq!(app.sk.path, path);
             app.resolve_pending_file_action(&ctx, PendingFileDecision::Cancel);
             assert!(app.pending_file_action.is_none());
+        }
+    }
+
+    #[test]
+    fn curve_mirror_reflects_path_and_bezier_handle_geometry() {
+        use crate::model::{CurveHandles, CurveNodeMode, Kind, Material, Pick, Shape};
+        let mut app = App::new(true, None);
+        let mut curve = Shape::new(Kind::Curve, [40.0, 0.0, 10.0], Material::default());
+        curve.path = vec![[5.0, 0.0, 0.0, 1.0], [15.0, 0.0, 0.0, 1.0], [15.0, 10.0, 0.0, 1.0]];
+        curve.params = [0.0, 0.0, 0.0, 1.0];
+        curve.blend = 0.0;
+        curve.curve_handles = vec![CurveHandles {
+            mode: CurveNodeMode::Corner, incoming: [2.0, 3.0, 0.0], outgoing: [4.0, 5.0, 0.0]
+        }];
+        app.scene.groups[0].shapes.clear();
+        app.scene.groups[0].shapes.push(curve.clone());
+        app.sel = Some(Pick::Shape(0, 0));
+        app.mirror_copy();
+        let mirrored = app.scene.shape(0, 1).unwrap();
+        assert_eq!(mirrored.pos[0], -40.0);
+        assert_eq!(mirrored.path[0][0], -5.0);
+        assert_eq!(mirrored.path[1][0], -15.0);
+        assert_eq!(mirrored.curve_handles[0].incoming[0], -2.0);
+        assert_eq!(mirrored.curve_handles[0].outgoing[0], -4.0);
+        let scene_of = |sh: Shape| {
+            let mut g = crate::model::Group::new("curve");
+            g.shapes.push(sh);
+            crate::model::Scene { groups: vec![g], ..Default::default() }
+        };
+        let a = crate::sdf::Field::new(&scene_of(curve));
+        let b = crate::sdf::Field::new(&scene_of(mirrored.clone()));
+        for p in [[55.0, 5.0, 10.0], [45.0, 0.0, 10.0], [50.0, 9.0, 10.0]] {
+            let source = a.distance(p);
+            let reflected = b.distance([-p[0], p[1], p[2]]);
+            assert!((source - reflected).abs() < 0.01, "{p:?}: {source} != {reflected}");
         }
     }
 
