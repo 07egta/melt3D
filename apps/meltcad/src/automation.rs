@@ -129,6 +129,8 @@ fn run(scene: &mut Scene, cmd: &Value) -> Result<Value, String> {
             let mut v = serde_json::to_value(scene.melt).map_err(|e| e.to_string())?;
             merge(&mut v, &Value::Object(without(obj, &["cmd", "token"])));
             scene.melt = serde_json::from_value(v).map_err(|e| format!("Bad melt settings: {e}"))?;
+            // Report the values that will actually be used, not pre-sanitize input.
+            scene.sanitize();
             Ok(json!({"amount": scene.melt.amount, "drip": scene.melt.drip, "ripple": scene.melt.ripple}))
         }
         "extrude" => extrude(scene, obj),
@@ -221,7 +223,7 @@ fn run(scene: &mut Scene, cmd: &Value) -> Result<Value, String> {
     };
     // Read-only requests must not silently change a live, possibly unsanitized scene.
     // Mutating commands still sanitize before returning the final state.
-    if !matches!(name, "commands" | "scene.get" | "scene.summary" | "render" | "anim.get" | "ui.precise") {
+    if !matches!(name, "commands" | "scene.get" | "scene.summary" | "render" | "anim.get" | "ui.precise" | "melt.set") {
         scene.sanitize();
     }
     out
@@ -754,6 +756,18 @@ mod tests {
 
     fn run(scene: &mut Scene, v: Value) -> Result<Value, String> {
         execute(scene, &v)
+    }
+
+    #[test]
+    fn melt_set_replies_with_sanitized_effective_values() {
+        let mut sc = Scene::default();
+        let reply = run(&mut sc, json!({"cmd": "melt.set", "amount": 999, "drip": -10, "ripple": 0})).expect("melt");
+        assert_eq!(reply["amount"], json!(10.0));
+        assert_eq!(reply["drip"], json!(0.0));
+        assert_eq!(reply["ripple"], json!(0.3));
+        assert_eq!(reply["amount"], json!(sc.melt.amount));
+        assert_eq!(reply["drip"], json!(sc.melt.drip));
+        assert_eq!(reply["ripple"], json!(sc.melt.ripple));
     }
 
     #[test]
