@@ -219,8 +219,11 @@ fn run(scene: &mut Scene, cmd: &Value) -> Result<Value, String> {
         }
         other => Err(format!("Unknown command \"{other}\". Try {{\"cmd\":\"commands\"}}")),
     };
-    // whatever a command did, the scene stays inside the limits every other path keeps
-    scene.sanitize();
+    // Read-only requests must not silently change a live, possibly unsanitized scene.
+    // Mutating commands still sanitize before returning the final state.
+    if !matches!(name, "commands" | "scene.get" | "scene.summary" | "render" | "anim.get" | "ui.precise") {
+        scene.sanitize();
+    }
     out
 }
 
@@ -293,6 +296,9 @@ fn shape_add(scene: &mut Scene, obj: &Map<String, Value>) -> Result<Value, Strin
     }
     let kind: Kind = serde_json::from_value(obj.get("kind").cloned().ok_or("Missing \"kind\" (Sphere, Box, Cylinder, ...)")?)
         .map_err(|_| "Unknown kind. Examples: Sphere, Box, Cylinder, Torus, Cone, Capsule, Hemi, Tube, Wedge, Star".to_string())?;
+    if kind == Kind::Mesh {
+        return Err("Mesh needs imported volume data; use Import mesh instead of shape.add".into());
+    }
     let mut shape = Shape::new(kind, [0.0, 0.0, 20.0], Material::default());
     let mut v = serde_json::to_value(&shape).map_err(|e| e.to_string())?;
     merge(&mut v, &shape_patch(obj));
@@ -304,6 +310,7 @@ fn shape_add(scene: &mut Scene, obj: &Map<String, Value>) -> Result<Value, Strin
         Some(_) => index(obj, "group")?,
         None => scene.groups.len() - 1,
     };
+    editable_group(scene, g)?;
     let group = scene.groups.get_mut(g).ok_or("No such group")?;
     group.shapes.push(shape);
     Ok(json!({"group": g, "shape": group.shapes.len() - 1}))
@@ -318,7 +325,11 @@ fn shape_set(scene: &mut Scene, obj: &Map<String, Value>) -> Result<Value, Strin
         merge(&mut patch, &json!({"kind": k}));
     }
     merge(&mut v, &patch);
-    *shape = serde_json::from_value(v).map_err(|e| format!("Bad shape field: {e}"))?;
+    let updated: Shape = serde_json::from_value(v).map_err(|e| format!("Bad shape field: {e}"))?;
+    if updated.kind == Kind::Mesh && updated.volume.is_none() {
+        return Err("Mesh needs imported volume data; use Import mesh instead of shape.set".into());
+    }
+    *shape = updated;
     Ok(json!({"group": g, "shape": s}))
 }
 
@@ -743,6 +754,45 @@ mod tests {
 
     fn run(scene: &mut Scene, v: Value) -> Result<Value, String> {
         execute(scene, &v)
+    }
+
+    #[test]
+    fn read_only_commands_never_sanitize_or_mutate_a_live_scene() {
+        let mut sc = Scene::default();
+        sc.groups[0].shapes[0].scale = [0.0, 0.0, 0.0];
+        let before = sc.clone();
+        for name in ["commands", "scene.get", "scene.summary", "anim.get"] {
+            assert!(run(&mut sc, json!({"cmd": name})).is_ok(), "{name}");
+            assert_eq!(sc, before, "{name} must not mutate any scene state");
+        }
+    }
+
+    #[test]
+    fn mesh_commands_cannot_claim_success_without_volume_data() {
+        let mut sc = Scene::default();
+        let before = sc.clone();
+        assert!(run(&mut sc, json!({"cmd":"shape.add", "kind":"Mesh", "group":0})).is_err());
+        assert_eq!(sc, before);
+        assert!(run(&mut sc, json!({"cmd":"shape.set", "group":0, "shape":0, "kind":"Mesh"})).is_err());
+        assert_eq!(sc, before);
+    }
+
+    #[test]
+    fn shape_add_and_extrude_reject_linked_copy_groups_without_losing_geometry() {
+        let mut sc = Scene::default();
+        let original_uid = sc.groups[0].uid;
+        let mut linked = Group::new("Linked copy");
+        linked.instance_of = Some(original_uid);
+        sc.groups.push(linked);
+        let before = sc.clone();
+        for command in [
+            json!({"cmd":"shape.add", "kind":"Box", "group":1}),
+            json!({"cmd":"shape.add", "kind":"Box"}),
+            json!({"cmd":"extrude", "group":1, "points":[[0,0],[10,0],[10,10],[0,10]], "height":10}),
+        ] {
+            assert!(run(&mut sc, command.clone()).is_err(), "{command}");
+            assert_eq!(sc, before, "no successful-looking disappearing geometry");
+        }
     }
 
     #[test]
