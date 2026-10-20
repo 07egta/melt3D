@@ -80,7 +80,9 @@ pub fn overlays(app: &mut SolveApp, ui: &mut egui::Ui, rect: Rect) {
     if !app.ui.easy_layout {
         return;
     }
-    top_left(app, ui, rect);
+    if app.show_easy_top_bar {
+        top_left(app, ui, rect);
+    }
     tool_strip(app, ui, rect);
 }
 
@@ -442,6 +444,28 @@ mod tests {
         assert!(h.app.ui.pick_off.is_empty());
         h.step(&json!({"click": {"handle": "easy:pick:body"}})).unwrap();
         assert!(h.app.ui.pick_bodies);
+    }
+
+    #[test]
+    fn a_host_can_hide_the_top_bar_without_hiding_modelling_tools_or_navigation() {
+        let mut h = easy();
+        assert!(h.app.show_easy_top_bar);
+        assert_eq!(crate::scenario::handles("easy:pick:").len(), 4);
+        assert_eq!(crate::scenario::handles("easy:switch:").len(), 2);
+
+        h.app.show_easy_top_bar = false;
+        h.frames(2);
+        assert!(crate::scenario::handles("easy:pick:").is_empty());
+        assert!(crate::scenario::handles("easy:switch:").is_empty());
+        assert!(crate::scenario::rect_of("easy:strip").is_some());
+        assert!(crate::scenario::rect_of("nav:outer").is_some());
+        h.step(&json!({"click": {"handle": "easy:tool:sketch.line"}})).unwrap();
+        assert!(h.app.session.active_sketch.is_some(), "modelling tools remain usable when the top bar is hidden");
+
+        h.app.show_easy_top_bar = true;
+        h.frames(2);
+        assert_eq!(crate::scenario::handles("easy:pick:").len(), 4);
+        assert_eq!(crate::scenario::handles("easy:switch:").len(), 2);
     }
 
     #[test]
