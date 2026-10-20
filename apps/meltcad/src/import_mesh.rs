@@ -474,18 +474,25 @@ impl Values<'_> {
 
 fn read_ply(b: &[u8]) -> Result<ImportedMesh, String> {
     const BAD: &str = "The PLY header is wrong";
-    let end = b.windows(10).take(1 << 16).position(|w| w == b"end_header").ok_or(BAD)?;
+    // Only an entire header line can terminate the header. A comment may
+    // legally contain the text "end_header" without ending the header.
+    let header_limit = b.len().min(1 << 16);
+    let mut offset = 0usize;
+    let mut boundary = None;
+    for line in b[..header_limit].split_inclusive(|&byte| byte == b'\n') {
+        if !line.ends_with(b"\n") {
+            break;
+        }
+        let line_without_nl = &line[..line.len() - 1];
+        let content = line_without_nl.strip_suffix(b"\r").unwrap_or(line_without_nl);
+        if content == b"end_header" {
+            boundary = Some((offset, offset + line.len()));
+            break;
+        }
+        offset += line.len();
+    }
+    let (end, body_start) = boundary.ok_or(BAD)?;
     let head = std::str::from_utf8(b.get(..end).ok_or(BAD)?).map_err(|_| BAD.to_string())?;
-    let mut body_start = end + 10;
-    // the header line ends with \n or \r\n
-    if b.get(body_start) == Some(&b'\r') {
-        body_start += 1;
-    }
-    if b.get(body_start) == Some(&b'\n') {
-        body_start += 1;
-    } else {
-        return Err(BAD.into());
-    }
     let mut enc = None;
     let mut elements: Vec<Element> = Vec::new();
     for (i, line) in head.lines().enumerate() {
@@ -530,6 +537,10 @@ fn read_ply(b: &[u8]) -> Result<ImportedMesh, String> {
     let mut v = Values { enc, body, pos: 0 };
     let mut m = ImportedMesh::default();
     let mut idx: Vec<u32> = Vec::new();
+    // PLY elements may appear in any declared order, including faces before vertices.
+    // Keep a compact offset table and triangulate only after all vertices are loaded.
+    let mut face_ranges: Vec<(usize, usize)> = Vec::new();
+    let mut face_indices: Vec<u32> = Vec::new();
     for el in &elements {
         // the body must be able to hold the rows before anything is reserved
         let remaining = body.len().saturating_sub(v.pos);
@@ -594,14 +605,25 @@ fn read_ply(b: &[u8]) -> Result<ImportedMesh, String> {
                     return Err(BAD_NUMBER.into());
                 }
                 m.positions.push(q);
-            } else if is_face {
-                for t in crate::polygon::triangulate(&m.positions, &idx) {
-                    if m.triangles.len() >= MAX_TRIANGLES {
-                        return Err(TOO_MANY_TRIS.into());
-                    }
-                    m.triangles.push(t);
+            } else if is_face && idx.len() >= 3 {
+                if face_indices.len().saturating_add(idx.len()) > MAX_TRIANGLES.saturating_mul(3) {
+                    return Err(TOO_MANY_TRIS.into());
                 }
+                face_ranges.push((face_indices.len(), idx.len()));
+                face_indices.extend_from_slice(&idx);
             }
+        }
+    }
+    for (start, len) in face_ranges {
+        let face = &face_indices[start..start + len];
+        if face.iter().any(|&v| v as usize >= m.positions.len()) {
+            return Err(BAD_INDEX.into());
+        }
+        for t in crate::polygon::triangulate(&m.positions, face) {
+            if m.triangles.len() >= MAX_TRIANGLES {
+                return Err(TOO_MANY_TRIS.into());
+            }
+            m.triangles.push(t);
         }
     }
     Ok(m)
@@ -1145,6 +1167,25 @@ pub mod tests {
         let r = load(u.as_bytes(), "u.obj");
         assert_eq!(r.mesh.triangles.len(), 6);
         assert!((r.mesh.surface_area() - 10.0).abs() < 1e-4, "{}", r.mesh.surface_area());
+    }
+
+    #[test]
+    fn ply_header_end_marker_inside_comment_is_not_a_terminator() {
+        let normal = ply_ascii();
+        let with_comment = normal.replace("comment tetra", "comment end_header is mentioned here");
+        let base = load(normal.as_bytes(), "tetra.ply");
+        let again = load(with_comment.as_bytes(), "tetra.ply");
+        assert_eq!(base.mesh.positions, again.mesh.positions);
+        assert_eq!(base.mesh.triangles, again.mesh.triangles);
+    }
+
+    #[test]
+    fn ply_faces_before_vertices_still_triangulate_concave_polygons() {
+        let ply = "ply\nformat ascii 1.0\nelement face 1\nproperty list uchar int vertex_indices\nelement vertex 8\nproperty float x\nproperty float y\nproperty float z\nend_header\n\\
+            8 0 1 2 3 4 5 6 7\n0 0 0\n4 0 0\n4 4 0\n3 4 0\n3 1 0\n1 1 0\n1 4 0\n0 4 0\n";
+        let imported = load(ply.as_bytes(), "concave.ply");
+        assert!((imported.mesh.surface_area() - 10.0).abs() < 1e-4, "{}", imported.mesh.surface_area());
+        assert_eq!(imported.mesh.triangles.len(), 6);
     }
 
     #[test]
