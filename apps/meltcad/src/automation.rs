@@ -48,7 +48,9 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("anim.render", "{path, size?, gpu?}: the animation as a GIF (gpu: true draws it like the window does, when there is a graphics card)"),
     ("save", "{path}: write the scene file"),
     ("load", "{path}: read a scene file"),
-    ("scene.add_file", "{path}: add another scene file to this one, in a new group that melts with what is there"),
+    ("scene.add_file", "{path}: add another scene file to this one, in a new group (a piece of the big file) that melts with what is there"),
+    ("piece.reload", "{group}: read the file of a piece again and replace the piece with it"),
+    ("piece.save", "{group, path}: write a piece into a file of its own (the piece remembers it)"),
     ("render", "{path, size?}: four views as a PNG (CPU picture)"),
 ];
 
@@ -171,6 +173,17 @@ pub fn execute(scene: &mut Scene, cmd: &Value) -> Result<Value, String> {
             let t = std::fs::read_to_string(&path).map_err(|e| format!("Cannot read {path}: {e}"))?;
             *scene = Scene::from_json(&t)?;
             Ok(summary(scene))
+        }
+        "piece.reload" => {
+            let g = index(obj, "group")?;
+            crate::add_file::reload_piece(scene, g)?;
+            Ok(summary(scene))
+        }
+        "piece.save" => {
+            let g = index(obj, "group")?;
+            let path = text(obj, "path")?;
+            crate::add_file::save_piece(scene, g, std::path::Path::new(&path))?;
+            Ok(json!({"saved": path}))
         }
         "scene.add_file" => {
             let path = text(obj, "path")?;
@@ -971,6 +984,11 @@ mod tests {
             json!({}),
             json!({"cmd": 3}),
             json!({"cmd": "nope"}),
+            json!({"cmd": "piece.reload"}),
+            json!({"cmd": "piece.reload", "group": 99999}),
+            json!({"cmd": "piece.reload", "group": 0}),
+            json!({"cmd": "piece.save", "group": 0}),
+            json!({"cmd": "piece.save", "group": 0, "path": "/nonexistent/dir/x.meltcad"}),
             json!({"cmd": "scene.add_file"}),
             json!({"cmd": "scene.add_file", "path": 7}),
             json!({"cmd": "scene.add_file", "path": "/nonexistent/meltcad-add-file.meltcad"}),

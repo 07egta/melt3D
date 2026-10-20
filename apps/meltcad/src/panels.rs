@@ -104,7 +104,7 @@ impl App {
         ui.spacing_mut().item_spacing.y = 2.0;
         let ngroups = self.scene.groups.len();
         // "x12" after a patterned group, "link" after a linked copy (looked up once for the whole list)
-        let badges: Vec<String> = if self.scene.groups.iter().any(|g| g.pattern.is_some() || g.is_linked()) {
+        let badges: Vec<String> = if self.scene.groups.iter().any(|g| g.pattern.is_some() || g.is_linked() || g.piece.is_some()) {
             let resolved = crate::pattern::resolve(&self.scene);
             (0..ngroups)
                 .map(|gi| {
@@ -114,6 +114,7 @@ impl App {
                         (true, true) => format!("Linked ×{n}"),
                         (true, false) => "Linked".to_string(),
                         (false, true) => format!("×{n}"),
+                        _ if g.piece.is_some() => "File".to_string(),
                         _ => String::new(),
                     }
                 })
@@ -492,6 +493,7 @@ impl App {
                 );
             }
         }
+        self.piece_card(ui, g);
         // what it melts with: the shapes inside it melt together, and the groups at the same level melt with each other
         let into = parent.clone().map_or("Scene".to_string(), |p| p);
         let partners: Vec<String> = (0..self.scene.groups.len())
