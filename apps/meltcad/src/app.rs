@@ -652,6 +652,9 @@ impl App {
             None => self.scene.groups.len().checked_sub(1),
         };
         match g {
+            // Linked copies own no geometry. Putting a shape here would be invisible
+            // and Scene::sanitize would silently delete it on reload.
+            Some(g) if self.scene.groups.get(g).is_some_and(Group::is_linked) => None,
             Some(g) if g < self.scene.groups.len() => Some(g),
             _ => {
                 self.scene.groups.push(Group::new("Group 1"));
@@ -668,7 +671,10 @@ impl App {
             self.say(ctx, format!("Up to {MAX_SHAPES} shapes"));
             return;
         }
-        let Some(g) = self.target_group() else { return };
+        let Some(g) = self.target_group() else {
+            self.say(ctx, "This is a linked copy. Select its source or Unlink it before adding a shape");
+            return;
+        };
         // beside the selected shape so the two melt together; else at the view's centre
         let size = kind.default_size();
         let rest = match kind {
@@ -2819,6 +2825,24 @@ mod tests {
             app.resolve_pending_file_action(&ctx, PendingFileDecision::Cancel);
             assert!(app.pending_file_action.is_none());
         }
+    }
+
+    #[test]
+    fn a_linked_copy_rejects_add_shape_instead_of_losing_it_at_reload() {
+        use crate::model::{Kind, Pick, Scene};
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        app.sel = Some(Pick::Group(0));
+        app.make_instance(&ctx);
+        let Some(Pick::Group(link)) = app.sel else { panic!("linked copy selected") };
+        assert!(app.scene.groups[link].is_linked());
+        let count = app.scene.shape_count();
+        app.add_shape(&ctx, Kind::Box);
+        assert_eq!(app.scene.shape_count(), count, "a linked group cannot own shapes");
+        assert!(app.scene.groups[link].shapes.is_empty());
+        let reopened = Scene::from_json(&app.scene.to_json()).unwrap();
+        assert_eq!(reopened.shape_count(), count);
+        assert_eq!(reopened.groups[link].instance_of, app.scene.groups[link].instance_of);
     }
 
     #[test]
