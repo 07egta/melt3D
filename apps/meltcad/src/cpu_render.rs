@@ -151,33 +151,41 @@ pub fn thumb(scene: &Scene, size: usize) -> Vec<u8> {
     img
 }
 
-/// Handles `--render in.yura out.png [size]`; true when it did (the caller then exits).
-pub fn cli(args: &[std::ffi::OsString]) -> bool {
+/// Handles `--render in.yura out.png [size]`. `None` means this is
+/// another command; `Some(false)` means render failed (non-zero process exit).
+pub fn cli(args: &[std::ffi::OsString]) -> Option<bool> {
     if args.get(1).and_then(|a| a.to_str()) != Some("--render") {
-        return false;
+        return None;
     }
     let (Some(input), Some(output)) = (args.get(2), args.get(3)) else {
         eprintln!("usage: meltcad --render in.yura out.png [size]");
-        return true;
+        return Some(false);
     };
-    let size = args.get(4).and_then(|a| a.to_str()).and_then(|a| a.parse().ok()).unwrap_or(220);
-    let scene = match std::fs::read_to_string(input).map_err(|e| e.to_string()).and_then(|t| Scene::from_json(&t)) {
-        Ok(s) => s,
+    // The renderer's sheet() function also clamps this, but keep the CLI
+    // explicit about its maximum memory budget.
+    let size: usize = args.get(4).and_then(|a| a.to_str()).and_then(|a| a.parse().ok()).unwrap_or(220).clamp(40, 600);
+    let scene = match crate::recovery::read_project(std::path::Path::new(input)) {
+        Ok((s, _)) => s,
         Err(e) => {
             eprintln!("cannot read the scene: {e}");
-            return true;
+            return Some(false);
         }
     };
     let (w, rgba) = sheet(&scene, size);
-    match crate::png::encode_rgba(w as u32, w as u32, &rgba) {
-        Ok(bytes) => {
-            if let Err(e) = std::fs::write(output, bytes) {
-                eprintln!("cannot write the picture: {e}");
-            }
+    let bytes = match crate::png::encode_rgba(w as u32, w as u32, &rgba) {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            eprintln!("cannot encode the picture: {e}");
+            return Some(false);
         }
-        Err(e) => eprintln!("cannot encode the picture: {e}"),
+    };
+    match std::fs::write(output, bytes) {
+        Ok(()) => Some(true),
+        Err(e) => {
+            eprintln!("cannot write the picture: {e}");
+            Some(false)
+        }
     }
-    true
 }
 
 /// The whole animation as a GIF: every frame (or every `step`-th) drawn from `cam`, or from a
@@ -250,6 +258,27 @@ pub fn animation_gif(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn render_cli_reports_read_and_write_errors_in_its_exit_status() {
+        let dir = std::env::temp_dir().join(format!("melt3d-render-cli-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let input = dir.join("scene.meltcad");
+        let png = dir.join("output.png");
+        let args = |inp: &std::path::Path, out: &std::path::Path| -> Vec<std::ffi::OsString> {
+            vec!["meltcad".into(), "--render".into(), inp.as_os_str().to_os_string(),
+                 out.as_os_str().to_os_string(), "40".into()]
+        };
+        assert_eq!(cli(&["meltcad".into(), "--other".into()]), None);
+        assert_eq!(cli(&args(&dir.join("missing.meltcad"), &png)), Some(false));
+        assert!(!png.exists());
+        std::fs::write(&input, Scene::default().try_to_json().unwrap()).unwrap();
+        assert_eq!(cli(&args(&input, &dir.join("nonexistent-parent").join("out.png"))), Some(false));
+        assert_eq!(cli(&args(&input, &png)), Some(true));
+        let bytes = std::fs::read(&png).unwrap();
+        assert!(bytes.starts_with(&[137, 80, 78, 71, 13, 10, 26, 10]));
+        let _ = std::fs::remove_dir_all(dir);
+    }
 
     #[test]
     fn the_default_scene_draws_something() {
