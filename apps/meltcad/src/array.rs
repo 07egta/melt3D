@@ -5,6 +5,7 @@ use egui::{Align2, RichText};
 
 use crate::app::App;
 use crate::model::{Group, MAX_GROUPS, MAX_SHAPES, Pick, Shape};
+use crate::pattern::Xform;
 use crate::style;
 
 #[derive(Clone, Copy, PartialEq)]
@@ -32,8 +33,41 @@ fn id() -> egui::Id {
     egui::Id::new("array_card")
 }
 
+/// Is the array card showing? (Keys such as Delete must not reach the scene behind it.)
+pub fn is_open(ctx: &egui::Context) -> bool {
+    ctx.data(|m| m.get_temp::<Dlg>(id())).is_some()
+}
+
 pub fn open(ctx: &egui::Context) {
     ctx.data_mut(|m| m.insert_temp(id(), Dlg::default()));
+}
+
+/// How far (degrees) copy number `k` is turned about Z. A full turn is divided evenly (no copy on
+/// top of the original); a part turn ends on its last copy.
+fn turn(d: &Dlg, k: u32) -> f32 {
+    let per = if d.angle >= 359.5 { d.angle / d.count as f32 } else { d.angle / (d.count.saturating_sub(1)).max(1) as f32 };
+    per * k as f32
+}
+
+/// Where copy number `k` of a linked copy goes: the same move or turn, applied to its transform.
+/// `c` is the middle of the group it shows (the transform turns about it).
+fn place_xform(x: &mut Xform, c: [f32; 3], d: &Dlg, k: u32) {
+    match d.mode {
+        Mode::Line => {
+            for i in 0..3 {
+                x.pos[i] += d.step[i] * k as f32;
+            }
+        }
+        Mode::Circle => {
+            let a = turn(d, k);
+            let (sn, cs) = a.to_radians().sin_cos();
+            // the point the copy now stands at, turned about the Z axis, minus where it was
+            let (wx, wy) = (c[0] + x.pos[0], c[1] + x.pos[1]);
+            x.pos[0] = wx * cs - wy * sn - c[0];
+            x.pos[1] = wx * sn + wy * cs - c[1];
+            x.rot[2] += a;
+        }
+    }
 }
 
 /// Where copy number `k` (1-based) of a shape goes. Line: moved by k steps. Circle: turned about the Z axis.
@@ -46,13 +80,12 @@ fn place(s: &mut Shape, d: &Dlg, k: u32) {
         }
         Mode::Circle => {
             // a full turn is divided evenly (no copy on top of the original); a part turn ends on its last copy
-            let per = if d.angle >= 359.5 { d.angle / d.count as f32 } else { d.angle / (d.count.saturating_sub(1)).max(1) as f32 };
-            let a = (per * k as f32).to_radians();
-            let (sn, cs) = a.sin_cos();
+            let deg = turn(d, k);
+            let (sn, cs) = deg.to_radians().sin_cos();
             let (x, y) = (s.pos[0], s.pos[1]);
             s.pos[0] = x * cs - y * sn;
             s.pos[1] = x * sn + y * cs;
-            s.rot[2] += per * k as f32;
+            s.rot[2] += deg;
         }
     }
 }
@@ -85,23 +118,44 @@ impl App {
                 Ok(copies as usize)
             }
             Some(Pick::Group(g)) => {
-                let base: Group = self.scene.groups.get(g).cloned().ok_or("No group")?;
-                if self.scene.groups.len() + copies as usize > MAX_GROUPS
-                    || self.scene.shape_count() + base.shapes.len() * copies as usize > MAX_SHAPES
-                {
+                // the whole outline under the group: its child groups come along
+                let end = self.scene.subtree_end(g);
+                let tree: Vec<Group> = self.scene.groups.get(g..end).ok_or("No group")?.to_vec();
+                let n = tree.len();
+                let shapes: usize = tree.iter().map(|t| t.shapes.len()).sum();
+                if self.scene.groups.len() + n * copies as usize > MAX_GROUPS || self.scene.shape_count() + shapes * copies as usize > MAX_SHAPES {
                     return Err("That goes over the limit".into());
                 }
-                crate::mesh::can_add(&self.scene, (0..copies).flat_map(|_| base.shapes.iter()))?;
-                let end = self.scene.subtree_end(g);
+                crate::mesh::can_add(&self.scene, (0..copies).flat_map(|_| tree.iter().flat_map(|t| t.shapes.iter())))?;
+                // a linked copy turns about the middle of the group it shows
+                let centres: Vec<[f32; 3]> = tree
+                    .iter()
+                    .map(|t| {
+                        t.instance_of
+                            .and_then(|u| self.scene.group_by_uid(u))
+                            .and_then(|i| self.scene.groups.get(i))
+                            .map(|src| crate::pattern::centre_of_shapes(&src.shapes))
+                            .unwrap_or([0.0; 3])
+                    })
+                    .collect();
                 for k in 1..=copies {
-                    let mut c = base.clone();
-                    for s in &mut c.shapes {
-                        place(s, d, k);
+                    let mut copy = tree.clone();
+                    for (c, centre) in copy.iter_mut().zip(&centres) {
+                        for s in &mut c.shapes {
+                            place(s, d, k);
+                        }
+                        if c.instance_of.is_some() {
+                            place_xform(&mut c.xform, *centre, d, k);
+                        }
                     }
-                    c.name = format!("{} {}", base.name, k + 1);
-                    self.scene.groups.insert(end + k as usize - 1, c);
+                    if let Some(top) = copy.first_mut() {
+                        top.name = format!("{} {}", tree[0].name, k + 1);
+                    }
+                    let at = end + (k as usize - 1) * n;
+                    self.scene.groups.splice(at..at, copy);
                 }
-                self.sel = Some(Pick::Group(end + copies as usize - 1));
+                self.scene.dedupe_uids();
+                self.sel = Some(Pick::Group(end + (copies as usize - 1) * n));
                 Ok(copies as usize)
             }
             None => Err("Select something to arrange".into()),
@@ -164,6 +218,10 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
             });
         });
     });
+    // Esc closes the card (the keys behind it are paused while it shows)
+    if !ctx.egui_wants_keyboard_input() && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+        close = true;
+    }
     if go {
         match app.make_array(&d) {
             Ok(n) => {
@@ -233,5 +291,71 @@ mod tests {
         let mut app = App::new(true, None);
         open(&ctx);
         ctx.run_ui(egui::RawInput::default(), |ui| update(&mut app, ui.ctx())).textures_delta.clear();
+    }
+
+    fn nested_scene(app: &mut App) {
+        use crate::model::Group;
+        let mut child = Group::new("child");
+        child.depth = 1;
+        let mut shape = app.scene.groups[0].shapes[0].clone();
+        shape.pos = [0.0, 0.0, 5.0];
+        child.shapes.push(shape);
+        app.scene.groups.insert(1, child);
+    }
+
+    #[test]
+    fn arraying_a_group_copies_its_child_groups_too() {
+        let mut app = App::new(true, None);
+        nested_scene(&mut app);
+        let before = app.scene.groups.len();
+        let shapes = app.scene.shape_count();
+        app.sel = Some(Pick::Group(0));
+        assert_eq!(app.make_array(&Dlg { count: 3, ..Dlg::default() }), Ok(2));
+        assert_eq!(app.scene.groups.len(), before + 4);
+        assert_eq!(app.scene.shape_count(), shapes * 3);
+        let depths: Vec<u8> = app.scene.groups.iter().map(|g| g.depth).collect();
+        assert_eq!(&depths[..6], &[0, 1, 0, 1, 0, 1][..depths.len().min(6)]);
+        assert_eq!(app.scene.groups[3].shapes[0].pos[0], 30.0, "the child moved with its copy");
+        assert_eq!(app.sel, Some(Pick::Group(4)));
+    }
+
+    #[test]
+    fn linked_copies_array_apart_instead_of_piling_up() {
+        let mut app = App::new(true, None);
+        let uid = app.scene.ensure_group_uid(0).unwrap();
+        let mut link = Group::new("link");
+        link.instance_of = Some(uid);
+        app.scene.groups.push(link);
+        let at = app.scene.groups.len() - 1;
+        app.sel = Some(Pick::Group(at));
+        assert_eq!(app.make_array(&Dlg { count: 3, ..Dlg::default() }), Ok(2));
+        let xs: Vec<f32> = app.scene.groups[at..].iter().map(|g| g.xform.pos[0]).collect();
+        assert_eq!(xs, vec![0.0, 30.0, 60.0]);
+        // around the Z axis the copies turn about the Z axis, not all on the spot
+        app.scene.groups[0].shapes[0].pos = [20.0, 0.0, 5.0];
+        let at2 = at;
+        app.sel = Some(Pick::Group(at2));
+        let d = Dlg { mode: Mode::Circle, count: 4, angle: 360.0, ..Dlg::default() };
+        assert_eq!(app.make_array(&d), Ok(3));
+        let c = crate::pattern::centre_of_shapes(&app.scene.groups[0].shapes);
+        let g1 = &app.scene.groups[at2 + 1].xform;
+        assert!((c[0] + g1.pos[0]).abs() < 1e-3 && (c[1] + g1.pos[1] - 20.0).abs() < 1e-3, "{g1:?}");
+    }
+
+    #[test]
+    fn the_card_keeps_the_delete_key_from_the_scene_behind_it() {
+        let ctx = egui::Context::default();
+        assert!(!is_open(&ctx));
+        open(&ctx);
+        assert!(is_open(&ctx));
+        let mut app = App::new(true, None);
+        app.sel = Some(Pick::Shape(0, 0));
+        let n = app.scene.shape_count();
+        let input = egui::RawInput {
+            events: vec![egui::Event::Key { key: egui::Key::Delete, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() }],
+            ..Default::default()
+        };
+        ctx.run_ui(input, |ui| app.keys(ui.ctx())).textures_delta.clear();
+        assert_eq!(app.scene.shape_count(), n);
     }
 }

@@ -1170,7 +1170,7 @@ impl App {
     // ----- shortcuts -----
 
     pub(crate) fn keys(&mut self, ctx: &egui::Context) {
-        if self.pending_file_action.is_some() || self.recovery.pending_path().is_some() || crate::svg_dialog::is_open(ctx) {
+        if self.pending_file_action.is_some() || self.recovery.pending_path().is_some() || crate::svg_dialog::is_open(ctx) || crate::array::is_open(ctx) {
             return;
         }
         // Dimensions have their own Tab/Enter/Esc lifecycle. Never dispatch text-input
