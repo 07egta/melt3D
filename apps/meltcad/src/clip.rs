@@ -99,6 +99,9 @@ fn add_shapes(app: &mut App, mut shapes: Vec<Shape>) -> Result<String, String> {
         Some(Pick::Shape(g, _)) | Some(Pick::Group(g)) if g < app.scene.groups.len() => g,
         _ => app.scene.groups.len() - 1,
     };
+    if app.scene.groups[g].is_linked() {
+        return Err("This is a linked copy. Select its source or Unlink it before pasting shapes".into());
+    }
     crate::mesh::can_add(&app.scene, shapes.iter())?;
     shifted(&mut shapes, STEP);
     for s in &mut shapes {
@@ -123,6 +126,16 @@ fn add_block(app: &mut App, mut block: Vec<Group>, done: &str) -> Result<String,
         return Err(format!("Up to {MAX_SHAPES} shapes"));
     }
     crate::mesh::can_add(&app.scene, block.iter().flat_map(|g| g.shapes.iter()))?;
+    // Copied scenes may reuse IDs from the destination. Rebase group IDs,
+    // shape IDs, link sources and pattern references *before* splicing so
+    // linked copies cannot silently attach to pre-existing geometry.
+    let mut incoming = Scene { groups: block, ..Scene::default() };
+    let by = crate::add_file::max_uid(&app.scene);
+    if by.checked_add(crate::add_file::max_uid(&incoming)).is_none() {
+        return Err("Too many identifiers to paste safely".into());
+    }
+    crate::add_file::shift_uids(&mut incoming, by);
+    block = incoming.groups;
     let base = block.first().map_or(0, |g| g.depth);
     for g in &mut block {
         g.depth = g.depth.saturating_sub(base);
@@ -245,6 +258,43 @@ mod tests {
         assert!(paste_text(&mut app, &other.to_json()).is_ok());
         let depths: Vec<u8> = app.scene.groups.iter().map(|g| g.depth).collect();
         assert_eq!(depths, vec![0, 0, 1], "{depths:?}");
+    }
+
+    #[test]
+    fn pasting_a_scene_remaps_colliding_link_source_uids() {
+        let mut app = App::new(true, None);
+        app.scene.groups[0].name = "existing sphere".into();
+        app.scene.groups[0].uid = 1;
+        app.sel = None;
+
+        let mut box_group = Group::new("incoming box");
+        box_group.uid = 1;
+        box_group.shapes.push(Shape::new(Kind::Box, [35.0, 0.0, 10.0], Default::default()));
+        let mut link = Group::new("incoming link");
+        link.instance_of = Some(1);
+        let incoming = Scene { groups: vec![box_group, link], ..Scene::default() };
+        assert!(paste_text(&mut app, &incoming.to_json()).is_ok());
+        let source_uid = app.scene.groups[1].uid;
+        assert_ne!(source_uid, app.scene.groups[0].uid);
+        assert_eq!(app.scene.groups[2].instance_of, Some(source_uid));
+        assert_eq!(crate::pattern::link_source(&app.scene, 2), Some(1));
+        assert_eq!(app.scene.groups[1].shapes[0].kind, Kind::Box);
+        assert_eq!(app.scene.groups[0].shapes[0].kind, Kind::Sphere);
+        let reopened = Scene::from_json(&app.scene.to_json()).unwrap();
+        assert_eq!(crate::pattern::link_source(&reopened, 2), Some(1));
+    }
+
+    #[test]
+    fn pasted_shapes_cannot_disappear_inside_linked_copies() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        app.sel = Some(Pick::Shape(0, 0));
+        let text = copy_text(&app).unwrap();
+        app.sel = Some(Pick::Group(0));
+        app.make_instance(&ctx);
+        let original_count = app.scene.shape_count();
+        assert!(paste_text(&mut app, &text).is_err());
+        assert_eq!(app.scene.shape_count(), original_count);
     }
 
     #[test]
