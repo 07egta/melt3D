@@ -4,6 +4,7 @@
 
 mod accel;
 mod adapt;
+mod add_file;
 mod anim;
 mod anim_ui;
 mod app;

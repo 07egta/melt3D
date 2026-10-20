@@ -1316,6 +1316,14 @@ impl App {
                             self.open_dialog(&ctx);
                             ui.close();
                         }
+                        if ui
+                            .add_enabled(!self.scene_structure_locked(), egui::Button::new("Add file…"))
+                            .on_hover_text("Put another Melt 3D file into this one. It melts with what is already here")
+                            .clicked()
+                        {
+                            self.add_file_dialog(&ctx);
+                            ui.close();
+                        }
                         if ui.add_enabled(!self.scene_structure_locked(), egui::Button::new("Import SVG…")).clicked() {
                             crate::svg_dialog::open(&ctx);
                             ui.close();
