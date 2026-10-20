@@ -95,8 +95,45 @@ impl App {
 
     pub(crate) fn anim_bar(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
+        // a GIF being made
+        let mut finished = None;
+        if let Some(job) = &self.an.job {
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+            match job.rx.try_recv() {
+                Ok(r) => finished = Some(r),
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    finished = Some(Err("GIF worker stopped unexpectedly".to_owned()));
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            }
+        }
+        if let Some(r) = finished {
+            self.an.job = None;
+            match r {
+                Ok(p) => self.say(&ctx, format!("Saved {p}")),
+                Err(e) => self.say(&ctx, format!("GIF not saved: {e}")),
+            }
+        }
+
         if !self.an.open {
             self.an.playing = false;
+            if let Some(job) = &self.an.job {
+                egui::Panel::bottom("gif_background_progress")
+                    .exact_size(32.0)
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            let done = job.done.load(Ordering::Relaxed);
+                            let total = job.total.load(Ordering::Relaxed);
+                            ui.label(format!("Making GIF {done}/{total}"));
+                            if ui.button("Cancel GIF").clicked() {
+                                job.cancel.store(true, Ordering::Relaxed);
+                            }
+                            if ui.button("Show timeline").clicked() {
+                                self.an.open = true;
+                            }
+                        });
+                    });
+            }
             return;
         }
         let length = self.scene.anim.length.max(1);
@@ -114,21 +151,6 @@ impl App {
                 self.show_pose(f);
             }
             ctx.request_repaint();
-        }
-        // a GIF being made
-        let mut finished = None;
-        if let Some(job) = &self.an.job {
-            ctx.request_repaint_after(std::time::Duration::from_millis(100));
-            if let Ok(r) = job.rx.try_recv() {
-                finished = Some(r);
-            }
-        }
-        if let Some(r) = finished {
-            self.an.job = None;
-            match r {
-                Ok(p) => self.say(&ctx, format!("Saved {p}")),
-                Err(e) => self.say(&ctx, format!("GIF not saved: {e}")),
-            }
         }
 
         let mut go: Option<u32> = None;
