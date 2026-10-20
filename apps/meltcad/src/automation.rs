@@ -652,23 +652,24 @@ fn solid_from_sketch(scene: &mut Scene, obj: &Map<String, Value>, command: &str)
 
 /// `meltcad --run script.json [--scene in] [--out out.meltcad] [--png out.png]`: true when it ran
 /// (the caller then exits). The script is a JSON array of commands, or `{"commands": [...]}`.
-pub fn cli(args: &[std::ffi::OsString]) -> bool {
+/// `--run`: `None` when this is not a `--run` call, else whether every step worked.
+pub fn run_cli(args: &[std::ffi::OsString]) -> Option<bool> {
     if args.get(1).and_then(|a| a.to_str()) != Some("--run") {
-        return false;
+        return None;
     }
     let arg = |flag: &str| -> Option<String> {
         args.iter().position(|a| a.to_str() == Some(flag)).and_then(|i| args.get(i + 1)).map(|a| a.to_string_lossy().into_owned())
     };
     let Some(script) = args.get(2).map(|a| a.to_string_lossy().into_owned()) else {
         eprintln!("usage: meltcad --run script.json [--scene in.meltcad] [--out out.meltcad] [--png out.png]");
-        return true;
+        return Some(false);
     };
     let mut scene = match arg("--scene") {
         Some(p) => match std::fs::read_to_string(&p).map_err(|e| e.to_string()).and_then(|t| Scene::from_json(&t)) {
             Ok(s) => s,
             Err(e) => {
                 eprintln!("cannot read the scene: {e}");
-                return true;
+                return Some(false);
             }
         },
         None => Scene { groups: Vec::new(), ..Scene::default() },
@@ -683,32 +684,45 @@ pub fn cli(args: &[std::ffi::OsString]) -> bool {
         },
         Ok(_) => {
             eprintln!("the script must be a JSON array of commands");
-            return true;
+            return Some(false);
         }
         Err(e) => {
             eprintln!("cannot read the script: {e}");
-            return true;
+            return Some(false);
         }
     };
     let _guard = crate::mesh::LoadGuard::begin();
+    let mut ok = true;
     for c in &cmds {
         match execute(&mut scene, c) {
             Ok(v) => println!("{v}"),
-            Err(e) => println!("{}", json!({"error": e})),
+            Err(e) => {
+                ok = false;
+                println!("{}", json!({"error": e}));
+            }
         }
     }
     if let Some(p) = arg("--out") {
         match scene.try_to_json().and_then(|t| std::fs::write(&p, t).map_err(|e| e.to_string())) {
             Ok(()) => {}
-            Err(e) => eprintln!("cannot write {p}: {e}"),
+            Err(e) => {
+                ok = false;
+                eprintln!("cannot write {p}: {e}");
+            }
         }
     }
     if let Some(p) = arg("--png")
         && let Err(e) = execute(&mut scene, &json!({"cmd": "render", "path": p}))
     {
+        ok = false;
         eprintln!("cannot render: {e}");
     }
-    true
+    Some(ok)
+}
+
+/// True when `--run` handled the call (the exit code is set by [`run_cli`]'s caller).
+pub fn cli(args: &[std::ffi::OsString]) -> bool {
+    run_cli(args).is_some()
 }
 
 #[cfg(test)]
@@ -1127,6 +1141,22 @@ mod tests {
         assert_eq!(back.shape_count(), sc.shape_count());
         assert!(run(&mut back, json!({"cmd": "render", "path": p.to_string_lossy(), "size": 40})).is_ok());
         assert!(std::fs::metadata(&p).is_ok_and(|m| m.len() > 100));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn run_reports_failure_when_a_command_fails() {
+        let dir = std::env::temp_dir().join(format!("melt3d-run-exit-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let run = |text: &str| {
+            let f = dir.join("s.json");
+            let _ = std::fs::write(&f, text);
+            run_cli(&["meltcad".into(), "--run".into(), f.into_os_string()])
+        };
+        assert_eq!(run(r#"[{"cmd":"shape.add","kind":"Sphere"}]"#), Some(true));
+        assert_eq!(run(r#"[{"cmd":"unknown"}]"#), Some(false));
+        assert_eq!(run("not json"), Some(false));
+        assert_eq!(run_cli(&["meltcad".into()]), None);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
