@@ -277,8 +277,13 @@ impl App {
             ui.heading("Unsaved work found");
             ui.label(format!("Recovery data: {}", path.display()));
             ui.label("Restoring will not overwrite the original file.");
+            if self.dirty {
+                ui.label("There is unsaved work on screen. Save it first, then restore this one (or press Later).");
+            }
             ui.horizontal(|ui| {
-                if ui.button("Restore as unsaved copy").clicked() {
+                // restoring replaces what is on screen: never over work that is not saved yet
+                let blocked = self.dirty;
+                if ui.add_enabled(!blocked, egui::Button::new("Restore as unsaved copy")).on_disabled_hover_text("Save the work on screen first, or press Later").clicked() {
                     choice = Some(0);
                 }
                 if ui.button("Later").clicked() {

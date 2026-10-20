@@ -158,11 +158,30 @@ fn remove_if_present(path: &Path) -> io::Result<()> {
     }
 }
 
+/// Is the snapshot at `path` the live work of another running copy? Its lock file is then locked.
+/// A lock nobody holds belongs to a crashed copy: it is cleaned away here.
+fn in_use(path: &Path) -> bool {
+    let lock_path = path.with_extension("lock");
+    let Ok(file) = fs::OpenOptions::new().write(true).open(&lock_path) else { return false };
+    match file.try_lock() {
+        Ok(()) => {
+            drop(file);
+            let _ = fs::remove_file(&lock_path);
+            false
+        }
+        Err(fs::TryLockError::WouldBlock) => true,
+        Err(_) => false,
+    }
+}
+
 /// A unique snapshot per running process. Old snapshots are not removed until
 /// the user explicitly restores/discards them, or the current work is saved.
 pub struct Store {
     root: PathBuf,
     own: PathBuf,
+    /// Held open (and locked) for as long as this process runs: another launch sees the snapshot
+    /// beside it as work in use, not as work left by a crash. The system lets go if we crash.
+    lock: Option<fs::File>,
     pending: Vec<PathBuf>,
     restored_from: Option<PathBuf>,
     last_snapshot_rev: Option<u64>,
@@ -171,19 +190,24 @@ pub struct Store {
 
 impl Store {
     pub fn new(root: PathBuf, now: Instant) -> Store {
-        let own = root.join(format!("session-{}.yrecovery", unique_id()));
+        let id = unique_id();
+        let own = root.join(format!("session-{id}.yrecovery"));
+        let lock = fs::create_dir_all(&root)
+            .and_then(|()| fs::OpenOptions::new().create(true).write(true).truncate(false).open(own.with_extension("lock")))
+            .ok()
+            .filter(|f| f.try_lock().is_ok());
         let mut pending = Vec::new();
         if let Ok(entries) = fs::read_dir(&root) {
             for entry in entries.flatten() {
                 let path = entry.path();
-                if path.is_file() && path.extension().is_some_and(|ext| ext == "yrecovery") && path != own {
+                if path.is_file() && path.extension().is_some_and(|ext| ext == "yrecovery") && path != own && !in_use(&path) {
                     pending.push(path);
                 }
             }
         }
         pending.sort_by_key(|path| fs::metadata(path).and_then(|m| m.modified()).ok());
         pending.reverse();
-        Store { root, own, pending, restored_from: None, last_snapshot_rev: None, next_due: now + INTERVAL }
+        Store { root, own, lock, pending, restored_from: None, last_snapshot_rev: None, next_due: now + INTERVAL }
     }
 
     pub fn pending_path(&self) -> Option<&Path> {
@@ -263,7 +287,11 @@ impl Store {
     /// Called only after an approved, normal window exit. A crash does not
     /// execute this cleanup; never use Drop to delete a recovery.
     pub fn normal_exit(&mut self) -> io::Result<()> {
-        self.clear_active()
+        self.clear_active()?;
+        if self.lock.take().is_some() {
+            remove_if_present(&self.own.with_extension("lock"))?;
+        }
+        Ok(())
     }
 
     #[cfg(test)]
@@ -382,6 +410,21 @@ mod tests {
         json["checksum"] = serde_json::json!(0);
         fs::write(&valid, serde_json::to_vec(&json).expect("encode")).expect("tamper");
         assert!(read_snapshot(&valid).is_err(), "checksum mismatch is detected");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_running_copys_snapshot_is_not_offered_and_a_crashed_ones_is() {
+        let root = temp_root();
+        let now = Instant::now();
+        let mut running = Store::new(root.clone(), now);
+        assert!(running.checkpoint(&edited(), None, true, 2, now + INTERVAL).expect("checkpoint"));
+        // a second launch while the first still runs: nothing to restore, nothing it could delete
+        assert!(Store::new(root.clone(), now).pending_path().is_none());
+        // the first one goes away without cleaning up (a crash): its work is now offered
+        drop(running);
+        let second = Store::new(root.clone(), now);
+        assert!(second.pending_path().is_some());
         let _ = fs::remove_dir_all(root);
     }
 }
