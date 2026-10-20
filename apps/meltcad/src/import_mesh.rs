@@ -868,6 +868,35 @@ pub fn sniff(b: &[u8], name: &str) -> Option<MeshFormat> {
     None
 }
 
+/// OBJ colours live in a separate .mtl file that is not read: say so rather than lose them silently.
+fn appearance_obj(bytes: &[u8]) -> AppearanceInfo {
+    let mut out = AppearanceInfo::default();
+    let names_materials = bytes.split(|c| *c == b'\n').any(|line| {
+        let mut it = words(line);
+        matches!(it.next(), Some(b"mtllib" | b"usemtl"))
+    });
+    if names_materials {
+        out.notes.push("The OBJ's material file (.mtl) is not read, so its colours and materials are not kept".into());
+    }
+    out
+}
+
+/// PLY vertex colours are not kept (a shape has one colour): say so rather than lose them silently.
+fn appearance_ply(bytes: &[u8]) -> AppearanceInfo {
+    let mut out = AppearanceInfo::default();
+    let head = bytes.get(..bytes.len().min(16 * 1024)).unwrap_or(bytes);
+    let end = head.windows(10).position(|w| w == b"end_header").unwrap_or(head.len());
+    let header = String::from_utf8_lossy(head.get(..end).unwrap_or(head)).to_ascii_lowercase();
+    let coloured = header.lines().any(|l| {
+        let mut w = l.split_whitespace();
+        w.next() == Some("property") && matches!(w.last(), Some("red" | "green" | "blue" | "diffuse_red" | "diffuse_green" | "diffuse_blue"))
+    });
+    if coloured {
+        out.notes.push("The PLY's vertex colours are not kept; the shape gets one colour".into());
+    }
+    out
+}
+
 /// Read a mesh from the bytes of a file. `name` is only used to tell the format.
 pub fn import_bytes(bytes: &[u8], name: &str, opts: &ImportOptions) -> Result<Imported, String> {
     if bytes.len() > MAX_FILE_BYTES {
@@ -877,7 +906,9 @@ pub fn import_bytes(bytes: &[u8], name: &str, opts: &ImportOptions) -> Result<Im
     let appearance_info = match format {
         MeshFormat::ThreeMf => crate::import_3mf::appearance_3mf(bytes),
         MeshFormat::Glb => crate::import_glb::appearance_glb(bytes),
-        _ => Default::default(),
+        MeshFormat::Obj => appearance_obj(bytes),
+        MeshFormat::Ply => appearance_ply(bytes),
+        MeshFormat::Stl => Default::default(),
     };
     let raw = match format {
         MeshFormat::Stl => read_stl(bytes),
@@ -1122,6 +1153,18 @@ pub mod tests {
             0 0 0\n4 0 0\n4 4 0\n3 4 0\n3 1 0\n1 1 0\n1 4 0\n0 4 0\n8 0 1 2 3 4 5 6 7\n";
         let r = load(ply.as_bytes(), "u.ply");
         assert!((r.mesh.surface_area() - 10.0).abs() < 1e-4, "{}", r.mesh.surface_area());
+    }
+
+    #[test]
+    fn colours_that_cannot_be_kept_are_reported() {
+        let obj = "mtllib a.mtl\nv 0 0 0\nv 1 0 0\nv 0 1 0\nusemtl red\nf 1 2 3\n";
+        let r = import_bytes(obj.as_bytes(), "a.obj", &opts()).unwrap();
+        assert!(r.notes.iter().any(|n| n.contains(".mtl")), "{:?}", r.notes);
+        let plain = import_bytes(b"v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n", "a.obj", &opts()).unwrap();
+        assert!(plain.notes.iter().all(|n| !n.contains(".mtl")));
+        let ply = "ply\nformat ascii 1.0\nelement vertex 3\nproperty float x\nproperty float y\nproperty float z\nproperty uchar red\nproperty uchar green\nproperty uchar blue\nelement face 1\nproperty list uchar int vertex_indices\nend_header\n0 0 0 255 0 0\n1 0 0 255 0 0\n0 1 0 255 0 0\n3 0 1 2\n";
+        let r = import_bytes(ply.as_bytes(), "a.ply", &opts()).unwrap();
+        assert!(r.notes.iter().any(|n| n.contains("vertex colours")), "{:?}", r.notes);
     }
 
     #[test]
