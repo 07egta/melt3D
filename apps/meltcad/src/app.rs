@@ -529,6 +529,9 @@ impl App {
         self.redo.clear();
         self.sel = if self.scene.shape(0, 0).is_some() { Some(Pick::Shape(0, 0)) } else { None };
         self.path = path;
+        // a new or opened document does not inherit the last one's typed title
+        self.doc_title.clear();
+        self.title_edit = None;
         self.dirty = false;
         if !notes.is_empty() {
             self.notice = Some(notes.join(", "));
@@ -1049,6 +1052,18 @@ impl App {
         for (g, s) in self.sel_targets() {
             if let Some(sh) = self.scene.shape_mut(g, s) {
                 sh.pos = [sh.pos[0] + d[0], sh.pos[1] + d[1], sh.pos[2] + d[2]];
+            }
+        }
+        // a linked copy has no shapes of its own: it stands where its transform puts it
+        let mut moved = std::collections::HashSet::new();
+        for p in self.picks() {
+            if let Pick::Group(g) = p
+                && moved.insert(g)
+                && let Some(gr) = self.scene.groups.get_mut(g)
+                && gr.instance_of.is_some()
+            {
+                gr.xform.pos = [gr.xform.pos[0] + d[0], gr.xform.pos[1] + d[1], gr.xform.pos[2] + d[2]];
+                gr.xform.sanitize();
             }
         }
     }
@@ -2812,6 +2827,31 @@ fn clean_title(typed: &str) -> String {
 #[cfg(test)]
 mod title_tests {
     use super::clean_title;
+
+    #[test]
+    fn new_does_not_keep_the_last_documents_title() {
+        let mut app = super::App::new(true, None);
+        app.doc_title = "Foo".into();
+        app.title_edit = Some("Fo".into());
+        app.apply_file_action(super::PendingFileAction::New(crate::model::Scene::default()));
+        assert_eq!(app.doc_name(), "Untitled");
+        assert!(app.title_edit.is_none());
+    }
+
+    #[test]
+    fn arrow_keys_move_a_linked_copy_through_its_transform() {
+        use crate::model::{Group, Pick};
+        let mut app = super::App::new(true, None);
+        let uid = app.scene.ensure_group_uid(0).unwrap();
+        let mut link = Group::new("link");
+        link.instance_of = Some(uid);
+        app.scene.groups.push(link);
+        let at = app.scene.groups.len() - 1;
+        app.sel = Some(Pick::Group(at));
+        app.nudge([5.0, 0.0, 2.0]);
+        assert_eq!(app.scene.groups[at].xform.pos, [5.0, 0.0, 2.0]);
+        assert_eq!(app.scene.groups[0].shapes[0].pos, super::App::new(true, None).scene.groups[0].shapes[0].pos, "the source stays");
+    }
 
     #[test]
     fn titles_are_made_safe_for_file_names() {
