@@ -283,7 +283,11 @@ impl App {
             ui.horizontal(|ui| {
                 // restoring replaces what is on screen: never over work that is not saved yet
                 let blocked = self.dirty;
-                if ui.add_enabled(!blocked, egui::Button::new("Restore as unsaved copy")).on_disabled_hover_text("Save the work on screen first, or press Later").clicked() {
+                if ui
+                    .add_enabled(!blocked, egui::Button::new("Restore as unsaved copy"))
+                    .on_disabled_hover_text("Save the work on screen first, or press Later")
+                    .clicked()
+                {
                     choice = Some(0);
                 }
                 if ui.button("Later").clicked() {
@@ -1190,7 +1194,11 @@ impl App {
     // ----- shortcuts -----
 
     pub(crate) fn keys(&mut self, ctx: &egui::Context) {
-        if self.pending_file_action.is_some() || self.recovery.pending_path().is_some() || crate::svg_dialog::is_open(ctx) || crate::array::is_open(ctx) {
+        if self.pending_file_action.is_some()
+            || self.recovery.pending_path().is_some()
+            || crate::svg_dialog::is_open(ctx)
+            || crate::array::is_open(ctx)
+        {
             return;
         }
         // Dimensions have their own Tab/Enter/Esc lifecycle. Never dispatch text-input
@@ -1849,7 +1857,9 @@ impl App {
                         ui.label(RichText::new(format!("{} shapes", self.scene.shape_count())).size(12.0).color(style::DIM));
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if style::pill_enabled(ui, "+ Group", false, !self.scene_structure_locked())
-                                .on_hover_text(style::keys("New empty group.\nTo nest: Shift+click several shapes or groups in the list, then press Ctrl+G"))
+                                .on_hover_text(style::keys(
+                                    "New empty group.\nTo nest: Shift+click several shapes or groups in the list, then press Ctrl+G",
+                                ))
                                 .clicked()
                             {
                                 self.add_group();

@@ -14,23 +14,24 @@ use crate::import_mesh::{
 /// scene, of the root nodes; with no nodes at all, every mesh).
 fn reachable_meshes(json: &Value) -> Vec<usize> {
     let nodes = json.get("nodes").and_then(Value::as_array);
-    let roots: Vec<usize> = match json.get("scenes").and_then(|s| s.get(usz(json.get("scene")).unwrap_or(0))).and_then(|s| s.get("nodes")).and_then(Value::as_array) {
-        Some(a) => a.iter().filter_map(|v| usz(Some(v))).collect(),
-        None => match nodes {
-            Some(nodes) => {
-                let mut is_child = vec![false; nodes.len()];
-                for n in nodes {
-                    for c in n.get("children").and_then(Value::as_array).into_iter().flatten() {
-                        if let Some(slot) = usz(Some(c)).and_then(|i| is_child.get_mut(i)) {
-                            *slot = true;
+    let roots: Vec<usize> =
+        match json.get("scenes").and_then(|s| s.get(usz(json.get("scene")).unwrap_or(0))).and_then(|s| s.get("nodes")).and_then(Value::as_array) {
+            Some(a) => a.iter().filter_map(|v| usz(Some(v))).collect(),
+            None => match nodes {
+                Some(nodes) => {
+                    let mut is_child = vec![false; nodes.len()];
+                    for n in nodes {
+                        for c in n.get("children").and_then(Value::as_array).into_iter().flatten() {
+                            if let Some(slot) = usz(Some(c)).and_then(|i| is_child.get_mut(i)) {
+                                *slot = true;
+                            }
                         }
                     }
+                    (0..nodes.len()).filter(|i| !is_child[*i]).collect()
                 }
-                (0..nodes.len()).filter(|i| !is_child[*i]).collect()
-            }
-            None => return (0..json.get("meshes").and_then(Value::as_array).map_or(0, Vec::len)).collect(),
-        },
-    };
+                None => return (0..json.get("meshes").and_then(Value::as_array).map_or(0, Vec::len)).collect(),
+            },
+        };
     let mut out = Vec::new();
     let mut stack: Vec<(usize, usize)> = roots.into_iter().map(|r| (r, 0)).collect();
     let mut visits = 0usize;

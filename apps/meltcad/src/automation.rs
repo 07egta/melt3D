@@ -720,11 +720,6 @@ pub fn run_cli(args: &[std::ffi::OsString]) -> Option<bool> {
     Some(ok)
 }
 
-/// True when `--run` handled the call (the exit code is set by [`run_cli`]'s caller).
-pub fn cli(args: &[std::ffi::OsString]) -> bool {
-    run_cli(args).is_some()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
