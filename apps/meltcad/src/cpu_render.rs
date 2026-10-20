@@ -180,6 +180,11 @@ pub fn cli(args: &[std::ffi::OsString]) -> bool {
     true
 }
 
+/// The interval of stored GIF pictures. 240 frames must not be thinned at all.
+fn gif_frame_step(length: u32, fps: u32) -> u32 {
+    (length.saturating_sub(1) / 240 + 1).max(fps.max(1).div_ceil(50))
+}
+
 /// The whole animation as a GIF: every frame (or every `step`-th) drawn from `cam`, or from a
 /// camera that fits the piece at all its poses. `size` is the width in pixels.
 pub fn animation_gif(
@@ -218,7 +223,7 @@ pub fn animation_gif(
     });
     // a GIF frame lasts 2 hundredths of a second at the least: above 50 fps, pictures are skipped
     // (and the waits shared out evenly) so the animation still takes as long as it should
-    let step = (a.length / 240 + 1).max(a.fps.max(1).div_ceil(50)).max(1);
+    let step = gif_frame_step(a.length, a.fps);
     let frames: Vec<u32> = (0..a.length).step_by(step as usize).collect();
     let total = frames.len() as u32;
     // the same picture as the window when there is a graphics card to ask (else the plain CPU one)
@@ -243,13 +248,31 @@ pub fn animation_gif(
             _ => pics.push(view(&s, &cam, w, h)),
         }
     }
+    if !progress(total, total) {
+        return Err("Stopped".into());
+    }
     let delays = crate::gif::delays(pics.len(), 100.0 * step as f32 / a.fps.max(1) as f32);
-    crate::gif::encode_timed(w, h, &pics, &delays)
+    let gif = crate::gif::encode_timed(w, h, &pics, &delays)?;
+    // Encoding a complete set of frames may take time; cancellation can arrive
+    // while the palette/LZW encoder runs, before the caller writes a file.
+    if !progress(total, total) {
+        return Err("Stopped".into());
+    }
+    Ok(gif)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gif_240_frame_animation_is_not_halved() {
+        assert_eq!(gif_frame_step(239, 30), 1);
+        assert_eq!(gif_frame_step(240, 30), 1);
+        assert_eq!((0..240u32).step_by(gif_frame_step(240, 30) as usize).last(), Some(239));
+        assert_eq!(gif_frame_step(241, 30), 2);
+        assert_eq!(gif_frame_step(240, 60), 2, "60 fps needs >=2 centiseconds per GIF image");
+    }
 
     #[test]
     fn the_default_scene_draws_something() {
