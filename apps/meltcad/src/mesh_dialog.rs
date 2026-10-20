@@ -189,6 +189,15 @@ fn begin_selected_rebake(app: &App, ctx: &egui::Context) {
     ctx.data_mut(|m| m.insert_temp(rebake_id(), RebakeRequest { group, shape, original, res: 160, path, job: None, msg: String::new() }));
 }
 
+/// Completion may race with the Stop button: cancellation always wins.
+fn accept_rebake_result<T>(ctl: &BakeControl, result: Result<T, String>) -> Result<T, String> {
+    if ctl.cancel.load(Ordering::Acquire) {
+        Err(ERR_CANCEL.into())
+    } else {
+        result
+    }
+}
+
 fn rebake_panel(app: &mut App, ctx: &egui::Context) {
     let Some(mut req) = ctx.data_mut(|m| {
         let r = m.get_temp::<RebakeRequest>(rebake_id());
@@ -199,7 +208,7 @@ fn rebake_panel(app: &mut App, ctx: &egui::Context) {
     };
     let mut close = false;
     if let Some(j) = req.job.clone() {
-        match j.job.take() {
+        match j.job.take().map(|result| accept_rebake_result(&j.ctl, result)) {
             Some(Ok(result)) => {
                 req.job = None;
                 // Reject stale results and replacements that would exceed the scene volume budget.
@@ -827,6 +836,15 @@ mod tests {
         shape.mesh_source = Some(MeshSource { path: String::new(), y_up: false, mesh_hash: 0 });
         shape.source.clear();
         assert!(check_rebake_source(&shape, "any.obj", 123).is_err());
+    }
+
+    #[test]
+    fn stopping_rebake_wins_even_if_worker_has_already_completed() {
+        let ctl = BakeControl::new();
+        assert_eq!(accept_rebake_result(&ctl, Ok(17)), Ok(17));
+        ctl.cancel.store(true, Ordering::Release);
+        assert_eq!(accept_rebake_result(&ctl, Ok(17)), Err(ERR_CANCEL.into()));
+        assert_eq!(accept_rebake_result(&ctl, Err::<i32, String>("failed".into())), Err(ERR_CANCEL.into()));
     }
 
     fn loaded_box(lo: [f32; 3], hi: [f32; 3]) -> Loaded {
