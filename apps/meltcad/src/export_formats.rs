@@ -480,7 +480,8 @@ pub fn glb(s: &Surface, name: &str) -> Result<Vec<u8>, String> {
     let (mut lo, mut hi) = ([f32::INFINITY; 3], [f32::NEG_INFINITY; 3]);
     for p in &mesh.positions {
         for a in 0..3 {
-            let v = fin(p[a]) as f32;
+            // glTF is in metres; the model is in millimetres
+            let v = fin(p[a]) as f32 * 0.001;
             lo[a] = lo[a].min(v);
             hi[a] = hi[a].max(v);
             bin.extend_from_slice(&v.to_le_bytes());
@@ -773,7 +774,8 @@ pub mod tests {
         assert_eq!(doc["asset"]["version"], "2.0");
         let acc = &doc["accessors"];
         assert_eq!(acc[0]["count"], 4);
-        assert_eq!(acc[0]["max"], json!([10.0, 10.0, 10.0]));
+        // metres: the 10 mm part is 0.01 m
+        assert_eq!(acc[0]["max"], json!(vec![10.0f32 * 0.001; 3]));
         assert_eq!(acc[0]["min"], json!([0.0, 0.0, 0.0]));
         // two (roughness, metal) groups: two primitives and two materials sharing the vertices
         let prims = doc["meshes"][0]["primitives"].as_array().unwrap();
@@ -784,7 +786,7 @@ pub mod tests {
         assert_eq!(metal, 1);
         // read the third vertex position and the second vertex colour back from the binary chunk
         let f = |o: usize| f32::from_le_bytes([bin[o], bin[o + 1], bin[o + 2], bin[o + 3]]);
-        assert_eq!((f(2 * 12), f(2 * 12 + 4), f(2 * 12 + 8)), (0.0, 10.0, 0.0));
+        assert_eq!((f(2 * 12), f(2 * 12 + 4), f(2 * 12 + 8)), (0.0, 10.0f32 * 0.001, 0.0));
         let col = doc["bufferViews"][1]["byteOffset"].as_u64().unwrap() as usize;
         assert_eq!((f(col + 3 * 12), f(col + 3 * 12 + 4), f(col + 3 * 12 + 8)), (0.0, 0.0, 1.0));
         // the indices of both primitives together are the 4 triangles
