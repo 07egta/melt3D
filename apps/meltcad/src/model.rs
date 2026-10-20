@@ -723,6 +723,16 @@ pub struct Group {
 }
 
 impl Group {
+    /// The order the shapes are melted together in: everything that is not a minus first (in list
+    /// order), then the minus shapes. So a minus cuts all the plus shapes of its group, wherever it
+    /// sits in the list, and moving it up or down never changes the result.
+    pub fn fold_order(&self) -> Vec<usize> {
+        let keep = |s: &Shape| s.op != Op::Subtract;
+        let firsts = self.shapes.iter().enumerate().filter(|(_, s)| keep(s)).map(|(i, _)| i);
+        let cuts = self.shapes.iter().enumerate().filter(|(_, s)| !keep(s)).map(|(i, _)| i);
+        firsts.chain(cuts).collect()
+    }
+
     pub fn new(name: impl Into<String>) -> Group {
         Group {
             name: name.into(),
