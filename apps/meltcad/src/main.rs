@@ -125,7 +125,13 @@ fn no_graphics(choice: backend::Choice, plan: backend::Plan, tried: &[backend::B
 
 fn main() -> eframe::Result {
     let args: Vec<std::ffi::OsString> = std::env::args_os().collect();
-    if cpu_render::cli(&args) || bench::cli(&args) || automation::cli(&args) || mcp::cli(&args) {
+    if let Some(ok) = automation::run_cli(&args) {
+        if !ok {
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+    if cpu_render::cli(&args) || bench::cli(&args) || mcp::cli(&args) {
         return Ok(());
     }
     perf::init();

@@ -46,7 +46,7 @@ fn tools() -> Value {
             "description": format!("Run Melt 3D commands in order and return each answer. Units are mm, Z is up. Shapes melt together smoothly (SDF modelling). Commands:\n{list}Example: [{{\"cmd\":\"shape.add\",\"kind\":\"Sphere\",\"pos\":[0,0,30],\"size\":[20,20,20]}}]"),
             "inputSchema": {
                 "type": "object",
-                "properties": {"commands": {"type": "array", "items": {"type": "object"}, "description": "Command objects, each with a \"cmd\" field"}},
+                "properties": {"commands": {"type": "array", "items": {"type": "object"}, "maxItems": MAX_COMMANDS, "description": "Command objects, each with a \"cmd\" field (at most 500 per call)"}},
                 "required": ["commands"]
             }
         },
@@ -58,6 +58,9 @@ fn tools() -> Value {
     ])
 }
 
+/// The most commands one `melt3d_run` call accepts.
+const MAX_COMMANDS: usize = 500;
+
 fn call(backend: &mut Backend, name: &str, args: &Value) -> Value {
     let text = |s: String, err: bool| json!({"content": [{"type": "text", "text": s}], "isError": err});
     match name {
@@ -65,9 +68,12 @@ fn call(backend: &mut Backend, name: &str, args: &Value) -> Value {
             let Some(cmds) = args.get("commands").and_then(Value::as_array) else {
                 return text("\"commands\" must be an array of command objects".into(), true);
             };
+            if cmds.len() > MAX_COMMANDS {
+                return text(format!("too many commands ({}): send at most {MAX_COMMANDS} per call; nothing was run", cmds.len()), true);
+            }
             let mut out = Vec::new();
             let mut failed = false;
-            for c in cmds.iter().take(500) {
+            for c in cmds {
                 match backend.run(c) {
                     Ok(v) => out.push(json!({"ok": true, "result": v})),
                     Err(e) => {
@@ -206,5 +212,16 @@ mod tests {
         assert_eq!(view.as_ref().and_then(|v| v["result"]["content"][0]["type"].as_str()), Some("image"));
         let unk = handle(&mut b, &json!({"jsonrpc":"2.0","id":6,"method":"nope"}));
         assert!(unk.is_some_and(|v| v.get("error").is_some()));
+    }
+
+    #[test]
+    fn more_than_the_limit_is_an_error_and_runs_nothing() {
+        let mut b = local();
+        let many: Vec<Value> = (0..=MAX_COMMANDS).map(|_| json!({"cmd": "shape.add", "kind": "Sphere"})).collect();
+        let r = call(&mut b, "melt3d_run", &json!({"commands": many}));
+        assert_eq!(r["isError"].as_bool(), Some(true));
+        let n = call(&mut b, "melt3d_run", &json!({"commands": [{"cmd": "scene.summary"}]}));
+        assert!(n["content"][0]["text"].as_str().unwrap_or("").contains("\"shape_count\":0"));
+        assert_eq!(tools()[0]["inputSchema"]["properties"]["commands"]["maxItems"], json!(MAX_COMMANDS));
     }
 }
