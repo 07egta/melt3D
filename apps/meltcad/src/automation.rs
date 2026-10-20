@@ -56,7 +56,23 @@ pub const COMMANDS: &[(&str, &str)] = &[
 ];
 
 /// Run one command on the scene. Returns the answer, or the reason it failed.
+///
+/// A command that fails changes nothing: the scene is put back as it was.
 pub fn execute(scene: &mut Scene, cmd: &Value) -> Result<Value, String> {
+    let name = cmd.get("cmd").and_then(Value::as_str).unwrap_or("");
+    let reads_only = matches!(name, "commands" | "scene.get" | "scene.summary" | "render" | "anim.get" | "ui.precise");
+    if reads_only {
+        return run(scene, cmd);
+    }
+    let before = scene.clone();
+    let out = run(scene, cmd);
+    if out.is_err() {
+        *scene = before;
+    }
+    out
+}
+
+fn run(scene: &mut Scene, cmd: &Value) -> Result<Value, String> {
     let obj = cmd.as_object().ok_or("A command is a JSON object: {\"cmd\": \"...\"}")?;
     let name = obj.get("cmd").and_then(Value::as_str).ok_or("Missing \"cmd\"")?;
     let out = match name {
@@ -105,7 +121,8 @@ pub fn execute(scene: &mut Scene, cmd: &Value) -> Result<Value, String> {
             if g >= scene.groups.len() {
                 return Err("No such group".into());
             }
-            scene.groups.remove(g);
+            // the groups inside it move up one step, as when the group is deleted on screen
+            scene.remove_group(g);
             Ok(json!({"deleted": g}))
         }
         "melt.set" => {
@@ -1137,6 +1154,31 @@ mod tests {
         assert!(run(&mut back, json!({"cmd": "render", "path": p.to_string_lossy(), "size": 40})).is_ok());
         assert!(std::fs::metadata(&p).is_ok_and(|m| m.len() > 100));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_failed_command_leaves_the_scene_as_it_was() {
+        let mut sc = Scene { groups: Vec::new(), ..Scene::default() };
+        let before = sc.clone();
+        assert!(execute(&mut sc, &json!({"cmd": "shape.add", "kind": "Sphere", "group": 99})).is_err());
+        assert_eq!(sc, before, "no empty group is left behind");
+        let fps = sc.anim.fps;
+        assert!(execute(&mut sc, &json!({"cmd": "anim.set", "fps": 60, "length": "bad"})).is_err());
+        assert_eq!(sc.anim.fps, fps, "fps was not changed");
+        assert_eq!(sc, before);
+    }
+
+    #[test]
+    fn deleting_a_group_lifts_its_children_one_step() {
+        let mut sc = Scene { groups: Vec::new(), ..Scene::default() };
+        for (name, depth) in [("P", 0u8), ("A", 0), ("B", 1)] {
+            let mut g = crate::model::Group::new(name);
+            g.depth = depth;
+            sc.groups.push(g);
+        }
+        assert!(execute(&mut sc, &json!({"cmd": "group.delete", "group": 1})).is_ok());
+        let shape: Vec<(String, u8)> = sc.groups.iter().map(|g| (g.name.clone(), g.depth)).collect();
+        assert_eq!(shape, vec![("P".to_string(), 0), ("B".to_string(), 0)]);
     }
 
     #[test]
