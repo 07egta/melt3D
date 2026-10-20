@@ -395,6 +395,8 @@ Solid の命令は新しい形を追加し、参照した Sketch は残します
 - **Clay** をオンにすると、ポーズを3コマずつ止めてコマ撮りの感じになります。
 - **Export GIF** で動く絵として保存。
 - AI からは `anim.set / anim.key / anim.delete / anim.at / anim.render`（`{"cmd":"commands"}` で一覧）。
-- 別のファイルを足すのは「ファイル → Add file…」。足したものは新しいグループに入り、最初から Melt: on で今の作品と溶け合います。AI からは `scene.add_file {path}`。
+- **大ファイル（Stage）と中のファイル（Piece）**: ふつうの `.meltcad` が、そのまま大ファイルです。「ファイル → Add file…」で足した別のファイルは、シーン一覧で「File」の印が付いた1つのグループ（Piece）になり、最初から Melt: on で今の作品や、ほかの Piece と溶け合います。溶ける量は Piece のグループの Melt で変えられ、Off にすれば溶けずに並びます。
+  - Piece のパネルに「Reload」（元のファイルを読み直して置き換え。溶ける量・名前・＋/−・表示は保つ）と「Save as file…」（Piece の中身を単独のファイルとして書き出し、以後はそのファイルを覚える）があります。
+  - AI からは `scene.add_file {path}`、`piece.reload {group}`、`piece.save {group, path}`。
 - スケッチや立体のプレビューを編集中は再生・コマ移動・ポーズ記録を止めます。確定後の編集だけを記録し、編集と記録を同じ Undo にまとめます。
 - `anim.at` の `frame` は 0 から始まり、最後のコマを超えた場合は末尾に収めて、実際の `frame` を返します。開いている画面への変更命令は再生を止め、タイムラインの自動記録で命令の結果を上書きしません。

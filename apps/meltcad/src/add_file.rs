@@ -4,7 +4,7 @@
 use std::path::Path;
 
 use crate::app::App;
-use crate::model::{Group, MAX_DEPTH, MAX_GROUPS, MAX_SHAPES, Pick, Scene};
+use crate::model::{Group, MAX_DEPTH, MAX_GROUPS, MAX_SHAPES, Pick, Piece, Scene};
 use crate::pattern::{Pattern, Source};
 
 /// How far an added file melts into what was there before (mm): the usual "Melt: on" of a group.
@@ -44,11 +44,18 @@ fn shift_uids(sc: &mut Scene, by: u32) {
 /// Put `other` at the end of `scene`. It goes inside one new group (named `name`) with "Melt: on",
 /// so the whole file melts into what was there; its own groups keep their order and nesting.
 /// Returns the index of the first group added.
-pub fn merge_into(scene: &mut Scene, mut other: Scene, name: &str) -> Result<usize, String> {
+pub fn merge_into(scene: &mut Scene, other: Scene, name: &str) -> Result<usize, String> {
+    let at = scene.groups.len();
+    merge_at(scene, other, name, None, at, 0)
+}
+
+/// `merge_into` at place `at` of the list, with the new group at nesting `depth`. The new group is a
+/// piece of the big file: it remembers `path`, so it can be read again or saved back.
+fn merge_at(scene: &mut Scene, mut other: Scene, name: &str, path: Option<&Path>, at: usize, depth: u8) -> Result<usize, String> {
     if other.groups.is_empty() {
         return Err("That file has nothing in it".into());
     }
-    let wrap = other.groups.iter().all(|g| g.depth < MAX_DEPTH);
+    let wrap = other.groups.iter().all(|g| u16::from(g.depth) + u16::from(depth) < u16::from(MAX_DEPTH));
     if scene.groups.len() + other.groups.len() + usize::from(wrap) > MAX_GROUPS {
         return Err(format!("Up to {MAX_GROUPS} groups"));
     }
@@ -57,15 +64,18 @@ pub fn merge_into(scene: &mut Scene, mut other: Scene, name: &str) -> Result<usi
     }
     crate::mesh::can_add(scene, other.groups.iter().flat_map(|g| g.shapes.iter()))?;
     shift_uids(&mut other, max_uid(scene));
-    let at = scene.groups.len();
+    let at = at.min(scene.groups.len());
+    let mut block: Vec<Group> = Vec::new();
     if wrap {
         let title: String = name.chars().filter(|c| !c.is_control()).take(MAX_NAME_CHARS).collect();
-        let mut parent = Group::new(if title.trim().is_empty() { "Added file".to_string() } else { title });
+        let mut parent = Group::new(if title.trim().is_empty() { "Added file".to_string() } else { title.clone() });
         parent.blend = ADDED_BLEND;
-        scene.groups.push(parent);
+        parent.depth = depth;
+        parent.piece = Some(Piece { file: title, path: path.map(|p| p.to_string_lossy().into_owned()) });
+        block.push(parent);
         for mut g in other.groups {
-            g.depth += 1;
-            scene.groups.push(g);
+            g.depth += depth + 1;
+            block.push(g);
         }
     } else {
         // nested too deep to be wrapped: the first top-level group melts into the scene instead
@@ -73,8 +83,12 @@ pub fn merge_into(scene: &mut Scene, mut other: Scene, name: &str) -> Result<usi
         if let Some(g) = first_top.and_then(|i| other.groups.get_mut(i)) {
             g.blend = g.blend.max(ADDED_BLEND);
         }
-        scene.groups.append(&mut other.groups);
+        for mut g in other.groups {
+            g.depth = g.depth.saturating_add(depth);
+            block.push(g);
+        }
     }
+    scene.groups.splice(at..at, block);
     scene.normalize_depths();
     Ok(at)
 }
@@ -83,7 +97,63 @@ pub fn merge_into(scene: &mut Scene, mut other: Scene, name: &str) -> Result<usi
 pub fn add_file(scene: &mut Scene, path: &Path) -> Result<usize, String> {
     let (other, _notes) = crate::recovery::read_project(path)?;
     let name = path.file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    merge_into(scene, other, &name)
+    let at = scene.groups.len();
+    merge_at(scene, other, &name, Some(path), at, 0)
+}
+
+/// Read the file of piece `gi` again and put it in the piece's place. The piece keeps its melt
+/// amount, its +/- and whether it is shown. Nothing changes when the file cannot be read or does not fit.
+pub fn reload_piece(scene: &mut Scene, gi: usize) -> Result<(), String> {
+    let old = scene.groups.get(gi).cloned().ok_or("No such group")?;
+    let piece = old.piece.clone().ok_or("This group is not a piece of a file")?;
+    let path = piece.path.clone().ok_or("Where this piece came from is not known. Use Save as file… first")?;
+    let (other, _notes) = crate::recovery::read_project(Path::new(&path))?;
+    let end = scene.subtree_end(gi);
+    let removed: Vec<Group> = scene.groups.drain(gi..end).collect();
+    match merge_at(scene, other, &piece.file, Some(Path::new(&path)), gi, old.depth) {
+        Ok(at) => {
+            if let Some(g) = scene.groups.get_mut(at) {
+                g.name = old.name;
+                g.blend = old.blend;
+                g.visible = old.visible;
+                g.op = old.op;
+                g.xform = old.xform;
+            }
+            Ok(())
+        }
+        Err(e) => {
+            scene.groups.splice(gi..gi, removed);
+            Err(e)
+        }
+    }
+}
+
+/// Write piece `gi` (what is inside it) into its own file at `path`, and remember that file for it.
+pub fn save_piece(scene: &mut Scene, gi: usize, path: &Path) -> Result<(), String> {
+    let g = scene.groups.get(gi).ok_or("No such group")?;
+    if g.piece.is_none() {
+        return Err("This group is not a piece of a file".into());
+    }
+    let end = scene.subtree_end(gi);
+    let top = u16::from(g.depth) + 1;
+    let inside: Vec<Group> = scene
+        .groups
+        .get(gi + 1..end)
+        .unwrap_or_default()
+        .iter()
+        .cloned()
+        .map(|mut x| {
+            x.depth = (u16::from(x.depth).saturating_sub(top)) as u8;
+            x
+        })
+        .collect();
+    let file = Scene { groups: inside, melt: scene.melt, ..Scene::default() };
+    crate::recovery::save_project(path, &file)?;
+    if let Some(p) = scene.groups.get_mut(gi).and_then(|g| g.piece.as_mut()) {
+        p.file = path.file_stem().map(|n| n.to_string_lossy().chars().take(crate::model::MAX_PIECE_FILE).collect()).unwrap_or_default();
+        p.path = Some(path.to_string_lossy().into_owned());
+    }
+    Ok(())
 }
 
 impl App {
@@ -91,6 +161,39 @@ impl App {
     pub(crate) fn add_file_dialog(&mut self, ctx: &egui::Context) {
         let Some(path) = rfd::FileDialog::new().add_filter("Melt 3D", &["meltcad", "yura", "json"]).pick_file() else { return };
         self.add_file_path(ctx, &path);
+    }
+
+    /// In the group's panel: a piece of the big file says where it came from, and can read that
+    /// file again or be saved as a file of its own.
+    pub(crate) fn piece_card(&mut self, ui: &mut egui::Ui, g: usize) {
+        let Some(piece) = self.scene.groups.get(g).and_then(|x| x.piece.clone()) else { return };
+        let ctx = ui.ctx().clone();
+        ui.label(egui::RichText::new(format!("Piece of the big file: {}", piece.file)).size(12.0).color(crate::style::DIM))
+            .on_hover_text("A whole file you added. It melts with the other pieces and shapes of this scene");
+        let free = !self.scene_structure_locked();
+        ui.horizontal_wrapped(|ui| {
+            if crate::style::pill_enabled(ui, "Reload", false, free && piece.path.is_some())
+                .on_hover_text("Read the file again and replace this piece with it")
+                .clicked()
+            {
+                match reload_piece(&mut self.scene, g) {
+                    Ok(()) => {
+                        self.sel = Some(Pick::Group(g));
+                        self.say(&ctx, "Read the file again");
+                    }
+                    Err(e) => self.say(&ctx, format!("Could not reload: {e}")),
+                }
+            }
+            if crate::style::pill_enabled(ui, "Save as file…", false, free).on_hover_text("Write this piece into a file of its own").clicked()
+                && let Some(path) =
+                    rfd::FileDialog::new().add_filter("Melt 3D", &["meltcad"]).set_file_name(format!("{}.meltcad", piece.file)).save_file()
+            {
+                match save_piece(&mut self.scene, g, &path) {
+                    Ok(()) => self.say(&ctx, "Saved the piece as a file"),
+                    Err(e) => self.say(&ctx, format!("Could not save: {e}")),
+                }
+            }
+        });
     }
 
     pub(crate) fn add_file_path(&mut self, ctx: &egui::Context, path: &Path) {
@@ -192,6 +295,55 @@ mod tests {
         assert_eq!(mine.groups[at].name, "a");
         assert!(mine.groups[at].blend > 0.0);
         assert_eq!(mine.groups.len(), 5);
+    }
+
+    fn temp(name: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("meltcad-piece-{}-{name}.meltcad", std::process::id()))
+    }
+
+    #[test]
+    fn an_added_file_is_a_piece_that_reloads_and_saves_back() {
+        let first = temp("first");
+        crate::recovery::save_project(&first, &scene_with(vec![group("t", 0, vec![ball(30.0)])])).unwrap();
+        let mut mine = scene_with(vec![group("mine", 0, vec![ball(0.0)])]);
+        let at = add_file(&mut mine, &first).unwrap();
+        let piece = mine.groups[at].piece.clone().expect("a piece of the big file");
+        assert!(piece.path.as_deref().is_some_and(|p| p.ends_with("first.meltcad")));
+        // the user set this piece apart and renamed it: a reload keeps that, and takes the new contents
+        mine.groups[at].blend = 33.0;
+        mine.groups[at].name = "my friend".into();
+        crate::recovery::save_project(&first, &scene_with(vec![group("t", 0, vec![ball(30.0), ball(60.0)])])).unwrap();
+        reload_piece(&mut mine, at).unwrap();
+        assert_eq!(mine.shape_count(), 3);
+        assert_eq!((mine.groups[at].blend, mine.groups[at].name.as_str()), (33.0, "my friend"));
+        assert!(mine.groups[at].piece.is_some());
+        // saving the piece writes only what is inside it, back at the top level
+        let second = temp("second");
+        save_piece(&mut mine, at, &second).unwrap();
+        let (back, _) = crate::recovery::read_project(&second).unwrap();
+        assert_eq!(back.shape_count(), 2);
+        assert!(back.groups.iter().all(|g| g.depth == 0 && g.piece.is_none()));
+        assert!(mine.groups[at].piece.as_ref().and_then(|p| p.path.as_deref()).is_some_and(|p| p.ends_with("second.meltcad")));
+        // the piece survives a save and a load of the big file
+        let (loaded, _) = Scene::from_json_notes(&mine.to_json()).unwrap();
+        assert_eq!(loaded.groups[at].piece, mine.groups[at].piece);
+        let _ = std::fs::remove_file(&first);
+        let _ = std::fs::remove_file(&second);
+    }
+
+    #[test]
+    fn a_failed_reload_leaves_the_scene_as_it_was() {
+        let gone = temp("gone");
+        crate::recovery::save_project(&gone, &scene_with(vec![group("t", 0, vec![ball(30.0)])])).unwrap();
+        let mut mine = scene_with(vec![group("mine", 0, vec![ball(0.0)])]);
+        let at = add_file(&mut mine, &gone).unwrap();
+        let before = mine.clone();
+        let _ = std::fs::remove_file(&gone);
+        assert!(reload_piece(&mut mine, at).is_err());
+        assert_eq!(mine, before);
+        assert!(reload_piece(&mut mine, 0).is_err(), "a plain group is not a piece");
+        assert!(reload_piece(&mut mine, 99).is_err());
+        assert!(save_piece(&mut mine, 0, &temp("never")).is_err());
     }
 
     #[test]

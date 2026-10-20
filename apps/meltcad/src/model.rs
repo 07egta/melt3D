@@ -720,7 +720,24 @@ pub struct Group {
     /// Where a linked copy stands (move, turn, scale about the source's middle).
     #[serde(default, skip_serializing_if = "Xform::is_identity")]
     pub xform: Xform,
+    /// Set when the group holds a whole file that was added to this one ("Add file"): a piece of the big file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub piece: Option<Piece>,
 }
+
+/// Which file a piece of the big file came from, so it can be read again or saved back.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Piece {
+    /// The file's name (no folder).
+    pub file: String,
+    /// Where it was read from, when that is known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+}
+
+/// The longest file name and path a piece keeps.
+pub const MAX_PIECE_FILE: usize = 80;
+pub const MAX_PIECE_PATH: usize = 1024;
 
 impl Group {
     /// The order the shapes are melted together in: everything that is not a minus first (in list
@@ -746,6 +763,7 @@ impl Group {
             pattern: None,
             instance_of: None,
             xform: Xform::default(),
+            piece: None,
         }
     }
 }
@@ -1191,6 +1209,12 @@ impl Scene {
         let mut left = MAX_SHAPES;
         for g in &mut self.groups {
             fix(&mut g.blend, 0.0, 200.0, 0.0);
+            if let Some(p) = &mut g.piece {
+                p.file = p.file.chars().filter(|c| !c.is_control()).take(MAX_PIECE_FILE).collect();
+                if let Some(path) = &mut p.path {
+                    path.truncate(path.char_indices().nth(MAX_PIECE_PATH).map_or(path.len(), |(i, _)| i));
+                }
+            }
             if let Some(p) = &mut g.pattern {
                 p.sanitize();
             }
