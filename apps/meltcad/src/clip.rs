@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::app::App;
 use crate::model::{Group, MAX_GROUPS, MAX_SHAPES, Pick, Scene, Shape};
+use crate::pattern::{Pattern, Source};
 
 /// A pasted copy sits exactly where the original was (no shift).
 const STEP: f32 = 0.0;
@@ -68,12 +69,12 @@ pub fn paste_text(app: &mut App, text: &str) -> Result<String, String> {
             let group = sc.groups.into_iter().next().ok_or("It was empty")?;
             return add_shapes(app, group.shapes);
         }
-        return add_block(app, sc.groups, "Pasted");
+        return add_block(app, sc.groups, "Pasted", true);
     }
     // a whole scene file pasted as text: its groups are added
     if let Ok(sc) = Scene::from_json(text) {
         let n = sc.groups.len();
-        return add_block(app, sc.groups, &format!("Pasted {n} groups"));
+        return add_block(app, sc.groups, &format!("Pasted {n} groups"), false);
     }
     Err("Nothing to paste".into())
 }
@@ -115,7 +116,7 @@ fn add_shapes(app: &mut App, mut shapes: Vec<Shape>) -> Result<String, String> {
 
 /// Put a block of groups (a group with the groups nested in it, or a whole scene) into the scene
 /// after the selection, keeping how they nest. All of it goes in, or none of it does.
-fn add_block(app: &mut App, mut block: Vec<Group>, done: &str) -> Result<String, String> {
+fn add_block(app: &mut App, mut block: Vec<Group>, done: &str, from_clipboard: bool) -> Result<String, String> {
     if block.is_empty() {
         return Err("It was empty".into());
     }
@@ -130,11 +131,40 @@ fn add_block(app: &mut App, mut block: Vec<Group>, done: &str) -> Result<String,
     // shape IDs, link sources and pattern references *before* splicing so
     // linked copies cannot silently attach to pre-existing geometry.
     let mut incoming = Scene { groups: block, ..Scene::default() };
+    // A copied linked group (or geometry pattern) may intentionally refer to
+    // a source *outside* the copied subtree in the same scene. Preserve those
+    // references only for the application's clipboard; a foreign whole-scene
+    // JSON must never connect to a coincidentally matching destination UID.
+    let original = from_clipboard.then(|| incoming.groups.clone());
+    let own_groups: std::collections::HashSet<u32> = incoming.groups.iter().map(|g| g.uid).filter(|u| *u != 0).collect();
+    let own_shapes: std::collections::HashSet<u32> =
+        incoming.groups.iter().flat_map(|g| g.shapes.iter().map(|s| s.uid)).filter(|u| *u != 0).collect();
     let by = crate::add_file::max_uid(&app.scene);
     if by.checked_add(crate::add_file::max_uid(&incoming)).is_none() {
         return Err("Too many identifiers to paste safely".into());
     }
     crate::add_file::shift_uids(&mut incoming, by);
+    if let Some(original) = original {
+        for (new, old) in incoming.groups.iter_mut().zip(&original) {
+            if let Some(source) = old.instance_of
+                && !own_groups.contains(&source)
+                && app.scene.group_by_uid(source).is_some()
+            {
+                new.instance_of = Some(source);
+            }
+            match (&mut new.pattern, &old.pattern) {
+                (Some(Pattern::Path { source: dest, .. }), Some(Pattern::Path { source, .. }))
+                    if !own_shapes.contains(source) && app.scene.shape_by_uid(*source).is_some() => *dest = *source,
+                (Some(Pattern::Geometry { source: Source::Shape(dest), .. }),
+                 Some(Pattern::Geometry { source: Source::Shape(source), .. }))
+                    if !own_shapes.contains(source) && app.scene.shape_by_uid(*source).is_some() => *dest = *source,
+                (Some(Pattern::Geometry { source: Source::Group(dest), .. }),
+                 Some(Pattern::Geometry { source: Source::Group(source), .. }))
+                    if !own_groups.contains(source) && app.scene.group_by_uid(*source).is_some() => *dest = *source,
+                _ => {}
+            }
+        }
+    }
     block = incoming.groups;
     let base = block.first().map_or(0, |g| g.depth);
     for g in &mut block {
@@ -295,6 +325,22 @@ mod tests {
         let original_count = app.scene.shape_count();
         assert!(paste_text(&mut app, &text).is_err());
         assert_eq!(app.scene.shape_count(), original_count);
+    }
+
+    #[test]
+    fn copying_a_link_within_one_scene_keeps_its_original_source() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        app.sel = Some(Pick::Group(0));
+        app.make_instance(&ctx);
+        let original_link = match app.sel { Some(Pick::Group(gi)) => gi, _ => panic!("linked copy") };
+        let uid = app.scene.groups[original_link].instance_of.expect("linked source");
+        let clip = copy_text(&app).unwrap();
+        assert!(paste_text(&mut app, &clip).is_ok());
+        let new_link = match app.sel { Some(Pick::Group(gi)) => gi, _ => panic!("pasted linked copy") };
+        assert!(app.scene.groups[new_link].is_linked());
+        assert_eq!(app.scene.groups[new_link].instance_of, Some(uid));
+        assert_eq!(crate::pattern::link_source(&app.scene, new_link), Some(0));
     }
 
     #[test]
