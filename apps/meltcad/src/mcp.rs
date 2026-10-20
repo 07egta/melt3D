@@ -134,7 +134,7 @@ pub fn cli(args: &[std::ffi::OsString]) -> bool {
         Some(port) => {
             let token = std::env::var("MELT3D_CONTROL_TOKEN")
                 .ok()
-                .or_else(|| std::fs::read_to_string(crate::control::token_file(port)).ok().map(|t| t.trim().to_string()))
+                .or_else(|| crate::control::token_file(port).ok().and_then(|path| std::fs::read_to_string(path).ok()).map(|t| t.trim().to_string()))
                 .unwrap_or_default();
             let conn = TcpStream::connect(("127.0.0.1", port)).and_then(|w| w.try_clone().map(|r| (r, w)));
             match conn {
