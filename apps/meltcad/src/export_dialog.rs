@@ -74,7 +74,7 @@ impl<T: Clone + Send + 'static> Task<T> {
 struct Dlg {
     opts: Options,
     /// What the estimate and the check were made for.
-    snap: Option<(Scene, Option<Pick>, Scope, bool, f32)>,
+    snap: Option<(Scene, Option<Pick>, Options)>,
     est: Task<Estimate>,
     check: Task<PrintCheck>,
     /// The check should start by itself on the next frame.
@@ -359,15 +359,19 @@ fn row(ui: &mut egui::Ui, label: &str, add: impl FnOnce(&mut egui::Ui)) {
     });
 }
 
+/// Cached measurements depend on the entire export configuration, especially
+/// precision and physical scale. Never display a result from an older setting.
+fn snapshot_stale(snap: Option<&(Scene, Option<Pick>, Options)>, scene: &Scene, sel: Option<Pick>, opts: &Options) -> bool {
+    snap.is_none_or(|s| &s.0 != scene || s.1 != sel || &s.2 != opts)
+}
+
 /// Call once per frame: the progress of a running export and the card when it is open.
 pub fn update(app: &mut App, ctx: &egui::Context) {
     running_card(app, ctx);
     let Some(mut d) = ctx.data_mut(|m| m.remove_temp::<Dlg>(id())).filter(|d| d.open) else { return };
     // the estimate and the check are about the scene as it is now
-    // The print check reports physical mm, so changing export scale
-    // invalidates it even when the scene's geometry is unchanged.
-    let key = (app.scene.clone(), app.sel, d.opts.scope, d.opts.ignore_paint, d.opts.scale_pct);
-    let stale = d.snap.as_ref().is_none_or(|s| s.0 != key.0 || s.1 != key.1 || s.2 != key.2 || s.3 != key.3 || s.4 != key.4);
+    let key = (app.scene.clone(), app.sel, d.opts.clone());
+    let stale = snapshot_stale(d.snap.as_ref(), &key.0, key.1, &key.2);
     if stale {
         d.snap = Some(key);
         d.check.reset();
@@ -761,6 +765,21 @@ mod tests {
         // an error is shown in English
         assert_eq!(jp_error(CANCELLED), "Cancelled");
         assert!(jp_error("the model is too big for this precision; choose a coarser one").contains("detail"));
+    }
+
+    #[test]
+    fn print_check_cache_invalidates_when_precision_or_scale_changes() {
+        let scene = Scene::default();
+        let old = Options::default();
+        let snapshot = (scene.clone(), None, old.clone());
+        assert!(!snapshot_stale(Some(&snapshot), &scene, None, &old));
+        let precise = Options { tolerance: 0.1, ..old.clone() };
+        assert!(snapshot_stale(Some(&snapshot), &scene, None, &precise), "precision affects measured thin walls");
+        let scaled = Options { scale_pct: 10.0, ..old.clone() };
+        assert!(snapshot_stale(Some(&snapshot), &scene, None, &scaled), "physical scale affects measured wall thickness");
+        let scope = Options { scope: Scope::Selected, ..old };
+        assert!(snapshot_stale(Some(&snapshot), &scene, None, &scope));
+        assert!(snapshot_stale(None, &scene, None, &scaled));
     }
 
     #[test]
