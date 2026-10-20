@@ -42,6 +42,7 @@ pub enum Action {
     PrintCheck,
     ImportSvg,
     ImportMesh,
+    OpenPrecise,
     FrameAll,
     FrameSelection,
     TogglePerspective,
@@ -76,7 +77,8 @@ impl Action {
             | Self::ClearPattern
             | Self::MakeInstance
             | Self::ImportSvg
-            | Self::ImportMesh => true,
+            | Self::ImportMesh
+            | Self::OpenPrecise => true,
             _ => false,
         }
     }
@@ -182,6 +184,7 @@ pub fn entries() -> Vec<Entry> {
         cmd("Print Check", "print check volume size 体積 おおきさ プリントチェック", Action::PrintCheck),
         cmd("Import SVG", "svg import いんぽーと SVGを読み込む", Action::ImportSvg),
         cmd("Import Mesh", "mesh stl obj 3mf ply glb import めっしゅ よみこむ とりこむ 取り込み メッシュを読み込む", Action::ImportMesh),
+        cmd("SolidCraft で精密に作る", "solid solidcraft precise cad 精密 ソリッド", Action::OpenPrecise),
         cmd("Frame All", "frame all home ぜんたい 全体を見る", Action::FrameAll),
         cmd("Frame Selection", "frame focus selection みる えらんだものを見る", Action::FrameSelection),
         cmd("Toggle Perspective / Ortho", "perspective orthographic ortho えんきん へいこう 遠近 平行を切りかえ", Action::TogglePerspective),
@@ -356,6 +359,7 @@ impl App {
             Action::PrintCheck => self.print_check(ctx),
             Action::ImportSvg => crate::svg_dialog::open(ctx),
             Action::ImportMesh => crate::mesh_dialog::open(ctx),
+            Action::OpenPrecise => self.open_precise(ctx),
             Action::FrameAll => self.frame_view(false),
             Action::FrameSelection => self.frame_view(true),
             Action::TogglePerspective => self.cam.ortho = !self.cam.ortho,
@@ -621,6 +625,13 @@ mod tests {
         assert_eq!(top("stl"), Some(Action::Export(ExportFormat::Stl)));
         assert_eq!(top("array"), Some(Action::Array));
         assert_eq!(top("ならべ"), Some(Action::Array));
+    }
+
+    #[test]
+    fn solidcraft_is_found_by_solid_and_japanese_names() {
+        for query in ["Solid", "solidcraft", "精密", "ソリッド"] {
+            assert_eq!(top(query), Some(Action::OpenPrecise), "{query}");
+        }
     }
 
     #[test]

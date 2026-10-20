@@ -18,6 +18,7 @@ use crate::sketch_saved;
 /// The commands, for `commands` and for the error text of an unknown one.
 pub const COMMANDS: &[(&str, &str)] = &[
     ("commands", "List the commands"),
+    ("ui.precise", "--control only: {on?:true}; SolidCraft を開く。false で戻り、立体を自動で Melt に取り込む"),
     ("scene.get", "The whole scene as JSON"),
     ("scene.summary", "Short list of groups and shapes with their numbers"),
     ("scene.set", "Replace the scene: {scene: {...}}"),
@@ -56,6 +57,7 @@ pub fn execute(scene: &mut Scene, cmd: &Value) -> Result<Value, String> {
     let obj = cmd.as_object().ok_or("A command is a JSON object: {\"cmd\": \"...\"}")?;
     let name = obj.get("cmd").and_then(Value::as_str).ok_or("Missing \"cmd\"")?;
     let out = match name {
+        "ui.precise" => Err("ui.precise は起動中の画面の --control から使ってください".into()),
         "commands" => Ok(json!(COMMANDS.iter().map(|(n, d)| json!({"cmd": n, "about": d})).collect::<Vec<_>>())),
         "scene.get" => serde_json::to_value(&*scene).map_err(|e| e.to_string()),
         "scene.summary" => Ok(summary(scene)),
@@ -965,6 +967,8 @@ mod tests {
             json!({}),
             json!({"cmd": 3}),
             json!({"cmd": "nope"}),
+            json!({"cmd": "ui.precise", "on": "false"}),
+            json!({"cmd": "ui.precise", "on": false}),
             json!({"cmd": "shape.add"}),
             json!({"cmd": "shape.add", "kind": "Banana"}),
             json!({"cmd": "shape.add", "kind": "Box", "size": "big"}),

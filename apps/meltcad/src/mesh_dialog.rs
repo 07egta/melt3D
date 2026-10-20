@@ -5,7 +5,7 @@
 //! The state lives in egui's memory like the other cards, so `App` needs no new fields.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -44,6 +44,30 @@ impl<T: Send + 'static> Job<T> {
     }
 }
 
+/// The outcome of a SolidCraft transfer. A completed bake is not a success until its shape
+/// has actually been inserted into the Melt scene.
+#[derive(Clone)]
+pub struct SolidImport {
+    result: Arc<Mutex<Option<Result<(), String>>>>,
+    completed: Arc<AtomicBool>,
+}
+
+impl SolidImport {
+    fn new() -> Self {
+        Self { result: Arc::new(Mutex::new(None)), completed: Arc::new(AtomicBool::new(false)) }
+    }
+
+    pub fn take_result(&self) -> Option<Result<(), String>> {
+        self.result.lock().unwrap_or_else(|e| e.into_inner()).take()
+    }
+
+    fn complete(&self, result: Result<(), String>) {
+        if !self.completed.swap(true, Ordering::AcqRel) {
+            *self.result.lock().unwrap_or_else(|e| e.into_inner()) = Some(result);
+        }
+    }
+}
+
 struct BakeJob {
     job: Arc<Job<Baked>>,
     ctl: Arc<BakeControl>,
@@ -52,6 +76,7 @@ struct BakeJob {
     loaded: Arc<Loaded>,
     settings: Settings,
     path: Option<PathBuf>,
+    original: bool,
 }
 
 #[derive(Clone)]
@@ -276,18 +301,69 @@ struct Dlg {
     msg: String,
     open: bool,
     path: Option<PathBuf>,
-    /// Start the bake as soon as the file is read (a solid sent from the precise view): no Load click.
-    auto: bool,
+    /// An in-memory SolidCraft transfer, completed only after insertion or explicit cancellation.
+    completion: Option<SolidImport>,
 }
 
 impl Default for Dlg {
     fn default() -> Dlg {
-        Dlg { reading: None, loaded: None, st: Settings::new([60.0; 3]), bake: None, msg: String::new(), open: false, path: None, auto: false }
+        Dlg { reading: None, loaded: None, st: Settings::new([60.0; 3]), bake: None, msg: String::new(), open: false, path: None, completion: None }
     }
 }
 
 fn id() -> egui::Id {
     egui::Id::new("mesh_import_card")
+}
+
+/// Imports and re-bakes must finish or be cancelled before changing modelling views.
+pub fn is_open(ctx: &egui::Context) -> bool {
+    ctx.data(|m| m.get_temp::<Dlg>(id()).is_some_and(|d| d.open) || m.get_temp::<RebakeRequest>(rebake_id()).is_some())
+}
+
+fn cancel_dialog(d: &Dlg, reason: &str) {
+    if let Some(b) = &d.bake {
+        b.ctl.cancel.store(true, Ordering::Relaxed);
+    }
+    if let Some(completion) = &d.completion {
+        completion.complete(Err(reason.into()));
+    }
+}
+
+/// Cancel any import or re-bake owned by this context, including pending SolidCraft transfers.
+#[cfg(test)]
+pub fn cancel(ctx: &egui::Context) -> bool {
+    let (dialog, rebake) = ctx.data_mut(|m| {
+        let dialog = m.remove_temp::<Dlg>(id());
+        let rebake = m.get_temp::<RebakeRequest>(rebake_id());
+        m.remove::<RebakeRequest>(rebake_id());
+        (dialog, rebake)
+    });
+    let had_request = dialog.is_some() || rebake.is_some();
+    if let Some(d) = dialog {
+        cancel_dialog(&d, "SolidCraft の取り込みを取り消しました");
+    }
+    if let Some(req) = rebake
+        && let Some(job) = req.job
+    {
+        job.ctl.cancel.store(true, Ordering::Relaxed);
+    }
+    had_request
+}
+
+/// Start converting an already loaded exact solid, retaining its original Z-up millimetres.
+/// An existing import is left intact so another operation cannot silently replace it.
+pub fn open_solid(ctx: &egui::Context, loaded: Loaded) -> Result<SolidImport, String> {
+    if is_open(ctx) {
+        return Err("先にメッシュの取り込みや再計算を完了するか、取り消してください".into());
+    }
+    let completion = SolidImport::new();
+    let st =
+        Settings { target_mm: loaded.size.into_iter().fold(0.0, f32::max), up: Up::Z, floor: false, centre: false, ..Settings::new(loaded.size) };
+    let mut d = Dlg { loaded: Some(Arc::new(loaded)), st, open: true, completion: Some(completion.clone()), ..Dlg::default() };
+    start_bake(&mut d);
+    ctx.data_mut(|m| m.insert_temp(id(), d));
+    ctx.request_repaint();
+    Ok(completion)
 }
 
 /// Menu entry "Import mesh…": ask for a file, then show the card.
@@ -300,27 +376,16 @@ pub fn open(ctx: &egui::Context) {
 
 /// Show the card for this file (a dropped file, or the one just chosen).
 pub fn open_path(ctx: &egui::Context, path: PathBuf) {
-    open_path_with(ctx, path, false);
-}
-
-/// Like `open_path`, but bakes at once with the default settings, so the solid is simply there.
-pub fn open_path_auto(ctx: &egui::Context, path: PathBuf) {
-    open_path_with(ctx, path, true);
-}
-
-fn open_path_with(ctx: &egui::Context, path: PathBuf, auto: bool) {
-    let mut d = ctx.data_mut(|m| m.remove_temp::<Dlg>(id())).filter(|d| d.open).unwrap_or_default();
-    if let Some(b) = &d.bake {
-        b.ctl.cancel.store(true, Ordering::Relaxed);
+    if let Some(d) = ctx.data_mut(|m| m.remove_temp::<Dlg>(id())) {
+        cancel_dialog(&d, "別のメッシュの読み込みに切り替えたため、SolidCraft の取り込みを取り消しました");
     }
-    d.bake = None;
-    d.loaded = None;
-    d.msg.clear();
-    d.open = true;
-    d.auto = auto;
     let p = path.clone();
-    d.path = Some(path.clone());
-    d.reading = Some((Job::spawn("meltcad-mesh-read", move || mesh_import::load(&p)), path));
+    let d = Dlg {
+        open: true,
+        path: Some(path.clone()),
+        reading: Some((Job::spawn("meltcad-mesh-read", move || mesh_import::load(&p)), path)),
+        ..Dlg::default()
+    };
     ctx.data_mut(|m| m.insert_temp(id(), d));
     ctx.request_repaint();
 }
@@ -369,27 +434,31 @@ fn start_bake(d: &mut Dlg) {
     let settings = d.st.sanitized();
     let ctl = Arc::new(BakeControl::new());
     let (l, c) = (loaded.clone(), ctl.clone());
-    let job = Job::spawn("meltcad-mesh-bake", move || mesh_import::bake(&l.imported.mesh, l.imported.format, &settings, &c));
-    d.bake = Some(Arc::new(BakeJob { job, ctl, started: Instant::now(), loaded, settings, path: d.path.clone() }));
+    let original = d.completion.is_some();
+    let job = Job::spawn("meltcad-mesh-bake", move || {
+        if original {
+            mesh_import::bake_original(&l.imported.mesh, settings.res, &c)
+        } else {
+            mesh_import::bake(&l.imported.mesh, l.imported.format, &settings, &c)
+        }
+    });
+    d.bake = Some(Arc::new(BakeJob { job, ctl, started: Instant::now(), loaded, settings, path: d.path.clone(), original }));
     d.msg.clear();
 }
 
-/// The shape and group of a baked mesh go into the scene. Returns whether the card can close.
-fn finish(app: &mut App, ctx: &egui::Context, b: &BakeJob, baked: &Baked) -> bool {
+/// The shape and group of a baked mesh go into the scene, or the card keeps a visible reason.
+fn finish(app: &mut App, ctx: &egui::Context, b: &BakeJob, baked: &Baked) -> Result<(), String> {
     if !app.allow_scene_structure_change() {
-        return false;
+        return Err("編集中のスケッチや立体を確定するか、取り消してから取り込んでください".into());
     }
     if app.scene.groups.len() >= MAX_GROUPS {
-        app.say(ctx, format!("Up to {MAX_GROUPS} groups"));
-        return false;
+        return Err(format!("Up to {MAX_GROUPS} groups"));
     }
     if app.scene.shape_count() >= MAX_SHAPES {
-        app.say(ctx, format!("Up to {MAX_SHAPES} shapes"));
-        return false;
+        return Err(format!("Up to {MAX_SHAPES} shapes"));
     }
     if let Some(why) = mesh_import::refuse(&app.scene, baked.volume.nodes()) {
-        app.say(ctx, why);
-        return false;
+        return Err(why.into());
     }
     let st = b.settings;
     let pos = mesh_import::place(baked, st.floor, st.centre, [app.cam.target[0], app.cam.target[1]]);
@@ -403,14 +472,26 @@ fn finish(app: &mut App, ctx: &egui::Context, b: &BakeJob, baked: &Baked) -> boo
         });
     }
     let mut group = Group::new(b.loaded.stem.clone());
+    if b.original {
+        // Use the ordinary group "Melt: on" default so the global Melt amount works
+        // immediately, including when the transferred mesh is alone in its group.
+        group.blend = 12.0;
+    }
     group.shapes.push(shape);
+    app.settle(ctx);
     app.scene.groups.push(group);
     let gi = app.scene.groups.len() - 1;
     app.sel = Some(Pick::Shape(gi, 0));
+    app.settle(ctx);
     app.frame_view(true);
     let secs = baked.stats.bvh_secs + baked.stats.sign_secs + baked.stats.dist_secs;
-    app.say(ctx, format!("Added mesh: {} ({} · {:.1} sec)", b.loaded.file_name, size_text(baked.size), secs));
-    true
+    if b.original {
+        app.tab = crate::app::Tab::Melt;
+        app.say(ctx, format!("SolidCraft の立体を取り込みました（{}・{secs:.1} 秒）", size_text(baked.size)));
+    } else {
+        app.say(ctx, format!("Added mesh: {} ({} · {:.1} sec)", b.loaded.file_name, size_text(baked.size), secs));
+    }
+    Ok(())
 }
 
 /// Call once per frame: handles dropped files, the running jobs, and shows the card when it is open.
@@ -427,9 +508,6 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
                 d.msg.clear();
                 d.loaded = Some(Arc::new(l));
                 d.reading = None;
-                if d.auto {
-                    start_bake(&mut d);
-                }
             }
             Some(Err(e)) => {
                 d.msg = format!("{}: {}", path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), e);
@@ -439,12 +517,15 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
         }
     }
     // the bake has finished
-    let mut close = false;
+    let mut inserted = false;
     if let Some(b) = d.bake.clone() {
         match b.job.take() {
             Some(Ok(baked)) => {
                 d.bake = None;
-                close = finish(app, ctx, &b, &baked);
+                match finish(app, ctx, &b, &baked) {
+                    Ok(()) => inserted = true,
+                    Err(e) => d.msg = e,
+                }
             }
             Some(Err(e)) => {
                 d.bake = None;
@@ -453,14 +534,27 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
             None => ctx.request_repaint_after(std::time::Duration::from_millis(60)),
         }
     }
+    if inserted {
+        if let Some(completion) = &d.completion {
+            completion.complete(Ok(()));
+        }
+        return;
+    }
+    let mut close = false;
     let mut go = false;
     let mut pick = false;
     let busy_read = d.reading.is_some();
+    let original = d.completion.is_some();
     egui::Area::new(egui::Id::new("mesh_import_area")).order(egui::Order::Foreground).anchor(Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
         style::card().show(ui, |ui| {
             ui.set_width(380.0);
-            ui.label(RichText::new("Import mesh").strong().size(15.0));
-            ui.label(RichText::new("Loads STL, OBJ, 3MF, PLY and GLB solids. Melt or cut them like other shapes").size(11.5).color(style::DIM));
+            if original {
+                ui.label(RichText::new("SolidCraft の立体を Melt に取り込み中").strong().size(15.0));
+                ui.label(RichText::new("大きさと位置を保って、メルトできる形に変換します。").size(11.5).color(style::DIM));
+            } else {
+                ui.label(RichText::new("Import mesh").strong().size(15.0));
+                ui.label(RichText::new("Loads STL, OBJ, 3MF, PLY and GLB solids. Melt or cut them like other shapes").size(11.5).color(style::DIM));
+            }
             ui.add_space(4.0);
             if let Some(b) = d.bake.clone() {
                 baking(ui, &b);
@@ -469,6 +563,22 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
                 if let Some((_, p)) = &d.reading {
                     ui.label(RichText::new(p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()).size(11.5).color(style::DIM));
                 }
+            } else if original {
+                if let Some(loaded) = &d.loaded {
+                    ui.label(RichText::new(format!("立体の大きさ: {}", size_text(loaded.size))).size(12.0));
+                }
+                ui.label(RichText::new("SolidCraft の作業は残っています。もう一度試すか、取り消して編集に戻れます。").size(11.5).color(style::DIM));
+                ui.horizontal(|ui| {
+                    ui.label("細かさ");
+                    for res in RES_CHOICES {
+                        if style::pill(ui, &res.to_string(), d.st.res == res)
+                            .on_hover_text("大きいほど滑らかになります。容量の上限で失敗したときは小さくして再試行できます")
+                            .clicked()
+                        {
+                            d.st.res = res;
+                        }
+                    }
+                });
             } else {
                 options(ui, &mut d, app, &mut pick);
             }
@@ -478,7 +588,18 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
             }
             ui.add_space(4.0);
             ui.horizontal(|ui| {
-                if d.bake.is_some() {
+                if original {
+                    if d.bake.is_none() {
+                        ui.add_enabled_ui(d.loaded.is_some() && !app.scene_structure_locked(), |ui| {
+                            if style::pill(ui, "もう一度", true).clicked() {
+                                go = true;
+                            }
+                        });
+                    }
+                    if ui.button("取消").clicked() {
+                        close = true;
+                    }
+                } else if d.bake.is_some() {
                     if style::pill(ui, "Stop", false).clicked()
                         && let Some(b) = &d.bake
                     {
@@ -506,16 +627,16 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
         return;
     }
     if go {
-        let nodes = d.loaded.as_ref().map_or(0, |l| estimate_of(l, &d.st).nodes);
+        let nodes = d.loaded.as_ref().map_or(0, |l| {
+            if original { mesh_import::estimate(l.size, l.imported.mesh.triangles.len(), d.st.res).nodes } else { estimate_of(l, &d.st).nodes }
+        });
         match mesh_import::refuse(&app.scene, nodes) {
             Some(why) => d.msg = why.to_string(),
             None => start_bake(&mut d),
         }
     }
     if close {
-        if let Some(b) = &d.bake {
-            b.ctl.cancel.store(true, Ordering::Relaxed);
-        }
+        cancel_dialog(&d, "SolidCraft の取り込みを取り消しました");
         return;
     }
     ctx.data_mut(|m| m.insert_temp(id(), d));
@@ -530,8 +651,13 @@ fn estimate_of(l: &Loaded, st: &Settings) -> mesh_import::Estimate {
 }
 
 fn baking(ui: &mut egui::Ui, b: &BakeJob) {
-    ui.label(RichText::new(format!("Measuring the shape… {}", b.loaded.file_name)).size(13.0));
-    ui.label(RichText::new("Calculating distance to the surrounding space").size(11.5).color(style::DIM));
+    if b.original {
+        ui.label(RichText::new("立体の表面までの距離を計算しています").size(13.0));
+        ui.label(RichText::new(format!("大きさ: {}", size_text(b.loaded.size))).size(11.5).color(style::DIM));
+    } else {
+        ui.label(RichText::new(format!("Measuring the shape… {}", b.loaded.file_name)).size(13.0));
+        ui.label(RichText::new("Calculating distance to the surrounding space").size(11.5).color(style::DIM));
+    }
     let frac = (b.ctl.progress.load(Ordering::Relaxed) as f32 / 1000.0).clamp(0.0, 1.0);
     let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 10.0), egui::Sense::hover());
     ui.painter().rect_filled(rect, 5.0, style::PANEL_DARK);
@@ -539,7 +665,8 @@ fn baking(ui: &mut egui::Ui, b: &BakeJob) {
     if w > 1.0 {
         ui.painter().rect_filled(egui::Rect::from_min_size(rect.min, egui::vec2(w, rect.height())), 5.0, style::ACCENT);
     }
-    ui.label(RichText::new(format!("{:.0}%  {:.0} sec", frac * 100.0, b.started.elapsed().as_secs_f64())).size(11.5).color(style::DIM));
+    let unit = if b.original { "秒" } else { "sec" };
+    ui.label(RichText::new(format!("{:.0}%  {:.0} {unit}", frac * 100.0, b.started.elapsed().as_secs_f64())).size(11.5).color(style::DIM));
 }
 
 fn options(ui: &mut egui::Ui, d: &mut Dlg, app: &App, pick: &mut bool) {
@@ -668,6 +795,29 @@ mod tests {
     use super::*;
     use crate::model::Kind;
 
+    fn loaded_box(lo: [f32; 3], hi: [f32; 3]) -> Loaded {
+        let mesh = crate::import_mesh::tests::box_mesh(lo, hi);
+        let size = mesh.size();
+        Loaded {
+            file_name: "SolidCraft.stl".into(),
+            stem: "SolidCraft".into(),
+            imported: crate::import_mesh::Imported {
+                mesh,
+                appearance: None,
+                format: crate::import_mesh::MeshFormat::Stl,
+                turned_y_up: false,
+                dropped_triangles: 0,
+                health: crate::import_mesh::Health::default(),
+                notes: Vec::new(),
+            },
+            size,
+        }
+    }
+
+    fn offset_box() -> Loaded {
+        loaded_box([250.0, -45.0, 65.0], [570.0, -25.0, 75.0])
+    }
+
     /// Run frames until `done` says so (the worker threads need a little time).
     fn pump(app: &mut App, ctx: &egui::Context, done: impl Fn(&App) -> bool) {
         for _ in 0..400 {
@@ -677,6 +827,129 @@ mod tests {
             }
             std::thread::sleep(std::time::Duration::from_millis(25));
         }
+    }
+
+    #[test]
+    fn a_solid_transfer_completes_after_insertion_preserves_geometry_and_is_one_undo() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        app.cam.target = [-200.0, 300.0, 0.0];
+        let before = app.scene.shape_count();
+        let completion = open_solid(&ctx, offset_box()).expect("start transfer");
+        assert!(is_open(&ctx));
+        assert_eq!(completion.take_result(), None, "a worker finishing alone is not an insertion");
+        let d = ctx.data(|m| m.get_temp::<Dlg>(id())).expect("transfer card");
+        assert_eq!((d.st.target_mm, d.st.up, d.st.floor, d.st.centre), (320.0, Up::Z, false, false));
+        assert!(d.bake.is_some(), "conversion starts without a Load click");
+        pump(&mut app, &ctx, |a| a.scene.shape_count() > before);
+        assert_eq!(completion.take_result(), Some(Ok(())));
+        assert_eq!(completion.take_result(), None, "completion is consumed once");
+        assert!(!is_open(&ctx));
+        let sh = app.scene.groups.last().and_then(|g| g.shapes.first()).expect("imported solid").clone();
+        assert_eq!(sh.size, [320.0, 20.0, 10.0], "no 200 mm import cap");
+        assert_eq!(sh.pos, [410.0, -35.0, 70.0], "no floor or camera recentering");
+        assert_eq!(app.scene.groups.last().unwrap().blend, 12.0, "global Melt controls must affect a transferred solid immediately");
+        assert_eq!(app.tab, crate::app::Tab::Melt);
+        assert_eq!(app.scene.shape_count(), before + 1);
+        app.undo();
+        assert_eq!(app.scene.shape_count(), before);
+        app.redo();
+        assert_eq!(app.scene.groups.last().and_then(|g| g.shapes.first()), Some(&sh));
+    }
+
+    #[test]
+    fn solid_transfers_do_not_replace_existing_imports_and_cancelled_transfers_can_retry() {
+        let ctx = egui::Context::default();
+        let manual = PathBuf::from("/nonexistent/meltcad-existing-import.stl");
+        open_path(&ctx, manual.clone());
+        assert!(open_solid(&ctx, offset_box()).is_err());
+        assert_eq!(ctx.data(|m| m.get_temp::<Dlg>(id())).and_then(|d| d.path), Some(manual));
+        assert!(cancel(&ctx));
+        assert!(!is_open(&ctx));
+
+        let completion = open_solid(&ctx, offset_box()).expect("start transfer");
+        assert!(open_solid(&ctx, offset_box()).is_err(), "an automatic transfer is protected too");
+        assert_eq!(completion.take_result(), None);
+        assert!(cancel(&ctx));
+        assert!(completion.take_result().is_some_and(|r| r.is_err()));
+        assert_eq!(completion.take_result(), None);
+        assert!(!is_open(&ctx));
+        let retry = open_solid(&ctx, offset_box()).expect("cancel does not prevent retry");
+        assert_eq!(retry.take_result(), None);
+        cancel(&ctx);
+        assert!(retry.take_result().is_some_and(|r| r.is_err()));
+    }
+
+    #[test]
+    fn choosing_a_manual_file_cancels_the_previous_solid_transfer() {
+        let ctx = egui::Context::default();
+        let completion = open_solid(&ctx, offset_box()).expect("start transfer");
+        let path = PathBuf::from("/nonexistent/meltcad-replacement-import.stl");
+        open_path(&ctx, path.clone());
+        assert!(completion.take_result().is_some_and(|r| r.is_err()));
+        let d = ctx.data(|m| m.get_temp::<Dlg>(id())).expect("manual card");
+        assert_eq!(d.path, Some(path));
+        assert!(d.completion.is_none());
+        assert!(is_open(&ctx));
+        cancel(&ctx);
+    }
+
+    #[test]
+    fn a_rebake_request_blocks_solid_transfer_without_being_replaced() {
+        let ctx = egui::Context::default();
+        let app = App::new(true, None);
+        let original = app.scene.groups[0].shapes[0].clone();
+        ctx.data_mut(|m| {
+            m.insert_temp(rebake_id(), RebakeRequest { group: 0, shape: 0, original, res: 128, path: None, job: None, msg: String::new() });
+        });
+        assert!(is_open(&ctx));
+        assert!(open_solid(&ctx, offset_box()).is_err());
+        assert!(ctx.data(|m| m.get_temp::<RebakeRequest>(rebake_id())).is_some());
+        assert!(cancel(&ctx));
+        assert!(!is_open(&ctx));
+    }
+
+    #[test]
+    fn failed_bakes_keep_the_transfer_pending_until_cancel() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        let before = app.scene.shape_count();
+        let completion = open_solid(&ctx, loaded_box([0.0; 3], [2001.0, 10.0, 10.0])).expect("conversion reports its error in the card");
+        pump(&mut app, &ctx, |_| ctx.data(|m| m.get_temp::<Dlg>(id())).is_some_and(|d| d.bake.is_none()));
+        let mut d = ctx.data(|m| m.get_temp::<Dlg>(id())).expect("failed transfer remains open");
+        assert!(!d.msg.is_empty());
+        assert_eq!(completion.take_result(), None);
+        start_bake(&mut d);
+        ctx.data_mut(|m| m.insert_temp(id(), d));
+        pump(&mut app, &ctx, |_| ctx.data(|m| m.get_temp::<Dlg>(id())).is_some_and(|d| d.bake.is_none()));
+        assert_eq!(completion.take_result(), None, "retry failure is not acknowledged as insertion");
+        assert_eq!(app.scene.shape_count(), before);
+        cancel(&ctx);
+        assert!(completion.take_result().is_some_and(|r| r.is_err()));
+    }
+
+    #[test]
+    fn insertion_rejections_stay_visible_and_can_be_retried() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        while app.scene.groups.len() < MAX_GROUPS {
+            app.scene.groups.push(Group::new("existing"));
+        }
+        app.settle(&ctx);
+        let before = app.scene.shape_count();
+        let completion = open_solid(&ctx, offset_box()).expect("start transfer");
+        pump(&mut app, &ctx, |_| ctx.data(|m| m.get_temp::<Dlg>(id())).is_some_and(|d| d.bake.is_none()));
+        let mut d = ctx.data(|m| m.get_temp::<Dlg>(id())).expect("rejected insertion stays open");
+        assert!(d.msg.contains("groups"), "{}", d.msg);
+        assert_eq!(completion.take_result(), None);
+        assert_eq!(app.scene.shape_count(), before);
+        app.scene.groups.pop();
+        app.settle(&ctx);
+        start_bake(&mut d);
+        ctx.data_mut(|m| m.insert_temp(id(), d));
+        pump(&mut app, &ctx, |a| a.scene.shape_count() > before);
+        assert_eq!(completion.take_result(), Some(Ok(())));
+        assert!(!is_open(&ctx));
     }
 
     #[test]
