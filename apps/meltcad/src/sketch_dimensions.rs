@@ -224,6 +224,10 @@ impl Dimensions {
                 if !finite_point(b) || points.get(index).is_none() {
                     return Err("Point is outside the sketch area".into());
                 }
+                // the same check as placing the point with the mouse
+                if prevent_cross && index >= 2 && sketch::crosses_polyline(&points[..index], start, b, false) {
+                    return Err("The outline crosses at this point".into());
+                }
                 Ok((None, Some((index, b)), None))
             }
             Target::Point { index } => {
@@ -389,6 +393,26 @@ mod tests {
         assert!(!d.accept(&pts, &profile));
         d.cancel(&mut pts, &mut profile);
         assert_eq!(pts[2], [15.0, 12.0]);
+    }
+
+    #[test]
+    fn a_typed_length_and_angle_may_not_cross_the_outline_either() {
+        // three corners placed, the fourth is the segment being typed
+        let mut pts = vec![[0.0, 0.0], [20.0, 0.0], [20.0, 20.0], [10.0, 20.0]];
+        let mut d = Dimensions::for_new_segment(&pts).expect("segment");
+        let mut profile = vec![];
+        let before = pts[3];
+        // from (20, 20) down and to the left, through the first side
+        d.fields = ["40".into(), "-120".into()];
+        d.update(&mut pts, &mut profile, 1, true);
+        assert!(d.error.is_some(), "crossing is refused");
+        assert_eq!(pts[3], before, "the draft stays as it was");
+        // the same numbers are fine where nothing is crossed (other pens do not check)
+        d.update(&mut pts, &mut profile, 1, false);
+        assert!(d.error.is_none());
+        d.fields = ["5".into(), "90".into()];
+        d.update(&mut pts, &mut profile, 1, true);
+        assert!(d.error.is_none(), "{:?}", d.error);
     }
 
     #[test]
