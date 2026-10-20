@@ -1369,19 +1369,22 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
     // ground
     if (floor_vis) {
         let gp = ro + rd * t_ground;
-        let fade = clamp(1.0 - length(gp.xy) / 600.0, 0.0, 1.0);
         if (grid_on) {
+            // endless plane: lines fade only when they get too dense to tell apart on screen
+            // (never by a fixed distance), so each grid level hands over to the next one
             let gs = 10.0;
+            let f1 = 1.0 - smoothstep(0.12, 0.45, max(gw1.x, gw1.y));
+            let f2 = 1.0 - smoothstep(0.12, 0.45, max(gw2.x, gw2.y));
             let a = abs(fract(gp.xy / gs - 0.5) - 0.5) / gw1;
             let line = 1.0 - min(min(a.x, a.y), 1.0);
             let major = abs(fract(gp.xy / (gs * 10.0) - 0.5) - 0.5) / gw2;
             let lm = 1.0 - min(min(major.x, major.y), 1.0);
             let axisx = 1.0 - min(abs(gp.y) / gwy, 1.0);
             let axisy = 1.0 - min(abs(gp.x) / gwx, 1.0);
-            col = mix(col, col + vec3<f32>(0.03), line * 0.5 * fade);
-            col = mix(col, col + vec3<f32>(0.05), lm * 0.6 * fade);
-            col = mix(col, lin(vec3<f32>(0.85, 0.35, 0.35)), axisx * 0.55 * fade);
-            col = mix(col, lin(vec3<f32>(0.42, 0.78, 0.42)), axisy * 0.55 * fade);
+            col = mix(col, col + vec3<f32>(0.03), line * 0.5 * f1);
+            col = mix(col, col + vec3<f32>(0.05), lm * 0.6 * f2);
+            col = mix(col, lin(vec3<f32>(0.85, 0.35, 0.35)), axisx * 0.55);
+            col = mix(col, lin(vec3<f32>(0.42, 0.78, 0.42)), axisy * 0.55);
         }
         if (floor_on) {
             // contact shadow of the blob on the ground
@@ -1535,15 +1538,15 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
     // seen from below the ground is see-through: only its lines are drawn
     if (!above && t_ground < 1e8 && (!hit || t_ground < t) && grid_on) {
         let gp = ro + rd * t_ground;
-        let fade = clamp(1.0 - length(gp.xy) / 600.0, 0.0, 1.0) * 0.6;
+        let fade = (1.0 - smoothstep(0.12, 0.45, max(gw1.x, gw1.y))) * 0.6;
         let gs = 10.0;
         let a = abs(fract(gp.xy / gs - 0.5) - 0.5) / gw1;
         let line = 1.0 - min(min(a.x, a.y), 1.0);
         let axisx = 1.0 - min(abs(gp.y) / gwy, 1.0);
         let axisy = 1.0 - min(abs(gp.x) / gwx, 1.0);
         col = mix(col, col + vec3<f32>(0.04), line * 0.5 * fade);
-        col = mix(col, lin(vec3<f32>(0.85, 0.35, 0.35)), axisx * 0.55 * fade);
-        col = mix(col, lin(vec3<f32>(0.42, 0.78, 0.42)), axisy * 0.55 * fade);
+        col = mix(col, lin(vec3<f32>(0.85, 0.35, 0.35)), axisx * 0.55 * 0.6);
+        col = mix(col, lin(vec3<f32>(0.42, 0.78, 0.42)), axisy * 0.55 * 0.6);
     }
 
     col = col + halo;
