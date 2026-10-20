@@ -542,6 +542,10 @@ impl App {
         self.doc_title.clear();
         self.title_edit = None;
         self.dirty = false;
+        // A different document must never inherit the old timeline's frame,
+        // playback state or edit revision. Otherwise the next UI frame can
+        // auto-record the new scene over one of its saved animation keys.
+        self.animation_at_applied(0);
         if !notes.is_empty() {
             self.notice = Some(notes.join(", "));
         }
@@ -2851,6 +2855,32 @@ mod title_tests {
         app.apply_file_action(super::PendingFileAction::New(crate::model::Scene::default()));
         assert_eq!(app.doc_name(), "Untitled");
         assert!(app.title_edit.is_none());
+    }
+
+    #[test]
+    fn opening_a_document_does_not_auto_overwrite_its_animation() {
+        use crate::model::Scene;
+        let ctx = egui::Context::default();
+        let mut app = super::App::new(true, None);
+        app.an.open = true;
+        app.an.frame = 10;
+        app.an.playing = true;
+
+        let mut imported = Scene::default();
+        let mut animation = std::mem::take(&mut imported.anim);
+        imported.groups[0].shapes[0].pos[0] = 0.0;
+        animation.capture(&mut imported, 0).unwrap();
+        imported.groups[0].shapes[0].pos[0] = 100.0;
+        animation.capture(&mut imported, 10).unwrap();
+        imported.anim = animation;
+        let key_before = imported.anim.tracks[0].keys[0].1.pos;
+
+        app.apply_file_action(super::PendingFileAction::New(imported));
+        assert!(!app.an.playing);
+        assert_eq!(app.an.frame, 0);
+        app.animation_capture_finished(&ctx);
+        assert_eq!(app.scene.anim.tracks[0].keys[0].1.pos, key_before);
+        assert!(!app.dirty, "loading must not dirty or change the document");
     }
 
     #[test]
