@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 
 /// `frames` are RGBA pictures of `w` x `h`; `delay_cs` is the time of every frame in 1/100 s.
+#[cfg(test)]
 pub fn encode(w: usize, h: usize, frames: &[Vec<u8>], delay_cs: u16) -> Result<Vec<u8>, String> {
     encode_timed(w, h, frames, &vec![delay_cs; frames.len()])
 }
