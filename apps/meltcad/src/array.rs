@@ -352,7 +352,13 @@ mod tests {
         app.sel = Some(Pick::Shape(0, 0));
         let n = app.scene.shape_count();
         let input = egui::RawInput {
-            events: vec![egui::Event::Key { key: egui::Key::Delete, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() }],
+            events: vec![egui::Event::Key {
+                key: egui::Key::Delete,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: Default::default(),
+            }],
             ..Default::default()
         };
         ctx.run_ui(input, |ui| app.keys(ui.ctx())).textures_delta.clear();

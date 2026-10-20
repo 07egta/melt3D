@@ -394,6 +394,27 @@ mod tests {
         out.textures_delta.clear();
     }
 
+    /// Time to draw every preset swatch once (the Material tab redraws them every frame):
+    /// `cargo test --release -p meltcad swatch_cost -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn swatch_cost() {
+        let ctx = egui::Context::default();
+        let list = presets();
+        let t = std::time::Instant::now();
+        let frames = 50;
+        for _ in 0..frames {
+            let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+                let painter = ui.painter().clone();
+                for pr in list {
+                    swatch(&painter, Pos2::new(40.0, 40.0), 14.0, &pr.material);
+                }
+            });
+            out.textures_delta.clear();
+        }
+        eprintln!("{} swatches per frame: {:.3} ms per frame", list.len(), t.elapsed().as_secs_f64() * 1000.0 / f64::from(frames));
+    }
+
     /// `YT_OUT=/tmp/grad.yura cargo test -p meltcad dump_gradient_showcase -- --ignored` writes a scene with the
     /// gradient presets and a few directions, for looking at.
     #[test]

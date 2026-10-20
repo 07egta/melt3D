@@ -44,6 +44,7 @@ fn shift_uids(sc: &mut Scene, by: u32) {
 /// Put `other` at the end of `scene`. It goes inside one new group (named `name`) with "Melt: on",
 /// so the whole file melts into what was there; its own groups keep their order and nesting.
 /// Returns the index of the first group added.
+#[cfg(test)]
 pub fn merge_into(scene: &mut Scene, other: Scene, name: &str) -> Result<usize, String> {
     let at = scene.groups.len();
     merge_at(scene, other, name, None, at, 0)
