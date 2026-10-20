@@ -102,9 +102,9 @@ fn ask(ctx: &egui::Context, cat: usize, i: usize, item: &Item) {
     }
 }
 
-/// The grid place nearest the middle where a disc of radius `r` touches none of `taken`
+/// The grid place nearest `around` (the middle of the scene) where a disc of radius `r` touches none of `taken`
 /// (centre, radius). None when the grid around the middle is full.
-pub fn free_spot(taken: &[([f32; 2], f32)], r: f32) -> Option<[f32; 2]> {
+pub fn free_spot(taken: &[([f32; 2], f32)], r: f32, around: [f32; 2]) -> Option<[f32; 2]> {
     let r = if r.is_finite() { r.clamp(2.0, 400.0) } else { 20.0 };
     let step = 2.0 * r + 6.0;
     for ring in 0..=24i32 {
@@ -114,9 +114,9 @@ pub fn free_spot(taken: &[([f32; 2], f32)], r: f32) -> Option<[f32; 2]> {
                 if i.abs().max(j.abs()) != ring {
                     continue;
                 }
-                let p = [i as f32 * step, j as f32 * step];
+                let p = [around[0] + i as f32 * step, around[1] + j as f32 * step];
                 let free = taken.iter().all(|(c, tr)| ((c[0] - p[0]).powi(2) + (c[1] - p[1]).powi(2)).sqrt() >= tr + r + 2.0);
-                let d = p[0].hypot(p[1]);
+                let d = (p[0] - around[0]).hypot(p[1] - around[1]);
                 if free && best.is_none_or(|b| d < b.0) {
                     best = Some((d, p));
                 }
@@ -157,7 +157,7 @@ pub fn insert(app: &mut App, ctx: &egui::Context, item: &Item) -> bool {
                 (gr > 0.0).then_some(([gc[0], gc[1]], gr))
             })
             .collect();
-        free_spot(&discs, own_r).unwrap_or([c[0] + r + own_r + 6.0, c[1]])
+        free_spot(&discs, own_r, [c[0], c[1]]).unwrap_or([c[0] + r + own_r + 6.0, c[1]])
     } else {
         [0.0, 0.0]
     };
@@ -236,10 +236,14 @@ pub fn panel(app: &mut App, ui: &mut egui::Ui) {
                                 ui.painter().text(r.center(), Align2::CENTER_CENTER, "…", egui::FontId::proportional(14.0), style::DIM);
                             }
                         }
-                        if resp.on_hover_text(format!("Add {} to the scene", it.name)).clicked() {
+                        let tip = format!("Add {} to the scene", it.name);
+                        let mut hit = resp.on_hover_text(&tip).clicked();
+                        // the name works like the picture
+                        let name = ui.add(egui::Label::new(RichText::new(&it.name).size(11.5)).sense(egui::Sense::click()));
+                        hit |= name.on_hover_text(tip).on_hover_cursor(egui::CursorIcon::PointingHand).clicked();
+                        if hit {
                             pick = Some((ci, ii));
                         }
-                        ui.label(RichText::new(&it.name).size(11.5));
                     });
                     if n % per_row == 0 {
                         ui.end_row();
@@ -267,14 +271,14 @@ mod tests {
     fn a_crowd_grows_as_a_block_not_a_line() {
         let mut taken: Vec<([f32; 2], f32)> = Vec::new();
         for _ in 0..30 {
-            let Some(p) = super::free_spot(&taken, 10.0) else { panic!("no spot") };
+            let Some(p) = super::free_spot(&taken, 10.0, [0.0, 0.0]) else { panic!("no spot") };
             assert!(taken.iter().all(|(c, r)| (c[0] - p[0]).hypot(c[1] - p[1]) >= r + 10.0), "no overlap");
             taken.push((p, 10.0));
         }
         let xs = taken.iter().map(|(c, _)| c[0]);
         let width = xs.clone().fold(f32::MIN, f32::max) - xs.fold(f32::MAX, f32::min);
         assert!(width < 30.0 * 26.0 / 2.0, "30 items spread {width} wide");
-        assert!(super::free_spot(&[], f32::NAN).is_some());
+        assert!(super::free_spot(&[], f32::NAN, [0.0, 0.0]).is_some());
     }
 
     use super::*;
@@ -300,6 +304,20 @@ mod tests {
             insert(&mut app, &ctx, &it);
         }
         assert!(app.scene.groups.len() <= MAX_GROUPS && app.scene.shape_count() <= MAX_SHAPES);
+    }
+
+    #[test]
+    fn a_new_model_lands_beside_a_scene_that_was_moved_away_from_the_origin() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        for g in &mut app.scene.groups {
+            for s in &mut g.shapes {
+                s.pos[0] += 800.0;
+            }
+        }
+        assert!(insert(&mut app, &ctx, &item()));
+        let (a, b) = (app.scene.groups[0].shapes[0].pos, app.scene.groups[1].shapes[0].pos);
+        assert!((a[0] - b[0]).hypot(a[1] - b[1]) < 300.0, "near the old model, not at the origin: {a:?} {b:?}");
     }
 
     #[test]
