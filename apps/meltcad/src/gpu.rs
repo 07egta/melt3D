@@ -183,7 +183,8 @@ impl ScenePack {
             let Some(g) = scene.groups.get(gi) else { continue };
             let first = shape_n;
             let mut members: Vec<&crate::model::Shape> = Vec::new();
-            for (si, s) in g.shapes.iter().enumerate() {
+            for si in g.fold_order() {
+                let Some(s) = g.shapes.get(si) else { continue };
                 if !s.solid() || shape_n >= MAX_SHAPES {
                     continue;
                 }
@@ -737,7 +738,8 @@ pub(crate) fn try_build_from(device: &wgpu::Device, queue: &wgpu::Queue, format:
         (bgl, layout)
     })?;
     // (the slow one: the driver compiles the shader here)
-    let pipeline = step(device, "Scene render pipeline (create_render_pipeline)", || triangle_pipeline(device, "meltcad", &layout, &module, format, false))?;
+    let pipeline =
+        step(device, "Scene render pipeline (create_render_pipeline)", || triangle_pipeline(device, "meltcad", &layout, &module, format, false))?;
     crate::perf::mark("scene pipeline created");
     let buffer = step(device, "uniform buffer", || {
         device.create_buffer_init(&wgpu::util::BufferInitDescriptor {

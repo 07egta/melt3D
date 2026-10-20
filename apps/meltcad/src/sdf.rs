@@ -382,7 +382,8 @@ impl Field {
                 let mut shapes = Vec::new();
                 let mut origin = Vec::new();
                 let mut members: Vec<&Shape> = Vec::new();
-                for (si, s) in srcg.shapes.iter().enumerate() {
+                for si in srcg.fold_order() {
+                    let Some(s) = srcg.shapes.get(si) else { continue };
                     if s.solid() {
                         shapes.push(Prepared::new(s));
                         origin.push((rg.src, si));
@@ -739,6 +740,20 @@ mod tests {
         // switched off: the same as plain
         s.face_melt.amount = 0.0;
         assert!((Prepared::new(&s).distance([3.0, 4.0, 10.0]) - plain.distance([3.0, 4.0, 10.0])).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_minus_cuts_its_group_wherever_it_sits_in_the_list() {
+        let mut hole = ball(0.0, 5.0);
+        hole.op = Op::Subtract;
+        for cut_first in [true, false] {
+            let shapes = if cut_first { vec![hole.clone(), ball(0.0, 10.0)] } else { vec![ball(0.0, 10.0), hole.clone()] };
+            let mut sc = Scene { groups: vec![], melt: Default::default(), env: Default::default(), saved: Vec::new(), anim: Default::default() };
+            sc.groups.push(group_of("g", 0, shapes));
+            let f = Field::new(&sc);
+            assert!(f.distance([0.0, 0.0, 0.0]) > 0.0, "the hole is empty (minus first: {cut_first})");
+            assert!(f.distance([7.5, 0.0, 0.0]) < 0.0, "the wall is still there (minus first: {cut_first})");
+        }
     }
 
     #[test]
