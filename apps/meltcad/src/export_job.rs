@@ -130,8 +130,27 @@ pub fn prepare(scene: &Scene, sel: Option<Pick>, scope: Scope, ignore_paint: boo
             {
                 return Err("the selection is gone".into());
             }
+            // Keep the selected group's complete subtree. Ancestors must
+            // remain visible as structural containers, but contribute no
+            // geometry of their own (otherwise a child-only export is empty).
+            let end = if only.is_some() { gi + 1 } else { scene.subtree_end(gi) };
+            let mut ancestors = std::collections::HashSet::new();
+            let mut at = scene.parent_of(gi);
+            while let Some(parent) = at {
+                ancestors.insert(parent);
+                at = scene.parent_of(parent);
+            }
             for (i, g) in s.groups.iter_mut().enumerate() {
-                g.visible = i == gi;
+                let selected = (gi..end).contains(&i);
+                let container = ancestors.contains(&i);
+                g.visible = selected || container;
+                if container {
+                    g.op = Op::Add;
+                    g.pattern = None;
+                    for sh in &mut g.shapes {
+                        sh.visible = false;
+                    }
+                }
                 if i == gi {
                     g.op = Op::Add;
                     if let Some(si) = only {
@@ -147,18 +166,19 @@ pub fn prepare(scene: &Scene, sel: Option<Pick>, scope: Scope, ignore_paint: boo
         }
     }
     if ignore_paint {
+        // Paint groups can contain Add descendants: deleting only the Paint
+        // parent accidentally turns those descendants into solid geometry.
+        // Hide instead; the existing hierarchy and UID references stay intact.
         for g in &mut s.groups {
-            g.shapes.retain(|sh| sh.op != Op::Paint);
+            if g.op == Op::Paint {
+                g.visible = false;
+            }
+            for sh in &mut g.shapes {
+                if sh.op == Op::Paint {
+                    sh.visible = false;
+                }
+            }
         }
-        // (an empty group stays when other groups are nested in it: it is their container)
-        let holds: Vec<bool> = (0..s.groups.len()).map(|i| s.groups.get(i + 1).is_some_and(|n| n.depth > s.groups[i].depth)).collect();
-        let mut i = 0;
-        s.groups.retain(|g| {
-            let keep = g.op != Op::Paint && (!g.shapes.is_empty() || g.is_linked() || holds.get(i).copied().unwrap_or(false));
-            i += 1;
-            keep
-        });
-        s.normalize_depths();
     }
     Ok(s)
 }
@@ -226,7 +246,15 @@ fn single_look(scene: &Scene) -> Option<Mat8> {
     let mut first: Option<Mat8> = None;
     for rg in crate::pattern::resolve(scene) {
         let Some(src) = scene.groups.get(rg.src) else { continue };
+        if scene.groups.get(rg.gi).is_some_and(|g| g.op == Op::Paint) {
+            return None;
+        }
         for s in src.shapes.iter().filter(|s| s.solid()) {
+            // One base material does not imply one surface colour: a shape
+            // can carry a spatial gradient or a Paint stain.
+            if s.material.has_gradient() || s.op == Op::Paint {
+                return None;
+            }
             let m = look_of(s.material.color, s.material.roughness, s.material.metallic);
             match first {
                 None => first = Some(m),
@@ -284,64 +312,20 @@ pub fn mesh_scene(scene: &Scene, tolerance: f64, threads: usize, prog: &export_m
 /// field leaves stains out because they change no distance; the GPU shader paints them, and so
 /// does this, with the same soft edge.)
 struct Painter {
-    base: Field,
-    stains: Vec<(Field, f32)>,
+    field: Field,
 }
 
 impl Painter {
     fn new(scene: &Scene) -> Painter {
-        let amount = if scene.melt.amount.is_finite() { scene.melt.amount.max(0.0) } else { 1.0 };
-        // a stain alone: the whole scene with everything hidden but that group (so that patterns and
-        // linked copies still find what they follow)
-        let alone = |gi: usize, g: crate::model::Group| {
-            let mut sc =
-                Scene { groups: scene.groups.clone(), melt: scene.melt, env: scene.env.clone(), saved: Vec::new(), anim: Default::default() };
-            for other in &mut sc.groups {
-                other.visible = false;
-            }
-            if let Some(slot) = sc.groups.get_mut(gi) {
-                *slot = g;
-            }
-            Field::new(&sc)
-        };
-        let mut stains = Vec::new();
-        for (gi, g) in scene.groups.iter().enumerate().filter(|(_, g)| g.visible) {
-            if g.op == Op::Paint {
-                let mut u = g.clone();
-                u.op = Op::Add;
-                stains.push((alone(gi, u), g.blend * amount));
-            } else {
-                for sh in g.shapes.iter().filter(|s| s.solid() && s.op == Op::Paint) {
-                    let mut one = sh.clone();
-                    one.op = Op::Add;
-                    let mut u = g.clone();
-                    u.op = Op::Add;
-                    u.visible = true;
-                    u.shapes = vec![one];
-                    stains.push((alone(gi, u), sh.blend * amount));
-                }
-            }
-        }
-        Painter { base: Field::new(scene), stains }
+        // Field::sample already composites Op::Paint masks in exactly the
+        // same direction as the CPU renderer. Reapplying masks here used to
+        // recolour surfaces OUTSIDE the painted area (and double-blend edges).
+        Painter { field: Field::new(scene) }
     }
 
     fn look(&self, p: [f32; 3]) -> Mat8 {
-        let s = self.base.sample(p);
-        let (mut c, mut r, mut m) = (s.color, s.roughness, s.metallic);
-        for (field, k) in &self.stains {
-            let b = field.sample(p);
-            let soft = (k * 0.35).max(0.3);
-            let w = (0.5 - b.dist / soft).clamp(0.0, 1.0);
-            if !w.is_finite() || w >= 1.0 {
-                continue;
-            }
-            for (a, value) in c.iter_mut().enumerate() {
-                *value = b.color[a] + (*value - b.color[a]) * w;
-            }
-            r = b.roughness + (r - b.roughness) * w;
-            m = b.metallic + (m - b.metallic) * w;
-        }
-        look_of(c, r, m)
+        let s = self.field.sample(p);
+        look_of(s.color, s.roughness, s.metallic)
     }
 }
 
@@ -370,8 +354,8 @@ fn classify(looks: &[Mat8], max: usize) -> (Vec<u16>, usize) {
             let key = (u32::from(m.rgb[0]) >> shift)
                 | ((u32::from(m.rgb[1]) >> shift) << 8)
                 | ((u32::from(m.rgb[2]) >> shift) << 16)
-                | (u32::from(m.rough >> (shift + 1)) << 24)
-                | (u32::from(m.metal >> (shift + 1)) << 28);
+                | ((u32::from(m.rough) >> (shift + 1)) << 24)
+                | ((u32::from(m.metal) >> (shift + 1)) << 28);
             let next = map.len();
             let c = *map.entry(key).or_insert(next as u16);
             if map.len() > max {
