@@ -603,7 +603,10 @@ impl App {
                     }
                 }
                 Act::Rotate(i) => {
-                    s.rot[i] = (rot[i] + turn_deg).rem_euclid(360.0);
+                    // The ring is aligned to the *world* axis. Euler addition
+                    // turns around a shape-local axis after previous rotations,
+                    // so compose the world rotation as a matrix instead.
+                    s.rot = crate::pattern::turn_euler(rot, i as u8, turn_deg);
                     if group {
                         s.pos = add(d.centre, rotate_about(sub(pos, d.centre), WORLD[i], turn_deg));
                     }
