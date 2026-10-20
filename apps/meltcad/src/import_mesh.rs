@@ -533,8 +533,18 @@ fn read_ply(b: &[u8]) -> Result<ImportedMesh, String> {
     for el in &elements {
         // the body must be able to hold the rows before anything is reserved
         let remaining = body.len().saturating_sub(v.pos);
+        // A property-less element consumes zero bytes but used to run its
+        // declared count without any validation (even one billion iterations
+        // for a roughly 60-byte PLY header). Such rows have no information.
+        if el.count > 0 && el.props.is_empty() {
+            return Err("A PLY element with rows must declare properties".into());
+        }
+        // Unknown elements need a limit too, not only vertices/faces.
+        if el.count > MAX_VERTICES.max(MAX_TRIANGLES * 2) {
+            return Err("Too many elements in the PLY".into());
+        }
         let min_row: usize = if enc == Enc::Ascii { 1 } else { el.props.iter().map(|p| p.list.map_or(p.ty.size(), Ty::size)).sum() };
-        if !el.props.is_empty() && el.count.checked_mul(min_row.max(1)).is_none_or(|need| need > remaining) {
+        if el.count.checked_mul(min_row.max(1)).is_none_or(|need| need > remaining) {
             return Err(CUT_OFF.into());
         }
         let is_vertex = el.name == "vertex";
@@ -1060,6 +1070,18 @@ pub mod tests {
         facet normal 0 -1 0\n outer loop\n vertex 0 0 0\n vertex 1 0 0\n vertex 0 0 1\n endloop\n endfacet\n\
         facet normal -1 0 0\n outer loop\n vertex 0 0 0\n vertex 0 0 1\n vertex 0 1 0\n endloop\n endfacet\n\
         facet normal 1 1 1\n outer loop\n vertex 1 0 0\n vertex 0 1 0\n vertex 0 0 1\n endloop\n endfacet\nendsolid t\n";
+
+    #[test]
+    fn propertyless_ply_element_cannot_force_a_billion_empty_iterations() {
+        let malicious = b"ply\nformat ascii 1.0\nelement dummy 1000000000\nend_header\n";
+        assert!(read_ply(malicious).is_err());
+        let binary = b"ply\nformat binary_little_endian 1.0\nelement dummy 1000000000\nend_header\n";
+        assert!(read_ply(binary).is_err());
+        // A zero-row dummy element is harmless and should still be accepted
+        // alongside valid geometry by the normal reader.
+        let valid = b"ply\nformat ascii 1.0\nelement dummy 0\nelement vertex 3\nproperty float x\nproperty float y\nproperty float z\nelement face 1\nproperty list uchar int vertex_indices\nend_header\n0 0 0\n1 0 0\n0 1 0\n3 0 1 2\n";
+        assert_eq!(read_ply(valid).unwrap().triangles.len(), 1);
+    }
 
     #[test]
     fn ascii_stl_by_hand() {
