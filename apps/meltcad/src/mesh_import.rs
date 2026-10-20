@@ -196,6 +196,27 @@ pub fn rebake(mesh: &ImportedMesh, y_up: bool, final_size: [f32; 3], res: u32, c
     Ok(Baked { volume: SharedVolume::new(volume), size: final_size, file_centre: [0.0; 3], stats })
 }
 
+/// Bake original Z-up millimetre geometry without applying the interactive import defaults.
+/// The volume is centred around the source bounds and `file_centre` restores its original
+/// position when the resulting shape is placed in the scene.
+pub fn bake_original(mesh: &ImportedMesh, res: u32, ctl: &BakeControl) -> Result<Baked, String> {
+    let (lo, hi) = mesh.bounds().ok_or_else(|| import_mesh::NO_SHAPE.to_string())?;
+    let size = [0, 1, 2].map(|a| hi[a] - lo[a]);
+    let centre = [0, 1, 2].map(|a| lo[a] + size[a] * 0.5);
+    if size.iter().any(|x| !x.is_finite() || !(0.01..=2000.0).contains(x)) || centre.iter().any(|x| !x.is_finite() || !(-5000.0..=5000.0).contains(x))
+    {
+        return Err("立体が Melt の対応範囲を超えています（各辺 0.01〜2000 mm、中心位置 ±5000 mm）。SolidCraft で寸法・位置を調整してください".into());
+    }
+    let mut centered = mesh.clone();
+    for p in &mut centered.positions {
+        for a in 0..3 {
+            p[a] -= centre[a];
+        }
+    }
+    let (volume, stats) = bake_with(&centered, &BakeOptions { res: res.clamp(16, 256), ..BakeOptions::default() }, ctl)?;
+    Ok(Baked { volume: SharedVolume::new(volume), size, file_centre: centre, stats })
+}
+
 /// Surface-centroid SDF residual (mean, maximum, number sampled), not Hausdorff error.
 pub fn surface_residual(mesh: &ImportedMesh, y_up: bool, final_size: [f32; 3], volume: &Volume) -> (f32, f32, usize) {
     let mut m = mesh.clone();
@@ -286,6 +307,33 @@ pub(crate) mod tests {
         // a sphere of radius r, made 2r across, baked as is
         let st = Settings { target_mm: 2.0 * r, up: Up::Z, floor: true, centre: true, res };
         bake(&sphere_mesh(r, 40, 80), MeshFormat::Stl, &st, &BakeControl::new()).unwrap()
+    }
+
+    #[test]
+    fn original_bake_keeps_large_and_submillimetre_geometry_and_offset() {
+        for (lo, hi, res) in [([-120.0, 20.0, 7.0], [120.0, 60.0, 31.0], 32), ([4.0, -3.0, 0.25], [4.4, -2.7, 0.45], 16)] {
+            let b = bake_original(&box_mesh(lo, hi), res, &BakeControl::new()).unwrap();
+            let expected_size = [0, 1, 2].map(|a| hi[a] - lo[a]);
+            let expected_centre = [0, 1, 2].map(|a| (lo[a] + hi[a]) * 0.5);
+            assert_eq!(b.size, expected_size);
+            assert_eq!(b.file_centre, expected_centre);
+            let local_inside = [0.0, 0.0, 0.0];
+            let local_outside = [expected_size[0] * 0.5 + b.volume.cell * 2.0, 0.0, 0.0];
+            assert!(b.volume.distance(local_inside) < 0.0);
+            assert!(b.volume.distance(local_outside) > 0.0);
+            let pos = place(&b, false, false, [0.0; 2]);
+            assert_eq!(pos, expected_centre);
+            let shape = shape_of(&b, "original", "source", pos, Material::default());
+            let field = Field::new(&scene_with(shape));
+            assert!(field.distance(expected_centre) < 0.0);
+        }
+    }
+
+    #[test]
+    fn original_bake_rejects_dimensions_and_positions_outside_scene_bounds() {
+        assert!(bake_original(&box_mesh([0.0; 3], [2001.0, 10.0, 10.0]), 16, &BakeControl::new()).is_err());
+        assert!(bake_original(&box_mesh([0.0; 3], [0.009, 1.0, 1.0]), 16, &BakeControl::new()).is_err());
+        assert!(bake_original(&box_mesh([5001.0, 0.0, 0.0], [5002.0, 1.0, 1.0]), 16, &BakeControl::new()).is_err());
     }
 
     #[test]

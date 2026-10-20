@@ -2,6 +2,7 @@
 //! software rasteriser in `style_preview.rs` (no window or graphics device is needed).
 //! `YURA_PREVIEW=/path/app.ppm YURA_TAB=0..3 cargo test -p meltcad app_preview -- --ignored`
 //! `YURA_SKETCH=draw|ready|saved|extrude|solid|edit` selects a step of the Solid workflow.
+//! `YURA_PRECISE=empty|solid|sketch|melt` shows SolidCraft or its solid after transfer into Melt.
 //! `YURA_WIDTH=1920 YURA_HEIGHT=1080 YURA_PPP=1` sets logical window size and pixel density;
 //! use `960` by `600` to check the same controls in a narrow window.
 
@@ -82,6 +83,83 @@ fn sketch_preview(app: &mut App, ctx: &egui::Context, which: &str) {
     }
 }
 
+/// Seed the embedded modeller through its public commands, including the sketch and feature
+/// history. Its viewport renders on the CPU when no graphics device was installed.
+fn precise_preview(app: &mut App, ctx: &egui::Context, which: &str) {
+    use serde_json::json;
+
+    assert!(matches!(which, "empty" | "solid" | "sketch" | "melt"), "YURA_PRECISE must be empty, solid, sketch or melt");
+    app.open_precise(ctx);
+    assert!(app.precise_on, "the embedded SolidCraft workspace must open");
+    let p = app.precise.as_mut().expect("the embedded modeller was created");
+    p.app.home.open = false;
+    p.app.viewport.no_pixels = false;
+    if which != "empty" {
+        p.app.run("sketch.create", json!({"plane":"XY", "name":"Base"})).expect("create the exact sketch");
+        p.app.run("sketch.rectangle.two_point", json!({"p0":[0,0], "p1":[60,40]})).expect("draw the exact rectangle");
+        if matches!(which, "solid" | "melt") {
+            p.app.run("sketch.finish", json!({})).expect("finish the exact sketch");
+            p.app.run("solid.extrude", json!({"sketch":"Base", "distance":20, "operation":"new"})).expect("extrude the exact solid");
+        }
+        p.app.fit_view();
+    }
+    if which == "melt" {
+        app.set_precise_mode(ctx, false).expect("return through the real exact-solid transfer");
+    }
+}
+
+fn precise_viewport_ready(app: &App, ctx: &egui::Context, tex: &Textures) -> bool {
+    let Some(p) = app.precise.as_ref().filter(|_| app.precise_on) else { return false };
+    let Some(rect) = p.app.viewport.rect else { return false };
+    if rect.width() < 16.0 || rect.height() < 16.0 {
+        return false;
+    }
+    ctx.tex_manager().read().allocated().any(|(id, meta)| meta.name == "sc_cpu_viewport" && tex.contains_key(id))
+}
+
+fn check_precise_geometry(app: &App, which: &str, size: egui::Vec2) {
+    let p = app.precise.as_ref().expect("the precise workspace remains open");
+    if which != "melt" {
+        let rect = p.app.viewport.rect.expect("the exact modeller viewport was laid out");
+        assert!(egui::Rect::from_min_size(egui::Pos2::ZERO, size).expand(0.5).contains_rect(rect), "the embedded viewport must fit in the window");
+    }
+    let state = p.app.session.model.state();
+    let solid = matches!(which, "solid" | "melt");
+    assert_eq!(state.bodies.len(), usize::from(solid));
+    assert_eq!(state.sketches.len(), usize::from(which != "empty"));
+    assert_eq!(
+        p.app.session.doc.features.len(),
+        if solid { 2 } else { usize::from(which == "sketch") },
+        "the exact feature history must remain available"
+    );
+    assert_eq!(p.app.session.active_sketch.is_some(), which == "sketch");
+    if solid {
+        let mesh = state.bodies[0].mesh();
+        assert!(!mesh.triangles.is_empty(), "the exact solid must have visible geometry");
+        let extent = mesh.bounds().size();
+        for (actual, expected) in [(extent.x, 60.0), (extent.y, 40.0), (extent.z, 20.0)] {
+            assert!((actual - expected).abs() < 1e-6, "the exact feature dimensions must be preserved: {extent:?}");
+        }
+    }
+}
+
+fn melt_transfer_ready(app: &App, ctx: &egui::Context, expected_shapes: usize) -> bool {
+    !app.precise_on && !app.precise_transfer_pending() && !crate::mesh_dialog::is_open(ctx) && app.scene.shape_count() == expected_shapes
+}
+
+fn check_melt_transfer(app: &App, ctx: &egui::Context, expected_shapes: usize) {
+    assert!(melt_transfer_ready(app, ctx, expected_shapes), "the exact-solid import must complete before capturing the Melt view");
+    let Some(Pick::Shape(g, s)) = app.sel else { panic!("the transferred mesh must be selected") };
+    let shape = app.scene.shape(g, s).expect("the transferred shape remains in the scene");
+    assert_eq!(shape.kind, Kind::Mesh);
+    assert_eq!(app.scene.groups[g].blend, 12.0, "the real transfer must enable group melting");
+    assert!(app.tab == Tab::Melt, "the real transfer must show the Melt controls");
+    assert!(shape.volume.as_ref().is_some_and(|volume| volume.nodes() > 0), "the transferred mesh must have its baked distance data");
+    assert_eq!(shape.size, [60.0, 40.0, 20.0], "transferring into Melt must preserve the original dimensions");
+    assert_eq!(shape.pos, [30.0, 20.0, 10.0], "transferring into Melt must preserve the original position");
+    assert_eq!(app.scene.groups[0].shapes[0].kind, Kind::Sphere, "the original Melt shape must remain beside the transferred solid");
+}
+
 #[test]
 #[ignore]
 fn app_preview() {
@@ -133,6 +211,15 @@ fn app_preview() {
     }
     if let Ok(which) = std::env::var("YURA_SKETCH") {
         sketch_preview(&mut app, &ctx, &which);
+    }
+    let precise = std::env::var("YURA_PRECISE").ok();
+    let melt_transfer = precise.as_deref() == Some("melt");
+    let initial_shapes = app.scene.shape_count();
+    if melt_transfer {
+        assert_eq!(initial_shapes, 1, "the transfer preview starts with Melt's default sphere");
+    }
+    if let Some(which) = precise.as_deref() {
+        precise_preview(&mut app, &ctx, which);
     }
     // `YURA_MESH=card` shows the mesh import card with a file read; `YURA_MESH=shape` selects an imported mesh (its inspector)
     let mesh = std::env::var("YURA_MESH").ok();
@@ -196,7 +283,16 @@ fn app_preview() {
     let dialog_work = export.is_some() || mesh.is_some() || gpu_state.is_some();
     let min_frames = if dialog_work { 60 } else { 12 };
     let began = std::time::Instant::now();
+    let mut melt_framed_at: Option<usize> = None;
     for frame in 0..1500 {
+        if melt_transfer && melt_framed_at.is_none() && melt_transfer_ready(&app, &ctx, initial_shapes + 1) {
+            check_melt_transfer(&app, &ctx, initial_shapes + 1);
+            app.cam.ortho = true;
+            app.cam.look(0.6, 0.55);
+            app.frame_now();
+            app.settle(&ctx);
+            melt_framed_at = Some(frame);
+        }
         let input = egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
             time: Some(2.0 + frame as f64 / 30.0),
@@ -208,13 +304,36 @@ fn app_preview() {
         last = Some(out);
         // Waiting for the still-quality picture also gives auto-sized panels and font textures
         // time to settle. Never silently publish a flat placeholder as a geometry preview.
-        if frame + 1 >= min_frames && app.gpu.easy_view.settled && !app.perf.last_fast {
+        let ready = if melt_transfer {
+            melt_framed_at.is_some_and(|started| frame + 1 >= started + min_frames)
+                && melt_transfer_ready(&app, &ctx, initial_shapes + 1)
+                && app.gpu.easy_view.settled
+                && !app.perf.last_fast
+        } else if precise.is_some() {
+            precise_viewport_ready(&app, &ctx, &tex)
+        } else {
+            app.gpu.easy_view.settled && !app.perf.last_fast
+        };
+        if frame + 1 >= min_frames && ready {
             break;
         }
         assert!(began.elapsed() < std::time::Duration::from_secs(30), "the CPU viewport did not settle within 30 seconds");
         std::thread::sleep(std::time::Duration::from_millis(if dialog_work { 60 } else { 20 }));
     }
-    assert!(app.gpu.easy_view.settled && !app.perf.last_fast, "the preview must include the final CPU viewport");
+    if let Some(which) = precise.as_deref() {
+        if melt_transfer {
+            check_melt_transfer(&app, &ctx, initial_shapes + 1);
+            assert!(
+                melt_framed_at.is_some() && app.gpu.easy_view.settled && !app.perf.last_fast,
+                "the transferred solid must have a final Melt CPU picture"
+            );
+        } else {
+            assert!(precise_viewport_ready(&app, &ctx, &tex), "the embedded modeller must provide its real CPU viewport texture");
+        }
+        check_precise_geometry(&app, which, size);
+    } else {
+        assert!(app.gpu.easy_view.settled && !app.perf.last_fast, "the preview must include the final CPU viewport");
+    }
     type StripTailLayout = (Option<(egui::Rect, egui::Rect)>, f32, f32);
     if let Some((Some((button, clip)), content_height, max_height)) =
         ctx.data(|d| d.get_temp::<StripTailLayout>(egui::Id::new("tool_strip_tail_layout")))
