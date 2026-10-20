@@ -216,7 +216,9 @@ pub fn animation_gif(
         cam.frame(c, r);
         cam
     });
-    let step = (a.length / 240 + 1).max(1);
+    // a GIF frame lasts 2 hundredths of a second at the least: above 50 fps, pictures are skipped
+    // (and the waits shared out evenly) so the animation still takes as long as it should
+    let step = (a.length / 240 + 1).max(a.fps.max(1).div_ceil(50)).max(1);
     let frames: Vec<u32> = (0..a.length).step_by(step as usize).collect();
     let total = frames.len() as u32;
     // the same picture as the window when there is a graphics card to ask (else the plain CPU one)
@@ -241,8 +243,8 @@ pub fn animation_gif(
             _ => pics.push(view(&s, &cam, w, h)),
         }
     }
-    let delay = (100.0 * step as f32 / a.fps.max(1) as f32).round().clamp(2.0, 6000.0) as u16;
-    crate::gif::encode(w, h, &pics, delay)
+    let delays = crate::gif::delays(pics.len(), 100.0 * step as f32 / a.fps.max(1) as f32);
+    crate::gif::encode_timed(w, h, &pics, &delays)
 }
 
 #[cfg(test)]
