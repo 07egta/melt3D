@@ -174,6 +174,10 @@ fn main() -> eframe::Result {
         ..Default::default()
     };
     let tried_for_app = tried.clone();
+    // Delete per-launch token files on a normal exit, including after an
+    // eframe error. A crash may leave an inert file but never exposes it.
+    let token_files = std::sync::Arc::new(std::sync::Mutex::new(Vec::<std::path::PathBuf>::new()));
+    let files_for_app = token_files.clone();
     let result = eframe::run_native(
         "MELTCAD",
         options,
@@ -194,9 +198,21 @@ fn main() -> eframe::Result {
                 let ctx = cc.egui_ctx.clone();
                 match control::start(port, token.clone(), move || ctx.request_repaint()) {
                     Ok((rx, port)) => {
-                        app.control = Some(rx);
-                        let _ = std::fs::write(control::token_file(port), &token);
-                        eprintln!("control: 127.0.0.1:{port}, token file {}", control::token_file(port).display());
+                        match control::write_token(port, &token) {
+                            Ok(path) => {
+                                app.control = Some(rx);
+                                eprintln!("control: 127.0.0.1:{port}, token file {}", path.display());
+                                if let Ok(mut files) = files_for_app.lock() {
+                                    files.push(path);
+                                }
+                            }
+                            Err(e) => {
+                                // Fail closed: never activate the window's
+                                // command receiver if the secret could not
+                                // be published securely.
+                                eprintln!("control mode disabled: {e}");
+                            }
+                        }
                     }
                     Err(e) => eprintln!("{e}"),
                 }
@@ -208,6 +224,11 @@ fn main() -> eframe::Result {
             Ok(Box::new(app))
         }),
     );
+    if let Ok(files) = token_files.lock() {
+        for path in files.iter() {
+            let _ = std::fs::remove_file(path);
+        }
+    }
     if let Err(e) = &result {
         gpu_log::log(&format!("eframe stopped with an error: {e}"));
         no_graphics(choice, plan, &tried, &e.to_string());

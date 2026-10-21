@@ -61,8 +61,83 @@ pub fn make_token() -> String {
     out
 }
 
-pub fn token_file(port: u16) -> std::path::PathBuf {
-    std::env::temp_dir().join(format!("melt3d-control-{port}.token"))
+/// A token must never be placed in a shared /tmp directory. Use the
+/// operating system's private per-user app-state folder and a stable per-port
+/// filename so a separate `meltcad --mcp --control PORT` process can find it.
+pub fn token_file(port: u16) -> Result<std::path::PathBuf, String> {
+    let state: Option<std::path::PathBuf> = if cfg!(windows) {
+        std::env::var_os("LOCALAPPDATA")
+            .or_else(|| std::env::var_os("APPDATA"))
+            .map(std::path::PathBuf::from)
+    } else {
+        std::env::var_os("XDG_STATE_HOME")
+            .map(std::path::PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(|home| std::path::PathBuf::from(home).join(".local/state")))
+    };
+    let state = state.ok_or("Cannot start control mode: no private user directory is available")?;
+    Ok(state.join("Melt3D").join("control").join(format!("melt3d-{port}.token")))
+}
+
+/// Publish a control token only after the listener has bound its port and after
+/// creating the private directory. An entry left by a crashed server is stale:
+/// a live server could not have bound the same port. Remove that entry, then
+/// exclusively create the replacement without following a pre-existing symlink.
+pub fn write_token(port: u16, token: &str) -> Result<std::path::PathBuf, String> {
+    let path = token_file(port)?;
+    write_token_at(&path, token)?;
+    Ok(path)
+}
+
+fn write_token_at(path: &std::path::Path, token: &str) -> Result<(), String> {
+    secure_token_parent(path)?;
+    if let Err(e) = std::fs::remove_file(path) {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            return Err(format!("Cannot remove stale control token: {e}"));
+        }
+    }
+    write_token_to(path, token)
+}
+
+fn secure_token_parent(path: &std::path::Path) -> Result<&std::path::Path, String> {
+    let parent = path.parent().ok_or("The token path has no parent")?;
+    std::fs::create_dir_all(parent).map_err(|e| format!("Cannot create control directory: {e}"))?;
+    let metadata = std::fs::symlink_metadata(parent).map_err(|e| format!("Cannot inspect control directory: {e}"))?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err("The control directory must be a real private directory".into());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))
+            .map_err(|e| format!("Cannot secure control directory: {e}"))?;
+    }
+    Ok(parent)
+}
+
+fn write_token_to(path: &std::path::Path, token: &str) -> Result<(), String> {
+    secure_token_parent(path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut file = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(path)
+            .map_err(|e| format!("Cannot exclusively create control token: {e}"))?;
+        if let Err(e) = file.write_all(token.as_bytes()).and_then(|_| file.sync_all()) {
+            let _ = std::fs::remove_file(path);
+            return Err(format!("Cannot publish control token: {e}"));
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        // Windows LOCALAPPDATA is per-user and carries the user's ACL.
+        // create_new refuses any pre-existing file or link.
+        let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(path)
+            .map_err(|e| format!("Cannot exclusively create control token: {e}"))?;
+        if let Err(e) = file.write_all(token.as_bytes()).and_then(|_| file.sync_all()) {
+            let _ = std::fs::remove_file(path);
+            return Err(format!("Cannot publish control token: {e}"));
+        }
+    }
+    Ok(())
 }
 
 /// Start listening. Returns the requests channel and the port really used (0 = pick one).
@@ -188,6 +263,41 @@ mod tests {
         assert!(lines[0].contains("\"ok\":true"), "{lines:?}");
         assert!(lines[1].contains("\"shape_count\":1"), "{lines:?}");
         assert!(lines[2].contains("\"ok\":false"), "{lines:?}");
+    }
+
+    #[test]
+    fn control_token_path_is_discoverable_from_a_separate_client() {
+        let path = token_file(7777).unwrap();
+        assert_eq!(path.file_name().and_then(|name| name.to_str()), Some("melt3d-7777.token"));
+    }
+
+    #[test]
+    fn publishing_replaces_a_stale_launch_token() {
+        let folder = std::env::temp_dir().join(format!("melt3d-stale-token-test-{}", std::process::id()));
+        let path = folder.join("control").join("melt3d-7777.token");
+        write_token_to(&path, "old-token").unwrap();
+        write_token_at(&path, "new-token").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "new-token");
+        let _ = std::fs::remove_dir_all(folder);
+    }
+
+    #[test]
+    fn control_token_is_exclusive_and_user_private() {
+        let folder = std::env::temp_dir().join(format!("melt3d-token-test-{}", std::process::id()));
+        let path = folder.join("control").join("test.token");
+        write_token_to(&path, "secret-1234").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "secret-1234");
+        assert!(write_token_to(&path, "replaced").is_err(), "do not overwrite an existing token");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "secret-1234");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let dir_mode = std::fs::metadata(path.parent().unwrap()).unwrap().permissions().mode() & 0o777;
+            let file_mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(dir_mode, 0o700);
+            assert_eq!(file_mode, 0o600);
+        }
+        let _ = std::fs::remove_dir_all(folder);
     }
 
     #[test]
