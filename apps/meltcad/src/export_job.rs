@@ -563,8 +563,18 @@ pub fn serialize(b: &Built, o: &Options, path: &Path) -> Result<Vec<(PathBuf, Ve
         Format::Stl => vec![(main, fmt::stl_binary(&b.surface.mesh, &stem))],
         Format::StlAscii => vec![(main, fmt::stl_ascii(&b.surface.mesh, &stem).into_bytes())],
         Format::Obj => {
-            let mtl_path = path.with_extension("mtl");
-            let mtl_name = mtl_path.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "model.mtl".into());
+            // OBJ's mtllib treats whitespace as multiple library names. Give the
+            // actual MTL file and its reference the same whitespace-free name.
+            // Suffix transformed names so "My Car" does not collide with "My_Car".
+            let safe_stem: String = stem.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect();
+            let mtl_stem = if safe_stem == stem {
+                safe_stem
+            } else {
+                let hash = stem.as_bytes().iter().fold(0xcbf29ce484222325u64, |h, b| (h ^ u64::from(*b)).wrapping_mul(0x100000001b3));
+                format!("{safe_stem}_{hash:016x}")
+            };
+            let mtl_name = format!("{mtl_stem}.mtl");
+            let mtl_path = path.with_file_name(&mtl_name);
             let (obj, mtl) = fmt::obj_files(&b.surface, &stem, &mtl_name)?;
             let mut v = vec![(main, obj.into_bytes())];
             if let Some(m) = mtl {
