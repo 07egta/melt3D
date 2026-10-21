@@ -118,18 +118,16 @@ impl App {
         if !self.an.open {
             self.an.playing = false;
             if let Some(job) = &self.an.job {
-                egui::Area::new(egui::Id::new("gif_background_job"))
-                    .anchor(egui::Align2::RIGHT_BOTTOM, vec2(-14.0, -14.0))
-                    .show(&ctx, |ui| {
-                        egui::Frame::popup(ui.style()).show(ui, |ui| {
-                            let done = job.done.load(Ordering::Relaxed);
-                            let total = job.total.load(Ordering::Relaxed);
-                            ui.label(format!("Making GIF {done}/{total}"));
-                            if ui.button("Cancel GIF").clicked() {
-                                job.cancel.store(true, Ordering::Relaxed);
-                            }
-                        });
+                egui::Area::new(egui::Id::new("gif_background_job")).anchor(egui::Align2::RIGHT_BOTTOM, vec2(-14.0, -14.0)).show(&ctx, |ui| {
+                    egui::Frame::popup(ui.style()).show(ui, |ui| {
+                        let done = job.done.load(Ordering::Relaxed);
+                        let total = job.total.load(Ordering::Relaxed);
+                        ui.label(format!("Making GIF {done}/{total}"));
+                        if ui.button("Cancel GIF").clicked() {
+                            job.cancel.store(true, Ordering::Relaxed);
+                        }
                     });
+                });
             }
             return;
         }

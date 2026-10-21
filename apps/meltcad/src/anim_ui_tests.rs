@@ -179,12 +179,7 @@ fn disconnected_gif_worker_is_released_even_when_timeline_is_closed() {
     let mut app = animated();
     let (tx, rx) = std::sync::mpsc::channel();
     drop(tx);
-    app.an.job = Some(Job {
-        rx,
-        done: Arc::new(AtomicU32::new(0)),
-        total: Arc::new(AtomicU32::new(1)),
-        cancel: Arc::new(AtomicBool::new(false)),
-    });
+    app.an.job = Some(Job { rx, done: Arc::new(AtomicU32::new(0)), total: Arc::new(AtomicU32::new(1)), cancel: Arc::new(AtomicBool::new(false)) });
     app.an.open = false;
     bar(&mut app, &ctx);
     assert!(app.an.job.is_none(), "disconnected worker must not block future exports");
@@ -196,12 +191,7 @@ fn closing_timeline_keeps_gif_job_pollable_and_cancellable() {
     let mut app = animated();
     let (tx, rx) = std::sync::mpsc::channel();
     let cancel = Arc::new(AtomicBool::new(false));
-    app.an.job = Some(Job {
-        rx,
-        done: Arc::new(AtomicU32::new(1)),
-        total: Arc::new(AtomicU32::new(3)),
-        cancel: cancel.clone(),
-    });
+    app.an.job = Some(Job { rx, done: Arc::new(AtomicU32::new(1)), total: Arc::new(AtomicU32::new(3)), cancel: cancel.clone() });
     app.an.open = false;
     bar(&mut app, &ctx);
     assert!(app.an.job.is_some(), "pending job survives timeline close");
