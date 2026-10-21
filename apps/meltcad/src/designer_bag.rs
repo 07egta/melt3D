@@ -398,6 +398,7 @@ pub fn inspector(ui: &mut egui::Ui, g: &mut Group) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::App;
     use crate::export_formats::Format;
     use crate::export_job::{self, Options};
     use crate::export_mesh::Progress;
