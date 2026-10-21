@@ -540,16 +540,16 @@ mod tests {
                     )),
                     ..Default::default()
                 };
-                ctx.begin_pass(input);
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    if let Some(step) = step {
-                        let _ = content(ui, step, 3, None);
-                    } else {
-                        ui.label("YuraCAD");
-                    }
+                let out = ctx.run_ui(input, |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        if let Some(step) = step {
+                            let _ = content(ui, step, 3, None);
+                        } else {
+                            ui.label("YuraCAD");
+                        }
+                    });
                 });
-                let out = ctx.end_pass();
-                let tess = ctx.tessellate(out.shapes, 1.0);
+                let tess = ctx.tessellate(out.shapes, out.pixels_per_point);
                 triangles = tess.iter().map(|p| match &p.primitive {
                     egui::epaint::Primitive::Mesh(mesh) => mesh.indices.len() / 3,
                     _ => 0,
