@@ -266,9 +266,23 @@ mod tests {
         assert_eq!(rpc_error(-32600, "Invalid Request")["id"], Value::Null);
         assert_eq!(cli(&["meltcad".into()]), None);
 
-        // An object missing the required method is invalid, not a notification.
-        let invalid = handle(&mut local(), &json!({"jsonrpc": "2.0"}));
-        assert_eq!(invalid.as_ref().and_then(|v| v["error"]["code"].as_i64()), Some(-32600));
+        // Invalid requests are errors even when they have no usable request ID.
+        let invalid_requests = [
+            json!({"jsonrpc": "2.0"}),
+            json!({"jsonrpc": "1.0", "id": 1, "method": "ping"}),
+            json!({"jsonrpc": "2.0", "id": 1, "method": 7}),
+            json!({"jsonrpc": "2.0", "id": 1, "method": "ping", "params": 7}),
+            json!({"jsonrpc": "2.0", "id": true, "method": "ping"}),
+            json!(["not", "an", "object"]),
+        ];
+        for request in invalid_requests {
+            let reply = handle(&mut local(), &request);
+            assert_eq!(
+                reply.as_ref().and_then(|v| v["error"]["code"].as_i64()),
+                Some(-32600),
+                "request {request} returned {reply:?}",
+            );
+        }
     }
 
     #[test]
@@ -282,6 +296,8 @@ mod tests {
             }}),
         );
         assert!(response.is_none());
+        // A valid notification for an unknown method still receives no response.
+        assert!(handle(&mut b, &json!({"jsonrpc": "2.0", "method": "missing"})).is_none());
 
         let summary = handle(
             &mut b,
