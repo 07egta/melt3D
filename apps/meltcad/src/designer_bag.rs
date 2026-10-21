@@ -116,16 +116,7 @@ fn trim_colour() -> Material {
 fn chamfered_rect(width: f32, depth: f32, chamfer: f32) -> Vec<[f32; 2]> {
     let (w, d) = (width * 0.5, depth * 0.5);
     let r = chamfer.min(w * 0.25).min(d * 0.25);
-    vec![
-        [-w + r, -d],
-        [w - r, -d],
-        [w, -d + r],
-        [w, d - r],
-        [w - r, d],
-        [-w + r, d],
-        [-w, d - r],
-        [-w, -d + r],
-    ]
+    vec![[-w + r, -d], [w - r, -d], [w, -d + r], [w, d - r], [w - r, d], [-w + r, d], [-w, d - r], [-w, -d + r]]
 }
 
 /// Accordion-like perimeter; the changing front/back notches create crisp
@@ -214,11 +205,7 @@ fn bottom(p: &BagConfig) -> Shape {
 /// Remove the upper cap of the shell. A real Boolean opening, not just a
 /// dark rectangle: the cutter overlaps the already hollow interior.
 fn mouth_cut(p: &BagConfig) -> Shape {
-    let mut s = Shape::new(
-        Kind::Box,
-        [p.origin_xy[0], p.origin_xy[1], p.height + p.wall * 1.25],
-        colour(),
-    );
+    let mut s = Shape::new(Kind::Box, [p.origin_xy[0], p.origin_xy[1], p.height + p.wall * 1.25], colour());
     s.name = "開口部（くり抜き）".into();
     s.op = Op::Subtract;
     s.blend = 0.0;
@@ -228,11 +215,7 @@ fn mouth_cut(p: &BagConfig) -> Shape {
     } else {
         p.depth - p.wall * 3.3
     };
-    s.size = [
-        p.width - p.wall * 3.3,
-        opening_depth,
-        p.wall * 7.5,
-    ];
+    s.size = [p.width - p.wall * 3.3, opening_depth, p.wall * 7.5];
     s.round = p.wall.min(2.0);
     s
 }
@@ -266,13 +249,7 @@ fn handle(p: &BagConfig, front: bool) -> Shape {
 pub fn make_group(mut config: BagConfig) -> Group {
     config.sanitize();
     let mut g = Group::new(config.style.name());
-    g.shapes = vec![
-        body(&config),
-        bottom(&config),
-        mouth_cut(&config),
-        handle(&config, true),
-        handle(&config, false),
-    ];
+    g.shapes = vec![body(&config), bottom(&config), mouth_cut(&config), handle(&config, true), handle(&config, false)];
     for (index, shape) in g.shapes.iter_mut().enumerate() {
         shape.source = format!("designer-bag:part:{index}");
     }
@@ -305,12 +282,19 @@ pub fn rebuild(g: &mut Group, mut config: BagConfig) {
     // Match generated parts by stable source tags so reordering or renaming a
     // part does not detach its identity. Older saved bags predate these tags,
     // so use their original five-part prefix as a compatibility fallback.
+    let mut matched = vec![false; g.shapes.len()];
     for (index, s) in fresh.shapes.iter_mut().enumerate() {
         let tag = format!("designer-bag:part:{index}");
-        let old = g.shapes.iter().find(|old| old.source == tag).or_else(|| {
-            g.shapes.get(index).filter(|old| old.source.is_empty() && old.op == s.op)
-        });
-        if let Some(old) = old {
+        let old_index = g
+            .shapes
+            .iter()
+            .position(|old| old.source == tag)
+            .or_else(|| g.shapes.get(index).filter(|old| old.source.is_empty() && old.op == s.op).map(|_| index));
+        if let Some(old_index) = old_index {
+            if let Some(slot) = matched.get_mut(old_index) {
+                *slot = true;
+            }
+            let Some(old) = g.shapes.get(old_index) else { continue };
             s.uid = old.uid;
             let generated_name = match index {
                 0 => "本体（中空）",
@@ -327,7 +311,7 @@ pub fn rebuild(g: &mut Group, mut config: BagConfig) {
             }
         }
     }
-    fresh.shapes.extend(g.shapes.iter().filter(|old| !old.source.starts_with("designer-bag:part:")).cloned());
+    fresh.shapes.extend(g.shapes.iter().zip(matched).filter_map(|(shape, matched)| (!matched).then(|| shape.clone())));
     g.shapes = fresh.shapes;
     g.bag = Some(config);
 }
@@ -353,11 +337,7 @@ pub fn inspector(ui: &mut egui::Ui, g: &mut Group) {
     ui.add_space(5.0);
     ui.label(egui::RichText::new("Designer Bag | 寸法・形状").strong());
     ui.horizontal_wrapped(|ui| {
-        for (style, label) in [
-            (BagStyle::Tote, "トート"),
-            (BagStyle::HalfMoon, "半円"),
-            (BagStyle::Origami, "折り紙"),
-        ] {
+        for (style, label) in [(BagStyle::Tote, "トート"), (BagStyle::HalfMoon, "半円"), (BagStyle::Origami, "折り紙")] {
             if style::pill(ui, label, c.style == style).clicked() {
                 c.style = style;
             }
@@ -379,10 +359,15 @@ pub fn inspector(ui: &mut egui::Ui, g: &mut Group) {
     } else {
         ui.label(egui::RichText::new(format!("設計壁厚 {:.1} mm（実際の最薄部はプリントチェックで確認）", c.wall)).color(style::DIM).size(11.5));
     }
-    if style::pill(ui, "プリントチェック", false).on_hover_text("シーン全体のメッシュ肉厚・穴・張り出しを確認").clicked() {
+    if style::pill(ui, "プリントチェック", false).on_hover_text("シーン全体のメッシュ肉厚・穴・張り出しを確認").clicked()
+    {
         crate::export_dialog::open_check(ui.ctx());
     }
-    ui.label(egui::RichText::new("パーツ別の編集は左のツリーで「本体」「底面」「持ち手」を選択。寸法を変えるとパーツ形状を再生成します。").color(style::DIM).size(11.5));
+    ui.label(
+        egui::RichText::new("パーツ別の編集は左のツリーで「本体」「底面」「持ち手」を選択。寸法を変えるとパーツ形状を再生成します。")
+            .color(style::DIM)
+            .size(11.5),
+    );
 }
 
 #[cfg(test)]
@@ -482,6 +467,28 @@ mod tests {
         assert_eq!(g.shapes[5].uid, extra_uid);
         let reloaded = Scene::from_json(&Scene { groups: vec![g], ..Scene::default() }.to_json()).expect("scene reload");
         assert_eq!(reloaded.groups[0].shapes[5].uid, extra_uid);
+    }
+
+    #[test]
+    fn rebuilding_legacy_bag_keeps_only_unmatched_shapes_as_extras() {
+        let mut g = make_group(BagConfig::default());
+        for (index, shape) in g.shapes.iter_mut().enumerate() {
+            shape.source.clear();
+            shape.uid = 100 + index as u32;
+        }
+        let mut extra = Shape::new(Kind::Sphere, [3.0, 4.0, 5.0], Material::plain([0.1, 0.2, 0.3], 0.5, 0.0));
+        extra.name = "legacy user addition".into();
+        extra.uid = 500;
+        g.shapes.push(extra.clone());
+        let loaded = Scene::from_json(&Scene { groups: vec![g], ..Scene::default() }.to_json()).expect("legacy scene reload");
+        let mut legacy = loaded.groups.into_iter().next().expect("one saved group");
+        let mut edited = legacy.bag.clone().expect("bag settings");
+        edited.width = 140.0;
+        rebuild(&mut legacy, edited);
+        assert_eq!(legacy.shapes.len(), 6);
+        assert_eq!(legacy.shapes[5], extra);
+        assert_eq!(legacy.shapes[5].uid, 500);
+        assert!(legacy.shapes[..5].iter().all(|shape| shape.source.starts_with("designer-bag:part:")));
     }
 
     #[test]
