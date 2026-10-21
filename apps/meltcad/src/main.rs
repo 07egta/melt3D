@@ -132,7 +132,16 @@ fn main() -> eframe::Result {
         }
         return Ok(());
     }
-    if cpu_render::cli(&args) || bench::cli(&args) || mcp::cli(&args) {
+    if cpu_render::cli(&args) {
+        return Ok(());
+    }
+    if let Some(ok) = bench::cli(&args) {
+        if !ok {
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+    if mcp::cli(&args) {
         return Ok(());
     }
     perf::init();
