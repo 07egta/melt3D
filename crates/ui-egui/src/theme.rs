@@ -415,8 +415,8 @@ mod tests {
     fn dark_theme_is_isolated_between_concurrent_test_threads() {
         use std::sync::{Arc, Barrier};
 
-        let ready = Arc::new(Barrier::new(2));
-        let release = Arc::new(Barrier::new(2));
+        let ready = Arc::new(Barrier::new(3));
+        let release = Arc::new(Barrier::new(3));
         let workers = [false, true].map(|dark| {
             let ready = Arc::clone(&ready);
             let release = Arc::clone(&release);
