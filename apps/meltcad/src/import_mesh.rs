@@ -1181,7 +1181,7 @@ pub mod tests {
 
     #[test]
     fn ply_faces_before_vertices_still_triangulate_concave_polygons() {
-        let ply = "ply\nformat ascii 1.0\nelement face 1\nproperty list uchar int vertex_indices\nelement vertex 8\nproperty float x\nproperty float y\nproperty float z\nend_header\n\\
+        let ply = "ply\nformat ascii 1.0\nelement face 1\nproperty list uchar int vertex_indices\nelement vertex 8\nproperty float x\nproperty float y\nproperty float z\nend_header\n\
             8 0 1 2 3 4 5 6 7\n0 0 0\n4 0 0\n4 4 0\n3 4 0\n3 1 0\n1 1 0\n1 4 0\n0 4 0\n";
         let imported = load(ply.as_bytes(), "concave.ply");
         assert!((imported.mesh.surface_area() - 10.0).abs() < 1e-4, "{}", imported.mesh.surface_area());
