@@ -67,11 +67,19 @@ fn ok_computes_off_the_window_thread_saying_so_then_applies() {
 fn cancel_while_computing_applies_nothing() {
     let mut h = square_on_a_block();
     h.app.apply_off_thread = Some(Duration::ZERO);
+    let started = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let release = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let (finished_tx, finished_rx) = std::sync::mpsc::channel();
+    h.app.test_apply_gate = Some((started.clone(), release.clone(), finished_tx));
     let features = h.app.session.doc.features.len();
     h.step(&json!({"key": "Enter"})).unwrap();
+    // The worker pauses after it starts, keeping the computation in flight until after Escape.
+    started.wait();
     assert!(h.app.applying.is_some());
     h.step(&json!({"key": "Escape"})).unwrap();
     assert!(h.app.applying.is_none() && h.app.dialog.is_none());
+    release.wait();
+    finished_rx.recv_timeout(Duration::from_secs(5)).expect("cancelled worker finishes");
     h.frames(5);
     assert_eq!(h.app.session.doc.features.len(), features);
 }
