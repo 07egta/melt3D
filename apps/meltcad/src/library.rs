@@ -94,7 +94,7 @@ impl Item {
         let mut lo = [f32::INFINITY; 2];
         let mut hi = [f32::NEG_INFINITY; 2];
         for s in &self.group.shapes {
-            if !s.visible || s.op != crate::model::Op::Add {
+            if !s.solid() || s.op != crate::model::Op::Add {
                 continue;
             }
             let r = crate::view::radius_of(s);
@@ -173,16 +173,8 @@ mod tests {
         // Different-sized parts and many tiny details must not determine the
         // insertion position by the arithmetic mean of their centre points.
         let mut g = Group::new("片寄ったモデル");
-        g.shapes.push(crate::model::Shape::new(
-            crate::model::Kind::Sphere,
-            [-20.0, 0.0, 20.0],
-            crate::model::Material::default(),
-        ));
-        g.shapes.push(crate::model::Shape::new(
-            crate::model::Kind::Box,
-            [45.0, 0.0, 20.0],
-            crate::model::Material::default(),
-        ));
+        g.shapes.push(crate::model::Shape::new(crate::model::Kind::Sphere, [-20.0, 0.0, 20.0], crate::model::Material::default()));
+        g.shapes.push(crate::model::Shape::new(crate::model::Kind::Box, [45.0, 0.0, 20.0], crate::model::Material::default()));
         let it = Item { name: "テスト".into(), tags: vec![], group: g };
         let placed = Item { name: it.name.clone(), tags: vec![], group: it.placed([0.0, 0.0]) };
         assert!(placed.centre_xy().iter().all(|x| x.abs() < 1e-3));
@@ -192,5 +184,27 @@ mod tests {
     fn search_matches_names_and_tags() {
         let it = Item { name: "いぬ".into(), tags: vec!["Dog".into()], group: Group::new("x") };
         assert!(it.matches("") && it.matches("いぬ") && it.matches("dog") && !it.matches("ねこ"));
+    }
+    #[test]
+    fn everyday_vehicle_library_loads_places_saves_and_renders_thumbnails() {
+        let cat = all().iter().find(|c| c.name == "のりもの").expect("vehicle category");
+        let names = ["セダン", "軽自動車", "SUV", "バス", "トラック", "自転車", "バイク", "電車", "飛行機", "船"];
+        let mut distinct = std::collections::HashSet::new();
+        for it in &cat.items {
+            assert!(distinct.insert(it.name.as_str()), "duplicate model {}", it.name);
+        }
+        for name in names {
+            let it = cat.items.iter().find(|it| it.name == name).unwrap_or_else(|| panic!("missing {name}"));
+            assert!(!it.group.shapes.is_empty() && it.group.shapes.len() <= 40);
+            assert!(it.fits(0, 0));
+            let placed = it.placed([25.0, -10.0]);
+            assert_eq!(placed.shapes.len(), it.group.shapes.len());
+            let json = it.scene().to_json();
+            let loaded = Scene::from_json(&json).expect("save/load round trip");
+            assert_eq!(loaded.groups.len(), 1);
+            assert_eq!(loaded.groups[0].shapes.len(), it.group.shapes.len());
+            let pixels = crate::cpu_render::thumb(&loaded, 16);
+            assert_eq!(pixels.len(), 16 * 16 * 4);
+        }
     }
 }

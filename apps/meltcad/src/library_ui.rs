@@ -46,32 +46,35 @@ struct Job {
     ctx: egui::Context,
 }
 
-fn worker() -> Option<&'static Worker> {
-    static W: std::sync::OnceLock<Option<Worker>> = std::sync::OnceLock::new();
-    W.get_or_init(|| {
-        let (tx, rx) = std::sync::mpsc::channel::<Job>();
-        let done: Done = Default::default();
-        let out = done.clone();
-        std::thread::Builder::new()
-            .name("meltcad-thumbs".into())
-            .spawn(move || {
-                for job in rx {
-                    let rgba = std::panic::catch_unwind(|| crate::cpu_render::thumb(&job.scene, THUMB)).unwrap_or_default();
-                    if rgba.len() == THUMB * THUMB * 4 {
-                        out.lock().unwrap_or_else(|e| e.into_inner()).push((job.cat, job.item, rgba));
-                    }
-                    job.ctx.request_repaint();
+fn spawn_worker() -> Option<Worker> {
+    let (tx, rx) = std::sync::mpsc::channel::<Job>();
+    let done: Done = Default::default();
+    let out = done.clone();
+    std::thread::Builder::new()
+        .name("meltcad-thumbs".into())
+        .spawn(move || {
+            for job in rx {
+                let rgba = std::panic::catch_unwind(|| crate::cpu_render::thumb(&job.scene, THUMB)).unwrap_or_default();
+                if rgba.len() == THUMB * THUMB * 4 {
+                    out.lock().unwrap_or_else(|e| e.into_inner()).push((job.cat, job.item, rgba));
                 }
-            })
-            .ok()?;
-        Some(Worker { tx: std::sync::Mutex::new(tx), done, asked: Default::default() })
-    })
-    .as_ref()
+                job.ctx.request_repaint();
+            }
+        })
+        .ok()?;
+    Some(Worker { tx: std::sync::Mutex::new(tx), done, asked: Default::default() })
+}
+
+/// Texture caches belong to a Context, so their requests and completed pictures must too.
+/// A process-global queue lets another window/test consume a picture while global
+/// deduplication then prevents its original Context from ever requesting it again.
+fn worker(ctx: &egui::Context) -> Option<std::sync::Arc<Worker>> {
+    ctx.data_mut(|data| data.get_temp_mut_or_insert_with(egui::Id::new("library_worker"), || spawn_worker().map(std::sync::Arc::new)).clone())
 }
 
 /// Turn the pictures the thread has finished into textures (a few per frame).
 fn collect(ctx: &egui::Context) {
-    let Some(w) = worker() else { return };
+    let Some(w) = worker(ctx) else { return };
     let ready: Vec<(usize, usize, Vec<u8>)> = {
         let mut g = w.done.lock().unwrap_or_else(|e| e.into_inner());
         let n = g.len().min(6);
@@ -89,7 +92,7 @@ fn collect(ctx: &egui::Context) {
 
 /// Ask the thread for a picture (once per model).
 fn ask(ctx: &egui::Context, cat: usize, i: usize, item: &Item) {
-    let Some(w) = worker() else { return };
+    let Some(w) = worker(ctx) else { return };
     if !w.asked.lock().unwrap_or_else(|e| e.into_inner()).insert((cat, i)) {
         return;
     }
@@ -99,21 +102,69 @@ fn ask(ctx: &egui::Context, cat: usize, i: usize, item: &Item) {
     }
 }
 
+/// The grid place nearest `around` (the middle of the scene) where a disc of radius `r` touches none of `taken`
+/// (centre, radius). None when the grid around the middle is full.
+pub fn free_spot(taken: &[([f32; 2], f32)], r: f32, around: [f32; 2]) -> Option<[f32; 2]> {
+    let r = if r.is_finite() { r.clamp(2.0, 400.0) } else { 20.0 };
+    let step = 2.0 * r + 6.0;
+    for ring in 0..=24i32 {
+        let mut best: Option<(f32, [f32; 2])> = None;
+        for i in -ring..=ring {
+            for j in -ring..=ring {
+                if i.abs().max(j.abs()) != ring {
+                    continue;
+                }
+                let p = [around[0] + i as f32 * step, around[1] + j as f32 * step];
+                let free = taken.iter().all(|(c, tr)| ((c[0] - p[0]).powi(2) + (c[1] - p[1]).powi(2)).sqrt() >= tr + r + 2.0);
+                let d = (p[0] - around[0]).hypot(p[1] - around[1]);
+                if free && best.is_none_or(|b| d < b.0) {
+                    best = Some((d, p));
+                }
+            }
+        }
+        if let Some((_, p)) = best {
+            return Some(p);
+        }
+    }
+    None
+}
+
 /// Put an item into the scene. Returns false when the scene is full.
 pub fn insert(app: &mut App, ctx: &egui::Context, item: &Item) -> bool {
+    if !app.allow_scene_structure_change() {
+        return false;
+    }
     if !item.fits(app.scene.groups.len(), app.scene.shape_count()) {
-        let why = if app.scene.groups.len() >= MAX_GROUPS { format!("グループは{MAX_GROUPS}個までです") } else { format!("形は{MAX_SHAPES}個までです") };
+        let why = if app.scene.groups.len() >= MAX_GROUPS { format!("Up to {MAX_GROUPS} groups") } else { format!("Up to {MAX_SHAPES} shapes") };
         app.say(ctx, why);
         return false;
     }
     // stand it just beside the existing scene (or at the middle when the scene is empty)
     let (c, r) = crate::gpu::bounds(&app.scene, None);
     let (_, own_r) = crate::gpu::bounds(&item.scene(), None);
-    let at = if r > 0.0 { [c[0] + r + own_r + 6.0, c[1]] } else { [0.0, 0.0] };
+    let at = if r > 0.0 {
+        // the first free place on a grid around the middle, so a crowd grows as a block, not as a line
+        let discs: Vec<([f32; 2], f32)> = app
+            .scene
+            .groups
+            .iter()
+            .filter_map(|g| {
+                let mut one = crate::model::Scene::default();
+                one.groups.clear();
+                one.groups.push(g.clone());
+                one.melt = app.scene.melt;
+                let (gc, gr) = crate::gpu::bounds(&one, None);
+                (gr > 0.0).then_some(([gc[0], gc[1]], gr))
+            })
+            .collect();
+        free_spot(&discs, own_r, [c[0], c[1]]).unwrap_or([c[0] + r + own_r + 6.0, c[1]])
+    } else {
+        [0.0, 0.0]
+    };
     app.scene.groups.push(item.placed(at));
     app.sel = Some(Pick::Group(app.scene.groups.len() - 1));
     app.frame_view(false);
-    app.say(ctx, format!("「{}」を入れました", item.name));
+    app.say(ctx, format!("Added {}", item.name));
     true
 }
 
@@ -121,7 +172,7 @@ pub fn insert(app: &mut App, ctx: &egui::Context, item: &Item) -> bool {
 pub fn panel(app: &mut App, ui: &mut egui::Ui) {
     let cats = library::all();
     if cats.is_empty() {
-        ui.label(RichText::new("ライブラリは空です").color(style::DIM));
+        ui.label(RichText::new("Library is empty").color(style::DIM));
         return;
     }
     app.lib_cat = app.lib_cat.min(cats.len() - 1);
@@ -129,7 +180,7 @@ pub fn panel(app: &mut App, ui: &mut egui::Ui) {
     collect(&ctx);
     let mut made_one = false;
     let mut pick: Option<(usize, usize)> = None;
-    ui.add(egui::TextEdit::singleline(&mut app.lib_query).hint_text("さがす（なまえ・English）").desired_width(f32::INFINITY));
+    ui.add(egui::TextEdit::singleline(&mut app.lib_query).hint_text("Search by name").desired_width(f32::INFINITY));
     ui.add_space(2.0);
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing = Vec2::new(4.0, 4.0);
@@ -162,7 +213,7 @@ pub fn panel(app: &mut App, ui: &mut egui::Ui) {
                         // the pictures come from a thread of their own, so opening the tab never stalls
                         // (without a thread: one new picture per frame)
                         let tex = cached(ui.ctx(), ci, ii).or_else(|| {
-                            if worker().is_some() {
+                            if worker(ui.ctx()).is_some() {
                                 ask(ui.ctx(), ci, ii, it);
                                 return None;
                             }
@@ -174,16 +225,25 @@ pub fn panel(app: &mut App, ui: &mut egui::Ui) {
                         });
                         match tex {
                             Some(t) => {
-                                ui.painter().image(t.id(), r.shrink(4.0), egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
+                                ui.painter().image(
+                                    t.id(),
+                                    r.shrink(4.0),
+                                    egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                                    Color32::WHITE,
+                                );
                             }
                             None => {
                                 ui.painter().text(r.center(), Align2::CENTER_CENTER, "…", egui::FontId::proportional(14.0), style::DIM);
                             }
                         }
-                        if resp.on_hover_text(format!("{} をシーンに入れる", it.name)).clicked() {
+                        let tip = format!("Add {} to the scene", it.name);
+                        let mut hit = resp.on_hover_text(&tip).clicked();
+                        // the name works like the picture
+                        let name = ui.add(egui::Label::new(RichText::new(&it.name).size(11.5)).sense(egui::Sense::click()));
+                        hit |= name.on_hover_text(tip).on_hover_cursor(egui::CursorIcon::PointingHand).clicked();
+                        if hit {
                             pick = Some((ci, ii));
                         }
-                        ui.label(RichText::new(&it.name).size(11.5));
                     });
                     if n % per_row == 0 {
                         ui.end_row();
@@ -192,7 +252,7 @@ pub fn panel(app: &mut App, ui: &mut egui::Ui) {
             }
         });
         if n == 0 {
-            ui.label(RichText::new("見つかりませんでした").color(style::DIM));
+            ui.label(RichText::new("No results").color(style::DIM));
         }
     });
     if made_one {
@@ -207,6 +267,20 @@ pub fn panel(app: &mut App, ui: &mut egui::Ui) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_crowd_grows_as_a_block_not_a_line() {
+        let mut taken: Vec<([f32; 2], f32)> = Vec::new();
+        for _ in 0..30 {
+            let Some(p) = super::free_spot(&taken, 10.0, [0.0, 0.0]) else { panic!("no spot") };
+            assert!(taken.iter().all(|(c, r)| (c[0] - p[0]).hypot(c[1] - p[1]) >= r + 10.0), "no overlap");
+            taken.push((p, 10.0));
+        }
+        let xs = taken.iter().map(|(c, _)| c[0]);
+        let width = xs.clone().fold(f32::MIN, f32::max) - xs.fold(f32::MAX, f32::min);
+        assert!(width < 30.0 * 26.0 / 2.0, "30 items spread {width} wide");
+        assert!(super::free_spot(&[], f32::NAN, [0.0, 0.0]).is_some());
+    }
+
     use super::*;
     use crate::model::{Group, Kind, Material, Shape};
 
@@ -224,12 +298,26 @@ mod tests {
         assert!(insert(&mut app, &ctx, &it));
         assert_eq!(app.scene.groups.len(), 2);
         assert_eq!(app.sel, Some(Pick::Group(1)));
-        let (a, b) = (app.scene.groups[0].shapes[0].pos[0], app.scene.groups[1].shapes[0].pos[0]);
-        assert!(b > a + 10.0, "the new model must not sit inside the old one");
+        let (a, b) = (app.scene.groups[0].shapes[0].pos, app.scene.groups[1].shapes[0].pos);
+        assert!((a[0] - b[0]).hypot(a[1] - b[1]) > 10.0, "the new model must not sit inside the old one");
         for _ in 0..100 {
             insert(&mut app, &ctx, &it);
         }
         assert!(app.scene.groups.len() <= MAX_GROUPS && app.scene.shape_count() <= MAX_SHAPES);
+    }
+
+    #[test]
+    fn a_new_model_lands_beside_a_scene_that_was_moved_away_from_the_origin() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        for g in &mut app.scene.groups {
+            for s in &mut g.shapes {
+                s.pos[0] += 800.0;
+            }
+        }
+        assert!(insert(&mut app, &ctx, &item()));
+        let (a, b) = (app.scene.groups[0].shapes[0].pos, app.scene.groups[1].shapes[0].pos);
+        assert!((a[0] - b[0]).hypot(a[1] - b[1]) < 300.0, "near the old model, not at the origin: {a:?} {b:?}");
     }
 
     #[test]
@@ -261,6 +349,30 @@ mod tests {
             }
         }
         assert!(have, "a picture arrived");
+    }
+
+    #[test]
+    fn contexts_do_not_steal_thumbnails_or_suppress_each_others_requests() {
+        let first = egui::Context::default();
+        let second = egui::Context::default();
+        let first_worker = worker(&first).expect("first worker");
+        let second_worker = worker(&second).expect("second worker");
+        // A completed render is waiting for its owner. Let the other Context
+        // collect first: this used to drain the shared process-global queue.
+        first_worker.asked.lock().expect("requests").insert((99, 0));
+        first_worker.done.lock().expect("completed pictures").push((99, 0, vec![255; THUMB * THUMB * 4]));
+        collect(&second);
+        assert!(cached(&second, 99, 0).is_none(), "a different Context must not consume this picture");
+        collect(&first);
+        assert!(cached(&first, 99, 0).is_some(), "the requesting Context still receives its picture");
+        assert!(first_worker.done.lock().expect("completed pictures").is_empty());
+
+        // The same model needs its own texture in the other Context. A previous
+        // request from the first Context must not mark it as already requested.
+        assert!(!second_worker.asked.lock().expect("requests").contains(&(99, 0)), "requests belong to their own Context");
+        ask(&second, 99, 0, &item());
+        assert!(second_worker.asked.lock().expect("requests").contains(&(99, 0)));
+        assert!(cached(&second, 99, 0).is_none(), "requests stay asynchronous");
     }
 
     #[test]

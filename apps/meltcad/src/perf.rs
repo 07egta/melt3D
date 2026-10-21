@@ -68,19 +68,19 @@ impl Quality {
 
     pub fn label(self) -> &'static str {
         match self {
-            Quality::Light => "かるい",
-            Quality::Normal => "ふつう",
-            Quality::Fine => "きれい",
-            Quality::Auto => "じどう",
+            Quality::Light => "Light",
+            Quality::Normal => "Normal",
+            Quality::Fine => "Sharp",
+            Quality::Auto => "Auto",
         }
     }
 
     pub fn hint(self) -> &'static str {
         match self {
-            Quality::Light => "いちばん軽い (画面の半分の細かさ)",
-            Quality::Normal => "ほどほど (4分の3の細かさ)",
-            Quality::Fine => "いつもフルの細かさ",
-            Quality::Auto => "止まっているときはきれい、動かすときは速さに合わせて軽くする",
+            Quality::Light => "Lightest (half the screen detail)",
+            Quality::Normal => "Medium (three-quarters detail)",
+            Quality::Fine => "Always full detail",
+            Quality::Auto => "Sharp when still; lighter while moving to keep up the speed",
         }
     }
 
@@ -254,6 +254,7 @@ pub fn view_flags(srgb: bool, fast: bool, glow: bool) -> f32 {
 
 /// Does any *rendered* source contain a visible lamp? A visible linked copy can draw a
 /// hidden source, but an unrelated hidden lamp must not force the expensive halo march.
+#[cfg(test)]
 pub fn scene_has_glow(scene: &Scene) -> bool {
     let resolved = crate::pattern::resolve(scene);
     scene_has_glow_resolved(scene, &resolved)
@@ -261,11 +262,7 @@ pub fn scene_has_glow(scene: &Scene) -> bool {
 
 /// The same test with the already-resolved groups (packing must not resolve instances twice).
 pub fn scene_has_glow_resolved(scene: &Scene, resolved: &[crate::pattern::RGroup]) -> bool {
-    resolved.iter().any(|rg| {
-        scene.groups.get(rg.src).is_some_and(|source| {
-            source.shapes.iter().any(|s| s.visible && s.material.glow > 0.0)
-        })
-    })
+    resolved.iter().any(|rg| scene.groups.get(rg.src).is_some_and(|source| source.shapes.iter().any(|s| s.visible && s.material.glow > 0.0)))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -277,7 +274,8 @@ pub fn shape_radius(s: &Shape) -> f32 {
     let h = s.local_half();
     let sc = s.scale;
     let v = [h[0] * sc[0].abs(), h[1] * sc[1].abs(), h[2] * sc[2].abs()];
-    let r = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt() * 1.08 + 1.0;
+    let swell = s.face_melt.parts().map_or(0.0, |m| m.2.abs());
+    let r = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt() * 1.08 + 1.0 + swell;
     if r.is_finite() { r.min(1.0e4) } else { 1.0e4 }
 }
 
@@ -343,7 +341,14 @@ impl Drawn {
 
     /// Does the picture differ from what is now on the screen's model? Asks for another frame at
     /// most `MAX_STALE_RUN` times in a row.
-    pub fn wants_another_frame(&mut self, rev: u64, sel: Option<crate::model::Pick>, hover: Option<crate::model::Pick>, cam: &Camera, clean: bool) -> bool {
+    pub fn wants_another_frame(
+        &mut self,
+        rev: u64,
+        sel: Option<crate::model::Pick>,
+        hover: Option<crate::model::Pick>,
+        cam: &Camera,
+        clean: bool,
+    ) -> bool {
         let shown_sel = if clean { None } else { sel };
         let shown_hover = if clean { None } else { hover };
         let stale = self.rev != rev || self.sel != shown_sel || self.hover != shown_hover || self.cam != cam_key(cam) || self.clean != clean;
@@ -420,20 +425,21 @@ pub struct Perf {
 pub struct MenuState {
     pub quality: Quality,
     pub hud: bool,
-    /// Set when "速さをはかる" was clicked.
+    /// Set when "Speed test" was clicked.
     pub bench: bool,
 }
 
 /// The 'がしつ' menu of the top bar.
 /// `extra` adds entries below the quality choices (the graphics path's: simple view, backend, log).
 pub fn quality_menu(ui: &mut egui::Ui, menu: &mut MenuState, extra: impl FnOnce(&mut egui::Ui)) {
-    ui.menu_button(egui::RichText::new(format!("がしつ　{}", menu.quality.label())).size(13.0), |ui| {
+    ui.menu_button(egui::RichText::new(format!("Quality: {}", menu.quality.label())).size(13.0), |ui| {
         for q in Quality::ALL {
             ui.selectable_value(&mut menu.quality, q, q.label()).on_hover_text(q.hint());
         }
         ui.separator();
-        ui.checkbox(&mut menu.hud, "フレーム時間を表示　F3").on_hover_text("1秒あたりの枚数・CPU と GPU の時間・描画の倍率を絵の上に出します");
-        if ui.button("速さをはかる…").on_hover_text("いくつかのシーンを描いて、この機械での速さを表にします").clicked() {
+        ui.checkbox(&mut menu.hud, "Show frame time (F3)")
+            .on_hover_text("Shows frames per second, CPU and GPU time, and the draw scale over the view");
+        if ui.button("Speed test…").on_hover_text("Draws a few scenes and shows this machine's speed in a table").clicked() {
             menu.bench = true;
             ui.close();
         }

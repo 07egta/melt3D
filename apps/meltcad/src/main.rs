@@ -4,82 +4,100 @@
 
 mod accel;
 mod adapt;
+mod add_file;
+mod anim;
+mod anim_ui;
 mod app;
 mod array;
+mod automation;
+mod backend;
+mod bench;
+mod cad;
 mod camera;
 mod context_toolbar;
 mod clip;
+mod control;
 mod corner;
+mod cpu_render;
+mod curve;
+mod curve_tool;
+mod easy_view;
 mod export;
 mod export_decimate;
-mod export_dialog;
 mod export_deflate;
+mod export_dialog;
 mod export_formats;
 mod export_job;
 mod export_mesh;
 mod fonts;
+#[cfg(test)]
+mod frame_bench;
+mod gif;
 mod gizmo;
 mod glyphs;
 mod glyphs_more;
-mod backend;
-mod bench;
-mod easy_view;
 mod gpu;
-mod gpu_timing;
 mod gpu_log;
 mod gpu_status;
+mod gpu_timing;
 mod gpu_ui;
 mod hud;
 mod icon;
-#[cfg(test)]
-mod frame_bench;
-#[cfg(test)]
-mod input_tests;
 mod import_3mf;
 mod import_glb;
 mod import_inflate;
 mod import_mesh;
+#[cfg(test)]
+mod input_tests;
 mod library;
 mod library_ui;
+mod marquee;
 mod materials;
+mod mcp;
 mod mesh;
 mod mesh_dialog;
 mod mesh_import;
-mod cad;
-mod cpu_render;
-mod curve;
-mod curve_tool;
-mod pipe_tool;
 mod model;
-mod recovery;
-mod perf;
-mod ux_bench;
-mod prims;
+mod palette_prefs;
 mod panels;
 mod pattern;
 mod pattern_ui;
+mod perf;
+mod pipe_tool;
 mod png;
+mod polygon;
+mod precise;
+mod prims;
+mod recovery;
 mod sdf;
+mod sdf_volume;
 #[cfg(test)]
 mod shader_portability;
-mod sdf_volume;
 mod sketch;
-mod sketch_edit_ops;
 mod sketch_dimensions;
+mod sketch_edit_ops;
+mod sketch_icons;
+mod sketch_keep;
+mod sketch_live;
+#[cfg(test)]
+mod sketch_live_tests;
+mod sketch_plane_pick;
+mod sketch_saved;
 mod sketch_ui;
 mod stroke;
 mod style;
 mod svg;
 mod svg_dialog;
 mod view;
+mod view_mode;
 
 /// Tell the person why the program cannot start (there is no console in a Windows release build).
 fn fatal(message: &str) {
     gpu_log::log(&format!("FATAL: {message}"));
     rfd::MessageDialog::new()
         .set_level(rfd::MessageLevel::Error)
-        .set_title("MELTCAD")
-        .set_description(format!("{message}\n\nログ: {}", gpu_log::path().display()))
+        .set_title("Melt 3D")
+        .set_description(format!("{message}\n\nLog: {}", gpu_log::path().display()))
         .set_buttons(rfd::MessageButtons::Ok)
         .show();
 }
@@ -98,18 +116,24 @@ fn no_graphics(choice: backend::Choice, plan: backend::Plan, tried: &[backend::B
             all.push(b);
         }
         gpu_log::log(&format!("starting again with {next:?}"));
-        let r = backend::Relaunch { choice: None, tried: all, file: std::env::args_os().nth(1).map(std::path::PathBuf::from) };
+        let r = backend::Relaunch { choice: None, tried: all, file: control::file_arg(&std::env::args_os().collect::<Vec<_>>()) };
         if backend::relaunch(&r).is_ok() {
             std::process::exit(0);
         }
     }
-    fatal(&format!("グラフィックスを始められませんでした。\n{reason}\nグラフィックスドライバーを新しくすると直ることがあります。"));
+    fatal(&format!("Could not start graphics.\n{reason}\nUpdating your graphics driver may fix it."));
     std::process::exit(1)
 }
 
 fn main() -> eframe::Result {
     let args: Vec<std::ffi::OsString> = std::env::args_os().collect();
-    if cpu_render::cli(&args) || bench::cli(&args) {
+    if let Some(ok) = automation::run_cli(&args) {
+        if !ok {
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+    if cpu_render::cli(&args) || bench::cli(&args) || mcp::cli(&args) {
         return Ok(());
     }
     perf::init();
@@ -124,7 +148,7 @@ fn main() -> eframe::Result {
     let settings = backend::load();
     gpu_log::log(&format!("settings {settings:?}, choice {choice:?}, tried {tried:?}"));
     let Some(plan) = backend::plan(choice, cfg!(target_os = "windows"), &settings, &tried) else {
-        fatal("どの描画方式でも始められませんでした。");
+        fatal("Could not start with any graphics mode.");
         return Ok(());
     };
     gpu_log::log(&format!("graphics plan {plan:?}"));
@@ -135,9 +159,12 @@ fn main() -> eframe::Result {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1380.0, 860.0])
             .with_min_inner_size([960.0, 600.0])
-            .with_title("MELTCAD")
+            .with_title("Melt 3D")
             .with_icon(icon::data()),
         wgpu_options: backend::wgpu_configuration(plan),
+        // the precise solid view (SolidCraft's) draws with depth
+        depth_buffer: 24,
+        stencil_buffer: 8,
         ..Default::default()
     };
     let tried_for_app = tried.clone();
@@ -151,12 +178,26 @@ fn main() -> eframe::Result {
             style::apply(&cc.egui_ctx);
             let rs = cc.wgpu_render_state.clone();
             if rs.is_none() {
-                no_graphics(choice, plan, &tried_for_app, "グラフィックスのデバイス (wgpu) を作れませんでした。");
+                no_graphics(choice, plan, &tried_for_app, "Could not create a graphics device (wgpu).");
             }
             let srgb = rs.as_ref().is_none_or(|rs| rs.target_format.is_srgb());
-            let mut app = app::App::new(srgb, std::env::args_os().nth(1).map(std::path::PathBuf::from));
+            let all: Vec<std::ffi::OsString> = std::env::args_os().collect();
+            let mut app = app::App::new(srgb, control::file_arg(&all));
+            if let Some(port) = control::port_arg(&all) {
+                let token = control::make_token();
+                let ctx = cc.egui_ctx.clone();
+                match control::start(port, token.clone(), move || ctx.request_repaint()) {
+                    Ok((rx, port)) => {
+                        app.control = Some(rx);
+                        let _ = std::fs::write(control::token_file(port), &token);
+                        eprintln!("control: 127.0.0.1:{port}, token file {}", control::token_file(port).display());
+                    }
+                    Err(e) => eprintln!("{e}"),
+                }
+            }
             // the shader compiles on its own thread: the window shows first, with the simple view
-            app.attach_gpu(rs, &cc.egui_ctx, settings.easy);
+            // the GPU picture is the default every launch; the simple view is only a temporary choice
+            app.attach_gpu(rs, &cc.egui_ctx, false);
             perf::mark("app created");
             Ok(Box::new(app))
         }),

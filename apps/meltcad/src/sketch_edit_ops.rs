@@ -24,23 +24,33 @@ pub enum EditError {
 impl EditError {
     pub fn message(self) -> &'static str {
         match self {
-            EditError::InvalidOutline => "元の輪郭が不正です。先に交差や微小線分を直してください",
-            EditError::InvalidValue => "距離・半径は0より大きい有限値にしてください",
-            EditError::TooFewEdges => "これ以上辺を減らせません",
-            EditError::Parallel => "ほぼ平行な線は安全に交点を決められません",
-            EditError::CannotTrim => "この辺は隣の2辺を延長しても安全につながりません",
-            EditError::TooLarge => "距離・半径が大きすぎるか、角に十分な長さがありません",
-            EditError::TooManyPoints => "曲線の精度を保つと点数の上限を超えます",
-            EditError::InvalidResult => "自己交差・輪郭の反転・微小線分を生むため確定できません",
+            EditError::InvalidOutline => "Original outline is invalid. Fix crossings or tiny segments first",
+            EditError::InvalidValue => "Distance and radius must be finite values greater than 0",
+            EditError::TooFewEdges => "Cannot remove more edges",
+            EditError::Parallel => "Nearly parallel lines have no safe intersection",
+            EditError::CannotTrim => "This edge can't be trimmed; neighbors don't connect safely",
+            EditError::TooLarge => "Distance or radius too large, or corners too short",
+            EditError::TooManyPoints => "Keeping curve accuracy would exceed the point limit",
+            EditError::InvalidResult => "Can't apply: would create self-intersections, flipped outline, or tiny segments",
         }
     }
 }
 
-fn sub(a: Pt, b: Pt) -> [f64; 2] { [f64::from(a[0]) - f64::from(b[0]), f64::from(a[1]) - f64::from(b[1])] }
-fn dot(a: [f64; 2], b: [f64; 2]) -> f64 { a[0] * b[0] + a[1] * b[1] }
-fn cross(a: [f64; 2], b: [f64; 2]) -> f64 { a[0] * b[1] - a[1] * b[0] }
-fn length(a: [f64; 2]) -> f64 { dot(a, a).sqrt() }
-fn point(a: Pt, v: [f64; 2], t: f64) -> Pt { [(f64::from(a[0]) + v[0] * t) as f32, (f64::from(a[1]) + v[1] * t) as f32] }
+fn sub(a: Pt, b: Pt) -> [f64; 2] {
+    [f64::from(a[0]) - f64::from(b[0]), f64::from(a[1]) - f64::from(b[1])]
+}
+fn dot(a: [f64; 2], b: [f64; 2]) -> f64 {
+    a[0] * b[0] + a[1] * b[1]
+}
+fn cross(a: [f64; 2], b: [f64; 2]) -> f64 {
+    a[0] * b[1] - a[1] * b[0]
+}
+fn length(a: [f64; 2]) -> f64 {
+    dot(a, a).sqrt()
+}
+fn point(a: Pt, v: [f64; 2], t: f64) -> Pt {
+    [(f64::from(a[0]) + v[0] * t) as f32, (f64::from(a[1]) + v[1] * t) as f32]
+}
 fn unit(v: [f64; 2]) -> Option<[f64; 2]> {
     let l = length(v);
     (l > MIN_EDGE).then_some([v[0] / l, v[1] / l])
@@ -55,31 +65,43 @@ fn safe_original(p: &[Pt]) -> Result<(), EditError> {
     sketch::validate_profile(p).map(|_| ()).map_err(|_| EditError::InvalidOutline)
 }
 fn checked(original: &[Pt], candidate: Vec<Pt>) -> Result<Vec<Pt>, EditError> {
-    if candidate.len() > MAX_OUTLINE { return Err(EditError::TooManyPoints); }
+    if candidate.len() > MAX_OUTLINE {
+        return Err(EditError::TooManyPoints);
+    }
     if candidate.len() < 3 || candidate.iter().enumerate().any(|(i, p)| length(sub(candidate[(i + 1) % candidate.len()], *p)) < MIN_EDGE) {
         return Err(EditError::InvalidResult);
     }
     let old_area = sketch::signed_area(original);
     let new_area = sketch::signed_area(&candidate);
-    if old_area == 0.0 || old_area.signum() != new_area.signum() { return Err(EditError::InvalidResult); }
+    if old_area == 0.0 || old_area.signum() != new_area.signum() {
+        return Err(EditError::InvalidResult);
+    }
     let mut clean = sketch::validate_profile(&candidate).map_err(|e| match e {
         SketchError::TooManyPoints => EditError::TooManyPoints,
         _ => EditError::InvalidResult,
     })?;
     // validate_profile canonicalizes to CCW; existing shape data may be clockwise.
-    if old_area < 0.0 { clean.reverse(); }
+    if old_area < 0.0 {
+        clean.reverse();
+    }
     Ok(clean)
 }
 fn line_intersection(a: Pt, av: [f64; 2], b: Pt, bv: [f64; 2]) -> Result<(Pt, f64, f64), EditError> {
     let scale = length(av) * length(bv);
-    if scale < MIN_EDGE * MIN_EDGE { return Err(EditError::InvalidOutline); }
+    if scale < MIN_EDGE * MIN_EDGE {
+        return Err(EditError::InvalidOutline);
+    }
     let denom = cross(av, bv);
-    if denom.abs() <= PARALLEL_SIN * scale { return Err(EditError::Parallel); }
+    if denom.abs() <= PARALLEL_SIN * scale {
+        return Err(EditError::Parallel);
+    }
     let ab = sub(b, a);
     let t = cross(ab, bv) / denom;
     let u = cross(ab, av) / denom;
     let p = point(a, av, t);
-    if !p[0].is_finite() || !p[1].is_finite() { return Err(EditError::InvalidResult); }
+    if !p[0].is_finite() || !p[1].is_finite() {
+        return Err(EditError::InvalidResult);
+    }
     Ok((p, t, u))
 }
 
@@ -88,14 +110,22 @@ fn line_intersection(a: Pt, av: [f64; 2], b: Pt, bv: [f64; 2]) -> Result<(Pt, f6
 pub fn trim_edge(p: &[Pt], edge: usize) -> Result<Vec<Pt>, EditError> {
     safe_original(p)?;
     let n = p.len();
-    if n < 4 { return Err(EditError::TooFewEdges); }
-    if edge >= n { return Err(EditError::CannotTrim); }
+    if n < 4 {
+        return Err(EditError::TooFewEdges);
+    }
+    if edge >= n {
+        return Err(EditError::CannotTrim);
+    }
     let (a, b, c, d) = (p[(edge + n - 1) % n], p[edge], p[(edge + 1) % n], p[(edge + 2) % n]);
     let (hit, t, u) = line_intersection(a, sub(b, a), c, sub(d, c))?;
     // Only remove a chamfer-like edge: incoming extends beyond b, outgoing backwards beyond c.
-    if t < 1.0 - 1e-5 || u > 1e-5 { return Err(EditError::CannotTrim); }
+    if t < 1.0 - 1e-5 || u > 1e-5 {
+        return Err(EditError::CannotTrim);
+    }
     let cut_length = length(sub(c, b));
-    if length(sub(hit, b)).max(length(sub(hit, c))) > cut_length * 8.0 { return Err(EditError::TooLarge); }
+    if length(sub(hit, b)).max(length(sub(hit, c))) > cut_length * 8.0 {
+        return Err(EditError::TooLarge);
+    }
     let mut result = p.to_vec();
     result[edge] = hit;
     result.remove((edge + 1) % n);
@@ -106,7 +136,9 @@ pub fn trim_edge(p: &[Pt], edge: usize) -> Result<Vec<Pt>, EditError> {
 /// regardless of the original winding. Unsafe bevels, collapse and self-crossings are rejected.
 pub fn offset_profile(p: &[Pt], distance: f32) -> Result<Vec<Pt>, EditError> {
     safe_original(p)?;
-    if !distance.is_finite() || distance.abs() < 0.02 { return Err(EditError::InvalidValue); }
+    if !distance.is_finite() || distance.abs() < 0.02 {
+        return Err(EditError::InvalidValue);
+    }
     let d = f64::from(distance);
     let n = p.len();
     let outward = if sketch::signed_area(p) > 0.0 { 1.0 } else { -1.0 };
@@ -133,7 +165,9 @@ pub fn offset_profile(p: &[Pt], distance: f32) -> Result<Vec<Pt>, EditError> {
             }
             Err(e) => return Err(e),
         };
-        if length(sub(hit, cur)) > (d.abs() * 12.0).max(0.1) { return Err(EditError::TooLarge); }
+        if length(sub(hit, cur)) > (d.abs() * 12.0).max(0.1) {
+            return Err(EditError::TooLarge);
+        }
         result.push(hit);
     }
     // An inward offset that has passed through itself can remain a simple polygon but reverse
@@ -150,8 +184,12 @@ pub fn offset_profile(p: &[Pt], distance: f32) -> Result<Vec<Pt>, EditError> {
 /// at most 0.03 mm sagitta error. Does not silently lower precision to fit MAX_OUTLINE.
 pub fn fillet_corner(p: &[Pt], corner: usize, radius: f32) -> Result<Vec<Pt>, EditError> {
     safe_original(p)?;
-    if !radius.is_finite() || radius <= 0.0 { return Err(EditError::InvalidValue); }
-    if corner >= p.len() { return Err(EditError::InvalidOutline); }
+    if !radius.is_finite() || radius <= 0.0 {
+        return Err(EditError::InvalidValue);
+    }
+    if corner >= p.len() {
+        return Err(EditError::InvalidOutline);
+    }
     let n = p.len();
     let prev = p[(corner + n - 1) % n];
     let vtx = p[corner];
@@ -161,7 +199,9 @@ pub fn fillet_corner(p: &[Pt], corner: usize, radius: f32) -> Result<Vec<Pt>, Ed
     let a = unit(to_prev).ok_or(EditError::InvalidOutline)?;
     let b = unit(to_next).ok_or(EditError::InvalidOutline)?;
     let angle = dot(a, b).clamp(-1.0, 1.0).acos();
-    if angle < 1e-3 || std::f64::consts::PI - angle < 1e-3 { return Err(EditError::Parallel); }
+    if angle < 1e-3 || std::f64::consts::PI - angle < 1e-3 {
+        return Err(EditError::Parallel);
+    }
     let r = f64::from(radius);
     let tangent = r / (angle * 0.5).tan();
     if tangent < MIN_EDGE || tangent >= length(to_prev) - MIN_EDGE || tangent >= length(to_next) - MIN_EDGE {
@@ -174,24 +214,32 @@ pub fn fillet_corner(p: &[Pt], corner: usize, radius: f32) -> Result<Vec<Pt>, Ed
     let rs = sub(start, centre);
     let re = sub(end, centre);
     let sweep = cross(rs, re).atan2(dot(rs, re));
-    if sweep.abs() < 1e-6 { return Err(EditError::Parallel); }
+    if sweep.abs() < 1e-6 {
+        return Err(EditError::Parallel);
+    }
     // theta per segment limited by sagitta, rather than a fixed number of samples.
     let max_theta = 2.0 * (1.0 - (SAGITTA_MM / r).min(1.0)).acos();
     let steps = (sweep.abs() / max_theta.max(1e-4)).ceil().max(2.0) as usize;
-    if n + steps > MAX_OUTLINE { return Err(EditError::TooManyPoints); }
+    if n + steps > MAX_OUTLINE {
+        return Err(EditError::TooManyPoints);
+    }
     let theta0 = rs[1].atan2(rs[0]);
     let mut result = Vec::with_capacity(n + steps);
-    for i in 0..n {
+    for (i, existing) in p.iter().enumerate() {
         if i == corner {
             for j in 0..=steps {
-                if j == 0 { result.push(start); }
-                else if j == steps { result.push(end); }
-                else {
+                if j == 0 {
+                    result.push(start);
+                } else if j == steps {
+                    result.push(end);
+                } else {
                     let theta = theta0 + sweep * j as f64 / steps as f64;
                     result.push(point(centre, [theta.cos(), theta.sin()], r));
                 }
             }
-        } else { result.push(p[i]); }
+        } else {
+            result.push(*existing);
+        }
     }
     checked(p, result)
 }
@@ -199,8 +247,12 @@ pub fn fillet_corner(p: &[Pt], corner: usize, radius: f32) -> Result<Vec<Pt>, Ed
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn square() -> Vec<Pt> { vec![[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]] }
-    fn near(a: f32, b: f32) -> bool { (a - b).abs() < 0.001 }
+    fn square() -> Vec<Pt> {
+        vec![[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]]
+    }
+    fn near(a: f32, b: f32) -> bool {
+        (a - b).abs() < 0.001
+    }
     #[test]
     fn trim_removes_chamfer_and_preserves_winding() {
         let chamfer = vec![[0.0, 0.0], [8.0, 0.0], [10.0, 2.0], [10.0, 10.0], [0.0, 10.0]];
@@ -252,10 +304,12 @@ mod tests {
         assert_eq!(fillet_corner(&s, 1, f32::NAN), Err(EditError::InvalidValue));
         assert_eq!(offset_profile(&s, f32::INFINITY), Err(EditError::InvalidValue));
         assert!(trim_edge(&[[0.0, 0.0], [0.0, 0.0], [0.0, 10.0], [10.0, 10.0]], 0).is_err());
-        let points: Vec<Pt> = (0..MAX_OUTLINE).map(|i| {
-            let a = std::f32::consts::TAU * i as f32 / MAX_OUTLINE as f32;
-            [20.0 * a.cos(), 20.0 * a.sin()]
-        }).collect();
+        let points: Vec<Pt> = (0..MAX_OUTLINE)
+            .map(|i| {
+                let a = std::f32::consts::TAU * i as f32 / MAX_OUTLINE as f32;
+                [20.0 * a.cos(), 20.0 * a.sin()]
+            })
+            .collect();
         assert_eq!(fillet_corner(&points, 1, 1.0), Err(EditError::TooManyPoints));
     }
 }

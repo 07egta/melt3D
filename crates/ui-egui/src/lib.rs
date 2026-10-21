@@ -334,6 +334,9 @@ pub struct SolveApp {
     pub custom_titlebar: bool,
     /// macOS: the traffic lights sit over the application bar's left end.
     pub integrated_titlebar: bool,
+    /// The easy layout's selection chips and inspector/ribbon switches above the viewport.
+    /// Host apps can hide this bar while retaining modelling tools and navigation.
+    pub show_easy_top_bar: bool,
     /// Build bodies' display meshes on the CPU even where the GPU could (safe mode). Read by
     /// [`SolveApp::set_wgpu`].
     pub cpu_meshing: bool,
@@ -420,6 +423,7 @@ impl SolveApp {
             autosave_minutes: 5.0,
             custom_titlebar: false,
             integrated_titlebar: false,
+            show_easy_top_bar: true,
             cpu_meshing: false,
             frame_ms: 0.0,
             synthetic: Vec::new(),

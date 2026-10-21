@@ -150,7 +150,15 @@ pub fn prepare(scene: &Scene, sel: Option<Pick>, scope: Scope, ignore_paint: boo
         for g in &mut s.groups {
             g.shapes.retain(|sh| sh.op != Op::Paint);
         }
-        s.groups.retain(|g| g.op != Op::Paint && (!g.shapes.is_empty() || g.is_linked()));
+        // (an empty group stays when other groups are nested in it: it is their container)
+        let holds: Vec<bool> = (0..s.groups.len()).map(|i| s.groups.get(i + 1).is_some_and(|n| n.depth > s.groups[i].depth)).collect();
+        let mut i = 0;
+        s.groups.retain(|g| {
+            let keep = g.op != Op::Paint && (!g.shapes.is_empty() || g.is_linked() || holds.get(i).copied().unwrap_or(false));
+            i += 1;
+            keep
+        });
+        s.normalize_depths();
     }
     Ok(s)
 }
@@ -193,7 +201,7 @@ pub fn bounds(scene: &Scene) -> Result<([f64; 3], [f64; 3]), String> {
         }
         let one = [crate::pattern::Inst::IDENTITY];
         let insts: &[crate::pattern::Inst] = if rg.insts.is_empty() { &one } else { &rg.insts };
-        for s in src.shapes.iter().filter(|s| s.visible && s.op == Op::Add) {
+        for s in src.shapes.iter().filter(|s| s.solid() && s.op == Op::Add) {
             let r = reach_of(s) * 1.05 + (f64::from(s.blend.max(0.0)) + f64::from(g.blend.max(0.0))) * amount * factor;
             for inst in insts {
                 let at = inst.apply(s.pos);
@@ -218,7 +226,7 @@ fn single_look(scene: &Scene) -> Option<Mat8> {
     let mut first: Option<Mat8> = None;
     for rg in crate::pattern::resolve(scene) {
         let Some(src) = scene.groups.get(rg.src) else { continue };
-        for s in src.shapes.iter().filter(|s| s.visible) {
+        for s in src.shapes.iter().filter(|s| s.solid()) {
             let m = look_of(s.material.color, s.material.roughness, s.material.metallic);
             match first {
                 None => first = Some(m),
@@ -286,7 +294,8 @@ impl Painter {
         // a stain alone: the whole scene with everything hidden but that group (so that patterns and
         // linked copies still find what they follow)
         let alone = |gi: usize, g: crate::model::Group| {
-            let mut sc = Scene { groups: scene.groups.clone(), melt: scene.melt, env: scene.env.clone(), saved: Vec::new() };
+            let mut sc =
+                Scene { groups: scene.groups.clone(), melt: scene.melt, env: scene.env.clone(), saved: Vec::new(), anim: Default::default() };
             for other in &mut sc.groups {
                 other.visible = false;
             }
@@ -302,7 +311,7 @@ impl Painter {
                 u.op = Op::Add;
                 stains.push((alone(gi, u), g.blend * amount));
             } else {
-                for sh in g.shapes.iter().filter(|s| s.visible && s.op == Op::Paint) {
+                for sh in g.shapes.iter().filter(|s| s.solid() && s.op == Op::Paint) {
                     let mut one = sh.clone();
                     one.op = Op::Add;
                     let mut u = g.clone();
@@ -326,8 +335,8 @@ impl Painter {
             if !w.is_finite() || w >= 1.0 {
                 continue;
             }
-            for a in 0..3 {
-                c[a] = b.color[a] + (c[a] - b.color[a]) * w;
+            for (a, value) in c.iter_mut().enumerate() {
+                *value = b.color[a] + (*value - b.color[a]) * w;
             }
             r = b.roughness + (r - b.roughness) * w;
             m = b.metallic + (m - b.metallic) * w;
@@ -584,8 +593,7 @@ pub struct Report {
     pub closed: bool,
 }
 
-pub const NAMES: [&str; 6] =
-    ["空間をさがしています", "形をはかっています", "面をつないでいます", "なめらかにしています", "三角形をへらしています", "色をしらべています"];
+pub const NAMES: [&str; 6] = ["Searching space…", "Measuring the shape…", "Joining faces…", "Smoothing…", "Reducing triangles…", "Checking colours…"];
 
 /// An export running on its own thread.
 pub struct Job {
@@ -643,9 +651,9 @@ impl Job {
 
     pub fn phase_name(&self) -> &'static str {
         if self.writing.load(std::sync::atomic::Ordering::Relaxed) {
-            return "ファイルに書いています";
+            return "Writing the file…";
         }
-        NAMES.get(self.progress.phase() as usize).copied().unwrap_or("つくっています")
+        NAMES.get(self.progress.phase() as usize).copied().unwrap_or("Building…")
     }
 }
 
@@ -868,7 +876,7 @@ mod tests {
     pub fn scene_of(shapes: Vec<Shape>) -> Scene {
         let mut g = Group::new("g");
         g.shapes = shapes;
-        Scene { groups: vec![g], melt: Default::default(), env: Default::default(), saved: Vec::new() }
+        Scene { groups: vec![g], melt: Default::default(), env: Default::default(), saved: Vec::new(), anim: Default::default() }
     }
 
     fn sphere_at(x: f32, r: f32, m: Material) -> Shape {
@@ -1116,7 +1124,8 @@ mod tests {
         let tiny = Options { tolerance: 0.0, ..Options::default() };
         assert_eq!(tiny.sanitized().tolerance, MIN_TOLERANCE);
         // an empty scene
-        let empty = Scene { groups: vec![Group::new("e")], melt: Default::default(), env: Default::default(), saved: Vec::new() };
+        let empty =
+            Scene { groups: vec![Group::new("e")], melt: Default::default(), env: Default::default(), saved: Vec::new(), anim: Default::default() };
         assert!(build(&empty, None, &Options::default(), &Progress::new()).is_err());
         assert!(build(&Scene { groups: vec![], ..empty.clone() }, None, &Options::default(), &Progress::new()).is_err());
         // a shape with broken numbers
@@ -1182,8 +1191,7 @@ mod tests {
         scenes.push(("r100 sphere".into(), scene_of(vec![round])));
         for (ci, ii) in [(0usize, 0usize), (7, 0), (10, 0), (10, 5), (8, 0), (2, 1)] {
             if let Some(item) = crate::library::all().get(ci).and_then(|c| c.items.get(ii)) {
-                let mut sc = Scene::default();
-                sc.groups = vec![item.group.clone()];
+                let sc = Scene { groups: vec![item.group.clone()], ..Scene::default() };
                 scenes.push((format!("lib {} / {}", crate::library::all()[ci].name, item.name), sc));
             }
         }

@@ -48,7 +48,8 @@ impl Rig {
 
     fn frame_with(&mut self, events: Vec<Event>, _modifiers: Modifiers) -> f32 {
         self.time += 0.0083;
-        let input = RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1264.0, 720.0))), events, time: Some(self.time), ..Default::default() };
+        let input =
+            RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1264.0, 720.0))), events, time: Some(self.time), ..Default::default() };
         let t = Instant::now();
         let app = &mut self.app;
         let mut out = self.ctx.run_ui(input, |ui| app.frame_body(ui));
@@ -201,7 +202,12 @@ fn frame_cpu_bench() {
         let shapes = sc.shape_count();
         let report = |what: &str, r: &Rig| {
             let (avg, p95, max) = r.stats();
-            eprintln!("{label:<18} {shapes:>4} shapes  {what:<14} cpu ms/frame: avg {avg:6.2}  p95 {p95:6.2}  max {max:6.2}  ({} frames, {} packs, {} fields)", r.times.len(), r.app.perf.pack.packs, r.app.field_builds.get());
+            eprintln!(
+                "{label:<18} {shapes:>4} shapes  {what:<14} cpu ms/frame: avg {avg:6.2}  p95 {p95:6.2}  max {max:6.2}  ({} frames, {} packs, {} fields)",
+                r.times.len(),
+                r.app.perf.pack.packs,
+                r.app.field_builds.get()
+            );
         };
         // idle
         let mut r = Rig::new(sc.clone());

@@ -49,15 +49,16 @@ pub struct App {
     redo: Vec<Scene>,
     pub cam: Camera,
     pub sel: Option<Pick>,
-    /// Additional Ctrl-clicked selections; the primary one is still sel for existing gizmos.
-    pub multi_sel: Vec<Pick>,
-    /// Detect selections written by legacy tools, clearing stale additional selections.
-    pub selection_anchor: Option<Pick>,
+    /// Temporary extra picks, valid only while `multi_for` still matches the primary `sel`.
+    pub multi: Vec<Pick>,
+    pub(crate) multi_for: Option<Pick>,
     pub tool: Tool,
     /// What a new shape does: add to the group or carve from it.
     pub new_op: Op,
     pub drag: Option<Drag>,
     pub srgb: bool,
+    /// Analysis shading of the viewport (zebra, rings, up / down): a viewer setting, not part of the design.
+    pub view_mode: crate::view_mode::ViewMode,
     pub last_view_height: f32,
     /// The scene as of the last `track_scene` and its revision number: a change is found once per
     /// frame by comparing, and everything else (the picture, the field, the undo step) asks the
@@ -72,12 +73,24 @@ pub struct App {
     /// How many times the field was built (tests and the HUD look at it).
     pub(crate) field_builds: std::cell::Cell<u64>,
     pub path: Option<PathBuf>,
+    /// The name typed into the title for a design that has no file yet (empty = none).
+    doc_title: String,
+    /// The title being typed (Some while the name box in the top bar is open).
+    title_edit: Option<String>,
     pub dirty: bool,
     recovery: crate::recovery::Store,
     pending_file_action: Option<PendingFileAction>,
     close_approved: bool,
     status: (String, f64),
     pub renaming: Option<Pick>,
+    /// Box selection: which kind is on, and the corner where the drag began.
+    pub marquee: Option<crate::marquee::Marquee>,
+    pub marquee_from: Option<egui::Pos2>,
+    pub marquee_to: egui::Pos2,
+    /// How the view is turned and zoomed: the mouse's way or the trackpad's way (or follow what is used).
+    pub input_dev: crate::view::InputDev,
+    /// What the last scroll looked like (when the choice is Auto).
+    pub input_seen: crate::view::Device,
     pub folded: HashSet<usize>,
     /// A row of the scene list being dragged, and where every row is on screen this frame.
     pub layer_drag: Option<Pick>,
@@ -87,6 +100,12 @@ pub struct App {
     pub view_rect: egui::Rect,
     /// A picture being taken: the overlays are hidden until it arrives.
     pub capture: Option<Capture>,
+    /// Commands from `--control` (an AI or a script), run on the window thread.
+    pub an: crate::anim_ui::State,
+    /// SolidCraft's solid modeller, shown instead of the melt view while it is on.
+    pub precise: Option<crate::precise::Precise>,
+    pub precise_on: bool,
+    pub control: Option<std::sync::mpsc::Receiver<crate::control::Request>>,
     /// The shape under the mouse.
     pub hover: Option<Pick>,
     /// Where the camera is gliding to.
@@ -94,14 +113,20 @@ pub struct App {
     /// A left-drag that began on empty space is turning the view.
     pub orbiting: bool,
     pub show_keys: bool,
+    /// Pinned palette entries and custom shortcuts.
+    pub prefs: crate::palette_prefs::Prefs,
     /// Which tab of the right panel is showing.
     pub tab: Tab,
     /// The material list's chosen category (None = the person's saved ones).
     pub mat_cat: Option<crate::materials::Category>,
     /// A material picked from the list goes to the whole group.
     pub mat_group: bool,
+    /// Show the materials lightest first.
+    pub mat_sort: bool,
     /// The curve tool (nodes, drawing).
     pub ct: crate::curve_tool::State,
+    /// The strip shows only the tools that make solids from a sketch.
+    pub solid_mode: bool,
     /// The pipe (trace) tool.
     pub pt: crate::pipe_tool::State,
     /// The sketch tool (plane, pen, finished profile) and the outline editing.
@@ -120,8 +145,6 @@ pub struct App {
     pub gpu: crate::gpu_ui::GpuUi,
     /// The speed test window ("速さをはかる…").
     pub bench: crate::bench::Job,
-    /// Task-level usability recording, separate from the GPU-only bench.
-    pub ux: crate::ux_bench::Ui,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -154,37 +177,56 @@ impl App {
             redo: Vec::new(),
             cam: Camera::default(),
             sel: Some(Pick::Shape(0, 0)),
-            multi_sel: Vec::new(),
-            selection_anchor: Some(Pick::Shape(0, 0)),
+            multi: Vec::new(),
+            multi_for: None,
             tool: Tool::All,
             new_op: Op::Add,
             drag: None,
             srgb,
+            view_mode: crate::view_mode::ViewMode::Normal,
             last_view_height: 600.0,
             path: None,
+            doc_title: String::new(),
+            title_edit: None,
             dirty: false,
             recovery: crate::recovery::Store::new(crate::recovery::default_directory(), std::time::Instant::now()),
             pending_file_action: None,
             close_approved: false,
             status: (String::new(), 0.0),
             renaming: None,
+            marquee: None,
+            marquee_from: None,
+            marquee_to: egui::Pos2::ZERO,
+            input_dev: crate::view::InputDev::Auto,
+            solid_mode: false,
+            input_seen: crate::view::Device::Mouse,
             folded: HashSet::new(),
             layer_drag: None,
             row_rects: Vec::new(),
             shot: std::env::var_os("MELTCAD_TEST_DIR").map(PathBuf::from),
             view_rect: egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0)),
             capture: None,
+            control: None,
+            an: Default::default(),
+            precise: None,
+            precise_on: false,
             hover: None,
             fly: None,
             orbiting: false,
             show_keys: false,
+            prefs: crate::palette_prefs::Prefs::load(),
             tab: Tab::Shape,
             mat_cat: Some(crate::materials::Category::Basic),
             mat_group: false,
+            mat_sort: false,
             ct: Default::default(),
             pt: Default::default(),
             sk: Default::default(),
-            perf: crate::perf::Perf { sharpen: crate::perf::DEFAULT_SHARPEN, hud: std::env::var_os("MELTCAD_HUD").is_some_and(|v| v != "0"), ..Default::default() },
+            perf: crate::perf::Perf {
+                sharpen: crate::perf::DEFAULT_SHARPEN,
+                hud: std::env::var_os("MELTCAD_HUD").is_some_and(|v| v != "0"),
+                ..Default::default()
+            },
             clipboard: None,
             lib_open: false,
             lib_cat: 0,
@@ -192,7 +234,6 @@ impl App {
             notice: None,
             gpu: Default::default(),
             bench: Default::default(),
-            ux: Default::default(),
         };
         if let Some(p) = open {
             app.open_path(p);
@@ -218,6 +259,7 @@ impl App {
     /// Notice a change of the scene: compares with the copy kept from the last look, and when it
     /// differs bumps the revision number. Returns the number.
     pub(crate) fn track_scene(&mut self) -> u64 {
+        self.sync_multi_selection();
         if self.scene != self.tracked {
             self.tracked.clone_from(&self.scene);
             self.scene_rev += 1;
@@ -233,18 +275,34 @@ impl App {
         let Some(path) = self.recovery.pending_path().map(std::path::Path::to_path_buf) else { return };
         let mut choice = None;
         egui::Modal::new(egui::Id::new("yuracad_recovery")).show(ctx, |ui| {
-            ui.heading("前回の未保存作品が見つかりました");
-            ui.label(format!("復旧データ: {}", path.display()));
-            ui.label("復元しても元の作品ファイルは上書きしません。");
+            ui.heading("Unsaved work found");
+            ui.label(format!("Recovery data: {}", path.display()));
+            ui.label("Restoring will not overwrite the original file.");
+            if self.dirty {
+                ui.label("There is unsaved work on screen. Save it first, then restore this one (or press Later).");
+            }
             ui.horizontal(|ui| {
-                if ui.button("未保存のコピーとして復元").clicked() { choice = Some(0); }
-                if ui.button("あとで").clicked() { choice = Some(1); }
-                if ui.button("復旧データを削除").clicked() { choice = Some(2); }
+                // restoring replaces what is on screen: never over work that is not saved yet
+                let blocked = self.dirty;
+                if ui
+                    .add_enabled(!blocked, egui::Button::new("Restore as unsaved copy"))
+                    .on_disabled_hover_text("Save the work on screen first, or press Later")
+                    .clicked()
+                {
+                    choice = Some(0);
+                }
+                if ui.button("Later").clicked() {
+                    choice = Some(1);
+                }
+                if ui.button("Delete recovery data").clicked() {
+                    choice = Some(2);
+                }
             });
         });
         match choice {
             Some(0) => match self.recovery.recover_pending() {
                 Ok((scene, notes, _source)) => {
+                    self.clear_document_gestures();
                     self.scene = scene.clone();
                     self.committed = scene;
                     self.tracked = self.scene.clone();
@@ -257,17 +315,19 @@ impl App {
                     self.dirty = true;
                     self.sel = None;
                     self.frame_now();
-                    self.say(ctx, if notes.is_empty() { "未保存のコピーとして復元しました".into() } else { format!("復元しました: {}", notes.join("　")) });
+                    self.say(ctx, if notes.is_empty() { "Restored as unsaved copy".into() } else { format!("Restored: {}", notes.join(", ")) });
                 }
                 Err(e) => {
-                    self.say(ctx, format!("復旧ファイルが破損しているか開けません: {e}"));
+                    self.say(ctx, format!("Recovery file is damaged or cannot be opened: {e}"));
                     self.recovery.postpone();
                 }
             },
             Some(1) => self.recovery.postpone(),
-            Some(2) => if let Err(e) = self.recovery.discard_pending() {
-                self.say(ctx, format!("復旧データを削除できませんでした: {e}"));
-            },
+            Some(2) => {
+                if let Err(e) = self.recovery.discard_pending() {
+                    self.say(ctx, format!("Could not delete recovery data: {e}"));
+                }
+            }
             _ => {}
         }
     }
@@ -283,6 +343,11 @@ impl App {
             rev = self.track_scene();
             self.deduped_rev = rev;
         }
+        // a live sketch solid is one undo step, made when it is accepted
+        self.live_validate();
+        if self.sk.live.is_some() {
+            return;
+        }
         if self.committed_rev != rev && !ctx.input(|i| i.pointer.any_down()) {
             // (compared exactly once per change: a drag that ends where it began is no edit)
             if self.scene != self.committed {
@@ -297,7 +362,7 @@ impl App {
         }
     }
 
-    fn fix_selection(&mut self) {
+    pub(crate) fn fix_selection(&mut self) {
         let ok = match self.sel {
             Some(Pick::Shape(g, s)) => self.scene.shape(g, s).is_some(),
             Some(Pick::Group(g)) => g < self.scene.groups.len(),
@@ -309,21 +374,99 @@ impl App {
         self.sync_multi_selection();
     }
 
-    pub fn undo(&mut self) {
-        self.clear_multi_selection();
-        if let Some(prev) = self.undo.pop() {
-            self.redo.push(std::mem::replace(&mut self.scene, prev.clone()));
-            self.committed = prev;
-            self.fix_selection();
+    /// Draft commands keep their source indices until they finish. The older
+    /// in-place outline editor can end safely before another scene command starts.
+    pub(crate) fn scene_structure_locked(&self) -> bool {
+        self.sk.live.is_some() || self.sk.source_sketch.is_some() || self.sk.guide_edit.is_some()
+    }
+
+    pub(crate) fn allow_scene_structure_change(&mut self) -> bool {
+        if self.scene_structure_locked() {
+            self.sk.msg = "Finish or cancel the active sketch or solid before changing the scene".into();
+            false
+        } else {
+            if self.sk.edit.is_some() {
+                self.sketch_off();
+            }
+            true
         }
     }
 
+    /// Continue an in-place outline edit only across changes to that exact
+    /// outline. Old scenes may have no UIDs, so matching kind and index alone
+    /// would accidentally bind the editor to another shape after reordering.
+    fn prepare_outline_history(&mut self, next: &Scene) {
+        let Some(edit) = self.sk.edit.as_ref() else { return };
+        let (g, s, which) = (edit.g, edit.s, edit.which);
+        let keep = next.shape(g, s).filter(|sh| crate::sketch::edit_frame(sh, which).is_some()).is_some_and(|after| {
+            let mut comparable = self.scene.clone();
+            let Some(before) = comparable.shape_mut(g, s) else { return false };
+            before.outline.clone_from(&after.outline);
+            before.outline2.clone_from(&after.outline2);
+            comparable == *next
+        });
+        if keep {
+            if let Some(edit) = self.sk.edit.as_mut() {
+                edit.sel = None;
+                edit.drag = None;
+                edit.hover = None;
+                edit.edge_sel = None;
+            }
+            self.sk.edit_op = None;
+            self.sk.edit_index = None;
+            self.sk.snap_hit = None;
+            self.sk.msg.clear();
+        } else {
+            self.sketch_off();
+        }
+    }
+
+    /// Take the scene as the finished state (no undo step), after the program itself changed it.
+    pub(crate) fn committed_sync(&mut self) {
+        self.committed = self.scene.clone();
+    }
+
+    pub fn undo(&mut self) {
+        if self.sk.live.is_some() {
+            // undo while shaping = throw the live solid away
+            self.live_discard();
+            return;
+        }
+        if self.scene_structure_locked() {
+            self.allow_scene_structure_change();
+            return;
+        }
+        if self.edit_cancel_drag() {
+            return;
+        }
+        if let Some(prev) = self.undo.pop() {
+            self.prepare_outline_history(&prev);
+            self.redo.push(std::mem::replace(&mut self.scene, prev.clone()));
+            self.committed = prev;
+            self.fix_selection();
+            self.animation_at_applied(self.an.frame);
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn undo_depth(&self) -> usize {
+        self.undo.len()
+    }
+
     pub fn redo(&mut self) {
-        self.clear_multi_selection();
+        if self.scene_structure_locked() {
+            self.allow_scene_structure_change();
+            return;
+        }
+        if self.edit_cancel_drag() {
+            return;
+        }
         if let Some(next) = self.redo.pop() {
+            self.prepare_outline_history(&next);
             self.undo.push(std::mem::replace(&mut self.scene, next.clone()));
             self.committed = next;
             self.fix_selection();
+            self.animation_at_applied(self.an.frame);
         }
     }
 
@@ -332,7 +475,35 @@ impl App {
     }
 
     fn has_unsaved_work(&self) -> bool {
-        self.dirty || self.scene != self.committed
+        self.dirty || self.scene != self.committed || self.sketch_has_draft() || (self.sk.on && self.sk.separate)
+    }
+
+    fn sketch_has_draft(&self) -> bool {
+        self.sk.on
+            && self.sk.keep_sketch
+            && (!self.sk.pts.is_empty() || self.sk.anchor.is_some() || !self.sk.profile.is_empty() || self.sk.stage == crate::sketch_ui::Stage::Ready)
+    }
+
+    /// Indices in a gesture belong to one document. Forget them before replacing
+    /// the scene so Esc/drag release can never edit a similarly indexed new shape.
+    fn clear_document_gestures(&mut self) {
+        self.sk.reset();
+        self.sk.on = false;
+        self.sk.edit = None;
+        self.sk.edit_op = None;
+        self.sk.edit_index = None;
+        self.ct = crate::curve_tool::State::default();
+        self.pt = crate::pipe_tool::State::default();
+        self.drag = None;
+        self.marquee_from = None;
+        self.layer_drag = None;
+        self.renaming = None;
+        self.multi.clear();
+        self.multi_for = None;
+        self.hover = None;
+        self.orbiting = false;
+        self.capture = None;
+        self.fly = None;
     }
 
     fn request_file_action(&mut self, action: PendingFileAction) {
@@ -350,30 +521,31 @@ impl App {
     fn apply_file_action(&mut self, action: PendingFileAction) {
         let (scene, path, notes) = match action {
             PendingFileAction::New(scene) => (scene, None, Vec::new()),
-            PendingFileAction::Open(path) => {
-                match crate::recovery::read_project(&path) {
-                    Ok((scene, notes)) => (scene, Some(path), notes),
-                    Err(e) => {
-                        self.status = (format!("開けませんでした: {e}"), 0.0);
-                        return;
-                    }
+            PendingFileAction::Open(path) => match crate::recovery::read_project(&path) {
+                Ok((scene, notes)) => (scene, Some(path), notes),
+                Err(e) => {
+                    self.status = (format!("Could not open: {e}"), 0.0);
+                    return;
                 }
-            }
+            },
             PendingFileAction::Close => return,
         };
         if let Err(e) = self.recovery.clear_active() {
-            self.notice = Some(format!("復旧データを整理できませんでした: {e}"));
+            self.notice = Some(format!("Could not clean up recovery data: {e}"));
         }
+        self.clear_document_gestures();
         self.scene = scene.clone();
         self.committed = scene;
         self.undo.clear();
         self.redo.clear();
         self.sel = if self.scene.shape(0, 0).is_some() { Some(Pick::Shape(0, 0)) } else { None };
-        self.clear_multi_selection();
         self.path = path;
+        // a new or opened document does not inherit the last one's typed title
+        self.doc_title.clear();
+        self.title_edit = None;
         self.dirty = false;
         if !notes.is_empty() {
-            self.notice = Some(notes.join("　"));
+            self.notice = Some(notes.join(", "));
         }
         self.frame_now();
     }
@@ -403,8 +575,41 @@ impl App {
     }
 
     fn handle_close_request(&mut self, ctx: &egui::Context) {
+        if self.precise.as_ref().is_some_and(|p| p.app.quit_requested) {
+            if let Some(p) = self.precise.as_mut() {
+                p.app.quit_requested = false;
+            }
+            self.precise_on = false;
+            style::apply(ctx);
+            if self.has_unsaved_work() {
+                self.pending_file_action = Some(PendingFileAction::Close);
+            } else {
+                self.close_approved = true;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            ctx.request_repaint();
+        }
+        if ctx.input(|i| i.viewport().close_requested()) && !self.close_approved {
+            if self.precise_transfer_pending() {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                self.say(ctx, "立体の取り込みが終わるか、取り消してから閉じてください");
+                return;
+            }
+            if let Some(p) = self.precise.as_mut()
+                && solidcraft_ui_egui::documents::any_dirty(&p.app)
+            {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                solidcraft_ui_egui::documents::request_quit(&mut p.app);
+                self.precise_on = true;
+                solidcraft_ui_egui::theme::apply(ctx);
+                ctx.request_repaint();
+                return;
+            }
+        }
         if ctx.input(|i| i.viewport().close_requested()) && !self.close_approved && (self.has_unsaved_work() || self.pending_file_action.is_some()) {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.precise_on = false;
+            style::apply(ctx);
             if self.pending_file_action.is_none() {
                 self.pending_file_action = Some(PendingFileAction::Close);
             }
@@ -418,17 +623,17 @@ impl App {
         }
         let mut decision = None;
         egui::Modal::new(egui::Id::new("unsaved_file_action")).show(ctx, |ui| {
-            ui.heading("保存していない変更があります");
-            ui.label("いまの作品を保存してから続けますか？");
+            ui.heading("You have unsaved changes");
+            ui.label("Save current work before continuing?");
             ui.add_space(8.0);
             ui.horizontal(|ui| {
-                if ui.button("保存して続ける").clicked() {
+                if ui.button("Save and continue").clicked() {
                     decision = Some(PendingFileDecision::Save);
                 }
-                if ui.button("保存せず続ける").clicked() {
+                if ui.button("Continue without saving").clicked() {
                     decision = Some(PendingFileDecision::Discard);
                 }
-                if ui.button("キャンセル").clicked() {
+                if ui.button("Cancel").clicked() {
                     decision = Some(PendingFileDecision::Cancel);
                 }
             });
@@ -447,16 +652,18 @@ impl App {
         match g {
             Some(g) if g < self.scene.groups.len() => Some(g),
             _ => {
-                self.scene.groups.push(Group::new("グループ 1"));
+                self.scene.groups.push(Group::new("Group 1"));
                 Some(self.scene.groups.len() - 1)
             }
         }
     }
 
     pub fn add_shape(&mut self, ctx: &egui::Context, kind: Kind) {
-        self.clear_multi_selection();
+        if !self.allow_scene_structure_change() {
+            return;
+        }
         if self.scene.shape_count() >= MAX_SHAPES {
-            self.say(ctx, format!("形は{MAX_SHAPES}個までです"));
+            self.say(ctx, format!("Up to {MAX_SHAPES} shapes"));
             return;
         }
         let Some(g) = self.target_group() else { return };
@@ -491,17 +698,22 @@ impl App {
     }
 
     pub fn add_group(&mut self) {
-        self.clear_multi_selection();
+        if !self.allow_scene_structure_change() {
+            return;
+        }
         if self.scene.groups.len() < MAX_GROUPS {
             let n = self.scene.groups.len() + 1;
-            self.scene.groups.push(Group::new(format!("グループ {n}")));
+            self.scene.groups.push(Group::new(format!("Group {n}")));
             self.sel = Some(Pick::Group(self.scene.groups.len() - 1));
         }
     }
 
     pub fn duplicate(&mut self) {
-        if !self.multi_sel.is_empty() {
+        if !self.multi.is_empty() {
             self.duplicate_multi();
+            return;
+        }
+        if !self.allow_scene_structure_change() {
             return;
         }
         match self.sel {
@@ -511,26 +723,29 @@ impl App {
                         self.notice = Some(why.into());
                         return;
                     }
-                    c.pos = [c.pos[0] + 8.0, c.pos[1] + 8.0, c.pos[2]];
-                    c.name = format!("{} コピー", c.name);
+                    c.name = format!("{} copy", c.name);
                     self.scene.groups[g].shapes.insert(s + 1, c);
                     self.sel = Some(Pick::Shape(g, s + 1));
                 }
             }
-            Some(Pick::Group(g))
-                if self.scene.groups.len() < MAX_GROUPS && self.scene.shape_count() + self.scene.groups[g].shapes.len() <= MAX_SHAPES =>
-            {
-                let mut c = self.scene.groups[g].clone();
-                if let Err(why) = crate::mesh::can_add(&self.scene, c.shapes.iter()) {
+            Some(Pick::Group(g)) if g < self.scene.groups.len() => {
+                let e = self.scene.subtree_end(g);
+                let copies: Vec<Group> = self.scene.groups[g..e].to_vec();
+                let shapes: usize = copies.iter().map(|c| c.shapes.len()).sum();
+                if self.scene.groups.len() + copies.len() > MAX_GROUPS || self.scene.shape_count() + shapes > MAX_SHAPES {
+                    return;
+                }
+                if let Err(why) = crate::mesh::can_add(&self.scene, copies.iter().flat_map(|c| c.shapes.iter())) {
                     self.notice = Some(why.into());
                     return;
                 }
-                c.name = format!("{} コピー", c.name);
-                for s in &mut c.shapes {
-                    s.pos = [s.pos[0] + 8.0, s.pos[1] + 8.0, s.pos[2]];
+                for (i, mut c) in copies.into_iter().enumerate() {
+                    if i == 0 {
+                        c.name = format!("{} copy", c.name);
+                    }
+                    self.scene.groups.insert(e + i, c);
                 }
-                self.scene.groups.insert(g + 1, c);
-                self.sel = Some(Pick::Group(g + 1));
+                self.sel = Some(Pick::Group(e));
             }
             _ => {}
         }
@@ -539,6 +754,9 @@ impl App {
     /// Copy the selected shape to the other side of the YZ plane (x becomes -x): handy for
     /// ears, arms and eyes.
     pub fn mirror_copy(&mut self) {
+        if !self.allow_scene_structure_change() {
+            return;
+        }
         let Some(Pick::Shape(g, s)) = self.sel else { return };
         if self.scene.shape_count() >= MAX_SHAPES {
             return;
@@ -554,15 +772,228 @@ impl App {
                 p[0] = -p[0];
             }
             c.outline.reverse();
-            c.name = format!("{} (左右)", c.name);
+            c.name = format!("{} (mirror)", c.name);
             self.scene.groups[g].shapes.insert(s + 1, c);
             self.sel = Some(Pick::Shape(g, s + 1));
         }
     }
 
+    /// Everything selected: `sel` first, then any transient extra picks.
+    pub fn picks(&self) -> Vec<Pick> {
+        let mut v: Vec<Pick> = self.sel.into_iter().collect();
+        if self.sel.is_some() && self.multi_for == self.sel {
+            v.extend(self.multi.iter().copied().filter(|p| Some(*p) != self.sel));
+        }
+        v
+    }
+
+    /// The shapes and groups a "Melt" press is about: everything picked, and the groups of picked shapes.
+    fn melt_targets(&self) -> (Vec<(usize, usize)>, Vec<usize>, Vec<usize>) {
+        let picks = self.picks();
+        let mut shapes: Vec<(usize, usize)> = Vec::new();
+        let mut picked_groups: Vec<usize> = Vec::new();
+        let mut parents: Vec<usize> = Vec::new();
+        for p in &picks {
+            match *p {
+                Pick::Shape(g, s) => {
+                    shapes.push((g, s));
+                    parents.push(g);
+                }
+                Pick::Group(g) => picked_groups.push(g),
+            }
+        }
+        parents.sort_unstable();
+        parents.dedup();
+        (shapes, picked_groups, parents)
+    }
+
+    /// Is everything picked set to melt (shapes and the groups they sit in)?
+    pub fn selection_melts(&self) -> bool {
+        let (shapes, groups, parents) = self.melt_targets();
+        if shapes.is_empty() && groups.is_empty() {
+            return false;
+        }
+        shapes.iter().all(|&(g, s)| self.scene.shape(g, s).is_some_and(|x| x.blend > 0.0))
+            && groups.iter().chain(parents.iter()).all(|&g| self.scene.groups.get(g).is_some_and(|x| x.blend > 0.0))
+    }
+
+    /// One press: melt what is picked into its neighbours (the shapes AND the groups, which used to
+    /// be two switches), or take the melt away again. With nothing picked, it is the whole scene.
+    pub fn toggle_melt_selected(&mut self) {
+        let (mut shapes, mut groups, mut parents) = self.melt_targets();
+        if shapes.is_empty() && groups.is_empty() {
+            groups = (0..self.scene.groups.len()).collect();
+            shapes = groups.iter().flat_map(|&g| (0..self.scene.groups[g].shapes.len()).map(move |s| (g, s))).collect();
+            parents.clear();
+        }
+        let on = !self.selection_melts_of(&shapes, &groups, &parents);
+        for &(g, s) in &shapes {
+            if let Some(sh) = self.scene.shape_mut(g, s) {
+                sh.blend = if on { if sh.blend > 0.0 { sh.blend } else { 6.0 } } else { 0.0 };
+            }
+        }
+        for &g in groups.iter().chain(if on { parents.iter() } else { [].iter() }) {
+            if let Some(gr) = self.scene.groups.get_mut(g) {
+                gr.blend = if on { if gr.blend > 0.0 { gr.blend } else { 12.0 } } else { 0.0 };
+            }
+        }
+    }
+
+    fn selection_melts_of(&self, shapes: &[(usize, usize)], groups: &[usize], parents: &[usize]) -> bool {
+        !(shapes.is_empty() && groups.is_empty())
+            && shapes.iter().all(|&(g, s)| self.scene.shape(g, s).is_some_and(|x| x.blend > 0.0))
+            && groups.iter().chain(parents.iter()).all(|&g| self.scene.groups.get(g).is_some_and(|x| x.blend > 0.0))
+    }
+
+    /// The shapes of everything that is selected, each once.
+    pub fn sel_targets(&self) -> Vec<(usize, usize)> {
+        crate::view::targets_all(&self.scene, &self.picks())
+    }
+
+    /// Shift + click: add `p` to the selection, or take it out again.
+    pub fn toggle_pick(&mut self, p: Pick) {
+        if self.multi_for != self.sel {
+            self.multi.clear();
+        }
+        match self.sel {
+            None => self.sel = Some(p),
+            Some(s) if s == p => {
+                self.sel = if self.multi.is_empty() { None } else { Some(self.multi.remove(0)) };
+            }
+            Some(_) => {
+                if let Some(i) = self.multi.iter().position(|m| *m == p) {
+                    self.multi.remove(i);
+                } else {
+                    self.multi.push(p);
+                }
+            }
+        }
+        self.multi_for = self.sel;
+    }
+
+    /// Put the selected shapes into one new group (they melt together; the group is the unit to move and melt with others).
+    pub fn group_selected(&mut self) {
+        if !self.allow_scene_structure_change() {
+            return;
+        }
+        let picked_groups = self.picks().iter().any(|p| matches!(p, Pick::Group(_)));
+        if picked_groups {
+            self.group_groups();
+            return;
+        }
+        let mut shapes: Vec<(usize, usize)> =
+            self.picks().into_iter().filter_map(|p| if let Pick::Shape(g, s) = p { Some((g, s)) } else { None }).collect();
+        if shapes.len() < 2 || self.scene.groups.len() >= MAX_GROUPS {
+            return;
+        }
+        shapes.sort();
+        shapes.dedup();
+        let mut group = Group::new(format!("Group {}", self.scene.groups.len() + 1));
+        let mut taken: Vec<Shape> = Vec::new();
+        for (g, s) in shapes.iter().rev() {
+            if let Some(sh) = self.scene.groups.get_mut(*g).filter(|gr| *s < gr.shapes.len()).map(|gr| gr.shapes.remove(*s)) {
+                taken.push(sh);
+            }
+        }
+        taken.reverse();
+        group.shapes = taken;
+        let at = self.scene.groups.len();
+        self.scene.groups.push(group);
+        self.folded.clear();
+        self.multi.clear();
+        self.sel = Some(Pick::Group(at));
+        self.multi_for = self.sel;
+    }
+
+    /// Put the picked groups (and any picked loose shapes) inside one new parent group, so groups
+    /// can be nested (a "big group"). One picked group gets wrapped on its own.
+    fn group_groups(&mut self) {
+        let n = self.scene.groups.len();
+        if n >= MAX_GROUPS {
+            return;
+        }
+        let picks = self.picks();
+        let mut groups: Vec<usize> = picks.iter().filter_map(|p| if let Pick::Group(g) = p { Some(*g) } else { None }).filter(|g| *g < n).collect();
+        groups.sort_unstable();
+        groups.dedup();
+        // only the outermost picked groups: what sits inside one of them travels with it
+        let mut ranges: Vec<(usize, usize)> = Vec::new();
+        for &g in &groups {
+            if !ranges.iter().any(|&(a, b)| g >= a && g < b) {
+                ranges.push((g, self.scene.subtree_end(g)));
+            }
+        }
+        let Some(&(first, _)) = ranges.first() else { return };
+        let mut loose: Vec<(usize, usize)> = picks
+            .iter()
+            .filter_map(|p| if let Pick::Shape(g, s) = p { Some((*g, *s)) } else { None })
+            .filter(|(g, _)| !ranges.iter().any(|&(a, b)| *g >= a && *g < b))
+            .collect();
+        loose.sort_unstable();
+        loose.dedup();
+        let mut parent = Group::new(format!("Group {}", n + 1));
+        let mut taken: Vec<Shape> = Vec::new();
+        for (g, s) in loose.iter().rev() {
+            if let Some(sh) = self.scene.groups.get_mut(*g).filter(|gr| *s < gr.shapes.len()).map(|gr| gr.shapes.remove(*s)) {
+                taken.push(sh);
+            }
+        }
+        taken.reverse();
+        parent.shapes = taken;
+        let pdepth = self.scene.groups.get(first).map_or(0, |g| g.depth);
+        parent.depth = pdepth;
+        let tdepth: Vec<i32> = ranges.iter().map(|&(a, _)| self.scene.groups.get(a).map_or(0, |g| i32::from(g.depth))).collect();
+        let old = std::mem::take(&mut self.scene.groups);
+        let mut out: Vec<Group> = Vec::with_capacity(old.len() + 1);
+        let mut block: Vec<Group> = Vec::new();
+        for (i, mut g) in old.into_iter().enumerate() {
+            if i == first {
+                out.push(std::mem::replace(&mut parent, Group::new(String::new())));
+            }
+            if let Some(k) = ranges.iter().position(|&(a, b)| i >= a && i < b) {
+                let base = tdepth.get(k).copied().unwrap_or(0);
+                g.depth = (i32::from(g.depth) - base + i32::from(pdepth) + 1).clamp(0, i32::from(crate::model::MAX_DEPTH)) as u8;
+                block.push(g);
+            } else {
+                out.push(g);
+            }
+        }
+        let at = (first + 1).min(out.len());
+        for (i, g) in block.into_iter().enumerate() {
+            out.insert(at + i, g);
+        }
+        self.scene.groups = out;
+        self.scene.normalize_depths();
+        self.folded.clear();
+        self.multi.clear();
+        self.sel = Some(Pick::Group(first));
+        self.multi_for = self.sel;
+    }
+
     pub fn delete_selected(&mut self) {
-        if !self.multi_sel.is_empty() {
-            self.delete_multi();
+        if !self.allow_scene_structure_change() {
+            return;
+        }
+        let picks = self.picks();
+        if picks.len() > 1 {
+            let mut shapes: Vec<(usize, usize)> =
+                picks.iter().filter_map(|p| if let Pick::Shape(g, s) = p { Some((*g, *s)) } else { None }).collect();
+            let mut groups: Vec<usize> = picks.iter().filter_map(|p| if let Pick::Group(g) = p { Some(*g) } else { None }).collect();
+            shapes.sort();
+            shapes.dedup();
+            groups.sort();
+            groups.dedup();
+            for (g, s) in shapes.into_iter().rev() {
+                if let Some(gr) = self.scene.groups.get_mut(g).filter(|gr| s < gr.shapes.len()) {
+                    gr.shapes.remove(s);
+                }
+            }
+            for g in groups.into_iter().rev() {
+                self.scene.remove_group(g);
+            }
+            self.folded.clear();
+            self.multi.clear();
+            self.sel = None;
             return;
         }
         match self.sel {
@@ -575,7 +1006,8 @@ impl App {
                 };
             }
             Some(Pick::Group(g)) if g < self.scene.groups.len() => {
-                self.scene.groups.remove(g);
+                self.scene.remove_group(g);
+                self.folded.clear();
                 self.sel = None;
             }
             _ => {}
@@ -584,7 +1016,10 @@ impl App {
 
     /// Drag-and-drop in the scene list: put `from` next to `to` (before it, or after it).
     pub fn move_layer(&mut self, from: Pick, to: Pick, after: bool) {
-        self.clear_multi_selection();
+        if !self.allow_scene_structure_change() {
+            self.layer_drag = None;
+            return;
+        }
         match (from, to) {
             (Pick::Shape(g, s), Pick::Shape(g2, s2)) => {
                 if self.scene.shape(g, s).is_none() || self.scene.shape(g2, s2).is_none() || (g, s) == (g2, s2) {
@@ -611,13 +1046,16 @@ impl App {
                 if g >= self.scene.groups.len() || g2 >= self.scene.groups.len() || g == g2 {
                     return;
                 }
-                let gr = self.scene.groups.remove(g);
-                let mut idx = if g < g2 { g2 - 1 } else { g2 };
-                if after {
-                    idx += 1;
+                let e = self.scene.subtree_end(g);
+                if (g..e).contains(&g2) {
+                    return;
                 }
-                let idx = idx.min(self.scene.groups.len());
-                self.scene.groups.insert(idx, gr);
+                // (the place among the groups that stay, and the depth of the group it lands beside)
+                let removed = e - g;
+                let t = if g2 >= e { g2 - removed } else { g2 };
+                let (tdepth, tend) = (self.scene.groups[g2].depth, self.scene.subtree_end(g2));
+                let idx = if after { (if tend >= e { tend - removed } else { tend }).max(t + 1) } else { t };
+                let idx = self.scene.move_subtree(g, idx, tdepth);
                 self.folded.clear();
                 self.sel = Some(Pick::Group(idx));
             }
@@ -626,15 +1064,32 @@ impl App {
 
     /// Move the selection by `d` millimetres.
     pub fn nudge(&mut self, d: [f32; 3]) {
-        for (g, s) in crate::view::targets(&self.scene, self.sel) {
+        for (g, s) in self.sel_targets() {
             if let Some(sh) = self.scene.shape_mut(g, s) {
                 sh.pos = [sh.pos[0] + d[0], sh.pos[1] + d[1], sh.pos[2] + d[2]];
+            }
+        }
+        // a linked copy has no shapes of its own: it stands where its transform puts it
+        let mut moved = std::collections::HashSet::new();
+        for p in self.picks() {
+            if let Pick::Group(g) = p
+                && moved.insert(g)
+                && let Some(gr) = self.scene.groups.get_mut(g)
+                && gr.instance_of.is_some()
+            {
+                gr.xform.pos = [gr.xform.pos[0] + d[0], gr.xform.pos[1] + d[1], gr.xform.pos[2] + d[2]];
+                gr.xform.sanitize();
             }
         }
     }
 
     /// Switch plus and minus on the selection.
     pub fn flip_op(&mut self) {
+        if self.sk.live.is_some() {
+            self.new_op = self.new_op.flip();
+            self.live_update();
+            return;
+        }
         match self.sel {
             Some(Pick::Shape(g, s)) => {
                 if let Some(sh) = self.scene.shape_mut(g, s) {
@@ -657,8 +1112,39 @@ impl App {
     }
 
     fn open_dialog(&mut self, _ctx: &egui::Context) {
-        if let Some(p) = rfd::FileDialog::new().add_filter("MELTCAD", &["meltcad", "yura", "json"]).pick_file() {
+        if let Some(p) = rfd::FileDialog::new().add_filter("Melt 3D", &["meltcad", "yura", "json"]).pick_file() {
             self.open_path(p);
+        }
+    }
+
+    /// The design's name: the file's name, else the one typed into the title, else "Untitled".
+    pub(crate) fn doc_name(&self) -> String {
+        if let Some(stem) = self.path.as_ref().and_then(|p| p.file_stem()) {
+            return stem.to_string_lossy().into_owned();
+        }
+        if self.doc_title.is_empty() { "Untitled".into() } else { self.doc_title.clone() }
+    }
+
+    /// A new name typed into the title. Without a file it is only remembered (the first save
+    /// offers it); with a file, the file is renamed next to where it is. Nothing is overwritten.
+    fn rename_doc(&mut self, ctx: &egui::Context, typed: &str) {
+        let name = clean_title(typed);
+        if name.is_empty() || name == self.doc_name() {
+            return;
+        }
+        let Some(old) = self.path.clone() else {
+            self.doc_title = name;
+            return;
+        };
+        let ext = old.extension().map(|e| e.to_string_lossy().into_owned()).unwrap_or_else(|| "meltcad".into());
+        let new = old.with_file_name(format!("{name}.{ext}"));
+        if new.exists() {
+            self.say(ctx, format!("There is already a file named {name}"));
+            return;
+        }
+        match std::fs::rename(&old, &new) {
+            Ok(()) => self.path = Some(new),
+            Err(e) => self.say(ctx, format!("Could not rename: {e}")),
         }
     }
 
@@ -667,24 +1153,30 @@ impl App {
     }
 
     fn try_save(&mut self, ctx: &egui::Context, ask: bool) -> bool {
+        let pending_solid = self.sk.on && self.sk.separate;
+        if (self.sketch_has_draft() || pending_solid) && (!self.sketch_confirm(ctx) || self.sketch_has_draft() || (self.sk.on && self.sk.separate)) {
+            self.say(ctx, "Finish or cancel the current sketch or solid operation before saving".to_string());
+            return false;
+        }
         let path = match (&self.path, ask) {
             (Some(p), false) => Some(p.clone()),
-            _ => rfd::FileDialog::new().add_filter("MELTCAD", &["meltcad"]).set_file_name("作品.meltcad").save_file(),
+            _ => rfd::FileDialog::new().add_filter("Melt 3D", &["meltcad"]).set_file_name(format!("{}.meltcad", self.doc_name())).save_file(),
         };
         let Some(path) = path else { return false };
         match crate::recovery::save_project(&path, &self.scene) {
             Ok(()) => {
                 self.path = Some(path);
+                self.doc_title.clear();
                 self.dirty = false;
                 let revision = self.track_scene();
                 if let Err(e) = self.recovery.document_saved(revision) {
-                    self.notice = Some(format!("復旧データの整理に失敗しました: {e}"));
+                    self.notice = Some(format!("Could not clean up recovery data: {e}"));
                 }
-                self.say(ctx, "保存しました");
+                self.say(ctx, "Saved");
                 true
             }
             Err(e) => {
-                self.say(ctx, format!("保存できませんでした: {e}"));
+                self.say(ctx, format!("Could not save: {e}"));
                 false
             }
         }
@@ -708,7 +1200,11 @@ impl App {
     // ----- shortcuts -----
 
     pub(crate) fn keys(&mut self, ctx: &egui::Context) {
-        if self.pending_file_action.is_some() || self.recovery.pending_path().is_some() {
+        if self.pending_file_action.is_some()
+            || self.recovery.pending_path().is_some()
+            || crate::svg_dialog::is_open(ctx)
+            || crate::array::is_open(ctx)
+        {
             return;
         }
         // Dimensions have their own Tab/Enter/Esc lifecycle. Never dispatch text-input
@@ -717,19 +1213,19 @@ impl App {
             self.sketch_keys(ctx);
             return;
         }
-        if ctx.egui_wants_keyboard_input() {
+        if ctx.egui_wants_keyboard_input() || palette::capturing(ctx) {
             return;
         }
         use egui::{Key, Modifiers};
         // Cancel only an active gizmo gesture (keeping Esc for everything else); do not drop the
         // selection or commit its preview.
-        if self.drag.is_some()
-            && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
-            && self.cancel_gizmo_drag()
-        {
+        if self.drag.is_some() && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) && self.cancel_gizmo_drag() {
             return;
         }
         if self.sketch_keys(ctx) {
+            return;
+        }
+        if !palette::is_open(ctx) && self.custom_shortcuts(ctx) {
             return;
         }
         self.curve_keys(ctx);
@@ -754,14 +1250,12 @@ impl App {
         if hit(cmd, Key::D) {
             self.duplicate();
         }
+        if hit(cmd, Key::G) {
+            self.group_selected();
+        }
         let plain = Modifiers::NONE;
         if hit(plain, Key::Delete) || hit(plain, Key::Backspace) {
             self.delete_selected();
-        }
-        for (k, t) in [(Key::Q, Tool::Select), (Key::A, Tool::All), (Key::W, Tool::Move), (Key::E, Tool::Rotate), (Key::R, Tool::Scale)] {
-            if hit(plain, k) {
-                self.tool = t;
-            }
         }
         if hit(plain, Key::F3) {
             self.perf.hud = !self.perf.hud;
@@ -796,7 +1290,7 @@ impl App {
             self.frame_view(false);
         }
         if hit(plain, Key::Escape) {
-            self.select_pick(None, false);
+            self.sel = None;
         }
         // Blender-style views on the number keys
         let v = |k: Key, back: bool| hit(if back { Modifiers::CTRL } else { plain }, k);
@@ -833,145 +1327,347 @@ impl App {
                 // left: logo, file, edit, undo / redo, search.  right: export.  middle: the file name.
                 ui.horizontal_centered(|ui| {
                     ui.spacing_mut().item_spacing.x = 6.0;
-                    let (mark, _) = ui.allocate_exact_size(egui::vec2(18.0, 18.0), egui::Sense::hover());
-                    ui.painter().circle_filled(mark.center(), 8.0, style::ACCENT);
-                    ui.painter().circle_filled(mark.center() + egui::vec2(-2.5, -2.5), 2.6, Color32::from_white_alpha(120));
-                    ui.label(RichText::new("MELTCAD").size(14.0).strong().color(style::TEXT));
-                    style::vsep(ui);
-                    style::menu_button(ui, "ファイル", false, |ui| {
-                        if ui.button("新しく作る").clicked() {
+                    // the white mark, made once and kept in the context
+                    let tex: egui::TextureHandle =
+                        ui.ctx().data_mut(|d| d.get_temp::<egui::TextureHandle>(egui::Id::new("logo_tex"))).unwrap_or_else(|| {
+                            let h = ui.ctx().load_texture("logo", crate::icon::mark_image(), egui::TextureOptions::LINEAR);
+                            ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("logo_tex"), h.clone()));
+                            h
+                        });
+                    // the mark and the name are one button: it opens the app menu
+                    let logo = ui
+                        .horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 6.0;
+                            ui.add(egui::Image::new(&tex).fit_to_exact_size(egui::vec2(30.0, 30.0 * 131.0 / 192.0)).tint(style::TEXT));
+                            ui.label(RichText::new("Melt 3D").size(14.0).strong().color(style::TEXT));
+                        })
+                        .response
+                        .interact(egui::Sense::click())
+                        .on_hover_cursor(egui::CursorIcon::PointingHand)
+                        .on_hover_text("Menu");
+                    egui::Popup::menu(&logo).show(|ui| {
+                        if ui.button("New").clicked() {
                             self.new_scene(Scene::default());
                             ui.close();
                         }
-                        if ui.button("開く…　Ctrl+O").clicked() {
+                        if ui.button(style::keys("Open…  Ctrl+O")).clicked() {
                             self.open_dialog(&ctx);
                             ui.close();
                         }
-                        if ui.button("SVGを読み込む…").clicked() {
-                            crate::svg_dialog::open(&ctx);
-                            ui.close();
-                        }
-                        if ui.button("メッシュを読み込む…").on_hover_text("STL・OBJ・3MF・PLY・GLB").clicked() {
-                            crate::mesh_dialog::open(&ctx);
-                            ui.close();
-                        }
-                        if ui.button("保存　Ctrl+S").clicked() {
+                        if ui.button(style::keys("Save  Ctrl+S")).clicked() {
                             self.save(&ctx, false);
                             ui.close();
                         }
-                        if ui.button("名前をつけて保存…").clicked() {
+                        if ui.button("Save as…").clicked() {
                             self.save(&ctx, true);
                             ui.close();
                         }
                         ui.separator();
-                        if ui.button("書き出し…").on_hover_text("STL・3MF・OBJ・PLY・GLB").clicked() {
+                        if ui.button("Export…").clicked() {
                             crate::export_dialog::open(&ctx, None);
                             ui.close();
                         }
-                        if ui.button("前の設定でもう一度書き出す　Ctrl+E").clicked() {
+                        ui.separator();
+                        if ui.button("About Melt 3D").clicked() {
+                            self.say(&ctx, format!("Melt 3D {}", env!("CARGO_PKG_VERSION")));
+                            ui.close();
+                        }
+                    });
+                    style::vsep(ui);
+                    style::menu_button(ui, "File", false, |ui| {
+                        if ui.button("New").clicked() {
+                            self.new_scene(Scene::default());
+                            ui.close();
+                        }
+                        if ui.button(style::keys("Open…  Ctrl+O")).clicked() {
+                            self.open_dialog(&ctx);
+                            ui.close();
+                        }
+                        if ui
+                            .add_enabled(!self.scene_structure_locked(), egui::Button::new("Add file…"))
+                            .on_hover_text("Put another Melt 3D file into this one. It melts with what is already here")
+                            .clicked()
+                        {
+                            self.add_file_dialog(&ctx);
+                            ui.close();
+                        }
+                        if ui.add_enabled(!self.scene_structure_locked(), egui::Button::new("Import SVG…")).clicked() {
+                            crate::svg_dialog::open(&ctx);
+                            ui.close();
+                        }
+                        if ui
+                            .add_enabled(!self.scene_structure_locked(), egui::Button::new("Import mesh…"))
+                            .on_hover_text("STL, OBJ, 3MF, PLY, GLB")
+                            .clicked()
+                        {
+                            crate::mesh_dialog::open(&ctx);
+                            ui.close();
+                        }
+                        if ui.button(style::keys("Save  Ctrl+S")).clicked() {
+                            self.save(&ctx, false);
+                            ui.close();
+                        }
+                        if ui.button("Save as…").clicked() {
+                            self.save(&ctx, true);
+                            ui.close();
+                        }
+                        ui.separator();
+                        if ui.button("Export…").on_hover_text("STL, 3MF, OBJ, PLY, GLB").clicked() {
+                            crate::export_dialog::open(&ctx, None);
+                            ui.close();
+                        }
+                        if ui.button(style::keys("Export again with last settings  Ctrl+E")).clicked() {
                             self.export_stl(&ctx);
                             ui.close();
                         }
-                        if ui.button("画像(PNG)で書き出す").clicked() {
+                        if ui.button("Export image (PNG)").clicked() {
                             self.start_png(&ctx);
                             ui.close();
                         }
                     });
-                    style::menu_button(ui, "編集", false, |ui| {
-                        if ui.button("コピー　Ctrl+C").clicked() {
+                    style::menu_button(ui, "Edit", false, |ui| {
+                        if ui.button(style::keys("Copy  Ctrl+C")).clicked() {
                             self.copy(&ctx);
                             ui.close();
                         }
-                        if ui.button("切り取り　Ctrl+X").clicked() {
-                            self.cut(&ctx);
-                            ui.close();
-                        }
-                        if ui.button("貼りつけ　Ctrl+V").clicked() {
-                            self.paste(&ctx, None);
-                            ui.close();
-                        }
-                        ui.separator();
-                        if ui.button("複製　Ctrl+D").clicked() {
-                            self.duplicate();
-                            ui.close();
-                        }
-                        if ui.button("ならべてコピー…").clicked() {
-                            crate::array::open(&ctx);
-                            ui.close();
-                        }
-                        ui.menu_button("パターン", |ui| {
-                            for k in crate::pattern::PatternKind::ALL {
-                                if ui.button(k.label()).on_hover_text(k.hint()).clicked() {
-                                    self.set_pattern_kind(&ctx, k);
-                                    ui.close();
-                                }
+                        ui.add_enabled_ui(!self.scene_structure_locked(), |ui| {
+                            if ui.button(style::keys("Cut  Ctrl+X")).clicked() {
+                                self.cut(&ctx);
+                                ui.close();
+                            }
+                            if ui.button(style::keys("Paste  Ctrl+V")).clicked() {
+                                self.paste(&ctx, None);
+                                ui.close();
                             }
                             ui.separator();
-                            if ui.button("パターンをやめる").clicked() {
-                                self.clear_pattern();
+                            if ui.button(style::keys("Duplicate  Ctrl+D")).clicked() {
+                                self.duplicate();
+                                ui.close();
+                            }
+                            if ui.button("Array copy…").clicked() {
+                                crate::array::open(&ctx);
+                                ui.close();
+                            }
+                            ui.menu_button("Pattern", |ui| {
+                                for k in crate::pattern::PatternKind::ALL {
+                                    if ui.button(k.label()).on_hover_text(k.hint()).clicked() {
+                                        self.set_pattern_kind(&ctx, k);
+                                        ui.close();
+                                    }
+                                }
+                                ui.separator();
+                                if ui.button("Clear pattern").clicked() {
+                                    self.clear_pattern();
+                                    ui.close();
+                                }
+                            });
+                            if ui.button("Make instance").on_hover_text("Linked copy: edits to the original update it too").clicked() {
+                                self.make_instance(&ctx);
+                                ui.close();
+                            }
+                            if ui.button("Mirror copy").clicked() {
+                                self.mirror_copy();
+                                ui.close();
+                            }
+                            if ui.button("Delete  Del").clicked() {
+                                self.delete_selected();
                                 ui.close();
                             }
                         });
-                        if ui.button("インスタンスを作る").on_hover_text("リンクコピー：元を直すと、コピーも変わります").clicked() {
-                            self.make_instance(&ctx);
+                        ui.separator();
+                        if ui.button("Select none  Esc").clicked() {
+                            self.sel = None;
+                            self.multi.clear();
                             ui.close();
                         }
-                        if ui.button("左右コピー").clicked() {
-                            self.mirror_copy();
+                        if ui.button("Show all hidden").clicked() {
+                            for g in &mut self.scene.groups {
+                                g.visible = true;
+                                for sh in &mut g.shapes {
+                                    sh.visible = true;
+                                }
+                            }
                             ui.close();
                         }
-                        if ui.button("削除　Delete").clicked() {
-                            self.delete_selected();
+                    });
+                    style::menu_button(ui, "View", false, |ui| {
+                        let pi = std::f32::consts::PI;
+                        for (name, yaw, pitch) in [
+                            ("Front  1", 0.0, 0.0),
+                            ("Right  3", pi / 2.0, 0.0),
+                            ("Top  7", self.cam.yaw, pi / 2.0),
+                            ("Back  Ctrl+1", pi, 0.0),
+                            ("Left  Ctrl+3", -pi / 2.0, 0.0),
+                            ("Bottom  Ctrl+7", self.cam.yaw, -pi / 2.0),
+                        ] {
+                            if ui.button(style::keys(name)).clicked() {
+                                self.fly_look(yaw, pitch);
+                                ui.close();
+                            }
+                        }
+                        ui.separator();
+                        if ui.button("Turn left  Alt+←").clicked() {
+                            self.cam.yaw -= 0.26;
+                        }
+                        if ui.button("Turn right  Alt+→").clicked() {
+                            self.cam.yaw += 0.26;
+                        }
+                        ui.separator();
+                        if ui.button(if self.cam.ortho { "Perspective view  5" } else { "Flat (ortho) view  5" }).clicked() {
+                            self.cam.ortho = !self.cam.ortho;
+                            ui.close();
+                        }
+                        ui.horizontal(|ui| {
+                            for m in crate::view_mode::ViewMode::ALL {
+                                if crate::view_mode::swatch(ui, m, 28.0, self.view_mode == m).clicked() {
+                                    self.view_mode = m;
+                                }
+                            }
+                        });
+                        if ui.button("Frame all  Home").clicked() {
+                            self.frame_view(false);
+                            ui.close();
+                        }
+                        if ui.button("Frame selection  Shift+F").clicked() {
+                            self.frame_view(true);
                             ui.close();
                         }
                     });
                     style::vsep(ui);
-                    if style::icon_button(ui, 32.0, "元に戻す (Ctrl+Z)", false, glyphs::undo).clicked() {
+                    if ui
+                        .add_enabled(!self.scene_structure_locked() || self.sk.live.is_some(), |ui: &mut Ui| {
+                            style::icon_button(ui, 32.0, &style::keys("Undo (Ctrl+Z)"), false, glyphs::undo)
+                        })
+                        .clicked()
+                    {
                         self.undo();
                     }
-                    if style::icon_button(ui, 32.0, "やり直し (Ctrl+Shift+Z)", false, glyphs::redo).clicked() {
+                    if ui
+                        .add_enabled(!self.scene_structure_locked(), |ui: &mut Ui| {
+                            style::icon_button(ui, 32.0, &style::keys("Redo (Ctrl+Shift+Z)"), false, glyphs::redo)
+                        })
+                        .clicked()
+                    {
                         self.redo();
                     }
                     style::vsep(ui);
-                    if style::pill(ui, "さがす  F", false).on_hover_text("形・ライブラリ・コマンドをさがす (F)").clicked() {
+                    if style::pill(ui, "Find  F", false).on_hover_text("Find shapes, library, commands (F)").clicked() {
                         palette::open(&ctx);
+                    }
+                    // box selection: only what is completely inside, or everything the box touches
+                    for (mode, tip, icon) in [
+                        (
+                            crate::marquee::Marquee::Inside,
+                            "Box select: drag a box, take only shapes completely inside (Shift adds)",
+                            crate::glyphs_more::box_inside as fn(&egui::Painter, egui::Rect, Color32),
+                        ),
+                        (
+                            crate::marquee::Marquee::Touching,
+                            "Box select: drag a box, take every shape it touches (Shift adds)",
+                            crate::glyphs_more::box_touching as fn(&egui::Painter, egui::Rect, Color32),
+                        ),
+                    ] {
+                        let on = self.marquee == Some(mode);
+                        if style::icon_button(ui, 32.0, tip, on, icon).clicked() {
+                            self.marquee = if on { None } else { Some(mode) };
+                        }
                     }
                     let left_end = ui.cursor().left();
                     let right_start = ui.max_rect().right();
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        style::menu_button(ui, "書き出し", true, |ui| {
-                            if ui.button("書き出し…").on_hover_text("STL・3MF・OBJ・PLY・GLB。細かさ・単位・色など").clicked() {
+                        if ui
+                            .button(RichText::new("SolidCraft").color(style::ACCENT))
+                            .on_hover_text("精密なスケッチと立体を作る。戻ると自動で Melt に取り込み、とけあう形にできます")
+                            .clicked()
+                        {
+                            self.open_precise(&ctx);
+                        }
+                        style::menu_button(ui, "Export", true, |ui| {
+                            if ui.button("Export…").on_hover_text("STL, 3MF, OBJ, PLY, GLB. Detail, units, color").clicked() {
                                 crate::export_dialog::open(&ctx, None);
                                 ui.close();
                             }
-                            if ui.button("前の設定でもう一度").on_hover_text("Ctrl+E").clicked() {
+                            if ui.button("Export again").on_hover_text(style::keys("Ctrl+E")).clicked() {
                                 self.export_stl(&ctx);
                                 ui.close();
                             }
-                            if ui.button("画像 PNG").on_hover_text("見えているとおりに保存").clicked() {
+                            if ui.button("Image (PNG)").on_hover_text("Save as seen on screen").clicked() {
                                 self.start_png(&ctx);
                                 ui.close();
                             }
                             ui.separator();
-                            if ui.button("プリントチェック").on_hover_text("大きさ・体積・穴がないか").clicked() {
+                            if ui.button("Print check").on_hover_text("Size, volume, holes").clicked() {
                                 self.print_check(&ctx);
                                 ui.close();
                             }
                         });
+                        // Mouse or trackpad: Auto follows what the last scroll looked like
+                        {
+                            let eff = self.input_dev.device(self.input_seen);
+                            let items = [
+                                ("Mouse", "Wheel zooms, middle-drag turns, right-drag slides"),
+                                ("Trackpad", "Two fingers turn (Shift: slide), pinch zooms"),
+                            ];
+                            // nothing is chosen yet: the highlighted one is what the scrolling looked like
+                            let cur = match eff {
+                                crate::view::Device::Mouse => 0,
+                                crate::view::Device::Trackpad => 1,
+                            };
+                            let cur = match self.input_dev {
+                                crate::view::InputDev::Mouse => 0,
+                                crate::view::InputDev::Trackpad => 1,
+                                crate::view::InputDev::Auto => cur,
+                            };
+                            if let Some(i) = style::segmented(ui, "input_dev", &items, Some(cur), false) {
+                                self.input_dev = if i == 0 { crate::view::InputDev::Mouse } else { crate::view::InputDev::Trackpad };
+                            }
+                        }
                         let mut menu = crate::perf::MenuState { quality: self.perf.quality, hud: self.perf.hud, bench: false };
                         crate::perf::quality_menu(ui, &mut menu, |ui| self.gpu_menu_items(ui));
-                        if style::pill(ui, "操作性テスト", false).clicked() {
-                            self.ux.open = true;
-                        }
                         self.perf.quality = menu.quality;
                         self.perf.hud = menu.hud;
                         self.perf.bench_requested |= menu.bench;
                     });
-                    // the file name in the middle of the bar
-                    let name = self.path.as_ref().and_then(|p| p.file_stem()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "名前なし".into());
-                    let label = format!("{}{}", name, if self.dirty { " ●" } else { "" });
+                    // the design's name in the middle of the bar: click it to type a new one
                     let cx = bar.center().x.clamp(left_end + 60.0, (right_start - 220.0).max(left_end + 60.0));
-                    ui.painter().text(egui::pos2(cx, bar.center().y), egui::Align2::CENTER_CENTER, label, egui::FontId::proportional(13.0), style::DIM);
+                    let mut commit = false;
+                    let mut cancel = false;
+                    if let Some(text) = self.title_edit.as_mut() {
+                        let r = egui::Rect::from_center_size(egui::pos2(cx, bar.center().y), egui::vec2(220.0, 24.0));
+                        let edit = ui.put(
+                            r,
+                            egui::TextEdit::singleline(text).char_limit(MAX_TITLE_CHARS).horizontal_align(egui::Align::Center).desired_width(220.0),
+                        );
+                        if !edit.has_focus() && !edit.lost_focus() {
+                            edit.request_focus();
+                        }
+                        if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                            cancel = true;
+                        } else if edit.lost_focus() {
+                            commit = true;
+                        }
+                    } else {
+                        let label = format!("{}{}", self.doc_name(), if self.dirty { " *" } else { "" });
+                        let shown = ui.painter().text(
+                            egui::pos2(cx, bar.center().y),
+                            egui::Align2::CENTER_CENTER,
+                            label,
+                            egui::FontId::proportional(13.0),
+                            style::DIM,
+                        );
+                        let hit = ui.interact(shown.expand2(egui::vec2(8.0, 6.0)), egui::Id::new("doc_name"), egui::Sense::click());
+                        let hit = hit.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text("Click to rename this design");
+                        if hit.clicked() {
+                            self.title_edit = Some(self.doc_name());
+                        }
+                    }
+                    if cancel {
+                        self.title_edit = None;
+                    } else if commit {
+                        let typed = self.title_edit.take().unwrap_or_default();
+                        let ctx = ui.ctx().clone();
+                        self.rename_doc(&ctx, &typed);
+                    }
                 });
             },
         );
@@ -981,91 +1677,197 @@ impl App {
     fn tool_strip(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
         let rect = self.view_rect;
-        egui::Area::new(egui::Id::new("tool_strip")).order(egui::Order::Middle).fixed_pos(rect.left_top() + egui::vec2(12.0, 12.0)).show(&ctx, |ui| {
-            style::strip().show(ui, |ui| {
-                ui.spacing_mut().item_spacing = egui::vec2(0.0, 4.0);
-                // a tall strip scrolls instead of running off a small window
-                egui::ScrollArea::vertical().max_height((rect.height() - 40.0).max(120.0)).auto_shrink([true, true]).show(ui, |ui| {
-                ui.vertical_centered(|ui| {
-                    for k in Kind::MAIN {
-                        let r = style::icon_button(ui, 38.0, k.label(), false, |p, r, ink| glyphs::kind(p, r, k, ink, Color32::from_white_alpha(18)));
-                        if r.clicked() {
-                            self.add_shape(&ctx, k);
-                        }
-                    }
-                    self.curve_button(ui);
-                    self.pipe_button(ui);
-                    self.sketch_button(ui);
-                    style::menu_button(ui, "…", false, |ui| {
-                        ui.set_min_width(190.0);
-                        ui.label(egui::RichText::new("ほかの形").size(12.0).color(style::DIM));
-                        for k in Kind::MORE {
-                            let r = ui.horizontal(|ui| {
-                                let (rc, _) = ui.allocate_exact_size(egui::vec2(24.0, 24.0), egui::Sense::hover());
-                                glyphs::kind(ui.painter(), rc, k, ui.visuals().text_color(), Color32::from_white_alpha(18));
-                                ui.selectable_label(false, k.label())
-                            });
-                            if r.inner.clicked() {
-                                self.add_shape(&ctx, k);
-                                ui.close();
+        let strip = egui::Area::new(egui::Id::new("tool_strip")).order(egui::Order::Middle).fixed_pos(rect.left_top() + egui::vec2(12.0, 12.0)).show(
+            &ctx,
+            |ui| {
+                style::strip().show(ui, |ui| {
+                    ui.spacing_mut().item_spacing = egui::vec2(0.0, 4.0);
+                    // a strip that would not fit grows a second column so everything shows at once;
+                    // only when even that is too tall does it scroll
+                    let max_h = (rect.height().min(ctx.content_rect().bottom() - rect.top()) - 30.0).max(120.0);
+                    let narrow_h = ctx.data(|d| d.get_temp::<f32>(egui::Id::new("strip_narrow_h"))).unwrap_or(0.0);
+                    let wide = narrow_h > max_h;
+                    let strip_w = if wide { style::STRIP_W * 2.0 + 4.0 } else { style::STRIP_W };
+                    // The auto-sized Area otherwise keeps its previous (initially 400px)
+                    // height as the scroll limit, even when the viewport has room to grow.
+                    ui.set_max_height(max_h);
+                    #[cfg(test)]
+                    let mut strip_tail = None;
+                    let out = egui::ScrollArea::vertical().max_height(max_h).auto_shrink([true, true]).show(ui, |ui| {
+                        ui.set_max_width(strip_w);
+                        ui.horizontal_wrapped(|ui| {
+                            ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
+                            self.solid_mode_button(ui);
+                            if self.solid_mode {
+                                self.sketch_button(ui);
+                                self.sketch_make_buttons(ui);
+                            } else {
+                                for k in Kind::MAIN {
+                                    let r = ui.add_enabled(!self.scene_structure_locked(), |ui: &mut Ui| {
+                                        style::wide_button(ui, k.label(), k.label(), false, None, |p, r, ink| {
+                                            glyphs::kind(p, r, k, ink, Color32::from_white_alpha(18))
+                                        })
+                                    });
+                                    if r.clicked() {
+                                        self.add_shape(&ctx, k);
+                                    }
+                                }
+                                self.curve_button(ui);
+                                self.pipe_button(ui);
                             }
-                        }
-                        ui.separator();
-                        ui.label(egui::RichText::new("CADの機能").size(12.0).color(style::DIM));
-                        for k in Kind::CAD {
-                            let r = ui.horizontal(|ui| {
-                                let (rc, _) = ui.allocate_exact_size(egui::vec2(24.0, 24.0), egui::Sense::hover());
-                                glyphs::kind(ui.painter(), rc, k, ui.visuals().text_color(), Color32::from_white_alpha(18));
-                                ui.selectable_label(false, k.label())
-                            });
-                            if r.inner.clicked() {
-                                self.add_shape(&ctx, k);
-                                ui.close();
+                            if !self.solid_mode {
+                                style::menu_button_enabled(ui, "…", false, !self.scene_structure_locked(), |ui| {
+                                    ui.set_min_width(190.0);
+                                    ui.label(egui::RichText::new("Other shapes").size(12.0).color(style::DIM));
+                                    for k in Kind::MORE {
+                                        let r = ui.horizontal(|ui| {
+                                            let (rc, _) = ui.allocate_exact_size(egui::vec2(24.0, 24.0), egui::Sense::hover());
+                                            glyphs::kind(ui.painter(), rc, k, ui.visuals().text_color(), Color32::from_white_alpha(18));
+                                            ui.selectable_label(false, k.label())
+                                        });
+                                        if r.inner.clicked() {
+                                            self.add_shape(&ctx, k);
+                                            ui.close();
+                                        }
+                                    }
+                                    ui.separator();
+                                    ui.label(egui::RichText::new("CAD tools").size(12.0).color(style::DIM));
+                                    for k in Kind::CAD {
+                                        let r = ui.horizontal(|ui| {
+                                            let (rc, _) = ui.allocate_exact_size(egui::vec2(24.0, 24.0), egui::Sense::hover());
+                                            glyphs::kind(ui.painter(), rc, k, ui.visuals().text_color(), Color32::from_white_alpha(18));
+                                            ui.selectable_label(false, k.label())
+                                        });
+                                        if r.inner.clicked() {
+                                            self.add_shape(&ctx, k);
+                                            ui.close();
+                                        }
+                                    }
+                                });
                             }
-                        }
+                            ui.end_row();
+                            style::hsep_w(ui, strip_w);
+                            ui.end_row();
+                            let ops: &[Op] =
+                                if self.solid_mode { &[Op::Add, Op::Subtract] } else { &[Op::Add, Op::Subtract, Op::Paint, Op::Intersect] };
+                            for &op in ops {
+                                let on = self.new_op == op;
+                                let (name, tip) = match op {
+                                    Op::Add => ("Add", "Join: the new shape is added to the model (Tab flips Add / Cut)"),
+                                    Op::Subtract => ("Cut", "Cut: the new shape carves a hole out of the model"),
+                                    Op::Paint => ("Paint", "Paint: the new shape only changes the colour where it touches"),
+                                    Op::Intersect => ("Overlap", "Overlap: keep only the part where the new shape and the model meet"),
+                                };
+                                if style::wide_button(ui, name, tip, on, Some(style::op_color(op)), |p, r, ink| glyphs::op(p, r, op, ink)).clicked() {
+                                    self.new_op = op;
+                                    self.live_update();
+                                }
+                            }
+                            ui.end_row();
+                            // solid mode keeps only what makes a solid: the rest hides until you leave it
+                            if self.solid_mode {
+                                return;
+                            }
+                            style::hsep_w(ui, strip_w);
+                            ui.end_row();
+                            if ui
+                                .add_enabled(!self.scene_structure_locked(), |ui: &mut Ui| {
+                                    style::wide_button(ui, "New group", "New group", false, None, glyphs::group)
+                                })
+                                .clicked()
+                            {
+                                self.add_group();
+                            }
+                            let melting = self.selection_melts();
+                            if style::wide_button(
+                                ui,
+                                "Melt",
+                                "Melt the selected shapes together in one click (again to un-melt). Nothing selected: the whole scene",
+                                melting,
+                                None,
+                                crate::glyphs_more::melt,
+                            )
+                            .clicked()
+                            {
+                                self.toggle_melt_selected();
+                            }
+                            let pr = ui.add_enabled(!self.scene_structure_locked(), |ui: &mut Ui| {
+                                style::wide_button(
+                                    ui,
+                                    "Pattern",
+                                    "Repeat the selected group: mirror, grid, circle, along a path",
+                                    false,
+                                    None,
+                                    |p, r, ink| crate::pattern_ui::icon(crate::pattern::PatternKind::Circular, p, r, ink),
+                                )
+                            });
+                            #[cfg(test)]
+                            {
+                                strip_tail = Some((pr.rect, ui.clip_rect()));
+                            }
+                            egui::Popup::menu(&pr).show(|ui| {
+                                ui.set_min_width(170.0);
+                                for k in crate::pattern::PatternKind::ALL {
+                                    let r = ui.horizontal(|ui| {
+                                        let (rc, _) = ui.allocate_exact_size(egui::vec2(24.0, 24.0), egui::Sense::hover());
+                                        crate::pattern_ui::icon(k, ui.painter(), rc, ui.visuals().text_color());
+                                        ui.selectable_label(false, k.label())
+                                    });
+                                    if r.inner.clicked() {
+                                        self.set_pattern_kind(&ctx, k);
+                                        ui.close();
+                                    }
+                                }
+                                ui.separator();
+                                if ui.selectable_label(false, "Linked copy").clicked() {
+                                    self.make_instance(&ctx);
+                                    ui.close();
+                                }
+                                if ui.selectable_label(false, "Remove pattern").clicked() {
+                                    self.clear_pattern();
+                                    ui.close();
+                                }
+                            });
+                        });
                     });
-                    style::hsep(ui);
-                    for op in [Op::Add, Op::Subtract, Op::Paint, Op::Intersect] {
-                        let on = self.new_op == op;
-                        let col = if on { Color32::WHITE } else { style::op_color(op) };
-                        let tip = match op {
-                            Op::Add => "つぎは「足す」(くっつく)",
-                            Op::Subtract => "つぎは「削る」(くり抜く)",
-                            Op::Paint => "つぎは「ぬる」(形は変えずに色だけ)",
-                            Op::Intersect => "つぎは「重ねる」(前の形とかさなる所だけのこす)",
-                        };
-                        if style::icon_button(ui, 38.0, tip, on, |p, r, _| glyphs::op(p, r, op, col)).clicked() {
-                            self.new_op = op;
-                        }
-                    }
-                    style::hsep(ui);
-                    if style::icon_button(ui, 38.0, "グループを作る", false, glyphs::group).clicked() {
-                        self.add_group();
+                    #[cfg(test)]
+                    ctx.data_mut(|d| d.insert_temp(egui::Id::new("tool_strip_tail_layout"), (strip_tail, out.content_size.y, max_h)));
+                    if !wide {
+                        ctx.data_mut(|d| d.insert_temp(egui::Id::new("strip_narrow_h"), out.content_size.y));
                     }
                 });
-                });
-            });
-        });
+            },
+        );
+        // Floating command cards use the actual occupied area, including a second
+        // column or scrollbar, so they can stay beside the tools after a resize.
+        ctx.data_mut(|d| d.insert_temp(egui::Id::new("tool_strip_rect"), strip.response.rect));
     }
 
     /// The docked panel on the left: the scene list (outliner) and the ready-made models (assets).
     fn left_dock(&mut self, ui: &mut Ui) {
-        egui::Panel::left("dock").exact_size(272.0).resizable(false).frame(egui::Frame::new().fill(style::PANEL_DARK).inner_margin(egui::Margin::symmetric(10, 10))).show(
-            ui,
-            |ui| {
+        egui::Panel::left("dock")
+            .exact_size(272.0)
+            .resizable(false)
+            .frame(egui::Frame::new().fill(style::PANEL_DARK).inner_margin(egui::Margin::symmetric(10, 10)))
+            .show(ui, |ui| {
                 style::panel_sheen(ui, ui.max_rect().expand2(egui::vec2(10.0, 10.0)), style::PANEL_DARK, style::Edge::Left);
-                let tabs = [("シーン", ""), ("ライブラリ", "")];
+                let tabs = [("Scene", ""), ("Library", "")];
                 if let Some(i) = style::segmented(ui, "dock_tabs", &tabs, Some(usize::from(self.lib_open)), true) {
                     self.lib_open = i == 1;
                 }
                 ui.add_space(6.0);
                 if self.lib_open {
-                    crate::library_ui::panel(self, ui);
+                    ui.add_enabled_ui(!self.scene_structure_locked(), |ui| crate::library_ui::panel(self, ui));
                 } else {
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new(format!("{}こ", self.scene.shape_count())).size(12.0).color(style::DIM));
+                        ui.label(RichText::new(format!("{} shapes", self.scene.shape_count())).size(12.0).color(style::DIM));
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if style::icon_button(ui, 26.0, "グループを作る", false, glyphs::group).clicked() {
+                            if style::pill_enabled(ui, "+ Group", false, !self.scene_structure_locked())
+                                .on_hover_text(style::keys(
+                                    "New empty group.\nTo nest: Shift+click several shapes or groups in the list, then press Ctrl+G",
+                                ))
+                                .clicked()
+                            {
                                 self.add_group();
                             }
                         });
@@ -1075,45 +1877,6 @@ impl App {
                         self.layers(ui);
                     });
                 }
-            },
-        );
-    }
-
-    /// Tools and view buttons floating at the bottom middle.
-    fn tool_pill(&mut self, ui: &mut Ui) {
-        let ctx = ui.ctx().clone();
-        let rect = self.view_rect;
-        egui::Area::new(egui::Id::new("tool_pill"))
-            .order(egui::Order::Middle)
-            .pivot(egui::Align2::CENTER_BOTTOM)
-            .fixed_pos(egui::pos2(rect.center().x, rect.bottom() - 16.0))
-            .show(&ctx, |ui| {
-                style::card().show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = 8.0;
-                        let tools = [
-                            (Tool::Select, "選ぶ", "選ぶだけ (Q)"),
-                            (Tool::All, "ぜんぶ", "動かす・回す・大きさ ぜんぶ (A)"),
-                        ];
-                        let items: Vec<(&str, &str)> = tools.iter().map(|t| (t.1, t.2)).collect();
-                        let sel = tools.iter().position(|t| t.0 == self.tool);
-                        if let Some(i) = style::segmented(ui, "tool_pill_tools", &items, sel, false)
-                            && let Some(t) = tools.get(i)
-                        {
-                            self.tool = t.0;
-                        }
-                        style::vsep(ui);
-                        if style::pill(ui, if self.cam.ortho { "平行" } else { "遠近" }, false).on_hover_text("遠近 / 平行 (5)").clicked() {
-                            self.cam.ortho = !self.cam.ortho;
-                        }
-                        if style::pill(ui, "全体", false).on_hover_text("全体を見る (Home)").clicked() {
-                            self.frame_view(false);
-                        }
-                        if style::pill(ui, "?", self.show_keys).on_hover_text("操作のしかた").clicked() {
-                            self.show_keys = !self.show_keys;
-                        }
-                    });
-                });
             });
     }
 
@@ -1127,35 +1890,34 @@ impl App {
         egui::Area::new(egui::Id::new("keys_card"))
             .order(egui::Order::Foreground)
             .pivot(egui::Align2::RIGHT_BOTTOM)
-            .fixed_pos(rect.right_bottom() - egui::vec2(16.0, 72.0))
+            .fixed_pos(rect.right_bottom() - egui::vec2(16.0, 16.0))
             .show(&ctx, |ui| {
                 style::card().show(ui, |ui| {
                     ui.set_width(300.0);
-                    ui.label(RichText::new("操作のしかた").strong().size(14.0));
+                    ui.label(RichText::new("Controls").strong().size(14.0));
                     ui.separator();
                     for (k, v) in [
-                        ("中ボタンドラッグ", "回す"),
-                        ("右ドラッグ", "動かす (パン)"),
-                        ("ホイール", "ズーム (マウスの位置へ)"),
-                        ("左ドラッグ (何もない所)", "回す"),
-                        ("クリック", "選ぶ　Shiftでグループ"),
-                        ("Ctrl+クリック", "複数選択（もう一度で解除）"),
-                        ("右クリック", "選択に合った操作を表示"),
-                        ("ダブルクリック", "その形を見る"),
-                        ("F", "さがす（形・ライブラリ・コマンド）"),
-                        ("Shift+F / Home", "選んだもの / 全体を見る"),
-                        ("1 3 7 (Ctrlで反対)", "正面 / 右 / 上から"),
-                        ("5", "遠近 ⇄ 平行"),
-                        ("Q A W E R", "選ぶ / ぜんぶ / 動かす / 回す / 大きさ"),
-                        ("Tab", "足す ⇄ 削る"),
-                        ("Ctrl + ドラッグ", "1mm・15度ずつ"),
-                        ("矢印キー", "1mm動かす (Shiftで10mm)"),
-                        ("Ctrl+C / X / V", "コピー / 切り取り / 貼りつけ"),
-                        ("Ctrl+D / Delete", "複製 / 消す"),
-                        ("Ctrl+Z / Ctrl+Shift+Z", "元に戻す / やり直し"),
+                        ("Middle drag", "Orbit"),
+                        ("Right drag", "Pan"),
+                        ("Wheel", "Zoom to cursor"),
+                        ("Left drag (empty)", "Orbit"),
+                        ("Click", "Select  Ctrl: add/remove  Shift: add/remove"),
+                        ("Double click", "Focus on shape"),
+                        ("Drawing: left click → right click", "Place point → finish (all draw tools)"),
+                        ("F", "Find shapes, library, commands"),
+                        ("Shift+F / Home", "Frame selection / Frame all"),
+                        ("1 3 7 (Ctrl: opposite)", "Front / Right / Top"),
+                        ("5", "Perspective ⇄ Ortho"),
+                        ("Tab", "Add ⇄ Subtract"),
+                        ("Ctrl + drag", "1 mm / 15° steps"),
+                        ("Arrow keys", "Move 1 mm (Shift: 10 mm)"),
+                        ("Ctrl+C / X / V", "Copy / Cut / Paste"),
+                        ("Ctrl+D / Delete", "Duplicate / Delete"),
+                        ("Ctrl+G", "Group the selected shapes"),
+                        ("Ctrl+Z / Ctrl+Shift+Z", "Undo / Redo"),
                     ] {
                         ui.horizontal(|ui| {
-                            ui.add_sized([150.0, 18.0], egui::Label::new(RichText::new(k).size(12.0).color(style::ACCENT)));
+                            ui.add_sized([150.0, 18.0], egui::Label::new(RichText::new(style::keys(k)).size(12.0).color(style::ACCENT)));
                             ui.label(RichText::new(v).size(12.0).color(style::TEXT));
                         });
                     }
@@ -1179,15 +1941,22 @@ impl App {
                     let hint = crate::gizmo::hint(self.tool);
                     ui.label(RichText::new(if note.is_empty() { hint.to_string() } else { note }).size(12.0).color(style::DIM));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui
+                            .selectable_label(self.an.open, "Animation")
+                            .on_hover_text("Timeline: pose, play, melt over time, export a GIF")
+                            .clicked()
+                        {
+                            self.an.open = !self.an.open;
+                        }
                         let name = self
                             .path
                             .as_ref()
                             .and_then(|p| p.file_name())
                             .map(|n| n.to_string_lossy().into_owned())
-                            .unwrap_or_else(|| "名前なし".into());
-                        let dims = self.selection_size().map(|d| format!("　{d}")).unwrap_or_default();
+                            .unwrap_or_else(|| "Untitled".into());
+                        let dims = self.selection_size().map(|d| format!(" | {d}")).unwrap_or_default();
                         ui.label(
-                            RichText::new(format!("{}{}　形 {}{}", name, if self.dirty { " *" } else { "" }, self.scene.shape_count(), dims))
+                            RichText::new(format!("{}{} | Shapes {}{}", name, if self.dirty { " *" } else { "" }, self.scene.shape_count(), dims))
                                 .size(12.0)
                                 .color(style::DIM),
                         );
@@ -1205,15 +1974,15 @@ impl App {
                 let h = sh.local_half();
                 let turned = sh.rot.iter().any(|r| (r % 90.0).abs() > 0.01);
                 if turned {
-                    return Some(format!("おおよそ {:.0} mm", crate::view::radius_of(sh) * 2.0));
+                    return Some(format!("About {:.0} mm", crate::view::radius_of(sh) * 2.0));
                 }
                 // a quarter turn about one axis swaps two sizes: keep it simple and exact only when not turned
                 let dim = |i: usize| h[i] * sh.scale[i] * 2.0;
-                Some(format!("幅 {:.1} × 奥行 {:.1} × 高さ {:.1} mm", dim(0), dim(1), dim(2)))
+                Some(format!("W {:.1} × D {:.1} × H {:.1} mm", dim(0), dim(1), dim(2)))
             }
             Pick::Group(g) => {
                 let (_, r) = crate::gpu::bounds(&self.scene, Some(Pick::Group(g)));
-                (r > 0.0).then(|| format!("グループ おおよそ {:.0} mm", r * 2.0))
+                (r > 0.0).then(|| format!("Group about {:.0} mm", r * 2.0))
             }
         }
     }
@@ -1222,7 +1991,7 @@ impl App {
 
     /// Ask where to save, then take a clean picture of the viewport a moment later.
     fn start_png(&mut self, ctx: &egui::Context) {
-        let Some(path) = rfd::FileDialog::new().add_filter("PNG", &["png"]).set_file_name("作品.png").save_file() else { return };
+        let Some(path) = rfd::FileDialog::new().add_filter("PNG", &["png"]).set_file_name("Untitled.png").save_file() else { return };
         self.capture = Some(Capture { path, frames: 0 });
         ctx.request_repaint();
     }
@@ -1266,8 +2035,8 @@ impl App {
         let res =
             crate::png::encode_rgba((x1 - x0) as u32, (y1 - y0) as u32, &rgba).and_then(|b| std::fs::write(&cap.path, b).map_err(|e| e.to_string()));
         match res {
-            Ok(()) => self.say(ctx, "画像を保存しました"),
-            Err(e) => self.say(ctx, format!("画像を保存できませんでした: {e}")),
+            Ok(()) => self.say(ctx, "Image saved"),
+            Err(e) => self.say(ctx, format!("Could not save image: {e}")),
         }
     }
 
@@ -1286,7 +2055,10 @@ impl App {
         if dir.join("where").exists() {
             // where the overlay is (written to `dir/where.txt` every frame while the file `where` exists)
             let r = ctx.memory(|m| m.area_rect(egui::Id::new("frame_hud")));
-            let _ = std::fs::write(dir.join("where.txt"), format!("hud {} area {r:?} view {:?} ppp {}\n", self.perf.hud, self.view_rect, ctx.pixels_per_point()));
+            let _ = std::fs::write(
+                dir.join("where.txt"),
+                format!("hud {} area {r:?} view {:?} ppp {}\n", self.perf.hud, self.view_rect, ctx.pixels_per_point()),
+            );
         }
         if dir.join("bench").exists() && std::fs::remove_file(dir.join("bench")).is_ok() {
             self.perf.bench_requested = true;
@@ -1327,6 +2099,9 @@ impl App {
 
 impl eframe::App for App {
     fn on_exit(&mut self) {
+        if let Some(p) = self.precise.as_mut() {
+            solidcraft_ui_egui::recovery_ui::close(&mut p.app);
+        }
         if let Err(e) = self.recovery.normal_exit() {
             crate::gpu_log::log(&format!("recovery cleanup failed: {e}"));
         }
@@ -1337,6 +2112,104 @@ impl eframe::App for App {
 }
 
 impl App {
+    pub(crate) fn scene_edit_in_progress(&self) -> bool {
+        self.scene_structure_locked()
+            || self.sketch_active()
+            || self.drag.is_some()
+            || self.ct.drag.is_some()
+            || self.ct.drawing
+            || self.ct.draw_shape.is_some()
+            || self.pt.tracing
+            || self.layer_drag.is_some()
+            || self.marquee_from.is_some()
+            || self.renaming.is_some()
+            || self.title_edit.is_some()
+            || self.pending_file_action.is_some()
+    }
+
+    /// Runs the commands that arrived on the control channel (at most a few per frame).
+    fn run_control(&mut self, ctx: &egui::Context) {
+        let Some(rx) = self.control.take() else { return };
+        let mut ran = false;
+        for _ in 0..32 {
+            let Ok(req) = rx.try_recv() else { break };
+            // commands about the window itself are handled here; the rest change the scene
+            if req.cmd.get("cmd").and_then(serde_json::Value::as_str) == Some("ui.precise") {
+                let result = match req.cmd.get("on") {
+                    None => Ok(true),
+                    Some(serde_json::Value::Bool(on)) => Ok(*on),
+                    Some(_) => Err("on は true または false で指定してください".to_owned()),
+                }
+                .and_then(|on| {
+                    if ctx.egui_wants_keyboard_input() || ctx.input(|i| i.pointer.any_down()) {
+                        return Err("入力やドラッグを終えてから画面を切り替えてください".into());
+                    }
+                    self.set_precise_mode(ctx, on)?;
+                    Ok(serde_json::json!({"precise": self.precise_on, "importing": self.precise_transfer_pending()}))
+                });
+                let _ = req.reply.send(result);
+                ran = true;
+                continue;
+            }
+            let name = req.cmd.get("cmd").and_then(serde_json::Value::as_str);
+            let read_only = matches!(name, Some("commands" | "scene.get" | "scene.summary" | "render" | "anim.get" | "anim.render"));
+            let busy = self.precise_on || self.scene_edit_in_progress() || ctx.egui_wants_keyboard_input() || ctx.input(|i| i.pointer.any_down());
+            let result = if !read_only && busy {
+                Err("Finish or cancel the active edit before changing or saving the scene".into())
+            } else {
+                // Commands may sanitize even a read, or partially change a scene before
+                // returning an error. Only successful mutations reach the live document.
+                let mut next = self.scene.clone();
+                let result = crate::automation::execute(&mut next, &req.cmd);
+                if let Ok(value) = &result
+                    && !read_only
+                    && name != Some("save")
+                    && next != self.scene
+                {
+                    // Keep a completed UI edit separate from each queued command's undo
+                    // step, even when several commands arrive in the same frame.
+                    self.settle(ctx);
+                    self.clear_document_gestures();
+                    self.scene = next;
+                    self.sel = if let Some(g) = value.get("group").and_then(serde_json::Value::as_u64) {
+                        Some(match value.get("shape").and_then(serde_json::Value::as_u64) {
+                            Some(s) => Pick::Shape(g as usize, s as usize),
+                            None => Pick::Group(g as usize),
+                        })
+                    } else if matches!(name, Some("scene.new" | "scene.set" | "load")) {
+                        self.scene.shape(0, 0).map(|_| Pick::Shape(0, 0))
+                    } else if matches!(name, Some("shape.delete" | "group.delete")) {
+                        None
+                    } else {
+                        self.sel
+                    };
+                    self.fix_selection();
+                    self.settle(ctx);
+                }
+                if let Ok(value) = &result
+                    && !read_only
+                    && name != Some("save")
+                {
+                    // Control commands have the same explicit effect as CLI commands:
+                    // playback and UI auto-capture must not replace or recapture them.
+                    let frame = if name == Some("anim.at") {
+                        value.get("frame").and_then(serde_json::Value::as_u64).and_then(|f| u32::try_from(f).ok()).unwrap_or(self.an.frame)
+                    } else {
+                        self.an.frame
+                    };
+                    self.animation_at_applied(frame);
+                }
+                result
+            };
+            let _ = req.reply.send(result);
+            ran = true;
+        }
+        self.control = Some(rx);
+        if ran {
+            ctx.request_repaint();
+        }
+    }
+
     /// One frame of the window (what `eframe::App::ui` does; a method of its own so that tests can run it).
     pub(crate) fn frame_body(&mut self, ui: &mut Ui) {
         static FIRST: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -1344,8 +2217,13 @@ impl App {
         let ctx = ui.ctx().clone();
         let frame_began = std::time::Instant::now();
         self.perf.stats.begin(ctx.input(|i| i.time));
-        self.fix_selection();
+        self.sync_precise_transfer(&ctx);
+        self.run_control(&ctx);
         self.handle_close_request(&ctx);
+        if self.precise_frame(ui) {
+            return;
+        }
+        self.fix_selection();
         if let Some(n) = self.notice.take() {
             self.say(&ctx, n);
         }
@@ -1356,6 +2234,7 @@ impl App {
         }
         self.top_bar(ui);
         self.status_bar(ui);
+        self.anim_bar(ui);
         self.left_dock(ui);
         self.side(ui);
         egui::CentralPanel::default().frame(egui::Frame::new().fill(Color32::from_rgb(52, 52, 56))).show(ui, |ui| {
@@ -1364,7 +2243,6 @@ impl App {
         });
         if self.capture.is_none() {
             self.tool_strip(ui);
-            self.tool_pill(ui);
             self.selection_toolbar(&ctx);
             self.draw_card(&ctx);
             self.pipe_card(&ctx);
@@ -1380,11 +2258,11 @@ impl App {
                 self.bench.start(&ctx, backends);
             }
             self.bench.show(&ctx);
-            self.ux.show(&ctx, self.perf.quality.label());
         }
         self.pending_file_dialog(&ctx);
         self.recovery_dialog(&ctx);
         self.capture_step(&ctx);
+        self.animation_capture_finished(&ctx);
         self.settle(&ctx);
         if !cfg!(test) {
             ctx.request_repaint_after(crate::recovery::INTERVAL);
@@ -1392,16 +2270,12 @@ impl App {
                 let rev = self.track_scene();
                 let changed = self.has_unsaved_work();
                 if let Err(e) = self.recovery.checkpoint(&self.scene, self.path.as_deref(), changed, rev, std::time::Instant::now()) {
-                    self.notice = Some(format!("自動復旧データを保存できません: {e}"));
+                    self.notice = Some(format!("Could not save auto-recovery data: {e}"));
                 }
             }
         }
         self.test_hooks(&ctx);
-        let title = format!(
-            "MELTCAD — {}{}",
-            self.path.as_ref().and_then(|p| p.file_stem()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "名前なし".into()),
-            if self.dirty { " *" } else { "" }
-        );
+        let title = format!("Melt 3D — {}{}", self.doc_name(), if self.dirty { " *" } else { "" });
         // Only when it changed: every viewport command wakes the event loop for another frame,
         // which used to keep the window drawing all the time.
         if title != self.perf.last_title {
@@ -1414,9 +2288,7 @@ impl App {
         if self.perf.drawn.wants_another_frame(rev, self.sel, self.hover, &self.cam, clean) {
             ctx.request_repaint();
         }
-        let cpu_ms = frame_began.elapsed().as_secs_f64() * 1000.0;
-        self.perf.stats.end(cpu_ms as f32);
-        self.ux.record_frame(&ctx, cpu_ms);
+        self.perf.stats.end(frame_began.elapsed().as_secs_f32() * 1000.0);
     }
 }
 
@@ -1452,13 +2324,15 @@ mod tests {
         assert_eq!(app.sel, Some(Pick::Shape(0, 0)));
         assert!(app.sk.pts.is_empty() && app.sk.anchor.is_none());
 
-        ctx.input_mut(|i| i.events.push(egui::Event::Key {
-            key: egui::Key::Delete,
-            physical_key: None,
-            pressed: true,
-            repeat: false,
-            modifiers: egui::Modifiers::NONE,
-        }));
+        ctx.input_mut(|i| {
+            i.events.push(egui::Event::Key {
+                key: egui::Key::Delete,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            })
+        });
         app.keys(&ctx);
 
         assert_eq!(app.scene.shape_count(), 0, "Delete should remove the selected shape when no sketch points are pending");
@@ -1472,13 +2346,15 @@ mod tests {
         app.sk.click([0.0, 0.0], false);
         assert_eq!(app.sk.pts.len(), 1);
 
-        ctx.input_mut(|i| i.events.push(egui::Event::Key {
-            key: egui::Key::Backspace,
-            physical_key: None,
-            pressed: true,
-            repeat: false,
-            modifiers: egui::Modifiers::NONE,
-        }));
+        ctx.input_mut(|i| {
+            i.events.push(egui::Event::Key {
+                key: egui::Key::Backspace,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            })
+        });
         app.keys(&ctx);
 
         assert!(app.sk.pts.is_empty());
@@ -1493,13 +2369,15 @@ mod tests {
         app.sk.click([0.0, 0.0], false);
         assert_eq!(app.sk.pts.len(), 1);
 
-        ctx.input_mut(|i| i.events.push(egui::Event::Key {
-            key: egui::Key::Delete,
-            physical_key: None,
-            pressed: true,
-            repeat: false,
-            modifiers: egui::Modifiers::NONE,
-        }));
+        ctx.input_mut(|i| {
+            i.events.push(egui::Event::Key {
+                key: egui::Key::Delete,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            })
+        });
         app.keys(&ctx);
 
         assert!(app.sk.pts.is_empty());
@@ -1515,13 +2393,15 @@ mod tests {
         app.sk.click([0.0, 0.0], false);
         assert_eq!(app.sk.anchor, Some([0.0, 0.0]));
 
-        ctx.input_mut(|i| i.events.push(egui::Event::Key {
-            key: egui::Key::Delete,
-            physical_key: None,
-            pressed: true,
-            repeat: false,
-            modifiers: egui::Modifiers::NONE,
-        }));
+        ctx.input_mut(|i| {
+            i.events.push(egui::Event::Key {
+                key: egui::Key::Delete,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            })
+        });
         app.keys(&ctx);
 
         assert!(app.sk.anchor.is_none());
@@ -1543,13 +2423,15 @@ mod tests {
         assert!(app.sk.edit.as_ref().is_some_and(|edit| edit.sel.is_none()));
         let before = app.scene.shape_count();
 
-        ctx.input_mut(|i| i.events.push(egui::Event::Key {
-            key: egui::Key::Delete,
-            physical_key: None,
-            pressed: true,
-            repeat: false,
-            modifiers: egui::Modifiers::NONE,
-        }));
+        ctx.input_mut(|i| {
+            i.events.push(egui::Event::Key {
+                key: egui::Key::Delete,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            })
+        });
         app.keys(&ctx);
 
         assert_eq!(app.scene.shape_count(), before, "Delete without a chosen outline point must not remove the solid");
@@ -1630,6 +2512,63 @@ mod tests {
     }
 
     #[test]
+    fn control_mode_exit_uses_the_automatic_solid_import_and_rejects_invalid_input() {
+        use serde_json::json;
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        let (sender, receiver) = std::sync::mpsc::channel();
+        app.control = Some(receiver);
+        let (reply, results) = std::sync::mpsc::channel();
+        sender.send(crate::control::Request { cmd: json!({"cmd":"ui.precise","on":"false"}), reply: reply.clone() }).unwrap();
+        app.run_control(&ctx);
+        assert!(results.recv().unwrap().is_err());
+        assert!(!app.precise_on);
+        sender.send(crate::control::Request { cmd: json!({"cmd":"ui.precise","on":true}), reply: reply.clone() }).unwrap();
+        app.run_control(&ctx);
+        assert_eq!(results.recv().unwrap().unwrap()["precise"], true);
+        let p = app.precise.as_mut().unwrap();
+        assert_eq!(p.app.preferences.language, "ja");
+        assert!(!p.app.show_easy_top_bar);
+        p.app.run("solid.box", json!({"length":24,"width":12,"height":6})).unwrap();
+        let scene = app.scene.clone();
+        sender.send(crate::control::Request { cmd: json!({"cmd":"scene.new"}), reply: reply.clone() }).unwrap();
+        app.run_control(&ctx);
+        assert!(results.recv().unwrap().is_err(), "do not change a hidden Melt scene while SolidCraft is active");
+        assert_eq!(app.scene, scene);
+        sender.send(crate::control::Request { cmd: json!({"cmd":"ui.precise","on":false}), reply }).unwrap();
+        app.run_control(&ctx);
+        let answer = results.recv().unwrap().unwrap();
+        assert_eq!(answer["precise"], false);
+        assert_eq!(answer["importing"], true);
+        assert!(app.precise_transfer_pending());
+        assert!(crate::mesh_dialog::cancel(&ctx));
+        app.sync_precise_transfer(&ctx);
+    }
+
+    #[test]
+    fn closing_from_either_mode_protects_the_unsaved_exact_document() {
+        for precise_on in [true, false] {
+            let ctx = egui::Context::default();
+            let mut app = App::new(true, None);
+            app.open_precise(&ctx);
+            let p = app.precise.as_mut().unwrap();
+            p.app.viewport.no_pixels = true;
+            p.app.run("solid.box", serde_json::json!({"length":24,"width":12,"height":6})).unwrap();
+            app.precise_on = precise_on;
+            let mut input =
+                egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(960.0, 600.0))), ..Default::default() };
+            input.viewports.get_mut(&egui::ViewportId::ROOT).unwrap().events.push(egui::ViewportEvent::Close);
+            let mut output = ctx.run_ui(input, |ui| app.frame_body(ui));
+            assert!(output.viewport_output.get(&egui::ViewportId::ROOT).is_some_and(|v| v.commands.contains(&egui::ViewportCommand::CancelClose)));
+            assert!(app.precise_on, "show the precise document's save prompt even when it was hidden");
+            let p = app.precise.as_ref().unwrap();
+            assert!(p.app.docs.quitting.is_some() && p.app.docs.closing.is_some());
+            assert!(!p.app.quit_requested && p.app.session.is_dirty());
+            output.textures_delta.clear();
+        }
+    }
+
+    #[test]
     fn saving_before_reopening_the_current_file_keeps_the_saved_edit() {
         let path = std::env::temp_dir().join(format!("meltcad_reopen_guard_{}.meltcad", std::process::id()));
         std::fs::write(&path, Scene::default().to_json()).expect("initial file");
@@ -1659,13 +2598,15 @@ mod tests {
         std::fs::write(&path, Scene::default().to_json()).expect("other file");
 
         app.open_path(path.clone());
-        ctx.input_mut(|i| i.events.push(egui::Event::Key {
-            key: egui::Key::Delete,
-            physical_key: None,
-            pressed: true,
-            repeat: false,
-            modifiers: egui::Modifiers::NONE,
-        }));
+        ctx.input_mut(|i| {
+            i.events.push(egui::Event::Key {
+                key: egui::Key::Delete,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            })
+        });
         app.keys(&ctx);
 
         assert!(matches!(app.pending_file_action, Some(PendingFileAction::New(_))), "the first decision stays pending");
@@ -1683,6 +2624,55 @@ mod tests {
         assert_eq!(app.scene.shape(g, s).map(|x| x.op), Some(Op::Subtract));
         app.flip_op();
         assert_eq!(app.scene.shape(g, s).map(|x| x.op), Some(Op::Add));
+    }
+
+    #[test]
+    fn shift_click_selects_several_and_they_group_move_and_delete_together() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        app.add_shape(&ctx, Kind::Sphere);
+        app.add_shape(&ctx, Kind::Box);
+        app.add_shape(&ctx, Kind::Cylinder);
+        let all: Vec<Pick> = (0..app.scene.groups.iter().map(|g| g.shapes.len()).sum::<usize>())
+            .filter_map(|n| {
+                let mut left = n;
+                for (g, gr) in app.scene.groups.iter().enumerate() {
+                    if left < gr.shapes.len() {
+                        return Some(Pick::Shape(g, left));
+                    }
+                    left -= gr.shapes.len();
+                }
+                None
+            })
+            .collect();
+        assert!(all.len() >= 3);
+        app.sel = Some(all[0]);
+        app.toggle_pick(all[1]);
+        app.toggle_pick(all[2]);
+        assert_eq!(app.picks().len(), 3);
+        // Shift on one that is already in takes it out
+        app.toggle_pick(all[1]);
+        assert_eq!(app.picks(), vec![all[0], all[2]]);
+        // a plain selection elsewhere drops the extras
+        app.sel = Some(all[1]);
+        assert_eq!(app.picks(), vec![all[1]]);
+        // moving by the arrow keys moves all of them
+        app.sel = Some(all[0]);
+        app.multi.clear();
+        app.toggle_pick(all[2]);
+        let before: Vec<f32> = app.sel_targets().iter().filter_map(|(g, s)| app.scene.shape(*g, *s).map(|x| x.pos[0])).collect();
+        app.nudge([5.0, 0.0, 0.0]);
+        let after: Vec<f32> = app.sel_targets().iter().filter_map(|(g, s)| app.scene.shape(*g, *s).map(|x| x.pos[0])).collect();
+        assert!(before.iter().zip(&after).all(|(b, a)| (a - b - 5.0).abs() < 1e-4));
+        // group them: one new group holding exactly those two
+        let total = app.scene.shape_count();
+        app.group_selected();
+        let Some(Pick::Group(g)) = app.sel else { panic!("the new group is selected") };
+        assert_eq!(app.scene.groups[g].shapes.len(), 2);
+        assert_eq!(app.scene.shape_count(), total);
+        // delete the new group with another shape picked too
+        app.delete_selected();
+        assert_eq!(app.scene.shape_count(), total - 2);
     }
 
     #[test]
@@ -1732,5 +2722,165 @@ mod tests {
         app.duplicate();
         assert_eq!(app.scene.groups.len(), 2);
         assert_eq!(app.sel, Some(Pick::Group(1)));
+    }
+
+    #[test]
+    fn replacing_a_document_clears_live_shape_and_node_edit_indices() {
+        let mut app = App::new(true, None);
+        app.set_sketch_tool(true);
+        app.sk.keep_sketch = false;
+        app.sketch_done(crate::sketch_ui::Finished::Profile(crate::sketch::rect([0.0, 0.0], [20.0, 10.0])));
+        let (g, s) = app.sk.live.expect("preview");
+        let mut replacement = app.scene.clone();
+        replacement.groups[g].shapes[s].name = "New document's independent body".into();
+        replacement.groups[g].shapes[s].pos = [80.0, 90.0, 100.0];
+        app.apply_file_action(PendingFileAction::New(replacement.clone()));
+        assert!(app.sk.live.is_none() && app.sk.edit.is_none() && !app.sk.on);
+        assert!(app.drag.is_none() && app.multi.is_empty());
+        app.live_discard();
+        assert_eq!(app.scene, replacement, "Esc must not remove a body in the replacement document");
+    }
+
+    #[test]
+    fn save_commits_a_valid_sketch_draft_and_rejects_an_incomplete_one() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        let path = std::env::temp_dir().join(format!("meltcad-sketch-save-{}.meltcad", std::process::id()));
+        app.path = Some(path.clone());
+        app.set_sketch_tool(true);
+        app.sk.pts = vec![[0.0, 0.0], [10.0, 0.0]];
+        assert!(app.has_unsaved_work());
+        assert!(!app.try_save(&ctx, false));
+        app.sk.clear_drawing();
+        app.sk.frame = crate::sketch::Frame::floor();
+        app.sketch_done(crate::sketch_ui::Finished::Profile(crate::sketch::rect([0.0, 0.0], [20.0, 10.0])));
+        assert!(app.try_save(&ctx, false));
+        assert!(!app.sk.on);
+        let (saved, _) = crate::recovery::read_project(&path).expect("saved file");
+        assert_eq!(saved.groups.iter().flat_map(|g| &g.shapes).filter(|s| s.guide).count(), 1);
+        assert!(std::fs::remove_file(path).is_ok());
+    }
+
+    #[test]
+    fn save_refuses_an_incomplete_solid_and_confirms_a_valid_preview() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        app.scene.groups.clear();
+        let path = std::env::temp_dir().join(format!("meltcad-solid-save-{}.meltcad", std::process::id()));
+        app.path = Some(path.clone());
+        app.set_sketch_tool(true);
+        app.sk.frame = crate::sketch::Frame::floor();
+        app.sketch_done(crate::sketch_ui::Finished::Profile(crate::sketch::rect([0.0, 0.0], [20.0, 10.0])));
+        assert!(app.sketch_confirm(&ctx));
+        assert!(app.make_from_selected_line(&ctx, crate::sketch_ui::Make::Sweep));
+        assert!(!app.try_save(&ctx, false), "a missing path is never silently saved as a solid");
+        app.set_sketch_tool(false);
+        assert!(app.make_from_selected_line(&ctx, crate::sketch_ui::Make::Extrude));
+        app.sk.height = 32.0;
+        assert!(app.try_save(&ctx, false));
+        assert!(!app.sk.on && app.sk.live.is_none());
+        let (saved, _) = crate::recovery::read_project(&path).expect("saved file");
+        assert_eq!(saved.shape_count(), 2);
+        assert_eq!(saved.groups[0].shapes[1].kind, Kind::Extrude);
+        assert_eq!(saved.groups[0].shapes[1].size[0], 32.0);
+        assert!(std::fs::remove_file(path).is_ok());
+    }
+
+    #[test]
+    fn a_solid_draft_without_a_live_body_is_protected_by_file_actions() {
+        use crate::sketch_ui::{Finished, Make, Stage};
+
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        app.scene.groups.clear();
+        app.set_sketch_tool(true);
+        app.sketch_done(Finished::Profile(crate::sketch::rect([-5.0, -5.0], [5.0, 5.0])));
+        assert!(app.sketch_confirm(&ctx));
+        let source = app.sel;
+        app.set_sketch_tool(true);
+        app.sketch_done(Finished::Line(vec![[0.0, 0.0], [0.0, 30.0], [20.0, 50.0]]));
+        assert!(app.sketch_confirm(&ctx));
+        let Some(Pick::Shape(g, s)) = app.sel else { panic!("saved path") };
+        app.settle(&ctx);
+        app.committed = app.scene.clone();
+        app.dirty = false;
+        assert!(!app.has_unsaved_work(), "the saved source document starts clean");
+
+        app.sel = source;
+        assert!(app.make_from_selected_line(&ctx, Make::Sweep));
+        assert!(app.use_secondary_sketch(g, s));
+        assert_eq!(app.sk.stage, Stage::Ready);
+        assert!(app.sk.live.is_none(), "this valid operation still has no scene body");
+        assert_eq!(app.scene, app.committed);
+        let path = app.sk.path.clone();
+        for action in [PendingFileAction::New(Scene::default()), PendingFileAction::Open(PathBuf::from("another.meltcad")), PendingFileAction::Close]
+        {
+            app.request_file_action(action);
+            assert!(app.pending_file_action.is_some(), "all document changes must offer Save/Discard/Cancel");
+            assert_eq!(app.scene, app.committed);
+            assert_eq!(app.sk.path, path);
+            app.resolve_pending_file_action(&ctx, PendingFileDecision::Cancel);
+            assert!(app.pending_file_action.is_none());
+        }
+    }
+
+    #[test]
+    fn a_duplicate_stays_exactly_where_the_original_is() {
+        let mut app = App::new(true, None);
+        app.sel = Some(Pick::Shape(0, 0));
+        let at = app.scene.groups[0].shapes[0].pos;
+        app.duplicate();
+        assert_eq!(app.scene.groups[0].shapes[1].pos, at);
+        app.sel = Some(Pick::Group(0));
+        app.duplicate();
+        assert_eq!(app.scene.groups[1].shapes[0].pos, at);
+    }
+}
+
+/// The longest title that can be typed.
+const MAX_TITLE_CHARS: usize = 80;
+
+/// A typed title made safe to use as a file name: no path characters, trimmed, not too long.
+fn clean_title(typed: &str) -> String {
+    let kept: String = typed.chars().filter(|c| !c.is_control() && !"\\/:*?\"<>|".contains(*c)).collect();
+    kept.trim().trim_matches('.').trim().chars().take(MAX_TITLE_CHARS).collect()
+}
+
+#[cfg(test)]
+mod title_tests {
+    use super::clean_title;
+
+    #[test]
+    fn new_does_not_keep_the_last_documents_title() {
+        let mut app = super::App::new(true, None);
+        app.doc_title = "Foo".into();
+        app.title_edit = Some("Fo".into());
+        app.apply_file_action(super::PendingFileAction::New(crate::model::Scene::default()));
+        assert_eq!(app.doc_name(), "Untitled");
+        assert!(app.title_edit.is_none());
+    }
+
+    #[test]
+    fn arrow_keys_move_a_linked_copy_through_its_transform() {
+        use crate::model::{Group, Pick};
+        let mut app = super::App::new(true, None);
+        let uid = app.scene.ensure_group_uid(0).unwrap();
+        let mut link = Group::new("link");
+        link.instance_of = Some(uid);
+        app.scene.groups.push(link);
+        let at = app.scene.groups.len() - 1;
+        app.sel = Some(Pick::Group(at));
+        app.nudge([5.0, 0.0, 2.0]);
+        assert_eq!(app.scene.groups[at].xform.pos, [5.0, 0.0, 2.0]);
+        assert_eq!(app.scene.groups[0].shapes[0].pos, super::App::new(true, None).scene.groups[0].shapes[0].pos, "the source stays");
+    }
+
+    #[test]
+    fn titles_are_made_safe_for_file_names() {
+        assert_eq!(clean_title("  My vase  "), "My vase");
+        assert_eq!(clean_title("a/b\\c:d"), "abcd");
+        assert_eq!(clean_title("..."), "");
+        assert_eq!(clean_title("\n\t"), "");
+        assert_eq!(clean_title(&"x".repeat(500)).chars().count(), 80);
     }
 }

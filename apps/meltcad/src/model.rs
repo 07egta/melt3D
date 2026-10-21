@@ -6,6 +6,10 @@ use serde::{Deserialize, Serialize};
 use crate::mesh::SharedVolume;
 use crate::pattern::{Pattern, Xform};
 
+fn is_false(v: &bool) -> bool {
+    !*v
+}
+
 fn is_zero(v: &u32) -> bool {
     *v == 0
 }
@@ -83,27 +87,27 @@ impl Kind {
     pub const CAD: [Kind; 4] = [Kind::Revolve, Kind::Loft, Kind::Curve, Kind::Sweep];
     pub fn label(self) -> &'static str {
         match self {
-            Kind::Sphere => "球",
-            Kind::Box => "箱",
-            Kind::Cylinder => "円柱",
-            Kind::Torus => "ドーナツ",
-            Kind::Cone => "円すい",
-            Kind::Extrude => "押し出し",
-            Kind::Prism3 => "三角柱",
-            Kind::PrismN => "多角柱",
-            Kind::Octa => "正八面体",
-            Kind::Tetra => "正四面体",
-            Kind::Pyramid => "ピラミッド",
-            Kind::Capsule => "カプセル",
-            Kind::Hemi => "半球",
-            Kind::Tube => "パイプ",
-            Kind::Wedge => "くさび",
-            Kind::Star => "星柱",
-            Kind::Revolve => "回転体",
-            Kind::Loft => "ロフト",
-            Kind::Curve => "線",
-            Kind::Sweep => "スイープ",
-            Kind::Mesh => "メッシュ",
+            Kind::Sphere => "Sphere",
+            Kind::Box => "Box",
+            Kind::Cylinder => "Cylinder",
+            Kind::Torus => "Torus",
+            Kind::Cone => "Cone",
+            Kind::Extrude => "Extrude",
+            Kind::Prism3 => "Prism",
+            Kind::PrismN => "Polygon Prism",
+            Kind::Octa => "Octahedron",
+            Kind::Tetra => "Tetrahedron",
+            Kind::Pyramid => "Pyramid",
+            Kind::Capsule => "Capsule",
+            Kind::Hemi => "Hemisphere",
+            Kind::Tube => "Pipe",
+            Kind::Wedge => "Wedge",
+            Kind::Star => "Star Prism",
+            Kind::Revolve => "Revolve",
+            Kind::Loft => "Loft",
+            Kind::Curve => "Curve",
+            Kind::Sweep => "Sweep",
+            Kind::Mesh => "Mesh",
         }
     }
     pub fn id(self) -> f32 {
@@ -151,20 +155,20 @@ impl Kind {
     /// What the size numbers mean, for the inspector.
     pub fn size_labels(self) -> [&'static str; 3] {
         match self {
-            Kind::Sphere => ["半径", "", ""],
-            Kind::Box => ["幅", "奥行", "高さ"],
-            Kind::Cylinder => ["半径", "高さ", ""],
-            Kind::Torus => ["大半径", "小半径", ""],
-            Kind::Cone => ["半径", "高さ", ""],
-            Kind::Extrude => ["高さ", "", ""],
-            Kind::Prism3 | Kind::PrismN | Kind::Star => ["外半径", "高さ", ""],
-            Kind::Octa | Kind::Tetra | Kind::Hemi => ["半径", "", ""],
-            Kind::Pyramid => ["底の半径", "高さ", ""],
-            Kind::Capsule => ["半径", "長さ", ""],
-            Kind::Tube => ["外半径", "肉厚", "高さ"],
-            Kind::Wedge => ["幅", "奥行", "高さ"],
+            Kind::Sphere => ["Radius", "", ""],
+            Kind::Box => ["Width", "Depth", "Height"],
+            Kind::Cylinder => ["Radius", "Height", ""],
+            Kind::Torus => ["Major radius", "Minor radius", ""],
+            Kind::Cone => ["Radius", "Height", ""],
+            Kind::Extrude => ["Height", "", ""],
+            Kind::Prism3 | Kind::PrismN | Kind::Star => ["Outer radius", "Height", ""],
+            Kind::Octa | Kind::Tetra | Kind::Hemi => ["Radius", "", ""],
+            Kind::Pyramid => ["Base radius", "Height", ""],
+            Kind::Capsule => ["Radius", "Length", ""],
+            Kind::Tube => ["Outer radius", "Wall", "Height"],
+            Kind::Wedge => ["Width", "Depth", "Height"],
             Kind::Revolve => ["", "", ""],
-            Kind::Loft => ["高さ", "", ""],
+            Kind::Loft => ["Height", "", ""],
             Kind::Curve => ["", "", ""],
             Kind::Sweep => ["", "", ""],
             // (the size is the model's size in mm, shown by the mesh inspector, not edited)
@@ -199,10 +203,10 @@ impl Kind {
     /// Labels of the four extra numbers (`Shape::params`); empty = unused.
     pub fn param_labels(self) -> [&'static str; 4] {
         match self {
-            Kind::PrismN => ["辺の数", "", "", ""],
-            Kind::Pyramid => ["辺の数", "", "", ""],
-            Kind::Star => ["とがり数", "内側の比", "", ""],
-            Kind::Revolve => ["回す角度", "", "", ""],
+            Kind::PrismN => ["Sides", "", "", ""],
+            Kind::Pyramid => ["Sides", "", "", ""],
+            Kind::Star => ["Points", "Inner ratio", "", ""],
+            Kind::Revolve => ["Angle", "", "", ""],
             _ => ["", "", "", ""],
         }
     }
@@ -326,6 +330,9 @@ impl Material {
     /// shape's size; the flip is already in `t`). The range `grad_from..grad_to` is stretched over
     /// 0..1 and `grad_soft` decides how wide the blend is around its middle. The GPU copy is
     /// `shape_color` in `shader.wgsl`.
+    // max/min deliberately give the shader-compatible zero weight for NaN;
+    // f32::clamp would propagate it into the material and rendered pixels.
+    #[allow(clippy::manual_clamp)]
     pub fn gradient_weight(&self, t: f32) -> f32 {
         let span = (self.grad_to - self.grad_from).max(0.02);
         let u = ((t - self.grad_from) / span).max(0.0).min(1.0);
@@ -411,6 +418,14 @@ pub struct Shape {
     pub blend: f32,
     pub material: Material,
     pub visible: bool,
+    /// A sketch line: drawn on the screen as a line, never part of the solid (not rendered, not
+    /// exported, not measured). Extrude, Loft or Revolve turn it into a solid.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub guide: bool,
+    /// Original sketch axes in the shape's local space. Keeping the origin and axes
+    /// makes a saved sketch usable for Revolve without moving its axis to its centre.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guide_plane: Option<GuidePlane>,
     /// Corners of an `Extrude` outline, in the shape's own XY plane.
     pub outline: Vec<[f32; 2]>,
     /// Kind-specific extra numbers (`Kind::param_labels`).
@@ -447,6 +462,49 @@ pub struct Shape {
     /// Optional source reference, absent in all legacy .meltcad files.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mesh_source: Option<MeshSource>,
+    /// Melt only one face: the rest of the shape keeps its exact size.
+    #[serde(default, skip_serializing_if = "FaceMelt::is_off")]
+    pub face_melt: FaceMelt,
+}
+
+/// A saved sketch's two plane axes and inner contours. The outer contour remains
+/// in `Shape::path`, so moving or editing its nodes does not leave a stale copy.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct GuidePlane {
+    pub u: [f32; 3],
+    pub v: [f32; 3],
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub holes: Vec<Vec<[f32; 2]>>,
+}
+
+/// A melt that touches just one face of a shape (and a little way into it).
+/// `face`: 0 = none, 1..6 = +x -x +y -y +z -z in the shape's own axes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct FaceMelt {
+    #[serde(default)]
+    pub face: u8,
+    /// How far the melted face swells out (+) or sinks in (-), in mm.
+    #[serde(default)]
+    pub amount: f32,
+    /// How deep the melt reaches from the face, in mm.
+    #[serde(default)]
+    pub reach: f32,
+}
+
+impl FaceMelt {
+    pub const FACES: [(&'static str, &'static str); 6] =
+        [("+X", "+x face"), ("-X", "-x face"), ("+Y", "+y face"), ("-Y", "-y face"), ("+Z", "+z face"), ("-Z", "-z face")];
+    pub fn is_off(&self) -> bool {
+        self.face == 0 || self.face > 6 || !self.amount.is_finite() || self.amount == 0.0
+    }
+    /// The values the renderers use: (axis, +1/-1, amount, reach); nothing if the melt is off.
+    pub fn parts(&self) -> Option<(usize, f32, f32, f32)> {
+        if self.is_off() || !self.reach.is_finite() {
+            return None;
+        }
+        let i = usize::from(self.face - 1);
+        Some((i / 2, if i % 2 == 0 { 1.0 } else { -1.0 }, self.amount.clamp(-60.0, 60.0), self.reach.clamp(1.0, 200.0)))
+    }
 }
 
 /// The style of a shape's cut edges: what `Shape::round` makes of them.
@@ -473,6 +531,11 @@ pub const MAX_ROUND: f32 = 500.0;
 pub const MAX_PATH: usize = 48;
 
 impl Shape {
+    /// Shown and part of the solid (a hidden shape or a sketch line is not).
+    pub fn solid(&self) -> bool {
+        self.visible && !self.guide
+    }
+
     pub fn new(kind: Kind, pos: [f32; 3], material: Material) -> Shape {
         Shape {
             name: kind.label().to_string(),
@@ -486,6 +549,8 @@ impl Shape {
             blend: 6.0,
             material,
             visible: true,
+            guide: false,
+            guide_plane: None,
             outline: kind.default_outline(),
             params: kind.default_params(),
             path: kind.default_path(),
@@ -497,11 +562,13 @@ impl Shape {
             volume: None,
             source: String::new(),
             mesh_source: None,
+            face_melt: FaceMelt::default(),
         }
     }
 
     /// Grid widths in actual model millimetres after nonuniform scaling.
     /// A stored SDF has one cell size; on screen it may have three different pitches.
+    #[cfg(test)]
     pub fn mesh_cell_mm(&self) -> Option<[f32; 3]> {
         let v = self.volume.as_ref()?;
         (self.kind == Kind::Mesh).then(|| [0, 1, 2].map(|a| v.cell * self.scale[a].abs()))
@@ -620,6 +687,13 @@ impl Kind {
     }
 }
 
+fn is_zero_u8(v: &u8) -> bool {
+    *v == 0
+}
+
+/// The deepest a group can be nested.
+pub const MAX_DEPTH: u8 = 3;
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Group {
     pub name: String,
@@ -628,6 +702,9 @@ pub struct Group {
     pub blend: f32,
     pub visible: bool,
     pub shapes: Vec<Shape>,
+    /// How deep the group sits in the outline: it is part of the nearest group above it with a smaller depth.
+    #[serde(default, skip_serializing_if = "is_zero_u8")]
+    pub depth: u8,
     /// This group represents one extrusion with independent subtractive sketch holes.
     #[serde(default)]
     pub sketch_holes: bool,
@@ -643,11 +720,51 @@ pub struct Group {
     /// Where a linked copy stands (move, turn, scale about the source's middle).
     #[serde(default, skip_serializing_if = "Xform::is_identity")]
     pub xform: Xform,
+    /// Set when the group holds a whole file that was added to this one ("Add file"): a piece of the big file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub piece: Option<Piece>,
 }
 
+/// Which file a piece of the big file came from, so it can be read again or saved back.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Piece {
+    /// The file's name (no folder).
+    pub file: String,
+    /// Where it was read from, when that is known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+}
+
+/// The longest file name and path a piece keeps.
+pub const MAX_PIECE_FILE: usize = 80;
+pub const MAX_PIECE_PATH: usize = 1024;
+
 impl Group {
+    /// The order the shapes are melted together in: everything that is not a minus first (in list
+    /// order), then the minus shapes. So a minus cuts all the plus shapes of its group, wherever it
+    /// sits in the list, and moving it up or down never changes the result.
+    pub fn fold_order(&self) -> Vec<usize> {
+        let keep = |s: &Shape| s.op != Op::Subtract;
+        let firsts = self.shapes.iter().enumerate().filter(|(_, s)| keep(s)).map(|(i, _)| i);
+        let cuts = self.shapes.iter().enumerate().filter(|(_, s)| !keep(s)).map(|(i, _)| i);
+        firsts.chain(cuts).collect()
+    }
+
     pub fn new(name: impl Into<String>) -> Group {
-        Group { name: name.into(), op: Op::Add, blend: 0.0, visible: true, shapes: Vec::new(), sketch_holes: false, uid: 0, pattern: None, instance_of: None, xform: Xform::default() }
+        Group {
+            name: name.into(),
+            op: Op::Add,
+            blend: 0.0,
+            visible: true,
+            shapes: Vec::new(),
+            depth: 0,
+            sketch_holes: false,
+            uid: 0,
+            pattern: None,
+            instance_of: None,
+            xform: Xform::default(),
+            piece: None,
+        }
     }
 }
 
@@ -666,9 +783,9 @@ impl BlendMode {
     pub const ALL: [BlendMode; 3] = [BlendMode::Smooth, BlendMode::Round, BlendMode::Gooey];
     pub fn label(self) -> &'static str {
         match self {
-            BlendMode::Smooth => "なめらか",
-            BlendMode::Round => "まるく",
-            BlendMode::Gooey => "どろっと",
+            BlendMode::Smooth => "Smooth",
+            BlendMode::Round => "Round",
+            BlendMode::Gooey => "Gooey",
         }
     }
     pub fn id(self) -> f32 {
@@ -861,15 +978,18 @@ pub struct Scene {
     /// Materials the person saved to use again.
     #[serde(default)]
     pub saved: Vec<Material>,
+    /// Poses on a timeline (empty until the person makes the first one).
+    #[serde(default, skip_serializing_if = "crate::anim::Anim::is_empty")]
+    pub anim: crate::anim::Anim,
 }
 
 pub const MAX_SAVED: usize = 24;
 
 impl Default for Scene {
     fn default() -> Self {
-        let mut g = Group::new("グループ 1");
+        let mut g = Group::new("Group 1");
         g.shapes.push(Shape::new(Kind::Sphere, [0.0, 0.0, 20.0], Material::default()));
-        Scene { groups: vec![g], melt: Melt::default(), env: Environment::default(), saved: Vec::new() }
+        Scene { groups: vec![g], melt: Melt::default(), env: Environment::default(), saved: Vec::new(), anim: Default::default() }
     }
 }
 
@@ -890,6 +1010,7 @@ impl Scene {
     pub fn shape_count(&self) -> usize {
         self.groups.iter().map(|g| g.shapes.len()).sum()
     }
+    #[cfg(test)]
     pub fn to_json(&self) -> String {
         self.try_to_json().unwrap_or_default()
     }
@@ -914,6 +1035,152 @@ impl Scene {
         let notes = s.sanitize_notes();
         Ok((s, notes))
     }
+    // ----- nested groups: `Group::depth` makes the flat list an outline -----
+
+    /// Make the depths a valid outline: the first group is at the top, and no group sits more
+    /// than one level below the one before it.
+    pub fn normalize_depths(&mut self) {
+        let mut prev: i32 = -1;
+        for g in &mut self.groups {
+            let d = i32::from(g.depth).min(prev + 1).min(i32::from(MAX_DEPTH));
+            g.depth = d.max(0) as u8;
+            prev = i32::from(g.depth);
+        }
+    }
+
+    /// The groups from `g` on that belong to it (itself and everything nested in it): `g..end`.
+    pub fn subtree_end(&self, g: usize) -> usize {
+        let Some(top) = self.groups.get(g) else { return g };
+        let mut e = g + 1;
+        while self.groups.get(e).is_some_and(|n| n.depth > top.depth) {
+            e += 1;
+        }
+        e
+    }
+
+    /// The group `g` sits in, if any.
+    pub fn parent_of(&self, g: usize) -> Option<usize> {
+        let d = self.groups.get(g)?.depth;
+        if d == 0 {
+            return None;
+        }
+        (0..g).rev().find(|&i| self.groups[i].depth < d)
+    }
+
+    /// Put `g` (with what is nested in it) into the group just above it.
+    pub fn indent_group(&mut self, g: usize) -> bool {
+        let e = self.subtree_end(g);
+        let Some(top) = self.groups.get(g) else { return false };
+        let above = match g.checked_sub(1).and_then(|i| self.groups.get(i)) {
+            Some(a) => a.depth,
+            None => return false,
+        };
+        let deepest = self.groups[g..e].iter().map(|x| x.depth).max().unwrap_or(0);
+        if top.depth > above || deepest >= MAX_DEPTH {
+            return false;
+        }
+        for x in &mut self.groups[g..e] {
+            x.depth += 1;
+        }
+        true
+    }
+
+    /// Take `g` (with what is nested in it) out of its group: it lands right after that group.
+    /// Returns the new index.
+    pub fn outdent_group(&mut self, g: usize) -> Option<usize> {
+        let p = self.parent_of(g)?;
+        let (e, pe) = (self.subtree_end(g), self.subtree_end(p));
+        let mut block: Vec<Group> = self.groups.drain(g..e).collect();
+        for x in &mut block {
+            x.depth -= 1;
+        }
+        let at = pe - (e - g);
+        for (i, x) in block.into_iter().enumerate() {
+            self.groups.insert(at + i, x);
+        }
+        Some(at)
+    }
+
+    /// The first group before `g` at the same level (inside the same group), if any.
+    pub fn prev_sibling(&self, g: usize) -> Option<usize> {
+        let d = self.groups.get(g)?.depth;
+        for i in (0..g).rev() {
+            let x = self.groups[i].depth;
+            if x == d {
+                return Some(i);
+            }
+            if x < d {
+                return None;
+            }
+        }
+        None
+    }
+
+    /// The group right after `g`'s subtree, if it is at the same level.
+    pub fn next_sibling(&self, g: usize) -> Option<usize> {
+        let e = self.subtree_end(g);
+        (self.groups.get(e)?.depth == self.groups.get(g)?.depth).then_some(e)
+    }
+
+    /// Move `g` (with what is in it) up or down one place among its siblings. Returns where it is now.
+    pub fn shift_group(&mut self, g: usize, down: bool) -> Option<usize> {
+        let d = self.groups.get(g)?.depth;
+        let size = self.subtree_end(g) - g;
+        if down {
+            let ns = self.next_sibling(g)?;
+            let ne = self.subtree_end(ns);
+            Some(self.move_subtree(g, ne - size, d))
+        } else {
+            let ps = self.prev_sibling(g)?;
+            Some(self.move_subtree(g, ps, d))
+        }
+    }
+
+    /// Wrap `g` (with what is in it) in a new, empty group that takes its place. Returns the new group's index.
+    pub fn wrap_in_group(&mut self, g: usize, name: String) -> Option<usize> {
+        if g >= self.groups.len() || self.groups.len() >= MAX_GROUPS || self.groups[g..self.subtree_end(g)].iter().any(|x| x.depth >= MAX_DEPTH) {
+            return None;
+        }
+        let e = self.subtree_end(g);
+        let mut parent = Group::new(name);
+        parent.depth = self.groups[g].depth;
+        for x in &mut self.groups[g..e] {
+            x.depth += 1;
+        }
+        self.groups.insert(g, parent);
+        Some(g)
+    }
+
+    /// Remove `g`; what was nested in it moves up one level.
+    pub fn remove_group(&mut self, g: usize) {
+        if g >= self.groups.len() {
+            return;
+        }
+        let e = self.subtree_end(g);
+        for x in &mut self.groups[g + 1..e] {
+            x.depth = x.depth.saturating_sub(1);
+        }
+        self.groups.remove(g);
+        self.normalize_depths();
+    }
+
+    /// Move `g` and everything nested in it so that it starts at index `to` of the list as it is
+    /// without them; it takes the depth `depth`. Returns where it starts now.
+    pub fn move_subtree(&mut self, g: usize, to: usize, depth: u8) -> usize {
+        let e = self.subtree_end(g);
+        let base = i32::from(self.groups[g].depth);
+        let mut block: Vec<Group> = self.groups.drain(g..e).collect();
+        for x in &mut block {
+            x.depth = (i32::from(x.depth) - base + i32::from(depth)).clamp(0, i32::from(MAX_DEPTH)) as u8;
+        }
+        let at = to.min(self.groups.len());
+        for (i, x) in block.into_iter().enumerate() {
+            self.groups.insert(at + i, x);
+        }
+        self.normalize_depths();
+        at
+    }
+
     /// Clamp every number to a range the renderer and the mesher cope with.
     pub fn sanitize(&mut self) {
         let _ = self.sanitize_notes();
@@ -927,10 +1194,12 @@ impl Scene {
         let mut vol_shapes = 0usize;
         let mut vol_nodes = 0usize;
         let mut vol_seen: Vec<usize> = Vec::new();
+        self.normalize_depths();
         fix(&mut self.melt.amount, 0.0, 10.0, 1.0);
         fix(&mut self.melt.drip, 0.0, 40.0, 0.0);
         fix(&mut self.melt.ripple, 0.3, 4.0, 1.0);
         self.env.sanitize();
+        self.anim.sanitize();
         self.saved.truncate(MAX_SAVED);
         for m in &mut self.saved {
             m.sanitize();
@@ -940,6 +1209,12 @@ impl Scene {
         let mut left = MAX_SHAPES;
         for g in &mut self.groups {
             fix(&mut g.blend, 0.0, 200.0, 0.0);
+            if let Some(p) = &mut g.piece {
+                p.file = p.file.chars().filter(|c| !c.is_control()).take(MAX_PIECE_FILE).collect();
+                if let Some(path) = &mut p.path {
+                    path.truncate(path.char_indices().nth(MAX_PIECE_PATH).map_or(path.len(), |(i, _)| i));
+                }
+            }
             if let Some(p) = &mut g.pattern {
                 p.sanitize();
             }
@@ -986,7 +1261,9 @@ impl Scene {
                 if s.kind.uses_outline2() && s.outline2.len() < 3 {
                     s.outline2 = s.kind.default_outline2();
                 }
-                s.path.truncate(MAX_PATH);
+                // A finished sketch already contains its sampled outline. Do not
+                // silently drop its last 16 vertices when reopening the document.
+                s.path.truncate(if s.guide { MAX_OUTLINE } else { MAX_PATH });
                 for p in &mut s.path {
                     fix(&mut p[0], -5000.0, 5000.0, 0.0);
                     fix(&mut p[1], -5000.0, 5000.0, 0.0);
@@ -995,6 +1272,24 @@ impl Scene {
                 }
                 if s.kind.uses_path() && s.path.len() < 2 {
                     s.path = s.kind.default_path();
+                }
+                if !s.guide || s.kind != Kind::Curve {
+                    s.guide_plane = None;
+                } else if let Some(plane) = &mut s.guide_plane {
+                    if let Some(frame) = crate::sketch::Frame::from_axes([0.0; 3], plane.u, plane.v) {
+                        plane.u = frame.u;
+                        plane.v = frame.v;
+                        plane.holes.truncate(crate::sketch::MAX_HOLES);
+                        for hole in &mut plane.holes {
+                            hole.truncate(MAX_OUTLINE);
+                        }
+                        plane.holes.retain(|hole| {
+                            hole.iter().flatten().all(|v| v.is_finite() && v.abs() <= crate::sketch::COORD_MAX)
+                                && crate::sketch::validate_profile(hole).is_ok()
+                        });
+                    } else {
+                        s.guide_plane = None;
+                    }
                 }
                 if s.kind != Kind::Mesh {
                     s.volume = None;
@@ -1032,7 +1327,10 @@ impl Scene {
             notes.push(format!("こわれていて読めないメッシュが{lost}個あったので、取りのぞきました"));
         }
         if over > 0 {
-            notes.push(format!("メッシュが多すぎるので、{over}個を取りのぞきました（{}個・データ量に上限があります）", crate::mesh::MAX_VOLUME_SHAPES));
+            notes.push(format!(
+                "メッシュが多すぎるので、{over}個を取りのぞきました（{}個・データ量に上限があります）",
+                crate::mesh::MAX_VOLUME_SHAPES
+            ));
         }
         notes
     }
@@ -1049,13 +1347,8 @@ mod tests {
     fn a_sketch_outline_edit_updates_the_solid_atomically_and_survives_reload() {
         use crate::sdf::Prepared;
 
-        let built = crate::sketch::extrude(
-            &crate::sketch::Frame::floor(),
-            &crate::sketch::rect([-10.0, -10.0], [10.0, 10.0]),
-            10.0,
-            false,
-        )
-        .expect("a rectangle extrudes");
+        let built = crate::sketch::extrude(&crate::sketch::Frame::floor(), &crate::sketch::rect([-10.0, -10.0], [10.0, 10.0]), 10.0, false)
+            .expect("a rectangle extrudes");
         let mut shape = Shape::new(Kind::Extrude, [0.0; 3], Material::default());
         crate::sketch::apply(&built, &mut shape);
         let original = shape.clone();
@@ -1150,7 +1443,15 @@ mod tests {
 
     #[test]
     fn gradient_fields_are_sanitised() {
-        let mut m = Material { gradient: f32::NAN, grad_soft: 9.0, grad_from: -3.0, grad_to: f32::INFINITY, grad_axis: 77, color2: [f32::NAN, 5.0, -1.0], ..Material::default() };
+        let mut m = Material {
+            gradient: f32::NAN,
+            grad_soft: 9.0,
+            grad_from: -3.0,
+            grad_to: f32::INFINITY,
+            grad_axis: 77,
+            color2: [f32::NAN, 5.0, -1.0],
+            ..Material::default()
+        };
         m.sanitize();
         assert_eq!(m.gradient, 0.0);
         assert_eq!(m.grad_soft, 1.0);
@@ -1204,7 +1505,17 @@ mod tests {
         assert_eq!(m.color, [1.0, 0.0, 0.0]);
         assert!(!m.has_gradient());
         assert_eq!(m.grad_axis, 2);
-        let g = Material { gradient: 0.7, grad_axis: 0, grad_flip: true, grad_local: true, color2: [0.1, 0.2, 0.3], grad_soft: 0.3, grad_from: 0.1, grad_to: 0.9, ..Material::default() };
+        let g = Material {
+            gradient: 0.7,
+            grad_axis: 0,
+            grad_flip: true,
+            grad_local: true,
+            color2: [0.1, 0.2, 0.3],
+            grad_soft: 0.3,
+            grad_from: 0.1,
+            grad_to: 0.9,
+            ..Material::default()
+        };
         let back: Material = serde_json::from_str(&serde_json::to_string(&g).unwrap_or_default()).unwrap_or_default();
         assert_eq!(back, g);
         // a whole old scene still opens
@@ -1214,7 +1525,9 @@ mod tests {
 
     #[test]
     fn a_file_with_too_much_is_cut_to_the_new_limits() {
-        assert!(MAX_SHAPES >= 512 && MAX_GROUPS >= 96);
+        const {
+            assert!(MAX_SHAPES >= 512 && MAX_GROUPS >= 96);
+        }
         let mut sc = Scene::default();
         let one = sc.groups[0].shapes[0].clone();
         sc.groups.clear();
@@ -1272,5 +1585,4 @@ mod tests {
         sh.volume = Some(crate::mesh::SharedVolume::new(crate::mesh::tests::ball_volume(8)));
         assert_eq!(sh.mesh_cell_mm(), Some([2.0, 3.0, 4.0]));
     }
-
 }

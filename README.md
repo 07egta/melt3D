@@ -1,3 +1,13 @@
+# Melt 3D (this fork)
+
+**Melt 3D** is an easy, light 3D modeller where shapes melt into each other (`apps/meltcad`).
+Download for **Windows**, **Mac** (Apple Silicon and Intel) and **Linux** from the
+[latest Melt 3D release](https://github.com/07egta/melt3D/releases/latest). Unzip and open it;
+the first start on Windows ("More info", then "Run anyway") and on Mac (right-click, Open) asks
+once, because the app is not code-signed yet. How it works: [apps/meltcad/README.md](apps/meltcad/README.md).
+
+---
+
 # SolidCraft
 
 **An open-source parametric 3D CAD application built in pure Rust.**
