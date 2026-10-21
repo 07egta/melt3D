@@ -765,6 +765,7 @@ mod tests {
         let reply = run(&mut sc, json!({"cmd": "melt.set", "amount": 999, "drip": -10, "ripple": 0})).expect("melt");
         assert_eq!(reply["amount"], json!(10.0));
         assert_eq!(reply["drip"], json!(0.0));
+        assert_eq!(reply["ripple"], json!(0.3_f32));
         assert_eq!(reply["amount"], json!(sc.melt.amount));
         assert_eq!(reply["drip"], json!(sc.melt.drip));
         assert_eq!(reply["ripple"], json!(sc.melt.ripple));
@@ -794,6 +795,10 @@ mod tests {
     #[test]
     fn shape_add_and_extrude_reject_linked_copy_groups_without_losing_geometry() {
         let mut sc = Scene::default();
+        let mut ordinary = Scene::default();
+        assert!(run(&mut ordinary, json!({"cmd":"shape.add", "kind":"Box"})).is_ok());
+        assert_eq!(ordinary.groups[0].shapes.len(), 2);
+
         let original_uid = sc.groups[0].uid;
         let mut linked = Group::new("Linked copy");
         linked.instance_of = Some(original_uid);
@@ -801,6 +806,7 @@ mod tests {
         let before = sc.clone();
         for command in [
             json!({"cmd":"shape.add", "kind":"Box", "group":1}),
+            json!({"cmd":"shape.add", "kind":"Box"}),
             json!({"cmd":"extrude", "group":1, "points":[[0,0],[10,0],[10,10],[0,10]], "height":10}),
         ] {
             assert!(run(&mut sc, command.clone()).is_err(), "{command}");
