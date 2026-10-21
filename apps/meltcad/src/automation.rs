@@ -145,7 +145,13 @@ fn run(scene: &mut Scene, cmd: &Value) -> Result<Value, String> {
                 scene.anim.fps = v.as_u64().ok_or("fps is a number")?.min(60) as u32;
             }
             if let Some(v) = obj.get("length") {
-                scene.anim.length = v.as_u64().ok_or("length is a number")?.min(u64::from(crate::anim::MAX_FRAMES)) as u32;
+                let new_len = v.as_u64().ok_or("length is a number")?.clamp(1, u64::from(crate::anim::MAX_FRAMES)) as u32;
+                if let Some(last) = scene.anim.key_frames().last().copied()
+                    && last >= new_len
+                {
+                    return Err(format!("Poses exist up to frame {last}; delete them (anim.delete) before shortening the length to {new_len}").into());
+                }
+                scene.anim.length = new_len;
             }
             if let Some(v) = obj.get("clay") {
                 scene.anim.clay = v.as_bool().ok_or("clay is true or false")?;
@@ -1251,6 +1257,18 @@ mod tests {
         assert_eq!(reply["frame"], 9);
         assert_eq!(sc.groups[0].shapes[0].pos, [90.0, 0.0, 0.0]);
         assert_eq!(sc.anim, keys, "showing a pose never records another key");
+    }
+
+    #[test]
+    fn shortening_the_length_below_a_pose_is_refused() {
+        let mut sc = Scene::default();
+        run(&mut sc, json!({"cmd": "anim.set", "length": 30})).unwrap();
+        run(&mut sc, json!({"cmd": "anim.key", "frame": 20})).unwrap();
+        let before = sc.clone();
+        assert!(execute(&mut sc, &json!({"cmd": "anim.set", "length": 10})).is_err());
+        assert_eq!(sc, before, "the pose at frame 20 is untouched");
+        run(&mut sc, json!({"cmd": "anim.set", "length": 21})).unwrap();
+        assert_eq!(sc.anim.length, 21);
     }
 
     #[test]

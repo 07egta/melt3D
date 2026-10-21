@@ -223,10 +223,12 @@ impl App {
                     ui.label(RichText::new(format!("Frame {} / {}", self.an.frame + 1, length)).size(12.0).color(style::DIM));
                     ui.separator();
                     let a = &mut self.scene.anim;
+                    // Shortening below the last pose would squash poses together; delete them first.
+                    let shortest = a.key_frames().last().map_or(2, |l| (l + 1).max(2));
                     ui.label(RichText::new("Speed").size(12.0).color(style::DIM));
                     ui.add_enabled(!editing, egui::DragValue::new(&mut a.fps).range(1..=60).suffix(" fps"));
                     ui.label(RichText::new("Length").size(12.0).color(style::DIM));
-                    ui.add_enabled(!editing, egui::DragValue::new(&mut a.length).range(2..=crate::anim::MAX_FRAMES).suffix(" frames"));
+                    ui.add_enabled(!editing, egui::DragValue::new(&mut a.length).range(shortest..=crate::anim::MAX_FRAMES).suffix(" frames"));
                     ui.add_enabled(!editing, egui::Checkbox::new(&mut a.clay, "Clay"))
                         .on_hover_text("Hold each pose for a few frames, like stop motion");
                     ui.separator();
