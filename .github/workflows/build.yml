@@ -7,7 +7,7 @@ on:
   push:
     branches: [main, easy-layout-and-melt, integration/yuracad-20261017]
   pull_request:
-    branches: [easy-layout-and-melt, integration/yuracad-20261017]
+    branches: [main, easy-layout-and-melt, integration/yuracad-20261017]
   workflow_dispatch:
 
 permissions:
