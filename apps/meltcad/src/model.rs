@@ -540,6 +540,22 @@ impl Kind {
     }
 }
 
+/// Editor controls for a non-destructive Smooth Fusion preset.
+/// Actual geometry uses each editable Shape's existing SDF blend and position.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SmoothFusion {
+    /// Smooth-union transition width in millimetres (Shape::blend).
+    pub radius_mm: f32,
+    /// 0 = deep overlap, 1 = nearly touching, implemented by changing spacing.
+    pub contact: f32,
+}
+
+impl Default for SmoothFusion {
+    fn default() -> Self {
+        Self { radius_mm: 14.0, contact: 0.38 }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Group {
     pub name: String,
@@ -548,6 +564,9 @@ pub struct Group {
     pub blend: f32,
     pub visible: bool,
     pub shapes: Vec<Shape>,
+    /// Optional Smooth Fusion editor settings (old files omit this field).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fusion: Option<SmoothFusion>,
     /// A number linked copies and patterns find this group by (0 = none; see `Scene::ensure_group_uid`).
     #[serde(default, skip_serializing_if = "is_zero")]
     pub uid: u32,
@@ -564,7 +583,7 @@ pub struct Group {
 
 impl Group {
     pub fn new(name: impl Into<String>) -> Group {
-        Group { name: name.into(), op: Op::Add, blend: 0.0, visible: true, shapes: Vec::new(), uid: 0, pattern: None, instance_of: None, xform: Xform::default() }
+        Group { name: name.into(), op: Op::Add, blend: 0.0, visible: true, shapes: Vec::new(), fusion: None, uid: 0, pattern: None, instance_of: None, xform: Xform::default() }
     }
 }
 
@@ -852,6 +871,10 @@ impl Scene {
         let mut left = MAX_SHAPES;
         for g in &mut self.groups {
             fix(&mut g.blend, 0.0, 200.0, 0.0);
+            if let Some(fusion) = &mut g.fusion {
+                fix(&mut fusion.radius_mm, 0.0, 80.0, 14.0);
+                fix(&mut fusion.contact, 0.0, 1.0, 0.38);
+            }
             if let Some(p) = &mut g.pattern {
                 p.sanitize();
             }
@@ -859,6 +882,7 @@ impl Scene {
             if g.instance_of.is_some() {
                 // a linked copy shows its source's shapes, not its own
                 g.shapes.clear();
+                g.fusion = None;
             }
             g.shapes.truncate(left);
             left -= g.shapes.len();
