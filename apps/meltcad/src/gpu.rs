@@ -1556,17 +1556,20 @@ mod tests {
     #[test]
     fn puffy_extrude_inflation_reaches_the_existing_shader_params_slot() {
         let mut scene = Scene::default();
-        let shape = &mut scene.groups[0].shapes[0];
-        shape.kind = crate::model::Kind::Extrude;
-        shape.outline = vec![[-10.0, -10.0], [10.0, -10.0], [10.0, 10.0], [-10.0, 10.0]];
-        shape.size[0] = 8.0;
-        shape.params[0] = 1.25;
+        let shape = {
+            let shape = &mut scene.groups[0].shapes[0];
+            shape.kind = crate::model::Kind::Extrude;
+            shape.outline = vec![[-10.0, -10.0], [10.0, -10.0], [10.0, 10.0], [-10.0, 10.0]];
+            shape.size[0] = 8.0;
+            shape.params[0] = 1.25;
+            shape.clone()
+        };
         let frame = pack(&scene, &Camera::default(), [800.0, 600.0], None, None, true);
         let data = Frame::new(&frame);
         // One bounding sphere record precedes the 15-field shader Shape struct.
         assert_eq!(data.shape(0, 11)[0], 1.25);
         let sample = [10.75, 0.0, 20.0];
-        assert!(crate::sdf::Prepared::new(shape).distance(sample) < 0.0, "inflated outline reaches the sample");
+        assert!(crate::sdf::Prepared::new(&shape).distance(sample) < 0.0, "inflated outline reaches the sample");
         let mut plain = shape.clone();
         plain.params[0] = 0.0;
         assert!(crate::sdf::Prepared::new(&plain).distance(sample) > 0.0, "legacy uninflated outline does not");
