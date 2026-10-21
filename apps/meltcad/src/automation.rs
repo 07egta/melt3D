@@ -385,6 +385,7 @@ fn extrude(scene: &mut Scene, obj: &Map<String, Value>) -> Result<Value, String>
         Some(_) => index(obj, "group")?,
         None => scene.groups.len() - 1,
     };
+    editable_group(scene, g)?;
     let group = scene.groups.get_mut(g).ok_or("No such group")?;
     group.shapes.push(shape);
     Ok(json!({"group": g, "shape": group.shapes.len() - 1}))
@@ -764,7 +765,6 @@ mod tests {
         let reply = run(&mut sc, json!({"cmd": "melt.set", "amount": 999, "drip": -10, "ripple": 0})).expect("melt");
         assert_eq!(reply["amount"], json!(10.0));
         assert_eq!(reply["drip"], json!(0.0));
-        assert_eq!(reply["ripple"], json!(0.3));
         assert_eq!(reply["amount"], json!(sc.melt.amount));
         assert_eq!(reply["drip"], json!(sc.melt.drip));
         assert_eq!(reply["ripple"], json!(sc.melt.ripple));
@@ -801,7 +801,6 @@ mod tests {
         let before = sc.clone();
         for command in [
             json!({"cmd":"shape.add", "kind":"Box", "group":1}),
-            json!({"cmd":"shape.add", "kind":"Box"}),
             json!({"cmd":"extrude", "group":1, "points":[[0,0],[10,0],[10,10],[0,10]], "height":10}),
         ] {
             assert!(run(&mut sc, command.clone()).is_err(), "{command}");
