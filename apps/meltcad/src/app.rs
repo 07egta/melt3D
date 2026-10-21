@@ -89,6 +89,8 @@ pub struct App {
     /// A left-drag that began on empty space is turning the view.
     pub orbiting: bool,
     pub show_keys: bool,
+    /// Persistent command-palette favorites and recent commands, not part of scene history.
+    pub(crate) palette_prefs: palette::Prefs,
     /// Which tab of the right panel is showing.
     pub tab: Tab,
     /// The material list's chosen category (None = the person's saved ones).
@@ -168,6 +170,7 @@ impl App {
             fly: None,
             orbiting: false,
             show_keys: false,
+            palette_prefs: palette::Prefs::load(),
             tab: Tab::Shape,
             mat_cat: Some(crate::materials::Category::Basic),
             mat_group: false,
@@ -632,10 +635,22 @@ impl App {
     // ----- shortcuts -----
 
     fn keys(&mut self, ctx: &egui::Context) {
-        if self.pending_file_action.is_some() || ctx.egui_wants_keyboard_input() {
+        if self.pending_file_action.is_some() {
             return;
         }
         use egui::{Key, Modifiers};
+        // Ctrl+K (Cmd+K on macOS) is reserved for search; while the palette
+        // owns input, its arrows must not nudge shapes or rotate the viewport.
+        if palette::is_open(ctx) {
+            return;
+        }
+        if ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::K)) {
+            palette::open(ctx);
+            return;
+        }
+        if ctx.egui_wants_keyboard_input() {
+            return;
+        }
         self.sketch_keys(ctx);
         self.curve_keys(ctx);
         self.clipboard_events(ctx);
@@ -838,7 +853,7 @@ impl App {
                         self.redo();
                     }
                     style::vsep(ui);
-                    if style::pill(ui, "さがす  F", false).on_hover_text("形・ライブラリ・コマンドをさがす (F)").clicked() {
+                    if style::pill(ui, "さがす  Ctrl+K", false).on_hover_text("コマンド検索 (Ctrl+K / F) ・日本語/English・お気に入り").clicked() {
                         palette::open(&ctx);
                     }
                     let left_end = ui.cursor().left();
@@ -1045,7 +1060,8 @@ impl App {
                         ("左ドラッグ (何もない所)", "回す"),
                         ("クリック", "選ぶ　Shiftでグループ"),
                         ("ダブルクリック", "その形を見る"),
-                        ("F", "さがす（形・ライブラリ・コマンド）"),
+                        ("Ctrl+K / F", "さがす（日本語・英語）"),
+                        ("パレット内 ↑↓ / Enter", "選択 / 実行 (Alt+Fでお気に入り)"),
                         ("Shift+F / Home", "選んだもの / 全体を見る"),
                         ("1 3 7 (Ctrlで反対)", "正面 / 右 / 上から"),
                         ("5", "遠近 ⇄ 平行"),
