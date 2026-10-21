@@ -257,6 +257,24 @@ pub fn make_group(mut config: BagConfig) -> Group {
     g
 }
 
+fn part_role(shape: &Shape) -> Option<usize> {
+    const TAGS: [&str; 5] = ["designer-bag:part:0", "designer-bag:part:1", "designer-bag:part:2", "designer-bag:part:3", "designer-bag:part:4"];
+    if let Some(role) = TAGS.iter().position(|tag| shape.source == *tag) {
+        return Some(role);
+    }
+    if !shape.source.is_empty() {
+        return None;
+    }
+    match (shape.name.as_str(), shape.op) {
+        ("本体（中空）", Op::Add) => Some(0),
+        ("底面", Op::Add) => Some(1),
+        ("開口部（くり抜き）", Op::Subtract) => Some(2),
+        ("持ち手・前", Op::Add) => Some(3),
+        ("持ち手・後", Op::Add) => Some(4),
+        _ => None,
+    }
+}
+
 /// Regenerate only the five parametric parts. Keep the group identity, position,
 /// visibility, user colour edits and UIDs so other scene features remain stable.
 pub fn rebuild(g: &mut Group, mut config: BagConfig) {
@@ -266,7 +284,7 @@ pub fn rebuild(g: &mut Group, mut config: BagConfig) {
     // Do not rely on the editable display name or current vector order to
     // locate the body after a user rename or reorder.
     let old_height = g.bag.as_ref().map_or(config.height, |old| old.height);
-    let old_body = g.shapes.iter().find(|s| s.source == "designer-bag:part:0").or_else(|| g.shapes.first());
+    let old_body = g.shapes.iter().find(|shape| part_role(shape) == Some(0));
     if let Some(body) = old_body {
         config.origin_xy = [body.pos[0], body.pos[1]];
     }
@@ -279,40 +297,47 @@ pub fn rebuild(g: &mut Group, mut config: BagConfig) {
     for s in &mut fresh.shapes {
         s.pos[2] += z_offset;
     }
-    // Match generated parts by stable source tags so reordering or renaming a
-    // part does not detach its identity. Older saved bags predate these tags,
-    // so use their original five-part prefix as a compatibility fallback.
-    let mut matched = vec![false; g.shapes.len()];
-    for (index, s) in fresh.shapes.iter_mut().enumerate() {
-        let tag = format!("designer-bag:part:{index}");
-        let old_index = g
-            .shapes
-            .iter()
-            .position(|old| old.source == tag)
-            .or_else(|| g.shapes.get(index).filter(|old| old.source.is_empty() && old.op == s.op).map(|_| index));
-        if let Some(old_index) = old_index {
-            if let Some(slot) = matched.get_mut(old_index) {
-                *slot = true;
-            }
-            let Some(old) = g.shapes.get(old_index) else { continue };
-            s.uid = old.uid;
-            let generated_name = match index {
-                0 => "本体（中空）",
-                1 => "底面",
-                2 => "開口部（くり抜き）",
-                3 => "持ち手・前",
-                _ => "持ち手・後",
-            };
-            if old.name != generated_name {
-                s.name.clone_from(&old.name);
-            }
-            if s.op != Op::Subtract {
-                s.material = old.material;
+    // Replace managed parts in their original slots. This preserves Boolean
+    // order around user-added parts and keeps deliberate reordering intact.
+    let generated_names = ["本体（中空）", "底面", "開口部（くり抜き）", "持ち手・前", "持ち手・後"];
+    let mut used = [false; 5];
+    let mut rebuilt = Vec::with_capacity(g.shapes.len().max(fresh.shapes.len()));
+    for old in &g.shapes {
+        let Some(role) = part_role(old) else {
+            rebuilt.push(old.clone());
+            continue;
+        };
+        let Some(is_used) = used.get_mut(role) else {
+            rebuilt.push(old.clone());
+            continue;
+        };
+        if *is_used {
+            rebuilt.push(old.clone());
+            continue;
+        }
+        *is_used = true;
+        let Some(mut replacement) = fresh.shapes.get(role).cloned() else {
+            rebuilt.push(old.clone());
+            continue;
+        };
+        replacement.uid = old.uid;
+        if generated_names.get(role).is_some_and(|name| old.name != *name) {
+            replacement.name.clone_from(&old.name);
+        }
+        if replacement.op != Op::Subtract {
+            replacement.material = old.material;
+        }
+        rebuilt.push(replacement);
+    }
+    // Restore a deleted managed part at the end without moving user slots.
+    for (role, is_used) in used.iter().enumerate() {
+        if !is_used {
+            if let Some(shape) = fresh.shapes.get(role) {
+                rebuilt.push(shape.clone());
             }
         }
     }
-    fresh.shapes.extend(g.shapes.iter().zip(matched).filter_map(|(shape, matched)| (!matched).then(|| shape.clone())));
-    g.shapes = fresh.shapes;
+    g.shapes = rebuilt;
     g.bag = Some(config);
 }
 
@@ -450,23 +475,35 @@ mod tests {
     #[test]
     fn rebuilding_preserves_added_shapes_and_renamed_part_identity() {
         let mut g = make_group(BagConfig::default());
+        for (index, shape) in g.shapes.iter_mut().enumerate() {
+            shape.uid = 100 + index as u32;
+        }
         g.shapes[3].name = "custom handle label".into();
         let original_uid = g.shapes[3].uid;
         g.shapes.swap(3, 4);
-        let mut extra = Shape::new(Kind::Sphere, [3.0, 4.0, 5.0], Material::plain([0.1, 0.2, 0.3], 0.5, 0.0));
-        extra.name = "user charm".into();
+        let mut extra = Shape::new(Kind::Box, [3.0, 4.0, 5.0], Material::plain([0.1, 0.2, 0.3], 0.5, 0.0));
+        extra.name = "user subtractive feature".into();
+        extra.op = Op::Subtract;
+        extra.source = "user:subtractor".into();
+        extra.uid = 500;
         let extra_uid = extra.uid;
-        g.shapes.push(extra.clone());
+        g.shapes.insert(2, extra.clone());
         let mut edited = g.bag.clone().expect("bag settings");
         edited.width = 140.0;
         rebuild(&mut g, edited);
         assert_eq!(g.shapes.len(), 6);
-        assert_eq!(g.shapes[3].name, "custom handle label");
-        assert_eq!(g.shapes[3].uid, original_uid);
-        assert_eq!(g.shapes[5], extra);
-        assert_eq!(g.shapes[5].uid, extra_uid);
+        assert_eq!(g.shapes[0].source, "designer-bag:part:0");
+        assert_eq!(g.shapes[1].source, "designer-bag:part:1");
+        assert_eq!(g.shapes[2], extra, "user cut remains in its original Boolean slot");
+        assert_eq!(g.shapes[3].source, "designer-bag:part:2");
+        assert_eq!(g.shapes[4].source, "designer-bag:part:4");
+        assert_eq!(g.shapes[5].source, "designer-bag:part:3");
+        assert_eq!(g.shapes[5].name, "custom handle label");
+        assert_eq!(g.shapes[5].uid, original_uid);
+        assert_eq!(g.shapes[2].uid, extra_uid);
         let reloaded = Scene::from_json(&Scene { groups: vec![g], ..Scene::default() }.to_json()).expect("scene reload");
-        assert_eq!(reloaded.groups[0].shapes[5].uid, extra_uid);
+        assert_eq!(reloaded.groups[0].shapes[2], extra);
+        assert_eq!(reloaded.groups[0].shapes[5].uid, original_uid);
     }
 
     #[test]
@@ -476,19 +513,22 @@ mod tests {
             shape.source.clear();
             shape.uid = 100 + index as u32;
         }
-        let mut extra = Shape::new(Kind::Sphere, [3.0, 4.0, 5.0], Material::plain([0.1, 0.2, 0.3], 0.5, 0.0));
+        let mut extra = Shape::new(Kind::Box, [3.0, 4.0, 5.0], Material::plain([0.1, 0.2, 0.3], 0.5, 0.0));
         extra.name = "legacy user addition".into();
         extra.uid = 500;
-        g.shapes.push(extra.clone());
+        extra.source.clear();
+        g.shapes.insert(2, extra.clone());
         let loaded = Scene::from_json(&Scene { groups: vec![g], ..Scene::default() }.to_json()).expect("legacy scene reload");
         let mut legacy = loaded.groups.into_iter().next().expect("one saved group");
         let mut edited = legacy.bag.clone().expect("bag settings");
         edited.width = 140.0;
         rebuild(&mut legacy, edited);
         assert_eq!(legacy.shapes.len(), 6);
-        assert_eq!(legacy.shapes[5], extra);
-        assert_eq!(legacy.shapes[5].uid, 500);
-        assert!(legacy.shapes[..5].iter().all(|shape| shape.source.starts_with("designer-bag:part:")));
+        assert_eq!(legacy.shapes[2], extra);
+        assert_eq!(legacy.shapes[2].uid, 500);
+        assert_eq!(legacy.shapes[0].source, "designer-bag:part:0");
+        assert_eq!(legacy.shapes[1].source, "designer-bag:part:1");
+        assert_eq!(legacy.shapes[3].source, "designer-bag:part:2");
     }
 
     #[test]
