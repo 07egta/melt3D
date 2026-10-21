@@ -61,9 +61,9 @@ pub fn make_token() -> String {
     out
 }
 
-/// A token must never be placed in a shared /tmp directory. Use
-/// the operating system's private per-user app-state folder and a per-process
-/// filename so another local login cannot predict or read it.
+/// A token must never be placed in a shared /tmp directory. Use the
+/// operating system's private per-user app-state folder and a stable per-port
+/// filename so a separate `meltcad --mcp --control PORT` process can find it.
 pub fn token_file(port: u16) -> Result<std::path::PathBuf, String> {
     let state: Option<std::path::PathBuf> = if cfg!(windows) {
         std::env::var_os("LOCALAPPDATA")
@@ -75,16 +75,26 @@ pub fn token_file(port: u16) -> Result<std::path::PathBuf, String> {
             .or_else(|| std::env::var_os("HOME").map(|home| std::path::PathBuf::from(home).join(".local/state")))
     };
     let state = state.ok_or("Cannot start control mode: no private user directory is available")?;
-    Ok(state.join("Melt3D").join("control").join(format!("melt3d-{port}-{}.token", std::process::id())))
+    Ok(state.join("Melt3D").join("control").join(format!("melt3d-{port}.token")))
 }
 
-/// Publish a control token only after creating its private directory and an
-/// exclusively owned file. Never silently ignore an error and never follow a
-/// pre-existing token-file symlink.
+/// Publish a control token only after the listener has bound its port and after
+/// creating the private directory. An entry left by a crashed server is stale:
+/// a live server could not have bound the same port. Remove that entry, then
+/// exclusively create the replacement without following a pre-existing symlink.
 pub fn write_token(port: u16, token: &str) -> Result<std::path::PathBuf, String> {
     let path = token_file(port)?;
-    write_token_to(&path, token)?;
+    write_token_at(&path, token)?;
     Ok(path)
+}
+
+fn write_token_at(path: &std::path::Path, token: &str) -> Result<(), String> {
+    if let Err(e) = std::fs::remove_file(path) {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            return Err(format!("Cannot remove stale control token: {e}"));
+        }
+    }
+    write_token_to(path, token)
 }
 
 fn write_token_to(path: &std::path::Path, token: &str) -> Result<(), String> {
@@ -243,6 +253,22 @@ mod tests {
         assert!(lines[0].contains("\"ok\":true"), "{lines:?}");
         assert!(lines[1].contains("\"shape_count\":1"), "{lines:?}");
         assert!(lines[2].contains("\"ok\":false"), "{lines:?}");
+    }
+
+    #[test]
+    fn control_token_path_is_discoverable_from_a_separate_client() {
+        let path = token_file(7777).unwrap();
+        assert_eq!(path.file_name().and_then(|name| name.to_str()), Some("melt3d-7777.token"));
+    }
+
+    #[test]
+    fn publishing_replaces_a_stale_launch_token() {
+        let folder = std::env::temp_dir().join(format!("melt3d-stale-token-test-{}", std::process::id()));
+        let path = folder.join("control").join("melt3d-7777.token");
+        write_token_to(&path, "old-token").unwrap();
+        write_token_at(&path, "new-token").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "new-token");
+        let _ = std::fs::remove_dir_all(folder);
     }
 
     #[test]
