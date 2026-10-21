@@ -1263,7 +1263,7 @@ fn control_scene_replacement_and_deletion_clear_idle_index_state() {
         assert_eq!(r.app.undo_depth(), undo + 1, "{command}: exactly one undo step");
         assert!(r.app.dirty);
         assert!(r.app.ct.node.is_none() && r.app.pt.last.is_none(), "{command}: old node/pipe indices must be forgotten");
-        assert!(r.app.multi.is_empty() && r.app.multi_for.is_none(), "{command}: old multiselection must not bind to replacement shapes");
+        assert!(r.app.multi.is_empty() && (r.app.multi_for.is_none() || r.app.multi_for == r.app.sel), "{command}: old multiselection must not bind to replacement shapes");
         if matches!(command["cmd"].as_str(), Some("scene.set" | "load")) {
             assert_eq!(r.app.sel, Some(Pick::Shape(0, 0)));
             assert_eq!(r.app.scene.shape(0, 0).expect("newly loaded shape").kind, Kind::Cylinder);

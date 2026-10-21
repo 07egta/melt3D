@@ -288,6 +288,15 @@ impl Dimensions {
         if self.error.is_some() {
             return false;
         }
+        let needed = match &self.target {
+            Target::Rectangle { .. } => 2,
+            Target::Circle { .. } => 1,
+            _ => 0,
+        };
+        if self.fields.iter().take(needed).any(|f| !f.trim().parse::<f32>().is_ok_and(f32::is_finite)) {
+            self.error = Some("Type a number for each size".into());
+            return false;
+        }
         match &mut self.target {
             Target::Rectangle { anchor, edge } => {
                 if let (Ok(w), Ok(h)) = (self.fields[0].parse::<f32>(), self.fields[1].parse::<f32>()) {

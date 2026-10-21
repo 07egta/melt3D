@@ -151,8 +151,13 @@ pub fn thumb(scene: &Scene, size: usize) -> Vec<u8> {
     img
 }
 
-/// Handles `--render in.yura out.png [size]`. `None` means this is
-/// another command; `Some(false)` means render failed (non-zero process exit).
+/// Keep headless image sizes within the same bounds as the automation API.
+fn render_cli_size(value: Option<&std::ffi::OsString>) -> usize {
+    value.and_then(|a| a.to_str()).and_then(|a| a.parse::<usize>().ok()).unwrap_or(220).clamp(40, 600)
+}
+
+/// Handles `--render in.yura out.png [size]`.
+/// None = another command; Some(true) = success; Some(false) = failure.
 pub fn cli(args: &[std::ffi::OsString]) -> Option<bool> {
     if args.get(1).and_then(|a| a.to_str()) != Some("--render") {
         return None;
@@ -161,9 +166,7 @@ pub fn cli(args: &[std::ffi::OsString]) -> Option<bool> {
         eprintln!("usage: meltcad --render in.yura out.png [size]");
         return Some(false);
     };
-    // The renderer's sheet() function also clamps this, but keep the CLI
-    // explicit about its maximum memory budget.
-    let size: usize = args.get(4).and_then(|a| a.to_str()).and_then(|a| a.parse().ok()).unwrap_or(220).clamp(40, 600);
+    let size = render_cli_size(args.get(4));
     let scene = match crate::recovery::read_project(std::path::Path::new(input)) {
         Ok((s, _)) => s,
         Err(e) => {
@@ -301,6 +304,17 @@ mod tests {
         assert_eq!((0..240u32).step_by(gif_frame_step(240, 30) as usize).last(), Some(239));
         assert_eq!(gif_frame_step(241, 30), 2);
         assert_eq!(gif_frame_step(240, 60), 2, "60 fps needs >=2 centiseconds per GIF image");
+    }
+
+    #[test]
+    fn render_cli_reports_input_errors_and_clamps_untrusted_dimensions() {
+        let args = |v: &[&str]| -> Vec<std::ffi::OsString> { v.iter().copied().map(Into::into).collect() };
+        assert_eq!(cli(&args(&["meltcad"])), None);
+        assert_eq!(cli(&args(&["meltcad", "--render"])), Some(false));
+        assert_eq!(cli(&args(&["meltcad", "--render", "nonexistent-scene.yura", "out.png"])), Some(false));
+        assert_eq!(render_cli_size(Some(&"999999999".into())), 600);
+        assert_eq!(render_cli_size(Some(&"1".into())), 40);
+        assert_eq!(render_cli_size(Some(&"bad".into())), 220);
     }
 
     #[test]

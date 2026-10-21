@@ -134,13 +134,18 @@ fn main() -> eframe::Result {
         }
         return Ok(());
     }
-    if let Some(ok) = cpu_render::cli(&args) {
-        if !ok {
-            std::process::exit(1);
-        }
+    // CLI handlers must run in order: MCP owns stdio until EOF, so never
+    // evaluate every handler eagerly before checking which one matched.
+    if let Some(success) = cpu_render::cli(&args) {
+        if !success { std::process::exit(1); }
         return Ok(());
     }
-    if bench::cli(&args) || mcp::cli(&args) {
+    if let Some(success) = bench::cli(&args) {
+        if !success { std::process::exit(1); }
+        return Ok(());
+    }
+    if let Some(success) = mcp::cli(&args) {
+        if !success { std::process::exit(1); }
         return Ok(());
     }
     perf::init();
