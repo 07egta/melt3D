@@ -1065,10 +1065,7 @@ mod tests {
     #[test]
     fn obj_material_reference_uses_safe_matching_filename() {
         let built = Built {
-            surface: Surface {
-                mesh: crate::export_formats::tests::tetra(10.0),
-                look: crate::export_formats::tests::two_colours(),
-            },
+            surface: Surface { mesh: crate::export_formats::tests::tetra(10.0), look: crate::export_formats::tests::two_colours() },
             tris: 4,
             verts: 4,
             size_mm: [10.0; 3],
