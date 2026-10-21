@@ -7,6 +7,7 @@ use std::sync::OnceLock;
 use serde::Deserialize;
 
 use crate::model::{Group, MAX_GROUPS, MAX_SHAPES, Scene};
+use crate::designer_lamp::{self, LampParams, LampStyle};
 
 #[derive(Deserialize)]
 struct RawCategory {
@@ -57,7 +58,21 @@ const FILES: [&str; 15] = [
 /// All categories (parsed once). A damaged file is skipped, never a crash; a test checks they all parse.
 pub fn all() -> &'static [Category] {
     static LIB: OnceLock<Vec<Category>> = OnceLock::new();
-    LIB.get_or_init(|| FILES.iter().filter_map(|t| parse(t).ok()).filter(|c| !c.items.is_empty()).collect())
+    LIB.get_or_init(|| {
+        let mut categories: Vec<Category> = FILES.iter().filter_map(|t| parse(t).ok()).filter(|c| !c.items.is_empty()).collect();
+        // Add native parametric models to the EXISTING furniture category rather
+        // than duplicating the thumbnail, library-search or insertion code.
+        if let Some(furniture) = categories.iter_mut().find(|c| c.name == "かぐ") {
+            for style in LampStyle::ALL {
+                furniture.items.push(Item {
+                    name: format!("Designer Lamp（{}）", style.label()),
+                    tags: vec!["designer lamp".into(), "lamp".into(), "lighting".into(), "照明".into(), style.english().into(), style.label().into()],
+                    group: designer_lamp::build(LampParams::for_style(style)),
+                });
+            }
+        }
+        categories
+    })
 }
 
 fn parse(text: &str) -> Result<Category, String> {
@@ -104,9 +119,14 @@ impl Item {
     pub fn placed(&self, at: [f32; 2]) -> Group {
         let c = self.centre_xy();
         let mut g = self.group.clone();
+        let shift = [at[0] - c[0], at[1] - c[1]];
         for s in &mut g.shapes {
-            s.pos[0] += at[0] - c[0];
-            s.pos[1] += at[1] - c[1];
+            s.pos[0] += shift[0];
+            s.pos[1] += shift[1];
+        }
+        if let Some(p) = &mut g.lamp {
+            p.offset[0] += shift[0];
+            p.offset[1] += shift[1];
         }
         g
     }
@@ -150,6 +170,24 @@ mod tests {
             let my = g.shapes.iter().map(|s| s.pos[1]).sum::<f32>() / n;
             assert!((mx - 100.0).abs() < 1e-3 && (my + 50.0).abs() < 1e-3);
             assert_eq!(g.shapes[0].pos[2], it.group.shapes[0].pos[2]);
+        }
+    }
+
+    #[test]
+    fn designer_lamps_are_library_models_with_real_thumbnail_geometry() {
+        let lamps: Vec<&Item> = all().iter().flat_map(|c| &c.items).filter(|item| item.group.lamp.is_some()).collect();
+        assert_eq!(lamps.len(), 3);
+        for item in lamps {
+            assert!(item.matches("lamp") && item.matches("照明"));
+            assert_eq!(item.group.shapes.len(), 3);
+            assert_eq!(item.group.shapes[0].kind, crate::model::Kind::Revolve);
+            let placed = item.placed([120.0, -45.0]);
+            let spec = placed.lamp.unwrap();
+            let mut refreshed = placed.clone();
+            crate::designer_lamp::regenerate(&mut refreshed, spec);
+            assert_eq!(refreshed.shapes[0].pos, placed.shapes[0].pos);
+            let pixels = crate::cpu_render::thumb(&item.scene(), 32);
+            assert_eq!(pixels.len(), 32 * 32 * 4);
         }
     }
 
