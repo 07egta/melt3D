@@ -51,6 +51,7 @@ mod curve_tool;
 mod pipe_tool;
 mod model;
 mod perf;
+mod ripple;
 mod prims;
 mod panels;
 mod pattern;
