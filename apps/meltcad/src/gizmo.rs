@@ -603,7 +603,10 @@ impl App {
                     }
                 }
                 Act::Rotate(i) => {
-                    s.rot[i] = (rot[i] + turn_deg).rem_euclid(360.0);
+                    // The ring is aligned to the *world* axis. Euler addition
+                    // turns around a shape-local axis after previous rotations,
+                    // so compose the world rotation as a matrix instead.
+                    s.rot = crate::pattern::turn_euler(rot, i as u8, turn_deg);
                     if group {
                         s.pos = add(d.centre, rotate_about(sub(pos, d.centre), WORLD[i], turn_deg));
                     }
@@ -657,6 +660,32 @@ mod tests {
     fn rotating_about_z_turns_x_into_y() {
         let q = rotate_about([1.0, 0.0, 0.0], [0.0, 0.0, 1.0], 90.0);
         assert!(q[0].abs() < 1e-5 && (q[1] - 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn x_ring_rotates_a_previously_rotated_box_about_world_x_not_local_x() {
+        let mut app = App::new(true, None);
+        let sh = app.scene.shape_mut(0, 0).expect("initial shape");
+        sh.kind = Kind::Box;
+        sh.size = [30.0, 10.0, 5.0];
+        sh.pos = [0.0; 3];
+        sh.rot = [0.0, 0.0, 90.0];
+        app.sel = Some(Pick::Shape(0, 0));
+        app.cam.look(std::f32::consts::FRAC_PI_2, 0.0);
+        app.cam.frame([0.0; 3], 60.0);
+        let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0));
+        let geom = build(&app.cam, rect, &app.scene, app.sel, Tool::Rotate).unwrap();
+        let start = app.cam.project(rect, [0.0, 20.0, 0.0]).unwrap();
+        let finish = app.cam.project(rect, [0.0, 0.0, 20.0]).unwrap();
+        let mut drag = app.begin_drag(Handle::Axis(0), &geom, rect, start, Tool::Rotate, false);
+        app.apply_drag(&mut drag, finish, false);
+        let rotated = app.scene.shape(0, 0).unwrap();
+        let r = crate::sdf::rotation(rotated.rot);
+        // The original 30 mm local-X axis points along +Y; rotating around
+        // WORLD X must carry it into Z. Euler addition wrongly leaves it on Y.
+        let axis = [r[0][0], r[1][0], r[2][0]];
+        assert!(axis[2].abs() > 0.98 && axis[1].abs() < 0.05, "{axis:?} {:?}",
+                rotated.rot);
     }
 
     #[test]

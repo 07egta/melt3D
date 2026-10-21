@@ -782,6 +782,29 @@ impl App {
                 p[0] = -p[0];
             }
             c.outline.reverse();
+            // Reflect every representation of the model, not just the main
+            // 2D outline. Curve/Sweep use path nodes and optional Bezier
+            // handles; Loft uses an independent upper outline.
+            for p in &mut c.outline2 {
+                p[0] = -p[0];
+            }
+            c.outline2.reverse();
+            for p in &mut c.path {
+                p[0] = -p[0];
+            }
+            for h in &mut c.curve_handles {
+                h.incoming[0] = -h.incoming[0];
+                h.outgoing[0] = -h.outgoing[0];
+            }
+            if let Some(plane) = &mut c.guide_plane {
+                for hole in &mut plane.holes {
+                    for p in hole.iter_mut() {
+                        p[0] = -p[0];
+                    }
+                    hole.reverse();
+                }
+            }
+            c.uid = 0; // The mirrored copy needs its own animation/pattern identity.
             c.name = format!("{} (mirror)", c.name);
             self.scene.groups[g].shapes.insert(s + 1, c);
             self.sel = Some(Pick::Shape(g, s + 1));
@@ -1074,19 +1097,37 @@ impl App {
 
     /// Move the selection by `d` millimetres.
     pub fn nudge(&mut self, d: [f32; 3]) {
-        for (g, s) in self.sel_targets() {
+        let mut targets = self.sel_targets();
+        let mut seen: std::collections::HashSet<(usize, usize)> = targets.iter().copied().collect();
+        let mut linked = std::collections::HashSet::new();
+        // A group selection includes its descendants. The viewport's ordinary
+        // targets helper only lists its own shapes; applying that here used to
+        // leave nested children behind when nudging their parent.
+        for pick in self.picks() {
+            if let Pick::Group(g) = pick {
+                for gi in g..self.scene.subtree_end(g) {
+                    if let Some(group) = self.scene.groups.get(gi) {
+                        if group.is_linked() {
+                            linked.insert(gi);
+                        }
+                        for si in 0..group.shapes.len() {
+                            if seen.insert((gi, si)) {
+                                targets.push((gi, si));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        for (g, s) in targets {
             if let Some(sh) = self.scene.shape_mut(g, s) {
                 sh.pos = [sh.pos[0] + d[0], sh.pos[1] + d[1], sh.pos[2] + d[2]];
             }
         }
-        // a linked copy has no shapes of its own: it stands where its transform puts it
-        let mut moved = std::collections::HashSet::new();
-        for p in self.picks() {
-            if let Pick::Group(g) = p
-                && moved.insert(g)
-                && let Some(gr) = self.scene.groups.get_mut(g)
-                && gr.instance_of.is_some()
-            {
+        // Linked copies have no shapes; move each transform once, including
+        // links nested in selected parents or selected along with an ancestor.
+        for g in linked {
+            if let Some(gr) = self.scene.groups.get_mut(g) {
                 gr.xform.pos = [gr.xform.pos[0] + d[0], gr.xform.pos[1] + d[1], gr.xform.pos[2] + d[2]];
                 gr.xform.sanitize();
             }
@@ -2853,6 +2894,41 @@ mod tests {
     }
 
     #[test]
+    fn curve_mirror_reflects_path_and_bezier_handle_geometry() {
+        use crate::model::{CurveHandles, CurveNodeMode, Kind, Material, Pick, Shape};
+        let mut app = App::new(true, None);
+        let mut curve = Shape::new(Kind::Curve, [40.0, 0.0, 10.0], Material::default());
+        curve.path = vec![[5.0, 0.0, 0.0, 1.0], [15.0, 0.0, 0.0, 1.0], [15.0, 10.0, 0.0, 1.0]];
+        curve.params = [0.0, 0.0, 0.0, 1.0];
+        curve.blend = 0.0;
+        curve.curve_handles = vec![CurveHandles {
+            mode: CurveNodeMode::Corner, incoming: [2.0, 3.0, 0.0], outgoing: [4.0, 5.0, 0.0]
+        }];
+        app.scene.groups[0].shapes.clear();
+        app.scene.groups[0].shapes.push(curve.clone());
+        app.sel = Some(Pick::Shape(0, 0));
+        app.mirror_copy();
+        let mirrored = app.scene.shape(0, 1).unwrap();
+        assert_eq!(mirrored.pos[0], -40.0);
+        assert_eq!(mirrored.path[0][0], -5.0);
+        assert_eq!(mirrored.path[1][0], -15.0);
+        assert_eq!(mirrored.curve_handles[0].incoming[0], -2.0);
+        assert_eq!(mirrored.curve_handles[0].outgoing[0], -4.0);
+        let scene_of = |sh: Shape| {
+            let mut g = crate::model::Group::new("curve");
+            g.shapes.push(sh);
+            crate::model::Scene { groups: vec![g], ..Default::default() }
+        };
+        let a = crate::sdf::Field::new(&scene_of(curve));
+        let b = crate::sdf::Field::new(&scene_of(mirrored.clone()));
+        for p in [[55.0, 5.0, 10.0], [45.0, 0.0, 10.0], [50.0, 9.0, 10.0]] {
+            let source = a.distance(p);
+            let reflected = b.distance([-p[0], p[1], p[2]]);
+            assert!((source - reflected).abs() < 0.01, "{p:?}: {source} != {reflected}");
+        }
+    }
+
+    #[test]
     fn a_duplicate_stays_exactly_where_the_original_is() {
         let mut app = App::new(true, None);
         app.sel = Some(Pick::Shape(0, 0));
@@ -2912,6 +2988,32 @@ mod title_tests {
         app.animation_capture_finished(&ctx);
         assert_eq!(app.scene.anim.tracks[0].keys[0].1.pos, key_before);
         assert!(!app.dirty, "loading must not dirty or change the document");
+    }
+
+    #[test]
+    fn arrow_keys_move_nested_groups_exactly_once() {
+        use crate::model::{Group, Kind, Material, Pick, Shape};
+        let mut app = super::App::new(true, None);
+        let mut child = Group::new("child");
+        child.depth = 1;
+        child.shapes.push(Shape::new(Kind::Box, [40.0, 0.0, 10.0], Material::default()));
+        app.scene.groups.push(child);
+        let uid = app.scene.ensure_group_uid(0).unwrap();
+        let mut linked = Group::new("nested linked copy");
+        linked.depth = 2;
+        linked.instance_of = Some(uid);
+        app.scene.groups.push(linked);
+        app.sel = Some(Pick::Group(0));
+        app.nudge([10.0, 0.0, 0.0]);
+        assert_eq!(app.scene.groups[0].shapes[0].pos[0], 10.0);
+        assert_eq!(app.scene.groups[1].shapes[0].pos[0], 50.0);
+        assert_eq!(app.scene.groups[2].xform.pos[0], 10.0);
+        // The same child also selected on its own must not move twice.
+        app.multi_for = app.sel;
+        app.multi.push(Pick::Shape(1, 0));
+        app.nudge([10.0, 0.0, 0.0]);
+        assert_eq!(app.scene.groups[1].shapes[0].pos[0], 60.0);
+        assert_eq!(app.scene.groups[2].xform.pos[0], 20.0);
     }
 
     #[test]
