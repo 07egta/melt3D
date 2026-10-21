@@ -532,6 +532,30 @@ mod tests {
     }
 
     #[test]
+    fn rebuilding_with_an_interleaved_part_is_one_undoable_scene_edit() {
+        let mut g = make_group(BagConfig::default());
+        let mut extra = Shape::new(Kind::Box, [2.0, 3.0, 4.0], trim_colour());
+        extra.name = "user subtractive detail".into();
+        extra.op = Op::Subtract;
+        extra.source = "user:subtractor".into();
+        extra.uid = 500;
+        g.shapes.insert(2, extra);
+        let mut app = App::new(false, None);
+        app.scene = Scene { groups: vec![g], ..Scene::default() };
+        let ctx = egui::Context::default();
+        app.settle(&ctx);
+        let before = app.scene.clone();
+        let mut edited = app.scene.groups[0].bag.clone().expect("bag settings");
+        edited.width = 140.0;
+        rebuild(&mut app.scene.groups[0], edited);
+        app.settle(&ctx);
+        assert_eq!(app.scene.groups[0].shapes[2].name, "user subtractive detail");
+        assert_eq!(app.scene.groups[0].shapes[2].op, Op::Subtract);
+        app.undo();
+        assert_eq!(app.scene, before);
+    }
+
+    #[test]
     fn bad_values_clamp_before_geometry_and_scene_sanitization() {
         let mut p = BagConfig::default();
         p.width = f32::NAN;
