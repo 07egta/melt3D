@@ -73,24 +73,6 @@ impl Action {
     }
 }
 
-/// Position above the model but clear of the left shape strip and the bottom navigation pill.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Layout {
-    Full,
-    Compact,
-    Menu,
-}
-
-fn layout_for(width: f32) -> Layout {
-    if width < 400.0 {
-        Layout::Menu
-    } else if width < 650.0 {
-        Layout::Compact
-    } else {
-        Layout::Full
-    }
-}
-
 impl App {
     /// Non-mutating, bounded selection query: at most MAX_SHAPES items; no SDF rebuild.
     pub(crate) fn is_pick_selected(&self, pick: Pick) -> bool {
@@ -453,54 +435,6 @@ impl App {
         }
     }
 
-    pub(crate) fn selection_toolbar(&mut self, ctx: &egui::Context) {
-        if self.sel.is_none() && !(self.sk.on && self.sk.stage == Stage::Ready) {
-            return;
-        }
-        if self.capture.is_some() || self.drag.is_some() || self.orbiting || self.ct.drawing || self.pt.on {
-            return;
-        }
-        if self.sk.on && self.sk.stage != Stage::Ready {
-            return;
-        }
-        let rect = self.view_rect;
-        if rect.width() < 180.0 || rect.height() < 120.0 {
-            return;
-        }
-        let actions = self.toolbar_actions();
-        // Seven sketch-solid actions would overlap the tool strip on a narrow viewport.
-        let layout = if actions.len() > 5 && rect.width() < 550.0 { Layout::Menu } else { layout_for(rect.width()) };
-        let (pivot, anchor) = match layout {
-            Layout::Full => (Align2::CENTER_TOP, pos2(rect.center().x, rect.top() + 12.0)),
-            Layout::Compact | Layout::Menu => (Align2::RIGHT_TOP, pos2(rect.right() - 12.0, rect.top() + 12.0)),
-        };
-        egui::Area::new(egui::Id::new("selection_context_toolbar")).order(egui::Order::Foreground).pivot(pivot).fixed_pos(anchor).show(ctx, |ui| {
-            style::card().show(ui, |ui| {
-                ui.spacing_mut().item_spacing.x = if layout == Layout::Full { 5.0 } else { 2.0 };
-                ui.horizontal(|ui| {
-                    if layout == Layout::Full {
-                        let count = self.multi.len() + 1;
-                        ui.label(
-                            RichText::new(if count > 1 { format!("{count}個を選択") } else { "選択中".to_string() }).size(12.0).color(style::DIM),
-                        );
-                        style::vsep(ui);
-                    }
-                    if layout == Layout::Menu {
-                        ui.menu_button(format!("選択の操作 ({}) ▾", self.multi.len() + 1), |ui| {
-                            for action in self.toolbar_actions() {
-                                self.button_action(ui, action, true);
-                            }
-                        });
-                    } else {
-                        for action in self.toolbar_actions() {
-                            self.button_action(ui, action, false);
-                        }
-                    }
-                });
-            });
-        });
-    }
-
     /// Display a low-cost marker for each additional selected shape (GPU picking still uses primary).
     pub(crate) fn paint_multi_selection(&self, painter: &egui::Painter, rect: egui::Rect) {
         for pick in &self.multi {
@@ -616,11 +550,8 @@ mod tests {
     }
 
     #[test]
-    fn disabled_actions_explain_why_and_small_views_compact() {
+    fn disabled_actions_explain_why() {
         let mut app = App::new(true, None);
-        assert_eq!(layout_for(800.0), Layout::Full);
-        assert_eq!(layout_for(520.0), Layout::Compact);
-        assert_eq!(layout_for(300.0), Layout::Menu);
         assert!(app.disabled_reason(Action::AlignX).is_some());
         app.select_pick(Some(Pick::Shape(0, 0)), false);
         app.select_pick(Some(Pick::Group(0)), true);
@@ -651,7 +582,6 @@ mod tests {
                             ui.set_width(272.0);
                             app.layers(ui);
                         });
-                        app.selection_toolbar(ui.ctx());
                     },
                 );
                 output.textures_delta.clear();
@@ -681,7 +611,6 @@ mod tests {
         for i in 1..160 {
             app.scene.groups[0].shapes.push(Shape::new(Kind::Box, [i as f32, 0.0, 0.0], Material::default()));
         }
-        let ctx = egui::Context::default();
         let started = Instant::now();
         for i in 0..500 {
             app.select_pick(Some(Pick::Shape(0, i % 160)), false);
@@ -700,13 +629,5 @@ mod tests {
         );
         // Not a performance assertion: CI hardware / debug builds vary widely.
         assert_eq!(app.scene.shape_count(), 160);
-        // Actual overlay layout, without a GPU.
-        for width in [340.0, 520.0, 850.0] {
-            app.view_rect = egui::Rect::from_min_size(pos2(300.0, 50.0), vec2(width, 400.0));
-            let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
-                app.selection_toolbar(ui.ctx());
-            });
-            out.textures_delta.clear();
-        }
     }
 }

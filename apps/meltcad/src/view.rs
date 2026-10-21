@@ -10,7 +10,7 @@ use crate::perf::Gate;
 use crate::sdf::{V3, add, dot, len, mul, sub};
 use crate::style;
 
-/// The home button under the axis ball.
+/// The home button at the upper left of the axis ball.
 const HOME_RADIUS: f32 = 12.0;
 
 /// The pointing device the view controls are tuned for.
@@ -535,9 +535,9 @@ impl App {
             .or_else(|| self.gnomon_items(rect).into_iter().find(|(_, c, _)| (*c - p).length() < 8.0).map(|(d, _, _)| d))
     }
 
-    /// The home button sits just under the axis ball.
+    /// The home button sits at the upper left of the axis ball.
     fn home_centre(rect: Rect) -> Pos2 {
-        pos2(rect.right() - 62.0, rect.top() + 62.0 + 48.0 + 20.0)
+        pos2(rect.right() - 62.0 - 44.0, rect.top() + 62.0 - 44.0)
     }
 
     fn home_hit(rect: Rect, p: Pos2) -> bool {
@@ -867,12 +867,14 @@ mod home_tests {
     }
 
     #[test]
-    fn the_home_button_is_under_the_axis_ball_and_only_hits_itself() {
+    fn the_home_button_is_at_the_upper_left_of_the_axis_ball_and_only_hits_itself() {
         let rect = Rect::from_min_size(Pos2::ZERO, vec2(900.0, 600.0));
         let c = App::home_centre(rect);
         assert!(App::home_hit(rect, c));
         assert!(!App::home_hit(rect, c + vec2(40.0, 0.0)));
-        assert!(c.y > rect.top() + 62.0 + 48.0, "below the ball, not on it");
+        let ball = pos2(rect.right() - 62.0, rect.top() + 62.0);
+        assert!(c.x < ball.x && c.y < ball.y, "up and to the left of the ball");
+        assert!((c - ball).length() > 48.0 + HOME_RADIUS, "beside the ball, not on it");
         assert!(rect.contains(c));
     }
 }

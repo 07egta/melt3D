@@ -2301,7 +2301,6 @@ impl App {
         });
         if self.capture.is_none() {
             self.tool_strip(ui);
-            self.selection_toolbar(&ctx);
             self.draw_card(&ctx);
             self.pipe_card(&ctx);
             self.sketch_card(&ctx);

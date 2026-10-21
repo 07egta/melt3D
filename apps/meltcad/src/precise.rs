@@ -113,6 +113,20 @@ impl App {
         }
     }
 
+    /// The "Solid" and "Sketch" buttons: SolidCraft's sketch screen, drawing starts at once (it asks
+    /// for the plane first). When it is done, "Melt 3D に戻る" brings the solid back as a shape.
+    pub(crate) fn open_precise_sketch(&mut self, ctx: &egui::Context) {
+        if let Err(e) = self.set_precise_mode(ctx, true) {
+            self.say(ctx, e);
+            return;
+        }
+        if let Some(p) = self.precise.as_mut()
+            && !p.editing()
+        {
+            p.app.start("sketch.create");
+        }
+    }
+
     /// Both visible navigation and external commands use the same protected transition.
     pub(crate) fn set_precise_mode(&mut self, ctx: &egui::Context, on: bool) -> Result<(), String> {
         self.sync_precise_transfer(ctx);
@@ -198,6 +212,9 @@ impl App {
                             for (label, command, hint) in [
                                 ("スケッチを描く", "sketch.create", "平面を選び、線・長方形・円で輪郭を描きます"),
                                 ("押し出す", "solid.extrude", "完成した輪郭を選び、高さを指定して立体にします"),
+                                ("回転させる", "solid.revolve", "完成した輪郭を、軸のまわりに回して立体にします"),
+                                ("ロフト", "solid.loft", "いくつかの輪郭をなめらかにつないで立体にします"),
+                                ("スイープ", "solid.sweep", "輪郭を、道すじ(線)に沿って動かして立体にします"),
                                 ("角を丸める", "solid.fillet", "立体の辺を選び、丸みを付けます"),
                             ] {
                                 if style::pill(ui, label, false).on_hover_text(hint).clicked() {
@@ -391,6 +408,17 @@ mod tests {
         app.precise.as_mut().unwrap().app.run("sketch.create", json!({"plane":"XY"})).unwrap();
         assert!(app.set_precise_mode(&ctx, false).is_err());
         assert!(app.precise_on && app.precise.as_ref().unwrap().app.session.active_sketch.is_some());
+    }
+
+    #[test]
+    fn the_sketch_button_opens_solidcrafts_sketch_screen_and_starts_drawing() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        app.open_precise_sketch(&ctx);
+        assert!(app.precise_on, "the sketch screen is SolidCraft's");
+        let p = app.precise.as_ref().unwrap();
+        assert!(p.editing(), "asking for the plane has started");
+        assert!(!app.sk.on, "Melt 3D's own sketch tool stays off");
     }
 
     #[test]
