@@ -397,7 +397,8 @@ fn pack_curve(s: &crate::model::Shape, path: &mut Vec<f32>) -> (usize, usize) {
     if pts.len() < 2 || need(pts.len()) > room {
         return (0, 0);
     }
-    let (lo, hi) = crate::curve::bounds(&pts);
+    let squircle = s.size[2] >= 1.5;
+    let (lo, hi) = crate::curve::bounds_profile(&pts, squircle);
     let closed = s.params[0] > 0.5;
     push(path, [lo[0], lo[1], lo[2], crate::curve::max_joint_blend(&pts, closed)]);
     push(path, [hi[0], hi[1], hi[2], crate::curve::closed_joint_blend(&pts, closed)]);
@@ -405,7 +406,7 @@ fn pack_curve(s: &crate::model::Shape, path: &mut Vec<f32>) -> (usize, usize) {
     for pt in &pts {
         push(path, *pt);
     }
-    for g in crate::curve::group_spheres(&pts) {
+    for g in crate::curve::group_spheres_profile(&pts, squircle) {
         push(path, g);
     }
     (st, pts.len())
