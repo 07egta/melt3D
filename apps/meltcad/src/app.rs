@@ -49,7 +49,7 @@ pub struct App {
     redo: Vec<Scene>,
     pub cam: Camera,
     pub sel: Option<Pick>,
-    /// More picks next to `sel` (Shift + click). Only valid while `multi_for` is still `sel`.
+    /// Temporary extra picks, valid only while `multi_for` still matches the primary `sel`.
     pub multi: Vec<Pick>,
     pub(crate) multi_for: Option<Pick>,
     pub tool: Tool,
@@ -259,6 +259,7 @@ impl App {
     /// Notice a change of the scene: compares with the copy kept from the last look, and when it
     /// differs bumps the revision number. Returns the number.
     pub(crate) fn track_scene(&mut self) -> u64 {
+        self.sync_multi_selection();
         if self.scene != self.tracked {
             self.tracked.clone_from(&self.scene);
             self.scene_rev += 1;
@@ -370,6 +371,7 @@ impl App {
         if !ok {
             self.sel = None;
         }
+        self.sync_multi_selection();
     }
 
     /// Draft commands keep their source indices until they finish. The older
@@ -707,6 +709,10 @@ impl App {
     }
 
     pub fn duplicate(&mut self) {
+        if !self.multi.is_empty() {
+            self.duplicate_multi();
+            return;
+        }
         if !self.allow_scene_structure_change() {
             return;
         }
@@ -772,7 +778,7 @@ impl App {
         }
     }
 
-    /// Everything that is selected: `sel` first, then the Shift + click ones.
+    /// Everything selected: `sel` first, then any transient extra picks.
     pub fn picks(&self) -> Vec<Pick> {
         let mut v: Vec<Pick> = self.sel.into_iter().collect();
         if self.sel.is_some() && self.multi_for == self.sel {
@@ -1895,7 +1901,7 @@ impl App {
                         ("Right drag", "Pan"),
                         ("Wheel", "Zoom to cursor"),
                         ("Left drag (empty)", "Orbit"),
-                        ("Click", "Select  Shift: add/remove  Ctrl: whole group"),
+                        ("Click", "Select  Ctrl: add/remove  Shift: add/remove"),
                         ("Double click", "Focus on shape"),
                         ("Drawing: left click → right click", "Place point → finish (all draw tools)"),
                         ("F", "Find shapes, library, commands"),
@@ -2237,6 +2243,7 @@ impl App {
         });
         if self.capture.is_none() {
             self.tool_strip(ui);
+            self.selection_toolbar(&ctx);
             self.draw_card(&ctx);
             self.pipe_card(&ctx);
             self.sketch_card(&ctx);

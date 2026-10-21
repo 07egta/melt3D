@@ -581,6 +581,55 @@ fn sketch_alt_primary_drag_still_controls_the_camera() {
 }
 
 #[test]
+fn ctrl_click_selects_multiple_shapes_and_right_click_keeps_the_selection() {
+    let mut r = Rig::new();
+    r.app.tool = crate::gizmo::Tool::Select;
+    r.app.scene.groups[0].shapes[0].pos = [-35.0, 0.0, 20.0];
+    r.app.scene.groups[0].shapes.push(Shape::new(Kind::Box, [45.0, 0.0, 20.0], Material::default()));
+    r.frame(vec![]);
+    let p0 = r.app.cam.project(r.app.view_rect, [-35.0, 0.0, 20.0]).expect("first shape visible");
+    let p1 = r.app.cam.project(r.app.view_rect, [45.0, 0.0, 20.0]).expect("second shape visible");
+    assert_eq!(r.app.shape_at(r.app.view_rect, p0), Some((0, 0)));
+    assert_eq!(r.app.shape_at(r.app.view_rect, p1), Some((0, 1)));
+
+    r.mods = egui::Modifiers::NONE;
+    r.click(p0);
+    assert_eq!(r.app.sel, Some(Pick::Shape(0, 0)));
+    r.mods = egui::Modifiers::CTRL;
+    r.click(p1);
+    assert_eq!(r.app.sel, Some(Pick::Shape(0, 0)));
+    assert!(r.app.is_pick_selected(Pick::Shape(0, 1)));
+    assert_eq!(r.app.multi.len(), 1);
+
+    r.click(p1);
+    assert_eq!(r.app.multi.len(), 0, "Ctrl-click toggles an additional pick off");
+    r.mods = egui::Modifiers::CTRL;
+    r.click(p1);
+    assert_eq!(r.app.multi.len(), 1);
+    r.click(p0);
+    assert_eq!(r.app.sel, Some(Pick::Shape(0, 1)), "Ctrl-clicking the primary promotes the next pick");
+    assert!(r.app.multi.is_empty());
+    r.click(p1);
+    assert_eq!(r.app.sel, None, "Ctrl-clicking the sole primary clears the selection");
+
+    // Keep the current Shift-click toggle behavior from the integration base.
+    r.mods = egui::Modifiers::SHIFT;
+    r.click(p0);
+    assert_eq!(r.app.sel, Some(Pick::Shape(0, 0)));
+    r.click(p1);
+    assert!(r.app.is_pick_selected(Pick::Shape(0, 1)));
+    r.click(p1);
+    assert!(!r.app.is_pick_selected(Pick::Shape(0, 1)));
+
+    r.mods = egui::Modifiers::CTRL;
+    r.click(p1);
+    assert_eq!(r.app.multi.len(), 1);
+    r.frame(vec![Event::PointerButton { pos: p1, button: PointerButton::Secondary, pressed: true, modifiers: r.mods }]);
+    r.frame(vec![Event::PointerButton { pos: p1, button: PointerButton::Secondary, pressed: false, modifiers: r.mods }]);
+    assert_eq!(r.app.multi.len(), 1, "right-clicking a selected shape preserves the multi-selection");
+}
+
+#[test]
 fn solid_sketch_polygon_right_click_saves_only_the_sketch_and_returns_to_selection() {
     let mut r = Rig::new();
     r.plain_sketch(Pen::Polygon);
