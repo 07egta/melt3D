@@ -69,32 +69,7 @@ impl App {
 
     /// The menu on a right click in the viewport.
     pub fn context_menu(&mut self, ui: &mut Ui) {
-        if self.sel.is_none() {
-            ui.label(RichText::new("Nothing selected").color(style::DIM));
-            return;
-        }
-        let editable = !self.scene_structure_locked();
-        if ui.add_enabled(editable, egui::Button::new(style::keys("Duplicate  Ctrl+D"))).clicked() {
-            self.duplicate();
-            ui.close();
-        }
-        if ui.button("Add ⇄ Subtract  Tab").clicked() {
-            self.flip_op();
-            ui.close();
-        }
-        if ui.button("Focus  F").clicked() {
-            self.frame_view(true);
-            ui.close();
-        }
-        if ui.button("Rename").clicked() {
-            self.renaming = self.sel;
-            ui.close();
-        }
-        ui.separator();
-        if ui.add_enabled(editable, egui::Button::new(RichText::new("Delete  Del").color(style::CUT))).clicked() {
-            self.delete_selected();
-            ui.close();
-        }
+        self.context_actions(ui);
     }
 
     // ----- layers -----
@@ -157,11 +132,11 @@ impl App {
             if row.select {
                 let (shift, ctrl) = ui.input(|i| (i.modifiers.shift, i.modifiers.command || i.modifiers.ctrl));
                 if ctrl {
-                    self.toggle_pick(Pick::Group(gi));
+                    self.select_pick(Some(Pick::Group(gi)), true);
                 } else if shift {
                     range_to = Some(Pick::Group(gi));
                 } else {
-                    self.sel = Some(Pick::Group(gi));
+                    self.select_pick(Some(Pick::Group(gi)), false);
                 }
             }
             if row.drag_started {
@@ -196,11 +171,11 @@ impl App {
                     if row.select {
                         let (shift, ctrl) = ui.input(|i| (i.modifiers.shift, i.modifiers.command || i.modifiers.ctrl));
                         if ctrl {
-                            self.toggle_pick(Pick::Shape(gi, si));
+                            self.select_pick(Some(Pick::Shape(gi, si)), true);
                         } else if shift {
                             range_to = Some(Pick::Shape(gi, si));
                         } else {
-                            self.sel = Some(Pick::Shape(gi, si));
+                            self.select_pick(Some(Pick::Shape(gi, si)), false);
                         }
                     }
                     if row.drag_started {
@@ -400,6 +375,10 @@ impl App {
         if resp.double_clicked() && !out.eye && !out.op {
             self.renaming = Some(pick);
         }
+        if resp.secondary_clicked() && !self.is_pick_selected(pick) {
+            self.select_pick(Some(pick), false);
+        }
+        resp.context_menu(|ui| self.context_actions(ui));
         out
     }
 

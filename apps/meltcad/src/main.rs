@@ -14,6 +14,7 @@ mod backend;
 mod bench;
 mod cad;
 mod camera;
+mod context_toolbar;
 mod clip;
 mod control;
 mod corner;

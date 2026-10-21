@@ -354,8 +354,8 @@ impl App {
                 if mods.shift {
                     self.toggle_at(rect, p);
                 } else {
-                    // (Ctrl / Cmd + click takes the whole group the shape is in)
-                    self.pick_at(rect, p, mods.command || mods.ctrl);
+                    // Ctrl/Cmd toggles this item. Use the scene tree to select a whole group.
+                    self.pick_at(rect, p, mods.command || mods.ctrl, mods.command || mods.ctrl);
                 }
             }
         }
@@ -365,7 +365,10 @@ impl App {
             && !tool_busy
             && let Some(p) = pos
         {
-            self.pick_at(rect, p, false);
+            let under = self.guide_at(rect, p).or_else(|| self.shape_at(rect, p)).map(|(g, s)| as_pick(g, s));
+            if !under.is_some_and(|item| self.is_pick_selected(item)) {
+                self.select_pick(under, false);
+            }
         }
         if !tool_busy {
             resp.context_menu(|ui| self.context_menu(ui));
@@ -481,6 +484,7 @@ impl App {
         self.pipe_paint(&painter, rect);
         self.sketch_paint(&painter, rect);
         self.marquee_paint(&painter);
+        self.paint_multi_selection(&painter, rect);
         self.draw_gnomon(&painter, rect, pos);
     }
 
@@ -638,19 +642,21 @@ impl App {
     /// Shift + click: add the thing under the point to the selection, or take it out again.
     fn toggle_at(&mut self, rect: Rect, p: Pos2) {
         if let Some((g, s)) = self.shape_at(rect, p) {
-            self.toggle_pick(as_pick(g, s));
+            self.select_pick(Some(as_pick(g, s)), true);
         }
     }
 
-    fn pick_at(&mut self, rect: Rect, p: Pos2, keep: bool) {
+    fn pick_at(&mut self, rect: Rect, p: Pos2, keep: bool, additive: bool) {
         // a sketch line near the click wins over what lies behind it
         let hit = self.guide_at(rect, p).or_else(|| self.shape_at(rect, p));
         match hit {
             Some((g, s)) => {
                 let want = as_pick(g, s);
-                self.sel = if keep && self.sel == Some(want) { Some(Pick::Group(g)) } else { Some(want) };
+                let pick = if keep && !additive && self.sel == Some(want) { Pick::Group(g) } else { want };
+                self.select_pick(Some(pick), additive && pick == want);
             }
-            None => self.sel = None,
+            None if !additive => self.select_pick(None, false),
+            None => {}
         }
     }
 
