@@ -89,6 +89,7 @@ pub fn write_token(port: u16, token: &str) -> Result<std::path::PathBuf, String>
 }
 
 fn write_token_at(path: &std::path::Path, token: &str) -> Result<(), String> {
+    secure_token_parent(path)?;
     if let Err(e) = std::fs::remove_file(path) {
         if e.kind() != std::io::ErrorKind::NotFound {
             return Err(format!("Cannot remove stale control token: {e}"));
@@ -97,18 +98,27 @@ fn write_token_at(path: &std::path::Path, token: &str) -> Result<(), String> {
     write_token_to(path, token)
 }
 
-fn write_token_to(path: &std::path::Path, token: &str) -> Result<(), String> {
+fn secure_token_parent(path: &std::path::Path) -> Result<&std::path::Path, String> {
     let parent = path.parent().ok_or("The token path has no parent")?;
     std::fs::create_dir_all(parent).map_err(|e| format!("Cannot create control directory: {e}"))?;
+    let metadata = std::fs::symlink_metadata(parent).map_err(|e| format!("Cannot inspect control directory: {e}"))?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err("The control directory must be a real private directory".into());
+    }
     #[cfg(unix)]
     {
-        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-        let metadata = std::fs::symlink_metadata(parent).map_err(|e| format!("Cannot inspect control directory: {e}"))?;
-        if metadata.file_type().is_symlink() || !metadata.is_dir() {
-            return Err("The control directory must be a real private directory".into());
-        }
+        use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))
             .map_err(|e| format!("Cannot secure control directory: {e}"))?;
+    }
+    Ok(parent)
+}
+
+fn write_token_to(path: &std::path::Path, token: &str) -> Result<(), String> {
+    secure_token_parent(path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
         let mut file = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(path)
             .map_err(|e| format!("Cannot exclusively create control token: {e}"))?;
         if let Err(e) = file.write_all(token.as_bytes()).and_then(|_| file.sync_all()) {
