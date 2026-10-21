@@ -35,6 +35,45 @@ fn bar(app: &mut App, ctx: &egui::Context) {
 }
 
 #[test]
+fn late_cancel_does_not_overwrite_preexisting_gif() {
+    let path = std::env::temp_dir().join(format!("melt3d_cancel_{}_test.gif", std::process::id()));
+    std::fs::write(&path, b"old contents").unwrap();
+    let cancel = AtomicBool::new(true);
+    assert!(save_gif_if_active(&path, b"new contents".to_vec(), &cancel).is_err());
+    assert_eq!(std::fs::read(&path).unwrap(), b"old contents");
+    cancel.store(false, Ordering::Release);
+    assert!(save_gif_if_active(&path, b"new contents".to_vec(), &cancel).is_ok());
+    assert_eq!(std::fs::read(&path).unwrap(), b"new contents");
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn disconnected_gif_worker_releases_job_even_when_timeline_is_hidden() {
+    let ctx = egui::Context::default();
+    let mut app = animated();
+    app.an.open = false;
+    let (tx, rx) = std::sync::mpsc::channel();
+    drop(tx);
+    app.an.job = Some(Job { rx, done: Arc::new(AtomicU32::new(2)), total: Arc::new(AtomicU32::new(12)), cancel: Arc::new(AtomicBool::new(false)) });
+    bar(&mut app, &ctx);
+    assert!(app.an.job.is_none(), "disconnected worker must not leave GIF progress stuck");
+}
+
+#[test]
+fn hidden_timeline_keeps_polling_running_gif_and_releases_it_when_finished() {
+    let ctx = egui::Context::default();
+    let mut app = animated();
+    app.an.open = false;
+    let (tx, rx) = std::sync::mpsc::channel();
+    app.an.job = Some(Job { rx, done: Arc::new(AtomicU32::new(5)), total: Arc::new(AtomicU32::new(12)), cancel: Arc::new(AtomicBool::new(false)) });
+    bar(&mut app, &ctx);
+    assert!(app.an.job.is_some());
+    tx.send(Ok("test.gif".into())).unwrap();
+    bar(&mut app, &ctx);
+    assert!(app.an.job.is_none(), "hidden timeline must process completion");
+}
+
+#[test]
 fn drafts_and_actual_drags_cannot_move_or_capture_a_pose() {
     for kind in ["sketch", "outline", "live", "source", "guide", "curve_drag", "curve_drawing", "pipe_trace", "gizmo_drag"] {
         let ctx = egui::Context::default();

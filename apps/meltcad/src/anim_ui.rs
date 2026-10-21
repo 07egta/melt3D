@@ -18,6 +18,16 @@ pub struct Job {
     cancel: Arc<AtomicBool>,
 }
 
+/// A cancelled GIF must not overwrite a previous export when its final
+/// image has already rendered. Check cancellation again at the I/O boundary.
+fn save_gif_if_active(path: &std::path::Path, bytes: Vec<u8>, cancel: &AtomicBool) -> Result<String, String> {
+    if cancel.load(Ordering::Acquire) {
+        return Err("Stopped".into());
+    }
+    std::fs::write(path, bytes).map_err(|e| e.to_string())?;
+    Ok(path.display().to_string())
+}
+
 #[derive(Default)]
 pub struct State {
     pub open: bool,
@@ -95,8 +105,47 @@ impl App {
 
     pub(crate) fn anim_bar(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
+        // a GIF being made
+        let mut finished = None;
+        if let Some(job) = &self.an.job {
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+            match job.rx.try_recv() {
+                Ok(r) => finished = Some(r),
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    finished = Some(Err("GIF worker stopped unexpectedly".to_owned()));
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            }
+        }
+        if let Some(r) = finished {
+            self.an.job = None;
+            match r {
+                Ok(p) => self.say(&ctx, format!("Saved {p}")),
+                Err(e) => self.say(&ctx, format!("GIF not saved: {e}")),
+            }
+        }
+
         if !self.an.open {
             self.an.playing = false;
+            let mut reopen_timeline = false;
+            if let Some(job) = &self.an.job {
+                egui::Panel::bottom("gif_background_progress").exact_size(32.0).show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        let done = job.done.load(Ordering::Relaxed);
+                        let total = job.total.load(Ordering::Relaxed);
+                        ui.label(format!("Making GIF {done}/{total}"));
+                        if ui.button("Cancel GIF").clicked() {
+                            job.cancel.store(true, Ordering::Relaxed);
+                        }
+                        if ui.button("Show timeline").clicked() {
+                            reopen_timeline = true;
+                        }
+                    });
+                });
+            }
+            if reopen_timeline {
+                self.an.open = true;
+            }
             return;
         }
         let length = self.scene.anim.length.max(1);
@@ -114,21 +163,6 @@ impl App {
                 self.show_pose(f);
             }
             ctx.request_repaint();
-        }
-        // a GIF being made
-        let mut finished = None;
-        if let Some(job) = &self.an.job {
-            ctx.request_repaint_after(std::time::Duration::from_millis(100));
-            if let Ok(r) = job.rx.try_recv() {
-                finished = Some(r);
-            }
-        }
-        if let Some(r) = finished {
-            self.an.job = None;
-            match r {
-                Ok(p) => self.say(&ctx, format!("Saved {p}")),
-                Err(e) => self.say(&ctx, format!("GIF not saved: {e}")),
-            }
         }
 
         let mut go: Option<u32> = None;
@@ -252,7 +286,7 @@ impl App {
                 t2.store(n, Ordering::Relaxed);
                 !c2.load(Ordering::Relaxed)
             })
-            .and_then(|bytes| std::fs::write(&path, bytes).map_err(|e| e.to_string()).map(|()| path.display().to_string()));
+            .and_then(|bytes| save_gif_if_active(&path, bytes, &c2));
             let _ = tx.send(r);
             wake.request_repaint();
         });
