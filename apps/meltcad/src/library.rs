@@ -57,7 +57,23 @@ const FILES: [&str; 15] = [
 /// All categories (parsed once). A damaged file is skipped, never a crash; a test checks they all parse.
 pub fn all() -> &'static [Category] {
     static LIB: OnceLock<Vec<Category>> = OnceLock::new();
-    LIB.get_or_init(|| FILES.iter().filter_map(|t| parse(t).ok()).filter(|c| !c.items.is_empty()).collect())
+    LIB.get_or_init(|| {
+        let mut categories: Vec<Category> = FILES.iter().filter_map(|t| parse(t).ok()).filter(|c| !c.items.is_empty()).collect();
+        // Generated once from the exact same parametric state users later edit.
+        // No baked mesh assets, no extra runtime file reads and no duplicate SDF engine.
+        let items = crate::organic_vase::Design::ALL.into_iter().map(|design| {
+            let mut group = Group::new(design.name());
+            group.blend = 0.0;
+            group.shapes.push(crate::organic_vase::new(design));
+            Item {
+                name: design.name().to_string(),
+                tags: vec!["organic vase".into(), "有機 花瓶".into(), "vase".into(), "3Dプリント".into()],
+                group,
+            }
+        }).collect();
+        categories.push(Category { name: "花瓶・Vase".into(), items });
+        categories
+    })
 }
 
 fn parse(text: &str) -> Result<Category, String> {
@@ -150,6 +166,22 @@ mod tests {
             let my = g.shapes.iter().map(|s| s.pos[1]).sum::<f32>() / n;
             assert!((mx - 100.0).abs() < 1e-3 && (my + 50.0).abs() < 1e-3);
             assert_eq!(g.shapes[0].pos[2], it.group.shapes[0].pos[2]);
+        }
+    }
+
+    #[test]
+    fn parametric_organic_vases_appear_in_the_library_and_stay_editable() {
+        let cat = all().iter().find(|c| c.name == "花瓶・Vase").expect("vase category");
+        assert_eq!(cat.items.len(), 3);
+        for item in &cat.items {
+            assert!(item.matches("organic vase"));
+            assert!(item.fits(0, 0));
+            let mut scene = item.scene();
+            assert_eq!(scene.groups[0].shapes.len(), 1, "no Boolean primitive stacks");
+            assert!(scene.groups[0].shapes[0].vase.is_some(), "preset remains parametric");
+            let before = scene.clone();
+            scene.sanitize();
+            assert_eq!(scene, before);
         }
     }
 

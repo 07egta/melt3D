@@ -403,6 +403,9 @@ pub struct Shape {
     /// Where an imported mesh came from (its file name), shown in the inspector.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub source: String,
+    /// Parametric vase controls; ordinary Revolve sketches remain unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vase: Option<crate::organic_vase::VaseParams>,
 }
 
 /// The style of a shape's cut edges: what `Shape::round` makes of them.
@@ -451,6 +454,7 @@ impl Shape {
             uid: 0,
             volume: None,
             source: String::new(),
+            vase: None,
         }
     }
 
@@ -482,7 +486,10 @@ impl Shape {
             Kind::Capsule => [s[0], s[0], s[1] * 0.5 + s[0]],
             Kind::Tube => [s[0], s[0], s[2] * 0.5],
             Kind::Revolve => {
-                let r = mx(&self.outline, 0);
+                // The angular waves can extend past the 2D profile: include their full
+                // amplitude in the bounds, otherwise culling could clip the petals.
+                let wave = if self.vase.is_some() { self.params[2].abs().min(6.0) } else { 0.0 };
+                let r = mx(&self.outline, 0) + wave;
                 [r, r, mx(&self.outline, 1)]
             }
             Kind::Loft => {
@@ -910,6 +917,13 @@ impl Scene {
                 }
                 if s.kind != Kind::Mesh {
                     s.volume = None;
+                }
+                // Restore the derived profile after loading user-edited vase parameters.
+                // Kind changes abandon the parametric generator instead of overwriting geometry.
+                if s.kind == Kind::Revolve && s.vase.is_some() {
+                    crate::organic_vase::apply(s);
+                } else {
+                    s.vase = None;
                 }
             }
             // a mesh whose data is gone or damaged cannot be drawn: it goes, with a note; so do
