@@ -273,6 +273,9 @@ pub fn make_group(mut config: BagConfig) -> Group {
         handle(&config, true),
         handle(&config, false),
     ];
+    for (index, shape) in g.shapes.iter_mut().enumerate() {
+        shape.source = format!("designer-bag:part:{index}");
+    }
     g.bag = Some(config);
     g
 }
@@ -283,19 +286,48 @@ pub fn rebuild(g: &mut Group, mut config: BagConfig) {
     // The ordinary move gizmo changes each shape's world position. Recover
     // that translation before regenerating, otherwise editing one dimension
     // would snap a placed or moved bag back to its original location.
-    if let Some(body) = g.shapes.iter().find(|s| s.name == "本体（中空）") {
+    // Do not rely on the editable display name or current vector order to
+    // locate the body after a user rename or reorder.
+    let old_height = g.bag.as_ref().map_or(config.height, |old| old.height);
+    let old_body = g.shapes.iter().find(|s| s.source == "designer-bag:part:0").or_else(|| g.shapes.first());
+    if let Some(body) = old_body {
         config.origin_xy = [body.pos[0], body.pos[1]];
     }
     config.sanitize();
     let mut fresh = make_group(config.clone());
+    // A normal gizmo move translates every generated part. Recover all three
+    // translation components from the body; in particular, Z must not snap
+    // back to height / 2 when a dimension is edited.
+    let z_offset = old_body.map_or(0.0, |body| body.pos[2] - old_height * 0.5);
     for s in &mut fresh.shapes {
-        if let Some(old) = g.shapes.iter().find(|old| old.name == s.name && old.op == s.op) {
+        s.pos[2] += z_offset;
+    }
+    // Match generated parts by stable source tags so reordering or renaming a
+    // part does not detach its identity. Older saved bags predate these tags,
+    // so use their original five-part prefix as a compatibility fallback.
+    for (index, s) in fresh.shapes.iter_mut().enumerate() {
+        let tag = format!("designer-bag:part:{index}");
+        let old = g.shapes.iter().find(|old| old.source == tag).or_else(|| {
+            g.shapes.get(index).filter(|old| old.source.is_empty() && old.op == s.op)
+        });
+        if let Some(old) = old {
             s.uid = old.uid;
+            let generated_name = match index {
+                0 => "本体（中空）",
+                1 => "底面",
+                2 => "開口部（くり抜き）",
+                3 => "持ち手・前",
+                _ => "持ち手・後",
+            };
+            if old.name != generated_name {
+                s.name.clone_from(&old.name);
+            }
             if s.op != Op::Subtract {
                 s.material = old.material;
             }
         }
     }
+    fresh.shapes.extend(g.shapes.iter().filter(|old| !old.source.starts_with("designer-bag:part:")).cloned());
     g.shapes = fresh.shapes;
     g.bag = Some(config);
 }
@@ -408,17 +440,48 @@ mod tests {
 
     #[test]
     fn changing_dimensions_after_moving_keeps_the_bag_in_place() {
-        let mut g = make_group(BagConfig::default());
-        for s in &mut g.shapes {
-            s.pos[0] += 270.0;
-            s.pos[1] -= 70.0;
+        for style in BagStyle::ALL {
+            let mut g = make_group(BagConfig::for_style(style));
+            let baseline: Vec<_> = g.shapes.iter().map(|s| s.pos[2]).collect();
+            for s in &mut g.shapes {
+                s.pos[0] += 270.0;
+                s.pos[1] -= 70.0;
+                s.pos[2] += 20.0;
+            }
+            let old_z: Vec<_> = g.shapes.iter().map(|s| s.pos[2]).collect();
+            let mut edited = g.bag.clone().expect("bag settings");
+            edited.width += 12.0;
+            rebuild(&mut g, edited);
+            assert!((g.shapes[0].pos[0] - 270.0).abs() < 1e-3, "{style:?}");
+            assert!((g.shapes[0].pos[1] + 70.0).abs() < 1e-3, "{style:?}");
+            assert!((g.shapes[0].pos[2] - old_z[0]).abs() < 1e-3, "{style:?}");
+            assert_eq!(g.bag.as_ref().map(|b| b.origin_xy), Some([270.0, -70.0]));
+            for (index, shape) in g.shapes.iter().enumerate() {
+                assert!((shape.pos[2] - (baseline[index] + 20.0)).abs() < 1e-3, "{style:?} part {index}");
+            }
         }
+    }
+
+    #[test]
+    fn rebuilding_preserves_added_shapes_and_renamed_part_identity() {
+        let mut g = make_group(BagConfig::default());
+        g.shapes[3].name = "custom handle label".into();
+        let original_uid = g.shapes[3].uid;
+        g.shapes.swap(3, 4);
+        let mut extra = Shape::new(Kind::Sphere, [3.0, 4.0, 5.0], Material::plain([0.1, 0.2, 0.3], 0.5, 0.0));
+        extra.name = "user charm".into();
+        let extra_uid = extra.uid;
+        g.shapes.push(extra.clone());
         let mut edited = g.bag.clone().expect("bag settings");
         edited.width = 140.0;
         rebuild(&mut g, edited);
-        assert!((g.shapes[0].pos[0] - 270.0).abs() < 1e-3);
-        assert!((g.shapes[0].pos[1] + 70.0).abs() < 1e-3);
-        assert_eq!(g.bag.as_ref().map(|b| b.origin_xy), Some([270.0, -70.0]));
+        assert_eq!(g.shapes.len(), 6);
+        assert_eq!(g.shapes[3].name, "custom handle label");
+        assert_eq!(g.shapes[3].uid, original_uid);
+        assert_eq!(g.shapes[5], extra);
+        assert_eq!(g.shapes[5].uid, extra_uid);
+        let reloaded = Scene::from_json(&Scene { groups: vec![g], ..Scene::default() }.to_json()).expect("scene reload");
+        assert_eq!(reloaded.groups[0].shapes[5].uid, extra_uid);
     }
 
     #[test]
