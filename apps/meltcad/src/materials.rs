@@ -18,11 +18,11 @@ impl Category {
     pub const ALL: [Category; 5] = [Category::Basic, Category::Metal, Category::Glass, Category::Glow, Category::Fun];
     pub fn label(self) -> &'static str {
         match self {
-            Category::Basic => "ベーシック",
-            Category::Metal => "金ぞく",
-            Category::Glass => "ガラス",
-            Category::Glow => "ひかる",
-            Category::Fun => "ふしぎ",
+            Category::Basic => "Basic",
+            Category::Metal => "Metal",
+            Category::Glass => "Glass",
+            Category::Glow => "Glow",
+            Category::Fun => "Wonder",
         }
     }
 }
@@ -56,70 +56,72 @@ use Category::{Basic, Fun, Glass, Glow, Metal};
 
 static PRESETS: &[Preset] = &[
     // basic
-    p("クレイ", Basic, m([0.93, 0.62, 0.50], 0.85, 0.0, 0.0, 0.0, 0.0, 0.0)),
-    p("マット", Basic, m([0.80, 0.80, 0.82], 0.95, 0.0, 0.0, 0.0, 0.0, 0.0)),
-    p("プラスチック", Basic, m([0.92, 0.55, 0.42], 0.45, 0.0, 0.0, 0.0, 0.0, 0.0)),
-    p("つやプラ", Basic, m([0.40, 0.62, 0.96], 0.18, 0.0, 0.0, 0.0, 0.0, 0.0)),
-    p("ゴム", Basic, m([0.14, 0.14, 0.16], 0.70, 0.0, 0.0, 0.0, 0.0, 0.0)),
-    p("ワックス", Basic, t(m([0.98, 0.88, 0.62], 0.50, 0.0, 0.0, 0.0, 0.0, 0.0), 0.6)),
-    p("ミルク", Basic, t(m([0.97, 0.96, 0.93], 0.80, 0.0, 0.0, 0.0, 0.0, 0.0), 0.3)),
-    p("すみ", Basic, m([0.09, 0.09, 0.11], 0.30, 0.0, 0.0, 0.0, 0.0, 0.0)),
-    p("ストロベリー", Basic, m([0.96, 0.40, 0.52], 0.28, 0.0, 0.0, 0.0, 0.0, 0.0)),
-    p("ミント", Basic, m([0.55, 0.90, 0.78], 0.45, 0.0, 0.0, 0.0, 0.0, 0.0)),
-    p("スカイ", Basic, m([0.50, 0.75, 0.98], 0.35, 0.0, 0.0, 0.0, 0.0, 0.0)),
-    p("ラベンダー", Basic, m([0.72, 0.64, 0.96], 0.45, 0.0, 0.0, 0.0, 0.0, 0.0)),
-    p("レモン", Basic, m([0.98, 0.90, 0.46], 0.40, 0.0, 0.0, 0.0, 0.0, 0.0)),
-    p("ピンク", Basic, t(m([0.99, 0.78, 0.86], 0.55, 0.0, 0.0, 0.0, 0.0, 0.0), 0.25)),
-    p("木の実", Basic, m([0.50, 0.32, 0.20], 0.65, 0.0, 0.0, 0.0, 0.0, 0.0)),
-    p("石", Basic, m([0.52, 0.52, 0.54], 0.90, 0.0, 0.0, 0.0, 0.0, 0.0)),
+    p("Clay", Basic, m([0.93, 0.62, 0.50], 0.85, 0.0, 0.0, 0.0, 0.0, 0.0)),
+    p("Matte", Basic, m([0.80, 0.80, 0.82], 0.95, 0.0, 0.0, 0.0, 0.0, 0.0)),
+    p("Plastic", Basic, m([0.92, 0.55, 0.42], 0.45, 0.0, 0.0, 0.0, 0.0, 0.0)),
+    p("Glossy plastic", Basic, m([0.40, 0.62, 0.96], 0.18, 0.0, 0.0, 0.0, 0.0, 0.0)),
+    p("Rubber", Basic, m([0.14, 0.14, 0.16], 0.70, 0.0, 0.0, 0.0, 0.0, 0.0)),
+    p("Wax", Basic, t(m([0.98, 0.88, 0.62], 0.50, 0.0, 0.0, 0.0, 0.0, 0.0), 0.6)),
+    p("Milk", Basic, t(m([0.97, 0.96, 0.93], 0.80, 0.0, 0.0, 0.0, 0.0, 0.0), 0.3)),
+    p("Ink", Basic, m([0.09, 0.09, 0.11], 0.30, 0.0, 0.0, 0.0, 0.0, 0.0)),
+    p("Strawberry", Basic, m([0.96, 0.40, 0.52], 0.28, 0.0, 0.0, 0.0, 0.0, 0.0)),
+    p("Mint", Basic, m([0.55, 0.90, 0.78], 0.45, 0.0, 0.0, 0.0, 0.0, 0.0)),
+    p("Sky", Basic, m([0.50, 0.75, 0.98], 0.35, 0.0, 0.0, 0.0, 0.0, 0.0)),
+    p("Lavender", Basic, m([0.72, 0.64, 0.96], 0.45, 0.0, 0.0, 0.0, 0.0, 0.0)),
+    p("Lemon", Basic, m([0.98, 0.90, 0.46], 0.40, 0.0, 0.0, 0.0, 0.0, 0.0)),
+    p("Pink", Basic, t(m([0.99, 0.78, 0.86], 0.55, 0.0, 0.0, 0.0, 0.0, 0.0), 0.25)),
+    p("Nut", Basic, m([0.50, 0.32, 0.20], 0.65, 0.0, 0.0, 0.0, 0.0, 0.0)),
+    p("Stone", Basic, m([0.52, 0.52, 0.54], 0.90, 0.0, 0.0, 0.0, 0.0, 0.0)),
     // metal
-    p("ゴールド", Metal, m([1.00, 0.78, 0.35], 0.25, 1.0, 0.0, 0.0, 0.0, 0.0)),
-    p("ローズゴールド", Metal, m([0.97, 0.64, 0.56], 0.28, 1.0, 0.0, 0.0, 0.0, 0.0)),
-    p("シルバー", Metal, m([0.93, 0.93, 0.95], 0.22, 1.0, 0.0, 0.0, 0.0, 0.0)),
-    p("クローム", Metal, m([0.86, 0.88, 0.92], 0.07, 1.0, 0.0, 0.0, 0.0, 0.0)),
-    p("カッパー", Metal, m([0.95, 0.55, 0.40], 0.30, 1.0, 0.0, 0.0, 0.0, 0.0)),
-    p("ブロンズ", Metal, m([0.80, 0.55, 0.30], 0.38, 1.0, 0.0, 0.0, 0.0, 0.0)),
-    p("チタン", Metal, m([0.62, 0.62, 0.66], 0.42, 1.0, 0.0, 0.0, 0.0, 0.0)),
-    p("さびた鉄", Metal, m([0.55, 0.32, 0.22], 0.85, 0.7, 0.0, 0.0, 0.0, 0.0)),
-    p("ガンメタル", Metal, m([0.25, 0.26, 0.30], 0.30, 1.0, 0.0, 0.0, 0.0, 0.0)),
-    p("緑青", Metal, m([0.35, 0.72, 0.62], 0.55, 0.8, 0.0, 0.0, 0.0, 0.0)),
+    p("Gold", Metal, m([1.00, 0.78, 0.35], 0.25, 1.0, 0.0, 0.0, 0.0, 0.0)),
+    p("Rose gold", Metal, m([0.97, 0.64, 0.56], 0.28, 1.0, 0.0, 0.0, 0.0, 0.0)),
+    p("Silver", Metal, m([0.93, 0.93, 0.95], 0.22, 1.0, 0.0, 0.0, 0.0, 0.0)),
+    p("Chrome", Metal, m([0.86, 0.88, 0.92], 0.07, 1.0, 0.0, 0.0, 0.0, 0.0)),
+    p("Copper", Metal, m([0.95, 0.55, 0.40], 0.30, 1.0, 0.0, 0.0, 0.0, 0.0)),
+    p("Bronze", Metal, m([0.80, 0.55, 0.30], 0.38, 1.0, 0.0, 0.0, 0.0, 0.0)),
+    p("Titanium", Metal, m([0.62, 0.62, 0.66], 0.42, 1.0, 0.0, 0.0, 0.0, 0.0)),
+    p("Rusty iron", Metal, m([0.55, 0.32, 0.22], 0.85, 0.7, 0.0, 0.0, 0.0, 0.0)),
+    p("Gunmetal", Metal, m([0.25, 0.26, 0.30], 0.30, 1.0, 0.0, 0.0, 0.0, 0.0)),
+    p("Verdigris", Metal, m([0.35, 0.72, 0.62], 0.55, 0.8, 0.0, 0.0, 0.0, 0.0)),
     // glass
-    p("クリアガラス", Glass, m([0.97, 0.99, 1.00], 0.03, 0.0, 0.0, 1.0, 0.0, 0.0)),
-    p("すりガラス", Glass, m([0.95, 0.97, 1.00], 0.45, 0.0, 0.0, 0.85, 0.0, 0.0)),
-    p("ブルーガラス", Glass, m([0.45, 0.70, 1.00], 0.04, 0.0, 0.0, 1.0, 0.0, 0.0)),
-    p("グリーンガラス", Glass, m([0.45, 0.90, 0.58], 0.04, 0.0, 0.0, 1.0, 0.0, 0.0)),
-    p("ピンクガラス", Glass, m([1.00, 0.62, 0.78], 0.05, 0.0, 0.0, 1.0, 0.0, 0.0)),
-    p("ルビー", Glass, m([0.90, 0.10, 0.18], 0.03, 0.0, 0.0, 1.0, 0.0, 0.0)),
-    p("アンバー", Glass, m([1.00, 0.62, 0.15], 0.04, 0.0, 0.0, 1.0, 0.0, 0.0)),
-    p("ダイヤ", Glass, m([0.98, 0.99, 1.00], 0.02, 0.0, 0.0, 1.0, 0.25, 0.0)),
-    p("しずく", Glass, t(m([0.90, 0.97, 1.00], 0.02, 0.0, 0.0, 0.92, 0.0, 0.6), 0.3)),
+    p("Clear glass", Glass, m([0.97, 0.99, 1.00], 0.03, 0.0, 0.0, 1.0, 0.0, 0.0)),
+    p("Clear", Glass, m([1.00, 1.00, 1.00], 0.0, 0.0, 0.0, 1.0, 0.0, 0.5)),
+    p("Water", Glass, t(m([0.86, 0.95, 1.00], 0.0, 0.0, 0.0, 1.0, 0.0, 0.3), 0.15)),
+    p("Frosted glass", Glass, m([0.95, 0.97, 1.00], 0.45, 0.0, 0.0, 0.85, 0.0, 0.0)),
+    p("Blue glass", Glass, m([0.45, 0.70, 1.00], 0.04, 0.0, 0.0, 1.0, 0.0, 0.0)),
+    p("Green glass", Glass, m([0.45, 0.90, 0.58], 0.04, 0.0, 0.0, 1.0, 0.0, 0.0)),
+    p("Pink glass", Glass, m([1.00, 0.62, 0.78], 0.05, 0.0, 0.0, 1.0, 0.0, 0.0)),
+    p("Ruby", Glass, m([0.90, 0.10, 0.18], 0.03, 0.0, 0.0, 1.0, 0.0, 0.0)),
+    p("Amber", Glass, m([1.00, 0.62, 0.15], 0.04, 0.0, 0.0, 1.0, 0.0, 0.0)),
+    p("Diamond", Glass, m([0.98, 0.99, 1.00], 0.02, 0.0, 0.0, 1.0, 0.25, 0.0)),
+    p("Drop", Glass, t(m([0.90, 0.97, 1.00], 0.02, 0.0, 0.0, 0.92, 0.0, 0.6), 0.3)),
     // glow
-    p("ネオンピンク", Glow, m([1.00, 0.30, 0.65], 0.4, 0.0, 1.6, 0.0, 0.0, 0.0)),
-    p("ネオンブルー", Glow, m([0.25, 0.65, 1.00], 0.4, 0.0, 1.6, 0.0, 0.0, 0.0)),
-    p("ネオングリーン", Glow, m([0.35, 1.00, 0.45], 0.4, 0.0, 1.5, 0.0, 0.0, 0.0)),
-    p("ランプ", Glow, m([1.00, 0.82, 0.50], 0.5, 0.0, 1.8, 0.0, 0.0, 0.0)),
-    p("ラバ", Glow, m([1.00, 0.38, 0.10], 0.6, 0.0, 1.4, 0.0, 0.0, 0.0)),
-    p("ほたる", Glow, m([0.80, 1.00, 0.30], 0.5, 0.0, 1.2, 0.0, 0.0, 0.0)),
-    p("こおり", Glow, t(m([0.70, 0.92, 1.00], 0.2, 0.0, 0.4, 0.4, 0.0, 0.0), 0.5)),
+    p("Neon pink", Glow, m([1.00, 0.30, 0.65], 0.4, 0.0, 1.6, 0.0, 0.0, 0.0)),
+    p("Neon blue", Glow, m([0.25, 0.65, 1.00], 0.4, 0.0, 1.6, 0.0, 0.0, 0.0)),
+    p("Neon green", Glow, m([0.35, 1.00, 0.45], 0.4, 0.0, 1.5, 0.0, 0.0, 0.0)),
+    p("Lamp", Glow, m([1.00, 0.82, 0.50], 0.5, 0.0, 1.8, 0.0, 0.0, 0.0)),
+    p("Lava", Glow, m([1.00, 0.38, 0.10], 0.6, 0.0, 1.4, 0.0, 0.0, 0.0)),
+    p("Firefly", Glow, m([0.80, 1.00, 0.30], 0.5, 0.0, 1.2, 0.0, 0.0, 0.0)),
+    p("Ice", Glow, t(m([0.70, 0.92, 1.00], 0.2, 0.0, 0.4, 0.4, 0.0, 0.0), 0.5)),
     // fun
-    p("シャボン", Fun, m([0.95, 0.98, 1.00], 0.03, 0.0, 0.0, 0.92, 1.0, 0.0)),
-    p("ホログラム", Fun, m([0.85, 0.88, 0.95], 0.18, 0.8, 0.0, 0.0, 1.0, 0.0)),
-    p("カーペイント", Fun, m([0.86, 0.06, 0.10], 0.25, 0.0, 0.0, 0.0, 0.0, 1.0)),
-    p("パール", Fun, m([0.97, 0.95, 0.97], 0.30, 0.0, 0.0, 0.0, 0.35, 0.8)),
-    p("タマムシ", Fun, m([0.05, 0.35, 0.22], 0.22, 0.8, 0.0, 0.0, 0.9, 0.0)),
-    p("キャンディ", Fun, m([1.00, 0.45, 0.70], 0.30, 0.0, 0.0, 0.0, 0.0, 1.0)),
-    p("ゼリー", Fun, t(m([1.00, 0.55, 0.20], 0.10, 0.0, 0.0, 0.62, 0.0, 0.8), 0.8)),
-    p("オパール", Fun, m([0.95, 0.96, 1.00], 0.20, 0.0, 0.0, 0.35, 0.85, 0.4)),
-    p("夜空", Fun, m([0.10, 0.12, 0.35], 0.20, 0.5, 0.2, 0.0, 0.6, 0.7)),
-    p("マシュマロ", Fun, t(m([1.00, 0.92, 0.94], 0.75, 0.0, 0.0, 0.0, 0.0, 0.0), 0.7)),
-    p("チョコ", Fun, m([0.30, 0.16, 0.10], 0.35, 0.0, 0.0, 0.0, 0.0, 0.7)),
-    p("サンセット", Fun, grad(m([0.99, 0.74, 0.28], 0.40, 0.0, 0.0, 0.0, 0.0, 0.0), [0.55, 0.22, 0.78], 0.9)),
-    p("うみ", Fun, grad(m([0.05, 0.22, 0.62], 0.25, 0.0, 0.0, 0.0, 0.0, 0.5), [0.30, 0.92, 0.85], 0.8)),
-    p("ラムネ", Fun, grad(t(m([0.55, 0.85, 1.00], 0.15, 0.0, 0.0, 0.3, 0.0, 0.6), 0.4), [0.90, 0.98, 1.00], 0.7)),
-    p("いちごミルク", Fun, grad(m([1.00, 0.45, 0.60], 0.45, 0.0, 0.0, 0.0, 0.0, 0.3), [1.00, 0.93, 0.92], 0.6)),
-    p("オーロラ", Fun, grad(m([0.20, 0.95, 0.60], 0.30, 0.0, 0.5, 0.0, 0.0, 0.4), [0.60, 0.25, 0.95], 1.0)),
-    p("もりのあさ", Fun, grad(m([0.14, 0.40, 0.22], 0.70, 0.0, 0.0, 0.0, 0.0, 0.0), [0.88, 0.96, 0.55], 0.8)),
-    p("ミントアイス", Fun, t(m([0.62, 0.95, 0.85], 0.55, 0.0, 0.0, 0.0, 0.0, 0.3), 0.4)),
+    p("Soap bubble", Fun, m([0.95, 0.98, 1.00], 0.03, 0.0, 0.0, 0.92, 1.0, 0.0)),
+    p("Hologram", Fun, m([0.85, 0.88, 0.95], 0.18, 0.8, 0.0, 0.0, 1.0, 0.0)),
+    p("Car paint", Fun, m([0.86, 0.06, 0.10], 0.25, 0.0, 0.0, 0.0, 0.0, 1.0)),
+    p("Pearl", Fun, m([0.97, 0.95, 0.97], 0.30, 0.0, 0.0, 0.0, 0.35, 0.8)),
+    p("Jewel beetle", Fun, m([0.05, 0.35, 0.22], 0.22, 0.8, 0.0, 0.0, 0.9, 0.0)),
+    p("Candy", Fun, m([1.00, 0.45, 0.70], 0.30, 0.0, 0.0, 0.0, 0.0, 1.0)),
+    p("Jelly", Fun, t(m([1.00, 0.55, 0.20], 0.10, 0.0, 0.0, 0.62, 0.0, 0.8), 0.8)),
+    p("Opal", Fun, m([0.95, 0.96, 1.00], 0.20, 0.0, 0.0, 0.35, 0.85, 0.4)),
+    p("Night sky", Fun, m([0.10, 0.12, 0.35], 0.20, 0.5, 0.2, 0.0, 0.6, 0.7)),
+    p("Marshmallow", Fun, t(m([1.00, 0.92, 0.94], 0.75, 0.0, 0.0, 0.0, 0.0, 0.0), 0.7)),
+    p("Chocolate", Fun, m([0.30, 0.16, 0.10], 0.35, 0.0, 0.0, 0.0, 0.0, 0.7)),
+    p("Sunset", Fun, grad(m([0.99, 0.74, 0.28], 0.40, 0.0, 0.0, 0.0, 0.0, 0.0), [0.55, 0.22, 0.78], 0.9)),
+    p("Sea", Fun, grad(m([0.05, 0.22, 0.62], 0.25, 0.0, 0.0, 0.0, 0.0, 0.5), [0.30, 0.92, 0.85], 0.8)),
+    p("Ramune", Fun, grad(t(m([0.55, 0.85, 1.00], 0.15, 0.0, 0.0, 0.3, 0.0, 0.6), 0.4), [0.90, 0.98, 1.00], 0.7)),
+    p("Strawberry milk", Fun, grad(m([1.00, 0.45, 0.60], 0.45, 0.0, 0.0, 0.0, 0.0, 0.3), [1.00, 0.93, 0.92], 0.6)),
+    p("Aurora", Fun, grad(m([0.20, 0.95, 0.60], 0.30, 0.0, 0.5, 0.0, 0.0, 0.4), [0.60, 0.25, 0.95], 1.0)),
+    p("Forest morning", Fun, grad(m([0.14, 0.40, 0.22], 0.70, 0.0, 0.0, 0.0, 0.0, 0.0), [0.88, 0.96, 0.55], 0.8)),
+    p("Mint ice cream", Fun, t(m([0.62, 0.95, 0.85], 0.55, 0.0, 0.0, 0.0, 0.0, 0.3), 0.4)),
 ];
 
 pub fn presets() -> &'static [Preset] {
@@ -229,7 +231,11 @@ pub fn swatch(painter: &Painter, centre: Pos2, radius: f32, m: &Material) {
         centre,
         r,
         vec2(-0.34, -0.38),
-        &[(0.0, lighten(c, 0.22).gamma_multiply(body_alpha)), (0.45, shade(c, 0.92).gamma_multiply(body_alpha)), (1.0, base.gamma_multiply(body_alpha))],
+        &[
+            (0.0, lighten(c, 0.22).gamma_multiply(body_alpha)),
+            (0.45, shade(c, 0.92).gamma_multiply(body_alpha)),
+            (1.0, base.gamma_multiply(body_alpha)),
+        ],
     );
     if m.has_gradient() {
         gradient_tint(painter, centre, r, m, body_alpha);
@@ -268,9 +274,90 @@ pub fn swatch(painter: &Painter, centre: Pos2, radius: f32, m: &Material) {
     }
 }
 
+/// How heavy a material is for the graphics card (0 = light). Glass bends rays and soaks light, the
+/// clear coat and rainbow sheen add taps, metal and glow add a little.
+pub fn cost(m: &Material) -> f32 {
+    m.glass.clamp(0.0, 1.0) * 3.0
+        + m.translucency.clamp(0.0, 1.0) * 1.5
+        + m.coat.clamp(0.0, 1.0)
+        + m.iridescence.clamp(0.0, 1.0)
+        + (m.glow.clamp(0.0, 4.0) / 4.0) * 0.5
+        + m.metallic.clamp(0.0, 1.0) * 0.4
+}
+
+/// "Light", "Medium" or "Heavy", for the label next to a material.
+pub fn weight_word(m: &Material) -> &'static str {
+    let c = cost(m);
+    if c < 0.6 {
+        "Light"
+    } else if c < 2.0 {
+        "Medium"
+    } else {
+        "Heavy"
+    }
+}
+
+/// The same look with the expensive parts switched off (see-through, soaking, coat, sheen).
+pub fn lighter(m: &Material) -> Material {
+    Material { glass: 0.0, translucency: 0.0, coat: 0.0, iridescence: 0.0, ..*m }
+}
+
+/// A pleasant random colour (soft, not muddy), stepping the generator `seed`.
+pub fn random_color(seed: &mut u32) -> [f32; 3] {
+    let mut next = || {
+        // xorshift32: small, fine for picking colours
+        let mut x = if *seed == 0 { 0x9E37_79B9 } else { *seed };
+        x ^= x << 13;
+        x ^= x >> 17;
+        x ^= x << 5;
+        *seed = x;
+        (x >> 8) as f32 / (1u32 << 24) as f32
+    };
+    let h = next();
+    let s = 0.35 + next() * 0.4;
+    let v = 0.78 + next() * 0.2;
+    let (i, f) = ((h * 6.0).floor(), h * 6.0 - (h * 6.0).floor());
+    let (p, q, t) = (v * (1.0 - s), v * (1.0 - s * f), v * (1.0 - s * (1.0 - f)));
+    match (i as i32).rem_euclid(6) {
+        0 => [v, t, p],
+        1 => [q, v, p],
+        2 => [p, v, t],
+        3 => [p, q, v],
+        4 => [t, p, v],
+        _ => [v, p, q],
+    }
+}
+
+/// A starting value for `random_color` that differs on every press.
+pub fn fresh_seed() -> u32 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos() ^ (d.as_secs() as u32).rotate_left(16))
+        .unwrap_or(0x1234_5678)
+        | 1
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lighter_materials_cost_less_and_random_colours_are_valid() {
+        let glass = presets().iter().find(|p| p.name == "Clear glass").map(|p| p.material).unwrap_or_default();
+        assert!(cost(&lighter(&glass)) < cost(&glass));
+        assert_eq!(weight_word(&lighter(&glass)), "Light");
+        assert_eq!(weight_word(&glass), "Heavy");
+        let mut seed = 0;
+        let mut seen = Vec::new();
+        for _ in 0..50 {
+            let c = random_color(&mut seed);
+            assert!(c.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v)), "{c:?}");
+            seen.push((c[0] * 255.0) as u8);
+        }
+        seen.sort_unstable();
+        seen.dedup();
+        assert!(seen.len() > 10, "colours vary");
+    }
 
     #[test]
     fn the_library_is_big_and_valid() {
@@ -307,6 +394,27 @@ mod tests {
         out.textures_delta.clear();
     }
 
+    /// Time to draw every preset swatch once (the Material tab redraws them every frame):
+    /// `cargo test --release -p meltcad swatch_cost -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn swatch_cost() {
+        let ctx = egui::Context::default();
+        let list = presets();
+        let t = std::time::Instant::now();
+        let frames = 50;
+        for _ in 0..frames {
+            let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+                let painter = ui.painter().clone();
+                for pr in list {
+                    swatch(&painter, Pos2::new(40.0, 40.0), 14.0, &pr.material);
+                }
+            });
+            out.textures_delta.clear();
+        }
+        eprintln!("{} swatches per frame: {:.3} ms per frame", list.len(), t.elapsed().as_secs_f64() * 1000.0 / f64::from(frames));
+    }
+
     /// `YT_OUT=/tmp/grad.yura cargo test -p meltcad dump_gradient_showcase -- --ignored` writes a scene with the
     /// gradient presets and a few directions, for looking at.
     #[test]
@@ -326,8 +434,13 @@ mod tests {
         }
         // directions, flip, follow the shape, a stain over a gradient
         let base = Material { color: [1.0, 0.2, 0.2], color2: [0.2, 0.3, 1.0], gradient: 1.0, grad_soft: 0.5, ..Material::default() };
-        for (i, (axis, flip, local, rot)) in [(0u8, false, false, 0.0), (1, false, false, 0.0), (2, true, false, 0.0), (2, false, true, 35.0), (2, false, false, 35.0)].into_iter().enumerate() {
-            let mut sh = Shape::new(Kind::Box, [i as f32 * 28.0, 40.0, 12.0], Material { grad_axis: axis, grad_flip: flip, grad_local: local, ..base });
+        for (i, (axis, flip, local, rot)) in
+            [(0u8, false, false, 0.0), (1, false, false, 0.0), (2, true, false, 0.0), (2, false, true, 35.0), (2, false, false, 35.0)]
+                .into_iter()
+                .enumerate()
+        {
+            let mut sh =
+                Shape::new(Kind::Box, [i as f32 * 28.0, 40.0, 12.0], Material { grad_axis: axis, grad_flip: flip, grad_local: local, ..base });
             sh.size = [20.0, 20.0, 24.0];
             sh.rot = [rot, 0.0, 0.0];
             sh.blend = 0.0;
@@ -362,5 +475,4 @@ mod tests {
         let loaded = crate::model::Scene::from_json(&scene.to_json()).unwrap();
         assert_eq!(loaded.groups[0].shapes.last().unwrap().material, gltf);
     }
-
 }

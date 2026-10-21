@@ -42,7 +42,7 @@ pub fn default_directory() -> PathBuf {
 }
 
 fn size_error() -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidData, "ファイルが128 MiBの安全上限を超えています")
+    io::Error::new(io::ErrorKind::InvalidData, "The file is over the 128 MiB safety limit")
 }
 
 fn read_limited(path: &Path) -> io::Result<Vec<u8>> {
@@ -60,8 +60,7 @@ fn read_limited(path: &Path) -> io::Result<Vec<u8>> {
 
 fn parse_scene(text: &str) -> Result<(Scene, Vec<String>), String> {
     // A damaged design must never unwind through the event loop.
-    std::panic::catch_unwind(|| Scene::from_json_notes(text))
-        .map_err(|_| "破損した作品データの読み取りが中断されました".to_owned())?
+    std::panic::catch_unwind(|| Scene::from_json_notes(text)).map_err(|_| "Reading the damaged design data was stopped".to_owned())?
 }
 
 pub fn read_project(path: &Path) -> Result<(Scene, Vec<String>), String> {
@@ -82,7 +81,7 @@ fn atomic_write_with<F: FnOnce(&Path) -> io::Result<()>>(path: &Path, bytes: &[u
         return Err(size_error());
     }
     let parent = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or_else(|| Path::new("."));
-    let name = path.file_name().ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "保存先のファイル名がありません"))?;
+    let name = path.file_name().ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "The save location has no file name"))?;
     for _ in 0..16 {
         let mut tmp_name = OsString::from(".");
         tmp_name.push(name);
@@ -111,7 +110,7 @@ fn atomic_write_with<F: FnOnce(&Path) -> io::Result<()>>(path: &Path, bytes: &[u
         }
         return result;
     }
-    Err(io::Error::new(io::ErrorKind::AlreadyExists, "一時ファイルを作成できません"))
+    Err(io::Error::new(io::ErrorKind::AlreadyExists, "Could not create a temp file"))
 }
 
 pub fn save_project(path: &Path, scene: &Scene) -> Result<(), String> {
@@ -140,12 +139,12 @@ fn checksum(bytes: &[u8]) -> u64 {
 
 pub fn read_snapshot(path: &Path) -> Result<(Scene, Vec<String>, Option<String>), String> {
     let bytes = read_limited(path).map_err(|e| e.to_string())?;
-    let snapshot: Snapshot = serde_json::from_slice(&bytes).map_err(|e| format!("復旧ファイルの形式が不正です: {e}"))?;
+    let snapshot: Snapshot = serde_json::from_slice(&bytes).map_err(|e| format!("Recovery file format is invalid: {e}"))?;
     if snapshot.version != FORMAT_VERSION {
-        return Err(format!("未対応の復旧データ形式: {}", snapshot.version));
+        return Err(format!("Unsupported recovery data format: {}", snapshot.version));
     }
     if checksum(snapshot.payload.as_bytes()) != snapshot.checksum {
-        return Err("復旧データのチェックサムが一致しません（破損の可能性）".into());
+        return Err("Recovery data checksum does not match (may be damaged)".into());
     }
     let (scene, notes) = parse_scene(&snapshot.payload)?;
     Ok((scene, notes, snapshot.source))
@@ -159,11 +158,30 @@ fn remove_if_present(path: &Path) -> io::Result<()> {
     }
 }
 
+/// Is the snapshot at `path` the live work of another running copy? Its lock file is then locked.
+/// A lock nobody holds belongs to a crashed copy: it is cleaned away here.
+fn in_use(path: &Path) -> bool {
+    let lock_path = path.with_extension("lock");
+    let Ok(file) = fs::OpenOptions::new().write(true).open(&lock_path) else { return false };
+    match file.try_lock() {
+        Ok(()) => {
+            drop(file);
+            let _ = fs::remove_file(&lock_path);
+            false
+        }
+        Err(fs::TryLockError::WouldBlock) => true,
+        Err(_) => false,
+    }
+}
+
 /// A unique snapshot per running process. Old snapshots are not removed until
 /// the user explicitly restores/discards them, or the current work is saved.
 pub struct Store {
     root: PathBuf,
     own: PathBuf,
+    /// Held open (and locked) for as long as this process runs: another launch sees the snapshot
+    /// beside it as work in use, not as work left by a crash. The system lets go if we crash.
+    lock: Option<fs::File>,
     pending: Vec<PathBuf>,
     restored_from: Option<PathBuf>,
     last_snapshot_rev: Option<u64>,
@@ -172,19 +190,24 @@ pub struct Store {
 
 impl Store {
     pub fn new(root: PathBuf, now: Instant) -> Store {
-        let own = root.join(format!("session-{}.yrecovery", unique_id()));
+        let id = unique_id();
+        let own = root.join(format!("session-{id}.yrecovery"));
+        let lock = fs::create_dir_all(&root)
+            .and_then(|()| fs::OpenOptions::new().create(true).write(true).truncate(false).open(own.with_extension("lock")))
+            .ok()
+            .filter(|f| f.try_lock().is_ok());
         let mut pending = Vec::new();
         if let Ok(entries) = fs::read_dir(&root) {
             for entry in entries.flatten() {
                 let path = entry.path();
-                if path.is_file() && path.extension().is_some_and(|ext| ext == "yrecovery") && path != own {
+                if path.is_file() && path.extension().is_some_and(|ext| ext == "yrecovery") && path != own && !in_use(&path) {
                     pending.push(path);
                 }
             }
         }
         pending.sort_by_key(|path| fs::metadata(path).and_then(|m| m.modified()).ok());
         pending.reverse();
-        Store { root, own, pending, restored_from: None, last_snapshot_rev: None, next_due: now + INTERVAL }
+        Store { root, own, lock, pending, restored_from: None, last_snapshot_rev: None, next_due: now + INTERVAL }
     }
 
     pub fn pending_path(&self) -> Option<&Path> {
@@ -211,7 +234,7 @@ impl Store {
     /// the recovered work has been explicitly saved or discarded.
     pub fn recover_pending(&mut self) -> Result<(Scene, Vec<String>, Option<String>), String> {
         let Some(path) = self.pending.first() else {
-            return Err("復旧ファイルが見つかりません".into());
+            return Err("Recovery file not found".into());
         };
         let restored = read_snapshot(path)?;
         self.restored_from = Some(path.clone());
@@ -264,7 +287,11 @@ impl Store {
     /// Called only after an approved, normal window exit. A crash does not
     /// execute this cleanup; never use Drop to delete a recovery.
     pub fn normal_exit(&mut self) -> io::Result<()> {
-        self.clear_active()
+        self.clear_active()?;
+        if self.lock.take().is_some() {
+            remove_if_present(&self.own.with_extension("lock"))?;
+        }
+        Ok(())
     }
 
     #[cfg(test)]
@@ -283,7 +310,7 @@ mod tests {
 
     fn edited() -> Scene {
         let mut scene = Scene::default();
-        scene.groups.push(crate::model::Group::new("追加のグループ"));
+        scene.groups.push(crate::model::Group::new("Added group"));
         scene
     }
 
@@ -342,9 +369,7 @@ mod tests {
         fs::create_dir_all(&root).expect("create root");
         let original = root.join("original.meltcad");
         fs::write(&original, b"old project").expect("seed");
-        let err = atomic_write_with(&original, b"new project", |_| {
-            Err(io::Error::other("simulated failure before rename"))
-        }).expect_err("failure");
+        let err = atomic_write_with(&original, b"new project", |_| Err(io::Error::other("simulated failure before rename"))).expect_err("failure");
         assert_eq!(err.kind(), io::ErrorKind::Other);
         assert_eq!(fs::read(&original).expect("read"), b"old project");
         assert_eq!(fs::read_dir(&root).expect("list").count(), 1, "failed temp file is deleted");
@@ -385,6 +410,21 @@ mod tests {
         json["checksum"] = serde_json::json!(0);
         fs::write(&valid, serde_json::to_vec(&json).expect("encode")).expect("tamper");
         assert!(read_snapshot(&valid).is_err(), "checksum mismatch is detected");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_running_copys_snapshot_is_not_offered_and_a_crashed_ones_is() {
+        let root = temp_root();
+        let now = Instant::now();
+        let mut running = Store::new(root.clone(), now);
+        assert!(running.checkpoint(&edited(), None, true, 2, now + INTERVAL).expect("checkpoint"));
+        // a second launch while the first still runs: nothing to restore, nothing it could delete
+        assert!(Store::new(root.clone(), now).pending_path().is_none());
+        // the first one goes away without cleaning up (a crash): its work is now offered
+        drop(running);
+        let second = Store::new(root.clone(), now);
+        assert!(second.pending_path().is_some());
         let _ = fs::remove_dir_all(root);
     }
 }

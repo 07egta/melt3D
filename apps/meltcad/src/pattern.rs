@@ -28,7 +28,7 @@ pub const MAX_SIDE: u32 = 64;
 const COORD: f32 = 5000.0;
 
 /// What `Scene` says when the instances do not all fit.
-pub const TOO_MANY: &str = "パターンのこすうが多すぎます（シーン全体で256こまで）";
+pub const TOO_MANY: &str = "Too many pattern copies (up to 256 in the whole scene)";
 
 // ---------------------------------------------------------------------------------------------
 // The transform of one instance
@@ -64,6 +64,7 @@ fn transpose(a: &Mat) -> Mat {
     [[a[0][0], a[1][0], a[2][0]], [a[0][1], a[1][1], a[2][1]], [a[0][2], a[1][2], a[2][2]]]
 }
 
+#[cfg(test)]
 fn det(a: &Mat) -> f32 {
     dot(a[0], cross(a[1], a[2]))
 }
@@ -110,6 +111,7 @@ impl Inst {
     }
 
     /// Does it mirror (turn a right hand into a left one)?
+    #[cfg(test)]
     pub fn flips(&self) -> bool {
         det(&self.m) < 0.0
     }
@@ -207,20 +209,20 @@ impl PatternKind {
     pub const ALL: [PatternKind; 5] = [PatternKind::Mirror, PatternKind::Rect, PatternKind::Circular, PatternKind::Path, PatternKind::Geometry];
     pub fn label(self) -> &'static str {
         match self {
-            PatternKind::Mirror => "ミラー",
-            PatternKind::Rect => "矩形状",
-            PatternKind::Circular => "円形状",
-            PatternKind::Path => "パス上",
-            PatternKind::Geometry => "ジオメトリ",
+            PatternKind::Mirror => "Mirror",
+            PatternKind::Rect => "Rectangle",
+            PatternKind::Circular => "Circular",
+            PatternKind::Path => "Along path",
+            PatternKind::Geometry => "Geometry",
         }
     }
     pub fn hint(self) -> &'static str {
         match self {
-            PatternKind::Mirror => "X・Y・Zの面で左右（上下・前後）に写します",
-            PatternKind::Rect => "たて・よこ・高さに、同じ間かくでならべます",
-            PatternKind::Circular => "ある軸のまわりに、ぐるっとならべます",
-            PatternKind::Path => "線（カーブ・スイープ・かたち）にそってならべます",
-            PatternKind::Geometry => "ほかの形の点（ふし・かど）ごとに 1こずつおきます",
+            PatternKind::Mirror => "Mirrors across the X, Y or Z plane",
+            PatternKind::Rect => "Repeats evenly along length, width and height",
+            PatternKind::Circular => "Repeats in a circle around an axis",
+            PatternKind::Path => "Repeats along a line (curve, sweep or shape)",
+            PatternKind::Geometry => "Puts one copy at each point (node or corner) of another shape",
         }
     }
 }
@@ -355,7 +357,9 @@ pub fn shape_polyline(s: &Shape) -> Option<Poly> {
             to_world(crate::curve::build(&s.path, &s.params).iter().map(|p| [p[0], p[1], p[2]]).collect(), closed)
         }
         Kind::Sweep => to_world(s.path.iter().filter(|p| p.iter().all(|v| v.is_finite())).map(|p| [p[0], p[1], p[2]]).collect(), false),
-        Kind::Extrude | Kind::Loft => to_world(s.outline.iter().filter(|p| p.iter().all(|v| v.is_finite())).map(|p| [p[0], p[1], 0.0]).collect(), true),
+        Kind::Extrude | Kind::Loft => {
+            to_world(s.outline.iter().filter(|p| p.iter().all(|v| v.is_finite())).map(|p| [p[0], p[1], 0.0]).collect(), true)
+        }
         Kind::Revolve => to_world(s.outline.iter().filter(|p| p.iter().all(|v| v.is_finite())).map(|p| [p[0].max(0.0), 0.0, p[1]]).collect(), true),
         _ => None,
     }
@@ -365,17 +369,36 @@ pub fn shape_polyline(s: &Shape) -> Option<Poly> {
 /// (when it is a line).
 fn shape_points(s: &Shape) -> Vec<(V3, Option<V3>)> {
     let nodes: Option<(Vec<V3>, bool)> = match s.kind {
-        Kind::Curve | Kind::Sweep => Some((s.path.iter().filter(|p| p.iter().all(|v| v.is_finite())).map(|p| world_of(s, [p[0], p[1], p[2]])).collect(), s.kind == Kind::Curve && crate::curve::settings(&s.params).0)),
-        Kind::Extrude | Kind::Loft => Some((s.outline.iter().filter(|p| p.iter().all(|v| v.is_finite())).map(|p| world_of(s, [p[0], p[1], 0.0])).collect(), true)),
-        Kind::Revolve => Some((s.outline.iter().filter(|p| p.iter().all(|v| v.is_finite())).map(|p| world_of(s, [p[0].max(0.0), 0.0, p[1]])).collect(), true)),
+        Kind::Curve | Kind::Sweep => Some((
+            s.path.iter().filter(|p| p.iter().all(|v| v.is_finite())).map(|p| world_of(s, [p[0], p[1], p[2]])).collect(),
+            s.kind == Kind::Curve && crate::curve::settings(&s.params).0,
+        )),
+        Kind::Extrude | Kind::Loft => {
+            Some((s.outline.iter().filter(|p| p.iter().all(|v| v.is_finite())).map(|p| world_of(s, [p[0], p[1], 0.0])).collect(), true))
+        }
+        Kind::Revolve => {
+            Some((s.outline.iter().filter(|p| p.iter().all(|v| v.is_finite())).map(|p| world_of(s, [p[0].max(0.0), 0.0, p[1]])).collect(), true))
+        }
         _ => None,
     };
     if let Some((pts, closed)) = nodes {
         let n = pts.len();
         return (0..n)
             .map(|i| {
-                let prev = if i > 0 { pts.get(i - 1) } else if closed { pts.get(n - 1) } else { None };
-                let next = if i + 1 < n { pts.get(i + 1) } else if closed { pts.first() } else { None };
+                let prev = if i > 0 {
+                    pts.get(i - 1)
+                } else if closed {
+                    pts.get(n - 1)
+                } else {
+                    None
+                };
+                let next = if i + 1 < n {
+                    pts.get(i + 1)
+                } else if closed {
+                    pts.first()
+                } else {
+                    None
+                };
                 let here = pts.get(i).copied().unwrap_or([0.0; 3]);
                 let tangent = match (prev, next) {
                     (Some(a), Some(b)) => Some(sub(*b, *a)),
@@ -449,7 +472,7 @@ pub fn poly_length(poly: &Poly) -> f32 {
 
 /// The middle of a group's visible shapes.
 pub fn centre_of_shapes(shapes: &[Shape]) -> V3 {
-    let vis: Vec<&Shape> = shapes.iter().filter(|s| s.visible).collect();
+    let vis: Vec<&Shape> = shapes.iter().filter(|s| s.solid()).collect();
     if vis.is_empty() {
         return [0.0; 3];
     }
@@ -470,7 +493,7 @@ fn follow_points(src: Source, scene: &Scene) -> Vec<(V3, Option<V3>, Option<Mat>
             None => Vec::new(),
         },
         Source::Group(uid) => match scene.group_by_uid(uid).and_then(|g| scene.groups.get(g)) {
-            Some(g) => g.shapes.iter().filter(|s| s.visible).map(|s| (s.pos, None, None)).collect(),
+            Some(g) => g.shapes.iter().filter(|s| s.solid()).map(|s| (s.pos, None, None)).collect(),
             None => Vec::new(),
         },
     }
@@ -615,8 +638,17 @@ pub fn link_source(scene: &Scene, gi: usize) -> Option<usize> {
 pub fn resolve(scene: &Scene) -> Vec<RGroup> {
     let mut left = MAX_INSTANCES;
     let mut out = Vec::new();
+    // (hiding a group hides everything nested in it)
+    let mut hidden_below: Option<u8> = None;
     for (gi, g) in scene.groups.iter().enumerate() {
+        if let Some(d) = hidden_below {
+            if g.depth > d {
+                continue;
+            }
+            hidden_below = None;
+        }
         if !g.visible {
+            hidden_below = Some(g.depth);
             continue;
         }
         let linked = g.instance_of.is_some();
@@ -674,7 +706,7 @@ pub fn world_spheres(scene: &Scene) -> Vec<Bound> {
     let mut out = Vec::new();
     for rg in resolve(scene) {
         let Some(src) = scene.groups.get(rg.src) else { continue };
-        let parts: Vec<Bound> = src.shapes.iter().filter(|s| s.visible).map(|s| Bound { c: s.pos, r: crate::view::radius_of(s) }).collect();
+        let parts: Vec<Bound> = src.shapes.iter().filter(|s| s.solid()).map(|s| Bound { c: s.pos, r: crate::view::radius_of(s) }).collect();
         if parts.is_empty() {
             continue;
         }
@@ -690,7 +722,7 @@ pub fn world_spheres(scene: &Scene) -> Vec<Bound> {
 
 /// A sphere around the whole of a visible group's `Add` parts, in the group's own space.
 pub fn group_sphere(shapes: &[Shape]) -> Bound {
-    let spheres: Vec<Bound> = shapes.iter().filter(|s| s.visible).map(crate::accel::shape_bound).collect();
+    let spheres: Vec<Bound> = shapes.iter().filter(|s| s.solid()).map(crate::accel::shape_bound).collect();
     crate::accel::enclose(&spheres)
 }
 
@@ -1118,7 +1150,8 @@ mod tests {
 
     #[test]
     fn patterns_round_trip_and_old_files_and_unknown_patterns_open() {
-        let mut sc = scene_with(vec![ball([0.0; 3])], Some(Pattern::Circular { count: 5, angle: 270.0, axis: 1, centre: [1.0, 2.0, 3.0], rotate: false }));
+        let mut sc =
+            scene_with(vec![ball([0.0; 3])], Some(Pattern::Circular { count: 5, angle: 270.0, axis: 1, centre: [1.0, 2.0, 3.0], rotate: false }));
         sc.ensure_group_uid(0);
         sc.groups[0].xform = Xform { pos: [1.0, 2.0, 3.0], rot: [4.0, 5.0, 6.0], scale: 1.5 };
         sc.groups[0].instance_of = Some(9);

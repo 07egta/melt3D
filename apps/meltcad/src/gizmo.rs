@@ -11,7 +11,6 @@ use crate::camera::Camera;
 use crate::model::{Kind, Pick, Scene};
 use crate::sdf::{Prepared, V3, add, cross, dot, mul, sub};
 use crate::style;
-use crate::view::targets;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Tool {
@@ -151,11 +150,18 @@ fn arc_points(cam: &Camera, rect: Rect, c: V3, axis: usize, r: f32, span: (f32, 
 }
 
 /// The handles for the current selection, placed on screen.
+#[cfg(test)]
 pub fn build(cam: &Camera, rect: Rect, scene: &Scene, sel: Option<Pick>, tool: Tool) -> Option<Geom> {
+    build_multi(cam, rect, scene, sel.as_slice(), tool)
+}
+
+/// The handles for one pick or several: with several they sit in the middle of all and act on all.
+pub fn build_multi(cam: &Camera, rect: Rect, scene: &Scene, picks: &[Pick], tool: Tool) -> Option<Geom> {
     if tool == Tool::Select {
         return None;
     }
-    let centre_w = crate::view::centre_of(scene, sel)?;
+    let sel = if let [one] = picks { Some(*one) } else { None };
+    let centre_w = crate::view::centre_of_picks(scene, picks)?;
     let c = cam.project(rect, centre_w)?;
     let len_w = ARROW_PX * cam.mm_per_px(centre_w, rect.height());
     let shape = match sel {
@@ -398,7 +404,7 @@ fn angle_in_plane(v: V3, axis: usize) -> f32 {
 
 impl App {
     fn action_for(&self, handle: Handle, tool: Tool, shift: bool) -> Act {
-        let group = matches!(self.sel, Some(Pick::Group(_)));
+        let group = matches!(self.sel, Some(Pick::Group(_))) || self.picks().len() > 1;
         match (tool, handle) {
             (_, Handle::Plane(i)) => Act::MovePlane(i),
             (_, Handle::Arc(i)) | (Tool::Rotate, Handle::Axis(i)) => Act::Rotate(i),
@@ -461,11 +467,11 @@ impl App {
             (Act::StretchFace(k), Some(fs)) => fs.get(k).copied().flatten().map(|p| (p - g.centre).length()).unwrap_or(60.0),
             _ => 60.0,
         };
-        let from = targets(&self.scene, self.sel)
+        let from = crate::view::targets_all(&self.scene, &self.picks())
             .into_iter()
             .filter_map(|(gi, si)| self.scene.shape(gi, si).map(|s| (gi, si, s.pos, s.rot, s.scale)))
             .collect();
-        let link = match self.sel {
+        let link = match self.sel.filter(|_| self.picks().len() == 1) {
             Some(Pick::Group(gi)) => self.scene.groups.get(gi).filter(|gr| gr.is_linked()).map(|gr| (gi, gr.xform)),
             _ => None,
         };
@@ -514,7 +520,7 @@ impl App {
 
     pub fn apply_drag(&mut self, d: &mut Drag, mouse: Pos2, snap: bool) {
         let delta = mouse - d.start;
-        let group = matches!(self.sel, Some(Pick::Group(_)));
+        let group = matches!(self.sel, Some(Pick::Group(_))) || self.picks().len() > 1;
         let (right, up, _) = self.cam.basis();
         let (o, rd) = self.cam.ray_at(d.rect, mouse);
         let round = |v: f32, step: f32| if snap { (v / step).round() * step } else { v };
@@ -634,11 +640,11 @@ impl App {
 /// The handle's direction on the floor for the status line.
 pub fn hint(tool: Tool) -> &'static str {
     match tool {
-        Tool::Select => "クリックで選ぶ",
-        Tool::All => "矢印=動かす　四角=平面で動かす　曲がった矢印=回す　真ん中=ぜんぶ拡大　面の四角=その向きにのばす",
-        Tool::Move => "矢印で動かす (Ctrlで1mmずつ)",
-        Tool::Rotate => "輪っかで回す (Ctrlで15度ずつ)",
-        Tool::Scale => "真ん中=ぜんぶ拡大　面の四角=その向きだけのばす　軸の四角=その軸の大きさ",
+        Tool::Select => "Click to select",
+        Tool::All => "Arrow: move   Square: move on plane   Curved arrow: rotate   Center: scale all   Face square: stretch that way",
+        Tool::Move => "Drag arrow to move (Ctrl: 1 mm steps)",
+        Tool::Rotate => "Drag ring to rotate (Ctrl: 15 degree steps)",
+        Tool::Scale => "Center: scale all   Face square: stretch that way   Axis square: scale that axis",
     }
 }
 

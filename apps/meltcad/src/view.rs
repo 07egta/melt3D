@@ -10,6 +10,51 @@ use crate::perf::Gate;
 use crate::sdf::{V3, add, dot, len, mul, sub};
 use crate::style;
 
+/// The home button under the axis ball.
+const HOME_RADIUS: f32 = 12.0;
+
+/// The pointing device the view controls are tuned for.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Device {
+    Mouse,
+    Trackpad,
+}
+
+/// The person's choice: a fixed device, or follow what the scrolling looks like.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum InputDev {
+    Auto,
+    Mouse,
+    Trackpad,
+}
+
+impl InputDev {
+    /// The device in use: the fixed choice, or what was last seen.
+    pub fn device(self, seen: Device) -> Device {
+        match self {
+            InputDev::Auto => seen,
+            InputDev::Mouse => Device::Mouse,
+            InputDev::Trackpad => Device::Trackpad,
+        }
+    }
+}
+
+/// What a scroll event says about the device: a notched wheel sends whole lines; a trackpad sends
+/// pixels or fractions of a line (and pinches).
+pub fn device_of_scroll(unit: egui::MouseWheelUnit, delta: egui::Vec2) -> Option<Device> {
+    if !delta.x.is_finite() || !delta.y.is_finite() || (delta.x == 0.0 && delta.y == 0.0) {
+        return None;
+    }
+    match unit {
+        egui::MouseWheelUnit::Point => Some(Device::Trackpad),
+        egui::MouseWheelUnit::Page => Some(Device::Mouse),
+        egui::MouseWheelUnit::Line => {
+            let whole = |v: f32| (v - v.round()).abs() < 1e-3;
+            if whole(delta.x) && whole(delta.y) { Some(Device::Mouse) } else { Some(Device::Trackpad) }
+        }
+    }
+}
+
 /// The shapes a pick stands for.
 pub fn targets(scene: &Scene, pick: Option<Pick>) -> Vec<(usize, usize)> {
     match pick {
@@ -19,9 +64,50 @@ pub fn targets(scene: &Scene, pick: Option<Pick>) -> Vec<(usize, usize)> {
     }
 }
 
+/// The shapes of all these picks, each once.
+pub fn targets_all(scene: &Scene, picks: &[Pick]) -> Vec<(usize, usize)> {
+    if picks.len() <= 1 {
+        return targets(scene, picks.first().copied());
+    }
+    let mut out: Vec<(usize, usize)> = Vec::with_capacity(picks.len());
+    let mut seen = std::collections::HashSet::with_capacity(picks.len());
+    for p in picks {
+        // Visit each selected range directly: no temporary Vec for each pick, and
+        // no growing linear scan of all earlier selections for every shape.
+        let (g, range) = match *p {
+            Pick::Shape(g, s) if scene.shape(g, s).is_some() => (g, s..s + 1),
+            Pick::Group(g) => {
+                let Some(group) = scene.groups.get(g) else { continue };
+                (g, 0..group.shapes.len())
+            }
+            _ => continue,
+        };
+        for s in range {
+            let t = (g, s);
+            if seen.insert(t) {
+                out.push(t);
+            }
+        }
+    }
+    out
+}
+
 /// What a hit of the CPU field stands for: a shape, or (when `s` is `sdf::LINKED`) a whole linked copy.
 pub fn as_pick(g: usize, s: usize) -> Pick {
     if s == crate::sdf::LINKED { Pick::Group(g) } else { Pick::Shape(g, s) }
+}
+
+/// Where the handles sit for several picks: the middle of all their shapes.
+pub fn centre_of_picks(scene: &Scene, picks: &[Pick]) -> Option<V3> {
+    if let [one] = picks {
+        return centre_of(scene, Some(*one));
+    }
+    let t = targets_all(scene, picks);
+    let mut sum = [0.0; 3];
+    for (g, s) in &t {
+        sum = add(sum, scene.shape(*g, *s)?.pos);
+    }
+    (!t.is_empty()).then(|| mul(sum, 1.0 / t.len() as f32))
 }
 
 /// Where the handles sit: the shape, or the middle of a group.
@@ -89,8 +175,12 @@ impl App {
 
         // The handles
         let tool = self.tool;
-        let geom = if clean || self.ct.drawing || self.pt.on || self.sketch_active() { None } else { gizmo::build(&self.cam, rect, &self.scene, self.sel, tool) };
-        let over_gnomon = !clean && pos.is_some_and(|p| self.gnomon_hit(rect, p).is_some());
+        let geom = if clean || self.ct.drawing || self.pt.on || self.sketch_active() {
+            None
+        } else {
+            gizmo::build_multi(&self.cam, rect, &self.scene, &self.picks(), tool)
+        };
+        let over_gnomon = !clean && pos.is_some_and(|p| self.gnomon_hit(rect, p).is_some() || Self::home_hit(rect, p));
         let hover_handle = match (&geom, pos, &self.drag) {
             (Some(g), Some(p), None) if resp.hovered() && !over_gnomon && !ct.over => gizmo::hit(g, tool, p),
             _ => None,
@@ -147,7 +237,47 @@ impl App {
             moved_camera = true;
         }
         if resp.hovered() {
-            let (scroll, pinch) = ui.input(|i| (i.smooth_scroll_delta.y, i.zoom_delta()));
+            // learn what the person is using from how the scrolling arrives
+            let seen = ui.input(|i| {
+                i.events.iter().rev().find_map(|e| match e {
+                    egui::Event::MouseWheel { unit, delta, .. } => device_of_scroll(*unit, *delta),
+                    egui::Event::Zoom(_) => Some(Device::Trackpad),
+                    _ => None,
+                })
+            });
+            if let Some(d) = seen {
+                self.input_seen = d;
+            }
+            let device = self.input_dev.device(self.input_seen);
+            let (scroll_v, pinch) = ui.input(|i| (i.smooth_scroll_delta, i.zoom_delta()));
+            // trackpad: two fingers turn the view (Shift: slide it); the wheel of a mouse zooms
+            let (scroll, turn) = if device == Device::Trackpad { (0.0, scroll_v) } else { (scroll_v.y, egui::Vec2::ZERO) };
+            // egui folds a Shift+scroll into a sideways-only scroll: read the raw events so that
+            // Shift + two fingers slides the view up/down as well as left/right
+            let turn = if device == Device::Trackpad && mods.shift {
+                let raw = ui.input(|i| {
+                    i.events.iter().fold(egui::Vec2::ZERO, |acc, e| match e {
+                        egui::Event::MouseWheel { unit, delta, .. } => {
+                            acc + match unit {
+                                egui::MouseWheelUnit::Point => *delta,
+                                _ => *delta * 24.0,
+                            }
+                        }
+                        _ => acc,
+                    })
+                });
+                if raw != egui::Vec2::ZERO { raw } else { turn }
+            } else {
+                turn
+            };
+            if turn != egui::Vec2::ZERO && turn.x.is_finite() && turn.y.is_finite() {
+                if mods.shift {
+                    self.cam.pan(turn.x, turn.y, rect.height());
+                } else {
+                    self.cam.orbit(-turn.x, -turn.y);
+                }
+                moved_camera = true;
+            }
             if let Some(p) = pos {
                 // Apply wheel and pinch in one step, keeping the cursor anchor stable.
                 // Keep the original pinch sensitivity and mouse bindings.
@@ -160,8 +290,11 @@ impl App {
             }
         }
 
+        // Box selection (when one of the two box buttons is on) takes drags that start on empty space
+        let marquee_free = hover_handle.is_none() && !ct.taken && !ct.over && !over_gnomon;
+        let marquee_taken = self.marquee_input(ui, &resp, rect, marquee_free, mods.shift);
         // A drag that starts on a handle moves the thing; a drag that starts anywhere else turns the view
-        if resp.drag_started_by(PointerButton::Primary) && !mods.alt && !ct.taken && !self.sketch_active() {
+        if resp.drag_started_by(PointerButton::Primary) && !mods.alt && !ct.taken && !marquee_taken && !self.sketch_active() {
             // where the button went down (the pointer has moved a little by now)
             let origin = ui.input(|i| i.pointer.press_origin()).or(pos);
             let grabbed = match (&geom, origin) {
@@ -172,7 +305,7 @@ impl App {
                 self.drag = Some(self.begin_drag(h, g, rect, o, tool, mods.shift));
                 self.orbiting = false;
             } else {
-                self.orbiting = origin.is_some_and(|o| self.gnomon_hit(rect, o).is_none());
+                self.orbiting = origin.is_some_and(|o| self.gnomon_hit(rect, o).is_none() && !Self::home_hit(rect, o));
             }
         }
         if self.sketch_active() {
@@ -195,7 +328,7 @@ impl App {
             {
                 self.apply_drag(&mut d, p, mods.ctrl);
             }
-            if !(resp.drag_stopped() || !ui.input(|i| i.pointer.primary_down())) {
+            if !resp.drag_stopped() && ui.input(|i| i.pointer.primary_down()) {
                 self.drag = Some(d);
             }
         }
@@ -213,29 +346,40 @@ impl App {
             && !self.sketch_active()
             && let Some(p) = pos
         {
-            if let Some(axis) = self.gnomon_hit(rect, p) {
+            if Self::home_hit(rect, p) {
+                self.go_home();
+            } else if let Some(axis) = self.gnomon_hit(rect, p) {
                 self.look_along(axis);
             } else {
-                self.pick_at(rect, p, mods.shift, mods.ctrl);
+                if mods.shift {
+                    self.toggle_at(rect, p);
+                } else {
+                    // Ctrl/Cmd toggles this item. Use the scene tree to select a whole group.
+                    self.pick_at(rect, p, mods.command || mods.ctrl, mods.command || mods.ctrl);
+                }
             }
         }
+        // while a drawing tool is on, the right click belongs to the tool (it confirms)
+        let tool_busy = ct.taken || self.sketch_active() || self.ct.drawing || self.pt.on;
         if resp.secondary_clicked()
-            && !self.sketch_active()
+            && !tool_busy
             && let Some(p) = pos
         {
-            // Keep the multi-selection when right-clicking one of its members.
-            let under = self.shape_at(rect, p).map(|(g, s)| as_pick(g, s));
+            let under = self.guide_at(rect, p).or_else(|| self.shape_at(rect, p)).map(|(g, s)| as_pick(g, s));
             if !under.is_some_and(|item| self.is_pick_selected(item)) {
                 self.select_pick(under, false);
             }
         }
-        resp.context_menu(|ui| self.context_menu(ui));
+        if !tool_busy {
+            resp.context_menu(|ui| self.context_menu(ui));
+        }
         if resp.double_clicked_by(PointerButton::Primary)
             && hover_handle.is_none()
             && !ct.taken
             && !self.sketch_active()
             && let Some(p) = pos
             && self.gnomon_hit(rect, p).is_none()
+            && !Self::home_hit(rect, p)
         {
             match self.shape_at(rect, p) {
                 Some((g, s)) if self.scene.shape(g, s).is_some_and(crate::sketch::editable) => {
@@ -270,6 +414,7 @@ impl App {
             let pack = self.perf.pack.get(&self.scene, rev);
             let mut globals = pack.globals(&self.scene, &self.cam, [vp[0] as f32, vp[1] as f32], shown_sel, shown_hover, self.srgb);
             crate::gpu::set_view_flags(&mut globals, crate::perf::view_flags(self.srgb, false, pack.glow));
+            crate::gpu::set_view_mode(&mut globals, self.view_mode.id());
             counts = (self.scene.shape_count(), pack.group_n, pack.instances);
             let fbs = self.perf.feedback.state();
             sharp = if fast { 0.0 } else { fbs.sharp };
@@ -291,6 +436,7 @@ impl App {
             ui.painter().add(egui_wgpu::Callback::new_paint_callback(rect, cb));
         } else {
             // the simple view: drawn on the CPU by a worker thread, never blocking the window
+            self.gpu.easy_view.mode = self.view_mode.id();
             self.gpu.easy_view.update(ui.ctx(), &self.scene, &self.cam, vp, fast);
             self.gpu.easy_view.paint(&ui.painter_at(rect), rect, self.scene.env.backdrop);
         }
@@ -325,7 +471,7 @@ impl App {
         let draw_geom = if clean || self.ct.drawing || self.pt.on || self.sketch_active() {
             None
         } else if moved_camera || self.drag.is_some() {
-            gizmo::build(&self.cam, rect, &self.scene, self.sel, tool)
+            gizmo::build_multi(&self.cam, rect, &self.scene, &self.picks(), tool)
         } else {
             geom
         };
@@ -333,9 +479,11 @@ impl App {
             let active = self.drag.as_ref().map(gizmo::Drag::handle).or(hover_handle);
             gizmo::draw(&painter, g, tool, active);
         }
+        self.guide_paint(&painter, rect);
         self.curve_paint(&painter, rect);
         self.pipe_paint(&painter, rect);
         self.sketch_paint(&painter, rect);
+        self.marquee_paint(&painter);
         self.paint_multi_selection(&painter, rect);
         self.draw_gnomon(&painter, rect, pos);
     }
@@ -387,7 +535,42 @@ impl App {
             .or_else(|| self.gnomon_items(rect).into_iter().find(|(_, c, _)| (*c - p).length() < 8.0).map(|(d, _, _)| d))
     }
 
+    /// The home button sits just under the axis ball.
+    fn home_centre(rect: Rect) -> Pos2 {
+        pos2(rect.right() - 62.0, rect.top() + 62.0 + 48.0 + 20.0)
+    }
+
+    fn home_hit(rect: Rect, p: Pos2) -> bool {
+        (Self::home_centre(rect) - p).length() < HOME_RADIUS + 2.0
+    }
+
+    /// The home view: the first angle, everything in sight (gliding there).
+    pub fn go_home(&mut self) {
+        self.frame_view(false);
+        let home = Camera::default();
+        if let Some(goal) = self.fly.as_mut() {
+            goal.yaw = home.yaw;
+            goal.pitch = home.pitch;
+        }
+    }
+
+    fn draw_home(&self, p: &egui::Painter, rect: Rect, mouse: Option<Pos2>) {
+        let c = Self::home_centre(rect);
+        let hot = mouse.is_some_and(|m| Self::home_hit(rect, m));
+        p.circle_filled(c, HOME_RADIUS, Color32::from_black_alpha(if hot { 90 } else { 54 }));
+        let ink = if hot { style::TEXT } else { style::DIM };
+        let s = Stroke::new(1.6, ink);
+        // a little house: roof and walls
+        let roof = [c + vec2(-6.5, -0.5), c + vec2(0.0, -6.5), c + vec2(6.5, -0.5)];
+        p.line_segment([roof[0], roof[1]], s);
+        p.line_segment([roof[1], roof[2]], s);
+        p.line_segment([c + vec2(-4.5, -1.0), c + vec2(-4.5, 5.5)], s);
+        p.line_segment([c + vec2(4.5, -1.0), c + vec2(4.5, 5.5)], s);
+        p.line_segment([c + vec2(-4.5, 5.5), c + vec2(4.5, 5.5)], s);
+    }
+
     fn draw_gnomon(&self, p: &egui::Painter, rect: Rect, mouse: Option<Pos2>) {
+        self.draw_home(p, rect, mouse);
         let origin = pos2(rect.right() - 62.0, rect.top() + 62.0);
         p.circle_filled(origin, 48.0, Color32::from_black_alpha(36));
         let mut items = self.gnomon_items(rect);
@@ -456,16 +639,21 @@ impl App {
         self.field().ray(o, d, 5000.0).and_then(|(_, s)| s.nearest)
     }
 
+    /// Shift + click: add the thing under the point to the selection, or take it out again.
+    fn toggle_at(&mut self, rect: Rect, p: Pos2) {
+        if let Some((g, s)) = self.shape_at(rect, p) {
+            self.select_pick(Some(as_pick(g, s)), true);
+        }
+    }
+
     fn pick_at(&mut self, rect: Rect, p: Pos2, keep: bool, additive: bool) {
-        match self.shape_at(rect, p) {
+        // a sketch line near the click wins over what lies behind it
+        let hit = self.guide_at(rect, p).or_else(|| self.shape_at(rect, p));
+        match hit {
             Some((g, s)) => {
                 let want = as_pick(g, s);
-                if additive {
-                    self.select_pick(Some(want), true);
-                } else {
-                    let single = if keep && self.sel == Some(want) { Pick::Group(g) } else { want };
-                    self.select_pick(Some(single), false);
-                }
+                let pick = if keep && !additive && self.sel == Some(want) { Pick::Group(g) } else { want };
+                self.select_pick(Some(pick), additive && pick == want);
             }
             None if !additive => self.select_pick(None, false),
             None => {}
@@ -475,7 +663,11 @@ impl App {
     pub fn frame_view(&mut self, only_selected: bool) {
         let spheres: Vec<crate::accel::Bound> = if only_selected && self.sel.is_some() {
             let t = targets(&self.scene, self.sel);
-            t.iter().filter_map(|(g, s)| self.scene.shape(*g, *s)).filter(|s| s.visible).map(|s| crate::accel::Bound { c: s.pos, r: radius_of(s) }).collect()
+            t.iter()
+                .filter_map(|(g, s)| self.scene.shape(*g, *s))
+                .filter(|s| s.visible)
+                .map(|s| crate::accel::Bound { c: s.pos, r: radius_of(s) })
+                .collect()
         } else {
             crate::pattern::world_spheres(&self.scene)
         };
@@ -516,6 +708,111 @@ mod tests {
         assert_eq!(targets(&s, Some(Pick::Shape(0, 5))).len(), 0);
     }
 
+    fn reference_targets(scene: &Scene, picks: &[Pick]) -> Vec<(usize, usize)> {
+        let mut out = Vec::new();
+        for pick in picks {
+            for target in targets(scene, Some(*pick)) {
+                if !out.contains(&target) {
+                    out.push(target);
+                }
+            }
+        }
+        out
+    }
+
+    fn selection_scene(count: usize) -> Scene {
+        let mut scene = Scene::default();
+        let base = scene.groups[0].shapes[0].clone();
+        scene.groups[0].shapes = (0..count)
+            .map(|i| {
+                let mut shape = base.clone();
+                shape.pos[0] = i as f32;
+                shape
+            })
+            .collect();
+        scene
+    }
+
+    #[test]
+    fn overlapping_group_and_shape_picks_preserve_first_encounter_order() {
+        let mut scene = selection_scene(4);
+        let mut other = scene.groups[0].clone();
+        other.shapes.truncate(2);
+        scene.groups.push(other);
+        let picks = [
+            Pick::Shape(0, 2),
+            Pick::Group(1),
+            Pick::Group(usize::MAX),
+            Pick::Group(0),
+            Pick::Shape(1, 0),
+            Pick::Shape(0, usize::MAX),
+            Pick::Group(1),
+        ];
+        let want = vec![(0, 2), (1, 0), (1, 1), (0, 0), (0, 1), (0, 3)];
+        assert_eq!(targets_all(&scene, &picks), want);
+        assert_eq!(targets_all(&scene, &picks), reference_targets(&scene, &picks));
+        assert_eq!(targets_all(&scene, &[]), Vec::new());
+        assert_eq!(targets_all(&scene, &[Pick::Group(0)]), targets(&scene, Some(Pick::Group(0))));
+        // The handle centre depends on the same once-only list, not on how many
+        // overlapping group and shape picks refer to each object.
+        let expected_x = want.iter().map(|&(g, s)| scene.groups[g].shapes[s].pos[0]).sum::<f32>() / want.len() as f32;
+        assert!(centre_of_picks(&scene, &picks).is_some_and(|p| (p[0] - expected_x).abs() < 1e-5));
+    }
+
+    #[test]
+    fn large_multi_selections_match_the_original_targets_exactly() {
+        for count in [10, 100, 300, 1000] {
+            let scene = selection_scene(count);
+            let mut picks: Vec<_> = (0..count).rev().map(|s| Pick::Shape(0, s)).collect();
+            picks.extend([Pick::Group(0), Pick::Shape(usize::MAX, 0), Pick::Group(0)]);
+            let selected = targets_all(&scene, &picks);
+            assert_eq!(selected.len(), count);
+            assert_eq!(selected, reference_targets(&scene, &picks));
+        }
+    }
+
+    /// CPU selection bookkeeping only, not viewport FPS. Compares the exact old
+    /// algorithm with the same picks and preserves the returned order.
+    #[test]
+    #[ignore]
+    fn multi_selection_speed() {
+        use std::hint::black_box;
+        eprintln!("CPU selection expansion; medians of 7 interleaved runs");
+        eprintln!("shapes,reference_us,optimized_us,ratio");
+        for count in [10, 100, 300, 1000] {
+            let scene = selection_scene(count);
+            let picks: Vec<_> = (0..count).map(|s| Pick::Shape(0, s)).collect();
+            assert_eq!(targets_all(&scene, &picks), reference_targets(&scene, &picks));
+            let repeat = 30000 / count;
+            let measure = |optimized| {
+                let started = std::time::Instant::now();
+                for _ in 0..repeat {
+                    black_box(if optimized {
+                        targets_all(black_box(&scene), black_box(&picks))
+                    } else {
+                        reference_targets(black_box(&scene), black_box(&picks))
+                    });
+                }
+                started.elapsed().as_secs_f64() * 1e6 / repeat as f64
+            };
+            let mut times: [Vec<f64>; 2] = Default::default();
+            for run in 0..8 {
+                for step in 0..2 {
+                    let which = (run + step) % 2;
+                    let elapsed = measure(which == 1);
+                    if run > 0 {
+                        times[which].push(elapsed);
+                    }
+                }
+            }
+            for row in &mut times {
+                row.sort_by(f64::total_cmp);
+            }
+            let [reference, optimized] = times.map(|row| row[3]);
+            eprintln!("{count},{reference:.3},{optimized:.3},{:.2}", reference / optimized);
+        }
+    }
+
     #[test]
     fn the_view_glides_to_its_goal() {
         let mut app = App::new(true, None);
@@ -527,5 +824,55 @@ mod tests {
         }
         assert!(app.fly.is_none());
         assert!(goal.is_some_and(|g| (app.cam.dist - g).abs() < 0.5));
+    }
+}
+
+#[cfg(test)]
+mod device_tests {
+    use super::*;
+    use egui::{MouseWheelUnit as U, vec2};
+
+    #[test]
+    fn the_scroll_shape_tells_wheel_from_trackpad() {
+        assert_eq!(device_of_scroll(U::Line, vec2(0.0, 1.0)), Some(Device::Mouse));
+        assert_eq!(device_of_scroll(U::Line, vec2(0.0, -3.0)), Some(Device::Mouse));
+        assert_eq!(device_of_scroll(U::Line, vec2(0.0, 0.37)), Some(Device::Trackpad));
+        assert_eq!(device_of_scroll(U::Point, vec2(2.0, 5.0)), Some(Device::Trackpad));
+        assert_eq!(device_of_scroll(U::Point, vec2(0.0, 0.0)), None);
+        assert_eq!(device_of_scroll(U::Point, vec2(f32::NAN, 1.0)), None);
+    }
+
+    #[test]
+    fn a_fixed_choice_beats_what_was_seen() {
+        assert_eq!(InputDev::Auto.device(Device::Trackpad), Device::Trackpad);
+        assert_eq!(InputDev::Mouse.device(Device::Trackpad), Device::Mouse);
+        assert_eq!(InputDev::Trackpad.device(Device::Mouse), Device::Trackpad);
+    }
+}
+
+#[cfg(test)]
+mod home_tests {
+    use super::*;
+
+    #[test]
+    fn home_goes_to_the_first_angle_and_frames_everything() {
+        let mut app = App::new(true, None);
+        app.cam.yaw = 2.0;
+        app.cam.pitch = -0.4;
+        app.go_home();
+        let goal = app.fly.expect("the view glides home");
+        let first = Camera::default();
+        assert_eq!((goal.yaw, goal.pitch), (first.yaw, first.pitch));
+        assert!(goal.dist > 0.0 && goal.dist.is_finite());
+    }
+
+    #[test]
+    fn the_home_button_is_under_the_axis_ball_and_only_hits_itself() {
+        let rect = Rect::from_min_size(Pos2::ZERO, vec2(900.0, 600.0));
+        let c = App::home_centre(rect);
+        assert!(App::home_hit(rect, c));
+        assert!(!App::home_hit(rect, c + vec2(40.0, 0.0)));
+        assert!(c.y > rect.top() + 62.0 + 48.0, "below the ball, not on it");
+        assert!(rect.contains(c));
     }
 }

@@ -13,6 +13,15 @@ use serde::{Deserialize, Serialize};
 
 static DARK: AtomicBool = AtomicBool::new(true);
 
+/// A host app's own look on top of the dark theme (Melt 3D paints SolidCraft in its colours).
+/// Set once at start; SolidCraft itself never sets it.
+static SKIN: std::sync::OnceLock<fn(Tokens) -> Tokens> = std::sync::OnceLock::new();
+
+/// Let the host app restyle the dark tokens. Only the first call counts.
+pub fn set_skin(skin: fn(Tokens) -> Tokens) {
+    let _ = SKIN.set(skin);
+}
+
 thread_local! {
     /// The colour vision mode, per thread, where the dark theme is one global (`DARK`). Each app
     /// sets it from its own preferences at the start of every frame (`SolveApp::logic`), on the
@@ -307,7 +316,11 @@ impl Tokens {
 
     /// The tokens of a theme and colour vision mode.
     pub fn themed(dark: bool, mode: ColorVision) -> Tokens {
-        (if dark { Tokens::dark() } else { Tokens::light() }).with_vision(dark, mode)
+        let base = (if dark { Tokens::dark() } else { Tokens::light() }).with_vision(dark, mode);
+        match SKIN.get() {
+            Some(skin) if dark => skin(base),
+            _ => base,
+        }
     }
 
     /// These tokens with a colour vision mode's values on top (the tables in `palettes.rs`); Off

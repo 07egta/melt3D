@@ -23,6 +23,8 @@ pub struct Dimensions {
     pub error: Option<String>,
     /// True for a drawn loft top instead of the main outline.
     pub top_profile: bool,
+    /// The point was added by Tab for this edit: Esc takes it away again.
+    pub provisional: bool,
     before_fields: [String; 2],
     before_profile: Vec<[f32; 2]>,
     before_point: Option<[f32; 2]>,
@@ -44,10 +46,7 @@ fn sign(v: f32) -> f32 {
 impl Dimensions {
     pub fn for_shape(pen: Pen, a: [f32; 2], b: [f32; 2], profile: &[[f32; 2]], top: bool) -> Option<Self> {
         let (target, fields) = match pen {
-            Pen::Rect => (
-                Target::Rectangle { anchor: a, edge: b },
-                [number((b[0] - a[0]).abs()), number((b[1] - a[1]).abs())],
-            ),
+            Pen::Rect => (Target::Rectangle { anchor: a, edge: b }, [number((b[0] - a[0]).abs()), number((b[1] - a[1]).abs())]),
             Pen::Circle => {
                 let radius = (b[0] - a[0]).hypot(b[1] - a[1]);
                 (Target::Circle { center: a, edge: b }, [number(radius), number(radius * 2.0)])
@@ -63,6 +62,7 @@ impl Dimensions {
             needs_focus: true,
             error: None,
             top_profile: top,
+            provisional: false,
             before_profile: profile.to_vec(),
             before_point: None,
         })
@@ -88,6 +88,32 @@ impl Dimensions {
             needs_focus: true,
             error: None,
             top_profile: false,
+            provisional: false,
+            before_profile: Vec::new(),
+            before_point: Some(last),
+        })
+    }
+
+    /// Length and angle of the segment that ends at the last point (a polygon or a line).
+    pub fn for_new_segment(points: &[[f32; 2]]) -> Option<Self> {
+        let index = points.len().checked_sub(1)?;
+        if index == 0 {
+            return None;
+        }
+        let last = *points.get(index)?;
+        let start = *points.get(index - 1)?;
+        let (dx, dy) = (last[0] - start[0], last[1] - start[1]);
+        let fields = [number(dx.hypot(dy)), number(dy.atan2(dx).to_degrees())];
+        Some(Self {
+            target: Target::Segment { index, start },
+            before_fields: fields.clone(),
+            fields,
+            selected: 0,
+            editing: true,
+            needs_focus: true,
+            error: None,
+            top_profile: false,
+            provisional: true,
             before_profile: Vec::new(),
             before_point: Some(last),
         })
@@ -99,9 +125,9 @@ impl Dimensions {
 
     pub fn labels(&self) -> [&'static str; 2] {
         match self.target {
-            Target::Rectangle { .. } => ["幅", "高さ"],
-            Target::Circle { .. } => ["半径", "直径"],
-            Target::Segment { .. } => ["長さ", "角度"],
+            Target::Rectangle { .. } => ["Width", "Height"],
+            Target::Circle { .. } => ["Radius", "Diameter"],
+            Target::Segment { .. } => ["Length", "Angle"],
             Target::Point { .. } => ["X", "Y"],
         }
     }
@@ -116,10 +142,7 @@ impl Dimensions {
     pub fn readout(&self) -> String {
         let labels = self.labels();
         let units = self.units();
-        format!(
-            "{} {}{}  /  {} {}{}",
-            labels[0], self.fields[0], units[0], labels[1], self.fields[1], units[1]
-        )
+        format!("{} {}{}  /  {} {}{}", labels[0], self.fields[0], units[0], labels[1], self.fields[1], units[1])
     }
 
     pub fn position(&self, points: &[[f32; 2]]) -> Option<[f32; 2]> {
@@ -139,85 +162,88 @@ impl Dimensions {
     }
 
     fn parse(&self, index: usize) -> Result<f32, String> {
-        let Some(value) = self.fields.get(index) else { return Err("入力欄が見つかりません".into()) };
+        let Some(value) = self.fields.get(index) else { return Err("Input field not found".into()) };
         if value.len() > 32 {
-            return Err("数値は32文字以内で入力してください".into());
+            return Err("Enter a number of 32 characters or fewer".into());
         }
         let Ok(n) = value.trim().parse::<f32>() else {
-            return Err("有効な数値を入力してください".into());
+            return Err("Enter a valid number".into());
         };
         if !n.is_finite() {
-            return Err("有限の数値を入力してください".into());
+            return Err("Enter a finite number".into());
         }
         Ok(n)
     }
 
     /// Apply on each TextEdit change, never only after Enter. Invalid intermediate strings
     /// leave the last valid geometry visible and disable confirmation.
-    pub fn update(&mut self, points: &mut Vec<[f32; 2]>, profile: &mut Vec<[f32; 2]>, changed: usize, prevent_cross: bool) {
-        let result: Result<(Option<Vec<[f32; 2]>>, Option<(usize, [f32; 2])>, Option<String>), String> = (|| {
-            match self.target {
-                Target::Rectangle { anchor, edge } => {
-                    let (w, h) = (self.parse(0)?, self.parse(1)?);
-                    if w <= sketch::MIN_SIDE || h <= sketch::MIN_SIDE {
-                        return Err("幅と高さは0.5mmより大きくしてください".into());
-                    }
-                    let b = [anchor[0] + sign(edge[0] - anchor[0]) * w, anchor[1] + sign(edge[1] - anchor[1]) * h];
-                    if !finite_point(anchor) || !finite_point(b) {
-                        return Err("座標がスケッチ範囲の外です".into());
-                    }
-                    let p = sketch::rect_profile(anchor, b).map_err(sketch::SketchError::message)?;
-                    Ok((Some(p), None, None))
+    pub fn update(&mut self, points: &mut [[f32; 2]], profile: &mut Vec<[f32; 2]>, changed: usize, prevent_cross: bool) {
+        type DimensionChange = (Option<Vec<[f32; 2]>>, Option<(usize, [f32; 2])>, Option<String>);
+        let result: Result<DimensionChange, String> = (|| match self.target {
+            Target::Rectangle { anchor, edge } => {
+                let (w, h) = (self.parse(0)?, self.parse(1)?);
+                if w <= sketch::MIN_SIDE || h <= sketch::MIN_SIDE {
+                    return Err("Width and height must be greater than 0.5 mm".into());
                 }
-                Target::Circle { center, edge } => {
-                    let input = self.parse(changed.min(1))?;
-                    let radius = if changed == 0 { input } else { input / 2.0 };
-                    if radius <= sketch::MIN_SIDE {
-                        return Err("半径は0.5mmより大きくしてください".into());
-                    }
-                    let old = (edge[0] - center[0]).hypot(edge[1] - center[1]);
-                    if old < sketch::MIN_SIDE {
-                        return Err("円の向きを決定できません".into());
-                    }
-                    let b = [center[0] + (edge[0] - center[0]) * radius / old, center[1] + (edge[1] - center[1]) * radius / old];
-                    if !finite_point(center) || !finite_point(b) {
-                        return Err("座標がスケッチ範囲の外です".into());
-                    }
-                    let p = sketch::circle_profile(center, b).map_err(sketch::SketchError::message)?;
-                    if !p.iter().copied().all(finite_point) {
-                        return Err("円がスケッチ範囲の外です".into());
-                    }
-                    let other = if changed == 0 { number(radius * 2.0) } else { number(radius) };
-                    Ok((Some(p), None, Some(other)))
+                let b = [anchor[0] + sign(edge[0] - anchor[0]) * w, anchor[1] + sign(edge[1] - anchor[1]) * h];
+                if !finite_point(anchor) || !finite_point(b) {
+                    return Err("Coordinate is outside the sketch area".into());
                 }
-                Target::Segment { index, start } => {
-                    let length = self.parse(0)?;
-                    let angle = self.parse(1)?;
-                    if length <= sketch::MIN_SIDE || angle.abs() > 36000.0 {
-                        return Err("長さは0.5mmより大きく、角度は±36000°以内にしてください".into());
-                    }
-                    let rad = angle.to_radians();
-                    let b = [start[0] + length * rad.cos(), start[1] + length * rad.sin()];
-                    if !finite_point(b) || points.get(index).is_none() {
-                        return Err("点がスケッチ範囲の外です".into());
-                    }
-                    Ok((None, Some((index, b)), None))
+                let p = sketch::rect_profile(anchor, b).map_err(sketch::SketchError::message)?;
+                Ok((Some(p), None, None))
+            }
+            Target::Circle { center, edge } => {
+                let input = self.parse(changed.min(1))?;
+                let radius = if changed == 0 { input } else { input / 2.0 };
+                if radius <= sketch::MIN_SIDE {
+                    return Err("Radius must be greater than 0.5 mm".into());
                 }
-                Target::Point { index } => {
-                    let b = [self.parse(0)?, self.parse(1)?];
-                    if !finite_point(b) || points.get(index).is_none() {
-                        return Err("X・Yは±2000mm以内にしてください".into());
-                    }
-                    if let Some(previous) = index.checked_sub(1).and_then(|i| points.get(i)) {
-                        if (previous[0] - b[0]).hypot(previous[1] - b[1]) < 1e-3 {
-                            return Err("直前の点とは別の位置にしてください".into());
-                        }
-                        if prevent_cross && index >= 2 && sketch::crosses_polyline(&points[..index], *previous, b, false) {
-                            return Err("この点では輪郭が交差します".into());
-                        }
-                    }
-                    Ok((None, Some((index, b)), None))
+                let old = (edge[0] - center[0]).hypot(edge[1] - center[1]);
+                if old < sketch::MIN_SIDE {
+                    return Err("Can't determine circle orientation".into());
                 }
+                let b = [center[0] + (edge[0] - center[0]) * radius / old, center[1] + (edge[1] - center[1]) * radius / old];
+                if !finite_point(center) || !finite_point(b) {
+                    return Err("Coordinate is outside the sketch area".into());
+                }
+                let p = sketch::circle_profile(center, b).map_err(sketch::SketchError::message)?;
+                if !p.iter().copied().all(finite_point) {
+                    return Err("Circle is outside the sketch area".into());
+                }
+                let other = if changed == 0 { number(radius * 2.0) } else { number(radius) };
+                Ok((Some(p), None, Some(other)))
+            }
+            Target::Segment { index, start } => {
+                let length = self.parse(0)?;
+                let angle = self.parse(1)?;
+                if length <= sketch::MIN_SIDE || angle.abs() > 36000.0 {
+                    return Err("Length must be greater than 0.5 mm and angle within ±36000°".into());
+                }
+                let rad = angle.to_radians();
+                let b = [start[0] + length * rad.cos(), start[1] + length * rad.sin()];
+                if !finite_point(b) || points.get(index).is_none() {
+                    return Err("Point is outside the sketch area".into());
+                }
+                // the same check as placing the point with the mouse
+                if prevent_cross && index >= 2 && sketch::crosses_polyline(&points[..index], start, b, false) {
+                    return Err("The outline crosses at this point".into());
+                }
+                Ok((None, Some((index, b)), None))
+            }
+            Target::Point { index } => {
+                let b = [self.parse(0)?, self.parse(1)?];
+                if !finite_point(b) || points.get(index).is_none() {
+                    return Err("X and Y must be within ±2000 mm".into());
+                }
+                if let Some(previous) = index.checked_sub(1).and_then(|i| points.get(i)) {
+                    if (previous[0] - b[0]).hypot(previous[1] - b[1]) < 1e-3 {
+                        return Err("Place it apart from the previous point".into());
+                    }
+                    if prevent_cross && index >= 2 && sketch::crosses_polyline(&points[..index], *previous, b, false) {
+                        return Err("The outline crosses at this point".into());
+                    }
+                }
+                Ok((None, Some((index, b)), None))
             }
         })();
         match result {
@@ -225,7 +251,9 @@ impl Dimensions {
                 if let Some(p) = new_profile {
                     *profile = p;
                 }
-                if let Some((index, p)) = new_point && let Some(current) = points.get_mut(index) {
+                if let Some((index, p)) = new_point
+                    && let Some(current) = points.get_mut(index)
+                {
                     *current = p;
                 }
                 if let Some(value) = synced {
@@ -239,7 +267,9 @@ impl Dimensions {
 
     /// Esc cancels the in-progress changes and restores the state at the last Enter.
     pub fn cancel(&mut self, points: &mut Vec<[f32; 2]>, profile: &mut Vec<[f32; 2]>) {
-        if self.is_profile() {
+        if self.provisional {
+            points.pop();
+        } else if self.is_profile() {
             profile.clone_from(&self.before_profile);
         } else if let Some(old) = self.before_point
             && let Target::Segment { index, .. } | Target::Point { index } = self.target
@@ -268,7 +298,9 @@ impl Dimensions {
             }
             Target::Circle { center, edge } => {
                 let old = (edge[0] - center[0]).hypot(edge[1] - center[1]);
-                if let Ok(radius) = self.fields[0].parse::<f32>() && old > 0.0 {
+                if let Ok(radius) = self.fields[0].parse::<f32>()
+                    && old > 0.0
+                {
                     edge[0] = center[0] + (edge[0] - center[0]) / old * radius;
                     edge[1] = center[1] + (edge[1] - center[1]) / old * radius;
                 }
@@ -304,7 +336,7 @@ mod tests {
         let mut d = Dimensions::for_shape(Pen::Rect, [10.0, 20.0], [-15.0, 8.0], &old, false).expect("fields");
         let mut p = old.clone();
         d.fields = ["36.25".into(), "17.5".into()];
-        d.update(&mut vec![], &mut p, 1, false);
+        d.update(&mut [], &mut p, 1, false);
         assert!(d.error.is_none());
         let (min, max) = sketch::bbox(&p).expect("box");
         assert!(approximately(min[0], -26.25) && approximately(max[1], 20.0));
@@ -319,11 +351,11 @@ mod tests {
         let mut d = Dimensions::for_shape(Pen::Circle, [0.0, 0.0], [4.0, 0.0], &old, false).expect("fields");
         let mut p = old;
         d.fields[1] = "30".into();
-        d.update(&mut vec![], &mut p, 1, false);
+        d.update(&mut [], &mut p, 1, false);
         assert_eq!(d.fields[0], "15");
         assert!(approximately(p[0][0].hypot(p[0][1]), 15.0));
         d.fields[0] = "8".into();
-        d.update(&mut vec![], &mut p, 0, false);
+        d.update(&mut [], &mut p, 0, false);
         assert_eq!(d.fields[1], "16");
         assert!(approximately(p[0][0].hypot(p[0][1]), 8.0));
     }
@@ -364,12 +396,32 @@ mod tests {
     }
 
     #[test]
+    fn a_typed_length_and_angle_may_not_cross_the_outline_either() {
+        // three corners placed, the fourth is the segment being typed
+        let mut pts = vec![[0.0, 0.0], [20.0, 0.0], [20.0, 20.0], [10.0, 20.0]];
+        let mut d = Dimensions::for_new_segment(&pts).expect("segment");
+        let mut profile = vec![];
+        let before = pts[3];
+        // from (20, 20) down and to the left, through the first side
+        d.fields = ["40".into(), "-120".into()];
+        d.update(&mut pts, &mut profile, 1, true);
+        assert!(d.error.is_some(), "crossing is refused");
+        assert_eq!(pts[3], before, "the draft stays as it was");
+        // the same numbers are fine where nothing is crossed (other pens do not check)
+        d.update(&mut pts, &mut profile, 1, false);
+        assert!(d.error.is_none());
+        d.fields = ["5".into(), "90".into()];
+        d.update(&mut pts, &mut profile, 1, true);
+        assert!(d.error.is_none(), "{:?}", d.error);
+    }
+
+    #[test]
     fn bounds_and_self_intersection_are_rejected_without_destroying_preview() {
         let old = sketch::rect_profile([0.0, 0.0], [10.0, 5.0]).expect("rectangle");
         let mut d = Dimensions::for_shape(Pen::Rect, [0.0, 0.0], [10.0, 5.0], &old, false).expect("fields");
         let mut profile = old.clone();
         d.fields[0] = "30000".into();
-        d.update(&mut vec![], &mut profile, 0, false);
+        d.update(&mut [], &mut profile, 0, false);
         assert_eq!(profile, old);
         assert!(d.error.is_some());
 
@@ -379,5 +431,29 @@ mod tests {
         d.update(&mut pts, &mut vec![], 1, true);
         assert!(d.error.is_some());
         assert_eq!(pts[3], [0.0, 20.0]);
+    }
+}
+
+#[cfg(test)]
+mod tab_segment_tests {
+    use super::*;
+
+    #[test]
+    fn a_tab_segment_types_length_and_angle_and_esc_takes_it_away() {
+        let mut points = vec![[0.0, 0.0], [10.0, 0.0]];
+        let Some(mut d) = Dimensions::for_new_segment(&points) else { panic!("segment") };
+        assert_eq!(d.labels(), ["Length", "Angle"]);
+        d.fields = ["20".into(), "90".into()];
+        let mut profile = Vec::new();
+        d.update(&mut points, &mut profile, 0, false);
+        let p = points[1];
+        assert!(p[0].abs() < 1e-3 && (p[1] - 20.0).abs() < 1e-3, "{p:?}");
+        assert!(d.accept(&points, &profile));
+        // a second one, cancelled: the point goes away again
+        points.push([5.0, 20.0]);
+        let Some(mut d2) = Dimensions::for_new_segment(&points) else { panic!("segment") };
+        d2.cancel(&mut points, &mut profile);
+        assert_eq!(points.len(), 2);
+        assert!(Dimensions::for_new_segment(&[[0.0, 0.0]]).is_none(), "one point has no segment");
     }
 }

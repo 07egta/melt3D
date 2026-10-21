@@ -360,7 +360,8 @@ mod tests {
         assert_eq!(older.kind, Kind::Box);
         assert_eq!(older.corner, Corner::Round);
         // a name from the future is round too
-        let odd: Shape = serde_json::from_str(&json.replace("Chamfer", "Bullnose")).unwrap_or_else(|_| Shape::new(Kind::Sphere, [0.0; 3], Material::default()));
+        let odd: Shape =
+            serde_json::from_str(&json.replace("Chamfer", "Bullnose")).unwrap_or_else(|_| Shape::new(Kind::Sphere, [0.0; 3], Material::default()));
         assert_eq!(odd.corner, Corner::Round);
         assert_eq!(odd.kind, Kind::Box);
     }

@@ -8,7 +8,15 @@ MELTCAD は、やわらかい形を かんたんに作れる 3D モデリング�
 - 色や つやを決める（ざいしつ）
 - STL・3MF・OBJ・PLY・GLB に書き出して、3D プリンターで印刷したり ほかのソフトで使う
 
-## はじめかた
+## ダウンロード（Windows / Mac / Linux）
+
+[Releases ページ](https://github.com/07egta/melt3D/releases/latest) から、自分のパソコンのファイルをダウンロードして、zip をひらくだけです。
+
+- **Windows**: `Melt3D-…-windows-x64.zip` → ひらいて `Melt3D.exe` をダブルクリック。「PCが保護されました」と出たら「詳細情報」→「実行」。
+- **Linux**: `Melt3D-…-linux-x64.tar.gz` → ひらいて `./Melt3D` を実行。
+- **Mac（M1 以降）**: `Melt3D-…-macos-arm64.zip` / **Mac（Intel）**: `Melt3D-…-macos-intel.zip` → ひらいて「Melt 3D」を アプリケーション に入れる。はじめの 1 回だけ、右クリック → 「開く」。
+
+## はじめかた（ソースから）
 
 Rust が入っていれば、このリポジトリのフォルダで次のコマンドを打つと起動します。
 
@@ -23,6 +31,22 @@ cargo run --release -p meltcad -- 作品.yura
 ```
 
 起動直後は、球が 1 つ置かれています。上のまんなかの形のボタンを押すと、えらんでいる形のとなりに新しい形が出てきます。
+
+## SolidCraft で精密に作る
+
+寸法を決めた部品や、穴・角の丸みがある部品は、Melt 3D の中の **SolidCraft** で作れます。
+
+1. 上の **「SolidCraft」** を押します。「さがす F」で `Solid`・`SolidCraft`・`精密`・`ソリッド` と入力しても開けます。途中のスケッチや立体プレビューは、先に確定するか取り消してください。
+2. 画面上部の日本語の案内に沿ってスケッチを描き、押し出しなどで立体にします。寸法を直したり、穴や角の丸みを加えたりでき、STEP にも書き出せます。
+3. **「Melt 3D に戻る」** を押すと、作った立体がメルトできる形として入ります。大きさ（mm）と位置を保ち、Melt 側に置いていた形も残ります。同じ立体を変更せずにもう一度戻っても、重ねて追加しません。
+
+受け渡しに失敗したときは理由が表示されます。SolidCraft の形を保ったまま、原因を直してもう一度戻れます。
+
+Melt 側に入る形は、立体をメッシュにしてからメルト用のデータへ変換した近似です。細い部分や小さい穴は変換の細かさの影響を受けます。SolidCraft の寸法・履歴を残すには、SolidCraft 側でも **`.solidcraft`** として保存してください。Melt の **`.meltcad`** は受け取った形を保存し、SolidCraft の編集履歴は含みません。
+
+精密データにも自動復旧を用意しています。予期せず終了した場合は、SolidCraft を開くと復旧候補が表示されます。通常の終了時も、未保存の精密データを確認してから閉じます。
+
+操作と受け渡しの詳しい説明: [SolidCraft 統合の操作メモ](../../docs/yuracad-solid-integration-20261020.md)。
 
 ## 画面のならび
 
@@ -331,3 +355,64 @@ Illustrator や Inkscape などで作った SVG の絵を、ぐーっと押し�
 - 「書き出し」メニュー: 書き出し…（カード）、前の設定でもう一度（Ctrl+E）、画像(PNG)、プリントチェック。
 - 「書き出し → プリントチェック」: 大きさ、体積、表面が閉じているか（穴がないか）を下の帯に出します。
 - えらんでいる形の大きさ（幅 × 奥行 × 高さ）は、下の帯の右に出ます。
+
+## AI・プログラムから操作する（命令の形）
+`meltcad --run script.json [--scene in.meltcad] [--out out.meltcad] [--png out.png]`
+スクリプトは命令の配列です。例: `[{"cmd":"shape.add","kind":"Sphere","pos":[0,0,20]},{"cmd":"melt.set","amount":1.5}]`。
+命令の一覧は `{"cmd":"commands"}`。
+
+### Sketch を保存してから Solid を作る
+
+`sketch.create` は完成した輪郭や開いた線を保存します。画面やダイアログは開きません。
+返り値の `group` と `shape` は 0 から始まる番号です。その組を `sketch`、`top`、`path` に渡します。
+Solid の命令は新しい形を追加し、参照した Sketch は残します。`scene.summary` の `sketch:true` でも見分けられます。
+
+```json
+[
+  {"cmd":"sketch.create","name":"Plate outline","points":[[-10,-10],[10,-10],[10,10],[-10,10]],"holes":[[[-3,-3],[3,-3],[3,3],[-3,3]]]},
+  {"cmd":"solid.extrude","sketch":{"group":0,"shape":0},"height":12,"both":true}
+]
+```
+
+| 命令 | 主な入力 |
+|---|---|
+| `sketch.create` | `points:[[x,y],…]`、任意で `closed`（既定 `true`）、`holes`、`plane`、追加先 `group`、`name` |
+| `sketch.set` | `group`、`shape`、新しい `points`。省略した `closed`、`holes`、`plane`、名前・ID・材質・可視性・変換は保持 |
+| `solid.extrude` | `sketch:{group,shape}`、`height`（既定 20 mm）、`both`、`flip` |
+| `solid.revolve` | 立っている平面に保存した `sketch`。平面原点を通る縦軸の周りに回転 |
+| `solid.loft` | `sketch` と `top:{group,shape}`。平行な2平面の実際の距離と横ずれを使用。`top` を省略すると `height`（20 mm）と `top_scale`（0.5）のコピーを使用 |
+| `solid.sweep` | 閉じた `sketch` と開いた `path:{group,shape}`、`scale`（1）。開いた Sketch を `sketch` に渡すと `radius`（4 mm）の丸い管 |
+
+`plane` の既定は `"floor"`。`"front"`、`"side"`、または
+`{"origin":[0,0,30],"u":[1,0,0],"v":[0,1,0]}` のように原点と2方向を指定できます。
+`points` と穴の座標はこの平面内の mm です。`sketch.set` は現在の変換後の平面内の mm を受け取り、
+形の回転や倍率も保持します。穴を消すときは `"holes":[]` を明示します。
+
+閉じた輪郭は最大64点、開いた線は最大48点、穴は最大12個です。座標は平面内 ±2000 mm、
+平面原点は各軸 ±5000 mm。高さは 0.1–2000 mm、`top_scale` は 0.1–3、
+閉輪郭 Sweep の `scale` は 0.2–4、丸い Sweep の `radius` は 0.4–16 mm です。
+各 Solid 命令には `op:"Add"|"Subtract"`、`name`、`color:[r,g,b]`（各 0–1）も指定できます。
+穴付き輪郭は Extrude に使えます。穴を含む形は専用グループとして追加されます。
+保存済み `top` がある Loft では `height`・`top_scale`・`flip` は指定せず、
+丸い Sweep は `radius`、閉輪郭 Sweep は `scale` を使います。
+数値や輪郭、参照先、容量が不正なら、これらの命令はシーンを変えずにエラーを返します。
+従来の `extrude` 命令も引き続き利用できます。
+
+### 開いているアプリを動かす／MCP
+- `meltcad --control 7777` … アプリを開いたまま、127.0.0.1:7777 に JSON を1行ずつ送って操作できます。最初の1回だけ `"token"` が必要（中身は一時フォルダの `melt3d-control-7777.token`）。
+- `meltcad --mcp` … MCP サーバー（画面なし）。`meltcad --mcp --control 7777` なら開いている画面を操作します。
+- Claude Code: `claude mcp add melt3d -- /path/to/meltcad --mcp --control 7777`
+- 道具は2つ: `melt3d_run`（命令を実行）と `melt3d_view`（絵を見る）。
+- スケッチ・ドラッグ・文字入力の途中では、外部からの変更と保存は現在の編集が終わるまで拒否します。読み取りと画像出力は使えます。成功した変更は1命令ずつ Undo でき、失敗した命令では画面のシーンを変更しません。
+
+### アニメーション（クレイアニメ風・メルトも動く）
+- 右下の **Animation** を押すと、下に時間の帯（タイムライン）が出ます。
+- やり方: 形を置く → **Set pose**（今の形を覚える）→ 別のコマに動かす → 形を動かす（自動で覚える）→ **Play**。ポーズの間は自動でつながります。溶け具合（Melt）も動きます。
+- **Clay** をオンにすると、ポーズを3コマずつ止めてコマ撮りの感じになります。
+- **Export GIF** で動く絵として保存。
+- AI からは `anim.set / anim.key / anim.delete / anim.at / anim.render`（`{"cmd":"commands"}` で一覧）。
+- **大ファイル（Stage）と中のファイル（Piece）**: ふつうの `.meltcad` が、そのまま大ファイルです。「ファイル → Add file…」で足した別のファイルは、シーン一覧で「File」の印が付いた1つのグループ（Piece）になり、最初から Melt: on で今の作品や、ほかの Piece と溶け合います。溶ける量は Piece のグループの Melt で変えられ、Off にすれば溶けずに並びます。
+  - Piece のパネルに「Reload」（元のファイルを読み直して置き換え。溶ける量・名前・＋/−・表示は保つ）と「Save as file…」（Piece の中身を単独のファイルとして書き出し、以後はそのファイルを覚える）があります。
+  - AI からは `scene.add_file {path}`、`piece.reload {group}`、`piece.save {group, path}`。
+- スケッチや立体のプレビューを編集中は再生・コマ移動・ポーズ記録を止めます。確定後の編集だけを記録し、編集と記録を同じ Undo にまとめます。
+- `anim.at` の `frame` は 0 から始まり、最後のコマを超えた場合は末尾に収めて、実際の `frame` を返します。開いている画面への変更命令は再生を止め、タイムラインの自動記録で命令の結果を上書きしません。

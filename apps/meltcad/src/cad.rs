@@ -242,7 +242,11 @@ fn sweep(p: &Prepared, q: V3) -> f32 {
     let rr = profile_round(p, r);
     let d2 = if p.chamfer && p.round > 0.0 {
         corner::cut_polygon(polygon(&p.outline, uv), uv, &p.outline, p.poly_orient, p.round / r.max(1e-3), false) * r
-    } else if rr > 0.0 { (polygon_inset(&p.outline, uv, rr, p.poly_orient, false) - rr) * r } else { polygon(&p.outline, uv) * r };
+    } else if rr > 0.0 {
+        (polygon_inset(&p.outline, uv, rr, p.poly_orient, false) - rr) * r
+    } else {
+        polygon(&p.outline, uv) * r
+    };
     // flat end caps: how far past the first / last node along the path
     let mut axial = -1e5_f32;
     if i == 0 && t <= 0.0 {

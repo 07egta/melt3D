@@ -29,6 +29,49 @@ fn shade(f: &Field, o: [f32; 3], d: [f32; 3]) -> [f32; 3] {
     }
 }
 
+/// One picture of the scene from `cam`, `w` x `h` RGBA (for animation frames).
+pub fn view(scene: &Scene, cam: &Camera, w: usize, h: usize) -> Vec<u8> {
+    let (w, h) = (w.clamp(16, 1200), h.clamp(16, 1200));
+    let f = Field::new(scene);
+    let aspect = w as f32 / h as f32;
+    let rows: Vec<Vec<u8>> = std::thread::scope(|sc| {
+        let threads = std::thread::available_parallelism().map_or(2, |n| n.get()).clamp(1, 8);
+        let hs: Vec<_> = (0..threads)
+            .map(|k| {
+                let f = &f;
+                sc.spawn(move || {
+                    let mut part = Vec::new();
+                    for y in (k..h).step_by(threads) {
+                        let mut row = vec![0u8; w * 4];
+                        for x in 0..w {
+                            let nx = (x as f32 + 0.5) / w as f32 * 2.0 - 1.0;
+                            let ny = 1.0 - (y as f32 + 0.5) / h as f32 * 2.0;
+                            let (o, d) = cam.ray([nx, ny], aspect);
+                            let col = shade(f, o, d);
+                            for c in 0..3 {
+                                row[x * 4 + c] = (col[c].clamp(0.0, 1.0).powf(1.0 / 2.2) * 255.0) as u8;
+                            }
+                            row[x * 4 + 3] = 255;
+                        }
+                        part.push((y, row));
+                    }
+                    part
+                })
+            })
+            .collect();
+        let mut rows = vec![Vec::new(); h];
+        for hnd in hs {
+            for (y, row) in hnd.join().unwrap_or_default() {
+                if let Some(slot) = rows.get_mut(y) {
+                    *slot = row;
+                }
+            }
+        }
+        rows
+    });
+    rows.concat()
+}
+
 /// Render the four views into one RGBA sheet (2 x size wide and high).
 pub fn sheet(scene: &Scene, size: usize) -> (usize, Vec<u8>) {
     let size = size.clamp(40, 600);
@@ -135,6 +178,73 @@ pub fn cli(args: &[std::ffi::OsString]) -> bool {
         Err(e) => eprintln!("cannot encode the picture: {e}"),
     }
     true
+}
+
+/// The whole animation as a GIF: every frame (or every `step`-th) drawn from `cam`, or from a
+/// camera that fits the piece at all its poses. `size` is the width in pixels.
+pub fn animation_gif(
+    scene: &Scene,
+    cam: Option<Camera>,
+    size: usize,
+    use_gpu: bool,
+    mut progress: impl FnMut(u32, u32) -> bool,
+) -> Result<Vec<u8>, String> {
+    let a = &scene.anim;
+    if a.is_empty() {
+        return Err("No poses yet. Set a pose first".into());
+    }
+    let w = size.clamp(64, 640);
+    let h = (w * 3 / 4).max(48);
+    let cam = cam.unwrap_or_else(|| {
+        let keys = a.key_frames();
+        let spheres: Vec<([f32; 3], f32)> = keys
+            .iter()
+            .map(|&f| {
+                let mut s = scene.clone();
+                a.apply(&mut s, f);
+                crate::gpu::bounds(&s, None)
+            })
+            .filter(|(_, r)| *r > 0.0)
+            .collect();
+        let n = spheres.len().max(1) as f32;
+        let c = spheres.iter().fold([0.0f32; 3], |m, (c, _)| [m[0] + c[0] / n, m[1] + c[1] / n, m[2] + c[2] / n]);
+        let r =
+            spheres.iter().map(|(p, r)| ((p[0] - c[0]).powi(2) + (p[1] - c[1]).powi(2) + (p[2] - c[2]).powi(2)).sqrt() + r).fold(0.0f32, f32::max);
+        let (c, r) = if spheres.is_empty() { ([0.0, 0.0, 20.0], 40.0) } else { (c, r) };
+        let mut cam = Camera::default();
+        cam.look(0.6, 0.42);
+        cam.frame(c, r);
+        cam
+    });
+    // a GIF frame lasts 2 hundredths of a second at the least: above 50 fps, pictures are skipped
+    // (and the waits shared out evenly) so the animation still takes as long as it should
+    let step = (a.length / 240 + 1).max(a.fps.max(1).div_ceil(50)).max(1);
+    let frames: Vec<u32> = (0..a.length).step_by(step as usize).collect();
+    let total = frames.len() as u32;
+    // the same picture as the window when there is a graphics card to ask (else the plain CPU one)
+    let mut gpu = if use_gpu { crate::gpu::offscreen::Offscreen::open_with(None, None).ok() } else { None };
+    let pic = gpu.as_ref().map(|g| g.picture([w as u32, h as u32]));
+    let mut pics = Vec::new();
+    for (i, &f) in frames.iter().enumerate() {
+        if !progress(i as u32, total) {
+            return Err("Stopped".into());
+        }
+        let mut s = scene.clone();
+        a.apply(&mut s, f);
+        match (gpu.as_mut(), pic.as_ref()) {
+            (Some(g), Some(pic)) => {
+                let pack = crate::gpu::ScenePack::new(&s, crate::gpu::VolumeSet::of(&s));
+                g.load(&pack);
+                let mut globals = pack.globals(&s, &cam, [w as f32, h as f32], None, None, false);
+                crate::gpu::set_view_flags(&mut globals, crate::perf::view_flags(false, false, pack.glow));
+                g.frame(pic, &globals, false);
+                pics.push(g.read(pic));
+            }
+            _ => pics.push(view(&s, &cam, w, h)),
+        }
+    }
+    let delays = crate::gif::delays(pics.len(), 100.0 * step as f32 / a.fps.max(1) as f32);
+    crate::gif::encode_timed(w, h, &pics, &delays)
 }
 
 #[cfg(test)]
