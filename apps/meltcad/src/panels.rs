@@ -359,6 +359,9 @@ impl App {
                 "このグループ全体が、前のグループとどのくらい溶けるか (グープ)",
             );
         }
+        if let Some(gr) = self.scene.groups.get_mut(g) {
+            crate::designer_bag::inspector(ui, gr);
+        }
         ui.horizontal(|ui| {
             if style::pill_enabled(ui, "↑ 前へ", false, g > 0).clicked() {
                 swap = Some((g, g - 1));

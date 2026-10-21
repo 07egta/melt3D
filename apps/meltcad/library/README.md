@@ -1,8 +1,24 @@
 # MELTCAD model library
 
-Each `*.json` here is one category of ready-made models, compiled into the app (`src/library.rs`).
-The files are **generated** by Python scripts in `gen/` (one script per file) so a model is a few
-lines of readable code.
+Most categories here are `*.json` ready-made models compiled into the app (`src/library.rs`).
+These files are **generated** by Python scripts in `gen/` (one script per file).
+
+## Parametric Designer Bag
+
+The **バッグ** category is built in Rust (`src/designer_bag.rs`), not in a generated JSON file.
+Choose **デザイナーバッグ・トート**, **デザイナーバッグ・半円** or **デザイナーバッグ・折り紙**.
+The library inserts an editable group of five real SDF parts (hollow body, floor, Boolean
+opening, front handle and rear handle). Select the group to edit width, height, depth,
+wall thickness, handle rise/diameter/curvature and the variant. Use the left scene tree
+to modify individual shapes and their materials; regenerating group dimensions updates
+the parametric parts. The settings are saved in the scene's `Group.bag` field with the
+ordinary shapes, so old scene files still load and editing survives save/reopen.
+
+A rectangular Boolean opening removes the cap of the shell; two spline handles merge into
+the rim with a small Smooth Union. The existing print-check dialog evaluates the generated
+geometry, and the standard OBJ/3MF exporters operate on it without special-case writers.
+**Physical load-bearing strength and minimum printable feature size depend on the printer
+and material and are not guaranteed.**
 
 ## File format
 

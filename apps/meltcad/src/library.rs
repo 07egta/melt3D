@@ -57,7 +57,17 @@ const FILES: [&str; 15] = [
 /// All categories (parsed once). A damaged file is skipped, never a crash; a test checks they all parse.
 pub fn all() -> &'static [Category] {
     static LIB: OnceLock<Vec<Category>> = OnceLock::new();
-    LIB.get_or_init(|| FILES.iter().filter_map(|t| parse(t).ok()).filter(|c| !c.items.is_empty()).collect())
+    LIB.get_or_init(|| {
+        let mut categories: Vec<Category> = FILES.iter().filter_map(|t| parse(t).ok()).filter(|c| !c.items.is_empty()).collect();
+        categories.push(Category {
+            name: "バッグ".into(),
+            items: crate::designer_bag::library_groups()
+                .into_iter()
+                .map(|(name, tags, group)| Item { name, tags, group })
+                .collect(),
+        });
+        categories
+    })
 }
 
 fn parse(text: &str) -> Result<Category, String> {
@@ -104,9 +114,15 @@ impl Item {
     pub fn placed(&self, at: [f32; 2]) -> Group {
         let c = self.centre_xy();
         let mut g = self.group.clone();
+        let dx = at[0] - c[0];
+        let dy = at[1] - c[1];
         for s in &mut g.shapes {
-            s.pos[0] += at[0] - c[0];
-            s.pos[1] += at[1] - c[1];
+            s.pos[0] += dx;
+            s.pos[1] += dy;
+        }
+        if let Some(bag) = &mut g.bag {
+            bag.origin_xy[0] += dx;
+            bag.origin_xy[1] += dy;
         }
         g
     }
@@ -150,6 +166,20 @@ mod tests {
             let my = g.shapes.iter().map(|s| s.pos[1]).sum::<f32>() / n;
             assert!((mx - 100.0).abs() < 1e-3 && (my + 50.0).abs() < 1e-3);
             assert_eq!(g.shapes[0].pos[2], it.group.shapes[0].pos[2]);
+        }
+    }
+
+    #[test]
+    fn designer_bag_variants_are_in_the_library_and_keep_placed_parameters() {
+        let category = all().iter().find(|c| c.name == "バッグ").expect("bag category");
+        assert_eq!(category.items.len(), 3);
+        for item in &category.items {
+            assert!(item.matches("designer bag"));
+            let g = item.placed([120.0, -80.0]);
+            let p = g.bag.as_ref().expect("editable bag configuration");
+            assert!((p.origin_xy[0] - 120.0).abs() < 1e-3);
+            assert!((p.origin_xy[1] + 80.0).abs() < 1e-3);
+            assert_eq!(g.shapes.len(), 5);
         }
     }
 
