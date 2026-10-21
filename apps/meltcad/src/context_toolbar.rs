@@ -279,7 +279,9 @@ impl App {
             },
             Action::EndSketchEdit => self.sk.edit.is_none().then_some("輪郭を編集中ではありません"),
             Action::Extrude => {
-                if !(self.sk.on && self.sk.stage == Stage::Ready && !self.sk.profile.is_empty()) {
+                if self.sk.on && self.sk.keep_sketch {
+                    Some("Finish Sketch first to save the guide before choosing a solid operation")
+                } else if !(self.sk.on && self.sk.stage == Stage::Ready && !self.sk.profile.is_empty()) {
                     Some("2D輪郭を完成させてください")
                 } else if self.scene.shape_count().saturating_add(1 + self.sk.holes.len()) > MAX_SHAPES {
                     Some("形の上限に達しました")
@@ -583,6 +585,34 @@ mod tests {
         app.run_action(Action::Delete, &ctx);
         assert_eq!(app.scene.groups[1].shapes.len(), 0);
         assert!(app.multi.is_empty());
+    }
+
+    #[test]
+    fn plain_sketch_must_be_saved_before_extrusion_and_invalid_dimensions_do_not_commit() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        app.set_sketch_tool(true);
+        app.sk.stage = Stage::Ready;
+        app.sk.profile = crate::sketch::rect([0.0, 0.0], [20.0, 20.0]);
+        let before = app.scene.clone();
+
+        assert!(app.disabled_reason(Action::Extrude).is_some());
+        app.run_action(Action::Extrude, &ctx);
+        assert_eq!(app.scene, before, "the toolbar cannot bypass Finish Sketch");
+        assert_eq!(app.sk.make, Make::Extrude);
+
+        app.sk.dimension =
+            crate::sketch_dimensions::Dimensions::for_shape(crate::sketch_ui::Pen::Rect, [0.0, 0.0], [20.0, 20.0], &app.sk.profile, false);
+        app.sk.dimension.as_mut().unwrap().fields[0] = "not a number".into();
+        assert!(!app.sketch_confirm(&ctx));
+        assert_eq!(app.scene, before, "invalid dimensions cannot create stale guide geometry");
+        assert!(app.sk.keep_sketch);
+
+        app.sk.dimension = None;
+        assert!(app.sketch_confirm(&ctx));
+        assert!(!app.sk.on);
+        assert_eq!(app.scene.shape_count(), 1);
+        assert!(app.scene.shape(0, 0).is_some_and(|shape| shape.guide));
     }
 
     #[test]
