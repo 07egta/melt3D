@@ -101,9 +101,23 @@ fn call(backend: &mut Backend, name: &str, args: &Value) -> Value {
 
 /// One JSON-RPC message in, the answer (if any) out.
 fn handle(backend: &mut Backend, msg: &Value) -> Option<Value> {
-    let id = msg.get("id")?.clone(); // no id: a notification, no answer
-    let method = msg.get("method").and_then(Value::as_str).unwrap_or("");
-    let params = msg.get("params").cloned().unwrap_or(Value::Null);
+    let Some(fields) = msg.as_object() else {
+        return Some(rpc_error(-32600, "Invalid Request: expected a JSON object"));
+    };
+    if fields.get("jsonrpc").and_then(Value::as_str) != Some("2.0") {
+        return Some(rpc_error(-32600, "Invalid Request: jsonrpc must be \"2.0\""));
+    }
+    let Some(method) = fields.get("method").and_then(Value::as_str) else {
+        return Some(rpc_error(-32600, "Invalid Request: method must be a string"));
+    };
+    if fields.get("params").is_some_and(|params| !params.is_object() && !params.is_array()) {
+        return Some(rpc_error(-32600, "Invalid Request: params must be an object or array"));
+    }
+    let id = fields.get("id").cloned();
+    if id.as_ref().is_some_and(|id| !id.is_null() && !id.is_string() && !id.is_number()) {
+        return Some(rpc_error(-32600, "Invalid Request: id must be a string, number, or null"));
+    }
+    let params = fields.get("params").cloned().unwrap_or(Value::Null);
     let result = match method {
         "initialize" => Ok(json!({
             "protocolVersion": params.get("protocolVersion").and_then(Value::as_str).unwrap_or("2024-11-05"),
@@ -119,7 +133,8 @@ fn handle(backend: &mut Backend, msg: &Value) -> Option<Value> {
         }
         _ => Err(json!({"code": -32601, "message": format!("Method not found: {method}")})),
     };
-    Some(match result {
+    // Notifications are executed, but JSON-RPC forbids sending them a reply.
+    id.map(|id| match result {
         Ok(r) => json!({"jsonrpc": "2.0", "id": id, "result": r}),
         Err(e) => json!({"jsonrpc": "2.0", "id": id, "error": e}),
     })
@@ -250,6 +265,33 @@ mod tests {
         assert_eq!(rpc_error(-32700, "Parse error")["error"]["code"], json!(-32700));
         assert_eq!(rpc_error(-32600, "Invalid Request")["id"], Value::Null);
         assert_eq!(cli(&["meltcad".into()]), None);
+
+        // An object missing the required method is invalid, not a notification.
+        let invalid = handle(&mut local(), &json!({"jsonrpc": "2.0"}));
+        assert_eq!(invalid.as_ref().and_then(|v| v["error"]["code"].as_i64()), Some(-32600));
+    }
+
+    #[test]
+    fn valid_notifications_execute_without_a_response() {
+        let mut b = local();
+        let response = handle(
+            &mut b,
+            &json!({"jsonrpc": "2.0", "method": "tools/call", "params": {
+                "name": "melt3d_run",
+                "arguments": {"commands": [{"cmd": "shape.add", "kind": "Sphere"}]}
+            }}),
+        );
+        assert!(response.is_none());
+
+        let summary = handle(
+            &mut b,
+            &json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {
+                "name": "melt3d_run",
+                "arguments": {"commands": [{"cmd": "scene.summary"}]}
+            }}),
+        );
+        let text = summary.as_ref().and_then(|v| v["result"]["content"][0]["text"].as_str()).unwrap_or("");
+        assert!(text.contains("\"shape_count\":1"), "{text}");
     }
 
     #[test]
