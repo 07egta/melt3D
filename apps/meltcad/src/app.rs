@@ -2259,12 +2259,10 @@ impl App {
         self.settle(&ctx);
         if !cfg!(test) {
             ctx.request_repaint_after(crate::recovery::INTERVAL);
-            if self.recovery.pending_path().is_none() {
-                let rev = self.track_scene();
-                let changed = self.has_unsaved_work();
-                if let Err(e) = self.recovery.checkpoint(&self.scene, self.path.as_deref(), changed, rev, std::time::Instant::now()) {
-                    self.notice = Some(format!("Could not save auto-recovery data: {e}"));
-                }
+            let rev = self.track_scene();
+            let changed = self.has_unsaved_work();
+            if let Err(e) = self.recovery.checkpoint(&self.scene, self.path.as_deref(), changed, rev, std::time::Instant::now()) {
+                self.notice = Some(format!("Could not save auto-recovery data: {e}"));
             }
         }
         self.test_hooks(&ctx);
