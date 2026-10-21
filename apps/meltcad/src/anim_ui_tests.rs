@@ -54,12 +54,7 @@ fn disconnected_gif_worker_releases_job_even_when_timeline_is_hidden() {
     app.an.open = false;
     let (tx, rx) = std::sync::mpsc::channel();
     drop(tx);
-    app.an.job = Some(Job {
-        rx,
-        done: Arc::new(AtomicU32::new(2)),
-        total: Arc::new(AtomicU32::new(12)),
-        cancel: Arc::new(AtomicBool::new(false)),
-    });
+    app.an.job = Some(Job { rx, done: Arc::new(AtomicU32::new(2)), total: Arc::new(AtomicU32::new(12)), cancel: Arc::new(AtomicBool::new(false)) });
     bar(&mut app, &ctx);
     assert!(app.an.job.is_none(), "disconnected worker must not leave GIF progress stuck");
 }
@@ -70,12 +65,7 @@ fn hidden_timeline_keeps_polling_running_gif_and_releases_it_when_finished() {
     let mut app = animated();
     app.an.open = false;
     let (tx, rx) = std::sync::mpsc::channel();
-    app.an.job = Some(Job {
-        rx,
-        done: Arc::new(AtomicU32::new(5)),
-        total: Arc::new(AtomicU32::new(12)),
-        cancel: Arc::new(AtomicBool::new(false)),
-    });
+    app.an.job = Some(Job { rx, done: Arc::new(AtomicU32::new(5)), total: Arc::new(AtomicU32::new(12)), cancel: Arc::new(AtomicBool::new(false)) });
     bar(&mut app, &ctx);
     assert!(app.an.job.is_some());
     tx.send(Ok("test.gif".into())).unwrap();
