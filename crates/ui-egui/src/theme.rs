@@ -3,6 +3,7 @@
 //! uses comes from [`Tokens`].
 
 use std::cell::Cell;
+#[cfg(not(test))]
 use std::sync::atomic::{AtomicBool, Ordering};
 
 #[path = "../../../assets/styles/ui/palettes.rs"]
@@ -11,6 +12,7 @@ mod palettes;
 use egui::{Color32, Stroke};
 use serde::{Deserialize, Serialize};
 
+#[cfg(not(test))]
 static DARK: AtomicBool = AtomicBool::new(true);
 
 /// A host app's own look on top of the dark theme (Melt 3D paints SolidCraft in its colours).
@@ -23,7 +25,12 @@ pub fn set_skin(skin: fn(Tokens) -> Tokens) {
 }
 
 thread_local! {
-    /// The colour vision mode, per thread, where the dark theme is one global (`DARK`). Each app
+    /// UI tests run app instances on separate threads. Keep each test's theme isolated so one
+    /// app cannot change the colours another app is rendering.
+    #[cfg(test)]
+    static DARK_TEST: Cell<bool> = const { Cell::new(true) };
+    /// UI modes are per thread during tests so concurrent app tests cannot change each other. In normal
+    /// builds the dark theme is process-wide (`DARK`). Each app
     /// sets it from its own preferences at the start of every frame (`SolveApp::logic`), on the
     /// thread that draws it. Tests run many apps side by side on their own threads in one process:
     /// with one global, a test in a mode changed the colours under another one
@@ -35,6 +42,11 @@ thread_local! {
 
 /// Is the dark theme on?
 pub fn is_dark() -> bool {
+    #[cfg(test)]
+    {
+        return DARK_TEST.with(Cell::get);
+    }
+    #[cfg(not(test))]
     DARK.load(Ordering::Relaxed)
 }
 
@@ -356,6 +368,9 @@ pub fn material_color(name: &str) -> Option<Color32> {
 
 /// Switch themes (the visuals follow on the next [`apply`]).
 pub fn set_dark(dark: bool) {
+    #[cfg(test)]
+    DARK_TEST.with(|theme| theme.set(dark));
+    #[cfg(not(test))]
     DARK.store(dark, Ordering::Relaxed);
 }
 
@@ -396,6 +411,30 @@ pub fn apply(ctx: &egui::Context) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn dark_theme_is_isolated_between_concurrent_test_threads() {
+        use std::sync::{Arc, Barrier};
+
+        let ready = Arc::new(Barrier::new(2));
+        let release = Arc::new(Barrier::new(2));
+        let workers = [false, true].map(|dark| {
+            let ready = Arc::clone(&ready);
+            let release = Arc::clone(&release);
+            std::thread::spawn(move || {
+                super::set_dark(dark);
+                ready.wait();
+                release.wait();
+                assert_eq!(super::is_dark(), dark);
+            })
+        });
+
+        ready.wait();
+        release.wait();
+        for worker in workers {
+            worker.join().expect("theme test worker should not panic");
+        }
+    }
+
     /// Title and section bands stand out from a dialog, the title more than its sections.
     #[test]
     fn heading_bands_are_darker_than_the_dialog_in_order() {
