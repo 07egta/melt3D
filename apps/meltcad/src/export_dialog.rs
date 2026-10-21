@@ -354,9 +354,15 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
         d.est.start(ctx, move |p| export_job::estimate(&scene, sel, &o, p));
     }
     if d.run_check {
-        d.run_check = false;
         let (scene, sel, o) = (app.scene.clone(), app.sel, d.opts.clone());
         d.check.start(ctx, move |p| export_job::print_check(&scene, sel, &o, p));
+        // The estimate above may already own the single high-memory permit. Keep the
+        // automatically requested check queued until that worker exits instead of
+        // consuming the request as a BUSY error.
+        d.run_check = matches!(d.check.result(), Some(Err(ref e)) if e == crate::work_budget::BUSY);
+        if d.run_check {
+            ctx.request_repaint_after(std::time::Duration::from_millis(150));
+        }
     }
     if let Some(Err(e)) = d.est.result()
         && e == crate::work_budget::BUSY
@@ -703,6 +709,32 @@ mod tests {
         // an error is said in Japanese
         assert_eq!(jp_error(CANCELLED), "やめました");
         assert!(jp_error("the model is too big for this precision; choose a coarser one").contains("細かさ"));
+    }
+
+    #[test]
+    fn automatic_print_check_retries_after_the_shared_worker_permit_is_busy() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        let permit = crate::work_budget::try_acquire(&ctx).expect("other heavy worker");
+        open_check(&ctx);
+        frame(&mut app, &ctx);
+        let d = ctx.data(|m| m.get_temp::<Dlg>(id())).expect("open dialog");
+        assert!(d.run_check, "a BUSY print check remains queued");
+        assert!(matches!(d.check.result(), Some(Err(ref e)) if e == crate::work_budget::BUSY));
+
+        drop(permit);
+        let started = std::time::Instant::now();
+        loop {
+            frame(&mut app, &ctx);
+            let d = ctx.data(|m| m.get_temp::<Dlg>(id())).expect("open dialog");
+            if let Some(result) = d.check.result()
+                && result.is_ok()
+            {
+                break;
+            }
+            assert!(started.elapsed().as_secs() < 60, "the queued print check never completed");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
     }
 
     #[test]

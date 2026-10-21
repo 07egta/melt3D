@@ -34,6 +34,11 @@ enum PendingFileAction {
     Close,
 }
 
+struct QueuedOpen {
+    path: PathBuf,
+    base_revision: u64,
+}
+
 #[derive(Clone, Copy)]
 enum PendingFileDecision {
     Save,
@@ -72,7 +77,7 @@ pub struct App {
     pending_file_action: Option<PendingFileAction>,
     /// Native document parsing and saving run off the UI thread.
     native_job: Option<crate::document_job::Job>,
-    queued_open: Option<PathBuf>,
+    queued_open: Option<QueuedOpen>,
     /// A Save-and-continue decision only runs after a complete successful save.
     after_save: Option<PendingFileAction>,
     close_approved: bool,
@@ -305,7 +310,7 @@ impl App {
             PendingFileAction::Open(path) => {
                 // No file I/O or JSON parsing on the UI thread. The current design stays
                 // visible until the worker reports a fully validated new Scene.
-                self.queued_open = Some(path);
+                self.queued_open = Some(QueuedOpen { path, base_revision: self.track_scene() });
             }
             PendingFileAction::Close => {}
         }
@@ -649,19 +654,17 @@ impl App {
     /// Start and poll native file work without blocking a frame. Failed/cancelled results never
     /// replace the current Scene; edits made while an open was pending also prevent replacement.
     fn update_native_job(&mut self, ctx: &egui::Context) {
-        if self.native_job.is_none() && let Some(path) = self.queued_open.clone() {
-            let rev = self.track_scene();
-            match crate::document_job::Job::open(ctx, path, rev) {
-                Ok(job) => {
-                    self.queued_open = None;
-                    self.native_job = Some(job);
-                }
-                Err(e) if e == crate::work_budget::BUSY => {
-                    ctx.request_repaint_after(std::time::Duration::from_millis(80));
-                }
-                Err(e) => {
-                    self.queued_open = None;
-                    self.say(ctx, e);
+        if self.native_job.is_none() && let Some(queued) = self.queued_open.take() {
+            if self.track_scene() != queued.base_revision {
+                self.say(ctx, "読み込みを待っている間に作品が変わったため、読み込みをやめました");
+            } else {
+                match crate::document_job::Job::open(ctx, queued.path.clone(), queued.base_revision) {
+                    Ok(job) => self.native_job = Some(job),
+                    Err(e) if e == crate::work_budget::BUSY => {
+                        self.queued_open = Some(queued);
+                        ctx.request_repaint_after(std::time::Duration::from_millis(80));
+                    }
+                    Err(e) => self.say(ctx, e),
                 }
             }
         }
@@ -1661,6 +1664,29 @@ mod tests {
         drop(permit);
         pump_native(&mut app, &ctx);
         assert_eq!(app.path.as_ref(), Some(&path));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn edits_while_an_open_waits_for_the_worker_are_preserved() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        let dir = std::env::temp_dir().join(format!("yura_queued_open_edit_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("replacement.yura");
+        std::fs::write(&path, Scene::default().to_json()).expect("fixture");
+        let permit = crate::work_budget::try_acquire(&ctx).expect("other heavy job");
+
+        app.open_path(path);
+        app.update_native_job(&ctx);
+        assert!(app.queued_open.is_some(), "open waits behind the existing worker");
+        app.add_shape(&ctx, Kind::Box);
+        let edited = app.scene.clone();
+        drop(permit);
+
+        pump_native(&mut app, &ctx);
+        assert_eq!(app.scene, edited, "the queued open must not discard edits made while it waited");
+        assert!(app.path.is_none(), "the rejected open must not change the current document path");
         let _ = std::fs::remove_dir_all(dir);
     }
 
