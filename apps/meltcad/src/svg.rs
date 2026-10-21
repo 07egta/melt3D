@@ -509,7 +509,9 @@ fn parse_color(s: &str) -> Option<[f32; 3]> {
         let v = |i: usize, w: usize| u32::from_str_radix(h.get(i..i + w)?, 16).ok();
         return match h.len() {
             3 => Some([v(0, 1)? as f32 * 17.0 / 255.0, v(1, 1)? as f32 * 17.0 / 255.0, v(2, 1)? as f32 * 17.0 / 255.0]),
-            6 => Some([v(0, 2)? as f32 / 255.0, v(2, 2)? as f32 / 255.0, v(4, 2)? as f32 / 255.0]),
+            // #RGBA and #RRGGBBAA: the colour counts, the alpha is not used.
+            4 => Some([v(0, 1)? as f32 * 17.0 / 255.0, v(1, 1)? as f32 * 17.0 / 255.0, v(2, 1)? as f32 * 17.0 / 255.0]),
+            6 | 8 => Some([v(0, 2)? as f32 / 255.0, v(2, 2)? as f32 / 255.0, v(4, 2)? as f32 / 255.0]),
             _ => None,
         };
     }
@@ -1033,6 +1035,9 @@ struct State {
     hidden: bool,
     fill_hidden: bool,
     color: Option<[f32; 3]>,
+    /// The CSS `color` property, which `fill="currentColor"` means.
+    current: Option<[f32; 3]>,
+    current_fill: bool,
 }
 
 /// Names whose contents are never drawn by us.
@@ -1100,7 +1105,16 @@ fn collect_ids(src: &str) -> HashMap<&str, (usize, usize)> {
 fn walk(src: &str, tol: Option<f64>, ids: &HashMap<&str, (usize, usize)>, limited: &mut bool) -> Vec<Raw> {
     let mut budget = Budget { commands: 0, points: 0, elements: 0, visits: 0, limited: false };
     let mut out = Vec::new();
-    let initial = State { xf: Affine::ID, fill_none: false, evenodd: false, hidden: false, fill_hidden: false, color: None };
+    let initial = State {
+        xf: Affine::ID,
+        fill_none: false,
+        evenodd: false,
+        hidden: false,
+        fill_hidden: false,
+        color: None,
+        current: None,
+        current_fill: false,
+    };
     walk_part(src, src, tol, ids, &mut budget, &mut out, initial, None, &mut Vec::new());
     *limited |= budget.limited;
     out
@@ -1193,10 +1207,22 @@ fn walk_part<'a>(
         if let Some(o) = tag.prop("fill-opacity").and_then(opacity) {
             st.fill_hidden = o <= 0.0;
         }
+        if let Some(c) = tag.prop("color").and_then(parse_color) {
+            st.current = Some(c);
+            // A fill of currentColor follows the colour even when it is set on a child.
+            if st.current_fill {
+                st.color = Some(c);
+            }
+        }
         if let Some(f) = tag.prop("fill") {
+            st.current_fill = f.trim().eq_ignore_ascii_case("currentcolor");
             match f {
                 "inherit" | "unset" => {}
                 "none" | "transparent" => st.fill_none = true,
+                _ if st.current_fill => {
+                    st.color = st.current;
+                    st.fill_none = false;
+                }
                 _ => {
                     st.color = parse_color(f).or(st.color);
                     st.fill_none = false;
@@ -1809,6 +1835,14 @@ mod tests {
         assert_eq!(a.contours[1].color, Some([0.0, 0.0, 1.0]));
         let ring = parse(&wrap(r#"<g fill-rule="evenodd"><path fill-rule="inherit" d="M0 0 H80 V80 H0 Z M20 20 H60 V60 H20 Z"/></g>"#)).unwrap();
         assert_eq!((ring.solids(), ring.holes()), (1, 1));
+    }
+
+    #[test]
+    fn current_color_and_eight_digit_hex_keep_their_rgb() {
+        let a = parse(&wrap(r##"<g color="#00ff00"><rect width="8" height="8" fill="currentColor"/></g><rect x="20" width="8" height="8" fill="#ff000080"/><rect x="40" width="8" height="8" fill="#0f08"/>"##)).unwrap();
+        assert_eq!(a.contours[0].color, Some([0.0, 1.0, 0.0]));
+        assert_eq!(a.contours[1].color, Some([1.0, 0.0, 0.0]));
+        assert_eq!(a.contours[2].color, Some([0.0, 1.0 * 15.0 * 17.0 / 255.0, 0.0]));
     }
 
     #[test]

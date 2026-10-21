@@ -26,13 +26,26 @@ pub struct Vals {
     pub round: f32,
 }
 
+/// Turn from `a` to `b` degrees the short way when they are less than a full turn apart
+/// (350 -> 10 goes 20 degrees forward, not 340 back). Bigger gaps are kept as typed so a
+/// deliberate spin still spins.
+fn turn(a: f32, b: f32, t: f32) -> f32 {
+    let mut d = b - a;
+    if d > 180.0 && d < 360.0 {
+        d -= 360.0;
+    } else if d < -180.0 && d > -360.0 {
+        d += 360.0;
+    }
+    a + d * t
+}
+
 impl Vals {
     fn lerp(a: &Vals, b: &Vals, t: f32) -> Vals {
         let l = |x: f32, y: f32| x + (y - x) * t;
         let v3 = |x: [f32; 3], y: [f32; 3]| [l(x[0], y[0]), l(x[1], y[1]), l(x[2], y[2])];
         Vals {
             pos: v3(a.pos, b.pos),
-            rot: v3(a.rot, b.rot),
+            rot: [turn(a.rot[0], b.rot[0], t), turn(a.rot[1], b.rot[1], t), turn(a.rot[2], b.rot[2], t)],
             size: v3(a.size, b.size),
             scale: v3(a.scale, b.scale),
             color: v3(a.color, b.color),
@@ -103,12 +116,14 @@ impl Anim {
         // Callers temporarily take Scene.anim out to avoid borrowing conflicts.
         // Reserve old/deleted shapes' track IDs here, not only in Scene::max_uid.
         let reserved_uid = self.tracks.iter().map(|t| t.uid).max().unwrap_or(0);
+        let mut skipped = 0usize;
         for (g, s) in ids {
             let Some(uid) = scene.ensure_shape_uid_above(g, s, reserved_uid) else { continue };
             let Some(shape) = scene.shape(g, s) else { continue };
             let v = Vals::of(shape);
             if self.tracks.iter().all(|t| t.uid != uid) {
                 if self.tracks.len() >= MAX_TRACKS {
+                    skipped += 1;
                     continue;
                 }
                 self.tracks.push(Track { uid, keys: Vec::new() });
@@ -118,6 +133,9 @@ impl Anim {
             }
         }
         put(&mut self.melt, frame, MeltKey { amount: scene.melt.amount, drip: scene.melt.drip, ripple: scene.melt.ripple });
+        if skipped > 0 {
+            return Err(format!("Only {MAX_TRACKS} shapes can be animated; {skipped} shape(s) were not recorded"));
+        }
         Ok(())
     }
 
@@ -138,7 +156,12 @@ impl Anim {
 
     /// The frame that is really shown at `frame` (with "clay" a pose is held for a few frames).
     pub fn shown(&self, frame: u32) -> u32 {
-        if self.clay { frame / CLAY_HOLD * CLAY_HOLD } else { frame }
+        if !self.clay {
+            return frame;
+        }
+        let held = frame / CLAY_HOLD * CLAY_HOLD;
+        // A pose set between two held frames is still shown on its own frame.
+        self.key_frames().into_iter().filter(|k| *k > held && *k <= frame).max().unwrap_or(held)
     }
 
     /// Put the scene into its pose at `frame`. Shapes without keys stay as they are.
@@ -202,7 +225,7 @@ impl Anim {
                     *a = fin(*a, 0.0, 1.0e5, 1.0);
                 }
                 for a in v.scale.iter_mut() {
-                    *a = fin(*a, -1.0e3, 1.0e3, 1.0);
+                    *a = fin(*a, 0.01, 1.0e3, 1.0);
                 }
                 for a in v.color.iter_mut() {
                     *a = fin(*a, 0.0, 1.0, 0.5);
@@ -253,6 +276,45 @@ fn sample<T: Copy>(keys: &[(u32, T)], t: f32, mix: impl Fn(&T, &T, f32) -> T) ->
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn rotation_takes_the_short_way_and_spins_stay() {
+        assert!((turn(350.0, 10.0, 0.5) - 360.0).abs() < 1e-3);
+        assert!((turn(10.0, 350.0, 0.5) - 0.0).abs() < 1e-3);
+        assert!((turn(0.0, 720.0, 0.5) - 360.0).abs() < 1e-3);
+        assert!((turn(0.0, 90.0, 0.5) - 45.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn scale_never_reaches_zero_or_below() {
+        let mut a = Anim::default();
+        let mut v = Vals { pos: [0.0; 3], rot: [0.0; 3], size: [1.0; 3], scale: [0.0, -2.0, 1.0], color: [0.5; 3], round: 0.0 };
+        v.scale[2] = f32::NAN;
+        a.tracks.push(Track { uid: 1, keys: vec![(0, v)] });
+        a.sanitize();
+        assert!(a.tracks[0].keys[0].1.scale.iter().all(|s| *s >= 0.01 && s.is_finite()));
+    }
+
+    #[test]
+    fn clay_shows_a_pose_that_is_not_on_a_multiple_of_three() {
+        let mut a = Anim { clay: true, length: 30, ..Anim::default() };
+        a.melt.push((4, MeltKey { amount: 1.0, drip: 0.0, ripple: 1.0 }));
+        assert_eq!(a.shown(4), 4);
+        assert_eq!(a.shown(5), 4);
+        assert_eq!(a.shown(3), 3);
+        assert_eq!(a.shown(6), 6);
+    }
+
+    #[test]
+    fn too_many_shapes_is_reported_not_ignored() {
+        let mut a = Anim::default();
+        for uid in 1..=MAX_TRACKS as u32 {
+            a.tracks.push(Track { uid, keys: Vec::new() });
+        }
+        let mut sc = Scene::default();
+        sc.groups[0].shapes[0].uid = 100_000;
+        assert!(a.capture(&mut sc, 0).is_err());
+    }
+
     use super::*;
 
     fn ball() -> Scene {
