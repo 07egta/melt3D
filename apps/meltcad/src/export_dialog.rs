@@ -136,6 +136,11 @@ fn new_dlg(ctx: &egui::Context, format: Option<Format>) -> Dlg {
 }
 
 /// Open the card (optionally with a file type chosen).
+/// The export card is showing (keys must not edit the scene behind it).
+pub fn is_open(ctx: &egui::Context) -> bool {
+    ctx.data(|m| m.get_temp::<Dlg>(id()).is_some_and(|d| d.open))
+}
+
 pub fn open(ctx: &egui::Context, format: Option<ExportFormat>) {
     let f = format.map(|f| match f {
         ExportFormat::Stl => Format::Stl,
