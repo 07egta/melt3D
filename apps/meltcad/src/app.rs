@@ -1255,6 +1255,8 @@ impl App {
             || self.recovery.pending_path().is_some()
             || crate::svg_dialog::is_open(ctx)
             || crate::array::is_open(ctx)
+            || crate::mesh_dialog::is_open(ctx)
+            || crate::export_dialog::is_open(ctx)
         {
             return;
         }
@@ -2666,6 +2668,31 @@ mod tests {
         assert!(matches!(app.pending_file_action, Some(PendingFileAction::New(_))), "the first decision stays pending");
         assert_eq!(app.scene.shape_count(), 2, "Delete cannot edit behind the dialog");
         std::fs::remove_file(path).expect("remove sample file");
+    }
+
+    #[test]
+    fn delete_cannot_edit_behind_the_mesh_or_export_card() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        app.add_shape(&ctx, Kind::Box);
+        let n = app.scene.shape_count();
+        for open in [
+            (|c: &egui::Context| crate::mesh_dialog::open_path(c, std::env::temp_dir().join("meltcad-no-such-mesh.stl"))) as fn(&egui::Context),
+            |c| crate::export_dialog::open(c, None),
+        ] {
+            open(&ctx);
+            ctx.input_mut(|i| {
+                i.events.push(egui::Event::Key {
+                    key: egui::Key::Delete,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                })
+            });
+            app.keys(&ctx);
+            assert_eq!(app.scene.shape_count(), n, "Delete belongs to the open card, not the shape behind it");
+        }
     }
 
     #[test]
