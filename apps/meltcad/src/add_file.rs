@@ -69,49 +69,67 @@ pub fn merge_into(scene: &mut Scene, other: Scene, name: &str) -> Result<usize, 
 
 /// `merge_into` at place `at` of the list, with the new group at nesting `depth`. The new group is a
 /// piece of the big file: it remembers `path`, so it can be read again or saved back.
-fn merge_at(scene: &mut Scene, mut other: Scene, name: &str, path: Option<&Path>, at: usize, depth: u8) -> Result<usize, String> {
+fn merge_at(scene: &mut Scene, other: Scene, name: &str, path: Option<&Path>, at: usize, depth: u8) -> Result<usize, String> {
+    merge_reserving(scene, other, name, path, at, depth, 0)
+}
+
+/// `merge_at`, where every new identifier is also above `reserve` (identifiers of things the new
+/// block replaces, so the replacement can take them over without a clash).
+fn merge_reserving(
+    scene: &mut Scene,
+    mut other: Scene,
+    name: &str,
+    path: Option<&Path>,
+    at: usize,
+    depth: u8,
+    reserve: u32,
+) -> Result<usize, String> {
     if other.groups.is_empty() {
         return Err("That file has nothing in it".into());
     }
-    let wrap = other.groups.iter().all(|g| u16::from(g.depth) + u16::from(depth) < u16::from(MAX_DEPTH));
-    if scene.groups.len() + other.groups.len() + usize::from(wrap) > MAX_GROUPS {
+    if scene.groups.len() + other.groups.len() + 1 > MAX_GROUPS {
         return Err(format!("Up to {MAX_GROUPS} groups"));
     }
     if scene.shape_count() + other.shape_count() > MAX_SHAPES {
         return Err(format!("Up to {MAX_SHAPES} shapes"));
     }
     crate::mesh::can_add(scene, other.groups.iter().flat_map(|g| g.shapes.iter()))?;
-    let offset = max_uid(scene);
+    let offset = max_uid(scene).max(reserve);
     if offset.checked_add(max_uid(&other)).is_none() {
         return Err("Too many identifiers to add this file safely".into());
     }
+    // The animation of the added shapes comes along: their tracks follow the shifted identifiers.
+    let mut theirs = std::mem::take(&mut other.anim);
     shift_uids(&mut other, offset);
+    let shapes_in: std::collections::HashSet<u32> = other.groups.iter().flat_map(|g| g.shapes.iter().map(|s| s.uid)).filter(|u| *u != 0).collect();
+    for t in &mut theirs.tracks {
+        t.uid = t.uid.saturating_add(offset);
+    }
+    theirs.tracks.retain(|t| shapes_in.contains(&t.uid));
+    if scene.anim.tracks.len() + theirs.tracks.len() > crate::anim::MAX_TRACKS {
+        return Err(format!("Up to {} animated shapes", crate::anim::MAX_TRACKS));
+    }
     let at = at.min(scene.groups.len());
     let mut block: Vec<Group> = Vec::new();
-    if wrap {
-        let title: String = name.chars().filter(|c| !c.is_control()).take(MAX_NAME_CHARS).collect();
-        let mut parent = Group::new(if title.trim().is_empty() { "Added file".to_string() } else { title.clone() });
-        parent.blend = ADDED_BLEND;
-        parent.depth = depth;
-        parent.piece = Some(Piece { file: title, path: path.map(|p| p.to_string_lossy().into_owned()) });
-        block.push(parent);
-        for mut g in other.groups {
-            g.depth += depth + 1;
-            block.push(g);
-        }
-    } else {
-        // nested too deep to be wrapped: the first top-level group melts into the scene instead
-        let first_top = other.groups.iter().position(|g| g.depth == 0);
-        if let Some(g) = first_top.and_then(|i| other.groups.get_mut(i)) {
-            g.blend = g.blend.max(ADDED_BLEND);
-        }
-        for mut g in other.groups {
-            g.depth = g.depth.saturating_add(depth);
-            block.push(g);
-        }
+    let title: String = name.chars().filter(|c| !c.is_control()).take(MAX_NAME_CHARS).collect();
+    let mut parent = Group::new(if title.trim().is_empty() { "Added file".to_string() } else { title.clone() });
+    parent.blend = ADDED_BLEND;
+    parent.depth = depth;
+    parent.piece = Some(Piece { file: title, path: path.map(|p| p.to_string_lossy().into_owned()) });
+    block.push(parent);
+    for mut g in other.groups {
+        // A file already as deep as the scene allows loses its deepest level of nesting: those
+        // groups become siblings of the level above, so the file is still one piece.
+        g.depth = g.depth.saturating_add(depth).saturating_add(1).min(MAX_DEPTH);
+        block.push(g);
     }
     scene.groups.splice(at..at, block);
     scene.normalize_depths();
+    if !theirs.tracks.is_empty() {
+        scene.anim.length = scene.anim.length.max(theirs.length).min(crate::anim::MAX_FRAMES);
+        scene.anim.tracks.extend(theirs.tracks);
+        scene.anim.sanitize();
+    }
     Ok(at)
 }
 
@@ -132,9 +150,17 @@ pub fn reload_piece(scene: &mut Scene, gi: usize) -> Result<(), String> {
     let (other, _notes) = crate::recovery::read_project(Path::new(&path))?;
     let end = scene.subtree_end(gi);
     let removed: Vec<Group> = scene.groups.drain(gi..end).collect();
-    match merge_at(scene, other, &piece.file, Some(Path::new(&path)), gi, old.depth) {
+    let gone: std::collections::HashSet<u32> = removed.iter().flat_map(|g| g.shapes.iter().map(|s| s.uid)).filter(|u| *u != 0).collect();
+    let reserve = removed.iter().flat_map(|g| g.shapes.iter().map(|s| s.uid).chain(std::iter::once(g.uid))).max().unwrap_or(0);
+    match merge_reserving(scene, other, &piece.file, Some(Path::new(&path)), gi, old.depth, reserve) {
         Ok(at) => {
+            // The old shapes are gone, and so are the poses that pointed at them.
+            scene.anim.tracks.retain(|t| !gone.contains(&t.uid));
             if let Some(g) = scene.groups.get_mut(at) {
+                // Copies and patterns elsewhere point at this piece by its number: it keeps it.
+                g.uid = old.uid;
+                g.pattern = old.pattern;
+                g.instance_of = old.instance_of;
                 g.name = old.name;
                 g.blend = old.blend;
                 g.visible = old.visible;
@@ -150,7 +176,60 @@ pub fn reload_piece(scene: &mut Scene, gi: usize) -> Result<(), String> {
     }
 }
 
+/// The numbers a group and its shapes can be linked by.
+fn uids_of(groups: &[Group]) -> std::collections::HashSet<u32> {
+    groups.iter().flat_map(|g| g.shapes.iter().map(|s| s.uid).chain(std::iter::once(g.uid))).filter(|u| *u != 0).collect()
+}
+
+/// What a group points at (a linked copy's original, a pattern's source).
+fn links_of(g: &Group) -> Vec<u32> {
+    let mut v: Vec<u32> = g.instance_of.into_iter().collect();
+    match &g.pattern {
+        Some(Pattern::Path { source, .. }) => v.push(*source),
+        Some(Pattern::Geometry { source: Source::Shape(u) | Source::Group(u), .. }) => v.push(*u),
+        _ => {}
+    }
+    v.retain(|u| *u != 0);
+    v
+}
+
+/// The whole groups outside `first..end` that things inside point at, as ranges of the group list.
+/// A file saved without them would have links that point nowhere.
+fn outside_sources(scene: &Scene, first: usize, end: usize) -> Vec<(usize, usize)> {
+    let mut ranges: Vec<(usize, usize)> = vec![(first, end)];
+    let mut extra: Vec<(usize, usize)> = Vec::new();
+    for _ in 0..16 {
+        let mut known = std::collections::HashSet::new();
+        for (a, b) in &ranges {
+            known.extend(uids_of(scene.groups.get(*a..*b).unwrap_or_default()));
+        }
+        let mut added = false;
+        let wanted: Vec<u32> = ranges.iter().flat_map(|(a, b)| scene.groups.get(*a..*b).unwrap_or_default().iter().flat_map(links_of)).collect();
+        for u in wanted {
+            if known.contains(&u) {
+                continue;
+            }
+            let Some(i) = scene.groups.iter().position(|g| g.uid == u || g.shapes.iter().any(|s| s.uid == u)) else { continue };
+            if ranges.iter().any(|(a, b)| (*a..*b).contains(&i)) {
+                continue;
+            }
+            let r = (i, scene.subtree_end(i));
+            ranges.retain(|(a, b)| !(r.0 <= *a && *b <= r.1));
+            extra.retain(|(a, b)| !(r.0 <= *a && *b <= r.1));
+            ranges.push(r);
+            extra.push(r);
+            added = true;
+        }
+        if !added {
+            break;
+        }
+    }
+    extra.sort_unstable();
+    extra
+}
+
 /// Write piece `gi` (what is inside it) into its own file at `path`, and remember that file for it.
+/// The piece's animation goes with it, and so do groups outside it that its copies and patterns use.
 pub fn save_piece(scene: &mut Scene, gi: usize, path: &Path) -> Result<(), String> {
     let g = scene.groups.get(gi).ok_or("No such group")?;
     if g.piece.is_none() {
@@ -163,23 +242,39 @@ pub fn save_piece(scene: &mut Scene, gi: usize, path: &Path) -> Result<(), Strin
     let include_parent = !g.shapes.is_empty();
     let first = if include_parent { gi } else { gi + 1 };
     let relative_depth = u16::from(g.depth) + u16::from(!include_parent);
-    let mut inside: Vec<Group> = scene
-        .groups
-        .get(first..end)
-        .unwrap_or_default()
-        .iter()
-        .cloned()
-        .map(|mut x| {
-            x.depth = u16::from(x.depth).saturating_sub(relative_depth) as u8;
+    let rebase = |range: &[Group], by: u16| -> Vec<Group> {
+        range
+            .iter()
+            .cloned()
+            .map(|mut x| {
+                x.depth = u16::from(x.depth).saturating_sub(by) as u8;
+                x
+            })
+            .collect()
+    };
+    let mut groups: Vec<Group> = Vec::new();
+    for (a, b) in outside_sources(scene, first, end) {
+        let by = scene.groups.get(a).map_or(0, |x| u16::from(x.depth));
+        groups.extend(rebase(scene.groups.get(a..b).unwrap_or_default(), by).into_iter().map(|mut x| {
+            x.piece = None;
             x
-        })
-        .collect();
+        }));
+    }
+    let mut inside = rebase(scene.groups.get(first..end).unwrap_or_default(), relative_depth);
     if include_parent {
         if let Some(parent) = inside.first_mut() {
             parent.piece = None; // The exported file must not refer back to itself.
         }
     }
-    let file = Scene { groups: inside, melt: scene.melt, ..Scene::default() };
+    groups.extend(inside);
+    let mut anim = scene.anim.clone();
+    let wanted = uids_of(&groups);
+    anim.tracks.retain(|t| wanted.contains(&t.uid));
+    anim.melt.clear();
+    if anim.tracks.is_empty() {
+        anim = crate::anim::Anim::default();
+    }
+    let file = Scene { groups, melt: scene.melt, anim, ..Scene::default() };
     crate::recovery::save_project(path, &file)?;
     if let Some(p) = scene.groups.get_mut(gi).and_then(|g| g.piece.as_mut()) {
         p.file = path.file_stem().map(|n| n.to_string_lossy().chars().take(crate::model::MAX_PIECE_FILE).collect()).unwrap_or_default();
@@ -320,13 +415,15 @@ mod tests {
     }
 
     #[test]
-    fn a_file_nested_too_deep_to_wrap_still_melts_at_its_first_top_group() {
+    fn a_file_nested_to_the_limit_is_still_one_piece_with_its_deepest_level_flattened() {
         let mut mine = scene_with(vec![group("mine", 0, vec![ball(0.0)])]);
         let deep = scene_with(vec![group("a", 0, vec![]), group("b", 1, vec![]), group("c", 2, vec![]), group("d", MAX_DEPTH, vec![ball(30.0)])]);
         let at = merge_into(&mut mine, deep, "deep").unwrap();
-        assert_eq!(mine.groups[at].name, "a");
+        assert_eq!(mine.groups[at].name, "deep");
         assert!(mine.groups[at].blend > 0.0);
-        assert_eq!(mine.groups.len(), 5);
+        assert!(mine.groups[at].piece.is_some(), "Reload and Save as file need a piece");
+        assert_eq!(mine.groups.len(), 6);
+        assert!(mine.groups.iter().all(|g| g.depth <= MAX_DEPTH));
     }
 
     fn temp(name: &str) -> std::path::PathBuf {
@@ -400,6 +497,77 @@ mod tests {
         assert!(reload_piece(&mut mine, 0).is_err(), "a plain group is not a piece");
         assert!(reload_piece(&mut mine, 99).is_err());
         assert!(save_piece(&mut mine, 0, &temp("never")).is_err());
+    }
+
+    #[test]
+    fn animation_travels_with_an_added_file_and_with_save_as_file() {
+        let first = temp("anim-first");
+        let second = temp("anim-second");
+        let mut theirs = scene_with(vec![group("t", 0, vec![ball(30.0)])]);
+        theirs.groups[0].shapes[0].uid = 5;
+        theirs.anim.length = 100;
+        theirs.anim.tracks.push(crate::anim::Track {
+            uid: 5,
+            keys: vec![(0, crate::anim::Vals::of(&theirs.groups[0].shapes[0])), (90, crate::anim::Vals::of(&theirs.groups[0].shapes[0]))],
+        });
+        crate::recovery::save_project(&first, &theirs).unwrap();
+        let mut mine = scene_with(vec![group("mine", 0, vec![ball(0.0)])]);
+        mine.groups[0].shapes[0].uid = 9;
+        let at = add_file(&mut mine, &first).unwrap();
+        assert_eq!(mine.anim.tracks.len(), 1, "the added shape keeps its keys");
+        let uid = mine.groups[at + 1].shapes[0].uid;
+        assert_eq!(mine.anim.tracks[0].uid, uid);
+        assert_eq!(mine.anim.tracks[0].keys.len(), 2);
+        assert_eq!(mine.anim.length, 100);
+        save_piece(&mut mine, at, &second).unwrap();
+        let (back, _) = crate::recovery::read_project(&second).unwrap();
+        assert_eq!(back.anim.tracks.len(), 1, "Save as file keeps the piece's animation");
+        // reloading replaces the old poses with the new ones instead of leaving dead tracks
+        reload_piece(&mut mine, at).unwrap();
+        assert_eq!(mine.anim.tracks.len(), 1);
+        assert_eq!(mine.anim.tracks[0].uid, mine.groups[at + 1].shapes[0].uid);
+        let _ = std::fs::remove_file(first);
+        let _ = std::fs::remove_file(second);
+    }
+
+    #[test]
+    fn reload_keeps_the_pieces_number_and_pattern_so_links_to_it_stay() {
+        let first = temp("uid");
+        crate::recovery::save_project(&first, &scene_with(vec![group("t", 0, vec![ball(30.0)])])).unwrap();
+        let mut mine = scene_with(vec![]);
+        let at = add_file(&mut mine, &first).unwrap();
+        mine.groups[at].uid = 1;
+        let mut copy = group("c", 0, vec![]);
+        copy.instance_of = Some(1);
+        mine.groups.push(copy);
+        reload_piece(&mut mine, at).unwrap();
+        assert_eq!(mine.groups[at].uid, 1);
+        let ids = uids_of(&mine.groups);
+        let all: Vec<u32> =
+            mine.groups.iter().flat_map(|g| g.shapes.iter().map(|s| s.uid).chain(std::iter::once(g.uid))).filter(|u| *u != 0).collect();
+        assert_eq!(ids.len(), all.len(), "no number is used twice");
+        assert_eq!(mine.groups.last().and_then(|g| g.instance_of), Some(1));
+        let _ = std::fs::remove_file(first);
+    }
+
+    #[test]
+    fn save_as_file_brings_the_outside_groups_its_copies_use() {
+        let first = temp("ext-first");
+        let out = temp("ext-out");
+        crate::recovery::save_project(&first, &scene_with(vec![group("t", 0, vec![ball(30.0)])])).unwrap();
+        let mut mine = scene_with(vec![group("master", 0, vec![ball(0.0)])]);
+        mine.groups[0].uid = 1;
+        let at = add_file(&mut mine, &first).unwrap();
+        let mut copy = group("copy", 1, vec![]);
+        copy.instance_of = Some(1);
+        mine.groups.insert(at + 1, copy);
+        save_piece(&mut mine, at, &out).unwrap();
+        let (back, _) = crate::recovery::read_project(&out).unwrap();
+        assert!(back.groups.iter().any(|g| g.name == "master"), "the original of the copy is in the file");
+        let copy = back.groups.iter().find(|g| g.name == "copy").unwrap();
+        assert!(copy.instance_of.is_some_and(|u| back.groups.iter().any(|g| g.uid == u)), "the copy still points at something");
+        let _ = std::fs::remove_file(first);
+        let _ = std::fs::remove_file(out);
     }
 
     #[test]

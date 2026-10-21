@@ -190,11 +190,16 @@ fn add_block(app: &mut App, mut block: Vec<Group>, done: &str, from_clipboard: b
 impl App {
     /// Copy the selection (to the system clipboard and to the app's own copy for the menu).
     pub fn copy(&mut self, ctx: &egui::Context) {
+        let many = self.picks().len();
         match copy_text(self) {
             Some(t) => {
                 ctx.copy_text(t.clone());
                 self.clipboard = Some(t);
-                self.say(ctx, "Copied");
+                if many > 1 {
+                    self.say(ctx, format!("Copied the first of {many} selected (a copy holds one thing)"));
+                } else {
+                    self.say(ctx, "Copied");
+                }
             }
             None => self.say(ctx, "Select something to copy"),
         }
@@ -202,6 +207,11 @@ impl App {
 
     pub fn cut(&mut self, ctx: &egui::Context) {
         if !self.allow_scene_structure_change() {
+            return;
+        }
+        // A copy holds one thing. Deleting several after copying one would lose the rest.
+        if self.picks().len() > 1 {
+            self.say(ctx, "Cut takes one thing at a time. Select one, or press Delete to remove several");
             return;
         }
         if self.sel.is_some() {
@@ -393,5 +403,21 @@ mod tests {
         assert_eq!(app.scene.shape_count(), 1);
         app.paste(&ctx, None);
         assert_eq!(app.scene.shape_count(), 2);
+    }
+
+    #[test]
+    fn cut_with_several_selected_keeps_them_all() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        app.add_shape(&ctx, Kind::Box);
+        app.add_shape(&ctx, Kind::Sphere);
+        let before = app.scene.shape_count();
+        let first = app.picks()[0];
+        let other = Pick::Shape(0, 0);
+        app.multi_for = app.sel;
+        app.multi.push(if first == other { Pick::Shape(0, 1) } else { other });
+        assert!(app.picks().len() > 1);
+        app.cut(&ctx);
+        assert_eq!(app.scene.shape_count(), before, "nothing is lost when a copy cannot hold the whole selection");
     }
 }
