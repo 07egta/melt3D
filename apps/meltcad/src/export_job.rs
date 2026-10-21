@@ -130,8 +130,27 @@ pub fn prepare(scene: &Scene, sel: Option<Pick>, scope: Scope, ignore_paint: boo
             {
                 return Err("the selection is gone".into());
             }
+            // Keep the selected group's complete subtree. Ancestors must
+            // remain visible as structural containers, but contribute no
+            // geometry of their own (otherwise a child-only export is empty).
+            let end = if only.is_some() { gi + 1 } else { scene.subtree_end(gi) };
+            let mut ancestors = std::collections::HashSet::new();
+            let mut at = scene.parent_of(gi);
+            while let Some(parent) = at {
+                ancestors.insert(parent);
+                at = scene.parent_of(parent);
+            }
             for (i, g) in s.groups.iter_mut().enumerate() {
-                g.visible = i == gi;
+                let selected = (gi..end).contains(&i);
+                let container = ancestors.contains(&i);
+                g.visible = selected || container;
+                if container {
+                    g.op = Op::Add;
+                    g.pattern = None;
+                    for sh in &mut g.shapes {
+                        sh.visible = false;
+                    }
+                }
                 if i == gi {
                     g.op = Op::Add;
                     if let Some(si) = only {
@@ -147,18 +166,19 @@ pub fn prepare(scene: &Scene, sel: Option<Pick>, scope: Scope, ignore_paint: boo
         }
     }
     if ignore_paint {
+        // Paint groups can contain Add descendants: deleting only the Paint
+        // parent accidentally turns those descendants into solid geometry.
+        // Hide instead; the existing hierarchy and UID references stay intact.
         for g in &mut s.groups {
-            g.shapes.retain(|sh| sh.op != Op::Paint);
+            if g.op == Op::Paint {
+                g.visible = false;
+            }
+            for sh in &mut g.shapes {
+                if sh.op == Op::Paint {
+                    sh.visible = false;
+                }
+            }
         }
-        // (an empty group stays when other groups are nested in it: it is their container)
-        let holds: Vec<bool> = (0..s.groups.len()).map(|i| s.groups.get(i + 1).is_some_and(|n| n.depth > s.groups[i].depth)).collect();
-        let mut i = 0;
-        s.groups.retain(|g| {
-            let keep = g.op != Op::Paint && (!g.shapes.is_empty() || g.is_linked() || holds.get(i).copied().unwrap_or(false));
-            i += 1;
-            keep
-        });
-        s.normalize_depths();
     }
     Ok(s)
 }
@@ -226,7 +246,15 @@ fn single_look(scene: &Scene) -> Option<Mat8> {
     let mut first: Option<Mat8> = None;
     for rg in crate::pattern::resolve(scene) {
         let Some(src) = scene.groups.get(rg.src) else { continue };
+        if scene.groups.get(rg.gi).is_some_and(|g| g.op == Op::Paint) {
+            return None;
+        }
         for s in src.shapes.iter().filter(|s| s.solid()) {
+            // One base material does not imply one surface colour: a shape
+            // can carry a spatial gradient or a Paint stain.
+            if s.material.has_gradient() || s.op == Op::Paint {
+                return None;
+            }
             let m = look_of(s.material.color, s.material.roughness, s.material.metallic);
             match first {
                 None => first = Some(m),
@@ -284,64 +312,20 @@ pub fn mesh_scene(scene: &Scene, tolerance: f64, threads: usize, prog: &export_m
 /// field leaves stains out because they change no distance; the GPU shader paints them, and so
 /// does this, with the same soft edge.)
 struct Painter {
-    base: Field,
-    stains: Vec<(Field, f32)>,
+    field: Field,
 }
 
 impl Painter {
     fn new(scene: &Scene) -> Painter {
-        let amount = if scene.melt.amount.is_finite() { scene.melt.amount.max(0.0) } else { 1.0 };
-        // a stain alone: the whole scene with everything hidden but that group (so that patterns and
-        // linked copies still find what they follow)
-        let alone = |gi: usize, g: crate::model::Group| {
-            let mut sc =
-                Scene { groups: scene.groups.clone(), melt: scene.melt, env: scene.env.clone(), saved: Vec::new(), anim: Default::default() };
-            for other in &mut sc.groups {
-                other.visible = false;
-            }
-            if let Some(slot) = sc.groups.get_mut(gi) {
-                *slot = g;
-            }
-            Field::new(&sc)
-        };
-        let mut stains = Vec::new();
-        for (gi, g) in scene.groups.iter().enumerate().filter(|(_, g)| g.visible) {
-            if g.op == Op::Paint {
-                let mut u = g.clone();
-                u.op = Op::Add;
-                stains.push((alone(gi, u), g.blend * amount));
-            } else {
-                for sh in g.shapes.iter().filter(|s| s.solid() && s.op == Op::Paint) {
-                    let mut one = sh.clone();
-                    one.op = Op::Add;
-                    let mut u = g.clone();
-                    u.op = Op::Add;
-                    u.visible = true;
-                    u.shapes = vec![one];
-                    stains.push((alone(gi, u), sh.blend * amount));
-                }
-            }
-        }
-        Painter { base: Field::new(scene), stains }
+        // Field::sample already composites Op::Paint masks in exactly the
+        // same direction as the CPU renderer. Reapplying masks here used to
+        // recolour surfaces OUTSIDE the painted area (and double-blend edges).
+        Painter { field: Field::new(scene) }
     }
 
     fn look(&self, p: [f32; 3]) -> Mat8 {
-        let s = self.base.sample(p);
-        let (mut c, mut r, mut m) = (s.color, s.roughness, s.metallic);
-        for (field, k) in &self.stains {
-            let b = field.sample(p);
-            let soft = (k * 0.35).max(0.3);
-            let w = (0.5 - b.dist / soft).clamp(0.0, 1.0);
-            if !w.is_finite() || w >= 1.0 {
-                continue;
-            }
-            for (a, value) in c.iter_mut().enumerate() {
-                *value = b.color[a] + (*value - b.color[a]) * w;
-            }
-            r = b.roughness + (r - b.roughness) * w;
-            m = b.metallic + (m - b.metallic) * w;
-        }
-        look_of(c, r, m)
+        let s = self.field.sample(p);
+        look_of(s.color, s.roughness, s.metallic)
     }
 }
 
@@ -370,8 +354,8 @@ fn classify(looks: &[Mat8], max: usize) -> (Vec<u16>, usize) {
             let key = (u32::from(m.rgb[0]) >> shift)
                 | ((u32::from(m.rgb[1]) >> shift) << 8)
                 | ((u32::from(m.rgb[2]) >> shift) << 16)
-                | (u32::from(m.rough >> (shift + 1)) << 24)
-                | (u32::from(m.metal >> (shift + 1)) << 28);
+                | ((u32::from(m.rough) >> (shift + 1)) << 24)
+                | ((u32::from(m.metal) >> (shift + 1)) << 28);
             let next = map.len();
             let c = *map.entry(key).or_insert(next as u16);
             if map.len() > max {
@@ -732,7 +716,13 @@ pub fn print_check(scene: &Scene, sel: Option<Pick>, o: &Options, prog: &Progres
     let cell = f64::from(o.tolerance.clamp(MIN_TOLERANCE, MAX_TOLERANCE)).max(extent / 350.0).max(0.05);
     let meshed = mesh_scene(&scene, cell, th, &prog.slice(0.0, 0.8))?;
     let mesh = &meshed.mesh;
-    let size = size_of(mesh);
+    // Uniform export scaling changes real-world thickness and volume, not just
+    // the coordinates written to disk. File units do not change physical mm.
+    let physical_scale = f64::from(o.sanitized().scale_pct) / 100.0;
+    let size = size_of(mesh).map(|v| v * physical_scale);
+    let thin_limit_source = THIN_MM / physical_scale;
+    let thin_step_source = 0.1 / physical_scale;
+    let inside_source = 0.03_f64.min(thin_limit_source * 0.1);
     let (mut zmin, mut area, mut over) = (f64::INFINITY, 0.0, 0.0);
     for p in &mesh.positions {
         zmin = zmin.min(p[2]);
@@ -777,19 +767,20 @@ pub fn print_check(scene: &Scene, sel: Option<Pick>, o: &Options, prog: &Progres
             }
             let d = [n[0] / l, n[1] / l, n[2] / l];
             total += *a;
-            // just inside, then in 0.1 mm steps until the solid ends
+            // Ray march in source coordinates, but test the *exported*
+            // physical 0.8 mm wall threshold (and report the exported mm).
             let at = |t: f64| field.distance([(p[0] - d[0] * t) as f32, (p[1] - d[1] * t) as f32, (p[2] - d[2] * t) as f32]);
-            if at(0.03) >= 0.0 {
+            if at(inside_source) >= 0.0 {
                 continue;
             }
-            let mut t = 0.1;
-            while t < THIN_MM {
+            let mut t = thin_step_source;
+            while t < thin_limit_source {
                 if at(t) >= 0.0 {
                     thin += *a;
-                    thinnest = thinnest.min(t);
+                    thinnest = thinnest.min(t * physical_scale);
                     break;
                 }
-                t += 0.1;
+                t += thin_step_source;
             }
         }
         Ok((thin, total, thinnest))
@@ -797,13 +788,13 @@ pub fn print_check(scene: &Scene, sel: Option<Pick>, o: &Options, prog: &Progres
     let (thin, total, thinnest) = parts.iter().fold((0.0, 0.0, f64::INFINITY), |a, p| (a.0 + p.0, a.1 + p.1, a.2.min(p.2)));
     Ok(PrintCheck {
         size,
-        volume_cm3: melt::volume(mesh).abs() / 1000.0,
+        volume_cm3: melt::volume(mesh).abs() * physical_scale.powi(3) / 1000.0,
         closed: melt::is_watertight(mesh),
         thin_pct: if total > 0.0 { 100.0 * thin / total } else { 0.0 },
         thinnest: thinnest.is_finite().then_some(thinnest),
         overhang_pct: if area > 0.0 { 100.0 * over / area } else { 0.0 },
         tris: mesh.triangles.len(),
-        cell,
+        cell: cell * physical_scale,
     })
 }
 
@@ -895,6 +886,95 @@ mod tests {
     }
     fn blue() -> Material {
         Material::plain([0.0, 0.0, 1.0], 0.8, 1.0)
+    }
+
+    #[test]
+    fn exporting_a_parent_includes_children_and_exporting_a_child_keeps_its_ancestors() {
+        let mut parent = Group::new("parent");
+        parent.shapes.push(sphere_at(0.0, 5.0, red()));
+        let mut child = Group::new("child");
+        child.depth = 1;
+        child.shapes.push(sphere_at(40.0, 5.0, blue()));
+        let sc = Scene { groups: vec![parent, child], ..Scene::default() };
+
+        let both = prepare(&sc, Some(Pick::Group(0)), Scope::Selected, false).unwrap();
+        assert!(Field::new(&both).distance([0.0, 0.0, 20.0]) < 0.0);
+        assert!(Field::new(&both).distance([40.0, 0.0, 20.0]) < 0.0);
+
+        let only_child = prepare(&sc, Some(Pick::Group(1)), Scope::Selected, false).unwrap();
+        assert!(only_child.groups[0].visible && !only_child.groups[0].shapes[0].visible);
+        assert!(Field::new(&only_child).distance([40.0, 0.0, 20.0]) < 0.0);
+        assert!(Field::new(&only_child).distance([0.0, 0.0, 20.0]) > 0.0);
+    }
+
+    #[test]
+    fn ignoring_paint_keeps_nested_masks_out_of_geometry() {
+        let mut base = Group::new("base");
+        base.shapes.push(sphere_at(0.0, 3.0, red()));
+        let mut mask = Group::new("paint mask");
+        mask.op = Op::Paint;
+        let mut child = Group::new("paint child");
+        child.depth = 1;
+        child.shapes.push(sphere_at(30.0, 3.0, blue()));
+        let sc = Scene { groups: vec![base, mask, child], ..Scene::default() };
+        let without_stain = prepare(&sc, None, Scope::Visible, true).unwrap();
+        assert_eq!(without_stain.groups.len(), 3, "paint parents must not be deleted out from under children");
+        assert!(!without_stain.groups[1].visible);
+        assert!(Field::new(&without_stain).distance([30.0, 0.0, 20.0]) > 0.0);
+    }
+
+    #[test]
+    fn export_palette_handles_256_distinct_looks_without_a_shift_panic() {
+        let mut looks = Vec::new();
+        for red in [0, 64, 128, 192] {
+            for green in [0, 64, 128, 192] {
+                for blue in [0, 64, 128, 192] {
+                    for rough in [0, 128] {
+                        for metal in [0, 128] {
+                            looks.push(Mat8 { rgb: [red, green, blue], rough, metal });
+                        }
+                    }
+                }
+            }
+        }
+        assert_eq!(looks.len(), 256);
+        let (classes, n) = classify(&looks, 250);
+        assert_eq!(classes.len(), looks.len());
+        assert!((1..=250).contains(&n), "palette size {n}");
+    }
+
+    #[test]
+    fn export_samples_gradient_colours_instead_of_treating_them_as_uniform() {
+        let mut mat = red();
+        mat.gradient = 1.0;
+        mat.color2 = [0.0, 0.0, 1.0];
+        let mut shape = Shape::new(Kind::Sphere, [0.0; 3], mat);
+        shape.size[0] = 10.0;
+        shape.blend = 0.0;
+        let sc = scene_of(vec![shape]);
+        assert!(single_look(&sc).is_none());
+        let painter = Painter::new(&sc);
+        let bottom = painter.look([0.0, 0.0, -9.0]).rgb;
+        let top = painter.look([0.0, 0.0, 9.0]).rgb;
+        assert_ne!(bottom, top, "the two ends of the sphere need different vertex colours");
+    }
+
+    #[test]
+    fn paint_only_colours_the_surface_inside_its_mask() {
+        let mut base = Shape::new(Kind::Box, [0.0; 3], red());
+        base.size = [20.0, 20.0, 20.0];
+        base.blend = 0.0;
+        let mut stain = Shape::new(Kind::Sphere, [0.0, -10.0, 0.0], Material::plain([0.0, 1.0, 0.0], 0.3, 0.0));
+        stain.size[0] = 3.0;
+        stain.blend = 0.0;
+        stain.op = Op::Paint;
+        let sc = scene_of(vec![base, stain]);
+        assert!(single_look(&sc).is_none());
+        let painter = Painter::new(&sc);
+        let inside = painter.look([0.0, -10.0, 0.0]);
+        let outside = painter.look([8.0, -10.0, 0.0]);
+        assert_eq!(inside.rgb, [0, 255, 0]);
+        assert_eq!(outside.rgb, [255, 0, 0], "mask outside should keep the base colour");
     }
 
     #[test]
@@ -1163,6 +1243,20 @@ mod tests {
         block.blend = 0.0;
         let c = print_check(&scene_of(vec![block]), None, &Options { tolerance: 0.2, ..Options::default() }, &Progress::new()).unwrap();
         assert!(c.thin_pct < 2.0 && c.overhang_pct < 1.0, "{} {}", c.thin_pct, c.overhang_pct);
+    }
+
+    #[test]
+    fn print_check_measures_the_physical_wall_after_export_scale() {
+        let mut plate = Shape::new(Kind::Box, [0.0, 0.0, 1.0], Material::default());
+        plate.size = [20.0, 20.0, 2.0];
+        plate.blend = 0.0;
+        let sc = scene_of(vec![plate]);
+        let opts = Options { scale_pct: 10.0, tolerance: 0.15, ..Options::default() };
+        let check = print_check(&sc, None, &opts, &Progress::new()).unwrap();
+        assert!((check.size[0] - 2.0).abs() < 0.1, "{:?}", check.size);
+        assert!((check.size[2] - 0.2).abs() < 0.1, "{:?}", check.size);
+        assert!(check.thin_pct > 5.0, "a scaled 0.2 mm wall must be thin: {:?}", check.thin_pct);
+        assert!(check.thinnest.is_some_and(|t| t < THIN_MM), "{:?}", check.thinnest);
     }
 
     #[test]
