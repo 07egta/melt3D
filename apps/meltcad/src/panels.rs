@@ -346,6 +346,7 @@ impl App {
     fn group_inspector(&mut self, ui: &mut Ui, g: usize) {
         style::title(ui, "グループ");
         let n = self.scene.groups.len();
+        let other_shapes = self.scene.shape_count().saturating_sub(self.scene.groups[g].shapes.len());
         let mut swap = None;
         {
             let gr = &mut self.scene.groups[g];
@@ -358,6 +359,11 @@ impl App {
                 0.0..=80.0,
                 "このグループ全体が、前のグループとどのくらい溶けるか (グープ)",
             );
+            // Keep group-level chair parameters beside the native group properties.
+            // User-added shapes remain independent and are not re-meshed here.
+            if gr.designer_chair.is_some() && !gr.is_linked() {
+                crate::designer_chair::controls(ui, gr, other_shapes);
+            }
         }
         ui.horizontal(|ui| {
             if style::pill_enabled(ui, "↑ 前へ", false, g > 0).clicked() {
@@ -380,6 +386,14 @@ impl App {
 
     fn shape_inspector(&mut self, ui: &mut Ui, g: usize, s: usize) {
         style::title(ui, "形");
+        if self.scene.groups[g].designer_chair.is_some() {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new("Designer Chair の個別パーツ").size(11.5).color(style::DIM));
+                if ui.small_button("椅子全体の設定").clicked() {
+                    self.sel = Some(Pick::Group(g));
+                }
+            });
+        }
         let ngroups = self.scene.groups.len();
         let nshapes = self.scene.groups[g].shapes.len();
         let mut move_to: Option<usize> = None;
