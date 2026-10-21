@@ -129,21 +129,19 @@ impl App {
             self.an.playing = false;
             let mut reopen_timeline = false;
             if let Some(job) = &self.an.job {
-                egui::Panel::bottom("gif_background_progress")
-                    .exact_size(32.0)
-                    .show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            let done = job.done.load(Ordering::Relaxed);
-                            let total = job.total.load(Ordering::Relaxed);
-                            ui.label(format!("Making GIF {done}/{total}"));
-                            if ui.button("Cancel GIF").clicked() {
-                                job.cancel.store(true, Ordering::Relaxed);
-                            }
-                            if ui.button("Show timeline").clicked() {
-                                reopen_timeline = true;
-                            }
-                        });
+                egui::Panel::bottom("gif_background_progress").exact_size(32.0).show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        let done = job.done.load(Ordering::Relaxed);
+                        let total = job.total.load(Ordering::Relaxed);
+                        ui.label(format!("Making GIF {done}/{total}"));
+                        if ui.button("Cancel GIF").clicked() {
+                            job.cancel.store(true, Ordering::Relaxed);
+                        }
+                        if ui.button("Show timeline").clicked() {
+                            reopen_timeline = true;
+                        }
                     });
+                });
             }
             if reopen_timeline {
                 self.an.open = true;
