@@ -225,9 +225,20 @@ impl ScenePack {
             }
             let info = previous.and_then(|(old_scene, old_pack)| {
                 let old_group = old_scene.groups.get(gi)?;
+                // A group may be only partly admitted when earlier groups consume the
+                // MAX_SHAPES budget. Reusing its old bounds/blocks is safe only when the
+                // packed slice starts at the same offset and admits the same number of
+                // members; otherwise the new prefix can contain geometry the old bounds
+                // never covered (or retain blocks for shapes that are no longer packed).
+                let same_admission = old_pack.ranges.iter().any(
+                    |&(old_gi, old_first, old_count)| {
+                        old_gi == gi && old_first == first && old_count == count
+                    },
+                );
                 (old_group.shapes == g.shapes
                     && old_scene.melt.mode == scene.melt.mode
-                    && old_scene.melt.amount == scene.melt.amount)
+                    && old_scene.melt.amount == scene.melt.amount
+                    && same_admission)
                     .then(|| old_pack.source_infos.get(&gi).cloned())
                     .flatten()
             }).unwrap_or_else(|| Arc::new(crate::accel::group_info(&members, &scene.melt)));
@@ -1752,6 +1763,39 @@ mod tests {
             deleted.groups[0].shapes.remove(1);
             let _ = same_pack_as_cold(&deleted, Some((&original, &old)));
         }
+    }
+
+    #[test]
+    fn incremental_gpu_pack_rebuilds_group_bounds_when_shape_budget_admission_changes() {
+        let mut original = Scene::default();
+        original.groups[0].shapes.clear();
+        let mut first = crate::model::Group::new(String::from("first"));
+        let mut second = crate::model::Group::new(String::from("second"));
+        for i in 0..508 {
+            first.shapes.push(Shape::new(
+                crate::model::Kind::Sphere,
+                [i as f32 * 3.0, 0.0, 10.0],
+                Material::default(),
+            ));
+        }
+        for i in 0..7 {
+            second.shapes.push(Shape::new(
+                crate::model::Kind::Sphere,
+                [10_000.0 + i as f32 * 30.0, 0.0, 10.0],
+                Material::default(),
+            ));
+        }
+        original.groups = vec![first, second];
+        assert_eq!(original.shape_count(), crate::model::MAX_SHAPES + 3);
+        let old = same_pack_as_cold(&original, None);
+        assert_eq!(old.ranges[1].2, 4, "the final group is truncated by the shape cap");
+
+        // Removing three earlier shapes admits three more shapes from the unchanged
+        // second group. Its old source bounds cover only four of the now-seven members.
+        let mut changed = original.clone();
+        changed.groups[0].shapes.truncate(505);
+        let updated = same_pack_as_cold(&changed, Some((&original, &old)));
+        assert_eq!(updated.ranges[1].2, 7);
     }
 
     /// Run explicitly for comparative CPU packing timings on the actual target machine.
