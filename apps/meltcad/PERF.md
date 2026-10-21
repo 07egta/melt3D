@@ -264,12 +264,13 @@ multiple giant SDF jobs from running at once. The in-app GPU benchmark also hold
 The final file replacement is a very short **non-cancellable** stage.
 There is a reason printed on the progress card, and `Job::cancel` uses an
 atomic state transition so a late cancel cannot produce a half-installed
-file. On Windows (where `std::fs::rename` cannot replace an existing file),
-the old file is moved to a backup then the staged file is installed, with
-rollback on ordinary I/O failures. This is **failure-recoverable**, not a
-true multi-file atomic filesystem transaction; unexpected process termination
-between these renames can leave a recovery backup. No auto-recovery after a
-hard crash is claimed.
+file. An existing destination remains present while a sibling backup is
+copied, then the staged file replaces it with one rename. A later output
+failure restores earlier files from those backups without first removing their
+destination paths. Each replacement is failure-recoverable, but this is not a
+true multi-file filesystem transaction: unexpected process termination during
+an OBJ+MTL commit can leave one new file and one old file, along with a backup.
+No automatic recovery after a hard crash is claimed.
 
 ### Reproduction and benchmarks
 
