@@ -309,6 +309,9 @@ pub struct SolveApp {
     /// How long OK waits for a feature before computing it off the window thread, saying so;
     /// `None`: it waits as long as it takes (headless use, tests). The desktop app sets it.
     pub apply_off_thread: Option<std::time::Duration>,
+    /// Test-only gate for deterministic off-thread apply/cancel coverage.
+    #[cfg(test)]
+    pub(crate) test_apply_gate: Option<(std::sync::Arc<std::sync::Barrier>, std::sync::Arc<std::sync::Barrier>, std::sync::mpsc::Sender<()>)>,
     /// The last command started interactively (id, label), for Repeat.
     pub last_command: Option<(String, String)>,
     /// Esc was already acted on this frame (by the shortcuts), so later handlers skip it.
@@ -410,6 +413,8 @@ impl SolveApp {
             preview: preview::PreviewState::default(),
             applying: None,
             apply_off_thread: None,
+            #[cfg(test)]
+            test_apply_gate: None,
             last_command: None,
             esc_handled: false,
             status: None,

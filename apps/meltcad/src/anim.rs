@@ -100,8 +100,11 @@ impl Anim {
             return Err(format!("Up to {MAX_KEYS} poses"));
         }
         let ids: Vec<(usize, usize)> = scene.groups.iter().enumerate().flat_map(|(g, gr)| (0..gr.shapes.len()).map(move |s| (g, s))).collect();
+        // Callers temporarily take Scene.anim out to avoid borrowing conflicts.
+        // Reserve old/deleted shapes' track IDs here, not only in Scene::max_uid.
+        let reserved_uid = self.tracks.iter().map(|t| t.uid).max().unwrap_or(0);
         for (g, s) in ids {
-            let Some(uid) = scene.ensure_shape_uid(g, s) else { continue };
+            let Some(uid) = scene.ensure_shape_uid_above(g, s, reserved_uid) else { continue };
             let Some(shape) = scene.shape(g, s) else { continue };
             let v = Vals::of(shape);
             if self.tracks.iter().all(|t| t.uid != uid) {
@@ -274,6 +277,32 @@ mod tests {
         a.apply(&mut at, 0);
         assert!((at.groups[0].shapes[0].pos[0] - x0).abs() < 1e-3);
         assert_eq!(a.key_frames(), vec![0, 20]);
+    }
+
+    #[test]
+    fn a_deleted_shapes_animation_track_is_not_reused_by_a_new_shape() {
+        use crate::model::{Kind, Material, Shape};
+
+        let mut scene = Scene::default();
+        let mut anim = Anim::default();
+        anim.capture(&mut scene, 0).unwrap();
+        let old_uid = scene.groups[0].shapes[0].uid;
+        scene.groups[0].shapes[0].pos[0] = 100.0;
+        anim.capture(&mut scene, 10).unwrap();
+
+        scene.groups[0].shapes.clear();
+        scene.groups[0].shapes.push(Shape::new(Kind::Box, [500.0, 0.0, 20.0], Material::default()));
+        anim.capture(&mut scene, 20).unwrap();
+        let new_uid = scene.groups[0].shapes[0].uid;
+        assert!(new_uid > old_uid, "new geometry cannot inherit the deleted shape's track");
+        assert_eq!(anim.tracks.len(), 2);
+        anim.apply(&mut scene, 0);
+        assert_eq!(scene.groups[0].shapes[0].kind, Kind::Box);
+        assert_eq!(scene.groups[0].shapes[0].pos[0], 500.0);
+        scene.anim = anim;
+        let reopened = Scene::from_json(&scene.to_json()).unwrap();
+        assert_eq!(reopened.groups[0].shapes[0].uid, new_uid);
+        assert_eq!(reopened.anim.tracks.len(), 2);
     }
 
     #[test]

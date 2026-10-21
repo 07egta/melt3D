@@ -218,7 +218,10 @@ impl App {
         let mut copy = Group::new(format!("{name} (link)"));
         copy.instance_of = Some(uid);
         copy.xform = Xform { pos: [(reach * 2.0 + 10.0).clamp(20.0, 400.0), 0.0, 0.0], ..Xform::default() };
-        let at = (g + 1).min(self.scene.groups.len());
+        // Insert after the complete subtree. Inserting at g + 1 would make existing
+        // children belong to the new link because nesting is encoded by list order.
+        copy.depth = self.scene.groups[g].depth;
+        let at = self.scene.subtree_end(g);
         self.scene.groups.insert(at, copy);
         self.sel = Some(Pick::Group(at));
         self.say(ctx, "Made a linked copy. Edits to the original also change this one");
@@ -624,6 +627,24 @@ mod tests {
         let n = app.scene.groups.len();
         app.make_instance(&ctx);
         assert_eq!(app.scene.groups.len(), n);
+    }
+
+    #[test]
+    fn making_a_link_after_a_parent_does_not_reparent_its_children() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        let mut child = Group::new("existing child");
+        child.depth = 1;
+        child.shapes.push(Shape::new(Kind::Box, [40.0, 0.0, 10.0], Material::default()));
+        app.scene.groups.push(child);
+        assert_eq!(app.scene.parent_of(1), Some(0));
+        app.sel = Some(Pick::Group(0));
+        app.make_instance(&ctx);
+        assert_eq!(app.scene.groups.len(), 3);
+        assert_eq!(app.scene.parent_of(1), Some(0), "the original child stays under the original parent");
+        assert_eq!(app.scene.groups[1].name, "existing child");
+        assert_eq!(app.scene.groups[2].depth, 0, "the link is a sibling of its source");
+        assert_eq!(app.sel, Some(Pick::Group(2)));
     }
 
     #[test]
