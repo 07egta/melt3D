@@ -32,11 +32,11 @@ pub const GLOBAL_V4: usize = V4_ENV + ENV_V4;
 pub const GLOBAL_BYTES: usize = GLOBAL_V4 * 16;
 /// vec4 per texture row of the scene list.
 pub const ROW: usize = 1024;
-/// vec4 per group, per block of shapes, per instance, per shape (a bounding sphere and the 15 of `struct Shape`).
+/// vec4 per group, block, instance and shape (sphere + 15 base vec4 + 2 modifier vec4).
 const G_STRIDE: usize = 3;
 const B_STRIDE: usize = 2;
 const I_STRIDE: usize = 4;
-const S_STRIDE: usize = 16;
+const S_STRIDE: usize = 18;
 /// Outline points the lists hold (two points per vec4) and path nodes (one per vec4).
 pub const POLY_PTS: usize = 65536;
 pub const PATH_V4: usize = 32768;
@@ -134,6 +134,8 @@ pub struct ScenePack {
     /// Does any visible group or shape keep only an overlap (`Op::Intersect`)? Then what is far
     /// from a ray still decides where it stops, and the march may not leave anything out.
     pub overlaps: bool,
+    /// Conservative ray tracing step when twisted shapes are present.
+    pub ray_step: f32,
     /// Instances in the list (a plain group counts none).
     pub instances: usize,
     /// Shapes in the list and groups to draw.
@@ -159,6 +161,7 @@ impl ScenePack {
         let mut path: Vec<f32> = Vec::new();
         let mut shape_n = 0usize;
         let mut packed_overlap = false;
+        let mut ray_step = 1.0_f32;
         let mut block_n = 0usize;
         let mut inst_n = 0usize;
         let mut slots: Vec<(usize, usize, usize)> = Vec::new();
@@ -183,6 +186,9 @@ impl ScenePack {
                     continue;
                 }
                 pack_shape(s, &mut shapes, &mut poly, &mut path, &vols);
+                if let Some(d) = s.deformation {
+                    ray_step = ray_step.min(d.ray_step_safety(s.base_local_half()));
+                }
                 packed_overlap |= s.op == crate::model::Op::Intersect;
                 members.push(s);
                 slots.push((gi, si, shape_n));
@@ -250,6 +256,7 @@ impl ScenePack {
             list: Arc::new(list),
             vols: Arc::new(vols),
             glow: crate::perf::scene_has_glow(scene),
+            ray_step,
             overlaps: resolved.iter().filter_map(|r| scene.groups.get(r.gi)).any(|g| g.op == crate::model::Op::Intersect)
                 || packed_overlap,
             instances: inst_n,
@@ -299,7 +306,7 @@ impl ScenePack {
         }
         put(&mut u, 6, [self.group_n as f32, self.shape_n as f32, sel_first, sel_count]);
         put(&mut u, V4_OFFS, self.offs);
-        put(&mut u, V4_OFFS2, [self.offs2[0], self.offs2[1], if self.overlaps { 1.0 } else { 0.0 }, 0.0]);
+        put(&mut u, V4_OFFS2, [self.offs2[0], self.offs2[1], if self.overlaps { 1.0 } else { 0.0 }, self.ray_step]);
         let (bc, br) = bounds_of(scene, selected, &self.resolved);
         put(&mut u, V4_BOUND, [bc[0], bc[1], bc[2], br]);
         put(&mut u, V4_HOVER, [hover_first, hover_count, 0.0, 0.0]);
@@ -320,7 +327,7 @@ impl ScenePack {
     }
 }
 
-/// One shape's 16 vec4 (a bounding sphere, then `struct Shape`); its outline points and path nodes
+/// One shape's 18 vec4 (a bounding sphere, then `struct Shape`); its outline points and path nodes
 /// go into the shared pools.
 fn pack_shape(s: &crate::model::Shape, out: &mut Vec<f32>, poly: &mut Vec<f32>, path: &mut Vec<f32>, vols: &VolumeSet) {
     let p = Prepared::new(s);
@@ -360,8 +367,8 @@ fn pack_shape(s: &crate::model::Shape, out: &mut Vec<f32>, poly: &mut Vec<f32>, 
         };
     }
     push(out, [s.pos[0], s.pos[1], s.pos[2], radius]);
-    push(out, [p.inv[0][0], p.inv[0][1], p.inv[0][2], 0.0]);
-    push(out, [p.inv[1][0], p.inv[1][1], p.inv[1][2], 0.0]);
+    push(out, [p.inv[0][0], p.inv[0][1], p.inv[0][2], if s.deformation.is_some() { 1.0 } else { 0.0 }]);
+    push(out, [p.inv[1][0], p.inv[1][1], p.inv[1][2], s.deformation.map_or(1.0, |d| d.ray_step_safety(s.base_local_half()))]);
     push(out, [p.inv[2][0], p.inv[2][1], p.inv[2][2], 0.0]);
     push(out, [s.pos[0], s.pos[1], s.pos[2], p.min_scale()]);
     push(out, [s.scale[0], s.scale[1], s.scale[2], s.kind.id()]);
@@ -379,6 +386,11 @@ fn pack_shape(s: &crate::model::Shape, out: &mut Vec<f32>, poly: &mut Vec<f32>, 
     push(out, [p.shell, p.poly_limit, p.poly_orient, if p.chamfer && p.round > 0.0 { 1.0 } else { 0.0 }]);
     push(out, [m.color2[0], m.color2[1], m.color2[2], if m.has_gradient() { m.gradient } else { 0.0 }]);
     push(out, [f32::from(m.grad_axis.min(2)) + if m.grad_local { 3.0 } else { 0.0 }, m.grad_soft, m.grad_from, m.grad_to]);
+    // Non-destructive modifier lives in the already-packed scene-list texture.
+    // (0 in twist0.x means no deformation, so legacy model behaviour is exact.)
+    let (twist0, twist1) = s.deformation.map_or(([0.0; 4], [0.0; 4]), |d| d.gpu_parameters(s.base_local_half()));
+    push(out, twist0);
+    push(out, twist1);
 }
 
 /// A curve's smoothed points go into the path list behind two header entries (the low and high
@@ -1554,6 +1566,36 @@ mod tests {
     }
 
     #[test]
+    fn twist_modifier_is_packed_without_corrupting_shape_offsets() {
+        use crate::deform::{Axis, Deformation, Twist};
+        use crate::model::{Kind, Material, Shape};
+        let mut sc = Scene::default();
+        let mut plain = Shape::new(Kind::Box, [0.0, 0.0, 12.0], Material::default());
+        plain.size = [20.0, 10.0, 24.0];
+        let half = plain.base_local_half();
+        let mut twisted = plain.clone();
+        twisted.pos[0] = 35.0;
+        twisted.deformation = Some(Deformation::Twist(Twist {
+            axis: Axis::Y, reverse: true, degrees: 360.0,
+            begin: 0.2, end: 0.85, lower: 0.25, upper: 1.5,
+        }));
+        sc.groups[0].shapes = vec![plain, twisted];
+        let u = pack(&sc, &Camera::default(), [800.0, 600.0], Some(Pick::Shape(0, 1)), None, true);
+        let f = Frame::new(&u);
+        assert_eq!(S_STRIDE, 18, "WGSL shape_rec must use the same stride");
+        assert_eq!(f.shape(0, 16), [0.0; 4]);
+        assert_eq!(f.shape(0, 17), [0.0; 4]);
+        assert_eq!(f.shape(1, 16), [2.0, -360.0, 0.2, 0.85]);
+        let p = f.shape(1, 17);
+        assert_eq!(&p[..3], &[0.25, 1.5, half[1]]);
+        assert!((p[3] - half[2].hypot(half[0])).abs() < 1e-4);
+        assert_eq!(f.shape(1, 4)[0], 35.0, "next shape's position not shifted");
+        assert!(f.shape(1, 0)[3] >= f.shape(0, 0)[3], "expanded bounds enclose rotated corners");
+        // Packed offsets still point to the first 2D outline after both shapes.
+        assert_eq!(f.poly_base() - f.shapes_base(), 2 * S_STRIDE);
+    }
+
+    #[test]
     fn the_default_scene_packs_without_overflow() {
         let u = pack(&Scene::default(), &Camera::default(), [800.0, 600.0], Some(Pick::Shape(0, 0)), None, true);
         let f = Frame::new(&u);
@@ -2094,6 +2136,67 @@ mod headless_tests {
                 }
             }
             assert!(compared > 100, "measured {compared} points");
+        }
+    }
+
+    /// Directly read WGSL twist distance for box/cylinder and all three axes.
+    /// Requires Vulkan/DX12/GL; ignored by default in CI without a graphics adapter.
+    #[test]
+    #[ignore = "requires graphics adapter"]
+    fn twist_gpu_distance_matches_cpu() {
+        use crate::deform::{Axis, Deformation, Twist};
+        use crate::model::{Kind, Material, Shape};
+        let Some((device, queue, info)) = headless::open_device(false) else {
+            eprintln!("no graphics adapter for twist parity");
+            return;
+        };
+        eprintln!("{info}");
+        let mut src = shader_source();
+        let entry = src.find("fn fs(in: VOut)").expect("fragment entry");
+        let open = entry + src[entry..].find('{').expect("fragment body");
+        let mut depth = 0_i32;
+        let mut close = None;
+        for (off, ch) in src[open..].char_indices() {
+            if ch == '{' { depth += 1; }
+            if ch == '}' {
+                depth -= 1;
+                if depth == 0 { close = Some(open + off); break; }
+            }
+        }
+        src.replace_range(open..=close.expect("fragment end"),
+            "{\n    let q = vec3<f32>(in.uv.x * 48.0 - 24.0, in.uv.y * 48.0 - 24.0, 6.0);\n    let d = shape_dist(shape_at(0), q);\n    return vec4<f32>(clamp((d + 16.0) / 32.0, 0.0, 1.0), 0.0, 0.0, 1.0);\n}");
+        let res = try_build_from(&device, &queue, wgpu::TextureFormat::Rgba8Unorm, &src).expect("twist shader");
+        let mut gpu = headless::Gpu { device, queue, res, info };
+        let size = [64_u32, 64_u32];
+        for kind in [Kind::Box, Kind::Cylinder] {
+            for axis in Axis::ALL {
+                let mut shape = Shape::new(kind, [0.0; 3], Material::default());
+                shape.size = if kind == Kind::Box { [30.0, 18.0, 40.0] } else { [14.0, 40.0, 1.0] };
+                shape.deformation = Some(Deformation::Twist(Twist {
+                    axis, degrees: 180.0, begin: 0.1, end: 0.9, ..Twist::default()
+                }));
+                let prep = Prepared::new(&shape);
+                let scene = Scene {
+                    groups: vec![Group { shapes: vec![shape], ..Group::new("twist") }],
+                    melt: Default::default(), env: Default::default(), saved: Vec::new()
+                };
+                let data = pack(&scene, &Camera::default(), [64.0, 64.0], None, None, false);
+                let (pixels, _) = gpu.render(&data, size);
+                assert_eq!(pixels.len(), (size[0] * size[1] * 4) as usize);
+                let mut compared = 0;
+                for y in (0..size[1]).step_by(4) {
+                    for x in (0..size[0]).step_by(4) {
+                        let q = [(x as f32 + 0.5) * 48.0 / 64.0 - 24.0,
+                                 (y as f32 + 0.5) * 48.0 / 64.0 - 24.0, 6.0];
+                        let cpu = prep.distance(q);
+                        if !(-15.5..15.5).contains(&cpu) { continue; }
+                        let gpu_d = f32::from(pixels[((y * 64 + x) * 4) as usize]) * 32.0 / 255.0 - 16.0;
+                        assert!((gpu_d - cpu).abs() < 0.25, "{kind:?}/{axis:?} at {q:?}: GPU {gpu_d} CPU {cpu}");
+                        compared += 1;
+                    }
+                }
+                assert!(compared > 20, "{kind:?}/{axis:?}: only {compared} comparable points");
+            }
         }
     }
 

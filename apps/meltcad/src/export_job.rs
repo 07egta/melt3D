@@ -238,13 +238,89 @@ fn look_of(color: [f32; 3], rough: f32, metal: f32) -> Mat8 {
     Mat8 { rgb: [byte(color[0]), byte(color[1]), byte(color[2])], rough: byte(rough), metal: byte(metal) }
 }
 
+/// The zero-isosurface must stay exact for Boolean operations and meshing.
+/// A twisted shape's inverse-mapped SDF is not 1-Lipschitz, however, so the
+/// sparse mesher needs a conservative distance only when pruning its octree.
+#[derive(Clone, Copy, Debug)]
+struct TwistInfluence {
+    center: [f32; 3],
+    /// Region containing the shape and its conservative blend reach.
+    radius: f32,
+    /// Upper bound on the modifier's extra Lipschitz slope in world units.
+    rate: f32,
+}
+
+struct ExportField<'a> {
+    field: &'a Field,
+    twists: Vec<TwistInfluence>,
+    drip: f32,
+}
+
+impl ExportField<'_> {
+    fn from_scene<'a>(field: &'a Field, scene: &Scene) -> ExportField<'a> {
+        let mut twists = Vec::new();
+        let mult = crate::accel::reach_mult(scene.melt.mode);
+        let amount = scene.melt.amount.max(0.0);
+        let drip = scene.melt.drip.max(0.0);
+        for rg in crate::pattern::resolve(scene) {
+            let (Some(group), Some(source)) = (scene.groups.get(rg.gi), scene.groups.get(rg.src)) else { continue };
+            let one = [crate::pattern::Inst::IDENTITY];
+            let insts: &[crate::pattern::Inst] = if rg.insts.is_empty() { &one } else { &rg.insts };
+            for sh in source.shapes.iter().filter(|s| s.visible) {
+                let Some(crate::deform::Deformation::Twist(t)) = sh.deformation else { continue };
+                let rate = t.max_radians_per_mm(sh.base_local_half());
+                for instance in insts {
+                    // The minimum scale bounds the inverse local coordinate
+                    // of any world point; instances have rigid rotations.
+                    let min_scale = sh.scale.iter().copied().fold(f32::INFINITY, f32::min)
+                        .max(0.01) * instance.s.max(1e-6);
+                    // Only the source's geometric radius follows the
+                    // pattern scale; drip and Boolean blend reach are in the
+                    // receiving scene's world units.
+                    let radius = (reach_of(sh) as f32 * 1.1 * instance.s.max(1e-6))
+                        + mult * amount * (sh.blend + group.blend).max(0.0)
+                        + drip + 4.0;
+                    twists.push(TwistInfluence {
+                        center: instance.apply(sh.pos),
+                        radius,
+                        rate: rate / min_scale,
+                    });
+                }
+            }
+        }
+        ExportField { field, twists, drip }
+    }
+}
+
+impl export_mesh::Sdf for ExportField<'_> {
+    fn dist(&self, p: [f32; 3]) -> f32 {
+        self.field.distance(p)
+    }
+
+    fn pruning_distance(&self, p: [f32; 3], cell_radius: f32) -> f32 {
+        let d = self.field.distance(p);
+        let mut factor = 1.0_f32;
+        for t in &self.twists {
+            let delta = [p[0]-t.center[0], p[1]-t.center[1], p[2]-t.center[2]];
+            let distance = delta[0].hypot(delta[1]).hypot(delta[2]);
+            // Outside every possible affected surface region, legacy
+            // pruning remains untouched. Otherwise use the Lipschitz upper
+            // bound for all locations in the octree block, not just its centre.
+            if distance <= t.radius + cell_radius {
+                factor = factor.min(1.0 / (1.0 + t.rate * (distance + cell_radius + self.drip)));
+            }
+        }
+        d * factor
+    }
+}
+
 // ---------------------------------------------------------------- meshing
 
 /// The mesh of the (already prepared) scene.
 pub fn mesh_scene(scene: &Scene, tolerance: f64, threads: usize, prog: &export_mesh::Slice) -> Result<Meshed, String> {
     let field = Field::new(scene);
     let (mut lo, mut hi) = bounds(scene)?;
-    let sdf = |p: [f32; 3]| field.distance(p);
+    let sdf = ExportField::from_scene(&field, scene);
     let mut last_err = String::new();
     for _ in 0..4 {
         let extent = (0..3).map(|a| hi[a] - lo[a]).fold(0.0_f64, f64::max);
@@ -1154,6 +1230,33 @@ mod tests {
         block.blend = 0.0;
         let c = print_check(&scene_of(vec![block]), None, &Options { tolerance: 0.2, ..Options::default() }, &Progress::new()).unwrap();
         assert!(c.thin_pct < 2.0 && c.overhang_pct < 1.0, "{} {}", c.thin_pct, c.overhang_pct);
+    }
+
+    #[test]
+    fn twist_sparse_pruning_is_conservative_but_mesh_field_stays_exact() {
+        use crate::deform::{Deformation, Twist};
+        let mut sh = Shape::new(Kind::Box, [0.0, 0.0, 16.0], Material::default());
+        sh.size = [20.0, 14.0, 32.0];
+        sh.blend = 0.0;
+        let sc = scene_of(vec![sh.clone()]);
+        let field = Field::new(&sc);
+        let original = ExportField::from_scene(&field, &sc);
+        assert!(original.twists.is_empty());
+        let p = [10.0, 5.0, 16.0];
+        let d = export_mesh::Sdf::dist(&original, p);
+        assert_eq!(export_mesh::Sdf::pruning_distance(&original, p, 5.0), d);
+        sh.deformation = Some(Deformation::Twist(Twist::preset(360.0)));
+        let tw = scene_of(vec![sh]);
+        let field = Field::new(&tw);
+        let sdf = ExportField::from_scene(&field, &tw);
+        assert_eq!(sdf.twists.len(), 1);
+        let exact = export_mesh::Sdf::dist(&sdf, p);
+        let safe = export_mesh::Sdf::pruning_distance(&sdf, p, 10.0);
+        assert!((safe.abs() - exact.abs()) <= 1e-6, "pruning may only shrink magnitudes");
+        let outside = [5000.0, 5000.0, 5000.0];
+        let exact = export_mesh::Sdf::dist(&sdf, outside);
+        let safe = export_mesh::Sdf::pruning_distance(&sdf, outside, 0.5);
+        assert_eq!(safe, exact, "far cells still use efficient legacy pruning");
     }
 
     #[test]
