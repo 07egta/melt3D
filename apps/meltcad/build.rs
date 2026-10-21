@@ -4,9 +4,21 @@
 use std::{env, fs, io, path::PathBuf};
 
 const LIBRARIES: &[&str] = &[
-    "people", "hands", "animals", "tools_a", "tools_b", "furniture",
-    "food", "vehicles", "buildings", "nature", "print", "pip",
-    "realistic", "toon", "town",
+    "people",
+    "hands",
+    "animals",
+    "tools_a",
+    "tools_b",
+    "furniture",
+    "food",
+    "vehicles",
+    "buildings",
+    "nature",
+    "print",
+    "pip",
+    "realistic",
+    "toon",
+    "town",
 ];
 
 fn remove_json_whitespace(raw: &[u8]) -> io::Result<Vec<u8>> {

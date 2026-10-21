@@ -119,13 +119,24 @@ mod tests {
     #[test]
     fn compact_embedded_library_is_identical_to_the_original_json() {
         let names = [
-            "people", "hands", "animals", "tools_a", "tools_b",
-            "furniture", "food", "vehicles", "buildings", "nature",
-            "print", "pip", "realistic", "toon", "town",
+            "people",
+            "hands",
+            "animals",
+            "tools_a",
+            "tools_b",
+            "furniture",
+            "food",
+            "vehicles",
+            "buildings",
+            "nature",
+            "print",
+            "pip",
+            "realistic",
+            "toon",
+            "town",
         ];
         for (i, name) in names.iter().enumerate() {
-            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("library").join(format!("{name}.json"));
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("library").join(format!("{name}.json"));
             let original = std::fs::read_to_string(path).expect("original JSON exists");
             let before: serde_json::Value = serde_json::from_str(&original).expect("original valid");
             let after: serde_json::Value = serde_json::from_str(FILES[i]).expect("packed valid");
