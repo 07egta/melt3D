@@ -90,6 +90,10 @@ fn add_shapes(app: &mut App, mut shapes: Vec<Shape>) -> Result<String, String> {
 }
 
 fn add_group(app: &mut App, mut group: Group, offset: bool) -> Result<String, String> {
+    // Pasted letter contours remain usable solids, but they must not keep the
+    // source run/index identifier: otherwise editing the original text would
+    // unexpectedly regenerate the pasted copy as well.
+    group.puffy_text = None;
     if app.scene.groups.len() >= MAX_GROUPS {
         return Err(format!("グループは{MAX_GROUPS}個までです"));
     }

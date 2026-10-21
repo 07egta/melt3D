@@ -251,6 +251,8 @@ fn shape_dist(s: Shape, p: vec3<f32>) -> f32 {
             let w = vec2<f32>(d2, abs(q.z) - hh + rr);
             r = min(max(w.x, w.y), 0.0) + length(max(w, vec2<f32>(0.0))) - rr;
         }
+        // Same signed inflation used by the CPU SDF and mesh export for Extrude.
+        r -= clamp(s.params.x, -40.0, 40.0);
     }
     r = r * s.pos.w;
     // hollow walls of thickness `shell`

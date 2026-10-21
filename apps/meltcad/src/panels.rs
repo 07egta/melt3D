@@ -345,6 +345,7 @@ impl App {
 
     fn group_inspector(&mut self, ui: &mut Ui, g: usize) {
         style::title(ui, "グループ");
+        crate::puffy_text_ui::inspector_button(self, ui, g);
         let n = self.scene.groups.len();
         let mut swap = None;
         {
@@ -380,6 +381,7 @@ impl App {
 
     fn shape_inspector(&mut self, ui: &mut Ui, g: usize, s: usize) {
         style::title(ui, "形");
+        crate::puffy_text_ui::inspector_button(self, ui, g);
         let ngroups = self.scene.groups.len();
         let nshapes = self.scene.groups[g].shapes.len();
         let mut move_to: Option<usize> = None;

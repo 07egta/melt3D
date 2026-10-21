@@ -49,6 +49,8 @@ mod cpu_render;
 mod curve;
 mod curve_tool;
 mod pipe_tool;
+mod puffy_text;
+mod puffy_text_ui;
 mod model;
 mod perf;
 mod prims;
