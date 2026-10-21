@@ -764,7 +764,7 @@ impl App {
 
     /// Start editing the outline of shape (g, s) in the viewport.
     pub fn sketch_edit_begin(&mut self, g: usize, s: usize) {
-        let ok = self.scene.shape(g, s).is_some_and(sketch::editable);
+        let ok = !self.scene.is_locked(Pick::Shape(g, s)) && self.scene.shape(g, s).is_some_and(sketch::editable);
         if !ok {
             return;
         }
@@ -774,6 +774,8 @@ impl App {
         self.sk.reset();
         self.sk.on = false;
         self.sel = Some(Pick::Shape(g, s));
+        self.extra_selected.clear();
+        self.reveal_in_tree(Pick::Shape(g, s));
         self.sk.edit = Some(Edit { g, s, which: Which::Main, sel: None, drag: None, hover: None });
         if let Some(f) = self.scene.shape(g, s).and_then(|sh| sketch::edit_frame(sh, Which::Main)) {
             self.sketch_fly(&f);
@@ -796,6 +798,10 @@ impl App {
     /// The frame and outline being edited, or None when the shape is gone (the editing then ends).
     fn edit_target(&mut self) -> Option<(Frame, Vec<[f32; 2]>)> {
         let e = self.sk.edit.as_ref()?;
+        if self.scene.is_locked(Pick::Shape(e.g, e.s)) {
+            self.sk.edit = None;
+            return None;
+        }
         let found = self.scene.shape(e.g, e.s).filter(|sh| sketch::editable(sh)).and_then(|sh| {
             let f = sketch::edit_frame(sh, e.which)?;
             Some((f, sketch::outline_of(sh, e.which).clone()))

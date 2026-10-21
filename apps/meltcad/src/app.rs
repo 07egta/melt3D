@@ -1,6 +1,6 @@
 //! The window: top bar, shape palette, viewport, side panels, shortcuts, undo and files.
 
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::path::PathBuf;
 
 use egui::{Color32, RichText, Ui};
@@ -49,6 +49,14 @@ pub struct App {
     redo: Vec<Scene>,
     pub cam: Camera,
     pub sel: Option<Pick>,
+    /// Secondary selections in the scene tree; the existing `sel` remains the focus for
+    /// the inspector and legacy tools. These are UI-only, not persisted in design files.
+    pub extra_selected: BTreeSet<Pick>,
+    pub tree_anchor: Option<Pick>,
+    pub tree_query: String,
+    /// Request a single jump when the viewport selects an out-of-view tree row.
+    pub tree_scroll_target: Option<Pick>,
+    pub rename_text: String,
     pub tool: Tool,
     /// What a new shape does: add to the group or carve from it.
     pub new_op: Op,
@@ -147,6 +155,11 @@ impl App {
             redo: Vec::new(),
             cam: Camera::default(),
             sel: Some(Pick::Shape(0, 0)),
+            extra_selected: BTreeSet::new(),
+            tree_anchor: None,
+            tree_query: String::new(),
+            tree_scroll_target: None,
+            rename_text: String::new(),
             tool: Tool::All,
             new_op: Op::Add,
             drag: None,
@@ -243,6 +256,178 @@ impl App {
         }
     }
 
+    /// A single primary pick remains compatible with the inspector and existing shortcuts.
+    pub fn selected_picks(&self) -> Vec<Pick> {
+        let mut picks: Vec<Pick> = self.extra_selected.iter().copied().collect();
+        if let Some(p) = self.sel {
+            if !picks.contains(&p) {
+                picks.push(p);
+            }
+        }
+        picks
+    }
+
+    pub fn is_tree_selected(&self, pick: Pick) -> bool {
+        self.sel == Some(pick) || self.extra_selected.contains(&pick)
+    }
+
+    /// Tree and viewport use this same selection path.
+    pub fn select_item(&mut self, pick: Pick, additive: bool) {
+        if !additive {
+            self.sel = Some(pick);
+            self.extra_selected.clear();
+        } else if self.sel == Some(pick) {
+            if let Some(next) = self.extra_selected.pop_first() {
+                self.sel = Some(next);
+            } else {
+                self.sel = None;
+            }
+        } else if !self.extra_selected.remove(&pick) {
+            if let Some(previous) = self.sel {
+                self.extra_selected.insert(previous);
+            }
+            self.sel = Some(pick);
+        }
+        self.tree_anchor = Some(pick);
+        if let Pick::Shape(g, _) = pick { self.folded.remove(&g); }
+    }
+
+    /// Reveal viewport selections in the tree even when a group is folded or a
+    /// stale name filter would otherwise hide the selected object.
+    pub fn reveal_in_tree(&mut self, pick: Pick) {
+        if let Pick::Shape(g, _) = pick { self.folded.remove(&g); }
+        if !self.tree_query.trim().is_empty() {
+            let search = self.tree_query.trim().to_lowercase();
+            let matches = match pick {
+                Pick::Group(g) => self.scene.groups.get(g).is_some_and(|gr| gr.name.to_lowercase().contains(&search)),
+                Pick::Shape(g, s) => self.scene.groups.get(g).is_some_and(|gr| gr.name.to_lowercase().contains(&search)
+                    || gr.shapes.get(s).is_some_and(|sh| sh.name.to_lowercase().contains(&search))),
+            };
+            if !matches { self.tree_query.clear(); }
+        }
+        self.tree_scroll_target = Some(pick);
+    }
+
+    pub fn select_tree_range(&mut self, clicked: Pick, visible: &[Pick]) {
+        let anchor = self.tree_anchor.unwrap_or(clicked);
+        let start = visible.iter().position(|p| *p == anchor);
+        let end = visible.iter().position(|p| *p == clicked);
+        if let (Some(a), Some(b)) = (start, end) {
+            self.extra_selected.clear();
+            self.sel = Some(clicked);
+            for &p in &visible[a.min(b)..=a.max(b)] {
+                if p != clicked {
+                    self.extra_selected.insert(p);
+                }
+            }
+        } else {
+            self.select_item(clicked, false);
+        }
+    }
+
+    pub fn begin_tree_rename(&mut self, pick: Pick) {
+        self.rename_text = match pick {
+            Pick::Group(g) => self.scene.groups.get(g).map(|s| s.name.clone()),
+            Pick::Shape(g, s) => self.scene.shape(g, s).map(|s| s.name.clone()),
+        }.unwrap_or_default();
+        self.renaming = Some(pick);
+        self.reveal_in_tree(pick);
+    }
+
+    pub fn finish_tree_rename(&mut self, apply: bool) {
+        if let Some(pick) = self.renaming.take() {
+            let text = self.rename_text.trim();
+            if apply && !text.is_empty() && !self.scene.is_locked(pick) {
+                // Bound user-controlled labels to avoid huge UI and saved projects.
+                let name: String = text.chars().take(100).collect();
+                match pick {
+                    Pick::Group(g) => if let Some(gr) = self.scene.groups.get_mut(g) { gr.name = name; },
+                    Pick::Shape(g, s) => if let Some(sh) = self.scene.shape_mut(g, s) { sh.name = name; },
+                }
+            }
+        }
+        self.rename_text.clear();
+    }
+
+    pub fn toggle_item_lock(&mut self, pick: Pick) {
+        match pick {
+            Pick::Group(g) => if let Some(gr) = self.scene.groups.get_mut(g) { gr.locked = !gr.locked; },
+            Pick::Shape(g, s) => if let Some(sh) = self.scene.shape_mut(g, s) { sh.locked = !sh.locked; },
+        }
+    }
+
+    pub fn toggle_item_visibility(&mut self, pick: Pick) {
+        match pick {
+            Pick::Group(g) => if let Some(gr) = self.scene.groups.get_mut(g) { gr.visible = !gr.visible; },
+            Pick::Shape(g, s) => if let Some(sh) = self.scene.shape_mut(g, s) { sh.visible = !sh.visible; },
+        }
+    }
+
+    /// Move a selection of shapes into a new group without altering each Shape's
+    /// coordinates, parameters or material. Group-level Boolean/blend order can change.
+    pub fn group_selection(&mut self) -> bool {
+        let mut shapes: Vec<(usize, usize)> = self.selected_picks().into_iter()
+            .filter_map(|p| if let Pick::Shape(g, s) = p { Some((g, s)) } else { None })
+            .collect();
+        shapes.sort_unstable();
+        shapes.dedup();
+        if shapes.len() < 2 {
+            self.notice = Some("グループ化する形を Ctrl / Shift で2個以上選んでください".into());
+            return false;
+        }
+        if self.scene.groups.len() >= MAX_GROUPS {
+            self.notice = Some(format!("グループは{MAX_GROUPS}個までです"));
+            return false;
+        }
+        if shapes.iter().any(|&(g, s)| self.scene.shape(g, s).is_none() || self.scene.is_locked(Pick::Shape(g, s))) {
+            self.notice = Some("ロック中の形はグループ化できません".into());
+            return false;
+        }
+        // Grouping a pattern source can silently retarget linked instances.
+        // Refuse rather than destroy their parametric relationship.
+        if shapes.iter().any(|&(g, _)| self.scene.groups.get(g).is_some_and(|gr| {
+            gr.pattern.is_some() || gr.is_linked()
+                || (gr.uid != 0 && self.scene.groups.iter().any(|other| other.instance_of == Some(gr.uid)))
+        })) {
+            self.notice = Some("パターン・リンク元の形はそのままグループ化できません。リンクを解除してから操作してください".into());
+            return false;
+        }
+        // Snapshot the selected shapes first; remove from the original parents in
+        // descending index order so no index shifts can drop or duplicate a shape.
+        let moved: Vec<Shape> = shapes.iter().filter_map(|&(g, s)| self.scene.shape(g, s).cloned()).collect();
+        for &(g, s) in shapes.iter().rev() {
+            self.scene.groups[g].shapes.remove(s);
+        }
+        let mut group = Group::new(format!("グループ {}", self.scene.groups.len() + 1));
+        group.shapes = moved;
+        self.scene.groups.push(group);
+        self.extra_selected.clear();
+        self.sel = Some(Pick::Group(self.scene.groups.len() - 1));
+        self.tree_anchor = self.sel;
+        self.tree_scroll_target = self.sel;
+        self.notice = Some("グループ化しました。結合・くり抜きの順番が変わる場合はUndoで戻せます".into());
+        true
+    }
+
+    /// Never let a multi-selection or locked child enter the single-object gizmo.
+    pub fn can_transform_primary(&self) -> bool {
+        self.extra_selected.is_empty()
+            && self.sel.is_some_and(|p| {
+                !self.scene.is_locked(p)
+                    && crate::view::targets(&self.scene, Some(p)).into_iter()
+                        .all(|(g, s)| !self.scene.is_locked(Pick::Shape(g, s)))
+            })
+    }
+
+    pub fn focus_tree_item(&mut self, pick: Pick) {
+        self.select_item(pick, false);
+        if self.scene.is_visible(pick) {
+            self.frame_view(true);
+        } else {
+            self.notice = Some("非表示の形です。目のボタンで表示してから中央に表示できます".into());
+        }
+    }
+
     fn fix_selection(&mut self) {
         let ok = match self.sel {
             Some(Pick::Shape(g, s)) => self.scene.shape(g, s).is_some(),
@@ -251,13 +436,19 @@ impl App {
         };
         if !ok {
             self.sel = None;
+            self.extra_selected.clear();
         }
+        self.extra_selected.retain(|p| match *p {
+            Pick::Group(g) => g < self.scene.groups.len(),
+            Pick::Shape(g, s) => self.scene.shape(g, s).is_some(),
+        });
     }
 
     pub fn undo(&mut self) {
         if let Some(prev) = self.undo.pop() {
             self.redo.push(std::mem::replace(&mut self.scene, prev.clone()));
             self.committed = prev;
+            self.extra_selected.clear();
             self.fix_selection();
         }
     }
@@ -266,6 +457,7 @@ impl App {
         if let Some(next) = self.redo.pop() {
             self.undo.push(std::mem::replace(&mut self.scene, next.clone()));
             self.committed = next;
+            self.extra_selected.clear();
             self.fix_selection();
         }
     }
@@ -309,6 +501,11 @@ impl App {
         self.undo.clear();
         self.redo.clear();
         self.sel = if self.scene.shape(0, 0).is_some() { Some(Pick::Shape(0, 0)) } else { None };
+        self.extra_selected.clear();
+        self.tree_anchor = self.sel;
+        self.renaming = None;
+        self.tree_scroll_target = None;
+        self.folded.clear();
         self.path = path;
         self.dirty = false;
         if !notes.is_empty() {
@@ -384,6 +581,10 @@ impl App {
             None => self.scene.groups.len().checked_sub(1),
         };
         match g {
+            Some(g) if g < self.scene.groups.len() && self.scene.groups[g].locked => {
+                self.notice = Some("ロック中のグループには形を追加できません".into());
+                None
+            }
             Some(g) if g < self.scene.groups.len() => Some(g),
             _ => {
                 self.scene.groups.push(Group::new("グループ 1"));
@@ -420,6 +621,7 @@ impl App {
         let n = self.scene.groups[g].shapes.len();
         self.scene.groups[g].shapes.push(sh);
         self.sel = Some(Pick::Shape(g, n));
+        self.extra_selected.clear();
     }
 
     fn next_material(&self) -> Material {
@@ -433,10 +635,15 @@ impl App {
             let n = self.scene.groups.len() + 1;
             self.scene.groups.push(Group::new(format!("グループ {n}")));
             self.sel = Some(Pick::Group(self.scene.groups.len() - 1));
+            self.extra_selected.clear();
         }
     }
 
     pub fn duplicate(&mut self) {
+        if !self.extra_selected.is_empty() || self.sel.is_some_and(|p| self.scene.is_locked(p)) {
+            self.notice = Some("複製するにはロックしていない形を1つ選んでください".into());
+            return;
+        }
         match self.sel {
             Some(Pick::Shape(g, s)) if self.scene.shape_count() < MAX_SHAPES => {
                 if let Some(mut c) = self.scene.shape(g, s).cloned() {
@@ -473,6 +680,7 @@ impl App {
     /// ears, arms and eyes.
     pub fn mirror_copy(&mut self) {
         let Some(Pick::Shape(g, s)) = self.sel else { return };
+        if self.scene.is_locked(Pick::Shape(g, s)) || !self.extra_selected.is_empty() { return; }
         if self.scene.shape_count() >= MAX_SHAPES {
             return;
         }
@@ -494,6 +702,38 @@ impl App {
     }
 
     pub fn delete_selected(&mut self) {
+        let picks = self.selected_picks();
+        if picks.is_empty() {
+            return;
+        }
+        if picks.iter().any(|&p| self.scene.is_locked(p) || matches!(p, Pick::Group(g) if self.scene.groups.get(g).is_some_and(|gr| gr.shapes.iter().any(|sh| sh.locked)))) {
+            self.notice = Some("ロック中の形・グループは削除できません。先に鍵を外してください".into());
+            return;
+        }
+        if picks.len() > 1 {
+            let groups: BTreeSet<usize> = picks.iter().filter_map(|p| match *p { Pick::Group(g) => Some(g), _ => None }).collect();
+            let mut shapes: Vec<(usize, usize)> = picks.iter().filter_map(|p| match *p {
+                Pick::Shape(g, s) if !groups.contains(&g) => Some((g, s)),
+                _ => None,
+            }).collect();
+            shapes.sort_unstable();
+            shapes.dedup();
+            for (g, s) in shapes.into_iter().rev() {
+                if self.scene.shape(g, s).is_some() {
+                    self.scene.groups[g].shapes.remove(s);
+                }
+            }
+            for g in groups.into_iter().rev() {
+                if g < self.scene.groups.len() {
+                    self.scene.groups.remove(g);
+                }
+            }
+            self.sel = None;
+            self.extra_selected.clear();
+            self.tree_anchor = None;
+            self.folded.clear();
+            return;
+        }
         match self.sel {
             Some(Pick::Shape(g, s)) if self.scene.shape(g, s).is_some() => {
                 self.scene.groups[g].shapes.remove(s);
@@ -506,13 +746,20 @@ impl App {
             Some(Pick::Group(g)) if g < self.scene.groups.len() => {
                 self.scene.groups.remove(g);
                 self.sel = None;
+                self.folded.clear();
             }
             _ => {}
         }
+        self.extra_selected.clear();
     }
 
     /// Drag-and-drop in the scene list: put `from` next to `to` (before it, or after it).
     pub fn move_layer(&mut self, from: Pick, to: Pick, after: bool) {
+        if self.scene.is_locked(from) || self.scene.is_locked(to) || !self.extra_selected.is_empty()
+            || matches!(from, Pick::Group(g) if self.scene.groups.get(g).is_some_and(|gr| gr.shapes.iter().any(|s| s.locked))) {
+            self.notice = Some("並べ替えは、ロックを外して1つだけ選んでください".into());
+            return;
+        }
         match (from, to) {
             (Pick::Shape(g, s), Pick::Shape(g2, s2)) => {
                 if self.scene.shape(g, s).is_none() || self.scene.shape(g2, s2).is_none() || (g, s) == (g2, s2) {
@@ -554,7 +801,12 @@ impl App {
 
     /// Move the selection by `d` millimetres.
     pub fn nudge(&mut self, d: [f32; 3]) {
+        if !self.extra_selected.is_empty() {
+            self.notice = Some("複数選択中の移動は未対応です。1つ選択してください".into());
+            return;
+        }
         for (g, s) in crate::view::targets(&self.scene, self.sel) {
+            if self.scene.is_locked(Pick::Shape(g, s)) { continue; }
             if let Some(sh) = self.scene.shape_mut(g, s) {
                 sh.pos = [sh.pos[0] + d[0], sh.pos[1] + d[1], sh.pos[2] + d[2]];
             }
@@ -563,6 +815,7 @@ impl App {
 
     /// Switch plus and minus on the selection.
     pub fn flip_op(&mut self) {
+        if !self.extra_selected.is_empty() || self.sel.is_some_and(|p| self.scene.is_locked(p)) { return; }
         match self.sel {
             Some(Pick::Shape(g, s)) => {
                 if let Some(sh) = self.scene.shape_mut(g, s) {
@@ -642,6 +895,9 @@ impl App {
         let cmd = Modifiers::COMMAND;
         let cmd_shift = Modifiers::COMMAND | Modifiers::SHIFT;
         let hit = |m: Modifiers, k: Key| ctx.input_mut(|i| i.consume_key(m, k));
+        if hit(Modifiers::NONE, Key::F2) {
+            if let Some(pick) = self.sel { self.begin_tree_rename(pick); }
+        }
         if hit(cmd_shift, Key::Z) || hit(cmd, Key::Y) {
             self.redo();
         } else if hit(cmd, Key::Z) {
@@ -702,6 +958,7 @@ impl App {
         }
         if hit(plain, Key::Escape) {
             self.sel = None;
+            self.extra_selected.clear();
         }
         // Blender-style views on the number keys
         let v = |k: Key, back: bool| hit(if back { Modifiers::CTRL } else { plain }, k);
@@ -972,10 +1229,22 @@ impl App {
                             }
                         });
                     });
-                    ui.separator();
-                    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-                        self.layers(ui);
+                    ui.horizontal(|ui| {
+                        ui.add(egui::TextEdit::singleline(&mut self.tree_query).hint_text("名前で検索…").desired_width(185.0));
+                        if !self.tree_query.is_empty() && ui.small_button("×").on_hover_text("検索を消す").clicked() {
+                            self.tree_query.clear();
+                        }
                     });
+                    if self.selected_picks().len() >= 2 {
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new(format!("{}個選択", self.selected_picks().len())).size(11.0).color(style::DIM));
+                            if ui.small_button("グループ化").clicked() { self.group_selection(); }
+                            if ui.small_button("解除").clicked() { self.sel = None; self.extra_selected.clear(); }
+                        });
+                        ui.label(RichText::new("複数選択: Ctrl / Shift　個別編集は1つずつ").size(10.0).color(style::DIM));
+                    }
+                    ui.separator();
+                    self.layers(ui);
                 }
             },
         );
@@ -1608,6 +1877,55 @@ mod tests {
         assert_eq!(app.scene.groups[0].shapes.len(), 1);
     }
 
+
+    #[test]
+    fn outliner_multi_selection_grouping_undo_and_save_roundtrip() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        app.add_shape(&ctx, Kind::Box);
+        app.add_shape(&ctx, Kind::Cone);
+        app.settle(&ctx);
+        let before = app.scene.clone();
+        let first = before.shape(0, 0).cloned().expect("first shape");
+        let third = before.shape(0, 2).cloned().expect("third shape");
+        app.select_item(Pick::Shape(0, 0), false);
+        app.select_item(Pick::Shape(0, 2), true);
+        assert_eq!(app.selected_picks().len(), 2);
+        assert!(app.group_selection());
+        assert_eq!(app.scene.groups.last().map(|g| g.shapes.as_slice()), Some([first, third].as_slice()));
+        assert_eq!(app.sel, Some(Pick::Group(1)));
+        let restored = Scene::from_json(&app.scene.to_json()).expect("grouped scene saves");
+        assert_eq!(restored, app.scene);
+        app.settle(&ctx);
+        app.undo();
+        assert_eq!(app.scene, before);
+        assert!(app.extra_selected.is_empty());
+        app.redo();
+        assert_eq!(app.scene, restored);
+    }
+
+    #[test]
+    fn locking_prevents_edit_delete_reordering_but_not_visibility_and_is_undoable() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        app.add_shape(&ctx, Kind::Box);
+        app.settle(&ctx);
+        app.toggle_item_lock(Pick::Group(0));
+        app.settle(&ctx);
+        let before = app.scene.clone();
+        app.sel = Some(Pick::Shape(0, 1));
+        app.nudge([50.0, 0.0, 0.0]);
+        app.delete_selected();
+        app.move_layer(Pick::Shape(0, 1), Pick::Shape(0, 0), false);
+        assert_eq!(app.scene, before, "locked parent protects descendants");
+        app.toggle_item_visibility(Pick::Shape(0, 1));
+        assert!(!app.scene.shape(0, 1).expect("shape").visible);
+        app.settle(&ctx);
+        app.undo();
+        assert_eq!(app.scene, before);
+        app.undo();
+        assert!(!app.scene.groups[0].locked);
+    }
     #[test]
     fn a_group_can_be_duplicated_and_the_copy_is_selected() {
         let mut app = App::new(true, None);
