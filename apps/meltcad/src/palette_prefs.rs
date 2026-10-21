@@ -101,6 +101,7 @@ const BUILT_IN: &[(&str, &str)] = &[
     ("Ctrl+E", "Export"),
     ("Ctrl+D", "Duplicate"),
     ("Ctrl+G", "Group"),
+    ("Ctrl+K", "Find"),
     ("Delete", "Delete"),
     ("Backspace", "Delete"),
     ("F1", "Help"),
@@ -327,15 +328,24 @@ mod tests {
         assert_eq!(p.conflict("a", &sc("Ctrl+Z")), Some(Conflict::BuiltIn("Undo")));
         assert!(p.set_shortcut("a", sc("Ctrl+Z")).is_err());
         assert!(p.set_shortcut("a", sc("Escape")).is_err());
-        assert!(p.set_shortcut("a", sc("Ctrl+K")).is_ok());
-        assert_eq!(p.conflict("b", &sc("Ctrl+K")), Some(Conflict::Custom("a".into())));
-        assert!(p.set_shortcut("b", sc("Ctrl+K")).is_err());
-        assert!(p.set_shortcut("a", sc("Ctrl+K")).is_ok(), "the same entry may keep its own");
+        assert_eq!(p.conflict("a", &sc("Ctrl+K")), Some(Conflict::BuiltIn("Find")));
+        assert!(p.set_shortcut("a", sc("Ctrl+K")).is_err(), "palette shortcut is reserved");
+        assert!(p.set_shortcut("a", sc("Alt+K")).is_ok());
+        assert_eq!(p.conflict("b", &sc("Alt+K")), Some(Conflict::Custom("a".into())));
+        assert!(p.set_shortcut("b", sc("Alt+K")).is_err());
+        assert!(p.set_shortcut("a", sc("Alt+K")).is_ok(), "the same entry may keep its own");
         assert!(p.set_shortcut("b", sc("Ctrl+L")).is_ok());
         p.clear_shortcut("a");
         assert!(p.shortcut("a").is_none());
-        assert!(p.set_shortcut("b", sc("Ctrl+K")).is_ok(), "freed by Clear");
-        assert_eq!(p.shortcut("b"), Some(sc("Ctrl+K")));
+        assert!(p.set_shortcut("b", sc("Alt+K")).is_ok(), "freed by Clear");
+        assert_eq!(p.shortcut("b"), Some(sc("Alt+K")));
+    }
+
+    #[test]
+    fn legacy_ctrl_k_binding_is_removed_on_load() {
+        let p = Prefs::parse(r#"{"keys":{"old-command":"Ctrl+K","custom":"Alt+K"}}"#);
+        assert!(p.shortcut("old-command").is_none());
+        assert_eq!(p.shortcut("custom"), Some(sc("Alt+K")));
     }
 
     #[test]

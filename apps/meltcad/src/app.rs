@@ -1276,6 +1276,11 @@ impl App {
         if self.sketch_keys(ctx) {
             return;
         }
+        // Reserve Ctrl/Cmd+K for the command palette, even with old user bindings.
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::K)) {
+            palette::open(ctx);
+            return;
+        }
         if !palette::is_open(ctx) && self.custom_shortcuts(ctx) {
             return;
         }
