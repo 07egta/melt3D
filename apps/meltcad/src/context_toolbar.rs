@@ -322,7 +322,7 @@ impl App {
         }
     }
 
-    fn run_action(&mut self, action: Action, ctx: &egui::Context) {
+    fn run_toolbar_action(&mut self, action: Action, ctx: &egui::Context) {
         if let Some(why) = self.disabled_reason(action) {
             self.say(ctx, why);
             return;
@@ -431,7 +431,7 @@ impl App {
         };
         if response.clicked() {
             let ctx = ui.ctx().clone();
-            self.run_action(action, &ctx);
+            self.run_toolbar_action(action, &ctx);
             if menu {
                 ui.close();
             }
@@ -527,9 +527,9 @@ mod tests {
         let mut app = App::new(true, None);
         assert_eq!(app.toolbar_actions(), vec![Action::Move, Action::Rotate, Action::Scale, Action::Duplicate, Action::Delete]);
         let ctx = egui::Context::default();
-        app.run_action(Action::Rotate, &ctx);
+        app.run_toolbar_action(Action::Rotate, &ctx);
         assert_eq!(app.tool, Tool::Rotate);
-        app.run_action(Action::Move, &ctx);
+        app.run_toolbar_action(Action::Move, &ctx);
         assert_eq!(app.tool, Tool::Move);
         app.scene.groups[0].shapes.push(Shape::new(Kind::Extrude, [0.0; 3], Material::default()));
         app.select_pick(Some(Pick::Shape(0, 1)), false);
@@ -555,10 +555,10 @@ mod tests {
         app.select_pick(Some(Pick::Shape(0, 2)), true);
         assert_eq!(app.multi.len(), 2);
         let anchor = app.scene.shape(0, 0).unwrap().pos[0];
-        app.run_action(Action::AlignX, &ctx);
+        app.run_toolbar_action(Action::AlignX, &ctx);
         assert_eq!(app.scene.shape(0, 1).unwrap().pos[0], anchor);
         assert_eq!(app.scene.shape(0, 2).unwrap().pos[0], anchor);
-        app.run_action(Action::Duplicate, &ctx);
+        app.run_toolbar_action(Action::Duplicate, &ctx);
         assert_eq!(app.scene.shape_count(), 6);
         assert_eq!(
             [app.scene.shape(0, 1).unwrap().uid, app.scene.shape(0, 3).unwrap().uid, app.scene.shape(0, 5).unwrap().uid],
@@ -576,13 +576,13 @@ mod tests {
         assert_eq!(app.scene.shape_count(), 3);
         app.select_pick(Some(Pick::Shape(0, 0)), false);
         app.select_pick(Some(Pick::Shape(0, 2)), true);
-        app.run_action(Action::Group, &ctx);
+        app.run_toolbar_action(Action::Group, &ctx);
         assert_eq!(app.scene.groups.len(), 2);
         assert_eq!(app.scene.groups[1].shapes.len(), 2);
         assert_eq!(app.scene.shape_count(), 3);
         app.select_pick(Some(Pick::Shape(1, 0)), false);
         app.select_pick(Some(Pick::Shape(1, 1)), true);
-        app.run_action(Action::Delete, &ctx);
+        app.run_toolbar_action(Action::Delete, &ctx);
         assert_eq!(app.scene.groups[1].shapes.len(), 0);
         assert!(app.multi.is_empty());
     }
@@ -597,7 +597,7 @@ mod tests {
         let before = app.scene.clone();
 
         assert!(app.disabled_reason(Action::Extrude).is_some());
-        app.run_action(Action::Extrude, &ctx);
+        app.run_toolbar_action(Action::Extrude, &ctx);
         assert_eq!(app.scene, before, "the toolbar cannot bypass Finish Sketch");
         assert_eq!(app.sk.make, Make::Extrude);
 
@@ -611,8 +611,8 @@ mod tests {
         app.sk.dimension = None;
         assert!(app.sketch_confirm(&ctx));
         assert!(!app.sk.on);
-        assert_eq!(app.scene.shape_count(), 1);
-        assert!(app.scene.shape(0, 0).is_some_and(|shape| shape.guide));
+        assert_eq!(app.scene.shape_count(), before.shape_count() + 1);
+        assert!(app.scene.groups.iter().flat_map(|g| g.shapes.iter()).any(|shape| shape.guide));
     }
 
     #[test]
@@ -703,9 +703,10 @@ mod tests {
         // Actual overlay layout, without a GPU.
         for width in [340.0, 520.0, 850.0] {
             app.view_rect = egui::Rect::from_min_size(pos2(300.0, 50.0), vec2(width, 400.0));
-            let _ = ctx.run(egui::RawInput::default(), |ctx| {
-                app.selection_toolbar(ctx);
+            let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+                app.selection_toolbar(ui.ctx());
             });
+            out.textures_delta.clear();
         }
     }
 }

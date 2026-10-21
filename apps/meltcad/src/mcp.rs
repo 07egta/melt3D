@@ -101,9 +101,23 @@ fn call(backend: &mut Backend, name: &str, args: &Value) -> Value {
 
 /// One JSON-RPC message in, the answer (if any) out.
 fn handle(backend: &mut Backend, msg: &Value) -> Option<Value> {
-    let id = msg.get("id")?.clone(); // no id: a notification, no answer
-    let method = msg.get("method").and_then(Value::as_str).unwrap_or("");
-    let params = msg.get("params").cloned().unwrap_or(Value::Null);
+    let Some(fields) = msg.as_object() else {
+        return Some(rpc_error(-32600, "Invalid Request: expected a JSON object"));
+    };
+    if fields.get("jsonrpc").and_then(Value::as_str) != Some("2.0") {
+        return Some(rpc_error(-32600, "Invalid Request: jsonrpc must be \"2.0\""));
+    }
+    let Some(method) = fields.get("method").and_then(Value::as_str) else {
+        return Some(rpc_error(-32600, "Invalid Request: method must be a string"));
+    };
+    if fields.get("params").is_some_and(|params| !params.is_object() && !params.is_array()) {
+        return Some(rpc_error(-32600, "Invalid Request: params must be an object or array"));
+    }
+    let id = fields.get("id").cloned();
+    if id.as_ref().is_some_and(|id| !id.is_null() && !id.is_string() && !id.is_number()) {
+        return Some(rpc_error(-32600, "Invalid Request: id must be a string, number, or null"));
+    }
+    let params = fields.get("params").cloned().unwrap_or(Value::Null);
     let result = match method {
         "initialize" => Ok(json!({
             "protocolVersion": params.get("protocolVersion").and_then(Value::as_str).unwrap_or("2024-11-05"),
@@ -119,15 +133,53 @@ fn handle(backend: &mut Backend, msg: &Value) -> Option<Value> {
         }
         _ => Err(json!({"code": -32601, "message": format!("Method not found: {method}")})),
     };
-    Some(match result {
+    // Notifications are executed, but JSON-RPC forbids sending them a reply.
+    id.map(|id| match result {
         Ok(r) => json!({"jsonrpc": "2.0", "id": id, "result": r}),
         Err(e) => json!({"jsonrpc": "2.0", "id": id, "error": e}),
     })
 }
 
-pub fn cli(args: &[std::ffi::OsString]) -> bool {
+/// Limit a single stdio JSON-RPC line without allocating unbounded memory.
+/// Oversized input is drained up to the next newline, so the following request
+/// remains aligned instead of being parsed as a fragment.
+const MAX_REQUEST_LINE: usize = 1 << 20;
+
+fn bounded_line<R: BufRead>(input: &mut R) -> std::io::Result<Option<Result<Vec<u8>, &'static str>>> {
+    let mut line = Vec::new();
+    let mut oversized = false;
+    let mut any = false;
+    loop {
+        let available = input.fill_buf()?;
+        if available.is_empty() {
+            return Ok(any.then_some(if oversized { Err("MCP request exceeds 1 MiB") } else { Ok(line) }));
+        }
+        let n = available.iter().position(|&byte| byte == b'\n').map_or(available.len(), |i| i + 1);
+        let ended = available[n - 1] == b'\n';
+        any = true;
+        if !oversized {
+            if line.len().saturating_add(n) > MAX_REQUEST_LINE {
+                oversized = true;
+                line.clear();
+            } else {
+                line.extend_from_slice(&available[..n]);
+            }
+        }
+        input.consume(n);
+        if ended {
+            return Ok(Some(if oversized { Err("MCP request exceeds 1 MiB") } else { Ok(line) }));
+        }
+    }
+}
+
+fn rpc_error(code: i32, message: &str) -> Value {
+    json!({"jsonrpc":"2.0","id":null,"error":{"code":code,"message":message}})
+}
+
+/// None = not MCP mode; Some(false) = startup/read/output failure.
+pub fn cli(args: &[std::ffi::OsString]) -> Option<bool> {
     if !args.iter().any(|a| a.to_str() == Some("--mcp")) {
-        return false;
+        return None;
     }
     let mut backend = match crate::control::port_arg(args) {
         None => Backend::Local(Box::new(Scene { groups: Vec::new(), ..Scene::default() })),
@@ -141,22 +193,35 @@ pub fn cli(args: &[std::ffi::OsString]) -> bool {
                 Ok((r, writer)) => Backend::Remote { reader: BufReader::new(r), writer, token },
                 Err(e) => {
                     eprintln!("Cannot reach the Melt 3D window on port {port}: {e}. Start it with: meltcad --control {port}");
-                    return true;
+                    return Some(false);
                 }
             }
         }
     };
     let stdin = std::io::stdin();
+    let mut input = stdin.lock();
     let mut out = std::io::stdout();
-    for line in stdin.lock().lines().map_while(Result::ok) {
-        let Ok(msg) = serde_json::from_str::<Value>(&line) else { continue };
-        if let Some(reply) = handle(&mut backend, &msg)
+    loop {
+        let reply = match bounded_line(&mut input) {
+            Ok(None) => break,
+            Ok(Some(Err(e))) => Some(rpc_error(-32600, e)),
+            Ok(Some(Ok(line))) => match serde_json::from_slice::<Value>(&line) {
+                Ok(msg @ Value::Object(_)) => handle(&mut backend, &msg),
+                Ok(_) => Some(rpc_error(-32600, "Invalid Request: expected a JSON object")),
+                Err(_) => Some(rpc_error(-32700, "Parse error")),
+            },
+            Err(e) => {
+                eprintln!("Cannot read MCP stdin: {e}");
+                return Some(false);
+            }
+        };
+        if let Some(reply) = reply
             && writeln!(out, "{reply}").and_then(|_| out.flush()).is_err()
         {
-            break;
+            return Some(false);
         }
     }
-    true
+    Some(true)
 }
 
 fn base64(data: &[u8]) -> String {
@@ -181,6 +246,68 @@ mod tests {
 
     fn local() -> Backend {
         Backend::Local(Box::new(Scene { groups: Vec::new(), ..Scene::default() }))
+    }
+
+    #[test]
+    fn oversized_mcp_lines_are_bounded_and_do_not_corrupt_the_next_request() {
+        let mut input = vec![b'x'; MAX_REQUEST_LINE + 256];
+        input.extend_from_slice(b"\n{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"ping\"}\n");
+        let mut reader = std::io::BufReader::new(input.as_slice());
+        assert!(matches!(bounded_line(&mut reader), Ok(Some(Err(_)))));
+        let line = bounded_line(&mut reader).unwrap().unwrap().unwrap();
+        let parsed: Value = serde_json::from_slice(&line).unwrap();
+        assert_eq!(parsed["id"], json!(7));
+        assert!(bounded_line(&mut reader).unwrap().is_none());
+    }
+
+    #[test]
+    fn json_rpc_errors_use_standard_codes() {
+        assert_eq!(rpc_error(-32700, "Parse error")["error"]["code"], json!(-32700));
+        assert_eq!(rpc_error(-32600, "Invalid Request")["id"], Value::Null);
+        assert_eq!(cli(&["meltcad".into()]), None);
+
+        // Invalid requests are errors even when they have no usable request ID.
+        let invalid_requests = [
+            json!({"jsonrpc": "2.0"}),
+            json!({"jsonrpc": "1.0", "id": 1, "method": "ping"}),
+            json!({"jsonrpc": "2.0", "id": 1, "method": 7}),
+            json!({"jsonrpc": "2.0", "id": 1, "method": "ping", "params": 7}),
+            json!({"jsonrpc": "2.0", "id": true, "method": "ping"}),
+            json!(["not", "an", "object"]),
+        ];
+        for request in invalid_requests {
+            let reply = handle(&mut local(), &request);
+            assert_eq!(
+                reply.as_ref().and_then(|v| v["error"]["code"].as_i64()),
+                Some(-32600),
+                "request {request} returned {reply:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn valid_notifications_execute_without_a_response() {
+        let mut b = local();
+        let response = handle(
+            &mut b,
+            &json!({"jsonrpc": "2.0", "method": "tools/call", "params": {
+                "name": "melt3d_run",
+                "arguments": {"commands": [{"cmd": "shape.add", "kind": "Sphere"}]}
+            }}),
+        );
+        assert!(response.is_none());
+        // A valid notification for an unknown method still receives no response.
+        assert!(handle(&mut b, &json!({"jsonrpc": "2.0", "method": "missing"})).is_none());
+
+        let summary = handle(
+            &mut b,
+            &json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {
+                "name": "melt3d_run",
+                "arguments": {"commands": [{"cmd": "scene.summary"}]}
+            }}),
+        );
+        let text = summary.as_ref().and_then(|v| v["result"]["content"][0]["text"].as_str()).unwrap_or("");
+        assert!(text.contains("\"shape_count\":1"), "{text}");
     }
 
     #[test]

@@ -500,25 +500,28 @@ pub fn parse_args(args: &[std::ffi::OsString]) -> Option<Args> {
     Some(Args { out, frames, quick })
 }
 
-/// Handle `--bench`: returns true when the arguments were a benchmark request (the program then ends).
-pub fn cli(args: &[std::ffi::OsString]) -> bool {
-    let Some(a) = parse_args(args) else { return false };
+/// Handle `--bench`: None for other commands, Some(true) only when
+/// measurement and report persistence both succeeded.
+pub fn cli(args: &[std::ffi::OsString]) -> Option<bool> {
+    let Some(a) = parse_args(args) else { return None };
     let sizes: &[[u32; 2]] = if a.quick { &SIZES[..1] } else { &SIZES };
     let frames = if a.quick { a.frames.min(3) } else { a.frames };
     let mut progress = |s: &str| eprintln!("[bench] {s}");
     let result = run(sizes, frames, &scenes(), &mut progress, &|| false, backends_like_the_window());
-    let (title, text, path) = match result {
+    let (title, text, path, success) = match result {
         Ok(r) => {
             let text = format_table(&r);
             let path = a.out.clone().unwrap_or_else(default_output);
-            let note = match std::fs::write(&path, &text) {
+            let written = std::fs::write(&path, &text);
+            let success = written.is_ok();
+            let note = match written {
                 Ok(()) => format!("\n\n(saved: {})", path.display()),
                 Err(e) => format!("\n\n(could not save {}: {e})", path.display()),
             };
             println!("{text}");
-            ("MELTCAD speed test", format!("{text}{note}"), Some(path))
+            ("MELTCAD speed test", format!("{text}{note}"), Some(path), success)
         }
-        Err(e) => ("MELTCAD speed test", format!("Could not measure:\n{e}"), None),
+        Err(e) => ("MELTCAD speed test", format!("Could not measure:\n{e}"), None, false),
     };
     eprintln!("[bench] done {}", path.map(|p| p.display().to_string()).unwrap_or_default());
     // (a release build on Windows has no console: the answer is shown in a dialog too)
@@ -530,7 +533,7 @@ pub fn cli(args: &[std::ffi::OsString]) -> bool {
             .set_buttons(rfd::MessageButtons::Ok)
             .show();
     }
-    true
+    Some(success)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -807,6 +810,7 @@ mod tests {
     fn the_arguments() {
         let a = |v: &[&str]| -> Vec<std::ffi::OsString> { std::iter::once("meltcad").chain(v.iter().copied()).map(Into::into).collect() };
         assert_eq!(parse_args(&a(&[])), None);
+        assert_eq!(cli(&a(&[])), None);
         assert_eq!(parse_args(&a(&["scene.meltcad"])), None);
         assert_eq!(parse_args(&a(&["--bench"])), Some(Args { out: None, frames: FRAMES, quick: false }));
         assert_eq!(
