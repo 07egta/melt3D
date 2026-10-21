@@ -908,7 +908,9 @@ const VOLUME_UPLOAD_CHUNK_NODES: usize = VOL_W * 4 * 64;
 /// Visit the exact little-endian half-float bytes the old whole-volume upload produced.
 /// The final chunk is padded to a whole texel, never changing any actual node.
 fn for_each_volume_upload_chunk(data: &[f32], mut upload: impl FnMut(usize, &[u8])) {
-    let mut bytes = Vec::with_capacity(VOLUME_UPLOAD_CHUNK_NODES * 2);
+    // Reserve only what this volume can use. Small imported meshes are common; allocating
+    // the 1 MiB ceiling for a 32³ node volume needlessly multiplies its upload scratch by 16.
+    let mut bytes = Vec::with_capacity(volume_upload_capacity(data.len()));
     for (part, nodes) in data.chunks(VOLUME_UPLOAD_CHUNK_NODES).enumerate() {
         bytes.clear();
         for &node in nodes {
@@ -917,6 +919,10 @@ fn for_each_volume_upload_chunk(data: &[f32], mut upload: impl FnMut(usize, &[u8
         bytes.resize(nodes.len().next_multiple_of(4) * 2, 0);
         upload(part * VOLUME_UPLOAD_CHUNK_NODES, &bytes);
     }
+}
+
+fn volume_upload_capacity(nodes: usize) -> usize {
+    nodes.min(VOLUME_UPLOAD_CHUNK_NODES).next_multiple_of(4) * 2
 }
 
 /// Make the volume texture hold exactly `set`: only volumes that are new or moved are uploaded
@@ -1562,6 +1568,14 @@ mod tests {
         let mut calls = 0;
         for_each_volume_upload_chunk(&[], |_, _| calls += 1);
         assert_eq!(calls, 0, "empty volumes issue no writes");
+    }
+
+    #[test]
+    fn small_volume_upload_buffer_scales_with_the_volume() {
+        assert_eq!(volume_upload_capacity(32 * 32 * 32), 32 * 32 * 32 * 2);
+        assert_eq!(volume_upload_capacity(VOLUME_UPLOAD_CHUNK_NODES), VOLUME_UPLOAD_CHUNK_NODES * 2);
+        assert_eq!(volume_upload_capacity(VOLUME_UPLOAD_CHUNK_NODES + 1), VOLUME_UPLOAD_CHUNK_NODES * 2);
+        assert_eq!(volume_upload_capacity(0), 0);
     }
 
     #[test]
