@@ -1,6 +1,7 @@
 //! Stage complete output files on the same filesystem before changing any user-visible file.
-//! No partial export is published on cancellation or an I/O error. In-place replacements on
-//! Windows use a backup/rollback because std::fs::rename cannot replace a destination there.
+//! No partial export is published on cancellation or an I/O error. Existing files remain at
+//! their original paths while the replacement is staged and backed up; the final rename swaps
+//! in a complete file, and backups support rollback of a multi-file export.
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -28,19 +29,43 @@ impl Drop for Staged {
 fn rollback(entries: &mut [Staged]) -> String {
     let mut errors = Vec::new();
     for entry in entries.iter_mut().rev() {
-        if entry.installed {
+        if let Some(backup) = entry.backup.as_ref() {
+            // Replace the just-installed output directly. Removing the destination first
+            // would recreate the same missing-path window this staging code is meant to avoid.
+            if let Err(e) = std::fs::rename(backup, &entry.destination) {
+                errors.push(format!("{} の復旧に失敗: {e}（バックアップ: {}）", entry.destination.display(), backup.display()));
+            } else {
+                entry.backup = None;
+                entry.installed = false;
+            }
+        } else if entry.installed {
             if let Err(e) = std::fs::remove_file(&entry.destination) {
                 errors.push(format!("{}: {e}", entry.destination.display()));
-            }
-            entry.installed = false;
-        }
-        if let Some(backup) = entry.backup.take() {
-            if let Err(e) = std::fs::rename(&backup, &entry.destination) {
-                errors.push(format!("{} の復旧に失敗: {e}（バックアップ: {}）", entry.destination.display(), backup.display()));
+            } else {
+                entry.installed = false;
             }
         }
     }
     errors.join("; ")
+}
+
+fn install(entry: &mut Staged) -> Result<(), String> {
+    match std::fs::symlink_metadata(&entry.destination) {
+        Ok(m) => {
+            if !m.is_file() { return Err(format!("出力先はファイルではありません: {}", entry.destination.display())); }
+            let backup = sibling(&entry.destination, "backup");
+            // Keep the original path present until the staged replacement is ready.
+            // A copy also leaves a recovery source if a later file in this multi-file
+            // transaction fails after this destination has already been replaced.
+            std::fs::copy(&entry.destination, &backup).map_err(|e| format!("古いファイルを保護できません: {e}"))?;
+            entry.backup = Some(backup);
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(format!("出力先を調べられません: {e}")),
+    }
+    std::fs::rename(&entry.temp, &entry.destination).map_err(|e| format!("出力ファイルを確定できません: {e}"))?;
+    entry.installed = true;
+    Ok(())
 }
 
 /// Write all outputs in a worker. `begin_commit` reserves the uncancellable final rename
@@ -76,22 +101,7 @@ pub fn write_files(
     }
     // From here to the last rename, the caller must show why cancellation is unavailable.
     for index in 0..entries.len() {
-        let result = (|| -> Result<(), String> {
-            let entry = &mut entries[index];
-            match std::fs::symlink_metadata(&entry.destination) {
-                Ok(m) => {
-                    if !m.is_file() { return Err(format!("出力先はファイルではありません: {}", entry.destination.display())); }
-                    let backup = sibling(&entry.destination, "backup");
-                    std::fs::rename(&entry.destination, &backup).map_err(|e| format!("古いファイルを保護できません: {e}"))?;
-                    entry.backup = Some(backup);
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                Err(e) => return Err(format!("出力先を調べられません: {e}")),
-            }
-            std::fs::rename(&entry.temp, &entry.destination).map_err(|e| format!("出力ファイルを確定できません: {e}"))?;
-            entry.installed = true;
-            Ok(())
-        })();
+        let result = install(&mut entries[index]);
         if let Err(reason) = result {
             let restore = rollback(&mut entries);
             return Err(if restore.is_empty() { reason } else { format!("{reason}; {restore}") });
@@ -151,6 +161,25 @@ mod tests {
         assert_eq!(bytes, 1000);
         assert_eq!(std::fs::read(&path).expect("new file"), vec![7; 1000]);
         assert_eq!(std::fs::read_dir(&dir).expect("dir").count(), 1);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn failed_final_rename_never_removes_the_original_path() {
+        let dir = base();
+        std::fs::create_dir_all(&dir).expect("test directory");
+        let path = dir.join("original.yura");
+        std::fs::write(&path, b"original").expect("old data");
+        let mut entry = Staged {
+            destination: path.clone(),
+            temp: dir.join("missing-stage"),
+            backup: None,
+            installed: false,
+        };
+        assert!(install(&mut entry).is_err(), "missing staged file simulates a failed replacement");
+        assert_eq!(std::fs::read(&path).expect("original path remains present"), b"original");
+        let backup = entry.backup.as_ref().expect("the old file was backed up");
+        assert_eq!(std::fs::read(backup).expect("backup remains available"), b"original");
         let _ = std::fs::remove_dir_all(dir);
     }
 }
