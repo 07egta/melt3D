@@ -41,6 +41,7 @@ pub enum Action {
     PrintCheck,
     ImportSvg,
     ImportMesh,
+    OrganicBlob,
     FrameAll,
     FrameSelection,
     TogglePerspective,
@@ -142,6 +143,7 @@ pub fn entries() -> Vec<Entry> {
         cmd("画像(PNG)で書き出す", "export png image screenshot がぞう", Action::ExportPng),
         cmd("プリントチェック", "print check volume size 体積 おおきさ", Action::PrintCheck),
         cmd("SVGを読み込む", "svg import いんぽーと", Action::ImportSvg),
+        cmd("Organic Blob（ぷっくりブロブ）を作る", "organic blob metaball soft smooth ぷっくり ぶろぶ ぼこぼこ 有機 生成 preset プリセット", Action::OrganicBlob),
         cmd("メッシュを読み込む", "mesh stl obj 3mf ply glb import めっしゅ よみこむ とりこむ 取り込み", Action::ImportMesh),
         cmd("全体を見る", "frame all home ぜんたい", Action::FrameAll),
         cmd("えらんだものを見る", "frame focus selection みる", Action::FrameSelection),
@@ -263,6 +265,7 @@ impl App {
             Action::PrintCheck => self.print_check(ctx),
             Action::ImportSvg => crate::svg_dialog::open(ctx),
             Action::ImportMesh => crate::mesh_dialog::open(ctx),
+            Action::OrganicBlob => crate::organic_blob::open(ctx),
             Action::FrameAll => self.frame_view(false),
             Action::FrameSelection => self.frame_view(true),
             Action::TogglePerspective => self.cam.ortho = !self.cam.ortho,
@@ -359,6 +362,16 @@ mod tests {
     fn top(q: &str) -> Option<Action> {
         let all = entries();
         search(&all, q, 5).first().and_then(|i| all.get(*i)).map(|e| e.action)
+    }
+
+    #[test]
+    fn organic_blob_preset_is_discoverable_in_japanese_and_english() {
+        let e = entries();
+        let is_blob = |q: &str| search(&e, q, 10).iter()
+            .any(|i| matches!(e[*i].action, Action::OrganicBlob));
+        assert!(is_blob("Organic Blob"));
+        assert!(is_blob("ぷっくり"));
+        assert!(is_blob("メタボール") || is_blob("metaball"));
     }
 
     #[test]
