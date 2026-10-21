@@ -544,6 +544,10 @@ impl App {
         self.doc_title.clear();
         self.title_edit = None;
         self.dirty = false;
+        // A different document must never inherit the old timeline's frame,
+        // playback state or edit revision. Otherwise the next UI frame can
+        // auto-record the new scene over one of its saved animation keys.
+        self.animation_at_applied(0);
         if !notes.is_empty() {
             self.notice = Some(notes.join(", "));
         }
@@ -650,6 +654,9 @@ impl App {
             None => self.scene.groups.len().checked_sub(1),
         };
         match g {
+            // Linked copies own no geometry. Putting a shape here would be invisible
+            // and Scene::sanitize would silently delete it on reload.
+            Some(g) if self.scene.groups.get(g).is_some_and(Group::is_linked) => None,
             Some(g) if g < self.scene.groups.len() => Some(g),
             _ => {
                 self.scene.groups.push(Group::new("Group 1"));
@@ -666,7 +673,10 @@ impl App {
             self.say(ctx, format!("Up to {MAX_SHAPES} shapes"));
             return;
         }
-        let Some(g) = self.target_group() else { return };
+        let Some(g) = self.target_group() else {
+            self.say(ctx, "This is a linked copy. Select its source or Unlink it before adding a shape");
+            return;
+        };
         // beside the selected shape so the two melt together; else at the view's centre
         let size = kind.default_size();
         let rest = match kind {
@@ -2825,6 +2835,24 @@ mod tests {
     }
 
     #[test]
+    fn a_linked_copy_rejects_add_shape_instead_of_losing_it_at_reload() {
+        use crate::model::{Kind, Pick, Scene};
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        app.sel = Some(Pick::Group(0));
+        app.make_instance(&ctx);
+        let Some(Pick::Group(link)) = app.sel else { panic!("linked copy selected") };
+        assert!(app.scene.groups[link].is_linked());
+        let count = app.scene.shape_count();
+        app.add_shape(&ctx, Kind::Box);
+        assert_eq!(app.scene.shape_count(), count, "a linked group cannot own shapes");
+        assert!(app.scene.groups[link].shapes.is_empty());
+        let reopened = Scene::from_json(&app.scene.to_json()).unwrap();
+        assert_eq!(reopened.shape_count(), count);
+        assert_eq!(reopened.groups[link].instance_of, app.scene.groups[link].instance_of);
+    }
+
+    #[test]
     fn a_duplicate_stays_exactly_where_the_original_is() {
         let mut app = App::new(true, None);
         app.sel = Some(Pick::Shape(0, 0));
@@ -2858,6 +2886,32 @@ mod title_tests {
         app.apply_file_action(super::PendingFileAction::New(crate::model::Scene::default()));
         assert_eq!(app.doc_name(), "Untitled");
         assert!(app.title_edit.is_none());
+    }
+
+    #[test]
+    fn opening_a_document_does_not_auto_overwrite_its_animation() {
+        use crate::model::Scene;
+        let ctx = egui::Context::default();
+        let mut app = super::App::new(true, None);
+        app.an.open = true;
+        app.an.frame = 10;
+        app.an.playing = true;
+
+        let mut imported = Scene::default();
+        let mut animation = std::mem::take(&mut imported.anim);
+        imported.groups[0].shapes[0].pos[0] = 0.0;
+        animation.capture(&mut imported, 0).unwrap();
+        imported.groups[0].shapes[0].pos[0] = 100.0;
+        animation.capture(&mut imported, 10).unwrap();
+        imported.anim = animation;
+        let key_before = imported.anim.tracks[0].keys[0].1.pos;
+
+        app.apply_file_action(super::PendingFileAction::New(imported));
+        assert!(!app.an.playing);
+        assert_eq!(app.an.frame, 0);
+        app.animation_capture_finished(&ctx);
+        assert_eq!(app.scene.anim.tracks[0].keys[0].1.pos, key_before);
+        assert!(!app.dirty, "loading must not dirty or change the document");
     }
 
     #[test]

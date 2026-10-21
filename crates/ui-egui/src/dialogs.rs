@@ -356,11 +356,22 @@ fn begin_applying(app: &SolveApp, d: &Dialog) -> Option<Applying> {
     let scratch = app.session.scratch();
     let (tx, rx) = std::sync::mpsc::channel();
     let computed = cmds.clone();
+    #[cfg(test)]
+    let test_gate = app.test_apply_gate.clone();
     std::thread::Builder::new()
         .name("apply".into())
         .spawn(move || {
+            #[cfg(test)]
+            if let Some((started, release, _)) = &test_gate {
+                started.wait();
+                release.wait();
+            }
             let _ = scratch.preview(&computed);
             let _ = tx.send(());
+            #[cfg(test)]
+            if let Some((_, _, finished)) = test_gate {
+                let _ = finished.send(());
+            }
         })
         .ok()?;
     match rx.recv_timeout(wait) {

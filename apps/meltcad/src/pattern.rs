@@ -744,25 +744,39 @@ impl Scene {
         self.groups.iter().enumerate().find_map(|(gi, g)| g.shapes.iter().position(|s| s.uid == uid).map(|si| (gi, si)))
     }
     fn max_uid(&self) -> u32 {
-        self.groups.iter().flat_map(|g| g.shapes.iter().map(|s| s.uid).chain(std::iter::once(g.uid))).max().unwrap_or(0)
+        // Deleted shapes may still have animation tracks: those IDs are reserved
+        // until the tracks are explicitly removed, even after a save/reload.
+        self.groups
+            .iter()
+            .flat_map(|g| g.shapes.iter().map(|s| s.uid).chain(std::iter::once(g.uid)))
+            .chain(self.anim.tracks.iter().map(|t| t.uid))
+            .max()
+            .unwrap_or(0)
     }
     /// The `uid` of a group, given one first if it had none.
     pub fn ensure_group_uid(&mut self, gi: usize) -> Option<u32> {
-        let fresh = self.max_uid().saturating_add(1);
-        let g = self.groups.get_mut(gi)?;
-        if g.uid == 0 {
-            g.uid = fresh;
+        let existing = self.groups.get(gi)?.uid;
+        if existing != 0 {
+            return Some(existing);
         }
-        Some(g.uid)
+        let fresh = self.max_uid().checked_add(1)?;
+        self.groups.get_mut(gi)?.uid = fresh;
+        Some(fresh)
     }
     /// The `uid` of a shape, given one first if it had none.
     pub fn ensure_shape_uid(&mut self, gi: usize, si: usize) -> Option<u32> {
-        let fresh = self.max_uid().saturating_add(1);
-        let s = self.groups.get_mut(gi)?.shapes.get_mut(si)?;
-        if s.uid == 0 {
-            s.uid = fresh;
+        self.ensure_shape_uid_above(gi, si, 0)
+    }
+    /// `Anim::capture` temporarily moves the timeline out of Scene. It passes
+    /// the highest UID still owned by those detached tracks so they remain reserved.
+    pub(crate) fn ensure_shape_uid_above(&mut self, gi: usize, si: usize, reserved: u32) -> Option<u32> {
+        let existing = self.shape(gi, si)?.uid;
+        if existing != 0 {
+            return Some(existing);
         }
-        Some(s.uid)
+        let fresh = self.max_uid().max(reserved).checked_add(1)?;
+        self.shape_mut(gi, si)?.uid = fresh;
+        Some(fresh)
     }
     /// A copied group or shape carries its original's `uid`: the first one in the list keeps it,
     /// later ones lose it (and so are not what a pattern follows).
