@@ -684,8 +684,7 @@ mod tests {
         // The original 30 mm local-X axis points along +Y; rotating around
         // WORLD X must carry it into Z. Euler addition wrongly leaves it on Y.
         let axis = [r[0][0], r[1][0], r[2][0]];
-        assert!(axis[2].abs() > 0.98 && axis[1].abs() < 0.05, "{axis:?} {:?}",
-                rotated.rot);
+        assert!(axis[2].abs() > 0.98 && axis[1].abs() < 0.05, "{axis:?} {:?}", rotated.rot);
     }
 
     #[test]

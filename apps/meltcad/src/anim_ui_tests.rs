@@ -211,3 +211,32 @@ fn history_after_scrubbing_is_not_recaptured_at_the_new_frame() {
     assert!(!app.an.playing);
     assert_eq!(app.scene, shown, "redo preserves the exact saved history, including its original keys");
 }
+
+#[test]
+fn disconnected_gif_worker_is_released_even_when_timeline_is_closed() {
+    let ctx = egui::Context::default();
+    let mut app = animated();
+    let (tx, rx) = std::sync::mpsc::channel();
+    drop(tx);
+    app.an.job = Some(Job { rx, done: Arc::new(AtomicU32::new(0)), total: Arc::new(AtomicU32::new(1)), cancel: Arc::new(AtomicBool::new(false)) });
+    app.an.open = false;
+    bar(&mut app, &ctx);
+    assert!(app.an.job.is_none(), "disconnected worker must not block future exports");
+}
+
+#[test]
+fn closing_timeline_keeps_gif_job_pollable_and_cancellable() {
+    let ctx = egui::Context::default();
+    let mut app = animated();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let cancel = Arc::new(AtomicBool::new(false));
+    app.an.job = Some(Job { rx, done: Arc::new(AtomicU32::new(1)), total: Arc::new(AtomicU32::new(3)), cancel: cancel.clone() });
+    app.an.open = false;
+    bar(&mut app, &ctx);
+    assert!(app.an.job.is_some(), "pending job survives timeline close");
+    cancel.store(true, Ordering::Relaxed);
+    assert!(cancel.load(Ordering::Relaxed));
+    tx.send(Err("Cancelled".to_string())).expect("deliver completion");
+    bar(&mut app, &ctx);
+    assert!(app.an.job.is_none(), "completion is polled with the timeline closed");
+}

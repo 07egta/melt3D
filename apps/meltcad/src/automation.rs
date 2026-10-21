@@ -186,16 +186,14 @@ fn run(scene: &mut Scene, cmd: &Value) -> Result<Value, String> {
         }
         "save" => {
             let path = text(obj, "path")?;
-            crate::recovery::save_project(std::path::Path::new(&path), scene)
-                .map_err(|e| format!("Cannot write {path}: {e}"))?;
+            crate::recovery::save_project(std::path::Path::new(&path), scene).map_err(|e| format!("Cannot write {path}: {e}"))?;
             Ok(json!({"saved": path}))
         }
         "load" => {
             let path = text(obj, "path")?;
             // Share the GUI's size limit and guarded project parser: hostile
             // automation inputs must not bypass the file safety boundary.
-            let (loaded, _) = crate::recovery::read_project(std::path::Path::new(&path))
-                .map_err(|e| format!("Cannot read {path}: {e}"))?;
+            let (loaded, _) = crate::recovery::read_project(std::path::Path::new(&path)).map_err(|e| format!("Cannot read {path}: {e}"))?;
             *scene = loaded;
             Ok(summary(scene))
         }
@@ -780,9 +778,13 @@ mod tests {
         std::fs::write(&output, b"previous valid data").unwrap();
         std::fs::write(&png, b"previous image").unwrap();
         let args: Vec<std::ffi::OsString> = vec![
-            "meltcad".into(), "--run".into(), script.as_os_str().to_os_string(),
-            "--out".into(), output.as_os_str().to_os_string(),
-            "--png".into(), png.as_os_str().to_os_string()
+            "meltcad".into(),
+            "--run".into(),
+            script.as_os_str().to_os_string(),
+            "--out".into(),
+            output.as_os_str().to_os_string(),
+            "--png".into(),
+            png.as_os_str().to_os_string(),
         ];
         assert_eq!(run_cli(&args), Some(false));
         assert_eq!(std::fs::read(&output).unwrap(), b"previous valid data");
@@ -797,10 +799,8 @@ mod tests {
         let script = folder.join("script.json");
         let output = folder.join("completed.meltcad");
         std::fs::write(&script, r#"[{"cmd":"shape.add","kind":"Box"}]"#).unwrap();
-        let args: Vec<std::ffi::OsString> = vec![
-            "meltcad".into(), "--run".into(), script.as_os_str().to_os_string(),
-            "--out".into(), output.as_os_str().to_os_string()
-        ];
+        let args: Vec<std::ffi::OsString> =
+            vec!["meltcad".into(), "--run".into(), script.as_os_str().to_os_string(), "--out".into(), output.as_os_str().to_os_string()];
         assert_eq!(run_cli(&args), Some(true));
         let (scene, _) = crate::recovery::read_project(&output).unwrap();
         assert_eq!(scene.shape_count(), 1);

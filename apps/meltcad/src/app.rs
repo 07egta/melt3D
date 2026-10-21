@@ -2322,12 +2322,10 @@ impl App {
         self.settle(&ctx);
         if !cfg!(test) {
             ctx.request_repaint_after(crate::recovery::INTERVAL);
-            if self.recovery.pending_path().is_none() {
-                let rev = self.track_scene();
-                let changed = self.has_unsaved_work();
-                if let Err(e) = self.recovery.checkpoint(&self.scene, self.path.as_deref(), changed, rev, std::time::Instant::now()) {
-                    self.notice = Some(format!("Could not save auto-recovery data: {e}"));
-                }
+            let rev = self.track_scene();
+            let changed = self.has_unsaved_work();
+            if let Err(e) = self.recovery.checkpoint(&self.scene, self.path.as_deref(), changed, rev, std::time::Instant::now()) {
+                self.notice = Some(format!("Could not save auto-recovery data: {e}"));
             }
         }
         self.test_hooks(&ctx);
@@ -2906,9 +2904,7 @@ mod tests {
         curve.path = vec![[5.0, 0.0, 0.0, 1.0], [15.0, 0.0, 0.0, 1.0], [15.0, 10.0, 0.0, 1.0]];
         curve.params = [0.0, 0.0, 0.0, 1.0];
         curve.blend = 0.0;
-        curve.curve_handles = vec![CurveHandles {
-            mode: CurveNodeMode::Corner, incoming: [2.0, 3.0, 0.0], outgoing: [4.0, 5.0, 0.0]
-        }];
+        curve.curve_handles = vec![CurveHandles { mode: CurveNodeMode::Corner, incoming: [2.0, 3.0, 0.0], outgoing: [4.0, 5.0, 0.0] }];
         app.scene.groups[0].shapes.clear();
         app.scene.groups[0].shapes.push(curve.clone());
         app.sel = Some(Pick::Shape(0, 0));

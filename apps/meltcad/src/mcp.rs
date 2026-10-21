@@ -277,11 +277,7 @@ mod tests {
         ];
         for request in invalid_requests {
             let reply = handle(&mut local(), &request);
-            assert_eq!(
-                reply.as_ref().and_then(|v| v["error"]["code"].as_i64()),
-                Some(-32600),
-                "request {request} returned {reply:?}",
-            );
+            assert_eq!(reply.as_ref().and_then(|v| v["error"]["code"].as_i64()), Some(-32600), "request {request} returned {reply:?}",);
         }
     }
 

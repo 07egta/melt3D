@@ -581,10 +581,12 @@ mod tests {
     fn accessor_offsets_cannot_wrap_or_escape_the_buffer_view() {
         let mut bin = vec![0u8; 20];
         bin[8..12].copy_from_slice(&1.25f32.to_le_bytes());
-        let make = |offset: u64, count: usize| json!({
-            "accessors":[{"bufferView":0,"byteOffset":offset,"componentType":5126,"count":count,"type":"VEC3"}],
-            "bufferViews":[{"buffer":0,"byteOffset":8,"byteLength":12}]
-        });
+        let make = |offset: u64, count: usize| {
+            json!({
+                "accessors":[{"bufferView":0,"byteOffset":offset,"componentType":5126,"count":count,"type":"VEC3"}],
+                "bufferViews":[{"buffer":0,"byteOffset":8,"byteLength":12}]
+            })
+        };
         let good = Accessor::open(&make(0, 1), &bin, 0).expect("valid accessor at view start");
         assert_eq!(good.get(&bin, 0, 0), Some(1.25));
         assert!(Accessor::open(&make(1, 1), &bin, 0).is_err(), "unaligned overrun is out of the view");
