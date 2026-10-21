@@ -37,21 +37,21 @@ pub struct Category {
 
 /// The files, in the order of the tabs.
 const FILES: [&str; 15] = [
-    include_str!("../library/people.json"),
-    include_str!("../library/hands.json"),
-    include_str!("../library/animals.json"),
-    include_str!("../library/tools_a.json"),
-    include_str!("../library/tools_b.json"),
-    include_str!("../library/furniture.json"),
-    include_str!("../library/food.json"),
-    include_str!("../library/vehicles.json"),
-    include_str!("../library/buildings.json"),
-    include_str!("../library/nature.json"),
-    include_str!("../library/print.json"),
-    include_str!("../library/pip.json"),
-    include_str!("../library/realistic.json"),
-    include_str!("../library/toon.json"),
-    include_str!("../library/town.json"),
+    include_str!(concat!(env!("OUT_DIR"), "/people.json")),
+    include_str!(concat!(env!("OUT_DIR"), "/hands.json")),
+    include_str!(concat!(env!("OUT_DIR"), "/animals.json")),
+    include_str!(concat!(env!("OUT_DIR"), "/tools_a.json")),
+    include_str!(concat!(env!("OUT_DIR"), "/tools_b.json")),
+    include_str!(concat!(env!("OUT_DIR"), "/furniture.json")),
+    include_str!(concat!(env!("OUT_DIR"), "/food.json")),
+    include_str!(concat!(env!("OUT_DIR"), "/vehicles.json")),
+    include_str!(concat!(env!("OUT_DIR"), "/buildings.json")),
+    include_str!(concat!(env!("OUT_DIR"), "/nature.json")),
+    include_str!(concat!(env!("OUT_DIR"), "/print.json")),
+    include_str!(concat!(env!("OUT_DIR"), "/pip.json")),
+    include_str!(concat!(env!("OUT_DIR"), "/realistic.json")),
+    include_str!(concat!(env!("OUT_DIR"), "/toon.json")),
+    include_str!(concat!(env!("OUT_DIR"), "/town.json")),
 ];
 
 /// All categories (parsed once). A damaged file is skipped, never a crash; a test checks they all parse.
@@ -115,6 +115,35 @@ impl Item {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn compact_embedded_library_is_identical_to_the_original_json() {
+        let names = [
+            "people",
+            "hands",
+            "animals",
+            "tools_a",
+            "tools_b",
+            "furniture",
+            "food",
+            "vehicles",
+            "buildings",
+            "nature",
+            "print",
+            "pip",
+            "realistic",
+            "toon",
+            "town",
+        ];
+        for (i, name) in names.iter().enumerate() {
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("library").join(format!("{name}.json"));
+            let original = std::fs::read_to_string(path).expect("original JSON exists");
+            let before: serde_json::Value = serde_json::from_str(&original).expect("original valid");
+            let after: serde_json::Value = serde_json::from_str(FILES[i]).expect("packed valid");
+            assert_eq!(after, before, "no geometry or material value may change: {name}");
+            assert!(FILES[i].len() <= original.len(), "the packed library should not grow");
+        }
+    }
 
     #[test]
     fn every_library_file_parses_and_every_item_fits_a_scene() {
