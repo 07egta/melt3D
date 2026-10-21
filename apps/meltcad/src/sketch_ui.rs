@@ -711,12 +711,11 @@ impl App {
     /// The coloured strip button that switches to the solid-making tools (and back).
     pub fn solid_mode_button(&mut self, ui: &mut Ui) {
         let on = self.solid_mode;
-        let tip = "Solid mode: only the tools that make a solid from a sketch (Sketch, Revolve, Loft, Extrude, Sweep). Press again to go back";
+        let tip = "Draw a sketch and make a solid from it (SolidCraft's sketch screen). Come back with the button at the top";
         if style::wide_button(ui, "Solid", tip, on, Some(SOLID_COLOR), crate::sketch_icons::solid).clicked() {
-            self.solid_mode = !on;
-            if !self.solid_mode && self.sk.on {
-                self.set_sketch_tool(false);
-            }
+            // The sketch screen is SolidCraft's: it is open already when this button is shown again.
+            let ctx = ui.ctx().clone();
+            self.open_precise_sketch(&ctx);
         }
     }
 
