@@ -694,6 +694,47 @@ mod tests {
     }
 
     #[test]
+    fn numeric_rectangle_and_circle_survive_guide_save_reload_and_extrusion() {
+        use crate::sketch_dimensions::Dimensions;
+        use crate::sketch_ui::{Finished, Pen};
+        let ctx = egui::Context::default();
+        for pen in [Pen::Rect, Pen::Circle] {
+            let mut app = App::new(true, None);
+            app.scene.groups.clear();
+            app.set_sketch_tool(true);
+            app.sk.pen = pen;
+            app.sk.frame = Frame::horizontal(15.0);
+            let a = [8.0, 12.0];
+            let b = [28.0, 22.0];
+            let raw = if pen == Pen::Rect { sketch::rect(a, b) } else { sketch::circle(a, 10.0, MAX_OUTLINE) };
+            app.sketch_done(Finished::Profile(raw.clone()));
+            let mut dimensions = Dimensions::for_shape(pen, a, b, &raw, false).expect("dimensions");
+            dimensions.fields = if pen == Pen::Rect { ["100".into(), "50".into()] } else { ["25".into(), "50".into()] };
+            dimensions.update(&mut app.sk.pts, &mut app.sk.profile, 0, false);
+            assert!(dimensions.error.is_none());
+            let expected = app.sk.profile.clone();
+            app.sk.dimension = Some(dimensions);
+            assert!(app.sketch_confirm(&ctx));
+            let Some(Pick::Shape(g, s)) = app.sel else { panic!("saved guide selected") };
+            app.scene = crate::model::Scene::from_json(&app.scene.to_json()).expect("reload guide");
+            let (frame, profile) = app.curve_profile(g, s).expect("saved profile");
+            assert_eq!(frame.origin, [0.0, 0.0, 15.0]);
+            assert_eq!(profile, expected, "numeric edits must be saved in the guide");
+            assert!(app.make_from_selected_line(&ctx, Make::Extrude));
+            let (solid_g, solid_s) = app.sk.live.expect("extrusion preview");
+            let solid = app.scene.shape(solid_g, solid_s).expect("solid");
+            let expected_bounds = sketch::bbox(&expected).expect("bounds");
+            let actual_bounds = sketch::bbox(&solid.outline).expect("extrusion bounds");
+            for (actual, expected) in [actual_bounds.1[0] - actual_bounds.0[0], actual_bounds.1[1] - actual_bounds.0[1]]
+                .into_iter()
+                .zip([expected_bounds.1[0] - expected_bounds.0[0], expected_bounds.1[1] - expected_bounds.0[1]])
+            {
+                assert!((actual - expected).abs() < 0.001);
+            }
+        }
+    }
+
+    #[test]
     fn a_saved_front_sketch_revolves_about_its_original_offset_axis() {
         let ctx = egui::Context::default();
         let mut app = App::new(true, None);
@@ -712,6 +753,20 @@ mod tests {
         let (lo, hi) = sketch::bbox(&shape.outline).expect("bounds");
         assert_eq!((lo, hi), ([0.0, -10.0], [10.0, 10.0]));
         assert_eq!(shape.blend, 0.0, "a solid command keeps its exact boundary");
+    }
+
+    #[test]
+    fn a_saved_profile_away_from_the_axis_keeps_its_inner_radius() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        let frame = Frame { origin: [50.0, -25.0, 40.0], ..Frame::front() };
+        save_profile(&mut app, frame, sketch::rect([10.0, 0.0], [20.0, 20.0]));
+        assert!(app.make_from_selected_line(&ctx, Make::Revolve));
+        let (g, s) = app.sk.live.expect("revolve preview");
+        let shape = app.scene.shape(g, s).expect("revolve");
+        assert_eq!(shape.kind, Kind::Revolve);
+        assert_eq!(shape.pos, [50.0, -25.0, 50.0]);
+        assert_eq!(sketch::bbox(&shape.outline), Some(([10.0, -10.0], [20.0, 10.0])));
     }
 
     #[test]
