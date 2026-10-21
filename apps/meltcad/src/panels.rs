@@ -187,7 +187,7 @@ impl App {
                     };
                     let selected = self.is_tree_selected(pick);
                     let effective_locked = self.scene.is_locked(pick);
-                    let id = ui.scope_id().with(("scene", pick));
+                    let id = ui.id().with(("scene", pick));
                     let row = if icon_shape {
                         let Pick::Shape(g, s) = pick else { continue };
                         let mat = self.scene.groups[g].shapes[s].material;
