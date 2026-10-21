@@ -539,15 +539,34 @@ pub fn file_unit(o: &Options) -> Units {
     if o.format == Format::Glb { Units::M } else { o.units }
 }
 
+/// OBJ's mtllib directive accepts whitespace-separated library names, not quoted
+/// filenames in every importer. Keep a safe ASCII companion filename and a stable
+/// suffix if sanitization was needed, to avoid collisions with other OBJ exports.
+fn obj_material_path(path: &Path) -> PathBuf {
+    let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).filter(|s| !s.is_empty()).unwrap_or_else(|| "model".into());
+    let plain: String = stem.chars().take(64).map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' }).collect();
+    let plain = if plain.is_empty() { "model".to_owned() } else { plain };
+    let safe = if plain == stem {
+        plain
+    } else {
+        let hash = stem.as_bytes().iter().fold(2166136261u32, |h, b| (h ^ u32::from(*b)).wrapping_mul(16777619));
+        format!("{plain}_{hash:08x}")
+    };
+    path.with_file_name(format!("{safe}.mtl"))
+}
+
 /// The files of a build, named after `path` (an OBJ with colours also gets its MTL).
 pub fn serialize(b: &Built, o: &Options, path: &Path) -> Result<Vec<(PathBuf, Vec<u8>)>, String> {
+    // All formats must report broken faces, including the legacy infallible STL
+    // byte writers, instead of producing an apparently successful empty mesh.
+    fmt::check(&b.surface.mesh)?;
     let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).filter(|s| !s.is_empty()).unwrap_or_else(|| "MELTCAD".into());
     let main = path.to_path_buf();
     Ok(match o.format {
         Format::Stl => vec![(main, fmt::stl_binary(&b.surface.mesh, &stem))],
         Format::StlAscii => vec![(main, fmt::stl_ascii(&b.surface.mesh, &stem).into_bytes())],
         Format::Obj => {
-            let mtl_path = path.with_extension("mtl");
+            let mtl_path = obj_material_path(path);
             let mtl_name = mtl_path.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "model.mtl".into());
             let (obj, mtl) = fmt::obj_files(&b.surface, &stem, &mtl_name)?;
             let mut v = vec![(main, obj.into_bytes())];
@@ -856,6 +875,54 @@ mod tests {
     use super::*;
     use crate::export_formats::tests::{read_stl_binary, unzip};
     use crate::model::{Group, Material};
+
+    #[test]
+    fn obj_material_names_are_safe_and_match_actual_companion_file() {
+        let paths = ["My Car.obj", "バッグ (青).obj", "Ordinary_Name.obj"];
+        for name in paths {
+            let path = Path::new(name);
+            let mtl = obj_material_path(path);
+            let mtl_name = mtl.file_name().unwrap().to_string_lossy();
+            assert!(mtl_name.is_ascii());
+            assert!(!mtl_name.contains(char::is_whitespace));
+            assert!(mtl_name.ends_with(".mtl"));
+            assert_eq!(mtl.parent(), path.parent(), "material stays next to OBJ");
+        }
+        assert_ne!(obj_material_path(Path::new("My Car.obj")), obj_material_path(Path::new("My_Car.obj")));
+
+        let mesh = TriMesh {
+            positions: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+            triangles: vec![[0, 1, 2]],
+        };
+        let built = Built {
+            surface: Surface { mesh, look: Look::uniform(Mat8 { rgb: [255, 0, 0], rough: 128, metal: 0 }) },
+            size_mm: [1.0, 1.0, 0.0], tris: 1, verts: 3, closed: false,
+        };
+        let options = Options { format: Format::Obj, ..Options::default() };
+        for name in ["My Car.obj", "バッグ (青).obj"] {
+            let files = serialize(&built, &options, Path::new(name)).expect("serialize OBJ and MTL");
+            assert_eq!(files.len(), 2);
+            let mtl = files[1].0.file_name().unwrap().to_string_lossy();
+            let obj = String::from_utf8(files[0].1.clone()).unwrap();
+            assert!(obj.contains(&format!("mtllib {mtl}\n")), "{obj}");
+        }
+    }
+
+    #[test]
+    fn no_export_format_may_write_invalid_mesh_indices() {
+        let mesh = TriMesh {
+            positions: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+            triangles: vec![[0, 1, 9]],
+        };
+        let built = Built {
+            surface: Surface { mesh, look: Look::none() },
+            size_mm: [1.0, 1.0, 0.0], tris: 1, verts: 3, closed: false,
+        };
+        for format in Format::ALL {
+            let options = Options { format, ..Options::default() };
+            assert!(serialize(&built, &options, Path::new("bad")).is_err(), "{format:?}");
+        }
+    }
 
     fn ball(r: f64) -> f64 {
         4.0 / 3.0 * std::f64::consts::PI * r * r * r
