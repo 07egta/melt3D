@@ -44,10 +44,12 @@ thread_local! {
 pub fn is_dark() -> bool {
     #[cfg(test)]
     {
-        return DARK_TEST.with(Cell::get);
+        DARK_TEST.with(Cell::get)
     }
     #[cfg(not(test))]
-    DARK.load(Ordering::Relaxed)
+    {
+        DARK.load(Ordering::Relaxed)
+    }
 }
 
 /// Colour vision modes (#778): a second set of values for the colours that carry a meaning, for
