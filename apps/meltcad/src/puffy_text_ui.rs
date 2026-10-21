@@ -7,7 +7,7 @@ use crate::app::App;
 use crate::puffy_text::{self, Align, Settings};
 use crate::style;
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 struct Dialog {
     settings: Settings,
     editing_run: Option<u32>,
