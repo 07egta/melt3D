@@ -101,6 +101,8 @@ pub struct App {
     pub pt: crate::pipe_tool::State,
     /// The sketch tool (plane, pen, finished profile) and the outline editing.
     pub sk: crate::sketch_ui::State,
+    /// Per-user opt-out, non-modal first-run guide and contextual operation hints.
+    pub guide: crate::guide::Guide,
     /// Frame cache, fast mode, quality and other speed-ups (see `perf.rs`).
     pub perf: crate::perf::Perf,
     /// The last copy (text), so the Edit menu can paste without asking the system.
@@ -174,6 +176,7 @@ impl App {
             ct: Default::default(),
             pt: Default::default(),
             sk: Default::default(),
+            guide: crate::guide::Guide::load(open.is_some()),
             perf: crate::perf::Perf { sharpen: crate::perf::DEFAULT_SHARPEN, hud: std::env::var_os("MELTCAD_HUD").is_some_and(|v| v != "0"), ..Default::default() },
             clipboard: None,
             lib_open: false,
@@ -291,6 +294,7 @@ impl App {
     }
 
     fn apply_file_action(&mut self, action: PendingFileAction) {
+        let was_new = matches!(&action, PendingFileAction::New(_));
         let (scene, path, notes) = match action {
             PendingFileAction::New(scene) => (scene, None, Vec::new()),
             PendingFileAction::Open(path) => {
@@ -306,6 +310,9 @@ impl App {
         };
         self.scene = scene.clone();
         self.committed = scene;
+        if was_new {
+            self.guide.new_scene_applied();
+        }
         self.undo.clear();
         self.redo.clear();
         self.sel = if self.scene.shape(0, 0).is_some() { Some(Pick::Shape(0, 0)) } else { None };
@@ -673,6 +680,9 @@ impl App {
         }
         if hit(plain, Key::Questionmark) || hit(plain, Key::F1) {
             self.show_keys = !self.show_keys;
+            if self.show_keys {
+                self.guide.panel_open = false;
+            }
         }
         for (m, step) in [(Modifiers::NONE, 1.0), (Modifiers::SHIFT, 10.0)] {
             for (k, d) in [
@@ -1014,8 +1024,11 @@ impl App {
                         if style::pill(ui, "全体", false).on_hover_text("全体を見る (Home)").clicked() {
                             self.frame_view(false);
                         }
-                        if style::pill(ui, "?", self.show_keys).on_hover_text("操作のしかた").clicked() {
+                        if style::pill(ui, "?", self.show_keys).on_hover_text("操作のしかた・初回ガイド").clicked() {
                             self.show_keys = !self.show_keys;
+                            if self.show_keys {
+                                self.guide.panel_open = false;
+                            }
                         }
                     });
                 });
@@ -1037,6 +1050,17 @@ impl App {
                 style::card().show(ui, |ui| {
                     ui.set_width(300.0);
                     ui.label(RichText::new("操作のしかた").strong().size(14.0));
+                    ui.horizontal_wrapped(|ui| {
+                        if ui.button("箱づくりガイド").on_hover_text("短い新規作成・スケッチ・押し出しの練習を開く").clicked() {
+                            self.guide.open();
+                            self.show_keys = false;
+                        }
+                        if !self.guide.prefs.hidden.is_empty()
+                            && ui.button("隠したヒントを戻す").clicked()
+                        {
+                            self.guide.reset_hints();
+                        }
+                    });
                     ui.separator();
                     for (k, v) in [
                         ("中ボタンドラッグ", "回す"),
@@ -1066,21 +1090,51 @@ impl App {
             });
     }
 
+    /// A single quiet status strip instead of a stack of interrupting tooltips/popups.
     fn status_bar(&mut self, ui: &mut Ui) {
         let now = ui.input(|i| i.time);
+        let info = crate::guide::hint(
+            &self.sk,
+            self.tool,
+            self.sel.is_some(),
+            self.scene.shape_count(),
+            self.new_op,
+            self.ct.drawing,
+            self.pt.on,
+        );
         egui::Panel::bottom("status")
-            .exact_size(28.0)
-            .frame(egui::Frame::new().fill(style::PANEL_DARK).inner_margin(egui::Margin::symmetric(14, 3)))
+            .exact_size(32.0)
+            .frame(egui::Frame::new().fill(style::PANEL_DARK).inner_margin(egui::Margin::symmetric(12, 5)))
             .show(ui, |ui| {
-                style::panel_sheen(ui, ui.max_rect().expand2(egui::vec2(14.0, 3.0)), style::PANEL_DARK, style::Edge::Top);
+                style::panel_sheen(ui, ui.max_rect().expand2(egui::vec2(12.0, 5.0)), style::PANEL_DARK, style::Edge::Top);
                 ui.horizontal_centered(|ui| {
-                    let note = if now - self.status.1 < 5.0 { self.status.0.clone() } else { String::new() };
+                    let note = if now - self.status.1 < 5.0 { self.status.0.as_str() } else { "" };
                     if !note.is_empty() {
-                        // the message goes away by itself: wake up when it is due
                         ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64((5.0 - (now - self.status.1)).max(0.0) + 0.05));
                     }
-                    let hint = crate::gizmo::hint(self.tool);
-                    ui.label(RichText::new(if note.is_empty() { hint.to_string() } else { note }).size(12.0).color(style::DIM));
+                    let error = self.sketch_active() && !self.sk.msg.is_empty();
+                    let hidden = info.id.is_some_and(|id| self.guide.prefs.is_hidden(id));
+                    let message = if error {
+                        format!("直すところ: {}　（スケッチの輪かくを確認）", self.sk.msg)
+                    } else if !note.is_empty() {
+                        note.to_string()
+                    } else if hidden {
+                        "F1: 操作のしかた".to_string()
+                    } else {
+                        format!("次: {}　｜　{}", info.action, info.controls)
+                    };
+                    let severity = error || (note.is_empty() && info.warning);
+                    let ink = if severity { style::CUT } else { style::DIM };
+                    let text = egui::RichText::new(message).size(12.0).color(ink);
+                    let room = (ui.available_width() - if ui.available_width() < 740.0 { 170.0 } else { 330.0 }).max(100.0);
+                    ui.add_sized([room, 18.0], egui::Label::new(text).truncate())
+                        .on_hover_text(format!("{}　｜　{}", info.action, info.controls));
+                    if !error && note.is_empty() && !info.warning && !hidden
+                        && let Some(id) = info.id
+                        && ui.small_button("×").on_hover_text("この種類の案内だけ非表示（あとで復元できます）").clicked()
+                    {
+                        self.guide.dismiss(id);
+                    }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let name = self
                             .path
@@ -1266,7 +1320,10 @@ impl App {
             self.draw_card(&ctx);
             self.pipe_card(&ctx);
             self.sketch_card(&ctx);
-            self.keys_card(ui);
+            if !self.guide.panel_open {
+                self.keys_card(ui);
+            }
+            self.guide_card(&ctx);
             crate::svg_dialog::update(self, &ctx);
             crate::mesh_dialog::update(self, &ctx);
             crate::array::update(self, &ctx);
