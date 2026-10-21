@@ -102,7 +102,24 @@ pub fn threads() -> usize {
 // ---------------------------------------------------------------- picking the part of the scene
 
 /// The scene to mesh: the chosen part of it, without stains if they are to be ignored.
-pub fn prepare(scene: &Scene, sel: Option<Pick>, scope: Scope, ignore_paint: bool) -> Result<Scene, String> {
+/// What is selected: one pick, several (a multi-selection), or nothing.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Picks(pub Vec<Pick>);
+
+impl From<Option<Pick>> for Picks {
+    fn from(p: Option<Pick>) -> Self {
+        Picks(p.into_iter().collect())
+    }
+}
+
+impl From<Vec<Pick>> for Picks {
+    fn from(p: Vec<Pick>) -> Self {
+        Picks(p)
+    }
+}
+
+pub fn prepare(scene: &Scene, sel: impl Into<Picks>, scope: Scope, ignore_paint: bool) -> Result<Scene, String> {
+    let sel: Picks = sel.into();
     let mut s = scene.clone();
     match scope {
         Scope::Visible => {}
@@ -117,32 +134,42 @@ pub fn prepare(scene: &Scene, sel: Option<Pick>, scope: Scope, ignore_paint: boo
         Scope::Selected => {
             // everything else is hidden rather than removed: patterns and linked copies find their
             // sources by number, wherever they are in the list
-            let Some(pick) = sel else { return Err("nothing is selected".into()) };
-            let (gi, only) = match pick {
-                Pick::Group(gi) => (gi, None),
-                Pick::Shape(gi, si) => (gi, Some(si)),
-            };
-            if scene.groups.get(gi).is_none() {
-                return Err("the selection is gone".into());
+            if sel.0.is_empty() {
+                return Err("nothing is selected".into());
             }
-            if let Some(si) = only
-                && scene.shape(gi, si).is_none()
-            {
-                return Err("the selection is gone".into());
-            }
-            // Keep the selected group's complete subtree. Ancestors must
-            // remain visible as structural containers, but contribute no
-            // geometry of their own (otherwise a child-only export is empty).
-            let end = if only.is_some() { gi + 1 } else { scene.subtree_end(gi) };
+            // The groups taken whole (with all they hold), the single shapes taken from a group,
+            // and the groups above them, which stay only as containers.
+            let mut whole: Vec<(usize, usize)> = Vec::new();
+            let mut single: std::collections::HashMap<usize, std::collections::HashSet<usize>> = std::collections::HashMap::new();
             let mut ancestors = std::collections::HashSet::new();
-            let mut at = scene.parent_of(gi);
-            while let Some(parent) = at {
-                ancestors.insert(parent);
-                at = scene.parent_of(parent);
+            for pick in &sel.0 {
+                let gi = match *pick {
+                    Pick::Group(gi) | Pick::Shape(gi, _) => gi,
+                };
+                if scene.groups.get(gi).is_none() {
+                    return Err("the selection is gone".into());
+                }
+                match *pick {
+                    Pick::Group(gi) => whole.push((gi, scene.subtree_end(gi))),
+                    Pick::Shape(gi, si) => {
+                        if scene.shape(gi, si).is_none() {
+                            return Err("the selection is gone".into());
+                        }
+                        single.entry(gi).or_default().insert(si);
+                    }
+                }
+                let mut at = scene.parent_of(gi);
+                while let Some(parent) = at {
+                    ancestors.insert(parent);
+                    at = scene.parent_of(parent);
+                }
             }
+            let tops: std::collections::HashSet<usize> = whole.iter().map(|w| w.0).collect();
             for (i, g) in s.groups.iter_mut().enumerate() {
-                let selected = (gi..end).contains(&i);
-                let container = ancestors.contains(&i);
+                let in_whole = whole.iter().any(|(a, b)| (*a..*b).contains(&i));
+                let some_shapes = single.get(&i);
+                let selected = in_whole || some_shapes.is_some();
+                let container = !selected && ancestors.contains(&i);
                 g.visible = selected || container;
                 if container {
                     g.op = Op::Add;
@@ -151,14 +178,14 @@ pub fn prepare(scene: &Scene, sel: Option<Pick>, scope: Scope, ignore_paint: boo
                         sh.visible = false;
                     }
                 }
-                if i == gi {
+                if tops.contains(&i) || (some_shapes.is_some() && !in_whole) {
                     g.op = Op::Add;
-                    if let Some(si) = only {
-                        for (k, sh) in g.shapes.iter_mut().enumerate() {
-                            sh.visible = k == si;
-                            if k == si {
-                                sh.op = Op::Add;
-                            }
+                }
+                if let (Some(only), false) = (some_shapes, in_whole) {
+                    for (k, sh) in g.shapes.iter_mut().enumerate() {
+                        sh.visible = only.contains(&k);
+                        if only.contains(&k) {
+                            sh.op = Op::Add;
                         }
                     }
                 }
@@ -449,7 +476,7 @@ fn size_of(mesh: &TriMesh) -> [f64; 3] {
 }
 
 /// Mesh, smooth, lighten, colour and convert: everything up to writing.
-pub fn build(scene: &Scene, sel: Option<Pick>, o: &Options, prog: &Progress) -> Result<Built, String> {
+pub fn build(scene: &Scene, sel: impl Into<Picks>, o: &Options, prog: &Progress) -> Result<Built, String> {
     let o = o.sanitized();
     let th = threads();
     let scene = prepare(scene, sel, o.scope, o.ignore_paint)?;
@@ -516,8 +543,8 @@ pub fn build(scene: &Scene, sel: Option<Pick>, o: &Options, prog: &Progress) -> 
         finish_look(&mesh, &carry)
     };
     let size_mm = size_of(&mesh);
-    // the mesher closes the surface by construction; the check is only worth its time on lighter meshes
-    let closed = complete && (mesh.triangles.len() > 3_000_000 || melt::is_watertight(&mesh));
+    // Never report a closed surface that was not checked, however big the mesh is.
+    let closed = complete && melt::is_watertight(&mesh);
     let (tris, verts) = (mesh.triangles.len(), mesh.positions.len());
     convert(&mut mesh, &o);
     Ok(Built { surface: Surface { mesh, look }, size_mm, tris, verts, closed })
@@ -608,7 +635,8 @@ pub struct Job {
 }
 
 impl Job {
-    pub fn start(scene: Scene, sel: Option<Pick>, opts: Options, path: PathBuf) -> Job {
+    pub fn start(scene: Scene, sel: impl Into<Picks>, opts: Options, path: PathBuf) -> Job {
+        let sel: Picks = sel.into();
         let progress = Arc::new(Progress::new());
         let writing = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let (tx, rx) = channel();
@@ -617,7 +645,7 @@ impl Job {
         let label = path.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
         let spawned = std::thread::Builder::new().name("yura-export".into()).spawn(move || {
             let t0 = Instant::now();
-            let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(&scene, sel, &opts, &path, &p, &w, t0)));
+            let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(&scene, sel.clone(), &opts, &path, &p, &w, t0)));
             let res = res.unwrap_or_else(|_| Err("the export stopped unexpectedly".into()));
             let _ = tx.send(res);
         });
@@ -662,7 +690,7 @@ impl Job {
 
 fn run(
     scene: &Scene,
-    sel: Option<Pick>,
+    sel: Picks,
     o: &Options,
     path: &Path,
     prog: &Progress,
@@ -723,7 +751,7 @@ fn tri_normal_area(t: [[f64; 3]; 3]) -> ([f64; 3], f64) {
 
 /// Measure the model for printing. `tolerance` is the precision wanted; the check itself never goes
 /// below a cell of a 350th of the model so that it stays quick.
-pub fn print_check(scene: &Scene, sel: Option<Pick>, o: &Options, prog: &Progress) -> Result<PrintCheck, String> {
+pub fn print_check(scene: &Scene, sel: impl Into<Picks>, o: &Options, prog: &Progress) -> Result<PrintCheck, String> {
     let th = threads();
     let scene = prepare(scene, sel, o.scope, o.ignore_paint)?;
     let (lo, hi) = bounds(&scene)?;
@@ -841,7 +869,7 @@ impl Estimate {
     }
 }
 
-pub fn estimate(scene: &Scene, sel: Option<Pick>, o: &Options, prog: &Progress) -> Result<Estimate, String> {
+pub fn estimate(scene: &Scene, sel: impl Into<Picks>, o: &Options, prog: &Progress) -> Result<Estimate, String> {
     let scene = prepare(scene, sel, o.scope, o.ignore_paint)?;
     let (lo, hi) = bounds(&scene)?;
     let extent = (0..3).map(|a| hi[a] - lo[a]).fold(0.0_f64, f64::max);
@@ -1066,6 +1094,33 @@ mod tests {
         let m = &b.surface.mesh;
         let hx = m.positions.iter().map(|p| p[0]).fold(f64::NEG_INFINITY, f64::max);
         assert!((hx - 0.02).abs() < 0.001, "{hx}");
+    }
+
+    #[test]
+    fn a_multi_selection_exports_every_picked_shape_and_group() {
+        let ball = |x: f32| {
+            let mut b = Shape::new(Kind::Sphere, [x, 0.0, 0.0], Material::default());
+            b.blend = 0.0;
+            b
+        };
+        let mut sc = Scene::default();
+        sc.groups.clear();
+        for (i, x) in [-100.0f32, 0.0, 100.0].into_iter().enumerate() {
+            let mut g = crate::model::Group::new(format!("g{i}"));
+            g.shapes.push(ball(x));
+            sc.groups.push(g);
+        }
+        let vol = |picks: Vec<Pick>| {
+            let o = Options { scope: Scope::Selected, tolerance: 2.0, ..Options::default() };
+            build(&sc, picks, &o, &Progress::new()).map(|b| melt::volume(&b.surface.mesh))
+        };
+        let one = vol(vec![Pick::Shape(0, 0)]).unwrap();
+        let two = vol(vec![Pick::Shape(0, 0), Pick::Group(2)]).unwrap();
+        assert!((two / one - 2.0).abs() < 0.05, "two picks give two balls: {two} vs {one}");
+        let three = vol(vec![Pick::Group(0), Pick::Group(1), Pick::Shape(2, 0)]).unwrap();
+        assert!((three / one - 3.0).abs() < 0.08);
+        assert!(vol(vec![]).is_err());
+        assert!(vol(vec![Pick::Group(0), Pick::Group(9)]).is_err());
     }
 
     #[test]

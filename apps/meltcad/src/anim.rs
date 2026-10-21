@@ -52,7 +52,7 @@ impl Vals {
             round: l(a.round, b.round),
         }
     }
-    fn of(s: &crate::model::Shape) -> Vals {
+    pub(crate) fn of(s: &crate::model::Shape) -> Vals {
         Vals { pos: s.pos, rot: s.rot, size: s.size, scale: s.scale, color: s.material.color, round: s.round }
     }
 }

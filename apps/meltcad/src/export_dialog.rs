@@ -10,9 +10,9 @@ use egui::{Align2, Color32, RichText, Stroke};
 
 use crate::app::{App, ExportFormat};
 use crate::export_formats::{Format, Units};
-use crate::export_job::{self, Estimate, Job, Lighten, MAX_TOLERANCE, MIN_TOLERANCE, Options, PrintCheck, Scope, Up};
+use crate::export_job::{self, Estimate, Job, Lighten, MAX_TOLERANCE, MIN_TOLERANCE, Options, Picks, PrintCheck, Scope, Up};
 use crate::export_mesh::{CANCELLED, MAX_VERTS, Progress};
-use crate::model::{Pick, Scene};
+use crate::model::Scene;
 use crate::style;
 
 // ---------------------------------------------------------------- small background tasks
@@ -74,7 +74,7 @@ impl<T: Clone + Send + 'static> Task<T> {
 struct Dlg {
     opts: Options,
     /// What the estimate and the check were made for.
-    snap: Option<(Scene, Option<Pick>, Options)>,
+    snap: Option<(Scene, Picks, Options)>,
     est: Task<Estimate>,
     check: Task<PrintCheck>,
     /// The check should start by itself on the next frame.
@@ -286,7 +286,7 @@ fn start_job(app: &mut App, ctx: &egui::Context, o: Options, path: PathBuf) -> b
         app.say(ctx, "Export is already running");
         return false;
     }
-    let job = Job::start(app.scene.clone(), app.sel, o.clone(), path);
+    let job = Job::start(app.scene.clone(), app.picks(), o.clone(), path);
     ctx.data_mut(|m| {
         m.insert_temp(job_id(), Running(Some(Arc::new(job))));
         m.insert_temp(last_id(), o);
@@ -361,7 +361,8 @@ fn row(ui: &mut egui::Ui, label: &str, add: impl FnOnce(&mut egui::Ui)) {
 
 /// Cached measurements depend on the entire export configuration, especially
 /// precision and physical scale. Never display a result from an older setting.
-fn snapshot_stale(snap: Option<&(Scene, Option<Pick>, Options)>, scene: &Scene, sel: Option<Pick>, opts: &Options) -> bool {
+fn snapshot_stale(snap: Option<&(Scene, Picks, Options)>, scene: &Scene, sel: impl Into<Picks>, opts: &Options) -> bool {
+    let sel: Picks = sel.into();
     snap.is_none_or(|s| &s.0 != scene || s.1 != sel || &s.2 != opts)
 }
 
@@ -370,18 +371,18 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
     running_card(app, ctx);
     let Some(mut d) = ctx.data_mut(|m| m.remove_temp::<Dlg>(id())).filter(|d| d.open) else { return };
     // the estimate and the check are about the scene as it is now
-    let key = (app.scene.clone(), app.sel, d.opts.clone());
-    let stale = snapshot_stale(d.snap.as_ref(), &key.0, key.1, &key.2);
+    let key = (app.scene.clone(), Picks::from(app.picks()), d.opts.clone());
+    let stale = snapshot_stale(d.snap.as_ref(), &key.0, key.1.clone(), &key.2);
     if stale {
         d.snap = Some(key);
         d.check.reset();
-        let (scene, sel, o) = (app.scene.clone(), app.sel, d.opts.clone());
-        d.est.start(move |p| export_job::estimate(&scene, sel, &o, p));
+        let (scene, sel, o) = (app.scene.clone(), app.picks(), d.opts.clone());
+        d.est.start(move |p| export_job::estimate(&scene, sel.clone(), &o, p));
     }
     if d.run_check {
         d.run_check = false;
-        let (scene, sel, o) = (app.scene.clone(), app.sel, d.opts.clone());
-        d.check.start(move |p| export_job::print_check(&scene, sel, &o, p));
+        let (scene, sel, o) = (app.scene.clone(), app.picks(), d.opts.clone());
+        d.check.start(move |p| export_job::print_check(&scene, sel.clone(), &o, p));
     }
     if d.est.running() || d.check.running() {
         ctx.request_repaint_after(std::time::Duration::from_millis(100));
@@ -644,8 +645,8 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
     });
     d.opts = d.opts.sanitized_for_edit();
     if check {
-        let (scene, sel, o) = (app.scene.clone(), app.sel, d.opts.clone());
-        d.check.start(move |p| export_job::print_check(&scene, sel, &o, p));
+        let (scene, sel, o) = (app.scene.clone(), app.picks(), d.opts.clone());
+        d.check.start(move |p| export_job::print_check(&scene, sel.clone(), &o, p));
     }
     if go {
         let o = d.opts.clone();
@@ -771,7 +772,7 @@ mod tests {
     fn print_check_cache_invalidates_when_precision_or_scale_changes() {
         let scene = Scene::default();
         let old = Options::default();
-        let snapshot = (scene.clone(), None, old.clone());
+        let snapshot = (scene.clone(), Picks::default(), old.clone());
         assert!(!snapshot_stale(Some(&snapshot), &scene, None, &old));
         let precise = Options { tolerance: 0.1, ..old.clone() };
         assert!(snapshot_stale(Some(&snapshot), &scene, None, &precise), "precision affects measured thin walls");
