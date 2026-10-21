@@ -76,7 +76,7 @@ impl Precise {
         theme::set_skin(melt_skin);
         let mut app = SolveApp::new(Session::default(), services());
         app.enable_easy_layout();
-        app.show_easy_top_bar = false;
+        app.apply_off_thread = Some(solidcraft_ui_egui::dialogs::APPLY_AT_ONCE);
         app.preferences.language = "ja".into();
         app.autosave_minutes = 0.5;
         if !cfg!(test) {
@@ -198,40 +198,7 @@ impl App {
                     {
                         back = true;
                     }
-                    ui.label(RichText::new("SolidCraft · 精密ソリッド").strong().color(style::TEXT));
                     ui.label(RichText::new("戻るだけで Melt に取り込み、とけあう形にできます").size(11.5).color(style::DIM));
-                });
-                ui.horizontal_wrapped(|ui| {
-                    if p.app.session.active_sketch.is_some() {
-                        ui.label(RichText::new("輪郭を描く → スケッチを完了 → 押し出す").color(style::DIM));
-                        if style::pill(ui, "スケッチを完了", true).clicked() {
-                            p.app.finish_sketch();
-                        }
-                    } else {
-                        ui.add_enabled_ui(!p.editing(), |ui| {
-                            for (label, command, hint) in [
-                                ("スケッチを描く", "sketch.create", "平面を選び、線・長方形・円で輪郭を描きます"),
-                                ("押し出す", "solid.extrude", "完成した輪郭を選び、高さを指定して立体にします"),
-                                ("回転させる", "solid.revolve", "完成した輪郭を、軸のまわりに回して立体にします"),
-                                ("ロフト", "solid.loft", "いくつかの輪郭をなめらかにつないで立体にします"),
-                                ("スイープ", "solid.sweep", "輪郭を、道すじ(線)に沿って動かして立体にします"),
-                                ("角を丸める", "solid.fillet", "立体の辺を選び、丸みを付けます"),
-                            ] {
-                                if style::pill(ui, label, false).on_hover_text(hint).clicked() {
-                                    p.app.start(command);
-                                }
-                            }
-                            ui.menu_button("箱・円柱・球", |ui| {
-                                for (label, command) in [("箱", "solid.box"), ("円柱", "solid.cylinder"), ("球", "solid.sphere")] {
-                                    if ui.button(label).clicked() {
-                                        p.app.start(command);
-                                        ui.close();
-                                    }
-                                }
-                            });
-                        });
-                    }
-                    ui.label(RichText::new("精密な履歴は「ファイル」から .solidcraft で保存").size(11.0).color(style::DIM));
                 });
                 if let Some(message) = &p.message {
                     ui.label(RichText::new(message).size(11.5).color(style::CUT));

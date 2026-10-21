@@ -2583,7 +2583,7 @@ mod tests {
         assert_eq!(results.recv().unwrap().unwrap()["precise"], true);
         let p = app.precise.as_mut().unwrap();
         assert_eq!(p.app.preferences.language, "ja");
-        assert!(!p.app.show_easy_top_bar);
+        assert!(p.app.show_easy_top_bar, "SolidCraft's own top bar is shown as it is");
         p.app.run("solid.box", json!({"length":24,"width":12,"height":6})).unwrap();
         let scene = app.scene.clone();
         sender.send(crate::control::Request { cmd: json!({"cmd":"scene.new"}), reply: reply.clone() }).unwrap();
