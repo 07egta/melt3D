@@ -517,7 +517,7 @@ mod tests {
         scene.groups = vec![glyph_group(&art, 'O', 0, &settings, [0.0, 0.0], 30.0).unwrap()];
         let field = Field::new(&scene);
         let progress = crate::export_mesh::Progress::new();
-        let mesh = crate::export_mesh::mesh_sparse(&field, [-19.0, -19.0, -3.0], [19.0, 19.0, 17.0], 0.6, 1, &progress.slice(0.0, 1.0)).expect("mesh");
+        let mesh = crate::export_mesh::mesh_sparse(&|point| field.distance(point), [-19.0, -19.0, -3.0], [19.0, 19.0, 17.0], 0.6, 1, &progress.slice(0.0, 1.0)).expect("mesh");
         assert!(solidcraft_geom::melt::is_watertight(&mesh.mesh), "3D letter must export watertight");
     }
 }
