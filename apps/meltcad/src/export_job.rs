@@ -676,8 +676,7 @@ fn run(
     let bytes: u64 = files.iter().map(|(_, data)| data.len() as u64).sum();
     // OBJ+MTL must commit as one logical output. A failure on the second
     // file can no longer silently leave the first output overwritten.
-    crate::export_transaction::write_many(&files, || prog.cancelled())
-        .map_err(|e| format!("could not save export: {e}"))?;
+    crate::export_transaction::write_many(&files, || prog.cancelled()).map_err(|e| format!("could not save export: {e}"))?;
     prog.set(1.0);
     Ok(Report {
         path: path.to_path_buf(),
@@ -890,13 +889,13 @@ mod tests {
         }
         assert_ne!(obj_material_path(Path::new("My Car.obj")), obj_material_path(Path::new("My_Car.obj")));
 
-        let mesh = TriMesh {
-            positions: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
-            triangles: vec![[0, 1, 2]],
-        };
+        let mesh = TriMesh { positions: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], triangles: vec![[0, 1, 2]] };
         let built = Built {
             surface: Surface { mesh, look: Look::uniform(Mat8 { rgb: [255, 0, 0], rough: 128, metal: 0 }) },
-            size_mm: [1.0, 1.0, 0.0], tris: 1, verts: 3, closed: false,
+            size_mm: [1.0, 1.0, 0.0],
+            tris: 1,
+            verts: 3,
+            closed: false,
         };
         let options = Options { format: Format::Obj, ..Options::default() };
         for name in ["My Car.obj", "バッグ (青).obj"] {
@@ -910,14 +909,8 @@ mod tests {
 
     #[test]
     fn no_export_format_may_write_invalid_mesh_indices() {
-        let mesh = TriMesh {
-            positions: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
-            triangles: vec![[0, 1, 9]],
-        };
-        let built = Built {
-            surface: Surface { mesh, look: Look::none() },
-            size_mm: [1.0, 1.0, 0.0], tris: 1, verts: 3, closed: false,
-        };
+        let mesh = TriMesh { positions: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], triangles: vec![[0, 1, 9]] };
+        let built = Built { surface: Surface { mesh, look: Look::none() }, size_mm: [1.0, 1.0, 0.0], tris: 1, verts: 3, closed: false };
         for format in Format::ALL {
             let options = Options { format, ..Options::default() };
             assert!(serialize(&built, &options, Path::new("bad")).is_err(), "{format:?}");
@@ -1194,6 +1187,32 @@ mod tests {
         }
         assert_eq!(wrong, 0);
         assert!(m.triangles.len() < 5000, "{} triangles", m.triangles.len());
+    }
+
+    #[test]
+    fn obj_material_reference_uses_safe_matching_filename() {
+        let built = Built {
+            surface: Surface { mesh: crate::export_formats::tests::tetra(10.0), look: crate::export_formats::tests::two_colours() },
+            tris: 4,
+            verts: 4,
+            size_mm: [10.0; 3],
+            closed: true,
+        };
+        let options = opts(Format::Obj, 0.5);
+        for stem in ["My Car", "日本語 (バッグ)", "My_Car", "model"] {
+            let path = Path::new("exports").join(format!("{stem}.obj"));
+            let files = serialize(&built, &options, &path).expect("serialize OBJ+MTL");
+            assert_eq!(files.len(), 2);
+            let mtl_name = files[1].0.file_name().unwrap().to_str().unwrap();
+            assert!(mtl_name.is_ascii() && !mtl_name.chars().any(char::is_whitespace));
+            assert_eq!(files[0].0, path);
+            let obj = String::from_utf8(files[0].1.clone()).unwrap();
+            assert!(obj.lines().any(|line| line == format!("mtllib {mtl_name}")));
+            assert!(String::from_utf8(files[1].1.clone()).unwrap().contains("newmtl"));
+        }
+        let a = serialize(&built, &options, Path::new("My Car.obj")).unwrap();
+        let b = serialize(&built, &options, Path::new("My_Car.obj")).unwrap();
+        assert_ne!(a[1].0, b[1].0, "escaped filenames cannot overwrite literal underscores");
     }
 
     #[test]

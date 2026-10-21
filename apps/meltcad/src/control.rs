@@ -66,9 +66,7 @@ pub fn make_token() -> String {
 /// filename so a separate `meltcad --mcp --control PORT` process can find it.
 pub fn token_file(port: u16) -> Result<std::path::PathBuf, String> {
     let state: Option<std::path::PathBuf> = if cfg!(windows) {
-        std::env::var_os("LOCALAPPDATA")
-            .or_else(|| std::env::var_os("APPDATA"))
-            .map(std::path::PathBuf::from)
+        std::env::var_os("LOCALAPPDATA").or_else(|| std::env::var_os("APPDATA")).map(std::path::PathBuf::from)
     } else {
         std::env::var_os("XDG_STATE_HOME")
             .map(std::path::PathBuf::from)
@@ -108,8 +106,7 @@ fn secure_token_parent(path: &std::path::Path) -> Result<&std::path::Path, Strin
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))
-            .map_err(|e| format!("Cannot secure control directory: {e}"))?;
+        std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700)).map_err(|e| format!("Cannot secure control directory: {e}"))?;
     }
     Ok(parent)
 }
@@ -119,7 +116,11 @@ fn write_token_to(path: &std::path::Path, token: &str) -> Result<(), String> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
-        let mut file = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(path)
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(path)
             .map_err(|e| format!("Cannot exclusively create control token: {e}"))?;
         if let Err(e) = file.write_all(token.as_bytes()).and_then(|_| file.sync_all()) {
             let _ = std::fs::remove_file(path);
@@ -130,7 +131,10 @@ fn write_token_to(path: &std::path::Path, token: &str) -> Result<(), String> {
     {
         // Windows LOCALAPPDATA is per-user and carries the user's ACL.
         // create_new refuses any pre-existing file or link.
-        let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(path)
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)
             .map_err(|e| format!("Cannot exclusively create control token: {e}"))?;
         if let Err(e) = file.write_all(token.as_bytes()).and_then(|_| file.sync_all()) {
             let _ = std::fs::remove_file(path);

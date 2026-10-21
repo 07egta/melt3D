@@ -249,7 +249,7 @@ impl Store {
             return Ok(false);
         }
         self.next_due = now + INTERVAL;
-        if !changed || self.last_snapshot_rev == Some(rev) || self.pending_path().is_some() {
+        if !changed || self.last_snapshot_rev == Some(rev) {
             return Ok(false);
         }
         fs::create_dir_all(&self.root).map_err(|e| e.to_string())?;
@@ -326,6 +326,35 @@ mod tests {
         assert!(!store.checkpoint(&scene, None, true, 2, now + INTERVAL * 3).expect("same revision"));
         assert!(store.checkpoint(&scene, None, true, 3, now + INTERVAL * 4).expect("new revision"));
         store.normal_exit().expect("cleanup");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn pending_crashed_recovery_does_not_block_the_current_sessions_snapshot() {
+        let root = temp_root();
+        let now = Instant::now();
+        let mut crashed = Store::new(root.clone(), now);
+        assert!(crashed.checkpoint(&edited(), None, true, 2, now + INTERVAL).expect("old snapshot"));
+        let old_path = crashed.own_path().to_path_buf();
+        let old_bytes = fs::read(&old_path).expect("old bytes");
+        drop(crashed);
+
+        let mut current = Store::new(root.clone(), now);
+        assert_eq!(current.pending_path(), Some(old_path.as_path()));
+        let mut current_scene = edited();
+        current_scene.groups.push(crate::model::Group::new("New session"));
+        assert!(current.checkpoint(&current_scene, None, true, 3, now + INTERVAL).expect("new snapshot"));
+        let current_path = current.own_path().to_path_buf();
+        assert_ne!(old_path, current_path, "each session owns a separate recovery file");
+        assert_eq!(fs::read(&old_path).expect("old file kept"), old_bytes);
+        assert_eq!(read_snapshot(&current_path).expect("current snapshot").0, current_scene);
+
+        drop(current); // Both sessions ended without normal_exit: both must remain recoverable.
+        let restarted = Store::new(root.clone(), now);
+        assert_eq!(restarted.pending.len(), 2);
+        assert!(restarted.pending.contains(&old_path));
+        assert!(restarted.pending.contains(&current_path));
+        drop(restarted);
         let _ = fs::remove_dir_all(root);
     }
 

@@ -1042,7 +1042,10 @@ impl Scene {
                 s.groups.len()
             ));
         }
-        let shapes = s.groups.iter().try_fold(0usize, |total, g| total.checked_add(g.shapes.len()))
+        let shapes = s
+            .groups
+            .iter()
+            .try_fold(0usize, |total, g| total.checked_add(g.shapes.len()))
             .ok_or("This project has too many shapes; the original file was preserved")?;
         if shapes > MAX_SHAPES {
             return Err(format!(

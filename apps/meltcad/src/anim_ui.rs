@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::mpsc::Receiver;
+use std::sync::mpsc::{Receiver, TryRecvError};
 
 use egui::{RichText, Sense, Ui, pos2, vec2};
 
@@ -40,6 +40,25 @@ pub struct State {
 }
 
 impl App {
+    /// Poll GIF completion even when the timeline itself is closed.
+    fn poll_gif_job(&mut self, ctx: &egui::Context) {
+        let finished = self.an.job.as_ref().and_then(|job| {
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+            match job.rx.try_recv() {
+                Ok(result) => Some(result),
+                Err(TryRecvError::Disconnected) => Some(Err("GIF worker ended without a result".to_string())),
+                Err(TryRecvError::Empty) => None,
+            }
+        });
+        if let Some(result) = finished {
+            self.an.job = None;
+            match result {
+                Ok(path) => self.say(ctx, format!("Saved {path}")),
+                Err(error) => self.say(ctx, format!("GIF not saved: {error}")),
+            }
+        }
+    }
+
     /// A draft owns its source shapes until it is finished or cancelled. Idle
     /// curve/pipe tools can still use the timeline; an actual edit cannot.
     pub(crate) fn animation_edit_active(&self) -> bool {

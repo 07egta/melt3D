@@ -154,13 +154,20 @@ fn add_block(app: &mut App, mut block: Vec<Group>, done: &str, from_clipboard: b
             }
             match (&mut new.pattern, &old.pattern) {
                 (Some(Pattern::Path { source: dest, .. }), Some(Pattern::Path { source, .. }))
-                    if !own_shapes.contains(source) && app.scene.shape_by_uid(*source).is_some() => *dest = *source,
-                (Some(Pattern::Geometry { source: Source::Shape(dest), .. }),
-                 Some(Pattern::Geometry { source: Source::Shape(source), .. }))
-                    if !own_shapes.contains(source) && app.scene.shape_by_uid(*source).is_some() => *dest = *source,
-                (Some(Pattern::Geometry { source: Source::Group(dest), .. }),
-                 Some(Pattern::Geometry { source: Source::Group(source), .. }))
-                    if !own_groups.contains(source) && app.scene.group_by_uid(*source).is_some() => *dest = *source,
+                    if !own_shapes.contains(source) && app.scene.shape_by_uid(*source).is_some() =>
+                {
+                    *dest = *source
+                }
+                (Some(Pattern::Geometry { source: Source::Shape(dest), .. }), Some(Pattern::Geometry { source: Source::Shape(source), .. }))
+                    if !own_shapes.contains(source) && app.scene.shape_by_uid(*source).is_some() =>
+                {
+                    *dest = *source
+                }
+                (Some(Pattern::Geometry { source: Source::Group(dest), .. }), Some(Pattern::Geometry { source: Source::Group(source), .. }))
+                    if !own_groups.contains(source) && app.scene.group_by_uid(*source).is_some() =>
+                {
+                    *dest = *source
+                }
                 _ => {}
             }
         }
@@ -333,11 +340,17 @@ mod tests {
         let mut app = App::new(true, None);
         app.sel = Some(Pick::Group(0));
         app.make_instance(&ctx);
-        let original_link = match app.sel { Some(Pick::Group(gi)) => gi, _ => panic!("linked copy") };
+        let original_link = match app.sel {
+            Some(Pick::Group(gi)) => gi,
+            _ => panic!("linked copy"),
+        };
         let uid = app.scene.groups[original_link].instance_of.expect("linked source");
         let clip = copy_text(&app).unwrap();
         assert!(paste_text(&mut app, &clip).is_ok());
-        let new_link = match app.sel { Some(Pick::Group(gi)) => gi, _ => panic!("pasted linked copy") };
+        let new_link = match app.sel {
+            Some(Pick::Group(gi)) => gi,
+            _ => panic!("pasted linked copy"),
+        };
         assert!(app.scene.groups[new_link].is_linked());
         assert_eq!(app.scene.groups[new_link].instance_of, Some(uid));
         assert_eq!(crate::pattern::link_source(&app.scene, new_link), Some(0));

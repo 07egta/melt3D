@@ -283,8 +283,7 @@ mod tests {
         let input = dir.join("scene.meltcad");
         let png = dir.join("output.png");
         let args = |inp: &std::path::Path, out: &std::path::Path| -> Vec<std::ffi::OsString> {
-            vec!["meltcad".into(), "--render".into(), inp.as_os_str().to_os_string(),
-                 out.as_os_str().to_os_string(), "40".into()]
+            vec!["meltcad".into(), "--render".into(), inp.as_os_str().to_os_string(), out.as_os_str().to_os_string(), "40".into()]
         };
         assert_eq!(cli(&["meltcad".into(), "--other".into()]), None);
         assert_eq!(cli(&args(&dir.join("missing.meltcad"), &png)), Some(false));

@@ -95,20 +95,19 @@ fn write_many_with(
             }
             let (stage, mut file) = unique_file(dest, "stage").map_err(|e| format!("cannot stage {}: {e}", dest.display()))?;
             parts.push(Part { dest: dest.clone(), stage, backup: None, changed: false });
-            file.write_all(bytes)
-                .and_then(|_| file.sync_all())
-                .map_err(|e| format!("cannot stage {}: {e}", dest.display()))?;
+            file.write_all(bytes).and_then(|_| file.sync_all()).map_err(|e| format!("cannot stage {}: {e}", dest.display()))?;
         }
 
         // Preserve the old contents of *every* existing destination before
         // the first rename. Copying is streamed to keep memory bounded.
         for part in &mut parts {
             if let Some(meta) = check_target(&part.dest)? {
-                let (backup, mut output) = unique_file(&part.dest, "backup")
-                    .map_err(|e| format!("cannot reserve backup {}: {e}", part.dest.display()))?;
+                let (backup, mut output) =
+                    unique_file(&part.dest, "backup").map_err(|e| format!("cannot reserve backup {}: {e}", part.dest.display()))?;
                 part.backup = Some(backup.clone());
                 let mut input = File::open(&part.dest).map_err(|e| format!("cannot back up {}: {e}", part.dest.display()))?;
-                io::copy(&mut input, &mut output).and_then(|_| output.sync_all())
+                io::copy(&mut input, &mut output)
+                    .and_then(|_| output.sync_all())
                     .map_err(|e| format!("cannot back up {}: {e}", part.dest.display()))?;
                 fs::set_permissions(&backup, meta.permissions())
                     .map_err(|e| format!("cannot preserve permissions for {}: {e}", part.dest.display()))?;
@@ -190,11 +189,7 @@ mod tests {
     use super::*;
 
     fn directory() -> PathBuf {
-        let folder = std::env::temp_dir().join(format!(
-            "melt3d-export-transaction-{}-{}",
-            std::process::id(),
-            SEQ.fetch_add(1, Ordering::Relaxed)
-        ));
+        let folder = std::env::temp_dir().join(format!("melt3d-export-transaction-{}-{}", std::process::id(), SEQ.fetch_add(1, Ordering::Relaxed)));
         fs::create_dir_all(&folder).unwrap();
         folder
     }

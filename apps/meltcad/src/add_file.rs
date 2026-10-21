@@ -16,8 +16,13 @@ const MAX_NAME_CHARS: usize = 60;
 pub(crate) fn max_uid(sc: &Scene) -> u32 {
     // Every local identifier and reference must be rebased together on import.
     // Also reserve IDs of deleted shapes with persistent animation tracks.
-    let mut max = sc.groups.iter().flat_map(|g| g.shapes.iter().map(|s| s.uid).chain(std::iter::once(g.uid)))
-        .chain(sc.anim.tracks.iter().map(|t| t.uid)).max().unwrap_or(0);
+    let mut max = sc
+        .groups
+        .iter()
+        .flat_map(|g| g.shapes.iter().map(|s| s.uid).chain(std::iter::once(g.uid)))
+        .chain(sc.anim.tracks.iter().map(|t| t.uid))
+        .max()
+        .unwrap_or(0);
     for g in &sc.groups {
         max = max.max(g.instance_of.unwrap_or(0));
         match &g.pattern {

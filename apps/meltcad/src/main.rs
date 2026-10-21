@@ -14,8 +14,8 @@ mod backend;
 mod bench;
 mod cad;
 mod camera;
-mod context_toolbar;
 mod clip;
+mod context_toolbar;
 mod control;
 mod corner;
 mod cpu_render;
@@ -137,15 +137,21 @@ fn main() -> eframe::Result {
     // CLI handlers must run in order: MCP owns stdio until EOF, so never
     // evaluate every handler eagerly before checking which one matched.
     if let Some(success) = cpu_render::cli(&args) {
-        if !success { std::process::exit(1); }
+        if !success {
+            std::process::exit(1);
+        }
         return Ok(());
     }
     if let Some(success) = bench::cli(&args) {
-        if !success { std::process::exit(1); }
+        if !success {
+            std::process::exit(1);
+        }
         return Ok(());
     }
     if let Some(success) = mcp::cli(&args) {
-        if !success { std::process::exit(1); }
+        if !success {
+            std::process::exit(1);
+        }
         return Ok(());
     }
     perf::init();
