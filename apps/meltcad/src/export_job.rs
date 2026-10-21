@@ -1063,6 +1063,35 @@ mod tests {
     }
 
     #[test]
+    fn obj_material_reference_uses_safe_matching_filename() {
+        let built = Built {
+            surface: Surface {
+                mesh: crate::export_formats::tests::tetra(10.0),
+                look: crate::export_formats::tests::two_colours(),
+            },
+            tris: 4,
+            verts: 4,
+            size_mm: [10.0; 3],
+            closed: true,
+        };
+        let options = opts(Format::Obj, 0.5);
+        for stem in ["My Car", "日本語 (バッグ)", "My_Car", "model"] {
+            let path = Path::new("exports").join(format!("{stem}.obj"));
+            let files = serialize(&built, &options, &path).expect("serialize OBJ+MTL");
+            assert_eq!(files.len(), 2);
+            let mtl_name = files[1].0.file_name().unwrap().to_str().unwrap();
+            assert!(mtl_name.is_ascii() && !mtl_name.chars().any(char::is_whitespace));
+            assert_eq!(files[0].0, path);
+            let obj = String::from_utf8(files[0].1.clone()).unwrap();
+            assert!(obj.lines().any(|line| line == format!("mtllib {mtl_name}")));
+            assert!(String::from_utf8(files[1].1.clone()).unwrap().contains("newmtl"));
+        }
+        let a = serialize(&built, &options, Path::new("My Car.obj")).unwrap();
+        let b = serialize(&built, &options, Path::new("My_Car.obj")).unwrap();
+        assert_ne!(a[1].0, b[1].0, "escaped filenames cannot overwrite literal underscores");
+    }
+
+    #[test]
     fn every_format_writes_a_file_that_reads_back() {
         let dir = std::env::temp_dir().join(format!("yura_export_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
