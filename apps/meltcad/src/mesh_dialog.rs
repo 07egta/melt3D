@@ -191,11 +191,7 @@ fn begin_selected_rebake(app: &App, ctx: &egui::Context) {
 
 /// Completion may race with the Stop button: cancellation always wins.
 fn accept_rebake_result<T>(ctl: &BakeControl, result: Result<T, String>) -> Result<T, String> {
-    if ctl.cancel.load(Ordering::Acquire) {
-        Err(ERR_CANCEL.into())
-    } else {
-        result
-    }
+    if ctl.cancel.load(Ordering::Acquire) { Err(ERR_CANCEL.into()) } else { result }
 }
 
 fn rebake_panel(app: &mut App, ctx: &egui::Context) {
