@@ -27,6 +27,11 @@ pub fn port_arg(args: &[std::ffi::OsString]) -> Option<u16> {
     args.get(i + 1)?.to_str()?.parse().ok()
 }
 
+/// Melt 3D opens on SolidCraft's own screen unless a file was given (that is a melt design).
+pub fn starts_in_solidcraft(file: Option<&std::path::Path>) -> bool {
+    file.is_none()
+}
+
 /// The file to open: the first argument that is not an option.
 pub fn file_arg(args: &[std::ffi::OsString]) -> Option<std::path::PathBuf> {
     let mut it = args.iter().skip(1);
