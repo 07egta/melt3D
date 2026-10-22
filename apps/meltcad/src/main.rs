@@ -233,6 +233,11 @@ fn main() -> eframe::Result {
             // the GPU picture is the default every launch; the simple view is only a temporary choice
             app.attach_gpu(rs, &cc.egui_ctx, false);
             perf::mark("app created");
+            // Melt 3D opens on SolidCraft's own screen; "Melt 3D に戻る" goes to the melt view.
+            // A file given on the command line is a melt design, so that one starts in melt.
+            if control::file_arg(&all).is_none() {
+                app.open_precise(&cc.egui_ctx);
+            }
             Ok(Box::new(app))
         }),
     );
