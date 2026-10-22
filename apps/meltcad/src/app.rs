@@ -2624,6 +2624,21 @@ mod tests {
     }
 
     #[test]
+    fn launching_into_solidcraft_without_edits_closes_without_a_prompt() {
+        assert!(crate::control::starts_in_solidcraft(None));
+        assert!(!crate::control::starts_in_solidcraft(Some(std::path::Path::new("a.meltcad"))));
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        app.open_precise(&ctx);
+        assert!(app.precise_on);
+        let mut input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(960.0, 600.0))), ..Default::default() };
+        input.viewports.get_mut(&egui::ViewportId::ROOT).unwrap().events.push(egui::ViewportEvent::Close);
+        let mut output = ctx.run_ui(input, |ui| app.frame_body(ui));
+        output.textures_delta.clear();
+        assert!(!output.viewport_output.get(&egui::ViewportId::ROOT).is_some_and(|v| v.commands.contains(&egui::ViewportCommand::CancelClose)));
+    }
+
+    #[test]
     fn saving_before_reopening_the_current_file_keeps_the_saved_edit() {
         let path = std::env::temp_dir().join(format!("meltcad_reopen_guard_{}.meltcad", std::process::id()));
         std::fs::write(&path, Scene::default().to_json()).expect("initial file");
