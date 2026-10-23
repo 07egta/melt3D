@@ -4044,7 +4044,7 @@ fn nav_bar(app: &mut SolveApp, ui: &mut egui::Ui, rect: Rect) {
             "orbit",
             if app.preferences.nav == crate::prefs::TOUCHPAD_NAV {
                 crate::i18n::tr("nav.touchpad.orbit")
-            } else if app.preferences.nav == crate::prefs::OPENSCAD_NAV {
+            } else if crate::prefs::left_drag_orbits(&app.preferences.nav) {
                 "Orbit (left drag on empty space; Shift+left drag box-selects)"
             } else if app.preferences.free_orbit {
                 "Orbit (right drag)"

@@ -1,6 +1,7 @@
-//! Box selection in the viewport. Two kinds, like the usual CAD pair: "Inside" takes the shapes
-//! that sit completely inside the box, "Touching" takes every shape the box touches at all.
-//! Drag on empty space while a kind is on; Shift adds to what is selected; Esc ends it.
+//! Box selection in the viewport: a left drag that starts on empty space. The direction picks the
+//! kind, as in CAD: dragged to the right, "Inside" takes the shapes that sit completely inside the
+//! box (solid outline); dragged to the left, "Touching" takes every shape the box touches (dashed).
+//! As in Blender, Shift adds to what is selected and Ctrl takes away; Esc drops the box.
 
 use egui::{Color32, Painter, PointerButton, Pos2, Rect, Stroke, Ui};
 
@@ -15,6 +16,11 @@ pub enum Marquee {
     Inside,
     /// Every shape the box touches.
     Touching,
+}
+
+/// The kind of box a drag makes: to the right only what is inside, to the left what it touches.
+pub fn mode_of(from: Pos2, to: Pos2) -> Marquee {
+    if to.x >= from.x { Marquee::Inside } else { Marquee::Touching }
 }
 
 /// The eight corners of a shape's box in the world.
@@ -90,20 +96,15 @@ pub fn pick_in_box(app: &App, rect: Rect, area: Rect, mode: Marquee) -> Vec<(usi
 impl App {
     /// Run the box selection for this frame. True when it took the press (no orbit, no handles).
     pub fn marquee_input(&mut self, ui: &Ui, resp: &egui::Response, rect: Rect, free: bool, shift: bool) -> bool {
-        let Some(mode) = self.marquee else {
-            self.marquee_from = None;
-            return false;
-        };
-        if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-            self.marquee = None;
-            self.marquee_from = None;
-            return false;
-        }
         if self.sketch_active() || self.ct.drawing || self.pt.on {
             self.marquee_from = None;
             return false;
         }
-        if resp.drag_started_by(PointerButton::Primary) && free {
+        if self.marquee_from.is_some() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.marquee_from = None;
+            return true;
+        }
+        if resp.drag_started_by(PointerButton::Primary) && free && !ui.input(|i| i.modifiers.alt) {
             self.marquee_from = ui.input(|i| i.pointer.press_origin());
         }
         let Some(from) = self.marquee_from else { return false };
@@ -116,11 +117,14 @@ impl App {
         self.marquee_from = None;
         let area = Rect::from_two_pos(from, to);
         if area.width() > 3.0 || area.height() > 3.0 {
-            let found = pick_in_box(self, rect, area, mode);
-            let mut picks: Vec<Pick> = if shift { self.picks() } else { Vec::new() };
+            let found = pick_in_box(self, rect, area, mode_of(from, to));
+            let remove = ui.input(|i| i.modifiers.command || i.modifiers.ctrl);
+            let mut picks: Vec<Pick> = if shift || remove { self.picks() } else { Vec::new() };
             for (g, s) in found {
                 let p = crate::view::as_pick(g, s);
-                if !picks.contains(&p) {
+                if remove {
+                    picks.retain(|q| *q != p);
+                } else if !picks.contains(&p) {
                     picks.push(p);
                 }
             }
@@ -133,7 +137,8 @@ impl App {
 
     /// The box being dragged.
     pub fn marquee_paint(&self, painter: &Painter) {
-        let (Some(mode), Some(from)) = (self.marquee, self.marquee_from) else { return };
+        let Some(from) = self.marquee_from else { return };
+        let mode = mode_of(from, self.marquee_to);
         let r = Rect::from_two_pos(from, self.marquee_to);
         let col = match mode {
             Marquee::Inside => Color32::from_rgb(120, 170, 255),

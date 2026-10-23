@@ -13,6 +13,11 @@ use crate::icon_svg::{self, Look};
 
 #[path = "../../../assets/icons/ui/source/glyphs.rs"]
 pub(crate) mod glyphs;
+
+/// The SolidCraft logo centred on `c`, `height` points tall (a host app's button to SolidCraft).
+pub fn brand_logo(p: &Painter, c: egui::Pos2, height: f32) {
+    glyphs::brand_mark_sized(p, c, height);
+}
 #[path = "../../../assets/icons/ui/source/markers.rs"]
 pub(crate) mod markers;
 #[path = "../../../assets/icons/ui/source/navigation.rs"]

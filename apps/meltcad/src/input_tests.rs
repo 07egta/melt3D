@@ -226,7 +226,41 @@ fn a_node_of_a_freshly_traced_pipe_can_be_dragged_too() {
 }
 
 #[test]
-fn with_the_pipe_tool_still_on_a_press_on_a_node_moves_the_node_instead_of_tracing() {
+fn a_right_click_ends_the_pipe_tool() {
+    let mut r = Rig::new();
+    r.app.set_pipe_tool(true);
+    r.frame(vec![]);
+    let p = r.app.view_rect.center() + vec2(-120.0, 60.0);
+    r.mv(p);
+    r.frame(vec![Event::PointerButton { pos: p, button: PointerButton::Secondary, pressed: true, modifiers: r.mods }]);
+    r.frame(vec![Event::PointerButton { pos: p, button: PointerButton::Secondary, pressed: false, modifiers: r.mods }]);
+    r.frame(vec![]);
+    assert!(!r.app.pt.on, "right click stops the pipe tool");
+}
+
+#[test]
+fn a_left_drag_on_empty_space_box_selects_by_direction_and_never_turns_the_view() {
+    let mut r = Rig::new();
+    r.app.tool = crate::gizmo::Tool::Select;
+    r.app.scene.groups[0].shapes[0].pos = [0.0, 0.0, 20.0];
+    r.frame(vec![]);
+    let c = r.app.cam.project(r.app.view_rect, [0.0, 0.0, 20.0]).expect("shape on screen");
+    let cam = (r.app.cam.yaw, r.app.cam.pitch);
+    // to the left, a box that only touches the shape takes it
+    r.drag(c + vec2(30.0, -30.0), c + vec2(-5.0, 10.0));
+    assert_eq!((r.app.cam.yaw, r.app.cam.pitch), cam, "a left drag never turns the view");
+    assert_eq!(r.app.sel, Some(Pick::Shape(0, 0)), "dragged leftwards: touching is enough");
+    r.app.sel = None;
+    // to the right, the same small box is not enough: the shape must be wholly inside
+    r.drag(c + vec2(-5.0, -30.0), c + vec2(30.0, 10.0));
+    assert_eq!(r.app.sel, None, "dragged rightwards: only shapes completely inside");
+    // a big box to the right takes it
+    r.drag(c + vec2(-260.0, -260.0), c + vec2(260.0, 260.0));
+    assert_eq!(r.app.sel, Some(Pick::Shape(0, 0)));
+}
+
+#[test]
+fn one_drag_draws_one_pipe_then_the_tool_ends_and_its_nodes_can_be_moved() {
     let mut r = Rig::new();
     r.app.pt.on = true;
     let rect = r.app.view_rect;
@@ -247,11 +281,11 @@ fn with_the_pipe_tool_still_on_a_press_on_a_node_moves_the_node_instead_of_traci
     let mid = shape.path.len() / 2;
     let Some(Some(node)) = lay.nodes.get(mid).copied() else { panic!("node on screen") };
     let before = shape.path.get(mid).copied();
-    assert!(r.app.pt.on, "the tool is still on, as after a stroke");
+    assert!(!r.app.pt.on, "one drag, one pipe: the tool ended by itself");
     r.drag(node.c, node.c + vec2(0.0, -50.0));
     let after = r.app.scene.shape(g, s).and_then(|s| s.path.get(mid).copied());
     assert_eq!(r.app.scene.shape_count(), count, "no second pipe was traced");
-    assert_ne!(before, after, "the node must move even though the pipe tool is on (before {before:?}, after {after:?})");
+    assert_ne!(before, after, "the new pipe's node moves (before {before:?}, after {after:?})");
 }
 
 #[test]

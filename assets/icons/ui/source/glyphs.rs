@@ -103,6 +103,11 @@ pub(crate) fn brand_mark(p: &egui::Painter, c: Pos2) {
 }
 
 /// The same original mark as a single quiet silhouette, without face seams or outlines.
+/// The logo at any height, in the theme's logo colours (for a host app that links to SolidCraft).
+pub(crate) fn brand_mark_sized(p: &egui::Painter, c: Pos2, height: f32) {
+    brand_mark_styled(p, c, height, crate::theme::Tokens::get().logo, true);
+}
+
 pub(crate) fn brand_mark_silhouette(p: &egui::Painter, c: Pos2, height: f32, ink: Color32) {
     brand_mark_styled(p, c, height, [ink; 4], false);
 }

@@ -846,3 +846,11 @@ mod keys_tests {
         assert_eq!(keys_for("Save  Ctrl+S", false), "Save  Ctrl+S");
     }
 }
+
+/// The marker for "made in SolidCraft": SolidCraft's own logo, so no long word is needed.
+pub const SOLID_BADGE: &str = "\u{1}solidcraft";
+
+/// SolidCraft's logo in `rect` (its height sets the size).
+pub fn solidcraft_logo(p: &Painter, rect: Rect) {
+    solidcraft_ui_egui::icons::brand_logo(p, rect.center(), rect.height().min(rect.width() * 1.15));
+}
