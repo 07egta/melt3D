@@ -120,6 +120,15 @@ fn precise_viewport_ready(app: &App, ctx: &egui::Context, tex: &Textures) -> boo
 }
 
 fn check_precise_geometry(app: &App, which: &str, size: egui::Vec2) {
+    if which == "melt" {
+        // after the transfer SolidCraft starts fresh; the design now lives in the melt shape
+        assert!(app.precise.is_none(), "the sent design is not left behind in SolidCraft");
+        let shape = app.scene.groups.last().and_then(|g| g.shapes.first()).expect("the transferred solid");
+        let link = shape.solid.as_ref().expect("the melt shape keeps its SolidCraft design");
+        let doc = solidcraft_engine::io::read_design(link.design.as_bytes()).expect("the kept design reads back");
+        assert_eq!(doc.features.len(), 2, "the exact feature history stays with the shape");
+        return;
+    }
     let p = app.precise.as_ref().expect("the precise workspace remains open");
     if which != "melt" {
         let rect = p.app.viewport.rect.expect("the exact modeller viewport was laid out");
