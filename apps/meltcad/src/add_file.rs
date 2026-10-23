@@ -261,10 +261,8 @@ pub fn save_piece(scene: &mut Scene, gi: usize, path: &Path) -> Result<(), Strin
         }));
     }
     let mut inside = rebase(scene.groups.get(first..end).unwrap_or_default(), relative_depth);
-    if include_parent {
-        if let Some(parent) = inside.first_mut() {
-            parent.piece = None; // The exported file must not refer back to itself.
-        }
+    if include_parent && let Some(parent) = inside.first_mut() {
+        parent.piece = None; // The exported file must not refer back to itself.
     }
     groups.extend(inside);
     let mut anim = scene.anim.clone();

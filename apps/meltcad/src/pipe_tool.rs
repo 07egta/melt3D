@@ -433,8 +433,8 @@ pub fn glyph(p: &Painter, r: Rect, ink: Color32) {
     p.add(egui::Shape::line(shine, Stroke::new(fat * 0.28, ink)));
     // the pencil at the end of the tube, still drawing it
     let tip = path[path.len() - 1] + vec2(fat * 0.35, -fat * 0.35);
-    let d = vec2(0.7071, -0.7071);
-    let n = vec2(0.7071, 0.7071);
+    let d = vec2(std::f32::consts::FRAC_1_SQRT_2, -std::f32::consts::FRAC_1_SQRT_2);
+    let n = vec2(std::f32::consts::FRAC_1_SQRT_2, std::f32::consts::FRAC_1_SQRT_2);
     let w = side * 0.085;
     let l = side * 0.34;
     let body = vec![tip + d * (w * 1.3) + n * w, tip + d * l + n * w, tip + d * l - n * w, tip + d * (w * 1.3) - n * w];

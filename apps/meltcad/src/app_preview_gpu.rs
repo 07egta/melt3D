@@ -166,7 +166,7 @@ impl GpuPreview {
         let mut pixels = Vec::with_capacity((width * height) as usize);
         for y in 0..height as usize {
             let row = &mapped[y * padded_row_bytes as usize..y * padded_row_bytes as usize + row_bytes as usize];
-            pixels.extend(row.chunks_exact(4).map(|px| [px[0] as f32 / 255.0, px[1] as f32 / 255.0, px[2] as f32 / 255.0]));
+            pixels.extend(row.as_chunks::<4>().0.iter().map(|px| [px[0] as f32 / 255.0, px[1] as f32 / 255.0, px[2] as f32 / 255.0]));
         }
         drop(mapped);
         self.readback.unmap();

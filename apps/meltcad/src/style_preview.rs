@@ -64,7 +64,7 @@ pub(crate) fn raster(prims: &[egui::ClippedPrimitive], tex: &Textures, w: usize,
     for cp in prims {
         let Primitive::Mesh(mesh) = &cp.primitive else { continue };
         let clip = cp.clip_rect;
-        for t in mesh.indices.chunks_exact(3) {
+        for t in mesh.indices.as_chunks::<3>().0.iter() {
             let v = [mesh.vertices[t[0] as usize], mesh.vertices[t[1] as usize], mesh.vertices[t[2] as usize]];
             let p: Vec<(f32, f32)> = v.iter().map(|x| (x.pos.x * ppp, x.pos.y * ppp)).collect();
             let minx = p.iter().map(|q| q.0).fold(f32::MAX, f32::min).floor().max(clip.left() * ppp).max(0.0) as usize;

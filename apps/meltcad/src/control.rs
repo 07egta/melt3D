@@ -93,10 +93,10 @@ pub fn write_token(port: u16, token: &str) -> Result<std::path::PathBuf, String>
 
 fn write_token_at(path: &std::path::Path, token: &str) -> Result<(), String> {
     secure_token_parent(path)?;
-    if let Err(e) = std::fs::remove_file(path) {
-        if e.kind() != std::io::ErrorKind::NotFound {
-            return Err(format!("Cannot remove stale control token: {e}"));
-        }
+    if let Err(e) = std::fs::remove_file(path)
+        && e.kind() != std::io::ErrorKind::NotFound
+    {
+        return Err(format!("Cannot remove stale control token: {e}"));
     }
     write_token_to(path, token)
 }

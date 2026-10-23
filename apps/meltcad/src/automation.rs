@@ -149,7 +149,7 @@ fn run(scene: &mut Scene, cmd: &Value) -> Result<Value, String> {
                 if let Some(last) = scene.anim.key_frames().last().copied()
                     && last >= new_len
                 {
-                    return Err(format!("Poses exist up to frame {last}; delete them (anim.delete) before shortening the length to {new_len}").into());
+                    return Err(format!("Poses exist up to frame {last}; delete them (anim.delete) before shortening the length to {new_len}"));
                 }
                 scene.anim.length = new_len;
             }
