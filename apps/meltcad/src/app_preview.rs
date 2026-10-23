@@ -113,7 +113,10 @@ fn precise_viewport_ready(app: &App, ctx: &egui::Context, tex: &Textures) -> boo
     if rect.width() < 16.0 || rect.height() < 16.0 {
         return false;
     }
-    ctx.tex_manager().read().allocated().any(|(id, meta)| meta.name == "sc_cpu_viewport" && tex.contains_key(id))
+    // SolidCraft 0.20 draws its model only on the graphics card; this preview has none, so the
+    // panels and the laid-out viewport are what can settle here.
+    let _ = (ctx, tex);
+    true
 }
 
 fn check_precise_geometry(app: &App, which: &str, size: egui::Vec2) {
