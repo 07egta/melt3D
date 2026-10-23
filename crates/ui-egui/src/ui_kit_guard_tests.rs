@@ -106,6 +106,10 @@ fn all_ui_and_apps_use_ui_kit_controls() {
     fn scan(dir: &Path, prefix: &str, failures: &mut Vec<String>) {
         for entry in std::fs::read_dir(dir).unwrap() {
             let path = entry.unwrap().path();
+            // Melt 3D (apps/meltcad) is its own app with its own look; it is not built from the kit.
+            if path.file_name().is_some_and(|n| n == "meltcad") {
+                continue;
+            }
             let name = path.file_name().unwrap().to_str().unwrap();
             let relative = format!("{prefix}{name}");
             if path.is_dir() {
@@ -361,6 +365,10 @@ fn all_ui_and_apps_use_the_one_kit_slider_and_numeric_fields() {
     fn scan(dir: &Path, kit: &Path, failures: &mut Vec<String>, constructors: &mut usize) {
         for entry in std::fs::read_dir(dir).unwrap() {
             let path = entry.unwrap().path();
+            // Melt 3D (apps/meltcad) is its own app with its own look; it is not built from the kit.
+            if path.file_name().is_some_and(|n| n == "meltcad") {
+                continue;
+            }
             if path.is_dir() {
                 scan(&path, kit, failures, constructors);
             } else if path.extension().is_some_and(|e| e == "rs") {
@@ -535,6 +543,10 @@ fn all_ui_and_apps_use_kit_checkboxes_and_the_single_check_glyph() {
     fn scan(dir: &Path, kit: &Path, failures: &mut Vec<String>) {
         for entry in std::fs::read_dir(dir).unwrap() {
             let path = entry.unwrap().path();
+            // Melt 3D (apps/meltcad) is its own app with its own look; it is not built from the kit.
+            if path.file_name().is_some_and(|n| n == "meltcad") {
+                continue;
+            }
             if path == kit {
                 continue;
             }
@@ -756,6 +768,10 @@ fn all_disclosures_use_the_one_kit_chevron_without_allowances() {
     fn scan(dir: &Path, kit: &Path, failures: &mut Vec<String>, definitions: &mut usize) {
         for entry in std::fs::read_dir(dir).unwrap() {
             let path = entry.unwrap().path();
+            // Melt 3D (apps/meltcad) is its own app with its own look; it is not built from the kit.
+            if path.file_name().is_some_and(|n| n == "meltcad") {
+                continue;
+            }
             if path.is_dir() {
                 scan(&path, kit, failures, definitions);
             } else if path.extension().is_some_and(|e| e == "rs") {
@@ -871,6 +887,10 @@ fn system_windows_and_prompts_only_use_kit_frames_without_allowances() {
     fn scan(dir: &Path, failures: &mut Vec<String>) {
         for entry in std::fs::read_dir(dir).unwrap() {
             let path = entry.unwrap().path();
+            // Melt 3D (apps/meltcad) is its own app with its own look; it is not built from the kit.
+            if path.file_name().is_some_and(|n| n == "meltcad") {
+                continue;
+            }
             if path.is_dir() {
                 if path.file_name().is_none_or(|n| n != "ui_kit") {
                     scan(&path, failures);

@@ -1076,6 +1076,7 @@
   "motion.track_name": "Spur {number}",
   "nav.alias.help": "Umschalt+Alt+Linksziehen dreht, Umschalt+Alt+Mitte verschiebt, Umschalt+Alt+Rechtsziehen zoomt; mittleres Ziehen verschiebt ebenfalls und rechtes Ziehen dreht",
   "nav.blender.help": "Mittlere Maustaste dreht, Umschalt+Mitte verschiebt, Strg+Mitte zoomt; rechtes Ziehen lässt die Kamera unverändert",
+  "nav.melt3d.help": "Mittlere Maustaste dreht, Umschalt+Mitte oder rechtes Ziehen verschiebt, Strg+Mitte zoomt; linkes Ziehen wählt per Rahmen aus",
   "nav.free_orbit.help": "Maus und 3D-Maus drehen über beide Pole hinweg und behalten die Rollneigung bei. Das Einrasten mit Umschalt ist deaktiviert.",
   "nav.free_orbit.label": "Freie Drehung",
   "nav.fusion.help": "Mittlere Maustaste verschiebt, Umschalt+Mitte dreht, rechte Maustaste dreht",

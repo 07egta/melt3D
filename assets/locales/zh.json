@@ -1129,6 +1129,7 @@
   "motion.track_name": "轨道 {number}",
   "nav.alias.help": "Shift+Alt+左键拖动旋转，Shift+Alt+中键拖动平移，Shift+Alt+右键拖动缩放；中键拖动也可平移，右键拖动旋转",
   "nav.blender.help": "中键拖动旋转，Shift+中键拖动平移，Ctrl+中键拖动缩放；右键拖动不会移动相机",
+  "nav.melt3d.help": "中键拖动旋转，Shift+中键或右键拖动平移，Ctrl+中键拖动缩放；左键拖动框选",
   "nav.free_orbit.help": "鼠标和3D鼠标可保持滚转并越过两个极点旋转。Shift轴吸附将被禁用。",
   "nav.free_orbit.label": "自由旋转",
   "nav.fusion.help": "中键拖动平移，Shift+中键拖动旋转，右键拖动旋转",
