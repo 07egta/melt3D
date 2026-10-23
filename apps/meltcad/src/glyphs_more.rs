@@ -317,18 +317,45 @@ pub fn kind_more(p: &Painter, rect: Rect, k: Kind, ink: Color32, fill: Color32) 
 
 /// Melt: two round blobs joined by a smooth neck.
 pub fn melt(p: &Painter, rect: Rect, ink: Color32) {
-    let f = Rect::from_center_size(rect.center(), egui::Vec2::splat(rect.width().min(rect.height()) * 0.8));
-    let at = |u: f32, v: f32| Pos2::new(f.left() + f.width() * u, f.top() + f.height() * v);
-    let s = Stroke::new((rect.width() * 0.075).clamp(1.2, 2.2), ink);
-    p.circle_filled(at(0.28, 0.42), f.width() * 0.2, ink.gamma_multiply(0.22));
-    p.circle_filled(at(0.72, 0.42), f.width() * 0.2, ink.gamma_multiply(0.22));
-    p.circle_stroke(at(0.28, 0.42), f.width() * 0.2, s);
-    p.circle_stroke(at(0.72, 0.42), f.width() * 0.2, s);
-    // the neck and a drip
-    p.line_segment([at(0.44, 0.34), at(0.56, 0.34)], s);
-    p.line_segment([at(0.44, 0.5), at(0.56, 0.5)], s);
-    p.circle_filled(at(0.5, 0.82), f.width() * 0.07, ink);
-    p.line_segment([at(0.5, 0.62), at(0.5, 0.76)], s);
+    // What it does: the picked shapes flow into one smooth piece. So: two balls with a soft neck
+    // between them, the outline of two blobs melting together.
+    let side = rect.width().min(rect.height()) * 0.92;
+    let c = rect.center();
+    let (a, b) = (c + egui::vec2(-side * 0.2, side * 0.04), c + egui::vec2(side * 0.22, -side * 0.04));
+    let (ra, rb) = (side * 0.23, side * 0.19);
+    let field = |q: Pos2| ra * ra / (q - a).length_sq().max(1e-4) + rb * rb / (q - b).length_sq().max(1e-4);
+    let mid = Pos2::new((a.x + b.x) * 0.5, (a.y + b.y) * 0.5);
+    let outline: Vec<Pos2> = (0..72)
+        .map(|i| {
+            let ang = std::f32::consts::TAU * i as f32 / 72.0;
+            let dir = egui::vec2(ang.cos(), ang.sin());
+            // the edge is where the field drops to 1: step out, then halve the step back and forth
+            let (mut lo, mut hi) = (0.0_f32, side);
+            for _ in 0..18 {
+                let m = (lo + hi) * 0.5;
+                if field(mid + dir * m) > 1.0 { lo = m } else { hi = m }
+            }
+            mid + dir * lo
+        })
+        .collect();
+    let mut mesh = Mesh::default();
+    mesh.colored_vertex(mid, ink.gamma_multiply(0.35));
+    for q in &outline {
+        mesh.colored_vertex(*q, ink.gamma_multiply(0.35));
+    }
+    let n = outline.len() as u32;
+    for i in 0..n {
+        mesh.add_triangle(0, 1 + i, 1 + (i + 1) % n);
+    }
+    p.add(Shape::mesh(mesh));
+    let mut closed = outline.clone();
+    if let Some(first) = outline.first() {
+        closed.push(*first);
+    }
+    p.add(Shape::line(closed, Stroke::new((side * 0.075).clamp(1.2, 2.2), ink)));
+    // a highlight on each ball: two round shapes, now one piece
+    p.circle_filled(a + egui::vec2(-ra * 0.35, -ra * 0.35), ra * 0.2, ink);
+    p.circle_filled(b + egui::vec2(-rb * 0.35, -rb * 0.35), rb * 0.2, ink);
 }
 
 /// Box select, inside only: a solid box with a shape fully inside it.

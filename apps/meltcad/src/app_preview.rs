@@ -117,6 +117,7 @@ fn precise_viewport_ready(app: &App) -> bool {
     if rect.width() < 16.0 || rect.height() < 16.0 {
         return false;
     }
+
     true
 }
 

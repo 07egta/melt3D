@@ -99,6 +99,7 @@ impl App {
                 return Err("今の操作を確定するか、取り消してから精密ソリッドを開いてください".into());
             }
             self.settle(ctx);
+            crate::fonts::ensure(ctx);
             if self.precise.is_none() {
                 self.precise = Some(Precise::new(self.gpu.rs.as_ref(), self.precise_services.take(), self.precise_prefs.as_deref()));
             }

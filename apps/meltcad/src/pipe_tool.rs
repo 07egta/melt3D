@@ -412,46 +412,34 @@ impl App {
 
 /// The icon of the pipe tool: a thin outline of a bent pipe with its open end showing the hole.
 pub fn glyph(p: &Painter, r: Rect, ink: Color32) {
-    let s = r.width().min(r.height()) * 0.8;
-    let f = Rect::from_center_size(r.center(), vec2(s, s));
+    // What the tool does: drag across the view and a fat, round tube follows the mouse. So: a thick
+    // round stroke (a tube, lit on top) drawn freehand, with the pencil still drawing it.
+    let side = r.width().min(r.height());
+    let f = Rect::from_center_size(r.center(), vec2(side, side));
     let at = |u: f32, v: f32| pos2(f.left() + f.width() * u, f.top() + f.height() * v);
-    let pen = Stroke::new((r.width() * 0.075).clamp(1.2, 2.6), ink);
-    // the centre line: along the bottom, a quarter-circle bend about (0.5, 0.56), then up
-    let (rad, half) = (0.24_f32, 0.085_f32);
-    let mut line: Vec<(f32, f32)> = vec![(0.10, 0.80), (0.50, 0.80)];
-    for i in 1..8 {
-        let a = std::f32::consts::FRAC_PI_2 * i as f32 / 8.0;
-        line.push((0.50 + rad * a.sin(), 0.56 + rad * a.cos()));
-    }
-    line.push((0.74, 0.56));
-    line.push((0.74, 0.14));
-    // offset both sides along the normals
-    let mut left = Vec::new();
-    let mut right = Vec::new();
-    for i in 0..line.len() {
-        let a = line[i.saturating_sub(1)];
-        let b = line[(i + 1).min(line.len() - 1)];
-        let (dx, dy) = (b.0 - a.0, b.1 - a.1);
-        let l = (dx * dx + dy * dy).sqrt().max(1e-6);
-        let (nx, ny) = (-dy / l, dx / l);
-        left.push(at(line[i].0 + nx * half, line[i].1 + ny * half));
-        right.push(at(line[i].0 - nx * half, line[i].1 - ny * half));
-    }
-    p.add(egui::Shape::line(left.clone(), pen));
-    p.add(egui::Shape::line(right.clone(), pen));
-    // the left end is cut straight; the top end is open, so its hole is an ellipse
-    if let (Some(a), Some(b)) = (left.first(), right.first()) {
-        p.line_segment([*a, *b], pen);
-    }
-    let top = at(0.74, 0.14);
-    let (rx, ry) = (f.width() * half, f.width() * half * 0.42);
-    let ring: Vec<Pos2> = (0..=20)
+    let path: Vec<Pos2> = (0..=20)
         .map(|i| {
-            let a = std::f32::consts::TAU * i as f32 / 20.0;
-            top + vec2(rx * a.cos(), ry * a.sin())
+            let t = i as f32 / 20.0;
+            at(0.10 + 0.56 * t, 0.70 - 0.30 * t + 0.12 * (t * std::f32::consts::TAU).sin())
         })
         .collect();
-    p.add(egui::Shape::line(ring, pen));
+    let fat = side * 0.22;
+    p.add(egui::Shape::line(path.clone(), Stroke::new(fat, ink.gamma_multiply(0.55))));
+    for e in [path[0], path[path.len() - 1]] {
+        p.circle_filled(e, fat * 0.5, ink.gamma_multiply(0.55));
+    }
+    // the shine along the top: it reads as round, a tube, not a flat line
+    let shine: Vec<Pos2> = path.iter().map(|q| *q + vec2(-fat * 0.12, -fat * 0.2)).collect();
+    p.add(egui::Shape::line(shine, Stroke::new(fat * 0.28, ink)));
+    // the pencil at the end of the tube, still drawing it
+    let tip = path[path.len() - 1] + vec2(fat * 0.35, -fat * 0.35);
+    let d = vec2(0.7071, -0.7071);
+    let n = vec2(0.7071, 0.7071);
+    let w = side * 0.085;
+    let l = side * 0.34;
+    let body = vec![tip + d * (w * 1.3) + n * w, tip + d * l + n * w, tip + d * l - n * w, tip + d * (w * 1.3) - n * w];
+    p.add(egui::Shape::convex_polygon(body, ink, Stroke::NONE));
+    p.add(egui::Shape::convex_polygon(vec![tip, tip + d * (w * 1.3) + n * w, tip + d * (w * 1.3) - n * w], ink.gamma_multiply(0.7), Stroke::NONE));
 }
 
 #[cfg(test)]

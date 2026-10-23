@@ -844,22 +844,23 @@ mod tests {
     fn the_outline_helpers_keep_it_valid() {
         let mut sc = Scene { groups: vec![], melt: Default::default(), env: Default::default(), saved: Vec::new(), anim: Default::default() };
         sc.groups.clear();
-        for (n, d) in [("a", 0), ("b", 1), ("c", 2), ("d", 0)] {
+        for (n, d) in [("a", 0), ("b", 1), ("c", 1), ("d", 0)] {
             sc.groups.push(group_of(n, d, vec![]));
         }
         assert_eq!(sc.subtree_end(0), 3);
-        assert_eq!(sc.parent_of(2), Some(1));
-        assert!(sc.indent_group(3), "d goes into a's last child group c? it goes under the group above");
+        assert_eq!(sc.parent_of(2), Some(0));
+        assert!(sc.indent_group(3), "d goes into the big group above it");
         sc.normalize_depths();
         let depths: Vec<u8> = sc.groups.iter().map(|g| g.depth).collect();
-        assert_eq!(depths, vec![0, 1, 2, 1]);
+        assert_eq!(depths, vec![0, 1, 1, 1]);
+        assert!(!sc.indent_group(3), "two levels at most: d cannot go one deeper");
         let at = sc.outdent_group(3);
         assert_eq!(at, Some(3));
         assert_eq!(sc.groups[3].depth, 0);
-        sc.remove_group(1);
+        sc.remove_group(0);
         let names: Vec<&str> = sc.groups.iter().map(|g| g.name.as_str()).collect();
-        assert_eq!(names, vec!["a", "c", "d"]);
-        assert_eq!(sc.groups[1].depth, 1, "c moved up one level with b gone");
+        assert_eq!(names, vec!["b", "c", "d"]);
+        assert_eq!(sc.groups.iter().map(|g| g.depth).collect::<Vec<_>>(), vec![0, 0, 0], "with the big group gone its groups move up");
         let mut bad = Scene { groups: vec![], melt: Default::default(), env: Default::default(), saved: Vec::new(), anim: Default::default() };
         bad.groups.clear();
         for d in [3, 3, 0, 2] {
