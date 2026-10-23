@@ -1129,6 +1129,7 @@
   "motion.track_name": "Track {number}",
   "nav.alias.help": "Shift+Alt+left drag orbits, Shift+Alt+middle pans, Shift+Alt+right zooms; middle drag also pans and right drag orbits",
   "nav.blender.help": "Middle drag orbits, Shift+middle pans, Ctrl+middle zooms; right drag leaves the camera alone",
+  "nav.melt3d.help": "Middle drag orbits, Shift+middle or right drag pans, Ctrl+middle zooms; left drag box-selects",
   "nav.free_orbit.help": "Mouse and 3D mouse rotate through both poles and preserve roll. Shift axis snapping is disabled.",
   "nav.free_orbit.label": "Free orbit",
   "nav.fusion.help": "Middle drag pans, Shift+middle orbits, right drag orbits",
