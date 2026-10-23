@@ -159,10 +159,10 @@ fn write_many_with(
         }
         for part in &parts {
             let _ = fs::remove_file(&part.stage);
-            if restore_failures.is_empty() {
-                if let Some(backup) = &part.backup {
-                    let _ = fs::remove_file(backup);
-                }
+            if restore_failures.is_empty()
+                && let Some(backup) = &part.backup
+            {
+                let _ = fs::remove_file(backup);
             }
         }
         if restore_failures.is_empty() {

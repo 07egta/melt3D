@@ -124,25 +124,8 @@ impl App {
 
     pub(crate) fn anim_bar(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
-        // a GIF being made
-        let mut finished = None;
-        if let Some(job) = &self.an.job {
-            ctx.request_repaint_after(std::time::Duration::from_millis(100));
-            match job.rx.try_recv() {
-                Ok(r) => finished = Some(r),
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                    finished = Some(Err("GIF worker stopped unexpectedly".to_owned()));
-                }
-                Err(std::sync::mpsc::TryRecvError::Empty) => {}
-            }
-        }
-        if let Some(r) = finished {
-            self.an.job = None;
-            match r {
-                Ok(p) => self.say(&ctx, format!("Saved {p}")),
-                Err(e) => self.say(&ctx, format!("GIF not saved: {e}")),
-            }
-        }
+        // a GIF being made: its end is noticed whether the timeline is open or not
+        self.poll_gif_job(&ctx);
 
         if !self.an.open {
             self.an.playing = false;

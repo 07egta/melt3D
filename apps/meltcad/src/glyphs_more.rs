@@ -358,27 +358,6 @@ pub fn melt(p: &Painter, rect: Rect, ink: Color32) {
     p.circle_filled(b + egui::vec2(-rb * 0.35, -rb * 0.35), rb * 0.2, ink);
 }
 
-/// Box select, inside only: a solid box with a shape fully inside it.
-pub fn box_inside(p: &Painter, rect: Rect, ink: Color32) {
-    let f = Rect::from_center_size(rect.center(), egui::Vec2::splat(rect.width().min(rect.height()) * 0.8));
-    let at = |u: f32, v: f32| Pos2::new(f.left() + f.width() * u, f.top() + f.height() * v);
-    let s = Stroke::new((rect.width() * 0.075).clamp(1.2, 2.2), ink);
-    p.rect_stroke(Rect::from_min_max(at(0.04, 0.12), at(0.96, 0.88)), 2.0, s, egui::StrokeKind::Inside);
-    p.rect_filled(Rect::from_min_max(at(0.3, 0.32), at(0.7, 0.68)), 2.0, ink.gamma_multiply(0.7));
-}
-
-/// Box select, touching: a dashed box that cuts through a shape.
-pub fn box_touching(p: &Painter, rect: Rect, ink: Color32) {
-    let f = Rect::from_center_size(rect.center(), egui::Vec2::splat(rect.width().min(rect.height()) * 0.8));
-    let at = |u: f32, v: f32| Pos2::new(f.left() + f.width() * u, f.top() + f.height() * v);
-    let s = Stroke::new((rect.width() * 0.075).clamp(1.2, 2.2), ink);
-    p.rect_filled(Rect::from_min_max(at(0.46, 0.36), at(0.96, 0.84)), 2.0, ink.gamma_multiply(0.7));
-    let (a, b, c, d) = (at(0.04, 0.12), at(0.7, 0.12), at(0.7, 0.62), at(0.04, 0.62));
-    for (u, v) in [(a, b), (b, c), (c, d), (d, a)] {
-        p.add(Shape::dashed_line(&[u, v], s, 3.0, 2.5));
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

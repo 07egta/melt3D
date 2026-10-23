@@ -503,7 +503,7 @@ pub fn parse_args(args: &[std::ffi::OsString]) -> Option<Args> {
 /// Handle `--bench`: None for other commands, Some(true) only when
 /// measurement and report persistence both succeeded.
 pub fn cli(args: &[std::ffi::OsString]) -> Option<bool> {
-    let Some(a) = parse_args(args) else { return None };
+    let a = parse_args(args)?;
     let sizes: &[[u32; 2]] = if a.quick { &SIZES[..1] } else { &SIZES };
     let frames = if a.quick { a.frames.min(3) } else { a.frames };
     let mut progress = |s: &str| eprintln!("[bench] {s}");

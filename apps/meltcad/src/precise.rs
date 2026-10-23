@@ -268,8 +268,10 @@ impl App {
     /// The solid that just came in (the selected shape) keeps its design. When it was an edit of an
     /// existing shape, that shape takes the new solid (where the person had moved it) instead.
     fn link_precise_solid(&mut self, design: Option<String>, edit: Option<u32>) {
-        let Some(Pick::Shape(gi, si)) = self.sel else { return };
-        let Some(new) = self.scene.shape(gi, si).cloned() else { return };
+        // the import puts the new solid alone in a new last group
+        let Some(gi) = self.scene.groups.len().checked_sub(1) else { return };
+        let si = 0;
+        let Some(new) = self.scene.shape(gi, si).filter(|s| s.kind == crate::model::Kind::Mesh && s.solid.is_none()).cloned() else { return };
         let link = design.map(|design| SolidLink { design, placed_at: new.pos });
         let target = edit.and_then(|uid| self.scene.shape_by_uid(uid)).filter(|&t| t != (gi, si));
         if let Some((tg, ts)) = target
