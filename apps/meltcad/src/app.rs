@@ -966,7 +966,7 @@ impl App {
         loose.dedup();
         // a group of groups gets a name that says so, numbered among the big groups
         let bigs = (0..n).filter(|&g| self.scene.groups.get(g + 1).is_some_and(|x| x.depth > self.scene.groups[g].depth)).count();
-        let mut parent = Group::new(format!("Big group {}", bigs + 1));
+        let mut parent = Group::new(format!("Parent Group {}", bigs + 1));
         let mut taken: Vec<Shape> = Vec::new();
         for (g, s) in loose.iter().rev() {
             if let Some(sh) = self.scene.groups.get_mut(*g).filter(|gr| *s < gr.shapes.len()).map(|gr| gr.shapes.remove(*s)) {
@@ -2683,7 +2683,7 @@ mod tests {
             if nested {
                 app.group_selected();
                 assert_eq!(app.scene.groups.len(), 3);
-                assert_eq!(app.scene.groups[0].name, "Big group 1", "a group of groups says what it is");
+                assert_eq!(app.scene.groups[0].name, "Parent Group 1", "a group of groups says what it is");
                 assert_eq!(app.scene.groups.iter().map(|g| g.depth).collect::<Vec<_>>(), vec![0, 1, 1]);
                 app.sel = Some(Pick::Group(1));
                 app.multi = vec![Pick::Group(2)];
