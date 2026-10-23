@@ -964,7 +964,9 @@ impl App {
             .collect();
         loose.sort_unstable();
         loose.dedup();
-        let mut parent = Group::new(format!("Group {}", n + 1));
+        // a group of groups gets a name that says so, numbered among the big groups
+        let bigs = (0..n).filter(|&g| self.scene.groups.get(g + 1).is_some_and(|x| x.depth > self.scene.groups[g].depth)).count();
+        let mut parent = Group::new(format!("Big group {}", bigs + 1));
         let mut taken: Vec<Shape> = Vec::new();
         for (g, s) in loose.iter().rev() {
             if let Some(sh) = self.scene.groups.get_mut(*g).filter(|gr| *s < gr.shapes.len()).map(|gr| gr.shapes.remove(*s)) {
@@ -1091,6 +1093,27 @@ impl App {
                 let idx = self.scene.move_subtree(g, idx, tdepth);
                 self.folded.clear();
                 self.sel = Some(Pick::Group(idx));
+            }
+        }
+    }
+
+    /// A row dropped onto the middle of a group's row: it goes inside that group.
+    pub fn move_layer_into(&mut self, from: Pick, into: usize) -> Result<(), &'static str> {
+        if !self.allow_scene_structure_change() {
+            return Err("Finish or cancel the active command first");
+        }
+        match from {
+            Pick::Shape(..) => {
+                self.move_layer(from, Pick::Group(into), true);
+                Ok(())
+            }
+            Pick::Group(g) => {
+                let at = self.scene.move_group_into(g, into).ok_or("A group cannot go inside itself, or more than 4 levels deep")?;
+                self.folded.clear();
+                self.multi.clear();
+                self.sel = Some(Pick::Group(at));
+                self.multi_for = self.sel;
+                Ok(())
             }
         }
     }
@@ -1920,13 +1943,18 @@ impl App {
                     ui.horizontal(|ui| {
                         ui.label(RichText::new(format!("{} shapes", self.scene.shape_count())).size(12.0).color(style::DIM));
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if style::pill_enabled(ui, "+ Group", false, !self.scene_structure_locked())
+                            let several = self.picks().len() > 1;
+                            if style::pill_enabled(ui, if several { "Group them" } else { "+ Group" }, false, !self.scene_structure_locked())
                                 .on_hover_text(style::keys(
-                                    "New empty group.\nTo nest: Shift+click several shapes or groups in the list, then press Ctrl+G",
+                                    "Nothing or one picked: a new empty group.\nSeveral picked (Shift+click): put them all in one new, bigger group (Ctrl+G).\nOr drag a group onto the middle of another group to put it inside",
                                 ))
                                 .clicked()
                             {
-                                self.add_group();
+                                if several {
+                                    self.group_selected();
+                                } else {
+                                    self.add_group();
+                                }
                             }
                         });
                     });
@@ -2629,11 +2657,45 @@ mod tests {
         let mut app = App::new(true, None);
         app.open_precise(&ctx);
         assert!(app.precise_on);
-        let mut input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(960.0, 600.0))), ..Default::default() };
+        let mut input =
+            egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(960.0, 600.0))), ..Default::default() };
         input.viewports.get_mut(&egui::ViewportId::ROOT).unwrap().events.push(egui::ViewportEvent::Close);
         let mut output = ctx.run_ui(input, |ui| app.frame_body(ui));
         output.textures_delta.clear();
         assert!(!output.viewport_output.get(&egui::ViewportId::ROOT).is_some_and(|v| v.commands.contains(&egui::ViewportCommand::CancelClose)));
+    }
+
+    #[test]
+    fn the_melt_button_melts_picked_groups_into_each_other_also_inside_a_big_group() {
+        let ball = |x: f32| Shape::new(Kind::Sphere, [x, 0.0, 0.0], crate::model::Material::default());
+        for nested in [false, true] {
+            let mut app = App::new(true, None);
+            let mut a = Group::new("A");
+            a.shapes = vec![ball(-14.0)];
+            let mut b = Group::new("B");
+            b.shapes = vec![ball(14.0)];
+            app.scene.groups = vec![a, b];
+            app.committed = app.scene.clone();
+            let gap = |app: &App| crate::sdf::Field::new(&app.scene).distance([0.0, 0.0, 0.0]);
+            app.sel = Some(Pick::Group(0));
+            app.multi = vec![Pick::Group(1)];
+            app.multi_for = app.sel;
+            if nested {
+                app.group_selected();
+                assert_eq!(app.scene.groups.len(), 3);
+                assert_eq!(app.scene.groups[0].name, "Big group 1", "a group of groups says what it is");
+                assert_eq!(app.scene.groups.iter().map(|g| g.depth).collect::<Vec<_>>(), vec![0, 1, 1]);
+                app.sel = Some(Pick::Group(1));
+                app.multi = vec![Pick::Group(2)];
+                app.multi_for = app.sel;
+            }
+            let hard = gap(&app);
+            app.toggle_melt_selected();
+            let melted = gap(&app);
+            assert!(melted < hard - 0.5, "nested {nested}: the two groups melt into each other ({melted} vs {hard})");
+            app.toggle_melt_selected();
+            assert!((gap(&app) - hard).abs() < 1e-3, "nested {nested}: pressing again takes the melt away");
+        }
     }
 
     #[test]
