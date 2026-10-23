@@ -94,7 +94,7 @@ impl Drag {
 }
 
 const RING_SEGS: usize = 56;
-const ARROW_PX: f32 = 78.0;
+pub(crate) const ARROW_PX: f32 = 78.0;
 // Hit distances are egui logical points, so physical click targets grow on high-DPI screens.
 const HANDLE_HIT_PX: f32 = 11.0;
 
@@ -616,7 +616,12 @@ impl App {
                     s.scale[i] = round(scale[i] * f, 0.05).clamp(0.01, 100.0);
                 }
                 Act::ScaleAll => {
-                    let f = ((delta.x - delta.y) / 160.0).exp();
+                    let f = if matches!(d.handle, Handle::Axis(_)) {
+                        // an arrow of several shapes: pull it out to grow, push it in to shrink
+                        (1.0 + delta.dot(d.screen_dir) / d.len_px).max(0.05)
+                    } else {
+                        ((delta.x - delta.y) / 160.0).exp()
+                    };
                     for (dst, src) in s.scale.iter_mut().zip(scale) {
                         *dst = round(src * f, 0.05).clamp(0.01, 100.0);
                     }

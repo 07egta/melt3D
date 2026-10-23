@@ -255,6 +255,54 @@ fn with_the_pipe_tool_still_on_a_press_on_a_node_moves_the_node_instead_of_traci
 }
 
 #[test]
+fn several_selected_shapes_grow_together_from_the_middle() {
+    for tool in [crate::gizmo::Tool::Scale, crate::gizmo::Tool::All] {
+        let mut r = Rig::new();
+        r.app.scene.groups[0].shapes[0].pos = [-30.0, 0.0, 20.0];
+        r.app.scene.groups[0].shapes.push(Shape::new(Kind::Box, [30.0, 0.0, 20.0], Material::default()));
+        r.app.sel = Some(Pick::Shape(0, 0));
+        r.app.multi = vec![Pick::Shape(0, 1)];
+        r.app.multi_for = r.app.sel;
+        r.app.tool = tool;
+        r.frame(vec![]);
+        let before: Vec<_> = (0..2).filter_map(|i| r.app.scene.shape(0, i).map(|s| (s.pos, s.scale))).collect();
+        let centre = r.app.cam.project(r.app.view_rect, [0.0, 0.0, 20.0]).expect("the middle of both");
+        r.drag(centre, centre + vec2(60.0, -60.0));
+        let after: Vec<_> = (0..2).filter_map(|i| r.app.scene.shape(0, i).map(|s| (s.pos, s.scale))).collect();
+        assert_ne!(before, after, "{tool:?}: dragging the middle handle of several shapes must change them");
+        for (b, a) in before.iter().zip(&after) {
+            assert!(a.1[0] > b.1[0], "{tool:?}: each shape grows");
+            assert!(a.0[0].abs() > b.0[0].abs(), "{tool:?}: and moves apart from the middle, so the group grows as a whole");
+        }
+    }
+}
+
+#[test]
+fn pulling_an_arrow_of_several_shapes_out_grows_them_and_in_shrinks_them() {
+    let mut r = Rig::new();
+    r.app.scene.groups[0].shapes[0].pos = [-30.0, 0.0, 20.0];
+    r.app.scene.groups[0].shapes.push(Shape::new(Kind::Box, [30.0, 0.0, 20.0], Material::default()));
+    r.app.sel = Some(Pick::Shape(0, 0));
+    r.app.multi = vec![Pick::Shape(0, 1)];
+    r.app.multi_for = r.app.sel;
+    r.app.tool = crate::gizmo::Tool::Scale;
+    r.frame(vec![]);
+    let rect = r.app.view_rect;
+    let c = r.app.cam.project(rect, [0.0, 0.0, 20.0]).expect("the middle");
+    let dir = (r.app.cam.project(rect, [10.0, 0.0, 20.0]).expect("along x") - c).normalized();
+    let end = c + dir * crate::gizmo::ARROW_PX;
+    let at = c + (end - c) * 0.8;
+    let out = (end - c).normalized() * 40.0;
+    let width = |r: &Rig| r.app.scene.shape(0, 0).map(|s| s.scale[0]).unwrap_or(0.0);
+    let w0 = width(&r);
+    r.drag(at, at + out);
+    assert!(width(&r) > w0, "pulling out grows");
+    r.app.undo();
+    r.drag(at, at - out * 0.5);
+    assert!(width(&r) < w0, "pushing in shrinks");
+}
+
+#[test]
 fn escape_during_handle_drag_restores_the_shape_and_clears_drag() {
     let mut r = Rig::new();
     r.app.tool = crate::gizmo::Tool::Scale;
