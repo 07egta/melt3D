@@ -2,11 +2,11 @@
 //! axis tags, the surface analysis colours and every colour an icon draws. These tests hold that
 //! the tokens equal what was drawn before, and that a new colour cannot skip them.
 
-use egui::{Color32, Pos2, Rect, vec2};
+use egui::Color32;
 use solidcraft_engine::render::Rgb;
 use solidcraft_engine::view::colors;
 
-use crate::theme::{IconColors, Tokens};
+use crate::theme::Tokens;
 
 fn rgb(c: Rgb) -> Color32 {
     Color32::from_rgb(c.0, c.1, c.2)
@@ -29,9 +29,7 @@ fn moved_colours_keep_the_values_they_were_drawn_with() {
         assert_eq!(t.analysis.access, [[0.20, 0.75, 0.30], [0.85, 0.22, 0.20]]);
         assert_eq!(t.analysis.curvature, [[0.15, 0.35, 0.95], [0.10, 0.80, 0.25], [0.90, 0.15, 0.10]]);
         assert!(!t.analysis.hatch);
-        assert_eq!(t.app_bar_icon, [Color32::from_rgb(225, 230, 238), Color32::from_rgb(120, 140, 170), Color32::from_rgb(120, 190, 255)]);
         assert_eq!(t.logo, [Color32::from_rgb(96, 158, 236), Color32::from_rgb(58, 136, 238), Color32::from_rgb(55, 108, 197), Color32::WHITE]);
-        assert_eq!(t.icons.glint, Color32::from_white_alpha(160));
         assert_eq!(t.icons.marker_halo, Color32::from_black_alpha(150));
         assert_eq!(t.icons.agent, Color32::from_rgb(168, 85, 247));
     }
@@ -56,103 +54,10 @@ fn analysis_colours_reach_the_shader_in_its_order() {
     assert_eq!(crate::gpu::analysis_colors(&striped)[32], 1.0);
 }
 
-/// Every name a `match` arm in the icon source draws.
-fn icon_names() -> Vec<&'static str> {
-    let src = include_str!("../../../assets/icons/ui/source/icons.rs");
-    let body = src.split("#[cfg(test)]").next().unwrap_or(src);
-    let mut names = Vec::new();
-    for line in body.lines() {
-        let line = line.trim_start();
-        if !line.starts_with('"') {
-            continue;
-        }
-        let Some((pattern, _)) = line.split_once("=>") else { continue };
-        let pattern = pattern.split(" if ").next().unwrap_or(pattern);
-        for part in pattern.split('|') {
-            let part = part.trim();
-            if part.len() > 2 && part.starts_with('"') && part.ends_with('"') {
-                names.push(&part[1..part.len() - 1]);
-            }
-        }
-    }
-    names.sort_unstable();
-    names.dedup();
-    names
-}
-
-/// Marker icon colours: every field its own colour, from `seed`.
-fn marker_icons(seed: u8) -> IconColors {
-    let c = |i: u8| Color32::from_rgb(seed, i, seed ^ i);
-    IconColors {
-        sheet: c(1),
-        sheet_2: c(2),
-        sheet_light: c(3),
-        sheet_line: c(4),
-        highlight: c(5),
-        glint: c(6),
-        folder: c(7),
-        plane: c(8),
-        fold: c(9),
-        stripe: c(10),
-        sky: c(11),
-        floor: c(12),
-        paint: [c(13), c(14), c(15)],
-        axes: [c(16), c(17), c(18)],
-        access: [c(19), c(20)],
-        draft: [c(21), c(22)],
-        curvature: [c(23), c(24), c(25)],
-        interference: c(26),
-        warning: c(27),
-        agent: c(28),
-        marker_halo: c(29),
-    }
-}
-
-/// The colours an icon draws (premultiplied `#RR_GG_BB_AA`, in drawing order).
-fn drawn_colours(name: &str, seed: u8) -> Vec<String> {
-    let ctx = egui::Context::default();
-    let input = egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(100.0, 100.0))), ..Default::default() };
-    let icons = marker_icons(seed);
-    let out = ctx.run_ui(input, |ui| {
-        let r = Rect::from_min_size(Pos2::ZERO, vec2(24.0, 24.0));
-        let ink = Color32::from_rgb(seed, 101, 1);
-        let fill = Color32::from_rgb(seed, 102, 2);
-        let accent = Color32::from_rgb(seed, 103, 3);
-        crate::icons::paint_with(ui.painter(), r, name, ink, fill, accent, &icons);
-    });
-    let text = format!("{:?}", out.shapes);
-    let b = text.as_bytes();
-    let mut colours = Vec::new();
-    for i in 0..b.len() {
-        let hex = |k: usize| b.get(i + k).is_some_and(u8::is_ascii_hexdigit);
-        if b[i] == b'#' && (1..=11).all(|k| if k % 3 == 0 { b.get(i + k) == Some(&b'_') } else { hex(k) }) {
-            colours.push(text[i..i + 12].to_string());
-        }
-    }
-    colours
-}
-
-/// "All icons past, present and future" follow the colour vision mode: an icon may draw only the
-/// colours its caller passes (ink, fill, accent) and the `IconColors` tokens, or colours made
-/// from them. Each icon is drawn twice with different marker colours; a colour that comes out the
-/// same both times was written into the icon, and a mode could not reach it.
-#[test]
-fn every_icon_draws_only_colours_a_mode_can_reach() {
-    let names = icon_names();
-    assert!(names.len() > 150, "icon names were not found in the icon source: {}", names.len());
-    let mut fixed = Vec::new();
-    for name in &names {
-        let (a, b) = (drawn_colours(name, 40), drawn_colours(name, 200));
-        assert_eq!(a.len(), b.len(), "{name}: the two drawings differ in shape");
-        for (x, y) in a.iter().zip(&b) {
-            if x == y && !x.ends_with("_00") {
-                fixed.push(format!("{name}: {x}"));
-            }
-        }
-    }
-    fixed.dedup();
-    assert!(fixed.is_empty(), "icons that draw a colour of their own: {fixed:?}");
-}
+// Icons no longer take their colours from the caller or from `IconColors`: the SVG masters name
+// palette roles (`assets/icons/ui/design/palette.toml`, light and dark, plus accents) that
+// `icon_svg` resolves. `icon_svg`'s own tests hold that every master parses and that only the
+// palette's colours exist, including its colour-vision variants.
 
 /// The most colour literals each UI file may hold, and why. None of them carries a meaning that a
 /// colour vision mode must change. A file with more fails here: make the new colour a token in
@@ -168,16 +73,12 @@ const ALLOWED_LITERALS: &[(&str, usize, &str)] = &[
     ("dialogs_library.rs", 1, "a library appearance's swatch: the colour is the fact"),
     ("dialogs_assembly.rs", 1, "the interference fill, shaded from its token"),
     ("dialogs_motion.rs", 1, "a white outline"),
-    ("documents.rs", 4, "white hover overlays on document tabs"),
-    ("frame.rs", 1, "the window shadow"),
     ("gizmo.rs", 2, "the gizmo's neutral grey ball"),
-    ("home.rs", 4, "white ink on accent buttons, and thumbnail tints"),
+    ("icons.rs", 1, "the white tint that carries an icon image's opacity"),
     ("ref_images.rs", 1, "a reference image's opacity tint"),
-    ("sketch_palette.rs", 1, "white text on the accent button"),
-    ("sketch_text.rs", 1, "white text on the selection chip"),
-    ("titlebar.rs", 4, "the window close button's red hover (the system's convention), white hovers and ink"),
-    ("toolbar.rs", 3, "white hover overlays and the version text"),
-    ("update.rs", 1, "text laid out only to measure its width, never drawn"),
+    ("theme_files.rs", 1, "a colour read from a theme file, which sets tokens"),
+    ("titlebar.rs", 2, "the window close button's red hover (the system's convention) and white ink"),
+    ("toolbar.rs", 1, "the version text"),
 ];
 
 const COLOUR_LITERALS: &[&str] = &[
@@ -216,22 +117,29 @@ fn colours_outside_the_theme_are_only_the_listed_neutral_ones() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let dirs = [root.join("src"), root.join("../../assets/icons/ui/source")];
     let mut found = Vec::new();
-    for dir in &dirs {
-        let entries = std::fs::read_dir(dir).unwrap_or_else(|e| panic!("{}: {e}", dir.display()));
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or_default().to_string();
-            if !name.ends_with(".rs") || name.ends_with("_tests.rs") || name == "theme.rs" {
+    fn scan(dir: &std::path::Path, prefix: &str, found: &mut Vec<String>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            let name = path.file_name().unwrap().to_str().unwrap();
+            let relative = format!("{prefix}{name}");
+            if path.is_dir() {
+                scan(&path, &format!("{relative}/"), found);
                 continue;
             }
-            let src = std::fs::read_to_string(&path).unwrap_or_default();
+            if !name.ends_with(".rs") || name.ends_with("_tests.rs") || matches!(name, "theme.rs" | "gallery.rs" | "test_support.rs") {
+                continue;
+            }
+            let src = std::fs::read_to_string(&path).unwrap();
             let code = src.split("#[cfg(test)]").next().unwrap_or(&src);
             let n: usize = COLOUR_LITERALS.iter().map(|p| code.matches(p).count()).sum();
-            let allowed = ALLOWED_LITERALS.iter().find(|(f, _, _)| *f == name).map_or(0, |(_, n, _)| *n);
+            let allowed = ALLOWED_LITERALS.iter().find(|(f, _, _)| *f == relative).map_or(0, |(_, n, _)| *n);
             if n > allowed {
-                found.push(format!("{name}: {n} colour literal(s), at most {allowed} allowed"));
+                found.push(format!("{relative}: {n} colour literal(s), at most {allowed} allowed"));
             }
         }
+    }
+    for dir in &dirs {
+        scan(dir, "", &mut found);
     }
     assert!(found.is_empty(), "colour literals outside theme::Tokens: {found:?}");
 }

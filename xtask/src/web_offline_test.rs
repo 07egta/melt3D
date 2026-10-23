@@ -2,9 +2,10 @@
 //!
 //! Serves six release builds, a site without the app and a development build at
 //! `/solidcraft/app/` (as on GitHub Pages, with its 10-minute HTTP caching) from a local server
-//! that can also act offline, flaky, hung or mid-deployment, plus another copy of the app at
+//! that can also act offline, flaky, hung or mid-deployment, or hold chosen responses until the
+//! test lets them go (nothing here depends on how fast the network or the machine is), plus another copy of the app at
 //! `/solidcraft/elsewhere/` on the same origin, and drives headless Chrome through the DevTools
-//! protocol through these steps (twenty-one page launches, which failures are numbered by):
+//! protocol through these steps (twenty-two page launches, which failures are numbered by):
 //!
 //! 1. online, build v1: the page loads, the service worker takes over and keeps every file;
 //! 2. offline: v1 starts from the kept copy;
@@ -14,18 +15,21 @@
 //!    page whose code can't be fetched);
 //! 5. the same for build v3: v1 starts, and v2's unfinished download is dropped (failed updates
 //!    don't pile up);
-//! 6. build v2 deployed again: its page fails at once while its other files are still coming:
-//!    v1 starts, and its download doesn't stay in progress (so it can be dropped);
+//! 6. build v2 deployed again: its page fails at once while its other files are held back:
+//!    v1 starts, and once they are let go its download doesn't stay in progress (so it can be
+//!    dropped);
 //! 7. v3's files download, but v4 is deployed meanwhile (its `index.html` comes): v1 starts, and
 //!    v3 isn't marked complete (a kept build never mixes deployments);
 //! 8. online: the first launch already gets v3 (resuming its download), and only v3 stays kept;
 //! 9. offline: v3 starts;
 //! 10. network hangs: after waiting for it a few seconds, v3 starts from the kept copy;
-//! 11. build v4 deployed, but the check for it is slow while v4's worker takes over (as when
-//!     another tab updates): the kept v3 starts and works, its copy retired but not deleted;
+//! 11. build v4 deployed, but the check for it is held back while v4's worker takes over (as
+//!     when another tab updates, which starts once the launch is waiting for the check): the kept
+//!     v3 starts and works, its copy retired but not deleted;
 //! 12. no open page uses the retired copies any more: a launch (v4) deletes them;
-//! 13. build v5's worker downloads slowly while a launch finds v6 deployed and downloads it:
-//!     v6 starts, v5's download isn't dropped from under its worker, then v6's worker takes over;
+//! 13. build v5's worker downloads, its files held back by the server, while a launch finds v6
+//!     deployed and downloads it: v6 starts, v5's download (let go afterwards) isn't dropped
+//!     from under its worker, then v6's worker takes over;
 //! 14. with no launch in between (a page left open), updates to v2 and then v3 both fail: the
 //!     second one's install drops the first's unfinished download;
 //! 15. the app removed (no `sw.js`, no `build.json`): the site's page starts, from the network;
@@ -33,7 +37,9 @@
 //! 17. offline: v6 still starts from the kept copy;
 //! 18. a development build (`trunk serve`) on the same origin: it starts (no `build.json`)
 //!     while the worker retires, dropping everything kept;
-//! 19. the development build starts, from the network, with no worker.
+//! 19. the development build starts, from the network, with no worker;
+//! 20. a sign-in in front of the app (everything redirects to another origin) while v6 is kept:
+//!     the launch shows the sign-in page, not the kept v6.
 //!
 //! The site is a small stand-in app (default) or a real web build (`--site dist/web`, after
 //! `trunk build --release`); a real build must hold the `sw.js` and `build.json` the generator
@@ -48,7 +54,8 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
@@ -58,12 +65,75 @@ use crate::web_offline;
 const PREFIX: &str = "/solidcraft/app/";
 /// Another copy of the app on the same origin.
 const ELSEWHERE: &str = "/solidcraft/elsewhere/";
-/// How long one launch may take (a real build compiles ~30 MB of wasm).
-const LAUNCH_TIMEOUT: Duration = Duration::from_secs(90);
+/// How long one launch may take (a real build compiles ~30 MB of wasm). Generous: the CI
+/// runners that take fork pull requests run several jobs per machine under gVisor, where one
+/// launch has taken over 90 s.
+const LAUNCH_TIMEOUT: Duration = Duration::from_secs(240);
 /// sw.js's NAVIGATE_TIMEOUT_MS, less a margin: a hung network is waited for at least this long.
 const SLOW_NETWORK_WAIT: Duration = Duration::from_secs(3);
-/// How long a file takes in Mode::SlowFiles.
-const SLOW_FILE: Duration = Duration::from_secs(6);
+/// Where Mode::SignIn redirects to (on `localhost`: another origin than the 127.0.0.1 app).
+const SIGN_IN: &str = "/sign-in";
+
+/// Exercise the real browser build's command bridge, using the same Chrome harness as the offline test.
+pub fn run_api(site: &str) -> Result<(), String> {
+    let site = std::fs::canonicalize(site).map_err(|e| format!("{site}: {e}; build apps/solidcraft-web with trunk first"))?;
+    if !site.join("index.html").is_file() {
+        return Err(format!("{}: index.html missing; build apps/solidcraft-web with trunk first", site.display()));
+    }
+    let chrome = find_chrome().ok_or("web-api-test: Chrome not found (set CHROME to its executable)")?;
+    let work = TempDir::new()?;
+    let server = Server::start(site.clone())?;
+    server.set(Mode::Serve(site));
+    let browser = Chrome::launch(&chrome, &work.0.join("profile"))?;
+    let mut cdp = browser.connect()?;
+    cdp.call("Emulation.setDeviceMetricsOverride", json!({"width": 1280, "height": 900, "deviceScaleFactor": 1, "mobile": false}))?;
+    cdp.call("Page.navigate", json!({"url": format!("http://127.0.0.1:{}{PREFIX}?webgl", server.port)}))?;
+    wait_for(&mut cdp, "!!window.solidcraft && !document.getElementById('solidcraft_loading')", "the browser API is ready", |v| v == true)?;
+    let result = cdp.eval(API_TEST)?;
+    println!("web-api-test: {result}");
+    Ok(())
+}
+
+const API_TEST: &str = r#"(async () => {
+    const app = window.solidcraft;
+    const check = (condition, message) => { if (!condition) throw new Error(message); };
+    const rejects = async (call, message) => {
+        try { await call(); } catch (error) {
+            check(error instanceof Error, 'rejections must be Error objects');
+            check(error.message.includes(message), error.message);
+            return;
+        }
+        throw new Error('expected rejection: ' + message);
+    };
+    const commands = await app.commands();
+    check(JSON.stringify(commands).includes('solid.box'), 'command discovery');
+    await app.request('ui.home', {open: false});
+    const before = await app.inspect();
+    check(before.bodies.length === 0, 'test starts with an empty design');
+    await app.execute('solid.box', {length: 30, width: 20, height: 10, body_name: 'Browser API box'});
+    const after = await app.inspect({measure: true});
+    check(after.bodies.length === 1, 'box appears in the active document');
+    check(Math.abs(after.bodies[0].volume_mm3 - 6000) < 0.001, 'box volume is 6000 mm³');
+    await app.execute('edit.undo');
+    check((await app.inspect()).bodies.length === 0, 'undo removes the box');
+    await app.execute('edit.redo', null);
+    check((await app.inspect()).bodies.length === 1, 'redo restores the box');
+    await rejects(() => app.request('missing.browser.method'), 'unknown');
+    await rejects(() => app.execute('missing.browser.command'), 'unknown');
+    const circular = {}; circular.self = circular;
+    await rejects(() => app.request('ui.inspect', circular), 'JSON serializable');
+    await rejects(() => app.request('ui.inspect', {value: 1n}), 'JSON serializable');
+    await rejects(() => app.request('ui.inspect', {text: 'x'.repeat(16 * 1024 * 1024)}), '16 MiB');
+    const queued = Array.from({length: 257}, () => app.request('ui.inspect'));
+    const settled = await Promise.allSettled(queued);
+    check(settled.filter(r => r.status === 'fulfilled').length === 256, 'queued requests drain across frames');
+    check(settled.filter(r => r.status === 'rejected' && r.reason instanceof Error && r.reason.message.includes('pending')).length === 1,
+        'queue limit rejects excess work');
+    check((await app.inspect()).bodies.length === 1, 'API still works after rejected requests');
+    const ui = await app.request('ui.inspect');
+    check(ui.home === false && ui.viewport[2] > 600, 'model viewport is visible');
+    return {commands: 'discovered', bodies: [0, 1, 0, 1], errors: 'rejected', queue: '256 completed, 1 rejected'};
+})()"#;
 
 /// Run the test; `required: false` (from `cargo xtask ci`) skips it when Chrome is missing.
 pub fn run(root: &Path, site: Option<&str>, required: bool) -> Result<(), String> {
@@ -127,15 +197,24 @@ pub fn run(root: &Path, site: Option<&str>, required: bool) -> Result<(), String
         let n = count.get() + 1;
         count.set(n);
         let t = Instant::now();
-        let r = cdp.call("Page.navigate", json!({ "url": format!("http://127.0.0.1:{}{at}?launch={n}", server.port) }))?;
-        if let Some(e) = r["errorText"].as_str().filter(|e| !e.is_empty()) {
-            return Err(format!("launch {n} (build {build}): the page didn't load: {e}"));
-        }
         let search = format!("?launch={n}");
-        wait_for(cdp, &state_js, &format!("launch {n} starts build {build}"), |s| {
-            s["search"] == search.as_str() && s["ready"] == "complete" && s["build"] == build && s["started"] == true
-        })?;
-        Ok(t.elapsed())
+        let what = format!("launch {n} starts build {build}");
+        // One retry: on a heavily loaded machine a launch can stall past the timeout. Loading the
+        // same page again must still start the same build.
+        for attempt in 1..=2 {
+            let r = cdp.call("Page.navigate", json!({ "url": format!("http://127.0.0.1:{}{at}?launch={n}", server.port) }))?;
+            if let Some(e) = r["errorText"].as_str().filter(|e| !e.is_empty()) {
+                return Err(format!("launch {n} (build {build}): the page didn't load: {e}"));
+            }
+            match wait_for(cdp, &state_js, &what, |s| {
+                s["search"] == search.as_str() && s["ready"] == "complete" && s["build"] == build && s["started"] == true
+            }) {
+                Ok(()) => return Ok(t.elapsed()),
+                Err(e) if attempt == 1 => println!("retry {e}"),
+                Err(e) => return Err(e),
+            }
+        }
+        unreachable!()
     };
     let launch = |cdp: &mut Cdp, build: &str| launch_at(cdp, PREFIX, build);
     // The page is controlled by the worker, which keeps exactly this build's files (and the mark
@@ -174,11 +253,14 @@ pub fn run(root: &Path, site: Option<&str>, required: bool) -> Result<(), String
     })?;
     step("flaky again: build v3 neither, so v1 starts; v2's unfinished download is dropped", t);
 
+    let name2_ = cache_name(PREFIX, &kept.get(1).map(|(v, _)| v.clone()).unwrap_or_default());
+    let asked = server.slow.load(Ordering::SeqCst);
     server.set(Mode::FailFast(v2.clone()));
     let t = launch(&mut cdp, "v1")?;
-    // Past the time the slow files would have arrived.
-    std::thread::sleep(SLOW_FILE + Duration::from_secs(1));
-    wait_for(&mut cdp, &state_js, "no download is left marked in progress", |s| s["filling"] == json!([]))?;
+    // The other files of v2 are asked for (and held) around the page's failure; let them go.
+    server.wait_asked_slowly(asked + kept.get(1).map_or(0, |(_, n)| n.saturating_sub(1)))?;
+    server.release();
+    wait_for(&mut cdp, &state_js, "no download is left marked in progress", |s| s["caches"].get(&name2_).is_some() && s["filling"] == json!([]))?;
     step("one file fails at once, others are still coming: v1 starts; v2's isn't left in progress", t);
 
     server.set(Mode::Mixed(v3.clone(), v4.clone()));
@@ -220,14 +302,28 @@ pub fn run(root: &Path, site: Option<&str>, required: bool) -> Result<(), String
     server.set(Mode::SlowCheck(v4.clone()));
     cdp.call("Network.clearBrowserCache", json!({}))?;
     other.eval(age)?;
-    other.eval(
-        "navigator.serviceWorker.getRegistration().then((r) => {
-          setTimeout(() => { r.update(); location.replace('about:blank'); }, 1000);
-          return true;
-        })",
-    )?;
     cdp.call("Page.navigate", json!({ "url": "about:blank" }))?;
+    // The other tab updates once the launch is waiting for build.json, and leaves.
+    let waiting = server.checks.clone();
+    let before = waiting.load(Ordering::SeqCst);
+    let updater = std::thread::spawn(move || -> Result<Cdp, String> {
+        let t = Instant::now();
+        while waiting.load(Ordering::SeqCst) <= before {
+            if t.elapsed() > LAUNCH_TIMEOUT {
+                return Err("the launch never asked for build.json".into());
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        other.eval(
+            "navigator.serviceWorker.getRegistration().then((r) => {
+              setTimeout(() => { r.update(); location.replace('about:blank'); }, 0);
+              return true;
+            })",
+        )?;
+        Ok(other)
+    });
     let t = launch(&mut cdp, "v3")?;
+    let mut other = updater.join().map_err(|_| "the updating tab panicked".to_string())??;
     let [name3, name4] = [2, 3].map(|i| kept.get(i).map(|(v, _)| cache_name(PREFIX, v)).unwrap_or_default());
     wait_for(&mut cdp, &state_js, "v4's worker keeps v4, v3's copy retired", |s| {
         s["kept"].as_object().is_some_and(|k| k.len() == 1 && k.contains_key(&name4))
@@ -247,11 +343,18 @@ pub fn run(root: &Path, site: Option<&str>, required: bool) -> Result<(), String
     // v5's worker installs, its files coming slowly; meanwhile v6 is deployed and launched.
     let update = "navigator.serviceWorker.getRegistration().then((r) => { r.update(); return true; })";
     let name5 = kept.get(4).map(|(v, _)| cache_name(PREFIX, v)).unwrap_or_default();
-    server.set(Mode::SlowFiles(v5));
+    let asked = server.slow.load(Ordering::SeqCst);
+    server.set(Mode::SlowFiles(v5.clone(), v6.clone()));
     cdp.eval(update)?;
     wait_for(&mut cdp, &state_js, "v5's worker starts downloading", |s| s["caches"].get(&name5).is_some())?;
+    // Chrome sends a server at most six requests at once: a build with more files has the rest
+    // wait for the first ones. v6 is deployed once all of v5's are asked for (any asked later
+    // would get v6's file, which rightly ends v5's download, but that isn't this step).
+    server.wait_asked_slowly(asked + only_in(&v5, &v6)?)?;
     server.set(Mode::Serve(v6));
+    // v5's files are still held while v6 launches; they come once v6 has started.
     let t = launch(&mut cdp, "v6")?;
+    server.release();
     wait_for(&mut cdp, &state_js, "v5's download is finished, not dropped", |s| s["complete"].as_array().is_some_and(|c| c.contains(&json!(name5))))?;
     cdp.eval(update)?;
     wait_for(&mut cdp, &state_js, "the worker keeps build v6", keeps(5))?;
@@ -278,6 +381,16 @@ pub fn run(root: &Path, site: Option<&str>, required: bool) -> Result<(), String
     step("nothing deployed (every file 404): v6 starts from the kept copy", launch(&mut cdp, "v6")?);
     server.set(Mode::Refuse);
     step("offline: build v6 still starts from the kept copy", launch(&mut cdp, "v6")?);
+
+    // In a tab of its own: in the tab that was redirected, Chrome skipped the next launch's check
+    // for a new worker (the development build's step below needs it).
+    server.set(Mode::SignIn);
+    let t = Instant::now();
+    let mut tab = browser.new_tab()?;
+    tab.call("Page.navigate", json!({ "url": format!("http://127.0.0.1:{}{PREFIX}", server.port) }))?;
+    wait_for(&mut tab, "location.pathname", "the sign-in page is shown", |p| p == SIGN_IN)?;
+    tab.call("Page.close", json!({}))?;
+    step("sign-in in front of the app: the launch shows the sign-in, not the kept v6", t.elapsed());
 
     server.set(Mode::Serve(dev));
     let t = launch(&mut cdp, "dev")?;
@@ -315,6 +428,15 @@ const STATE_JS: &str = "(async () => {
 })()";
 
 /// The worker's cache for a build of the copy at `path` (sw.js's CACHE_PREFIX + version).
+/// How many files `build` keeps that `other` doesn't have.
+fn only_in(build: &Path, other: &Path) -> Result<usize, String> {
+    let path = build.join("build.json");
+    let json: Value =
+        std::fs::read(&path).ok().and_then(|b| serde_json::from_slice(&b).ok()).ok_or_else(|| format!("{}: not readable", path.display()))?;
+    let files = json["files"].as_array().into_iter().flatten().filter_map(|f| f["file"].as_str());
+    Ok(files.filter(|f| !other.join(f).exists()).count())
+}
+
 fn cache_name(path: &str, version: &str) -> String {
     format!("solidcraft-app {path} {version}")
 }
@@ -428,17 +550,58 @@ enum Mode {
     Mixed(PathBuf, PathBuf),
     /// The network hangs: connections stay open, unanswered (until the mode changes).
     Hang,
-    /// Online, serving this build, but `build.json` hangs (until the mode changes).
+    /// Online, serving this build, but `build.json` hangs (until the mode changes), and `sw.js`
+    /// waits for the first `build.json` request: the browser's own check for a new worker, which
+    /// a navigation makes, must not install it before the launch is waiting for `build.json`.
     SlowCheck(PathBuf),
-    /// Online, serving this build, but its files (not `build.json`, `sw.js`) take SLOW_FILE.
-    SlowFiles(PathBuf),
-    /// Like SlowFiles, but `index.html` fails at once.
+    /// Online, serving this build, but its files (not `build.json`, `sw.js`) that the second build
+    /// lacks are held until `Server::release`. A file both builds have (`index.html`, a name that
+    /// no build changes) is served: the browser would make a request for the second build's copy
+    /// wait for the held one, and the launch of the second build must not depend on the first.
+    SlowFiles(PathBuf, PathBuf),
+    /// Like SlowFiles, but `index.html` fails at once (and isn't counted as asked for).
     FailFast(PathBuf),
+    /// A sign-in in front of the app (an expired session): every request is redirected to
+    /// SIGN_IN on another origin.
+    SignIn,
 }
 
 struct Server {
     port: u16,
     mode: Arc<Mutex<Mode>>,
+    /// How many files were asked for in Mode::SlowFiles.
+    slow: Arc<AtomicUsize>,
+    /// How many `build.json` requests were held in Mode::SlowCheck.
+    checks: Arc<AtomicUsize>,
+    /// Closed by Mode::SlowFiles, Mode::FailFast and Mode::SlowCheck: their held files wait until it opens
+    /// (`Server::release`, or the first held `build.json`).
+    gate: Arc<Gate>,
+}
+
+/// Responses wait here while it is closed.
+struct Gate {
+    open: Mutex<bool>,
+    changed: Condvar,
+}
+
+impl Gate {
+    fn set(&self, open: bool) {
+        if let Ok(mut o) = self.open.lock() {
+            *o = open;
+            self.changed.notify_all();
+        }
+    }
+
+    fn pass(&self) {
+        if let Ok(mut o) = self.open.lock() {
+            while !*o {
+                match self.changed.wait(o) {
+                    Ok(g) => o = g,
+                    Err(_) => return,
+                }
+            }
+        }
+    }
 }
 
 impl Server {
@@ -447,50 +610,94 @@ impl Server {
         let listener = TcpListener::bind("127.0.0.1:0").map_err(|e| format!("server: {e}"))?;
         let port = listener.local_addr().map_err(|e| format!("server: {e}"))?.port();
         let mode = Arc::new(Mutex::new(Mode::Refuse));
-        let shared = mode.clone();
+        let slow = Arc::new(AtomicUsize::new(0));
+        let checks = Arc::new(AtomicUsize::new(0));
+        let gate = Arc::new(Gate { open: Mutex::new(true), changed: Condvar::new() });
+        let (shared, asked, held, door) = (mode.clone(), slow.clone(), checks.clone(), gate.clone());
         std::thread::spawn(move || {
             for stream in listener.incoming().flatten() {
-                let (shared, elsewhere) = (shared.clone(), elsewhere.clone());
-                std::thread::spawn(move || answer(stream, &shared, &elsewhere));
+                let (shared, asked, held, door, elsewhere) = (shared.clone(), asked.clone(), held.clone(), door.clone(), elsewhere.clone());
+                std::thread::spawn(move || answer(stream, &shared, &Counters { slow: &asked, checks: &held, gate: &door }, &elsewhere));
             }
         });
-        Ok(Server { port, mode })
+        Ok(Server { port, mode, slow, checks, gate })
+    }
+
+    /// Wait until `n` files in all were asked for in Mode::SlowFiles.
+    fn wait_asked_slowly(&self, n: usize) -> Result<(), String> {
+        let t = Instant::now();
+        while t.elapsed() < LAUNCH_TIMEOUT {
+            if self.slow.load(Ordering::SeqCst) >= n {
+                return Ok(());
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        Err(format!("only {} of {n} slow files were asked for", self.slow.load(Ordering::SeqCst)))
+    }
+
+    /// Let go of the files held back in Mode::SlowFiles and Mode::FailFast.
+    fn release(&self) {
+        self.gate.set(true);
     }
 
     fn set(&self, mode: Mode) {
+        if matches!(mode, Mode::SlowFiles(..) | Mode::FailFast(_) | Mode::SlowCheck(_)) {
+            self.gate.set(false);
+        }
         if let Ok(mut m) = self.mode.lock() {
             *m = mode;
         }
     }
 }
 
-/// Hold a connection while the server's mode stays as it was (at most 20 s).
+/// Hold a connection while the server's mode stays as it was.
 fn hold(shared: &Mutex<Mode>, still: impl Fn(&Mode) -> bool) {
-    for _ in 0..200 {
-        std::thread::sleep(Duration::from_millis(100));
+    loop {
+        std::thread::sleep(Duration::from_millis(50));
         if !shared.lock().is_ok_and(|m| still(&m)) {
             return;
         }
     }
 }
 
-fn answer(mut stream: TcpStream, shared: &Mutex<Mode>, elsewhere: &Path) {
+struct Counters<'a> {
+    slow: &'a AtomicUsize,
+    checks: &'a AtomicUsize,
+    gate: &'a Gate,
+}
+
+fn answer(mut stream: TcpStream, shared: &Mutex<Mode>, seen: &Counters, elsewhere: &Path) {
     let Ok(read) = stream.try_clone() else { return };
     let mut reader = BufReader::new(read);
     let mut request = String::new();
     if reader.read_line(&mut request).is_err() {
         return;
     }
+    let mut port = "";
+    let mut host = String::new();
     loop {
         let mut header = String::new();
         match reader.read_line(&mut header) {
             Ok(0) | Err(_) => return,
             Ok(_) if header == "\r\n" => break,
-            Ok(_) => {}
+            Ok(_) => {
+                if let Some(h) = header.strip_prefix("Host: ") {
+                    host = h.trim().to_string();
+                }
+            }
         }
+    }
+    if let Some((_, p)) = host.rsplit_once(':') {
+        port = p;
     }
     let path = request.split_whitespace().nth(1).unwrap_or("/");
     let path = path.split('?').next().unwrap_or_default();
+    if path == SIGN_IN {
+        let body = b"<!DOCTYPE html><html><body>Sign in</body></html>";
+        let head = format!("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len());
+        let _ = stream.write_all(head.as_bytes()).and_then(|()| stream.write_all(body));
+        return;
+    }
     let (file, other) = match path.strip_prefix(ELSEWHERE) {
         Some(f) => (Some(f), true),
         None => (path.strip_prefix(PREFIX), false),
@@ -504,9 +711,10 @@ fn answer(mut stream: TcpStream, shared: &Mutex<Mode>, elsewhere: &Path) {
         Mode::Serve(dir) => (dir, false, false),
         Mode::Flaky(dir) => (dir, true, false),
         Mode::SlowCheck(dir) => (dir, false, true),
-        Mode::SlowFiles(dir) => {
-            if !small {
-                std::thread::sleep(SLOW_FILE);
+        Mode::SlowFiles(dir, next) => {
+            if !small && file.is_some_and(|f| !next.join(f).exists()) {
+                seen.slow.fetch_add(1, Ordering::SeqCst);
+                seen.gate.pass();
             }
             (dir, false, false)
         }
@@ -515,24 +723,36 @@ fn answer(mut stream: TcpStream, shared: &Mutex<Mode>, elsewhere: &Path) {
                 return;
             }
             if !small {
-                std::thread::sleep(SLOW_FILE);
+                seen.slow.fetch_add(1, Ordering::SeqCst);
+                seen.gate.pass();
             }
             (dir, false, false)
         }
         Mode::Mixed(dir, next) => (if file == Some("index.html") { next } else { dir }, false, false),
+        Mode::SignIn => {
+            let head = format!("HTTP/1.1 302 Found\r\nLocation: http://localhost:{port}{SIGN_IN}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+            let _ = stream.write_all(head.as_bytes());
+            return;
+        }
         Mode::Refuse => return,
         Mode::Hang => return hold(shared, |m| matches!(m, Mode::Hang)),
     };
+    if slow_check && file == Some("sw.js") {
+        seen.gate.pass();
+    }
     if flaky && !small {
         return;
     }
     if slow_check && file == Some("build.json") {
+        seen.checks.fetch_add(1, Ordering::SeqCst);
+        seen.gate.set(true);
         return hold(shared, |m| matches!(m, Mode::SlowCheck(_)));
     }
     let body = file.and_then(|f| std::fs::read(dir.join(f)).ok());
     let kind = match file.and_then(|f| f.rsplit('.').next()) {
         Some("html") => "text/html; charset=utf-8",
         Some("js") => "text/javascript",
+        Some("css") => "text/css",
         Some("json") => "application/json",
         Some("wasm") => "application/wasm",
         _ => "application/octet-stream",

@@ -30,7 +30,7 @@ fn plate_doc() -> (Document, u64) {
     doc.add_feature(
         FeatureKind::Extrude {
             thin: None,
-            sketch: s,
+            sketch: crate::SketchId(s),
             profiles: ProfileSel::All,
             extent: Extent {
                 convention: crate::ExtrudeConvention::LegacyPerSide,
@@ -103,16 +103,39 @@ fn set_back_reports_restored_features() {
     assert_eq!((m.last_recomputed, m.last_restored), (0, 0));
 }
 
+/// #1989: what an evaluation ahead on a copy of the model computed is kept for the run that
+/// follows on the model itself, which finds it there even once the evaluation cache has dropped
+/// it (the cache keeps only a few states of a design with large bodies). Copies keep nothing.
+#[test]
+fn results_kept_ahead_outlive_the_cache() {
+    let (mut doc, _) = plate_doc();
+    let mut m = Model::new();
+    m.evaluate(&doc);
+    doc.set_param("width", "50 mm", None, None).unwrap();
+    let kept = std::sync::Arc::new(KeptResults::default());
+    let mut ahead = m.clone();
+    ahead.keep(Some(kept.clone()));
+    assert!(ahead.clone().kept().is_none(), "a copy keeps nothing");
+    ahead.evaluate(&doc);
+    assert_eq!((ahead.last_recomputed, kept.len()), (2, 2));
+    *m.cache.lock().unwrap() = Default::default();
+    m.keep(Some(kept));
+    m.evaluate(&doc);
+    assert_eq!((m.last_recomputed, m.last_restored), (0, 2), "nothing computed again");
+    assert!(rel(measure(&m.state().bodies[0].body).unwrap().volume, 30000.0) < 1e-9);
+}
+
 #[test]
 fn box_fillet_cut_timeline() {
     let (mut doc, _) = plate_doc();
     doc.add_feature(
         FeatureKind::Fillet {
-            edges: vec![Vec3::new(0.0, 0.0, 10.0)],
+            edges: vec![Position(Vec3::new(0.0, 0.0, 10.0))],
             radius: "3".into(),
             body: None,
             style: Default::default(),
             fit: Default::default(),
+            corner: Default::default(),
         },
         None,
     )
@@ -123,7 +146,7 @@ fn box_fillet_cut_timeline() {
     doc.add_feature(
         FeatureKind::Extrude {
             thin: None,
-            sketch: s2,
+            sketch: crate::SketchId(s2),
             profiles: ProfileSel::Points { points: vec![Vec2::new(20.0, 15.0)] },
             extent: Extent {
                 convention: crate::ExtrudeConvention::LegacyPerSide,
@@ -162,7 +185,7 @@ fn errors_are_reported_not_fatal() {
     let (mut doc, s) = plate_doc();
     doc.add_feature(
         FeatureKind::Revolve {
-            sketch: s,
+            sketch: crate::SketchId(s),
             profiles: ProfileSel::All,
             axis: AxisRef::SketchAxis { axis: "y".into() },
             angle: "90 deg".into(),
@@ -178,11 +201,12 @@ fn errors_are_reported_not_fatal() {
     .unwrap();
     doc.add_feature(
         FeatureKind::Fillet {
-            edges: vec![Vec3::new(500.0, 0.0, 0.0)],
+            edges: vec![Position(Vec3::new(500.0, 0.0, 0.0))],
             radius: "1".into(),
             body: None,
             style: Default::default(),
             fit: Default::default(),
+            corner: Default::default(),
         },
         None,
     )
@@ -244,7 +268,7 @@ fn primitives_and_combine() {
     doc.add_feature(
         FeatureKind::Cylinder {
             base: point_expr(Vec3::new(5.0, 5.0, 0.0)),
-            axis: Vec3::Z,
+            axis: Dir(Vec3::Z),
             radius: "2".into(),
             height: "20".into(),
             operation: Operation::NewBody,

@@ -3,7 +3,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use solidcraft_doc::Document;
-use solidcraft_doc::joints::{Assembly, JointOrigin, Snap};
+use solidcraft_doc::joints::cam::CamProfile;
+use solidcraft_doc::joints::{Assembly, Coupling, JointOrigin, Size};
 
 use crate::{EngineError, Result};
 
@@ -25,12 +26,7 @@ fn add_references(count: &mut usize, more: usize) -> Result<()> {
 }
 
 fn finite_origin(origin: &JointOrigin) -> Result<()> {
-    let finite = match &origin.snap {
-        Snap::Frame { origin, z, x } => origin.is_finite() && z.is_finite() && x.is_none_or(|x| x.is_finite()),
-        Snap::FaceCenter { pick, .. } | Snap::CircleCenter { pick, .. } => pick.is_finite(),
-        Snap::Point { point, z } => point.is_finite() && z.is_none_or(|z| z.is_finite()),
-    };
-    if !finite {
+    if !origin.snap.is_finite() {
         return Err(invalid("joint origin contains non-finite geometry"));
     }
     Ok(())
@@ -60,7 +56,7 @@ fn budget(assembly: &Assembly) -> Result<()> {
     for origin in &assembly.origins {
         finite_origin(&origin.origin)?;
         text(&origin.name)?;
-        if let Snap::FaceCenter { face: Some(face), .. } | Snap::CircleCenter { face: Some(face), .. } = &origin.origin.snap {
+        for face in origin.origin.snap.face_names() {
             text(face)?;
         }
     }
@@ -76,7 +72,7 @@ fn budget(assembly: &Assembly) -> Result<()> {
         }
         for origin in [&joint.a, &joint.b] {
             finite_origin(origin)?;
-            if let Snap::FaceCenter { face: Some(face), .. } | Snap::CircleCenter { face: Some(face), .. } = &origin.snap {
+            for face in origin.snap.face_names() {
                 text(face)?;
             }
         }
@@ -102,8 +98,38 @@ fn budget(assembly: &Assembly) -> Result<()> {
             return Err(invalid("exploded view contains non-finite moves"));
         }
     }
-    if !assembly.links.iter().all(|l| l.ratio.is_finite() && l.offset.is_finite()) {
+    if !assembly.links.iter().all(|l| l.ratio.is_finite() && l.offset.is_finite() && l.lift.iter().all(|v| v.is_finite())) {
         return Err(invalid("motion link contains non-finite values"));
+    }
+    for cam in assembly.links.iter().filter_map(|l| match &l.coupling {
+        Some(Coupling::Cam(c)) => Some(c),
+        _ => None,
+    }) {
+        add_references(&mut references, cam.tip.iter().count())?;
+        if let Some(tip) = &cam.tip {
+            finite_origin(tip)?;
+        }
+        match &cam.profile {
+            CamProfile::Sketch { curves, .. } => {
+                add_references(&mut references, curves.len())?;
+                curves.iter().try_for_each(|c| text(c))?;
+            }
+            CamProfile::Edges { picks, names, .. } => {
+                add_references(&mut references, picks.len() + names.len())?;
+                if !picks.iter().all(|p| p.is_finite()) {
+                    return Err(invalid("motion link contains non-finite values"));
+                }
+                names.iter().try_for_each(|n| text(n))?;
+            }
+        }
+    }
+    for size in assembly.links.iter().filter_map(|l| l.coupling.as_ref()).flat_map(Coupling::sizes) {
+        match size {
+            Size::Length(v) if !v.is_finite() => return Err(invalid("motion link contains non-finite values")),
+            Size::Expr(e) => text(e)?,
+            Size::Circle(o) => finite_origin(o)?,
+            Size::Length(_) => {}
+        }
     }
     if references > MAX_REFERENCES {
         return Err(invalid("assembly references exceed the processing budget"));
@@ -203,9 +229,8 @@ fn origin(
 ) -> Option<JointOrigin> {
     let mut out = origin.clone();
     out.occurrence = *occurrences.get(&origin.occurrence)?;
-    match &mut out.snap {
-        Snap::FaceCenter { face: Some(face), .. } | Snap::CircleCenter { face: Some(face), .. } => *face = face_name(face, features, bodies)?,
-        _ => {}
+    for face in out.snap.face_names_mut() {
+        *face = face_name(face, features, bodies)?;
     }
     Some(out)
 }
@@ -244,12 +269,14 @@ pub(super) fn clone_assembly(
         return Err(invalid("copy occurrence map points to a missing occurrence"));
     }
     unique_ids(source.assembly.joints.iter().map(|j| j.id))?;
-    let mut joint_id = unique_ids(doc.assembly.joints.iter().map(|j| j.id))?;
+    unique_ids(doc.assembly.joints.iter().map(|j| j.id))?;
     let aux = |a: &Assembly| {
         a.contact_sets.iter().map(|x| x.id).chain(a.studies.iter().map(|x| x.id)).chain(a.exploded.iter().map(|x| x.id)).collect::<Vec<_>>()
     };
     unique_ids(aux(&source.assembly).into_iter())?;
-    let mut auxiliary_id = unique_ids(aux(&doc.assembly).into_iter())?;
+    unique_ids(aux(&doc.assembly).into_iter())?;
+    // Reserve from one persistent counter, committing it only when the entire copy succeeds.
+    let mut item_id = doc.next_item_id()?.saturating_sub(1);
     let mut a = doc.assembly.clone();
     let mut messages = Vec::new();
     let mut origin_names = a.origins.iter().map(|o| o.name.clone()).collect();
@@ -277,7 +304,7 @@ pub(super) fn clone_assembly(
         match (origin(&old.a, occurrences, features, bodies), origin(&old.b, occurrences, features, bodies)) {
             (Some(aa), Some(bb)) => {
                 let mut item = old.clone();
-                item.id = next_id(&mut joint_id)?;
+                item.id = next_id(&mut item_id)?;
                 item.name = unique_name(&old.name, &mut joint_names)?;
                 item.a = aa;
                 item.b = bb;
@@ -291,9 +318,30 @@ pub(super) fn clone_assembly(
         if !touched_joints.contains(&old.a) && !touched_joints.contains(&old.b) {
             continue;
         }
+        let mut item = old.clone();
+        // A gear's picked round faces are on occurrences of the copy too, and so are a cam's
+        // profile and its follower's tip.
+        let faces = item.coupling.as_mut().is_none_or(|c| {
+            let sizes = c.sizes_mut().into_iter().all(|size| match size {
+                Size::Circle(o) => origin(o, occurrences, features, bodies).map(|new| *o = new).is_some(),
+                _ => true,
+            });
+            let Coupling::Cam(cam) = c else { return sizes };
+            let tip = match &mut cam.tip {
+                Some(t) => origin(t, occurrences, features, bodies).map(|new| *t = new).is_some(),
+                None => true,
+            };
+            let profile = match &mut cam.profile {
+                CamProfile::Sketch { sketch, .. } => features.get(sketch).map(|new| *sketch = *new).is_some(),
+                CamProfile::Edges { occurrence, names, .. } => {
+                    occurrences.get(occurrence).map(|new| *occurrence = *new).is_some()
+                        && names.iter_mut().all(|n| n.is_empty() || face_name(n, features, bodies).map(|new| *n = new).is_some())
+                }
+            };
+            sizes && tip && profile
+        });
         match (joints.get(&old.a), joints.get(&old.b)) {
-            (Some(aa), Some(bb)) => {
-                let mut item = old.clone();
+            (Some(aa), Some(bb)) if faces => {
                 item.a = *aa;
                 item.b = *bb;
                 a.links.push(item);
@@ -308,7 +356,7 @@ pub(super) fn clone_assembly(
         }
         if let Some(ids) = old.occurrences.iter().map(|o| occurrences.get(o).copied()).collect::<Option<Vec<_>>>() {
             let mut item = old.clone();
-            item.id = next_id(&mut auxiliary_id)?;
+            item.id = next_id(&mut item_id)?;
             item.name = unique_name(&old.name, &mut contact_names)?;
             item.occurrences = ids;
             a.contact_sets.push(item);
@@ -323,7 +371,7 @@ pub(super) fn clone_assembly(
         }
         if old.keys.iter().all(|k| joints.contains_key(&k.joint)) {
             let mut item = old.clone();
-            item.id = next_id(&mut auxiliary_id)?;
+            item.id = next_id(&mut item_id)?;
             item.name = unique_name(&old.name, &mut study_names)?;
             for key in &mut item.keys {
                 key.joint = *joints.get(&key.joint).ok_or_else(|| invalid("missing copied study joint"))?;
@@ -340,7 +388,7 @@ pub(super) fn clone_assembly(
         }
         if old.moves.iter().all(|(o, _)| occurrences.contains_key(o)) {
             let mut item = old.clone();
-            item.id = next_id(&mut auxiliary_id)?;
+            item.id = next_id(&mut item_id)?;
             item.name = unique_name(&old.name, &mut view_names)?;
             for (o, _) in &mut item.moves {
                 *o = *occurrences.get(o).ok_or_else(|| invalid("missing copied exploded occurrence"))?;
@@ -351,6 +399,7 @@ pub(super) fn clone_assembly(
         }
     }
     budget(&a)?;
+    doc.next_id = item_id.checked_add(1).ok_or_else(|| invalid("assembly identifier space is exhausted"))?;
     doc.assembly = a;
     Ok(messages)
 }
