@@ -1,9 +1,9 @@
-//! Mandatory source-level boundary for the universal UI container. Runs in fast CI.
+//! Mandatory source-level boundary for the SolidCraft shared UI container. Runs in fast CI.
 use std::path::Path;
 use syn::visit::{self, Visit};
 
-/// Every production UI host, including nested modules and platform apps, goes through the
-/// universal container. Parse Rust rather than searching strings: aliases cannot bypass this.
+/// SolidCraft production UI hosts go through the shared container. MELTCAD is a separate editor
+/// with its own UI policy. Parse Rust rather than searching strings: aliases cannot bypass this.
 #[derive(Default)]
 struct ContainerGuard {
     modules: Vec<String>,
@@ -306,8 +306,9 @@ fn violations(source: &str) -> Result<Vec<String>, String> {
     Ok(guard.found)
 }
 
-/// Scan current and future crates/apps, including nested source and examples.
-/// The implementation module is the sole exception; feature-specific allowances are forbidden.
+/// Scan shared crates and SolidCraft apps, including nested source and examples.
+/// MELTCAD owns a separate editor UI and is outside this SolidCraft boundary. The shared
+/// implementation module is the sole source exception; feature-specific allowances are forbidden.
 pub fn run(root: &Path) -> Result<(), String> {
     fn scan(root: &Path, dir: &Path, failures: &mut Vec<String>) -> Result<(), String> {
         for entry in std::fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))? {
@@ -315,7 +316,9 @@ pub fn run(root: &Path) -> Result<(), String> {
             let path = entry.path();
             let kind = entry.file_type().map_err(|e| e.to_string())?;
             if kind.is_dir() {
-                if !matches!(entry.file_name().to_str(), Some("target" | ".git")) {
+                let relative = path.strip_prefix(root).unwrap_or(&path);
+                let meltcad = relative == Path::new("apps/meltcad");
+                if !matches!(entry.file_name().to_str(), Some("target" | ".git")) && !meltcad {
                     scan(root, &path, failures)?;
                 }
             } else if path.extension().is_some_and(|e| e == "rs")
@@ -460,17 +463,20 @@ mod tests {
         let root = std::env::temp_dir().join(format!("solidcraft-container-guard-{}-{unique}", std::process::id()));
         let source = root.join("crates/future-ui/src/nested/panel.rs");
         let example = root.join("apps/future-platform/examples/viewer.rs");
+        let meltcad = root.join("apps/meltcad/src/legacy_editor.rs");
         let implementation = root.join("crates/ui-egui/src/ui_kit/container.rs");
-        for path in [&source, &example, &implementation] {
+        for path in [&source, &example, &meltcad, &implementation] {
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         }
         std::fs::write(&source, "fn show() { egui::Area::new(id); }").unwrap();
         std::fs::write(&example, "fn main() { egui::Window::new(title); }").unwrap();
+        std::fs::write(&meltcad, "fn show() { egui::Window::new(title); }").unwrap();
         std::fs::write(&implementation, "fn factory() { egui::Window::new(title); }").unwrap();
         let rejected = run(&root).unwrap_err();
         assert!(rejected.contains("future-ui/src/nested/panel.rs"));
         assert!(rejected.contains("future-platform/examples/viewer.rs"));
-        assert!(!rejected.contains("ui_kit/container.rs"), "only the implementation is exempt");
+        assert!(!rejected.contains("ui_kit/container.rs"), "shared implementation is exempt");
+        assert!(!rejected.contains("apps/meltcad"), "the separate editor is outside this boundary");
         for path in [&source, &example] {
             std::fs::write(path, "fn show() { Container::new(ctx, Surface::Panel).area(id); }").unwrap();
         }

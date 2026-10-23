@@ -4,15 +4,6 @@
 
 use std::cell::Cell;
 
-/// A host app's own look on top of the dark theme (Melt 3D paints SolidCraft in its colours).
-/// Set once at start; SolidCraft itself never sets it.
-static SKIN: std::sync::OnceLock<fn(Tokens) -> Tokens> = std::sync::OnceLock::new();
-
-/// Let the host app restyle the dark tokens. Only the first call counts.
-pub fn set_skin(skin: fn(Tokens) -> Tokens) {
-    let _ = SKIN.set(skin);
-}
-
 #[path = "../../../assets/styles/ui/palettes.rs"]
 mod palettes;
 
@@ -554,11 +545,7 @@ impl Tokens {
     /// that base ([`set_custom`]), else the built-in one; the colour vision mode on top.
     pub fn themed(dark: bool, mode: ColorVision) -> Tokens {
         let custom = CUSTOM.get().filter(|c| c.dark == dark).map(|c| c.tokens);
-        let base = custom.unwrap_or(if dark { Tokens::dark() } else { Tokens::light() }).with_vision(dark, mode);
-        match SKIN.get() {
-            Some(skin) if dark => skin(base),
-            _ => base,
-        }
+        custom.unwrap_or(if dark { Tokens::dark() } else { Tokens::light() }).with_vision(dark, mode)
     }
 
     /// These tokens with a colour vision mode's values on top (the tables in `palettes.rs`); Off

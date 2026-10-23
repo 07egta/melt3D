@@ -236,11 +236,10 @@ fn pixel(s: &Setup, x: usize, y: usize) -> [u8; 4] {
     let mut surf_n: Option<V3> = None;
     let above = o[2] >= 0.0;
     let footprint = |gp: V3| s.cam.mm_per_px(gp, h);
-    if above && t_ground < 1e8 && hit.as_ref().is_none_or(|(t, _)| t_ground < *t) && (grid_on || floor_on) {
+    let ground_in_front = t_ground < 1e8 && hit.as_ref().is_none_or(|(t, _)| t_ground < *t);
+    let floor_vis = above && t_ground < 1e8 && hit.is_none() && floor_on;
+    if floor_vis {
         let gp = add(o, mul(rd, t_ground));
-        if grid_on {
-            col = grid(col, gp, footprint(gp), 1.0, false);
-        }
         if floor_on && env.shadow > 0.0 {
             // the blob's shadow on the ground
             if s.fine {
@@ -252,17 +251,15 @@ fn pixel(s: &Setup, x: usize, y: usize) -> [u8; 4] {
             col = mul(col, 1.0 + (0.6 + 0.4 * ao - 1.0) * env.shadow);
         }
     }
-    if let Some((t, smp)) = &hit
-        && (t_ground > *t || !(grid_on || floor_on))
-    {
+    if let Some((t, smp)) = &hit {
         let (c, n) = shade_point(s, o, rd, *t, smp);
         col = c;
         surf_n = Some(n);
     }
-    // seen from below the ground is see-through: only its lines are drawn
-    if !above && t_ground < 1e8 && hit.as_ref().is_none_or(|(t, _)| t_ground < *t) && grid_on {
+    // The grid is an overlay: it stays visible over geometry behind the plane without hiding it.
+    if grid_on && ground_in_front {
         let gp = add(o, mul(rd, t_ground));
-        col = grid(col, gp, footprint(gp), 1.0, true);
+        col = grid(col, gp, footprint(gp), 1.0, !above);
     }
     let [mut r, mut g, mut b] = encode(col, env.exposure);
     if let Some(n) = surf_n {
@@ -526,6 +523,35 @@ mod tests {
         let fine = big[1];
         assert!(fine[0] * fine[1] <= MAX_FINE_PIXELS, "{fine:?}");
         assert!(big[0][0] < fine[0], "the first pass is coarser");
+    }
+
+    #[test]
+    fn the_ground_plane_never_hides_objects_on_either_side() {
+        let mut sc = Scene::default();
+        sc.groups[0].shapes.clear();
+        sc.groups[0].shapes.push(Shape::new(Kind::Sphere, [0.0, 0.0, -20.0], Material { color: [0.95, 0.08, 0.04], ..Material::default() }));
+        sc.env.grid = true;
+        sc.env.floor = false;
+        let (w, h) = (80, 80);
+        let mut cam = Camera::default();
+        cam.look(0.0, std::f32::consts::FRAC_PI_2 - 0.002);
+        cam.target = [0.0, 0.0, 0.0];
+        cam.dist = 120.0;
+        let grid_only = render(&sc, &cam, [w, h], true, 2, &never).expect("grid only");
+        let below_grid = px(&grid_only, w, w / 2, h / 2);
+        assert!(below_grid[0] > below_grid[1] + 35, "grid alone must not hide the red object below it: {below_grid:?}");
+
+        sc.env.floor = true;
+        let with_floor = render(&sc, &cam, [w, h], true, 2, &never).expect("floor from above");
+        let visible_above = px(&with_floor, w, w / 2, h / 2);
+        assert!(visible_above[0] > visible_above[1] + 35, "the shadow floor must not hide the red object: {visible_above:?}");
+
+        sc.groups[0].shapes[0].pos[2] = 20.0;
+        sc.env.grid = false;
+        cam.look(0.0, -std::f32::consts::FRAC_PI_2 + 0.002);
+        let from_below = render(&sc, &cam, [w, h], true, 2, &never).expect("view from below");
+        let visible = px(&from_below, w, w / 2, h / 2);
+        assert!(visible[0] > visible[1] + 35, "floor must not hide geometry across the plane from below: {visible:?}");
     }
 
     #[test]

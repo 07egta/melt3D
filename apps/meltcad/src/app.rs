@@ -105,6 +105,8 @@ pub struct App {
     /// SolidCraft's solid modeller, shown instead of the melt view while it is on.
     pub precise: Option<crate::precise::Precise>,
     pub precise_on: bool,
+    pub(crate) precise_services: Option<solidcraft_ui_egui::Services>,
+    pub(crate) precise_prefs: Option<String>,
     pub control: Option<std::sync::mpsc::Receiver<crate::control::Request>>,
     /// The shape under the mouse.
     pub hover: Option<Pick>,
@@ -143,6 +145,9 @@ pub struct App {
     pub notice: Option<String>,
     /// The graphics path (GPU picture or the simple CPU one) and its cards.
     pub gpu: crate::gpu_ui::GpuUi,
+    /// The window is closing because its shared graphics device can no longer draw.
+    /// Keep the latest recovery checkpoint in this case.
+    gpu_device_lost: bool,
     /// The speed test window ("速さをはかる…").
     pub bench: crate::bench::Job,
 }
@@ -209,6 +214,8 @@ impl App {
             control: None,
             an: Default::default(),
             precise: None,
+            precise_services: None,
+            precise_prefs: None,
             precise_on: false,
             hover: None,
             fly: None,
@@ -233,6 +240,7 @@ impl App {
             lib_query: String::new(),
             notice: None,
             gpu: Default::default(),
+            gpu_device_lost: false,
             bench: Default::default(),
         };
         if let Some(p) = open {
@@ -2156,13 +2164,30 @@ impl App {
 }
 
 impl eframe::App for App {
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        if let Some(p) = self.precise.as_ref() {
+            self.precise_prefs = Some(p.app.prefs());
+        }
+        if let Some(prefs) = self.precise_prefs.as_ref() {
+            storage.set_string(crate::precise::PREFS_KEY, prefs.clone());
+        }
+    }
+
+    fn raw_input_hook(&mut self, ctx: &egui::Context, input: &mut egui::RawInput) {
+        if self.precise_on
+            && let Some(p) = self.precise.as_mut()
+        {
+            p.app.raw_input_hook(input);
+        }
+        let _ = ctx;
+    }
     fn on_exit(&mut self) {
         if let Some(p) = self.precise.as_mut() {
+            solidcraft_ui_egui::agent_chat::shutdown(&mut p.app);
+            solidcraft_ui_egui::save_job::tick(&mut p.app, true);
             solidcraft_ui_egui::recovery_ui::close(&mut p.app);
         }
-        if let Err(e) = self.recovery.normal_exit() {
-            crate::gpu_log::log(&format!("recovery cleanup failed: {e}"));
-        }
+        self.finish_recovery_on_exit();
     }
     fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
         self.frame_body(ui);
@@ -2170,6 +2195,25 @@ impl eframe::App for App {
 }
 
 impl App {
+    fn checkpoint_unsaved_for_device_loss(&mut self) {
+        if !self.has_unsaved_work() {
+            return;
+        }
+        let rev = self.track_scene();
+        let now = std::time::Instant::now();
+        if let Err(e) = self.recovery.checkpoint(&self.scene, self.path.as_deref(), true, rev, now + crate::recovery::INTERVAL) {
+            crate::gpu_log::log(&format!("could not save recovery data after graphics device loss: {e}"));
+        }
+    }
+
+    fn finish_recovery_on_exit(&mut self) {
+        if !self.gpu_device_lost
+            && let Err(e) = self.recovery.normal_exit()
+        {
+            crate::gpu_log::log(&format!("recovery cleanup failed: {e}"));
+        }
+    }
+
     pub(crate) fn scene_edit_in_progress(&self) -> bool {
         self.scene_structure_locked()
             || self.sketch_active()
@@ -2273,12 +2317,25 @@ impl App {
         static FIRST: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
         crate::perf::mark_once(&FIRST, "first ui frame");
         let ctx = ui.ctx().clone();
+        if self.gpu_device_lost {
+            return;
+        }
+        if let Some(lost) = self.gpu.rs.as_ref().map(|rs| rs.device_lost.clone()).filter(|lost| lost.is_lost()) {
+            let reason = lost.reason().unwrap_or_default();
+            crate::gpu_log::log(&format!("graphics device lost ({reason}); closing and preserving recovery data"));
+            self.checkpoint_unsaved_for_device_loss();
+            self.gpu_device_lost = true;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            return;
+        }
         let frame_began = std::time::Instant::now();
         self.perf.stats.begin(ctx.input(|i| i.time));
         self.sync_precise_transfer(&ctx);
         self.run_control(&ctx);
         self.handle_close_request(&ctx);
+        self.poll_gif_job(&ctx);
         if self.precise_frame(ui) {
+            self.test_hooks(&ctx);
             return;
         }
         self.fix_selection();
@@ -2350,6 +2407,47 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn graphics_loss_exit_checkpoints_current_unsaved_scene() {
+        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
+        let root = std::env::temp_dir().join(format!("meltcad_device_loss_{stamp}"));
+        let mut app = App::new(true, None);
+        app.recovery = crate::recovery::Store::new(root.clone(), std::time::Instant::now());
+        let ctx = egui::Context::default();
+        app.add_shape(&ctx, Kind::Box);
+        app.settle(&ctx);
+        let expected = app.scene.clone();
+
+        app.checkpoint_unsaved_for_device_loss();
+        app.gpu_device_lost = true;
+
+        app.finish_recovery_on_exit();
+        drop(app);
+
+        let mut restarted = crate::recovery::Store::new(root.clone(), std::time::Instant::now());
+        assert!(restarted.pending_path().is_some(), "a graphics-loss exit must leave the prior recovery checkpoint available");
+        let (restored, _, _) = restarted.recover_pending().expect("read preserved recovery");
+        assert_eq!(restored, expected, "the forced checkpoint must contain the current unsaved scene");
+        restarted.normal_exit().expect("remove test lock");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn graphics_loss_does_not_create_recovery_for_a_clean_scene() {
+        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
+        let root = std::env::temp_dir().join(format!("meltcad_device_loss_clean_{stamp}"));
+        let mut app = App::new(true, None);
+        app.recovery = crate::recovery::Store::new(root.clone(), std::time::Instant::now());
+
+        app.checkpoint_unsaved_for_device_loss();
+        drop(app);
+
+        let mut restarted = crate::recovery::Store::new(root.clone(), std::time::Instant::now());
+        assert!(restarted.pending_path().is_none(), "a clean scene must not produce an empty recovery file");
+        restarted.normal_exit().expect("remove test lock");
+        let _ = std::fs::remove_dir_all(root);
+    }
 
     #[test]
     fn adding_undoing_and_deleting_shapes() {
@@ -2629,7 +2727,8 @@ mod tests {
         let mut app = App::new(true, None);
         app.open_precise(&ctx);
         assert!(app.precise_on);
-        let mut input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(960.0, 600.0))), ..Default::default() };
+        let mut input =
+            egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(960.0, 600.0))), ..Default::default() };
         input.viewports.get_mut(&egui::ViewportId::ROOT).unwrap().events.push(egui::ViewportEvent::Close);
         let mut output = ctx.run_ui(input, |ui| app.frame_body(ui));
         output.textures_delta.clear();
