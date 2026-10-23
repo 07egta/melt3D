@@ -2143,9 +2143,7 @@ mod headless_tests {
         sc.groups[0].shapes[0].size[0] = 15.0;
         sc.env.grid = true;
         sc.env.floor = true;
-        let mut cam = Camera::default();
-        cam.target = [0.0; 3];
-        cam.dist = 120.0;
+        let mut cam = Camera { target: [0.0; 3], dist: 120.0, ..Camera::default() };
         for above in [true, false] {
             sc.groups[0].shapes[0].pos[2] = if above { -25.0 } else { 25.0 };
             cam.look(0.0, if above { 1.568 } else { -1.568 });

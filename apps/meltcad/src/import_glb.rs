@@ -351,7 +351,7 @@ fn read_primitive(json: &Value, bin: &[u8], prim: &Value) -> Result<Option<Part>
     match mode {
         4 => {
             tris.reserve(indices.len() / 3);
-            for t in indices.chunks_exact(3) {
+            for t in indices.as_chunks::<3>().0.iter() {
                 tris.push([t[0], t[1], t[2]]);
             }
         }

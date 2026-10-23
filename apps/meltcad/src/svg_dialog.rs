@@ -349,7 +349,9 @@ mod tests {
         let mesh = preview_mesh(&a);
         let area: f32 = mesh
             .indices
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .map(|t| {
                 let [p, q, r] = [mesh.vertices[t[0] as usize].pos, mesh.vertices[t[1] as usize].pos, mesh.vertices[t[2] as usize].pos];
                 ((q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x)).abs() * 0.5

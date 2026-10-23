@@ -1389,16 +1389,17 @@ mod tests {
     use super::*;
 
     fn named(names: &[(&str, u8)]) -> Scene {
-        let mut sc = Scene::default();
-        sc.groups = names
-            .iter()
-            .map(|&(n, d)| {
-                let mut g = Group::new(n);
-                g.depth = d;
-                g
-            })
-            .collect();
-        sc
+        Scene {
+            groups: names
+                .iter()
+                .map(|&(n, d)| {
+                    let mut g = Group::new(n);
+                    g.depth = d;
+                    g
+                })
+                .collect(),
+            ..Scene::default()
+        }
     }
 
     fn layout(sc: &Scene) -> Vec<(String, u8)> {
