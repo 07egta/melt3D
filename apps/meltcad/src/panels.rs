@@ -258,14 +258,40 @@ impl App {
         let target =
             pos.and_then(|p| self.row_rects.iter().find(|(_, r)| r.y_range().contains(p.y) && r.x_range().contains(p.x)).map(|(k, r)| (*k, *r, p)));
         if let Some((to, rect, p)) = target {
-            let after = p.y > rect.center().y;
-            let y = if after { rect.bottom() } else { rect.top() };
-            let line = [egui::pos2(rect.left() + 4.0, y), egui::pos2(rect.right() - 4.0, y)];
-            ui.painter().line_segment(line, Stroke::new(5.0, style::ACCENT.gamma_multiply(0.25)));
-            ui.painter().line_segment(line, Stroke::new(2.0, style::ACCENT));
-            if !down {
-                self.move_layer(from, to, after);
-                self.layer_drag = None;
+            let into = match to {
+                Pick::Group(g) if Pick::Group(g) != from => {
+                    let q = rect.height() * 0.25;
+                    (rect.top() + q..=rect.bottom() - q).contains(&p.y).then_some(g)
+                }
+                _ => None,
+            };
+            if let Some(g) = into {
+                let r = rect.shrink2(egui::vec2(3.0, 2.0));
+                ui.painter().rect_filled(r, 6.0, style::ACCENT.gamma_multiply(0.18));
+                ui.painter().rect_stroke(r, 6.0, Stroke::new(2.0, style::ACCENT), egui::StrokeKind::Inside);
+                ui.painter().text(
+                    egui::pos2(r.right() - 8.0, r.center().y),
+                    egui::Align2::RIGHT_CENTER,
+                    "Put inside",
+                    egui::FontId::proportional(11.5),
+                    style::ACCENT,
+                );
+                if !down {
+                    if let Err(why) = self.move_layer_into(from, g) {
+                        self.notice = Some(why.into());
+                    }
+                    self.layer_drag = None;
+                }
+            } else {
+                let after = p.y > rect.center().y;
+                let y = if after { rect.bottom() } else { rect.top() };
+                let line = [egui::pos2(rect.left() + 4.0, y), egui::pos2(rect.right() - 4.0, y)];
+                ui.painter().line_segment(line, Stroke::new(5.0, style::ACCENT.gamma_multiply(0.25)));
+                ui.painter().line_segment(line, Stroke::new(2.0, style::ACCENT));
+                if !down {
+                    self.move_layer(from, to, after);
+                    self.layer_drag = None;
+                }
             }
         }
         if !down {

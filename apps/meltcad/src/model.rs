@@ -79,7 +79,7 @@ impl Kind {
         Kind::Sweep,
     ];
     /// The six always shown on the top bar.
-    pub const MAIN: [Kind; 6] = [Kind::Sphere, Kind::Box, Kind::Cylinder, Kind::Torus, Kind::Cone, Kind::Extrude];
+    pub const MAIN: [Kind; 5] = [Kind::Sphere, Kind::Box, Kind::Cylinder, Kind::Torus, Kind::Cone];
     /// The extra solids in the "more" menu.
     pub const MORE: [Kind; 10] =
         [Kind::Prism3, Kind::PrismN, Kind::Octa, Kind::Tetra, Kind::Pyramid, Kind::Capsule, Kind::Hemi, Kind::Tube, Kind::Wedge, Kind::Star];
@@ -692,7 +692,9 @@ fn is_zero_u8(v: &u8) -> bool {
 }
 
 /// The deepest a group can be nested.
-pub const MAX_DEPTH: u8 = 3;
+/// Two levels are enough: a big group holds groups, and groups hold shapes. Groups melt into each
+/// other inside the big group, and the big group melts with the rest as one piece.
+pub const MAX_DEPTH: u8 = 1;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Group {
@@ -1171,6 +1173,29 @@ impl Scene {
         Some(g)
     }
 
+    /// Put `g` (with what is nested in it) inside `parent`, after what is already there. `None` when
+    /// it cannot go there (into itself, or nesting deeper than [`MAX_DEPTH`]). Returns its new index.
+    pub fn move_group_into(&mut self, g: usize, parent: usize) -> Option<usize> {
+        let n = self.groups.len();
+        if g >= n || parent >= n || g == parent {
+            return None;
+        }
+        let e = self.subtree_end(g);
+        if (g..e).contains(&parent) {
+            return None;
+        }
+        let base = self.groups[g].depth;
+        let deepest = self.groups[g..e].iter().map(|x| x.depth - base).max().unwrap_or(0);
+        let depth = self.groups[parent].depth.checked_add(1)?;
+        if depth.saturating_add(deepest) > MAX_DEPTH {
+            return None;
+        }
+        let pe = self.subtree_end(parent);
+        let removed = e - g;
+        let to = if pe >= e { pe - removed } else { pe };
+        Some(self.move_subtree(g, to, depth))
+    }
+
     /// Remove `g`; what was nested in it moves up one level.
     pub fn remove_group(&mut self, g: usize) {
         if g >= self.groups.len() {
@@ -1362,6 +1387,48 @@ pub const MAX_SHAPES: usize = 512;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn named(names: &[(&str, u8)]) -> Scene {
+        let mut sc = Scene::default();
+        sc.groups = names
+            .iter()
+            .map(|&(n, d)| {
+                let mut g = Group::new(n);
+                g.depth = d;
+                g
+            })
+            .collect();
+        sc
+    }
+
+    fn layout(sc: &Scene) -> Vec<(String, u8)> {
+        sc.groups.iter().map(|g| (g.name.clone(), g.depth)).collect()
+    }
+
+    #[test]
+    fn a_group_dropped_onto_another_goes_inside_it() {
+        // A, B, C: put B inside C, then A inside C as well -> C is the big group
+        let mut sc = named(&[("A", 0), ("B", 0), ("C", 0)]);
+        let at = sc.move_group_into(1, 2).expect("B goes into C");
+        assert_eq!(layout(&sc), vec![("A".into(), 0), ("C".into(), 0), ("B".into(), 1)]);
+        assert_eq!(sc.groups[at].name, "B");
+        sc.move_group_into(0, 1).expect("A goes into C too (a group before its new parent)");
+        assert_eq!(layout(&sc), vec![("C".into(), 0), ("B".into(), 1), ("A".into(), 1)]);
+    }
+
+    #[test]
+    fn nesting_stops_at_two_levels() {
+        let mut sc = named(&[("A", 0), ("a1", 1), ("B", 0), ("b1", 1)]);
+        assert_eq!(sc.move_group_into(0, 1), None, "not into its own child");
+        assert_eq!(sc.move_group_into(0, 0), None);
+        assert_eq!(sc.move_group_into(9, 0), None);
+        let before = sc.clone();
+        assert_eq!(sc.move_group_into(2, 0), None, "a big group cannot go inside another group");
+        assert_eq!(sc.move_group_into(3, 1), None, "a group inside a big group cannot take another group");
+        assert_eq!(sc, before, "a refused move changes nothing");
+        assert!(sc.move_group_into(3, 0).is_some(), "but a group can move from one big group to another");
+        assert_eq!(layout(&sc), vec![("A".into(), 0), ("a1".into(), 1), ("b1".into(), 1), ("B".into(), 0)]);
+    }
 
     #[test]
     fn a_sketch_outline_edit_updates_the_solid_atomically_and_survives_reload() {
