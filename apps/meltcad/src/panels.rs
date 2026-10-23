@@ -398,9 +398,16 @@ impl App {
                 ui.painter().rect_filled(r.rect, 7.0, Color32::from_white_alpha(22));
             }
         }
-        glyphs::eye(ui.painter(), eye, visible, if er.hovered() { Color32::WHITE } else { style::DIM });
-        let opcol = style::op_color(op);
-        glyphs::op(ui.painter(), opr, op, opcol.gamma_multiply(if orr.hovered() { 1.0 } else { 0.8 }));
+        // a quiet list: the eye and the join/cut mark show on the row under the mouse or the
+        // picked one, and always when they say something unusual (hidden, cut, paint, overlap)
+        let near = selected || resp.hovered() || er.hovered() || orr.hovered();
+        if near || !visible {
+            glyphs::eye(ui.painter(), eye, visible, if er.hovered() { Color32::WHITE } else { style::DIM });
+        }
+        if near || op != Op::Add {
+            let opcol = style::op_color(op);
+            glyphs::op(ui.painter(), opr, op, opcol.gamma_multiply(if orr.hovered() { 1.0 } else { 0.8 }));
+        }
         out.eye = er.clicked();
         out.op = orr.clicked();
         out.select = resp.clicked() && !out.eye && !out.op;
