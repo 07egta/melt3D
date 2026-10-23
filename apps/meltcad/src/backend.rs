@@ -266,9 +266,8 @@ pub fn save_to(path: &Path, settings: &Settings) -> std::io::Result<()> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, settings.to_text())?;
-    std::fs::rename(&tmp, path)
+    // a temporary file of its own, so two Melt 3D windows never take each other's (#227)
+    crate::recovery::atomic_write(path, settings.to_text().as_bytes())
 }
 
 pub fn load() -> Settings {
@@ -349,6 +348,30 @@ pub fn choice_now() -> (Choice, Option<String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn two_windows_saving_at_once_both_succeed_and_leave_no_temp_files() {
+        let dir = std::env::temp_dir().join(format!("melt3d-settings-race-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("settings.json");
+        let handles: Vec<_> = (0..8)
+            .map(|i| {
+                let path = path.clone();
+                std::thread::spawn(move || {
+                    let s = Settings { last_ok: None, failed: vec![], easy: i % 2 == 0 };
+                    (0..20).all(|_| save_to(&path, &s).is_ok())
+                })
+            })
+            .collect();
+        assert!(handles.into_iter().all(|h| h.join().unwrap_or(false)), "every save succeeds (#227)");
+        let text = std::fs::read_to_string(&path).expect("a settings file");
+        let _ = Settings::parse(&text);
+        let leftovers = std::fs::read_dir(&dir)
+            .map(|d| d.filter_map(Result::ok).filter(|e| e.file_name().to_string_lossy().ends_with(".tmp")).count())
+            .unwrap_or(0);
+        assert_eq!(leftovers, 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn backend_words_are_understood() {

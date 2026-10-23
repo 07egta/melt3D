@@ -240,3 +240,15 @@ fn closing_timeline_keeps_gif_job_pollable_and_cancellable() {
     bar(&mut app, &ctx);
     assert!(app.an.job.is_none(), "completion is polled with the timeline closed");
 }
+
+#[test]
+fn a_deleted_pose_stays_deleted() {
+    let ctx = egui::Context::default();
+    let mut app = animated();
+    app.show_pose(8);
+    assert_eq!(app.scene.anim.key_frames(), vec![0, 8]);
+    app.delete_animation_pose();
+    app.animation_capture_finished(&ctx);
+    app.settle(&ctx);
+    assert_eq!(app.scene.anim.key_frames(), vec![0], "the automatic capture must not bring the pose back (#88)");
+}
