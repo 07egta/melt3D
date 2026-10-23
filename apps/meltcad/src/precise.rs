@@ -28,7 +28,7 @@ fn services() -> Services {
     let open = dialog.clone();
     let save = dialog.clone();
     Services {
-        pick_open: Some(Box::new(move || {
+        pick_open: Some(Box::new(move |_kinds: &[&str]| {
             let future = open
                 .clone()
                 .add_filter("Designs, STEP, IGES and meshes", &["solidcraft", "json", "step", "stp", "igs", "iges", "3mf", "stl"])
@@ -53,8 +53,6 @@ fn melt_skin(mut t: Tokens) -> Tokens {
     t.toolbar = style::PANEL;
     t.panel = style::PANEL;
     t.panel_header = style::CARD;
-    t.heading_bg = style::CARD;
-    t.subheading_bg = style::PANEL_DARK;
     t.dialog_bg = style::PANEL;
     t.dialog_border = style::BORDER;
     t.border = style::BORDER;
@@ -75,7 +73,6 @@ impl Precise {
     fn new(rs: Option<&egui_wgpu::RenderState>) -> Precise {
         theme::set_skin(melt_skin);
         let mut app = SolveApp::new(Session::default(), services());
-        app.enable_easy_layout();
         app.apply_off_thread = Some(solidcraft_ui_egui::dialogs::APPLY_AT_ONCE);
         app.preferences.language = "ja".into();
         app.autosave_minutes = 0.5;
@@ -298,7 +295,6 @@ mod tests {
     fn exact_box(app: &mut App, ctx: &egui::Context) {
         app.set_precise_mode(ctx, true).unwrap();
         let p = app.precise.as_mut().unwrap();
-        p.app.viewport.no_pixels = true;
         p.app.run("sketch.create", json!({"plane":"XY","name":"Base"})).unwrap();
         p.app.run("sketch.rectangle.two_point", json!({"p0":[0,0],"p1":[240,24]})).unwrap();
         p.app.run("sketch.finish", json!({})).unwrap();

@@ -34,6 +34,97 @@ fn plate_with_hole() -> Session {
 const PLATE: f64 = 100.0 * 50.0 * 5.0;
 const HOLE: f64 = PI * 4.0 * 5.0;
 
+fn feature_pattern_plate() -> Session {
+    let mut s = Session::default();
+    run(&mut s, "solid.box", json!({"length":120,"width":120,"height":5,"corner":[0,0,0],"name":"Plate"}));
+    run(&mut s, "solid.hole", json!({"position":[60,60,5],"diameter":2,"name":"Hole"}));
+    s
+}
+
+#[test]
+fn feature_rectangular_center_flip_and_oblique_direction_keep_source_and_recompute() {
+    use solidcraft_geom::Vec3;
+    for flipped in [false, true] {
+        let mut s = feature_pattern_plate();
+        let before = s.doc.to_json();
+        run(
+            &mut s,
+            "solid.pattern.rectangular",
+            json!({
+                "features":["Hole"],"dir1":[1,0,0],"count1":4,"spacing1":15,
+                "dir2":[0.6,0.8,0],"count2":2,"spacing2":20,
+                "alignment":"center","alignment2":"center","reversed":flipped,"reversed2":flipped,"name":"Pattern"
+            }),
+        );
+        let sign = if flipped { -1.0 } else { 1.0 };
+        let st = s.world_state();
+        let body = &st.bodies[0].body;
+        // Analytic slots: the source, +1, -1, +2. The second direction is independent.
+        for i in [0.0, 1.0, -1.0, 2.0] {
+            for j in [0.0, 1.0] {
+                let p = Vec3::new(60.0 + sign * (15.0 * i + 12.0 * j), 60.0 + sign * 16.0 * j, 2.5);
+                assert!(!body.contains(p), "hole at {p:?}");
+                assert!(body.contains(p + Vec3::new(0.0, 2.0, 0.0)));
+            }
+        }
+        assert!(rel(volume(&mut s), 120.0 * 120.0 * 5.0 - 8.0 * PI * 5.0) < 1e-5);
+        let saved = s.doc.to_json();
+        run(&mut s, "edit.undo", json!({}));
+        assert_eq!(s.doc.to_json(), before);
+        run(&mut s, "edit.redo", json!({}));
+        assert_eq!(s.doc.to_json(), saved);
+        let mut reopened = Session::new(solidcraft_doc::Document::from_json(&saved).unwrap());
+        assert!(rel(volume(&mut reopened), volume(&mut s)) < 1e-8);
+        // The copies replay the edited feature rather than freezing its original tool.
+        run(&mut reopened, "timeline.redefine", json!({"feature":"Hole","command":"solid.hole","params":{"position":[60,60,5],"diameter":3}}));
+        assert!(rel(volume(&mut reopened), 120.0 * 120.0 * 5.0 - 8.0 * PI * 2.25 * 5.0) < 1e-5);
+    }
+}
+
+#[test]
+fn feature_circular_center_flip_uses_partial_arc_endpoints_and_full_circle_spacing() {
+    use solidcraft_geom::Vec3;
+    for total in [90.0_f64, 360.0] {
+        for flipped in [false, true] {
+            let mut s = feature_pattern_plate();
+            run(
+                &mut s,
+                "solid.pattern.circular",
+                json!({
+                    "features":["Hole"],"axis":{"origin":[40,60,0],"dir":[0,0,1]},
+                    "count":6,"angle":total,"alignment":"center","reversed":flipped
+                }),
+            );
+            let step = total / if total == 360.0 { 6.0 } else { 5.0 };
+            let st = s.world_state();
+            for slot in [0.0, 1.0, -1.0, 2.0, -2.0, 3.0] {
+                let a = (step * slot * if flipped { -1.0 } else { 1.0 }).to_radians();
+                let p = Vec3::new(40.0 + 20.0 * a.cos(), 60.0 + 20.0 * a.sin(), 2.5);
+                assert!(!st.bodies[0].body.contains(p), "hole at {p:?}");
+                assert!(st.bodies[0].body.contains(p + Vec3::new(2.0 * a.cos(), 2.0 * a.sin(), 0.0)));
+            }
+            assert!(rel(volume(&mut s), 120.0 * 120.0 * 5.0 - 6.0 * PI * 5.0) < 1e-5);
+            let saved = s.doc.to_json();
+            let mut reopened = Session::new(solidcraft_doc::Document::from_json(&saved).unwrap());
+            assert!(rel(volume(&mut reopened), volume(&mut s)) < 1e-8);
+        }
+    }
+}
+
+#[test]
+fn feature_pattern_rejects_malformed_alignment_and_flip_atomically() {
+    let mut s = feature_pattern_plate();
+    let before = s.doc.to_json();
+    let undo = s.undo.len();
+    for (key, value) in [("alignment", json!("diagonal")), ("alignment2", json!(null)), ("reversed", json!(1)), ("reversed2", json!("true"))] {
+        let mut p = json!({"features":["Hole"],"dir1":[1,0,0],"count1":4,"spacing1":10});
+        p[key] = value;
+        assert!(s.execute("solid.pattern.rectangular", &p).is_err());
+        assert_eq!(s.doc.to_json(), before);
+        assert_eq!(s.undo.len(), undo);
+    }
+}
+
 #[test]
 fn circular_axis_origin_rejects_invalid_values_atomically() {
     let mut s = plate_with_hole();
@@ -137,6 +228,35 @@ fn patterns_of_bodies() {
     run(&mut s, "solid.pattern.rectangular", json!({"bodies": ["Cube"], "dir1": [0, 0, 1], "count1": 3, "spacing1": 20}));
     assert!(rel(volume(&mut s), 6000.0) < 1e-4);
     assert!(s.execute("solid.pattern.rectangular", &json!({"bodies": ["Nope"], "dir1": [1, 0, 0], "count1": 2, "spacing1": 5})).is_err());
+}
+
+/// A construction axis picked in the dialog comes as its name (#2885): the copies turn about it,
+/// and follow it when it is edited.
+#[test]
+fn circular_pattern_about_a_construction_axis_follows_it() {
+    let mut s = Session::default();
+    run(&mut s, "solid.box", json!({"length": 2, "width": 2, "height": 2, "corner": [40, 0, 0], "body_name": "Cube"}));
+    let axis = |x: f64| json!({"a": {"point": [x, 0, 0]}, "b": {"point": [x, 0, 10]}, "name": "Axis1"});
+    run(&mut s, "construct.axis.two_points", axis(30.0));
+    run(&mut s, "solid.pattern.circular", json!({"bodies": ["Cube"], "axis": "Axis1", "count": 4}));
+    // The x and y extent of the four cubes.
+    let span = |s: &Session| {
+        let st = s.model.state();
+        assert_eq!(st.bodies.len(), 4);
+        let mut out = [f64::INFINITY, f64::NEG_INFINITY, f64::INFINITY, f64::NEG_INFINITY];
+        for b in st.bodies.iter().filter_map(|mb| solidcraft_kernel::measure(&mb.body).ok()).map(|m| m.bbox) {
+            out = [out[0].min(b.min.x), out[1].max(b.max.x), out[2].min(b.min.y), out[3].max(b.max.y)];
+        }
+        out
+    };
+    // About x = 30: the cube at x 40…42 also lands at 18…20, and at y ±(10…12).
+    for (got, want) in span(&s).into_iter().zip([18.0, 42.0, -12.0, 12.0]) {
+        assert!((got - want).abs() < 1e-6, "{got} vs {want}");
+    }
+    run(&mut s, "timeline.redefine", json!({"feature": "Axis1", "command": "construct.axis.two_points", "params": axis(35.0)}));
+    for (got, want) in span(&s).into_iter().zip([28.0, 42.0, -7.0, 7.0]) {
+        assert!((got - want).abs() < 1e-6, "{got} vs {want}");
+    }
 }
 
 #[test]
@@ -400,5 +520,87 @@ fn pattern_of_touching_cuts_needs_no_fallback() {
     }
     for k in ["faces", "edges", "vertices"] {
         assert_eq!(m["bodies"][0][k], single["bodies"][0][k], "{k}");
+    }
+}
+
+/// A pattern of cuts beside a round, on a bar whose long top edges are rounded, takes the exact
+/// planar route for every copy rather than the general boolean's retries: the teeth touch side
+/// by side and never reach the rounds (#1197). Retries and volume, not timing (see
+/// `scales_linearly`).
+#[test]
+fn pattern_of_cuts_beside_a_round_needs_no_retries() {
+    let mut s = Session::default();
+    run(&mut s, "solid.box", json!({"corner": [-10, 0, 0], "length": 20, "width": 200, "height": 4, "name": "Bar"}));
+    run(&mut s, "solid.fillet", json!({"edges": [[-10, 100, 4], [10, 100, 4]], "radius": 1}));
+    run(&mut s, "sketch.create", json!({"plane": "YZ", "name": "Tooth"}));
+    run(&mut s, "sketch.line", json!({"points": [[20, 4], [24, 2], [24, 5], [20, 5]], "closed": true}));
+    run(&mut s, "sketch.finish", json!({}));
+    let cut =
+        run(&mut s, "solid.extrude", json!({"sketch": "Tooth", "distance": 16, "direction": "symmetric", "operation": "cut", "name": "Tooth cut"}));
+    let teeth =
+        run(&mut s, "solid.pattern.rectangular", json!({"features": ["Tooth cut"], "dir1": [0, 1, 0], "count1": 40, "spacing1": 4, "name": "Teeth"}));
+    for created in [&cut, &teeth] {
+        let id = created["feature"].as_u64().unwrap();
+        let result = s.model.result(id).unwrap();
+        assert!(result.error.is_none() && result.warning.is_none(), "{result:?}");
+        assert!(result.boolean_diagnostics.events.is_empty(), "{:?}", result.boolean_diagnostics);
+    }
+    // The bar, less the rounds' corners and 40 teeth (a 4 x 2 triangle below the top, 16 wide).
+    let expected = 16000.0 - 400.0 * (1.0 - PI / 4.0) - 40.0 * 4.0 * 16.0;
+    let v = volume(&mut s);
+    assert!(rel(v, expected) < 1e-5, "{v} vs {expected}");
+}
+
+/// #2755: a cut cylinder with `targets` cuts only those bodies, and so do its pattern and mirror
+/// copies: a body over the plate that the cylinder was told to leave alone keeps its volume.
+#[test]
+fn copies_of_a_primitive_cut_only_its_targets() {
+    let body_volume = |s: &mut Session, name: &str| {
+        let m = run(s, "inspect.measure", json!({"bodies": [name]}));
+        m["bodies"][0]["volume_mm3"].as_f64().unwrap_or(f64::NAN)
+    };
+    // The command, and the holes in the plate after it (the cylinder's and its copies).
+    for (copy, holes) in [
+        (json!(["solid.pattern.rectangular", {"features": ["Trou"], "dir1": [1, 0, 0], "count1": 3, "spacing1": 30}]), 3.0),
+        (json!(["solid.mirror", {"features": ["Trou"], "plane": {"origin": [50, 0, 0], "normal": [1, 0, 0]}}]), 2.0),
+    ] {
+        let mut s = Session::default();
+        run(&mut s, "solid.box", json!({"length": 100, "width": 60, "height": 10, "body_name": "Plaque"}));
+        run(&mut s, "solid.box", json!({"length": 100, "width": 60, "height": 10, "corner": [0, 0, 5], "operation": "new", "body_name": "Voisin"}));
+        let cyl = json!({"radius": 3, "height": 30, "base": [10, 10, -5], "operation": "cut", "targets": ["Plaque"], "name": "Trou"});
+        run(&mut s, "solid.cylinder", cyl);
+        assert!(rel(body_volume(&mut s, "Voisin"), 60000.0) < 1e-9);
+        let (id, p) = (copy[0].as_str().unwrap_or_default(), copy[1].clone());
+        let r = run(&mut s, id, p);
+        assert_eq!(r["changed_bodies"], json!(["Plaque"]), "{id}");
+        assert!(rel(body_volume(&mut s, "Voisin"), 60000.0) < 1e-9, "{id} cut Voisin");
+        let removed = 60000.0 - body_volume(&mut s, "Plaque");
+        assert!(rel(removed, holes * PI * 9.0 * 10.0) < 1e-3, "{id}: {removed} mm³ cut from Plaque");
+    }
+}
+
+/// #3378: a pattern or mirror of a join whose targets the join merged into one body copies onto
+/// that body, as before #2755, instead of looking for the target the join used up.
+#[test]
+fn copies_of_a_join_that_merged_its_targets_join_the_merged_body() {
+    for (copy, n) in [
+        (json!(["solid.pattern.circular", {"features": ["spoke"], "axis": "Y", "count": 5}]), 5.0),
+        (json!(["solid.mirror", {"features": ["spoke"], "plane": {"origin": [0, 0, 0], "normal": [1, 0, 0]}}]), 2.0),
+    ] {
+        let mut s = Session::default();
+        run(&mut s, "solid.cylinder", json!({"radius": 66, "height": 3, "base": [0, 0, 0], "axis": "Y", "body_name": "rim"}));
+        run(&mut s, "solid.cylinder", json!({"radius": 63, "height": 3, "base": [0, 0, 0], "axis": "Y", "operation": "cut", "targets": ["rim"]}));
+        run(&mut s, "solid.cylinder", json!({"radius": 12, "height": 3, "base": [0, 0, 0], "axis": "Y", "body_name": "hub"}));
+        let v0 = volume(&mut s);
+        let spoke = json!({"length": 52, "width": 3, "height": 2.5, "corner": [12, 0, -1.25], "operation": "join", "targets": ["rim", "hub"], "name": "spoke"});
+        run(&mut s, "solid.box", spoke);
+        let v1 = volume(&mut s);
+        let (id, p) = (copy[0].as_str().unwrap_or_default(), copy[1].clone());
+        run(&mut s, id, p);
+        let names = run(&mut s, "inspect.measure", json!({}))["bodies"].as_array().map(|b| b.iter().map(|x| x["name"].clone()).collect::<Vec<_>>());
+        assert_eq!(names, Some(vec![json!("rim")]), "{id}: one body, the merged rim and hub");
+        // Every copy adds what the seed spoke added (curved bodies measure to about 0.02 %; a
+        // missing or doubled spoke is about 5 %).
+        assert!(rel(volume(&mut s), v0 + n * (v1 - v0)) < 1e-3, "{id}: {} vs {}", volume(&mut s), v0 + n * (v1 - v0));
     }
 }

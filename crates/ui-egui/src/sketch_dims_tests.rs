@@ -2,6 +2,7 @@
 
 use serde_json::json;
 
+use super::{BOX, in_view};
 use crate::scenario::Harness;
 
 fn drawing(command: &str) -> Harness {
@@ -125,6 +126,32 @@ fn forward_tab_completes_expression_then_cycles_and_shift_tab_moves_back() {
     let sketch = state.sketch(h.app.session.active_sketch.unwrap()).unwrap();
     assert_eq!(sketch.profiles.len(), 1);
     assert!((sketch.profiles[0].area - 120.0).abs() < 1e-6);
+}
+
+/// #3257: clicking a parameter suggestion under a line's length box puts the name in the box,
+/// which keeps the focus; the click places nothing, and Enter draws the line that long.
+#[test]
+fn clicking_a_parameter_suggestion_fills_the_length_box() {
+    let mut h = drawing("sketch.line");
+    h.app.run("parameters.add", json!({"name": "width", "expression": "24 mm"})).unwrap();
+    h.frames(2);
+    type_value(&mut h, "wid");
+    h.frames(1);
+    h.step(&json!({"click": {"handle": "dialog:suggestion:0"}})).unwrap();
+    h.frames(1);
+    assert_focus(&h, 0);
+    assert_eq!(h.app.tool.as_ref().unwrap().dims[0].value, "width");
+    let sketch = |h: &Harness| h.app.session.world_state().sketch(h.app.session.active_sketch.unwrap()).unwrap().sketch.curves.len();
+    assert_eq!(sketch(&h), 0, "the click on the list placed no point");
+    h.step(&json!({"key": "Enter"})).unwrap();
+    let state = h.app.session.world_state();
+    let sk = &state.sketch(h.app.session.active_sketch.unwrap()).unwrap().sketch;
+    assert_eq!(sk.curves.len(), 1);
+    let length = sk.shape(0).map(|s| match s {
+        solidcraft_engine::sketch::Shape::Line { a, b } => a.dist(b),
+        _ => 0.0,
+    });
+    assert!(length.is_some_and(|l| (l - 24.0).abs() < 1e-6), "{length:?}");
 }
 
 #[test]
@@ -315,4 +342,26 @@ fn a_line_end_on_a_circle_outside_the_axis_snap_stays_at_the_cursor() {
     let b = sk.curves.iter().find_map(|c| if let CurveKind::Line { b, .. } = c.kind { Some(b) } else { None }).unwrap();
     let end = sk.point(b).unwrap();
     assert!((end.len() - 30.0).abs() < 1e-9 && end.dist(at) < 0.5, "{end:?}");
+}
+
+/// A value box set off the cursor stays in the drawing area (#2201): past an edge it goes to the
+/// cursor's other side, still clear of it; with no room either side it is pushed inside.
+#[test]
+fn value_boxes_stay_in_view_and_off_the_cursor() {
+    let view = egui::Rect::from_min_max(egui::pos2(250.0, 130.0), egui::pos2(1650.0, 960.0));
+    let cursor = egui::pos2(565.0, 142.0);
+    // 50 px above the cursor: over the ribbon.
+    let above = cursor + egui::vec2(-34.0, -11.0 - 50.0);
+    let p = in_view(above, Some(view), Some(cursor));
+    let rect = egui::Rect::from_min_size(p, BOX);
+    assert!(view.contains_rect(rect), "{rect:?} in {view:?}");
+    assert!(!rect.expand(2.0).contains(cursor), "{rect:?} clear of {cursor:?}");
+    assert!(rect.min.y > cursor.y, "below the cursor now");
+    // A box that fits stays where it is; without a view nothing moves.
+    let inside = egui::pos2(700.0, 500.0);
+    assert_eq!(in_view(inside, Some(view), Some(cursor)), inside);
+    assert_eq!(in_view(above, None, Some(cursor)), above);
+    // No room on either side: inside the view all the same.
+    let tiny = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(80.0, 30.0));
+    assert!(tiny.contains_rect(egui::Rect::from_min_size(in_view(egui::pos2(-200.0, -200.0), Some(tiny), Some(egui::pos2(40.0, 15.0))), BOX)));
 }

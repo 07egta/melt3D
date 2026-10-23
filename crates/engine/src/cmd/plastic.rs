@@ -1,9 +1,11 @@
 //! Plastic (enclosure) features: Boss, Lip / Groove, Snap Fit and Rest, and plastic rules.
 
 use serde_json::{Value, json};
+use solidcraft_doc::BodyName;
 use solidcraft_doc::FeatureKind;
 use solidcraft_doc::expr::Kind;
 use solidcraft_doc::plastic::PlasticRule;
+use solidcraft_doc::{Dir, FacePick, Position};
 use solidcraft_geom::Vec3;
 
 use super::CommandSpec;
@@ -19,7 +21,7 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("plastic.lip", "Lip", lip).at("PLASTIC", "CREATE").icon("lip").params(
         "face: [x,y,z] on the rim face of a shelled body; width, height; type?: lip|groove; gap? (groove clearance); side?: inside|outside (which rim edge); body?",
     ),
-    CommandSpec::new("plastic.snap_fit", "Snap Fit", snap_fit).at("PLASTIC", "CREATE").icon("snap").params(
+    CommandSpec::new("plastic.snap_fit", "Snap Fit", snap_fit).at("PLASTIC", "CREATE").icon("snap_fit").params(
         "position: [x,y,z] on a face; direction? (default: out of the face); hook: [x,y,z] (the catch's direction); length, thickness, width, catch_depth, catch_length; body?",
     ),
     CommandSpec::new("plastic.rest", "Rest", rest).at("PLASTIC", "CREATE").icon("rest").params(
@@ -34,7 +36,7 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("plastic.assign_rule", "Assign Plastic Rule", assign_rule).at("PLASTIC", "SETUP").icon("plastic_assign").params(
         "bodies: [names]; rule: name (empty: no rule) — plastic features on these bodies take its draft and clearance as defaults",
     ),
-    CommandSpec::new("plastic.rules", "List Plastic Rules", list_rules).noundo().params("→ rules with their expressions and values, the active rule and the rules assigned to bodies"),
+    CommandSpec::new("plastic.rules", "List Plastic Rules", list_rules).icon("plastic_rule").noundo().params("→ rules with their expressions and values, the active rule and the rules assigned to bodies"),
 ];
 
 fn rule_json(s: &Session, r: &PlasticRule) -> Value {
@@ -87,7 +89,7 @@ fn manage_rules(s: &mut Session, p: &Value) -> Result<Value> {
             let probe = e.replace("Thickness", "(1 mm)");
             check_expr(s, &probe, kind, cmd, k)?;
             if let Some(slot) = rule.field_mut(k) {
-                *slot = e;
+                *slot = e.into();
             }
         }
     }
@@ -159,20 +161,20 @@ fn rest(s: &mut Session, p: &Value) -> Result<Value> {
         None => None,
     };
     let kind = FeatureKind::Rest {
-        position,
-        direction,
-        along,
+        position: FacePick(position),
+        direction: Dir(direction),
+        along: along.map(Dir),
         width: required(s, p, "width", Kind::Length, cmd)?,
         length: checked(s, p, "length", Kind::Length, cmd)?,
         height: required(s, p, "height", Kind::Length, cmd)?,
         draft: checked(s, p, "draft", Kind::Angle, cmd)?,
         thickness: checked(s, p, "thickness", Kind::Length, cmd)?,
-        body: str_(p, "body").map(str::to_string),
+        body: str_(p, "body").map(BodyName::from),
     };
     add_feature(s, p, kind)
 }
 
-fn checked(s: &Session, p: &Value, k: &str, kind: Kind, cmd: &str) -> Result<Option<String>> {
+fn checked(s: &Session, p: &Value, k: &str, kind: Kind, cmd: &str) -> Result<Option<solidcraft_doc::Expr>> {
     match expr(p, k) {
         Some(e) => {
             check_expr(s, &e, kind, cmd, k)?;
@@ -182,7 +184,7 @@ fn checked(s: &Session, p: &Value, k: &str, kind: Kind, cmd: &str) -> Result<Opt
     }
 }
 
-fn required(s: &Session, p: &Value, k: &str, kind: Kind, cmd: &str) -> Result<String> {
+fn required(s: &Session, p: &Value, k: &str, kind: Kind, cmd: &str) -> Result<solidcraft_doc::Expr> {
     let e = req_expr(cmd, p, k)?;
     check_expr(s, &e, kind, cmd, k)?;
     Ok(e)
@@ -202,8 +204,8 @@ fn boss(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "plastic.boss";
     let (position, direction) = placed(s, p, cmd)?;
     let kind = FeatureKind::Boss {
-        position,
-        direction,
+        position: FacePick(position),
+        direction: Dir(direction),
         diameter: required(s, p, "diameter", Kind::Length, cmd)?,
         height: required(s, p, "height", Kind::Length, cmd)?,
         hole_diameter: checked(s, p, "hole_diameter", Kind::Length, cmd)?,
@@ -214,7 +216,7 @@ fn boss(s: &mut Session, p: &Value) -> Result<Value> {
         rib_thickness: checked(s, p, "rib_thickness", Kind::Length, cmd)?,
         rib_length: checked(s, p, "rib_length", Kind::Length, cmd)?,
         rib_offset: checked(s, p, "rib_offset", Kind::Length, cmd)?,
-        body: str_(p, "body").map(str::to_string),
+        body: str_(p, "body").map(BodyName::from),
     };
     add_feature(s, p, kind)
 }
@@ -233,13 +235,13 @@ fn lip(s: &mut Session, p: &Value) -> Result<Value> {
         Some(o) => return Err(bad(cmd, format!("unknown side `{o}` (inside or outside)"))),
     };
     let kind = FeatureKind::Lip {
-        face,
+        face: Position(face),
         width: required(s, p, "width", Kind::Length, cmd)?,
         height: required(s, p, "height", Kind::Length, cmd)?,
         groove,
         gap: checked(s, p, "gap", Kind::Length, cmd)?,
         outside: outside || bool_(p, "outside").unwrap_or(false),
-        body: str_(p, "body").map(str::to_string),
+        body: str_(p, "body").map(BodyName::from),
     };
     add_feature(s, p, kind)
 }
@@ -252,15 +254,15 @@ fn snap_fit(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(cmd, "`hook` must point across the arm"));
     }
     let kind = FeatureKind::SnapFit {
-        position,
-        direction,
-        hook,
+        position: FacePick(position),
+        direction: Dir(direction),
+        hook: Dir(hook),
         length: required(s, p, "length", Kind::Length, cmd)?,
         thickness: required(s, p, "thickness", Kind::Length, cmd)?,
         width: required(s, p, "width", Kind::Length, cmd)?,
         catch_depth: required(s, p, "catch_depth", Kind::Length, cmd)?,
         catch_length: required(s, p, "catch_length", Kind::Length, cmd)?,
-        body: str_(p, "body").map(str::to_string),
+        body: str_(p, "body").map(BodyName::from),
     };
     add_feature(s, p, kind)
 }
@@ -334,6 +336,58 @@ mod tests {
         // Outside band along the outer edge (80 x 50): 80·50 − 78·48 = 256, 2 deep.
         assert!(rel(v0 - volume(&mut g), 256.0 * 2.0) < 1e-6, "{}", v0 - volume(&mut g));
         assert!(g.execute("plastic.lip", &json!({"face": [40, 25, 0], "width": 1, "height": 2})).is_err(), "a face without an inner edge");
+    }
+
+    #[test]
+    fn round_rim_lips_and_grooves_keep_curved_walls() {
+        for (obround, tilted) in [(false, false), (true, false), (true, true)] {
+            for outside in [false, true] {
+                for groove in [false, true] {
+                    let mut s = Session::default();
+                    let plane = if tilted {
+                        solidcraft_geom::Plane::new(Vec3::new(7., -3., 5.), Vec3::new(1., -1., 0.), Vec3::new(1., 1., -2.)).unwrap()
+                    } else {
+                        solidcraft_geom::Plane::XY
+                    };
+                    if obround {
+                        run(&mut s, "sketch.create", json!({"plane": plane, "name": "Rim"}));
+                        run(&mut s, "sketch.slot.center_to_center", json!({"p0": [-20, 0], "p1": [20, 0], "width": 40}));
+                        run(&mut s, "sketch.finish", json!({}));
+                        run(&mut s, "solid.extrude", json!({"sketch": "Rim", "distance": 12, "body_name": "Case"}));
+                    } else {
+                        run(&mut s, "solid.cylinder", json!({"radius": 20, "height": 12, "body_name": "Case"}));
+                    }
+                    let top = plane.origin + plane.normal() * 12.0;
+                    run(&mut s, "solid.shell", json!({"faces": [top], "thickness": 2}));
+                    let before = volume(&mut s);
+                    run(
+                        &mut s,
+                        "plastic.lip",
+                        json!({"face": top + plane.y * 19.0, "width": 0.8, "height": 1.5,
+                        "side": if outside { "outside" } else { "inside" }, "type": if groove { "groove" } else { "lip" }, "gap": 0.2}),
+                    );
+                    let width = if groove { 1.0 } else { 0.8 };
+                    let area = if outside { PI * (400.0 - (20.0_f64 - width).powi(2)) } else { PI * ((18.0_f64 + width).powi(2) - 324.0) };
+                    let area = area + if obround { 80.0 * width } else { 0.0 };
+                    let want = before + if groove { -area * 1.7 } else { area * 1.5 };
+                    let check = |s: &Session| {
+                        let st = s.model.state();
+                        let body = &st.body("Case").unwrap().body;
+                        let m = solidcraft_kernel::measure(body).unwrap();
+                        assert!(
+                            (m.volume - want).abs() < 0.1,
+                            "obround={obround} tilted={tilted} outside={outside} groove={groove}: {} vs {want}",
+                            m.volume
+                        );
+                        assert!(m.faces < 32, "obround={obround} tilted={tilted} outside={outside} groove={groove}: polygonal walls: {m:?}");
+                        assert!(m.merged.face_types.get("cylinder").copied().unwrap_or(0) >= 3, "{m:?}");
+                        assert!(body.validity().is_empty());
+                    };
+                    check(&s);
+                    check(&Session::new(solidcraft_doc::Document::from_json(&s.doc.to_json()).unwrap()));
+                }
+            }
+        }
     }
 
     #[test]

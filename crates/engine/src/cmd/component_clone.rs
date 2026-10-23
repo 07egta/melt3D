@@ -1,4 +1,5 @@
 //! Independent copies of a component definition graph, assembled and evaluated atomically.
+use solidcraft_doc::BodyName;
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::params::bad;
@@ -252,6 +253,11 @@ pub(super) fn paste(
         };
         let name = unique(&c.name, &mut used);
         let new = scratch.doc_mut().add_component(Some(&name), mapped_parent)?;
+        // A copy keeps the definition's part properties.
+        if let Some(added) = scratch.doc_mut().components.iter_mut().find(|x| x.id == new) {
+            added.metadata = c.metadata.clone();
+            added.properties = c.properties.clone();
+        }
         components.insert(*old, new);
         if *old != component {
             scratch.doc_mut().occurrences.retain(|o| o.component != new);
@@ -327,7 +333,7 @@ pub(super) fn paste(
         let entry = feats.iter().find(|f| {
             !f.suppressed
                 && matches!(&f.kind, FeatureKind::BodyTransfer { bodies, from, to, .. }
-            if !selected.contains(from) && bodies.contains(&body.name)
+            if !selected.contains(from) && bodies.iter().any(|b| *b == body.name)
                 && s.model.result(f.id).is_some_and(|result| !result.skipped && result.error.is_none()
                     && result.state.body(&body.name).is_some_and(|entered| source.model_body_component(entered) == *to)))
         });
@@ -346,7 +352,7 @@ pub(super) fn paste(
         bodies.insert(body.name.clone(), new_name.clone());
         let feature_name = unique(&format!("{} Base", body.name), &mut used);
         let id = scratch.doc_mut().add_feature(
-            FeatureKind::Import { file: format!("{} independent base", body.name), step: step.into(), components: Vec::new() },
+            FeatureKind::Import { file: format!("{} independent base", body.name), step: step.into(), components: Vec::new(), skip: Vec::new() },
             Some(&feature_name),
         )?;
         if let Some(f) = scratch.doc_mut().feature_mut(id) {
@@ -426,7 +432,7 @@ pub(super) fn paste(
         if let FeatureKind::Emboss { face: Some(face), .. } = &mut f.kind
             && !face.path.is_empty()
             && let FeatureKind::Emboss { face: Some(old_face), .. } = &old.kind
-            && bodies.contains_key(&old_face.body)
+            && bodies.contains_key(old_face.body.as_ref())
         {
             face.path = cloned_path(&source, &old_face.path, component, &clone_path, &occurrences)?;
         }
@@ -483,7 +489,7 @@ pub(super) fn paste(
         .collect();
     if !moved_out.is_empty() {
         let name = unique("Assigned-out bodies", &mut used);
-        let id = scratch.doc_mut().add_feature(FeatureKind::Remove { bodies: moved_out }, Some(&name))?;
+        let id = scratch.doc_mut().add_feature(FeatureKind::Remove { bodies: moved_out.into_iter().map(BodyName).collect() }, Some(&name))?;
         if let Some(f) = scratch.doc_mut().feature_mut(id) {
             f.component = root;
         }
@@ -526,7 +532,7 @@ pub(super) fn paste(
     for feature in &feats {
         if let FeatureKind::Emboss { face: Some(face), .. } = &feature.kind
             && !face.path.is_empty()
-            && !bodies.contains_key(&face.body)
+            && !bodies.contains_key(face.body.as_ref())
         {
             notices.push(format!("{} retains external selected occurrence path {:?}", feature.name, face.path));
         }
@@ -588,7 +594,7 @@ pub(super) fn paste(
         }
         if let FeatureKind::Pattern { features: references, .. } | FeatureKind::Mirror { features: references, .. } = &feature.kind {
             for name in references {
-                if !names.contains_key(name) {
+                if !names.contains_key(name.as_ref()) {
                     notices.push(format!("{} retains external feature reference {name}", feature.name));
                 }
             }

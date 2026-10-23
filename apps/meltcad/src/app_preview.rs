@@ -93,7 +93,6 @@ fn precise_preview(app: &mut App, ctx: &egui::Context, which: &str) {
     assert!(app.precise_on, "the embedded SolidCraft workspace must open");
     let p = app.precise.as_mut().expect("the embedded modeller was created");
     p.app.home.open = false;
-    p.app.viewport.no_pixels = false;
     if which != "empty" {
         p.app.run("sketch.create", json!({"plane":"XY", "name":"Base"})).expect("create the exact sketch");
         p.app.run("sketch.rectangle.two_point", json!({"p0":[0,0], "p1":[60,40]})).expect("draw the exact rectangle");
