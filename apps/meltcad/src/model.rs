@@ -1335,6 +1335,14 @@ impl Scene {
                 if s.kind.uses_path() && s.path.len() < 2 {
                     s.path = s.kind.default_path();
                 }
+                // one handle pair per node at most, each finite and inside the world (#215): a file
+                // with a huge handle list must not slow every curve sample down
+                s.curve_handles.truncate(s.path.len());
+                for h in &mut s.curve_handles {
+                    for v in h.incoming.iter_mut().chain(h.outgoing.iter_mut()) {
+                        fix(v, -5000.0, 5000.0, 0.0);
+                    }
+                }
                 if !s.guide || s.kind != Kind::Curve {
                     s.guide_plane = None;
                 } else if let Some(plane) = &mut s.guide_plane {
@@ -1419,6 +1427,21 @@ mod tests {
 
     fn layout(sc: &Scene) -> Vec<(String, u8)> {
         sc.groups.iter().map(|g| (g.name.clone(), g.depth)).collect()
+    }
+
+    #[test]
+    fn a_file_with_a_huge_curve_handle_list_loads_with_one_handle_per_node() {
+        let mut sc = Scene::default();
+        let mut sh = Shape::new(Kind::Curve, [0.0; 3], Material::default());
+        sh.path = vec![[0.0, 0.0, 0.0, 4.0], [10.0, 0.0, 0.0, 4.0], [20.0, 5.0, 0.0, 4.0]];
+        sh.curve_handles = vec![CurveHandles::default(); 100_000];
+        sh.curve_handles[0].outgoing = [-1e9, 1e9, 2.0];
+        sc.groups[0].shapes.push(sh);
+        let (back, _) = Scene::from_json_notes(&sc.to_json()).expect("loads");
+        let curve = back.groups[0].shapes.iter().find(|s| s.kind == Kind::Curve).expect("the curve");
+        assert_eq!(curve.curve_handles.len(), 3, "one handle pair per node (#215)");
+        let o = curve.curve_handles[0].outgoing;
+        assert!(o.iter().all(|v| v.is_finite() && v.abs() <= 5000.0), "{o:?}");
     }
 
     #[test]

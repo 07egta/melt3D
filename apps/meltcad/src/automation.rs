@@ -289,6 +289,70 @@ fn merge(base: &mut Value, patch: &Value) {
 }
 
 /// The shape fields of a command (`color` is the short way to say `material.color`).
+/// What every command may carry besides its own fields.
+const META_KEYS: [&str; 3] = ["cmd", "token", "id"];
+const SHAPE_KEYS: [&str; 26] = [
+    "name",
+    "kind",
+    "size",
+    "round",
+    "pos",
+    "rot",
+    "scale",
+    "op",
+    "blend",
+    "material",
+    "visible",
+    "guide",
+    "guide_plane",
+    "outline",
+    "params",
+    "path",
+    "curve_handles",
+    "outline2",
+    "shell",
+    "corner",
+    "uid",
+    "source",
+    "face_melt",
+    "group",
+    "shape",
+    "color",
+];
+const MATERIAL_KEYS: [&str; 16] = [
+    "color",
+    "roughness",
+    "metallic",
+    "glow",
+    "glass",
+    "iridescence",
+    "coat",
+    "translucency",
+    "color2",
+    "gradient",
+    "grad_axis",
+    "grad_flip",
+    "grad_local",
+    "grad_soft",
+    "grad_from",
+    "grad_to",
+];
+
+/// A typo in a field name is an error that names it, never a silent success (#223).
+fn reject_unknown(obj: &Map<String, Value>, known: &[&str], what: &str) -> Result<(), String> {
+    let unknown: Vec<&str> = obj.keys().map(String::as_str).filter(|k| !known.contains(k) && !META_KEYS.contains(k)).collect();
+    if !unknown.is_empty() {
+        return Err(format!("Unknown {what} field(s): {}. Known: {}", unknown.join(", "), known.join(", ")));
+    }
+    if let Some(m) = obj.get("material").and_then(Value::as_object) {
+        let bad: Vec<&str> = m.keys().map(String::as_str).filter(|k| !MATERIAL_KEYS.contains(k)).collect();
+        if !bad.is_empty() {
+            return Err(format!("Unknown material field(s): {}", bad.join(", ")));
+        }
+    }
+    Ok(())
+}
+
 fn shape_patch(obj: &Map<String, Value>) -> Value {
     let mut p = without(obj, &["cmd", "token", "group", "shape", "color", "kind"]);
     if let Some(c) = obj.get("color") {
@@ -301,6 +365,7 @@ fn shape_patch(obj: &Map<String, Value>) -> Value {
 }
 
 fn shape_add(scene: &mut Scene, obj: &Map<String, Value>) -> Result<Value, String> {
+    reject_unknown(obj, &SHAPE_KEYS, "shape")?;
     if scene.shape_count() >= MAX_SHAPES {
         return Err(format!("Up to {MAX_SHAPES} shapes"));
     }
@@ -327,6 +392,7 @@ fn shape_add(scene: &mut Scene, obj: &Map<String, Value>) -> Result<Value, Strin
 }
 
 fn shape_set(scene: &mut Scene, obj: &Map<String, Value>) -> Result<Value, String> {
+    reject_unknown(obj, &SHAPE_KEYS, "shape")?;
     let (g, s) = (index(obj, "group")?, index(obj, "shape")?);
     let shape = scene.shape_mut(g, s).ok_or("No such shape")?;
     let mut v = serde_json::to_value(&*shape).map_err(|e| e.to_string())?;
@@ -344,6 +410,7 @@ fn shape_set(scene: &mut Scene, obj: &Map<String, Value>) -> Result<Value, Strin
 }
 
 fn patch_group(g: &mut Group, obj: &Map<String, Value>) -> Result<(), String> {
+    reject_unknown(obj, &["group", "name", "op", "blend", "visible"], "group")?;
     let mut v = serde_json::to_value(&*g).map_err(|e| e.to_string())?;
     let mut p = Map::new();
     for key in ["name", "op", "blend", "visible"] {
@@ -380,6 +447,7 @@ fn extrude(scene: &mut Scene, obj: &Map<String, Value>) -> Result<Value, String>
         "side" => Frame::side(),
         other => return Err(format!("Unknown plane \"{other}\" (floor, front, side)")),
     };
+    reject_unknown(&without(obj, &["points", "height", "plane", "z"]), &SHAPE_KEYS, "shape")?;
     let built = sketch::extrude(&frame, &profile, height, false).map_err(|e| e.message())?;
     let mut shape = Shape::new(built.kind, built.pos, Material::default());
     sketch::apply(&built, &mut shape);
@@ -1144,6 +1212,21 @@ mod tests {
     }
 
     #[test]
+    fn a_misspelled_field_is_named_in_the_error_and_changes_nothing() {
+        let mut sc = Scene::default();
+        run(&mut sc, json!({"cmd": "shape.add", "kind": "Sphere"})).expect("a good shape.add");
+        let before = sc.clone();
+        let e = run(&mut sc, json!({"cmd": "shape.set", "group": 0, "shape": 0, "postion": [100, 0, 0]})).unwrap_err();
+        assert!(e.contains("postion"), "{e}");
+        let e = run(&mut sc, json!({"cmd": "group.set", "group": 0, "visble": false})).unwrap_err();
+        assert!(e.contains("visble"), "{e}");
+        assert_eq!(sc, before);
+        // the right names still work, and the usual extras (id, token) are fine
+        run(&mut sc, json!({"cmd": "shape.set", "id": 7, "group": 0, "shape": 0, "pos": [10, 0, 0], "color": [1, 0, 0]})).expect("good fields");
+        assert_eq!(sc.shape(0, 0).map(|s| s.pos), Some([10.0, 0.0, 0.0]));
+    }
+
+    #[test]
     fn hostile_commands_return_errors_and_never_panic() {
         let mut sc = Scene::default();
         for bad in [
@@ -1151,6 +1234,12 @@ mod tests {
             json!({}),
             json!({"cmd": 3}),
             json!({"cmd": "nope"}),
+            // a typo in a field name is an error, not a silent success (#223)
+            json!({"cmd": "shape.set", "group": 0, "shape": 0, "postion": [100, 0, 0]}),
+            json!({"cmd": "shape.add", "kind": "Sphere", "visble": false}),
+            json!({"cmd": "shape.add", "kind": "Sphere", "material": {"colr": [1, 0, 0]}}),
+            json!({"cmd": "group.set", "group": 0, "visble": false}),
+            json!({"cmd": "group.add", "nmae": "x"}),
             json!({"cmd": "piece.reload"}),
             json!({"cmd": "piece.reload", "group": 99999}),
             json!({"cmd": "piece.reload", "group": 0}),

@@ -874,7 +874,21 @@ impl App {
                 sh.blend = if on { if sh.blend > 0.0 { sh.blend } else { 6.0 } } else { 0.0 };
             }
         }
-        for &g in groups.iter().chain(if on { parents.iter() } else { [].iter() }) {
+        // Turning off: a parent group whose shapes are all being turned off stops melting too, so
+        // "off" really stops the melt into the other groups (#236). A parent that still holds a
+        // melting shape keeps its melt, so that shape stays as it was.
+        let emptied: Vec<usize> = if on {
+            Vec::new()
+        } else {
+            parents
+                .iter()
+                .copied()
+                .filter(|&g| {
+                    self.scene.groups.get(g).is_some_and(|gr| (0..gr.shapes.len()).all(|s| shapes.contains(&(g, s)) || gr.shapes[s].blend <= 0.0))
+                })
+                .collect()
+        };
+        for &g in groups.iter().chain(if on { parents.iter() } else { emptied.iter() }) {
             if let Some(gr) = self.scene.groups.get_mut(g) {
                 gr.blend = if on { if gr.blend > 0.0 { gr.blend } else { 12.0 } } else { 0.0 };
             }
@@ -2059,8 +2073,9 @@ impl App {
                 if turned {
                     return Some(format!("About {:.0} mm", crate::view::radius_of(sh) * 2.0));
                 }
-                // a quarter turn about one axis swaps two sizes: keep it simple and exact only when not turned
-                let dim = |i: usize| h[i] * sh.scale[i] * 2.0;
+                // turned by whole quarter turns: the sizes along the world's axes, swapped as turned (#195)
+                let r = crate::sdf::rotation(sh.rot);
+                let dim = |i: usize| (0..3).map(|j| r[i][j].abs() * h[j] * sh.scale[j]).sum::<f32>() * 2.0;
                 Some(format!("W {:.1} × D {:.1} × H {:.1} mm", dim(0), dim(1), dim(2)))
             }
             Pick::Group(g) => {
@@ -2783,6 +2798,51 @@ mod tests {
             app.toggle_melt_selected();
             assert!((gap(&app) - hard).abs() < 1e-3, "nested {nested}: pressing again takes the melt away");
         }
+    }
+
+    #[test]
+    fn melt_off_on_the_only_shape_of_a_group_stops_the_group_melting_too() {
+        let ball = |x: f32| {
+            let mut s = Shape::new(Kind::Box, [x, 0.0, 0.0], crate::model::Material::default());
+            s.blend = 6.0;
+            s
+        };
+        let mut app = App::new(true, None);
+        let mut a = Group::new("A");
+        a.shapes = vec![ball(-21.0)];
+        let mut b = Group::new("B");
+        b.blend = 12.0;
+        b.shapes = vec![ball(21.0)];
+        app.scene.groups = vec![a, b];
+        app.sel = Some(Pick::Shape(1, 0));
+        assert!(app.selection_melts());
+        app.toggle_melt_selected();
+        assert!(!app.selection_melts());
+        assert_eq!(app.scene.groups[1].blend, 0.0, "B held only that shape: its melt into A is off too (#236)");
+        // a group that still holds another melting shape keeps its melt
+        let mut c = ball(60.0);
+        c.blend = 6.0;
+        app.scene.groups[1].shapes.push(c);
+        app.scene.groups[1].blend = 12.0;
+        app.scene.groups[1].shapes[0].blend = 6.0;
+        app.sel = Some(Pick::Shape(1, 0));
+        app.toggle_melt_selected();
+        assert_eq!(app.scene.groups[1].blend, 12.0);
+        assert_eq!(app.scene.groups[1].shapes[1].blend, 6.0);
+    }
+
+    #[test]
+    fn a_quarter_turned_box_shows_its_sizes_along_the_world_axes() {
+        let mut app = App::new(true, None);
+        let mut b = Shape::new(Kind::Box, [0.0; 3], crate::model::Material::default());
+        b.size = [20.0, 5.0, 10.0];
+        let h = b.local_half();
+        b.rot = [0.0, 0.0, 90.0];
+        app.scene.groups[0].shapes = vec![b];
+        app.sel = Some(Pick::Shape(0, 0));
+        let text = app.selection_size().expect("a size");
+        let want = format!("W {:.1} × D {:.1} × H {:.1} mm", h[1] * 2.0, h[0] * 2.0, h[2] * 2.0);
+        assert_eq!(text, want, "a quarter turn about Z swaps width and depth (#195)");
     }
 
     #[test]
