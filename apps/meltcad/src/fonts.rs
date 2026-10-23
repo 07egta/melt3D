@@ -53,9 +53,24 @@ pub fn setup(ctx: &egui::Context) {
 }
 
 /// Install font bytes found earlier (see [`FontJob`]); `None` changes nothing.
+/// SolidCraft's own families (its medium, semibold and bold faces) are always installed: its screen
+/// asks for them, and a missing font family stops the whole app.
 pub fn install(ctx: &egui::Context, bytes: Option<Vec<u8>>) {
-    if let Some(bytes) = bytes {
-        ctx.set_fonts(with_cjk_fallback(egui::FontDefinitions::default(), bytes));
+    let base = solidcraft_ui_egui::fonts::base_font_definitions();
+    ctx.set_fonts(match bytes {
+        Some(bytes) => with_cjk_fallback(base, bytes),
+        None => base,
+    });
+    ctx.data_mut(|d| d.insert_temp(egui::Id::new(INSTALLED), true));
+}
+
+const INSTALLED: &str = "meltcad_fonts_installed";
+
+/// Make sure SolidCraft's font families exist before its screen draws (a context nobody set fonts on,
+/// as in tests, would otherwise stop at the first bold label).
+pub fn ensure(ctx: &egui::Context) {
+    if !ctx.data(|d| d.get_temp::<bool>(egui::Id::new(INSTALLED)).unwrap_or(false)) {
+        install(ctx, None);
     }
 }
 
@@ -80,7 +95,8 @@ impl FontJob {
 /// `fonts` with `bytes` appended as the last fallback of the Proportional and Monospace families.
 fn with_cjk_fallback(mut fonts: egui::FontDefinitions, bytes: Vec<u8>) -> egui::FontDefinitions {
     fonts.font_data.insert(CJK_FALLBACK.to_owned(), Arc::new(egui::FontData::from_owned(bytes)));
-    for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+    let families: Vec<egui::FontFamily> = fonts.families.keys().cloned().collect();
+    for family in families {
         let list = fonts.families.entry(family).or_default();
         list.retain(|entry| entry != CJK_FALLBACK);
         list.push(CJK_FALLBACK.to_owned());
