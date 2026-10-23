@@ -533,7 +533,9 @@ impl App {
             PendingFileAction::Open(path) => match crate::recovery::read_project(&path) {
                 Ok((scene, notes)) => (scene, Some(path), notes),
                 Err(e) => {
-                    self.status = (format!("Could not open: {e}"), 0.0);
+                    // through the notice queue: it is shown with the real time of this frame, so a
+                    // failure long after start-up still shows (#219)
+                    self.notice = Some(format!("Could not open: {e}"));
                     return;
                 }
             },
@@ -1106,6 +1108,13 @@ impl App {
                 }
                 let e = self.scene.subtree_end(g);
                 if (g..e).contains(&g2) {
+                    return;
+                }
+                // a subtree that would not fit at the target's depth is refused, not flattened (#203)
+                let base = self.scene.groups[g].depth;
+                let deepest = self.scene.groups[g..e].iter().map(|x| x.depth - base).max().unwrap_or(0);
+                if self.scene.groups[g2].depth.saturating_add(deepest) > crate::model::MAX_DEPTH {
+                    self.notice = Some("A Parent Group cannot go inside another group".into());
                     return;
                 }
                 // (the place among the groups that stay, and the depth of the group it lands beside)
@@ -2843,6 +2852,33 @@ mod tests {
         let text = app.selection_size().expect("a size");
         let want = format!("W {:.1} × D {:.1} × H {:.1} mm", h[1] * 2.0, h[0] * 2.0, h[2] * 2.0);
         assert_eq!(text, want, "a quarter turn about Z swaps width and depth (#195)");
+    }
+
+    #[test]
+    fn dragging_a_parent_group_beside_a_nested_group_keeps_its_tree() {
+        let mut app = App::new(true, None);
+        let g = |n: &str, d: u8| {
+            let mut x = Group::new(n);
+            x.depth = d;
+            x
+        };
+        app.scene.groups = vec![g("A", 0), g("a1", 1), g("B", 0), g("b1", 1)];
+        let before: Vec<(String, u8)> = app.scene.groups.iter().map(|x| (x.name.clone(), x.depth)).collect();
+        app.move_layer(Pick::Group(0), Pick::Group(3), true);
+        let after: Vec<(String, u8)> = app.scene.groups.iter().map(|x| (x.name.clone(), x.depth)).collect();
+        assert_eq!(after, before, "a parent group cannot land among nested groups; nothing is flattened (#203)");
+    }
+
+    #[test]
+    fn a_failed_open_long_after_start_still_shows_why() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        app.apply_file_action(PendingFileAction::Open(std::path::PathBuf::from("/nonexistent/melt3d/missing.meltcad")));
+        let input = egui::RawInput { time: Some(60.0), ..Default::default() };
+        let mut out = ctx.run_ui(input, |ui| app.frame_body(ui));
+        out.textures_delta.clear();
+        assert!(app.status.0.contains("Could not open"), "{:?}", app.status);
+        assert!((app.status.1 - 60.0).abs() < 1.0, "shown at the time it happened, not at start-up (#219): {:?}", app.status);
     }
 
     #[test]

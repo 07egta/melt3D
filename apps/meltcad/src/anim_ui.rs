@@ -94,6 +94,20 @@ impl App {
         self.an.rev = self.track_scene();
     }
 
+    /// "Delete pose": the key goes, the scene shows what the other poses say at this frame, and that
+    /// is not mistaken for an edit and captured right back (#88).
+    pub(crate) fn delete_animation_pose(&mut self) {
+        if self.animation_edit_active() {
+            return;
+        }
+        let frame = self.an.frame;
+        self.scene.anim.remove(frame);
+        let anim = std::mem::take(&mut self.scene.anim);
+        anim.apply(&mut self.scene, frame);
+        self.scene.anim = anim;
+        self.an.rev = self.track_scene();
+    }
+
     fn capture_animation_pose(&mut self, ctx: &egui::Context) {
         if self.animation_edit_active() {
             return;
@@ -269,7 +283,7 @@ impl App {
             self.capture_animation_pose(&ctx);
         }
         if delete_now {
-            self.scene.anim.remove(self.an.frame);
+            self.delete_animation_pose();
         }
         if start_gif {
             self.start_gif(&ctx);

@@ -262,9 +262,8 @@ impl Prefs {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
         }
-        let tmp = path.with_extension("json.tmp");
-        std::fs::write(&tmp, self.to_text())?;
-        std::fs::rename(&tmp, path)
+        // a temporary file of its own, so two Melt 3D windows never take each other's (#227)
+        crate::recovery::atomic_write(path, self.to_text().as_bytes())
     }
 
     /// Save, silently (a failure only means it is not remembered).
