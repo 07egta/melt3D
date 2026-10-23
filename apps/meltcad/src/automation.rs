@@ -353,6 +353,19 @@ fn reject_unknown(obj: &Map<String, Value>, known: &[&str], what: &str) -> Resul
     Ok(())
 }
 
+/// An outline given by a command goes through the same checks as one drawn on screen (no
+/// crossings, big enough, right of the axis for a revolve): a bad one is refused, nothing changes (#191).
+fn check_outlines(shape: &Shape, obj: &Map<String, Value>) -> Result<(), String> {
+    let mut probe = shape.clone();
+    if obj.contains_key("outline") && shape.kind.uses_outline() {
+        probe.set_sketch_outline(false, shape.outline.clone())?;
+    }
+    if obj.contains_key("outline2") && shape.kind.uses_outline2() {
+        probe.set_sketch_outline(true, shape.outline2.clone())?;
+    }
+    Ok(())
+}
+
 fn shape_patch(obj: &Map<String, Value>) -> Value {
     let mut p = without(obj, &["cmd", "token", "group", "shape", "color", "kind"]);
     if let Some(c) = obj.get("color") {
@@ -378,6 +391,7 @@ fn shape_add(scene: &mut Scene, obj: &Map<String, Value>) -> Result<Value, Strin
     let mut v = serde_json::to_value(&shape).map_err(|e| e.to_string())?;
     merge(&mut v, &shape_patch(obj));
     shape = serde_json::from_value(v).map_err(|e| format!("Bad shape field: {e}"))?;
+    check_outlines(&shape, obj)?;
     if scene.groups.is_empty() {
         scene.groups.push(Group::new("Group 1"));
     }
@@ -405,6 +419,7 @@ fn shape_set(scene: &mut Scene, obj: &Map<String, Value>) -> Result<Value, Strin
     if updated.kind == Kind::Mesh && updated.volume.is_none() {
         return Err("Mesh needs imported volume data; use Import mesh instead of shape.set".into());
     }
+    check_outlines(&updated, obj)?;
     *shape = updated;
     Ok(json!({"group": g, "shape": s}))
 }
@@ -1224,6 +1239,22 @@ mod tests {
         // the right names still work, and the usual extras (id, token) are fine
         run(&mut sc, json!({"cmd": "shape.set", "id": 7, "group": 0, "shape": 0, "pos": [10, 0, 0], "color": [1, 0, 0]})).expect("good fields");
         assert_eq!(sc.shape(0, 0).map(|s| s.pos), Some([10.0, 0.0, 0.0]));
+    }
+
+    #[test]
+    fn a_crossing_outline_from_a_command_is_refused_and_changes_nothing() {
+        let mut sc = Scene::default();
+        let bow = json!([[0, 0], [20, 20], [0, 20], [20, 0]]);
+        let e = run(&mut sc, json!({"cmd": "shape.add", "kind": "Extrude", "outline": bow, "size": [10, 1, 1]}));
+        assert!(e.is_err(), "a self-crossing outline is not a shape (#191): {e:?}");
+        let count = sc.shape_count();
+        run(&mut sc, json!({"cmd": "shape.add", "kind": "Extrude", "outline": [[0, 0], [20, 0], [20, 20], [0, 20]], "size": [10, 1, 1]}))
+            .expect("a square is fine");
+        assert_eq!(sc.shape_count(), count + 1);
+        let (g, s) = (sc.groups.len() - 1, sc.groups.last().map_or(0, |g| g.shapes.len() - 1));
+        let before = sc.clone();
+        assert!(run(&mut sc, json!({"cmd": "shape.set", "group": g, "shape": s, "outline": bow})).is_err());
+        assert_eq!(sc, before);
     }
 
     #[test]

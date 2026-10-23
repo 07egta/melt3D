@@ -590,6 +590,9 @@ pub fn generate(p: &Pattern, scene: &Scene, anchor: V3, room: usize) -> Vec<Inst
         }
     }
     out.retain(Inst::finite);
+    // every kind keeps to the room it was given (a mirror makes up to 8 at once): the scene's
+    // total never goes past MAX_INSTANCES (#188)
+    out.truncate(room);
     out
 }
 
@@ -811,6 +814,18 @@ pub fn lenient_pattern<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_mirror_after_a_full_grid_does_not_go_past_the_scene_limit() {
+        let mut sc = Scene::default();
+        sc.groups[0].pattern = Some(Pattern::Rect { counts: [64, 4, 1], spacing: [5.0, 5.0, 5.0] });
+        let mut b = Group::new("B");
+        b.shapes.push(Shape::new(Kind::Sphere, [100.0, 0.0, 0.0], Material::default()));
+        b.pattern = Some(Pattern::Mirror { axes: [true, true, true], centre: true });
+        sc.groups.push(b);
+        let total: usize = resolve(&sc).iter().map(|g| g.insts.len()).sum();
+        assert!(total <= MAX_INSTANCES, "{total} instances (#188)");
+    }
     use crate::model::Material;
 
     fn close(a: V3, b: V3) {
