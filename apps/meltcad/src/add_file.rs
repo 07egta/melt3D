@@ -368,7 +368,7 @@ mod tests {
         let at = merge_into(&mut mine, other, "friend").unwrap();
         assert_eq!(at, 1);
         let depths: Vec<u8> = mine.groups.iter().map(|g| g.depth).collect();
-        assert_eq!(depths, [0, 0, 1, 2]);
+        assert_eq!(depths, [0, 0, 1, 1], "two levels at most: the added file's nesting folds into its group");
         assert_eq!(mine.groups[1].name, "friend");
         assert!(mine.groups[1].blend > 0.0, "Melt: on");
         // two balls 44 mm apart (radius 20) leave a 4 mm gap alone, and they join once melted
