@@ -41,7 +41,7 @@ pub struct State {
 
 impl App {
     /// Poll GIF completion even when the timeline itself is closed.
-    fn poll_gif_job(&mut self, ctx: &egui::Context) {
+    pub(crate) fn poll_gif_job(&mut self, ctx: &egui::Context) {
         let finished = self.an.job.as_ref().and_then(|job| {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
             match job.rx.try_recv() {
@@ -318,3 +318,26 @@ impl App {
 #[cfg(test)]
 #[path = "anim_ui_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod precise_poll_regression {
+    use super::*;
+
+    #[test]
+    fn precise_view_still_polls_disconnected_gif_job() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        app.open_precise(&ctx);
+        let (tx, rx) = std::sync::mpsc::channel();
+        drop(tx);
+        app.an.job =
+            Some(Job { rx, done: Arc::new(AtomicU32::new(0)), total: Arc::new(AtomicU32::new(1)), cancel: Arc::new(AtomicBool::new(false)) });
+
+        let input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(960.0, 600.0))), ..Default::default() };
+        let mut output = ctx.run_ui(input, |ui| app.frame_body(ui));
+        output.textures_delta.clear();
+
+        assert!(app.precise_on, "the precise view owns the frame");
+        assert!(app.an.job.is_none(), "a disconnected GIF job is released in precise mode");
+    }
+}

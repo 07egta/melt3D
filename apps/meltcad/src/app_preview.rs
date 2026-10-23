@@ -1,5 +1,6 @@
 //! Renders the real application frame, including the CPU viewport and tool overlays, with the
-//! software rasteriser in `style_preview.rs` (no window or graphics device is needed).
+//! software rasteriser for Melt; the precise workspace uses the real offscreen WGPU callbacks.
+//! SolidCraft previews need a graphics adapter, but no native window.
 //! `YURA_PREVIEW=/path/app.ppm YURA_TAB=0..3 cargo test -p meltcad app_preview -- --ignored`
 //! `YURA_SKETCH=draw|ready|saved|extrude|solid|edit` selects a step of the Solid workflow.
 //! `YURA_PRECISE=empty|solid|sketch|melt` shows SolidCraft or its solid after transfer into Melt.
@@ -8,6 +9,9 @@
 
 use super::*;
 use crate::style::preview::{Textures, apply_deltas, raster, write_preview};
+
+#[path = "app_preview_gpu.rs"]
+mod app_preview_gpu;
 
 fn preview_number(name: &str, default: f32, min: f32, max: f32) -> f32 {
     std::env::var(name).ok().and_then(|s| s.parse::<f32>().ok()).filter(|v| v.is_finite()).unwrap_or(default).clamp(min, max)
@@ -107,13 +111,13 @@ fn precise_preview(app: &mut App, ctx: &egui::Context, which: &str) {
     }
 }
 
-fn precise_viewport_ready(app: &App, ctx: &egui::Context, tex: &Textures) -> bool {
+fn precise_viewport_ready(app: &App) -> bool {
     let Some(p) = app.precise.as_ref().filter(|_| app.precise_on) else { return false };
     let Some(rect) = p.app.viewport.rect else { return false };
     if rect.width() < 16.0 || rect.height() < 16.0 {
         return false;
     }
-    ctx.tex_manager().read().allocated().any(|(id, meta)| meta.name == "sc_cpu_viewport" && tex.contains_key(id))
+    true
 }
 
 fn check_precise_geometry(app: &App, which: &str, size: egui::Vec2) {
@@ -212,6 +216,15 @@ fn app_preview() {
         sketch_preview(&mut app, &ctx, &which);
     }
     let precise = std::env::var("YURA_PRECISE").ok();
+    let precise_gpu = precise.as_deref().is_some_and(|which| matches!(which, "empty" | "solid" | "sketch"));
+    let mut gpu_preview = if precise_gpu {
+        Some(app_preview_gpu::GpuPreview::new().expect("a headless WGPU adapter is required for SolidCraft preview"))
+    } else {
+        None
+    };
+    if let Some(gpu) = gpu_preview.as_ref() {
+        app.gpu.rs = Some(gpu.render_state.clone());
+    }
     let melt_transfer = precise.as_deref() == Some("melt");
     let initial_shapes = app.scene.shape_count();
     if melt_transfer {
@@ -298,8 +311,12 @@ fn app_preview() {
             ..Default::default()
         };
         let mut out = ctx.run_ui(input, |ui| app.frame_body(ui));
-        apply_deltas(&mut tex, &out.textures_delta);
-        out.textures_delta.clear();
+        if let Some(gpu) = gpu_preview.as_mut() {
+            gpu.render(&ctx, &out, size, ppp);
+        } else {
+            apply_deltas(&mut tex, &out.textures_delta);
+            out.textures_delta.clear();
+        }
         last = Some(out);
         // Waiting for the still-quality picture also gives auto-sized panels and font textures
         // time to settle. Never silently publish a flat placeholder as a geometry preview.
@@ -309,7 +326,7 @@ fn app_preview() {
                 && app.gpu.easy_view.settled
                 && !app.perf.last_fast
         } else if precise.is_some() {
-            precise_viewport_ready(&app, &ctx, &tex)
+            precise_viewport_ready(&app)
         } else {
             app.gpu.easy_view.settled && !app.perf.last_fast
         };
@@ -327,7 +344,7 @@ fn app_preview() {
                 "the transferred solid must have a final Melt CPU picture"
             );
         } else {
-            assert!(precise_viewport_ready(&app, &ctx, &tex), "the embedded modeller must provide its real CPU viewport texture");
+            assert!(precise_viewport_ready(&app), "the embedded modeller viewport must be laid out");
         }
         check_precise_geometry(&app, which, size);
     } else {
@@ -347,8 +364,21 @@ fn app_preview() {
         assert!(!card.intersects(strip), "the command card must not cover the tool strip: {card:?} / {strip:?}");
     }
     let Some(out) = last else { return };
-    let prims = ctx.tessellate(out.shapes, ppp);
-    let (w, h) = ((size.x * ppp) as usize, (size.y * ppp) as usize);
-    let img = raster(&prims, &tex, w, h, ppp, [0.2, 0.2, 0.22]);
+    let (w, h) = ((size.x * ppp).ceil() as usize, (size.y * ppp).ceil() as usize);
+    let img = if let Some(gpu) = gpu_preview.as_mut() {
+        gpu.render(&ctx, &out, size, ppp)
+    } else {
+        let prims = ctx.tessellate(out.shapes, ppp);
+        raster(&prims, &tex, w, h, ppp, [0.2, 0.2, 0.22])
+    };
+    if precise.as_deref() == Some("solid") {
+        let rect = app.precise.as_ref().unwrap().app.viewport.rect.unwrap();
+        let centre = rect.shrink2(rect.size() * 0.25);
+        let (x0, x1) = ((centre.left() * ppp).max(0.0) as usize, ((centre.right() * ppp) as usize).min(w));
+        let (y0, y1) = ((centre.top() * ppp).max(0.0) as usize, ((centre.bottom() * ppp) as usize).min(h));
+        let lit = (y0..y1).flat_map(|y| (x0..x1).map(move |x| y * w + x)).filter(|&i| img[i].iter().sum::<f32>() > 1.0).count();
+        let area = (x1 - x0) * (y1 - y0);
+        assert!(lit > area / 100, "the solid's viewport must contain rendered surfaces, not a blank callback: {lit}/{area}");
+    }
     write_preview(img, w, h, &std::env::var("YURA_PREVIEW").unwrap_or_else(|_| "app_preview.ppm".into()));
 }

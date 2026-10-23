@@ -2,7 +2,9 @@
 //! Only tiny UI state is added: multi-selection is transient, never part of the saved project.
 //! The original keyboard shortcuts, SDF rendering, and single-selection gizmos are unchanged.
 
-use egui::{Color32, RichText, Ui, pos2, vec2};
+use egui::{Color32, RichText, Ui};
+#[cfg(test)]
+use egui::{pos2, vec2};
 
 use crate::app::{App, Tab};
 use crate::gizmo::Tool;
