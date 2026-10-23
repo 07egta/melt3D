@@ -282,6 +282,14 @@ fn face_melt(s: Shape, q: vec3<f32>, d: f32, fc: i32) -> f32 {
 }
 
 // The surface colour of a shape at p: its colour, or the gradient (Material::gradient_weight).
+fn mix_colour(a: vec3<f32>, b: vec3<f32>, t: f32) -> vec3<f32> {
+    if (t <= 0.0) { return a; }
+    if (t >= 1.0) { return b; }
+    let al = pow(max(a, vec3<f32>(0.0)), vec3<f32>(2.2));
+    let bl = pow(max(b, vec3<f32>(0.0)), vec3<f32>(2.2));
+    return pow(max(mix(al, bl, t), vec3<f32>(0.0)), vec3<f32>(1.0 / 2.2));
+}
+
 fn shape_color(s: Shape, p: vec3<f32>) -> vec3<f32> {
     if (s.gcol.w <= 0.001) { return s.color.rgb; }
     let code = i32(s.gpar.x + 0.5);
@@ -296,14 +304,14 @@ fn shape_color(s: Shape, p: vec3<f32>) -> vec3<f32> {
     let u = clamp((t - s.gpar.z) / max(s.gpar.w - s.gpar.z, 0.02), 0.0, 1.0);
     let w = max(s.gpar.y * 0.5, 0.001);
     let k = smoothstep(0.5 - w, 0.5 + w, u);
-    return mix(s.color.rgb, s.gcol.rgb, k * s.gcol.w);
+    return mix_colour(s.color.rgb, s.gcol.rgb, k * s.gcol.w);
 }
 
 fn mix_hit(a: Hit, b: Hit, t: f32) -> Hit {
     // b at weight 0, a at weight 1
     var o: Hit;
     o.d = 0.0;
-    o.col = mix(b.col, a.col, t);
+    o.col = mix_colour(b.col, a.col, t);
     o.rough = mix(b.rough, a.rough, t);
     o.metal = mix(b.metal, a.metal, t);
     o.glow = mix(b.glow, a.glow, t);
@@ -1239,12 +1247,8 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
             t_max = -bq + sq;
         }
     }
-    // the floor hides everything behind it: the march ends there (the last step is taken just to it)
-    var t_cut = t_max;
-    if (run && !glow_scene && ro.z >= 0.0 && t_ground < 1e8 && (grid_on || floor_on)) {
-        t_cut = min(t_max, t_ground + 0.05);
-        if (t > t_cut) { run = false; }
-    }
+    // The modelling floor is a shadow receiver and grid overlay, never a ray-march clip plane.
+    let t_cut = t_max;
     var last = false;
     // a little per-pixel jitter turns banding in the lamp glow into fine noise
     t = t + fract(sin(dot(in.pos.xy, vec2<f32>(12.9898, 78.233))) * 43758.5453) * 1.5;
@@ -1332,8 +1336,9 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
     // What is seen is the floor or a surface (never both). Either way the key light's shadow of
     // that point is wanted: it is found here, in one place (the code of a shadow is large).
     let above = ro.z >= 0.0;
-    let floor_vis = above && t_ground < 1e8 && (!hit || t_ground < t) && (grid_on || floor_on);
-    let surf_vis = hit && (t_ground > t || !(grid_on || floor_on));
+    let ground_in_front = t_ground < 1e8 && (!hit || t_ground < t);
+    let floor_vis = above && t_ground < 1e8 && !hit && floor_on;
+    let surf_vis = hit;
     var n_hit = vec3<f32>(0.0, 0.0, 1.0);
     var sh_ro = vec3<f32>(0.0);
     var sh_steps = 0;
@@ -1369,23 +1374,6 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
     // ground
     if (floor_vis) {
         let gp = ro + rd * t_ground;
-        if (grid_on) {
-            // endless plane: lines fade only when they get too dense to tell apart on screen
-            // (never by a fixed distance), so each grid level hands over to the next one
-            let gs = 10.0;
-            let f1 = 1.0 - smoothstep(0.12, 0.45, max(gw1.x, gw1.y));
-            let f2 = 1.0 - smoothstep(0.12, 0.45, max(gw2.x, gw2.y));
-            let a = abs(fract(gp.xy / gs - 0.5) - 0.5) / gw1;
-            let line = 1.0 - min(min(a.x, a.y), 1.0);
-            let major = abs(fract(gp.xy / (gs * 10.0) - 0.5) - 0.5) / gw2;
-            let lm = 1.0 - min(min(major.x, major.y), 1.0);
-            let axisx = 1.0 - min(abs(gp.y) / gwy, 1.0);
-            let axisy = 1.0 - min(abs(gp.x) / gwx, 1.0);
-            col = mix(col, col + vec3<f32>(0.03), line * 0.5 * f1);
-            col = mix(col, col + vec3<f32>(0.05), lm * 0.6 * f2);
-            col = mix(col, lin(vec3<f32>(0.85, 0.35, 0.35)), axisx * 0.55);
-            col = mix(col, lin(vec3<f32>(0.42, 0.78, 0.42)), axisy * 0.55);
-        }
         if (floor_on) {
             // contact shadow of the blob on the ground
             if (fast) {
@@ -1535,18 +1523,32 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
         col = c;
     }
 
-    // seen from below the ground is see-through: only its lines are drawn
-    if (!above && t_ground < 1e8 && (!hit || t_ground < t) && grid_on) {
+    // The grid is an overlay on geometry behind its plane from either side; it never occludes.
+    if (grid_on && ground_in_front) {
         let gp = ro + rd * t_ground;
-        let fade = (1.0 - smoothstep(0.12, 0.45, max(gw1.x, gw1.y))) * 0.6;
         let gs = 10.0;
         let a = abs(fract(gp.xy / gs - 0.5) - 0.5) / gw1;
         let line = 1.0 - min(min(a.x, a.y), 1.0);
-        let axisx = 1.0 - min(abs(gp.y) / gwy, 1.0);
-        let axisy = 1.0 - min(abs(gp.x) / gwx, 1.0);
-        col = mix(col, col + vec3<f32>(0.04), line * 0.5 * fade);
-        col = mix(col, lin(vec3<f32>(0.85, 0.35, 0.35)), axisx * 0.55 * 0.6);
-        col = mix(col, lin(vec3<f32>(0.42, 0.78, 0.42)), axisy * 0.55 * 0.6);
+        if (above) {
+            // Keep the existing LOD handoff for the top-side grid.
+            let f1 = 1.0 - smoothstep(0.12, 0.45, max(gw1.x, gw1.y));
+            let f2 = 1.0 - smoothstep(0.12, 0.45, max(gw2.x, gw2.y));
+            let major = abs(fract(gp.xy / (gs * 10.0) - 0.5) - 0.5) / gw2;
+            let lm = 1.0 - min(min(major.x, major.y), 1.0);
+            let axisx = 1.0 - min(abs(gp.y) / gwy, 1.0);
+            let axisy = 1.0 - min(abs(gp.x) / gwx, 1.0);
+            col = mix(col, col + vec3<f32>(0.03), line * 0.5 * f1);
+            col = mix(col, col + vec3<f32>(0.05), lm * 0.6 * f2);
+            col = mix(col, lin(vec3<f32>(0.85, 0.35, 0.35)), axisx * 0.55);
+            col = mix(col, lin(vec3<f32>(0.42, 0.78, 0.42)), axisy * 0.55);
+        } else {
+            let fade = (1.0 - smoothstep(0.12, 0.45, max(gw1.x, gw1.y))) * 0.6;
+            let axisx = 1.0 - min(abs(gp.y) / gwy, 1.0);
+            let axisy = 1.0 - min(abs(gp.x) / gwx, 1.0);
+            col = mix(col, col + vec3<f32>(0.04), line * 0.5 * fade);
+            col = mix(col, lin(vec3<f32>(0.85, 0.35, 0.35)), axisx * 0.55 * 0.6);
+            col = mix(col, lin(vec3<f32>(0.42, 0.78, 0.42)), axisy * 0.55 * 0.6);
+        }
     }
 
     col = col + halo;

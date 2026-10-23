@@ -51,7 +51,7 @@ pub fn encode_timed(w: usize, h: usize, frames: &[Vec<u8>], delays: &[u16]) -> R
         out.extend_from_slice(&(w as u16).to_le_bytes());
         out.extend_from_slice(&(h as u16).to_le_bytes());
         out.push(0);
-        let idx: Vec<u8> = f.chunks_exact(4).map(|p| index_of(&palette, &mut lut, p)).collect();
+        let idx: Vec<u8> = f.as_chunks::<4>().0.iter().map(|p| index_of(&palette, &mut lut, p)).collect();
         out.push(8);
         for chunk in lzw(&idx).chunks(255) {
             out.push(chunk.len() as u8);
@@ -72,7 +72,7 @@ fn key(p: &[u8]) -> usize {
 fn make_palette(frames: &[Vec<u8>]) -> Vec<[u8; 3]> {
     let mut count = vec![0u32; 32768];
     for f in frames {
-        for p in f.chunks_exact(4) {
+        for p in f.as_chunks::<4>().0.iter() {
             if let Some(c) = count.get_mut(key(p)) {
                 *c += 1;
             }

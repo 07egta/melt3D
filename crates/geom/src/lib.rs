@@ -14,7 +14,6 @@ mod arcfit;
 pub mod blend;
 pub mod brep;
 pub mod bspline;
-pub mod melt;
 mod bvh;
 mod chain;
 pub mod compare;
@@ -59,3 +58,6 @@ pub fn finite_or(x: f64, fallback: f64) -> f64 {
 
 #[cfg(test)]
 mod tests;
+
+// Melt 3D mesh extraction; the upstream SolidCraft geometry API stays unchanged.
+pub mod melt;

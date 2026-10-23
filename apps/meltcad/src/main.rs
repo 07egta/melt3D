@@ -68,6 +68,7 @@ mod pipe_tool;
 mod png;
 mod polygon;
 mod precise;
+mod precise_services;
 mod prims;
 mod recovery;
 mod sdf;
@@ -181,6 +182,7 @@ fn main() -> eframe::Result {
             .with_icon(icon::data()),
         wgpu_options: backend::wgpu_configuration(plan),
         // the precise solid view (SolidCraft's) draws with depth
+        multisampling: precise_services::msaa(),
         depth_buffer: 24,
         stencil_buffer: 8,
         ..Default::default()
@@ -205,6 +207,8 @@ fn main() -> eframe::Result {
             let srgb = rs.as_ref().is_none_or(|rs| rs.target_format.is_srgb());
             let all: Vec<std::ffi::OsString> = std::env::args_os().collect();
             let mut app = app::App::new(srgb, control::file_arg(&all));
+            app.precise_services = Some(precise_services::services(rfd::AsyncFileDialog::new().set_parent(cc)));
+            app.precise_prefs = cc.storage.and_then(|storage| storage.get_string(precise::PREFS_KEY));
             if let Some(port) = control::port_arg(&all) {
                 let token = control::make_token();
                 let ctx = cc.egui_ctx.clone();
@@ -229,15 +233,17 @@ fn main() -> eframe::Result {
                     Err(e) => eprintln!("{e}"),
                 }
             }
-            // the shader compiles on its own thread: the window shows first, with the simple view
-            // the GPU picture is the default every launch; the simple view is only a temporary choice
-            app.attach_gpu(rs, &cc.egui_ctx, false);
-            perf::mark("app created");
-            // Melt 3D opens on SolidCraft's own screen; "Melt 3D に戻る" goes to the melt view.
-            // A file given on the command line is a melt design, so that one starts in melt.
+            // Open the requested workspace before compiling another workspace's shaders.
+            // OpenGL shares a driver lock: starting Melt's large shader here can otherwise
+            // stall SolidCraft's first frame for minutes even though Melt is not visible.
             if control::starts_in_solidcraft(control::file_arg(&all).as_deref()) {
+                app.gpu.rs = rs.clone();
                 app.open_precise(&cc.egui_ctx);
             }
+            if !app.precise_on {
+                app.attach_gpu(rs, &cc.egui_ctx, false);
+            }
+            perf::mark("app created");
             Ok(Box::new(app))
         }),
     );

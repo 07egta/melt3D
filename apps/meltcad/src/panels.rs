@@ -523,7 +523,7 @@ impl App {
         }
         self.piece_card(ui, g);
         // what it melts with: the shapes inside it melt together, and the groups at the same level melt with each other
-        let into = parent.clone().map_or("Scene".to_string(), |p| p);
+        let into = parent.clone().unwrap_or("Scene".to_string());
         let partners: Vec<String> = (0..self.scene.groups.len())
             .filter(|&i| i != g && self.scene.groups[i].depth == self.scene.groups[g].depth && self.scene.parent_of(i) == self.scene.parent_of(g))
             .map(|i| self.scene.groups[i].name.clone())

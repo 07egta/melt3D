@@ -357,7 +357,19 @@ pub fn warp(p: V3, drip: f32, ripple: f32) -> V3 {
 }
 
 fn mix3(a: V3, b: V3, t: f32) -> V3 {
-    [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t]
+    if t <= 0.0 {
+        return a;
+    }
+    if t >= 1.0 {
+        return b;
+    }
+    // Materials store display-space colours. Blend in linear light so two bright colours do not
+    // form an unexpectedly dark seam.
+    std::array::from_fn(|i| {
+        let a = a[i].max(0.0).powf(2.2);
+        let b = b[i].max(0.0).powf(2.2);
+        (a + (b - a) * t).max(0.0).powf(1.0 / 2.2)
+    })
 }
 
 /// What a point measures: the distance to the scene, the material there, and the (group, shape)
@@ -680,6 +692,22 @@ mod sampling_tests;
 mod tests {
     use super::*;
     use crate::model::{Group, Material, Scene};
+
+    #[test]
+    fn blended_colours_preserve_light_in_the_middle_and_stay_continuous() {
+        let red = [1.0, 0.0, 0.0];
+        let blue = [0.0, 0.0, 1.0];
+        let mid = mix3(red, blue, 0.5);
+        assert!(mid[0] > 0.72 && mid[2] > 0.72, "red and blue must not form a dark seam: {mid:?}");
+        assert_eq!(mix3(red, blue, 0.0), red);
+        assert_eq!(mix3(red, blue, 1.0), blue);
+        let mut prev = red;
+        for i in 1..=100 {
+            let c = mix3(red, blue, i as f32 / 100.0);
+            assert!(c[0] <= prev[0] && c[2] >= prev[2]);
+            prev = c;
+        }
+    }
 
     fn scene_of(shapes: Vec<Shape>) -> Scene {
         let mut g = Group::new("g");
@@ -1302,7 +1330,7 @@ mod tests {
         let p = Prepared::new(&s);
         close(p.color_at([0.0, 0.0, -20.0]), red); // the bottom
         close(p.color_at([0.0, 0.0, 20.0]), blue); // the top
-        close(p.color_at([0.0, 0.0, 0.0]), [0.5, 0.0, 0.5]); // halfway
+        close(p.color_at([0.0, 0.0, 0.0]), [0.7297401, 0.0, 0.7297401]); // halfway in linear light
         close(p.color_at([0.0, 0.0, 500.0]), blue); // clamped beyond the ends
         close(p.color_at([0.0, 0.0, -500.0]), red);
         // no gradient: always the plain colour
@@ -1317,14 +1345,14 @@ mod tests {
         // a weaker gradient reaches only part of the way
         let mut w = s.clone();
         w.material.gradient = 0.5;
-        close(Prepared::new(&w).color_at([0.0, 0.0, 20.0]), [0.5, 0.0, 0.5]);
+        close(Prepared::new(&w).color_at([0.0, 0.0, 20.0]), [0.7297401, 0.0, 0.7297401]);
         // the X axis
         let mut x = s.clone();
         x.material.grad_axis = 0;
         let p = Prepared::new(&x);
         close(p.color_at([-10.0, 0.0, 0.0]), red);
         close(p.color_at([10.0, 0.0, 0.0]), blue);
-        close(p.color_at([0.0, 0.0, 15.0]), [0.5, 0.0, 0.5]);
+        close(p.color_at([0.0, 0.0, 15.0]), [0.7297401, 0.0, 0.7297401]);
         // a range: all red up to a quarter of the height, all blue from three quarters
         let mut r = s.clone();
         r.material.grad_from = 0.25;
@@ -1351,8 +1379,8 @@ mod tests {
         close(world.color_at([0.0, 0.0, 20.0]), blue); // the world top is the end of the long box
         close(world.color_at([0.0, 0.0, -20.0]), red);
         // in the world the two ends of the local Z axis (world X here) are at the same height: purple
-        close(world.color_at([5.0, 0.0, 0.0]), [0.5, 0.0, 0.5]);
-        close(world.color_at([-5.0, 0.0, 0.0]), [0.5, 0.0, 0.5]);
+        close(world.color_at([5.0, 0.0, 0.0]), [0.7297401, 0.0, 0.7297401]);
+        close(world.color_at([-5.0, 0.0, 0.0]), [0.7297401, 0.0, 0.7297401]);
         // following the shape the colour runs along the local Z axis, which is only 10 long
         s.material.grad_local = true;
         let local = Prepared::new(&s);
