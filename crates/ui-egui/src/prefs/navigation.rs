@@ -74,7 +74,7 @@ pub(super) fn show(app: &mut SolveApp, ui: &mut egui::Ui, t: &Tokens) {
         }
         let help = if app.preferences.nav == TOUCHPAD_NAV {
             app.tr("nav.touchpad.help").to_owned()
-        } else if !app.preferences.free_orbit && app.preferences.nav != OPENSCAD_NAV {
+        } else if !app.preferences.free_orbit && !left_drag_orbits(&app.preferences.nav) {
             format!("{} {}", app.tr("prefs.extra_navigation"), app.tr("prefs.orbit_snap"))
         } else {
             app.tr("prefs.extra_navigation").to_owned()

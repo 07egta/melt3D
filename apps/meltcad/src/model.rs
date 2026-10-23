@@ -465,7 +465,23 @@ pub struct Shape {
     /// Melt only one face: the rest of the shape keeps its exact size.
     #[serde(default, skip_serializing_if = "FaceMelt::is_off")]
     pub face_melt: FaceMelt,
+    /// A solid made in SolidCraft carries its design, so it can be opened there again and edited.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub solid: Option<SolidLink>,
 }
+
+/// The SolidCraft design behind a shape that came from SolidCraft.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SolidLink {
+    /// The design file's text (SolidCraft's JSON form).
+    pub design: String,
+    /// Where the shape stood when it came in: an edit moves the new solid by what the shape has
+    /// been moved since, so it stays where it was put.
+    pub placed_at: [f32; 3],
+}
+
+/// The largest SolidCraft design a shape keeps (bigger ones still come in, just not editable).
+pub const MAX_SOLID_DESIGN: usize = 16 * 1024 * 1024;
 
 /// A saved sketch's two plane axes and inner contours. The outer contour remains
 /// in `Shape::path`, so moving or editing its nodes does not leave a stale copy.
@@ -563,6 +579,7 @@ impl Shape {
             source: String::new(),
             mesh_source: None,
             face_melt: FaceMelt::default(),
+            solid: None,
         }
     }
 

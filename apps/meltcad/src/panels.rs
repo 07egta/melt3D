@@ -34,9 +34,11 @@ const BACKDROPS: [[f32; 3]; 10] = [
 
 impl App {
     pub fn side(&mut self, ui: &mut Ui) {
+        // drag its left edge to make it wider or narrower
         egui::Panel::right("side")
-            .exact_size(312.0)
-            .resizable(false)
+            .default_size(312.0)
+            .size_range(280.0..=600.0)
+            .resizable(true)
             .frame(egui::Frame::new().fill(style::PANEL).inner_margin(egui::Margin::symmetric(14, 12)))
             .show(ui, |ui| {
                 style::panel_sheen(ui, ui.max_rect().expand2(vec2(14.0, 12.0)), style::PANEL, style::Edge::Left);
@@ -152,6 +154,8 @@ impl App {
                 for si in 0..nshapes {
                     let Some(s) = self.scene.shape(gi, si) else { continue };
                     let (name, op, visible, material) = (s.name.clone(), s.op, s.visible, s.material);
+                    // a solid from SolidCraft says so (double click opens it there)
+                    let badge = if s.solid.is_some() { style::SOLID_BADGE } else { "" };
                     let sel = self.picks().contains(&Pick::Shape(gi, si));
                     let id = ui.id().with(("s", gi, si));
                     let row = self.row(
@@ -166,7 +170,7 @@ impl App {
                         move |p, r, _| materials::swatch(p, r.center(), 8.5, &material),
                         false,
                         false,
-                        "",
+                        badge,
                     );
                     if row.select {
                         let (shift, ctrl) = ui.input(|i| (i.modifiers.shift, i.modifiers.command || i.modifiers.ctrl));
@@ -380,7 +384,10 @@ impl App {
             let col = if visible { style::TEXT } else { style::DIM };
             let clipped = ui.painter().with_clip_rect(name_rect);
             let used = clipped.text(egui::pos2(name_rect.left(), rect.center().y), Align2::LEFT_CENTER, &name, FontId::proportional(13.0), col);
-            if !badge.is_empty() {
+            if badge == style::SOLID_BADGE {
+                let logo = Rect::from_center_size(egui::pos2(used.right() + 13.0, rect.center().y), vec2(14.0, 15.0));
+                style::solidcraft_logo(&clipped, logo);
+            } else if !badge.is_empty() {
                 clipped.text(egui::pos2(used.right() + 6.0, rect.center().y), Align2::LEFT_CENTER, badge, FontId::proportional(11.5), style::ACCENT);
             }
         }
@@ -391,15 +398,31 @@ impl App {
                 ui.painter().rect_filled(r.rect, 7.0, Color32::from_white_alpha(22));
             }
         }
-        glyphs::eye(ui.painter(), eye, visible, if er.hovered() { Color32::WHITE } else { style::DIM });
-        let opcol = style::op_color(op);
-        glyphs::op(ui.painter(), opr, op, opcol.gamma_multiply(if orr.hovered() { 1.0 } else { 0.8 }));
+        // a quiet list: the eye and the join/cut mark show on the row under the mouse or the
+        // picked one, and always when they say something unusual (hidden, cut, paint, overlap)
+        let near = selected || resp.hovered() || er.hovered() || orr.hovered();
+        if near || !visible {
+            glyphs::eye(ui.painter(), eye, visible, if er.hovered() { Color32::WHITE } else { style::DIM });
+        }
+        if near || op != Op::Add {
+            let opcol = style::op_color(op);
+            glyphs::op(ui.painter(), opr, op, opcol.gamma_multiply(if orr.hovered() { 1.0 } else { 0.8 }));
+        }
         out.eye = er.clicked();
         out.op = orr.clicked();
         out.select = resp.clicked() && !out.eye && !out.op;
         out.drag_started = !locked && resp.drag_started() && !out.eye && !out.op;
         if resp.double_clicked() && !out.eye && !out.op {
-            self.renaming = Some(pick);
+            // a solid from SolidCraft opens there again; anything else gets renamed
+            match pick {
+                Pick::Shape(g, s) if self.scene.shape(g, s).is_some_and(|x| x.solid.is_some()) => {
+                    let ctx = ui.ctx().clone();
+                    if let Err(e) = self.edit_in_solidcraft(&ctx, g, s) {
+                        self.say(&ctx, e);
+                    }
+                }
+                _ => self.renaming = Some(pick),
+            }
         }
         if resp.secondary_clicked() && !self.is_pick_selected(pick) {
             self.select_pick(Some(pick), false);
@@ -559,41 +582,74 @@ impl App {
         let mut reorder: Option<usize> = None;
         let mut outline_changed = false;
         let mut top_changed = false;
+        let mut edit_solid = false;
         {
             let Some(sh) = self.scene.shape_mut(g, s) else { return };
             ui.text_edit_singleline(&mut sh.name);
             Self::op_pills(ui, &mut sh.op);
+            if sh.solid.is_some() {
+                // made in SolidCraft: open it there again, edit, come back, and it is replaced here
+                let r = ui
+                    .horizontal(|ui| {
+                        let (logo, _) = ui.allocate_exact_size(vec2(18.0, 20.0), Sense::hover());
+                        style::solidcraft_logo(ui.painter(), logo);
+                        style::pill(ui, "Edit", false)
+                    })
+                    .inner;
+                if r.on_hover_text(
+                    "Open this solid in SolidCraft (or double-click it in the list). Change it, go back, and it is replaced where it stands",
+                )
+                .clicked()
+                {
+                    edit_solid = true;
+                }
+            }
             if sh.kind == Kind::Mesh {
                 // an imported mesh cannot become a primitive by a click: it shows where it came from instead
                 crate::mesh_dialog::inspector(ui, sh);
             } else {
-                // change what kind of shape this is, keeping where it sits
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(RichText::new("Kind").color(style::DIM).size(12.0));
-                    ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
-                    for k in Kind::ALL {
-                        let on = sh.kind == k;
-                        if style::icon_button(ui, 32.0, k.label(), on, |p, r, ink| glyphs::kind(p, r, k, ink, Color32::from_white_alpha(18)))
-                            .clicked()
-                            && !on
-                        {
-                            if sh.name == sh.kind.label() {
-                                sh.name = k.label().to_string();
-                            }
-                            sh.kind = k;
-                            sh.size = k.default_size();
-                            sh.params = k.default_params();
-                            if k.uses_path() && sh.path.len() < 2 {
-                                sh.path = k.default_path();
-                            }
-                            if k.uses_outline2() && sh.outline2.len() < 3 {
-                                sh.outline2 = k.default_outline2();
-                            }
-                            if matches!(k, Kind::Revolve | Kind::Sweep) {
-                                sh.outline = k.default_outline();
+                // change what kind of shape this is, keeping where it sits: one button shows the
+                // kind it is now; the other kinds open from it
+                let now = sh.kind;
+                let kr = ui
+                    .horizontal(|ui| {
+                        ui.label(RichText::new("Kind").color(style::DIM).size(12.0));
+                        let r = style::icon_button(ui, 30.0, &format!("{} (click to change the kind)", now.label()), false, |p, r, ink| {
+                            glyphs::kind(p, r, now, ink, Color32::from_white_alpha(18))
+                        });
+                        ui.label(RichText::new(now.label()).size(12.5));
+                        r
+                    })
+                    .inner;
+                egui::Popup::menu(&kr).show(|ui| {
+                    ui.set_max_width(260.0);
+                    ui.horizontal_wrapped(|ui| {
+                        ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
+                        for k in Kind::ALL {
+                            let on = sh.kind == k;
+                            if style::icon_button(ui, 32.0, k.label(), on, |p, r, ink| glyphs::kind(p, r, k, ink, Color32::from_white_alpha(18)))
+                                .clicked()
+                                && !on
+                            {
+                                if sh.name == sh.kind.label() {
+                                    sh.name = k.label().to_string();
+                                }
+                                sh.kind = k;
+                                sh.size = k.default_size();
+                                sh.params = k.default_params();
+                                if k.uses_path() && sh.path.len() < 2 {
+                                    sh.path = k.default_path();
+                                }
+                                if k.uses_outline2() && sh.outline2.len() < 3 {
+                                    sh.outline2 = k.default_outline2();
+                                }
+                                if matches!(k, Kind::Revolve | Kind::Sweep) {
+                                    sh.outline = k.default_outline();
+                                }
+                                ui.close();
                             }
                         }
-                    }
+                    });
                 });
             }
             style::xyz(ui, "Position", &mut sh.pos, 0.5, -5000.0..=5000.0, "");
@@ -648,40 +704,54 @@ impl App {
                     );
                 }
             }
-            style::labeled_slider(ui, "Shell", &mut sh.shell, 0.0..=40.0, "Hollow out the inside, leaving walls this thick (mm). 0 = solid");
-            // melt just one face: the rest keeps its exact size
-            {
-                let fm = &mut sh.face_melt;
-                ui.label(RichText::new("Melt one face").color(style::DIM).size(12.0));
-                let mut items: Vec<(&str, &str)> = vec![("None", "Whole shape keeps its exact size")];
-                items.extend(crate::model::FaceMelt::FACES.iter().copied());
-                let now = Some(usize::from(fm.face.min(6)));
-                if let Some(i) = style::segmented(ui, "face_melt_face", &items, now, true) {
-                    fm.face = i.min(6) as u8;
-                    if fm.face > 0 {
-                        if fm.amount == 0.0 {
-                            fm.amount = 4.0;
+            // less used: hollow it out, or melt just one face. Folded away until used.
+            let used = sh.shell > 0.0 || sh.face_melt.face > 0;
+            egui::CollapsingHeader::new(RichText::new("Hollow · melt one face").size(12.0).color(style::DIM))
+                .id_salt(("shape_more", g, s))
+                .default_open(used)
+                .show(ui, |ui| {
+                    style::labeled_slider(ui, "Shell", &mut sh.shell, 0.0..=40.0, "Hollow out the inside, leaving walls this thick (mm). 0 = solid");
+                    // melt just one face: the rest keeps its exact size
+                    {
+                        let fm = &mut sh.face_melt;
+                        ui.label(RichText::new("Melt one face").color(style::DIM).size(12.0));
+                        let mut items: Vec<(&str, &str)> = vec![("None", "Whole shape keeps its exact size")];
+                        items.extend(crate::model::FaceMelt::FACES.iter().copied());
+                        let now = Some(usize::from(fm.face.min(6)));
+                        if let Some(i) = style::segmented(ui, "face_melt_face", &items, now, true) {
+                            fm.face = i.min(6) as u8;
+                            if fm.face > 0 {
+                                if fm.amount == 0.0 {
+                                    fm.amount = 4.0;
+                                }
+                                if fm.reach < 1.0 {
+                                    fm.reach = 12.0;
+                                }
+                            }
                         }
-                        if fm.reach < 1.0 {
-                            fm.reach = 12.0;
+                        if fm.face > 0 {
+                            style::labeled_slider(
+                                ui,
+                                "Swell",
+                                &mut fm.amount,
+                                -30.0..=30.0,
+                                "How far this face swells out (+) or sinks in (-), in mm; other faces keep their size",
+                            );
+                            style::labeled_slider(ui, "Depth", &mut fm.reach, 2.0..=60.0, "How far the melt reaches from the face, in mm");
                         }
                     }
-                }
-                if fm.face > 0 {
-                    style::labeled_slider(
-                        ui,
-                        "Swell",
-                        &mut fm.amount,
-                        -30.0..=30.0,
-                        "How far this face swells out (+) or sinks in (-), in mm; other faces keep their size",
-                    );
-                    style::labeled_slider(ui, "Depth", &mut fm.reach, 2.0..=60.0, "How far the melt reaches from the face, in mm");
-                }
-            }
+                });
             if sh.kind.uses_outline() {
                 outline_changed = true;
                 top_changed = sh.kind.uses_outline2();
             }
+        }
+        if edit_solid {
+            let ctx = ui.ctx().clone();
+            if let Err(e) = self.edit_in_solidcraft(&ctx, g, s) {
+                self.say(&ctx, e);
+            }
+            return;
         }
         if outline_changed {
             self.sketch_edit_button(ui, g, s);
@@ -1225,7 +1295,11 @@ impl App {
                 }
             }
         });
-        melt_preview(ui, m);
+        let m = *m;
+        if !self.real_melt_preview(ui) {
+            melt_preview(ui, &m);
+        }
+        let m: &mut Melt = &mut self.scene.melt;
         let items: Vec<(&str, &str)> = BlendMode::ALL.iter().map(|b| (b.label(), "")).collect();
         let sel = BlendMode::ALL.iter().position(|b| *b == m.mode);
         if let Some(i) = style::segmented(ui, "melt_modes", &items, sel, true)
@@ -1253,7 +1327,87 @@ struct RowResult {
     drag_started: bool,
 }
 
-/// Two blobs melting together with the chosen curve: a live picture of what the settings do.
+impl App {
+    /// The picked shapes (or the whole scene when nothing is picked) as they are, melting into each
+    /// other with these settings, seen from the view's direction. False when there is nothing to show.
+    fn real_melt_preview(&mut self, ui: &mut Ui) -> bool {
+        let picks = self.picks();
+        let keep: Vec<(usize, usize)> = if picks.is_empty() {
+            self.scene.groups.iter().enumerate().flat_map(|(g, gr)| (0..gr.shapes.len()).map(move |s| (g, s))).collect()
+        } else {
+            crate::view::targets_all(&self.scene, &picks)
+        };
+        let keep: Vec<(usize, usize)> = keep.into_iter().filter(|&(g, s)| self.scene.shape(g, s).is_some_and(|x| x.visible && !x.guide)).collect();
+        if keep.is_empty() || keep.len() > 64 {
+            return false;
+        }
+        // only the picked parts, in their own groups, so what melts into what stays the same
+        let mut scene = self.scene.clone();
+        for (g, group) in scene.groups.iter_mut().enumerate() {
+            let mut s = 0;
+            group.shapes.retain(|_| {
+                let k = keep.contains(&(g, s));
+                s += 1;
+                k
+            });
+        }
+        let w = ui.available_width().min(284.0).max(80.0);
+        let size = [(w as usize).max(1), 96];
+        let spheres = crate::pattern::world_spheres(&scene);
+        if spheres.is_empty() {
+            return false;
+        }
+        let mut c = [0.0_f32; 3];
+        for b in &spheres {
+            c = sdf::add(c, b.c);
+        }
+        let c = sdf::mul(c, 1.0 / spheres.len() as f32);
+        let r = spheres.iter().map(|b| sdf::len(sdf::sub(b.c, c)) + b.r).fold(1.0_f32, f32::max);
+        let mut cam = self.cam;
+        cam.frame(c, r);
+        // what the picture depends on: the kept shapes, the groups' melt, the settings, the view
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        for &(g, s) in &keep {
+            if let (Some(sh), Some(gr)) = (self.scene.shape(g, s), self.scene.groups.get(g)) {
+                format!(
+                    "{g} {:?} {:?} {:?} {:?} {:?} {} {:?} {} {:?} {} {} {}",
+                    sh.kind,
+                    sh.size,
+                    sh.pos,
+                    sh.rot,
+                    sh.scale,
+                    sh.blend,
+                    sh.op,
+                    sh.round,
+                    sh.material.color,
+                    gr.blend,
+                    gr.depth,
+                    sh.volume.as_ref().map_or(0, |v| v.key())
+                )
+                .hash(&mut h);
+            }
+        }
+        format!("{:?} {:?} {:?} {:?}", self.scene.melt, cam.yaw, cam.pitch, size).hash(&mut h);
+        let key = h.finish();
+        if self.melt_preview.as_ref().is_none_or(|(k, _)| *k != key) {
+            let Some(rgba) = crate::easy_view::render(&scene, &cam, size, false, 2, &|| false) else { return false };
+            let image = egui::ColorImage::from_rgba_unmultiplied(size, &rgba);
+            let tex = ui.ctx().load_texture("melt_preview", image, egui::TextureOptions::LINEAR);
+            self.melt_preview = Some((key, tex));
+        }
+        let Some((_, tex)) = self.melt_preview.as_ref() else { return false };
+        let (rect, _) = ui.allocate_exact_size(vec2(w, 96.0), Sense::hover());
+        let p = ui.painter_at(rect);
+        style::gfx::vgrad(&p, rect, 10.0, style::INSET_TOP, style::INSET_BOTTOM);
+        p.image(tex.id(), rect, Rect::from_min_max(Pos2::ZERO, egui::pos2(1.0, 1.0)), Color32::WHITE);
+        let label = if picks.is_empty() { "Preview: whole scene" } else { "Preview: selected" };
+        p.text(rect.left_bottom() + vec2(8.0, -6.0), Align2::LEFT_BOTTOM, label, FontId::proportional(10.0), Color32::from_white_alpha(110));
+        true
+    }
+}
+
+/// Two blobs melting together with the chosen curve: the picture when there are no shapes yet.
 fn melt_preview(ui: &mut Ui, m: &Melt) {
     let w = ui.available_width().min(284.0);
     let (rect, _) = ui.allocate_exact_size(vec2(w, 96.0), Sense::hover());

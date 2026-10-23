@@ -649,10 +649,10 @@ impl App {
 pub fn hint(tool: Tool) -> &'static str {
     match tool {
         Tool::Select => "Click to select",
-        Tool::All => "Arrow: move   Square: move on plane   Curved arrow: rotate   Center: scale all   Face square: stretch that way",
+        Tool::All => "Drag an arrow to move · a curve to turn · a box to stretch",
         Tool::Move => "Drag arrow to move (Ctrl: 1 mm steps)",
         Tool::Rotate => "Drag ring to rotate (Ctrl: 15 degree steps)",
-        Tool::Scale => "Center: scale all   Face square: stretch that way   Axis square: scale that axis",
+        Tool::Scale => "Drag the middle to grow all · a box to stretch one way",
     }
 }
 

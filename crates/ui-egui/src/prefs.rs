@@ -33,6 +33,15 @@ use crate::viewport::NavMode;
 
 pub const UNITS: [&str; 5] = ["mm", "cm", "m", "in", "ft"];
 pub const OPENSCAD_NAV: &str = "openscad";
+/// Melt 3D's own mapping (SolidCraft embedded in Melt 3D uses it, so both views work the same way),
+/// Blender-like: middle drag orbits, Shift+middle pans, Ctrl+middle zooms, right drag pans; the
+/// left button selects (a left drag from empty space box-selects).
+pub const MELT_NAV: &str = "melt3d";
+
+/// Presets in which a left drag that starts on empty space turns the view.
+pub fn left_drag_orbits(nav: &str) -> bool {
+    nav == OPENSCAD_NAV
+}
 pub const TOUCHPAD_NAV: &str = "touchpad";
 /// A mouse button that can drag the camera.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -97,7 +106,7 @@ use NavButton::{Left, Middle, Right};
 use NavMode::{Orbit, Pan, Zoom};
 
 /// The mouse mappings. The first is the default.
-pub const NAV_PRESETS: [NavPreset; 8] = [
+pub const NAV_PRESETS: [NavPreset; 9] = [
     NavPreset {
         id: "fusion",
         label: "Fusion",
@@ -168,6 +177,18 @@ pub const NAV_PRESETS: [NavPreset; 8] = [
             bind(Middle, NavKeys::SHIFT, Zoom),
             bind(Right, NavKeys::NONE, Pan),
             bind(Middle, NavKeys::NONE, Pan),
+        ],
+    },
+    NavPreset {
+        id: MELT_NAV,
+        label: "Melt 3D",
+        help: "Middle drag orbits, Shift+middle or right drag pans, Ctrl+middle zooms; left drag box-selects",
+        reverse_zoom: false,
+        bindings: &[
+            bind(Middle, NavKeys::SHIFT, Pan),
+            bind(Middle, NavKeys::CTRL, Zoom),
+            bind(Middle, NavKeys::NONE, Orbit),
+            bind(Right, NavKeys::NONE, Pan),
         ],
     },
     NavPreset {

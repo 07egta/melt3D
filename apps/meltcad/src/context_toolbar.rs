@@ -426,6 +426,27 @@ impl App {
             ui.label(RichText::new("形を選ぶと編集できます").color(style::DIM));
             return;
         }
+        // a solid made in SolidCraft: open its design there again
+        if let Some(Pick::Shape(g, s)) = self.sel
+            && self.scene.shape(g, s).is_some_and(|x| x.solid.is_some())
+        {
+            let r = ui
+                .horizontal(|ui| {
+                    let (logo, _) = ui.allocate_exact_size(vec2(16.0, 18.0), egui::Sense::hover());
+                    style::solidcraft_logo(ui.painter(), logo);
+                    ui.button(RichText::new("Edit").color(style::ACCENT))
+                })
+                .inner;
+            if r.on_hover_text("Open this solid in SolidCraft").clicked() {
+                let ctx = ui.ctx().clone();
+                if let Err(e) = self.edit_in_solidcraft(&ctx, g, s) {
+                    self.say(&ctx, e);
+                }
+                ui.close();
+                return;
+            }
+            ui.separator();
+        }
         for action in self.toolbar_actions() {
             self.button_action(ui, action, true);
         }

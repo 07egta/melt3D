@@ -10,6 +10,7 @@ use solidcraft_ui_egui::theme::{self, Tokens};
 use solidcraft_ui_egui::{Services, SolveApp};
 
 use crate::app::App;
+use crate::model::{Pick, SolidLink};
 use crate::style;
 
 pub struct Precise {
@@ -18,6 +19,12 @@ pub struct Precise {
     sent: Option<u64>,
     pending: Option<(u64, crate::mesh_dialog::SolidImport)>,
     message: Option<String>,
+    /// The design of the solid being sent, kept on the Melt shape so it can be edited again.
+    design: Option<String>,
+    /// Editing the solid of this Melt shape (its uid): coming back replaces that shape.
+    edit: Option<u32>,
+    /// The design file opened for an edit (removed when this workspace goes).
+    opened: Option<ExportFile>,
 }
 
 const DEPTH_BITS: u8 = 24;
@@ -75,6 +82,8 @@ impl Precise {
         let mut app = SolveApp::new(Session::default(), services());
         app.apply_off_thread = Some(solidcraft_ui_egui::dialogs::APPLY_AT_ONCE);
         app.preferences.language = "ja".into();
+        // turn, slide and zoom the view the same way as the Melt view
+        app.preferences.nav = solidcraft_ui_egui::prefs::MELT_NAV.into();
         app.autosave_minutes = 0.5;
         if !cfg!(test) {
             solidcraft_ui_egui::recovery_ui::start(
@@ -86,7 +95,7 @@ impl Precise {
         if let Some(rs) = rs {
             app.set_wgpu(rs, DEPTH_BITS, STENCIL_BITS, rs.msaa_samples);
         }
-        Precise { app, sent: None, pending: None, message: None }
+        Precise { app, sent: None, pending: None, message: None, design: None, edit: None, opened: None }
     }
 
     fn editing(&self) -> bool {
@@ -165,6 +174,10 @@ impl App {
             Ok(()) => {
                 p.sent = Some(hash);
                 p.message = None;
+                let (design, edit) = (p.design.take(), p.edit);
+                self.link_precise_solid(design, edit);
+                // the next visit starts on a clean, new design; this one lives on in the shape
+                self.precise = None;
             }
             Err(e) => {
                 let message = format!("{e} 精密ソリッドの形は残っています。戻り直すと再び取り込めます");
@@ -196,7 +209,6 @@ impl App {
                     {
                         back = true;
                     }
-                    ui.label(RichText::new("戻るだけで Melt に取り込み、とけあう形にできます").size(11.5).color(style::DIM));
                 });
                 if let Some(message) = &p.message {
                     ui.label(RichText::new(message).size(11.5).color(style::CUT));
@@ -241,6 +253,8 @@ impl App {
         if p.sent == Some(hash) {
             return Ok(());
         }
+        let design = String::from_utf8(solidcraft_engine::io::write_design(&p.app.session.design())).ok();
+        p.design = design.filter(|d| d.len() <= crate::model::MAX_SOLID_DESIGN);
         let imported = crate::import_mesh::import_bytes(&bytes, "SolidCraft.stl", &crate::import_mesh::ImportOptions { y_up: Some(false) })?;
         let size = imported.mesh.size();
         let loaded = crate::mesh_import::Loaded { file_name: "SolidCraft".into(), stem: p.app.session.doc.name.clone(), imported, size };
@@ -250,16 +264,76 @@ impl App {
     }
 }
 
+impl App {
+    /// The solid that just came in (the selected shape) keeps its design. When it was an edit of an
+    /// existing shape, that shape takes the new solid (where the person had moved it) instead.
+    fn link_precise_solid(&mut self, design: Option<String>, edit: Option<u32>) {
+        let Some(Pick::Shape(gi, si)) = self.sel else { return };
+        let Some(new) = self.scene.shape(gi, si).cloned() else { return };
+        let link = design.map(|design| SolidLink { design, placed_at: new.pos });
+        let target = edit.and_then(|uid| self.scene.shape_by_uid(uid)).filter(|&t| t != (gi, si));
+        if let Some((tg, ts)) = target
+            && self.scene.groups.get(gi).is_some_and(|g| g.shapes.len() == 1)
+        {
+            let Some(old) = self.scene.shape_mut(tg, ts) else { return };
+            // keep how far the person moved it since it came in
+            let placed = old.solid.as_ref().map_or(old.pos, |l| l.placed_at);
+            let moved = [old.pos[0] - placed[0], old.pos[1] - placed[1], old.pos[2] - placed[2]];
+            old.volume = new.volume.clone();
+            old.size = new.size;
+            old.pos = [new.pos[0] + moved[0], new.pos[1] + moved[1], new.pos[2] + moved[2]];
+            old.solid = link;
+            self.scene.remove_group(gi);
+            self.sel = self.scene.shape_by_uid(edit.unwrap_or(0)).map(|(g, s)| Pick::Shape(g, s));
+            self.multi.clear();
+            return;
+        }
+        if let Some(sh) = self.scene.shape_mut(gi, si) {
+            sh.solid = link;
+        }
+        let _ = self.scene.ensure_shape_uid(gi, si);
+    }
+
+    /// "Edit in SolidCraft": open the design behind this shape in SolidCraft; coming back puts the
+    /// changed solid in its place.
+    pub(crate) fn edit_in_solidcraft(&mut self, ctx: &egui::Context, g: usize, s: usize) -> Result<(), String> {
+        let design =
+            self.scene.shape(g, s).and_then(|sh| sh.solid.as_ref()).map(|l| l.design.clone()).ok_or("この形には SolidCraft のデータがありません")?;
+        if self.precise.as_ref().is_some_and(|p| p.pending.is_some() || p.editing()) {
+            return Err("SolidCraft の作業を先に終えてください".into());
+        }
+        let uid = self.scene.ensure_shape_uid(g, s).ok_or("この形を編集できません")?;
+        // a fresh workspace: whatever was there was sent already or is put aside
+        self.precise = None;
+        self.set_precise_mode(ctx, true)?;
+        let file = ExportFile::named("design.solidcraft")?;
+        std::fs::write(file.path(), design.as_bytes()).map_err(|e| format!("データを用意できません: {e}"))?;
+        let Some(p) = self.precise.as_mut() else { return Err("SolidCraft を開けませんでした".into()) };
+        let path = file.path().to_str().ok_or("一時ファイルの場所を読み取れません")?.to_owned();
+        p.app.open_path(&path);
+        p.edit = Some(uid);
+        p.opened = Some(file);
+        // the design itself is unchanged until something is edited: coming back without changes
+        // does not bring a second copy in
+        p.sent = None;
+        Ok(())
+    }
+}
+
 /// Each export owns a fresh directory; the in-memory importer never depends on a stale STL.
 struct ExportFile(PathBuf);
 
 impl ExportFile {
     fn new() -> Result<Self, String> {
+        Self::named("solid.stl")
+    }
+
+    fn named(name: &str) -> Result<Self, String> {
         static NEXT: AtomicU64 = AtomicU64::new(0);
         for _ in 0..16 {
             let dir = std::env::temp_dir().join(format!("melt3d-solid-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
             match std::fs::create_dir(&dir) {
-                Ok(()) => return Ok(Self(dir.join("solid.stl"))),
+                Ok(()) => return Ok(Self(dir.join(name))),
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
                 Err(e) => return Err(format!("一時ファイルを用意できません: {e}")),
             }
@@ -315,7 +389,7 @@ mod tests {
     }
 
     #[test]
-    fn returning_imports_an_exact_solid_once_after_success_and_keeps_its_history() {
+    fn returning_imports_the_solid_once_then_solidcraft_starts_fresh_and_the_shape_stays_editable() {
         let ctx = egui::Context::default();
         let mut app = App::new(true, None);
         exact_box(&mut app, &ctx);
@@ -328,17 +402,35 @@ mod tests {
         finish_import(&mut app, &ctx);
         assert_eq!(app.scene.shape_count(), count + 1);
         assert_eq!(app.undo_depth(), undo + 1, "the imported solid has its own undo step");
-        let shape = &app.scene.groups.last().unwrap().shapes[0];
+        let (g, s) = (app.scene.groups.len() - 1, 0);
+        let shape = app.scene.shape(g, s).unwrap().clone();
         assert_eq!(shape.kind, crate::model::Kind::Mesh);
         assert_eq!(shape.size, [240.0, 24.0, 12.0], "no manual import size cap");
         assert_eq!(shape.pos, [120.0, 12.0, 6.0], "keep the exact source placement");
         assert!(shape.volume.as_ref().unwrap().distance([0.0; 3]) < 0.0, "the solid is a meltable distance volume");
-        assert!(app.precise.as_ref().unwrap().sent.is_some());
+        assert!(shape.solid.as_ref().is_some_and(|l| l.design.contains("Base")), "the shape keeps its SolidCraft design");
+        assert!(app.precise.is_none(), "the sent design is not left behind in SolidCraft");
+
+        // the next visit is a clean new design, and coming back adds nothing
         app.set_precise_mode(&ctx, true).unwrap();
-        assert_eq!(app.precise.as_ref().unwrap().app.session.doc.features.len(), features);
+        assert!(app.precise.as_ref().unwrap().app.session.doc.features.len() < features, "SolidCraft opens fresh");
         app.set_precise_mode(&ctx, false).unwrap();
-        assert!(!crate::mesh_dialog::is_open(&ctx), "unchanged geometry must not be duplicated");
+        assert!(!crate::mesh_dialog::is_open(&ctx));
         assert_eq!(app.scene.shape_count(), count + 1);
+
+        // later: Edit in SolidCraft opens the same design; coming back replaces the shape where it was moved to
+        let uid = app.scene.shape(g, s).unwrap().uid;
+        app.scene.shape_mut(g, s).unwrap().pos[0] += 10.0;
+        app.edit_in_solidcraft(&ctx, g, s).unwrap();
+        assert!(app.precise_on);
+        assert_eq!(app.precise.as_ref().unwrap().app.session.doc.features.len(), features, "the design is back, history and all");
+        app.set_precise_mode(&ctx, false).unwrap();
+        finish_import(&mut app, &ctx);
+        assert_eq!(app.scene.shape_count(), count + 1, "the edit replaces the shape, not a second copy");
+        let (g2, s2) = app.scene.shape_by_uid(uid).expect("same shape");
+        let again = app.scene.shape(g2, s2).unwrap();
+        assert_eq!(again.pos, [130.0, 12.0, 6.0], "it stays where it was moved");
+        assert_eq!(app.sel, Some(Pick::Shape(g2, s2)));
     }
 
     #[test]
@@ -354,8 +446,10 @@ mod tests {
         app.set_precise_mode(&ctx, true).unwrap();
         app.set_precise_mode(&ctx, false).unwrap();
         assert!(app.precise_transfer_pending(), "retry unchanged geometry after cancellation");
+        let count = app.scene.shape_count();
         finish_import(&mut app, &ctx);
-        assert!(app.precise.as_ref().unwrap().sent.is_some());
+        assert_eq!(app.scene.shape_count(), count + 1, "the retry brings it in");
+        assert!(app.precise.is_none(), "and SolidCraft starts fresh next time");
     }
 
     #[test]

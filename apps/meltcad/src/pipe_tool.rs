@@ -260,7 +260,17 @@ impl App {
                 }
                 return Some(taken);
             }
-            self.pipe_finish();
+            // one drag, one pipe: the tool ends by itself and the new pipe stays selected, so the
+            // card keeps fixing it (radius, wall, ends). Press Pipe again for another.
+            if self.pipe_finish() {
+                self.pt.on = false;
+                self.pt.hover = None;
+            }
+            return Some(Input { over: true, taken: true, busy: false });
+        }
+        // a right click ends the tool, like Esc
+        if resp.clicked_by(egui::PointerButton::Secondary) {
+            self.set_pipe_tool(false);
             return Some(Input { over: true, taken: true, busy: false });
         }
         let over_gnomon = |p: Pos2| (p - pos2(rect.right() - 62.0, rect.top() + 62.0)).length() < 58.0;
@@ -358,8 +368,8 @@ impl App {
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("Pipe").strong().color(style::ACCENT));
                         if self.pt.on {
-                            ui.label(egui::RichText::new("Drag to trace").size(11.0).color(style::DIM));
-                            if style::pill(ui, "Cancel", false).on_hover_text("Turn off the pipe tool (Esc)").clicked() {
+                            ui.label(egui::RichText::new("Drag once to draw a pipe").size(11.0).color(style::DIM));
+                            if style::pill(ui, "Stop", false).on_hover_text("Stop drawing pipes (Esc or right click)").clicked() {
                                 off = true;
                             }
                         } else {
@@ -395,7 +405,7 @@ impl App {
                             }
                         });
                         ui.label(
-                            egui::RichText::new("Over a shape, traces along its surface   Alt+drag to rotate view").size(11.0).color(style::DIM),
+                            egui::RichText::new("Over a shape it follows the surface · middle drag turns the view").size(11.0).color(style::DIM),
                         );
                     }
                 });

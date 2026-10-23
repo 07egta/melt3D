@@ -141,6 +141,8 @@ pub struct App {
     pub lib_query: String,
     /// A message from code that has no window context (shown in the status bar next frame).
     pub notice: Option<String>,
+    /// The Melt tab's picture of the picked shapes melting (its fingerprint and the image).
+    pub(crate) melt_preview: Option<(u64, egui::TextureHandle)>,
     /// The graphics path (GPU picture or the simple CPU one) and its cards.
     pub gpu: crate::gpu_ui::GpuUi,
     /// The speed test window ("速さをはかる…").
@@ -232,6 +234,7 @@ impl App {
             lib_cat: 0,
             lib_query: String::new(),
             notice: None,
+            melt_preview: None,
             gpu: Default::default(),
             bench: Default::default(),
         };
@@ -1572,6 +1575,20 @@ impl App {
                         }
                     });
                     style::menu_button(ui, "View", false, |ui| {
+                        // the mouse works by itself (right drag slides, middle drag turns, wheel zooms);
+                        // a trackpad is found from how it scrolls, and can be chosen here
+                        ui.label(RichText::new("Pointing device").size(11.5).color(style::DIM));
+                        for (dev, name, tip) in [
+                            (crate::view::InputDev::Auto, "Automatic", "Find out from how the scrolling arrives"),
+                            (crate::view::InputDev::Mouse, "Mouse", "Middle drag turns, right drag slides, the wheel zooms"),
+                            (crate::view::InputDev::Trackpad, "Trackpad", "Two fingers turn (Shift: slide), pinch zooms"),
+                        ] {
+                            if ui.selectable_label(self.input_dev == dev, name).on_hover_text(tip).clicked() {
+                                self.input_dev = dev;
+                                ui.close();
+                            }
+                        }
+                        ui.separator();
                         let pi = std::f32::consts::PI;
                         for (name, yaw, pitch) in [
                             ("Front  1", 0.0, 0.0),
@@ -1635,31 +1652,17 @@ impl App {
                     if style::pill(ui, "Find  F", false).on_hover_text("Find shapes, library, commands (F)").clicked() {
                         palette::open(&ctx);
                     }
-                    // box selection: only what is completely inside, or everything the box touches
-                    for (mode, tip, icon) in [
-                        (
-                            crate::marquee::Marquee::Inside,
-                            "Box select: drag a box, take only shapes completely inside (Shift adds)",
-                            crate::glyphs_more::box_inside as fn(&egui::Painter, egui::Rect, Color32),
-                        ),
-                        (
-                            crate::marquee::Marquee::Touching,
-                            "Box select: drag a box, take every shape it touches (Shift adds)",
-                            crate::glyphs_more::box_touching as fn(&egui::Painter, egui::Rect, Color32),
-                        ),
-                    ] {
-                        let on = self.marquee == Some(mode);
-                        if style::icon_button(ui, 32.0, tip, on, icon).clicked() {
-                            self.marquee = if on { None } else { Some(mode) };
-                        }
-                    }
                     let left_end = ui.cursor().left();
                     let right_start = ui.max_rect().right();
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui
-                            .button(RichText::new("SolidCraft").color(style::ACCENT))
-                            .on_hover_text("精密なスケッチと立体を作る。戻ると自動で Melt に取り込み、とけあう形にできます")
-                            .clicked()
+                        if style::icon_button(
+                            ui,
+                            32.0,
+                            "SolidCraft: 精密なスケッチと立体を作る。戻ると自動で Melt に取り込み、とけあう形にできます",
+                            false,
+                            |p, r, _| style::solidcraft_logo(p, r),
+                        )
+                        .clicked()
                         {
                             self.open_precise(&ctx);
                         }
@@ -1682,27 +1685,6 @@ impl App {
                                 ui.close();
                             }
                         });
-                        // Mouse or trackpad: Auto follows what the last scroll looked like
-                        {
-                            let eff = self.input_dev.device(self.input_seen);
-                            let items = [
-                                ("Mouse", "Wheel zooms, middle-drag turns, right-drag slides"),
-                                ("Trackpad", "Two fingers turn (Shift: slide), pinch zooms"),
-                            ];
-                            // nothing is chosen yet: the highlighted one is what the scrolling looked like
-                            let cur = match eff {
-                                crate::view::Device::Mouse => 0,
-                                crate::view::Device::Trackpad => 1,
-                            };
-                            let cur = match self.input_dev {
-                                crate::view::InputDev::Mouse => 0,
-                                crate::view::InputDev::Trackpad => 1,
-                                crate::view::InputDev::Auto => cur,
-                            };
-                            if let Some(i) = style::segmented(ui, "input_dev", &items, Some(cur), false) {
-                                self.input_dev = if i == 0 { crate::view::InputDev::Mouse } else { crate::view::InputDev::Trackpad };
-                            }
-                        }
                         let mut menu = crate::perf::MenuState { quality: self.perf.quality, hud: self.perf.hud, bench: false };
                         crate::perf::quality_menu(ui, &mut menu, |ui| self.gpu_menu_items(ui));
                         self.perf.quality = menu.quality;
@@ -1926,9 +1908,11 @@ impl App {
 
     /// The docked panel on the left: the scene list (outliner) and the ready-made models (assets).
     fn left_dock(&mut self, ui: &mut Ui) {
+        // drag its right edge to make it wider or narrower
         egui::Panel::left("dock")
-            .exact_size(272.0)
-            .resizable(false)
+            .default_size(272.0)
+            .size_range(220.0..=560.0)
+            .resizable(true)
             .frame(egui::Frame::new().fill(style::PANEL_DARK).inner_margin(egui::Margin::symmetric(10, 10)))
             .show(ui, |ui| {
                 style::panel_sheen(ui, ui.max_rect().expand2(egui::vec2(10.0, 10.0)), style::PANEL_DARK, style::Edge::Left);
