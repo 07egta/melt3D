@@ -4,9 +4,9 @@
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use egui::{Color32, RichText, Ui};
+use egui::{RichText, Ui};
 use solidcraft_engine::Session;
-use solidcraft_ui_egui::theme::{self, Tokens};
+use solidcraft_ui_egui::theme;
 use solidcraft_ui_egui::{Services, SolveApp};
 
 use crate::app::App;
@@ -30,70 +30,32 @@ pub struct Precise {
 const DEPTH_BITS: u8 = 24;
 const STENCIL_BITS: u8 = 8;
 
-fn services() -> Services {
-    let dialog = rfd::AsyncFileDialog::new();
-    let open = dialog.clone();
-    let save = dialog.clone();
-    Services {
-        pick_open: Some(Box::new(move |_kinds: &[&str]| {
-            let future = open
-                .clone()
-                .add_filter("Designs, STEP, IGES and meshes", &["solidcraft", "json", "step", "stp", "igs", "iges", "3mf", "stl"])
-                .add_filter("All files", &["*"])
-                .pick_file();
-            Box::pin(async move { future.await.map(|p| p.path().to_string_lossy().into_owned()) })
-        })),
-        pick_save: Some(Box::new(move |name: &str, exts: &[&str]| {
-            let future = save.clone().set_file_name(name).add_filter("File", exts).save_file();
-            Box::pin(async move { future.await.map(|p| p.path().to_string_lossy().into_owned()) })
-        })),
-        ..Default::default()
-    }
-}
-
-/// SolidCraft in Melt 3D's colours: the same greys, the same green accent, so the two views feel
-/// like one app.
-fn melt_skin(mut t: Tokens) -> Tokens {
-    t.app_bar = style::PANEL_DARK;
-    t.app_bar_text = style::TEXT;
-    t.app_bar_hover = style::HOVER;
-    t.toolbar = style::PANEL;
-    t.panel = style::PANEL;
-    t.panel_header = style::CARD;
-    t.dialog_bg = style::PANEL;
-    t.dialog_border = style::BORDER;
-    t.border = style::BORDER;
-    t.text = style::TEXT;
-    t.text_dim = style::DIM;
-    t.accent = style::ACCENT;
-    t.accent_soft = style::ACCENT_SOFT;
-    t.chip = style::ACCENT_SOFT;
-    t.hover = style::HOVER;
-    t.field = style::PANEL_DARK;
-    t.timeline = style::PANEL_DARK;
-    t.viewport_top = Color32::from_rgb(40, 40, 43);
-    t.viewport_bottom = Color32::from_rgb(26, 26, 28);
-    t
-}
+pub(crate) const PREFS_KEY: &str = "melt3d.solidcraft.preferences.v1";
 
 impl Precise {
-    fn new(rs: Option<&egui_wgpu::RenderState>) -> Precise {
-        theme::set_skin(melt_skin);
-        let mut app = SolveApp::new(Session::default(), services());
+    fn new(rs: Option<&egui_wgpu::RenderState>, services: Option<Services>, prefs: Option<&str>) -> Precise {
+        let mut app = SolveApp::new(Session::default(), services.unwrap_or_else(|| crate::precise_services::services(rfd::AsyncFileDialog::new())));
         app.apply_off_thread = Some(solidcraft_ui_egui::dialogs::APPLY_AT_ONCE);
         app.preferences.language = "ja".into();
-        // turn, slide and zoom the view the same way as the Melt view
-        app.preferences.nav = solidcraft_ui_egui::prefs::MELT_NAV.into();
         app.autosave_minutes = 0.5;
+        if let Some(prefs) = prefs {
+            app.load_prefs(prefs);
+        }
+        // turn, slide and zoom the view the same way as the Melt view (after the saved settings,
+        // so both views always work alike)
+        app.preferences.nav = solidcraft_ui_egui::prefs::MELT_NAV.into();
         if !cfg!(test) {
             solidcraft_ui_egui::recovery_ui::start(
                 &mut app,
                 &crate::recovery::default_directory().join("solidcraft"),
                 std::time::Duration::from_secs(30),
             );
+            solidcraft_ui_egui::prefs::set_autosave(&mut app);
         }
         if let Some(rs) = rs {
             app.set_wgpu(rs, DEPTH_BITS, STENCIL_BITS, rs.msaa_samples);
+            solidcraft_ui_egui::gpu::install_picture_renderer(rs);
+            solidcraft_ui_egui::prefs::check_msaa(&mut app, u32::from(crate::precise_services::msaa()));
         }
         Precise { app, sent: None, pending: None, message: None, design: None, edit: None, opened: None }
     }
@@ -149,7 +111,10 @@ impl App {
             self.settle(ctx);
             crate::fonts::ensure(ctx);
             if self.precise.is_none() {
-                self.precise = Some(Precise::new(self.gpu.rs.as_ref()));
+                self.precise = Some(Precise::new(self.gpu.rs.as_ref(), self.precise_services.take(), self.precise_prefs.as_deref()));
+            }
+            if let Some(p) = self.precise.as_ref() {
+                solidcraft_ui_egui::fonts::setup_fonts_without_waiting(ctx, &p.app.preferences.language, &p.app.preferences.ui_font);
             }
             theme::apply(ctx);
         } else {
@@ -157,6 +122,10 @@ impl App {
                 return Err("スケッチや立体の操作を完了するか、取り消してから戻ってください".into());
             }
             self.send_precise_solid(ctx)?;
+            if self.gpu.rs.is_some() && !self.gpu.easy && matches!(self.gpu.status.snapshot().state, crate::gpu_status::State::Off) {
+                self.attach_gpu(self.gpu.rs.clone(), ctx, false);
+            }
+            crate::fonts::setup(ctx);
             style::apply(ctx);
         }
         self.precise_on = on;
@@ -176,8 +145,11 @@ impl App {
                 p.message = None;
                 let (design, edit) = (p.design.take(), p.edit);
                 self.link_precise_solid(design, edit);
-                // the next visit starts on a clean, new design; this one lives on in the shape
-                self.precise = None;
+                // the next visit starts on a clean, new design; this one lives on in the shape.
+                // Its settings carry over to the next one.
+                if let Some(p) = self.precise.take() {
+                    self.precise_prefs = Some(p.app.prefs());
+                }
             }
             Err(e) => {
                 let message = format!("{e} 精密ソリッドの形は残っています。戻り直すと再び取り込めます");
@@ -306,7 +278,9 @@ impl App {
         }
         let uid = self.scene.ensure_shape_uid(g, s).ok_or("この形を編集できません")?;
         // a fresh workspace: whatever was there was sent already or is put aside
-        self.precise = None;
+        if let Some(p) = self.precise.take() {
+            self.precise_prefs = Some(p.app.prefs());
+        }
         self.set_precise_mode(ctx, true)?;
         let file = ExportFile::named("design.solidcraft")?;
         std::fs::write(file.path(), design.as_bytes()).map_err(|e| format!("データを用意できません: {e}"))?;
@@ -388,6 +362,56 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         app.sync_precise_transfer(ctx);
+    }
+
+    #[test]
+    fn the_embedded_workspace_keeps_upstream_default_layout_and_panels() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        app.set_precise_mode(&ctx, true).unwrap();
+        let embedded = &app.precise.as_ref().unwrap().app;
+        let standard = solidcraft_ui_egui::UiState::default();
+        assert_eq!(embedded.ui.layout, standard.layout);
+        assert_eq!(embedded.ui.tab, standard.tab);
+        assert_eq!(embedded.ui.show_browser, standard.show_browser);
+        assert_eq!(embedded.ui.show_timeline, standard.show_timeline);
+        assert_eq!(embedded.preferences.language, "ja");
+        assert!(embedded.services.pick_open.is_some());
+        assert!(embedded.services.pick_save.is_some());
+    }
+
+    #[test]
+    fn embedded_preferences_survive_a_new_host_session() {
+        let ctx = egui::Context::default();
+        let mut first = App::new(true, None);
+        first.set_precise_mode(&ctx, true).unwrap();
+        let p = &mut first.precise.as_mut().unwrap().app;
+        p.preferences.language = "en".into();
+        p.autosave_minutes = 7.0;
+        p.preferences.layout = solidcraft_ui_egui::shell::LayoutMode::Docked;
+        let mut stored = std::collections::HashMap::default();
+        struct Memory(std::collections::HashMap<String, String>);
+        impl eframe::Storage for Memory {
+            fn get_string(&self, key: &str) -> Option<String> {
+                self.0.get(key).cloned()
+            }
+            fn set_string(&mut self, key: &str, value: String) {
+                self.0.insert(key.to_owned(), value);
+            }
+            fn remove_string(&mut self, key: &str) {
+                self.0.remove(key);
+            }
+            fn flush(&mut self) {}
+        }
+        let mut memory = Memory(std::mem::take(&mut stored));
+        eframe::App::save(&mut first, &mut memory);
+        let mut second = App::new(true, None);
+        second.precise_prefs = eframe::Storage::get_string(&memory, PREFS_KEY);
+        second.set_precise_mode(&ctx, true).unwrap();
+        let p = &second.precise.as_ref().unwrap().app;
+        assert_eq!(p.preferences.language, "en");
+        assert_eq!(p.autosave_minutes, 7.0);
+        assert_eq!(p.preferences.layout, solidcraft_ui_egui::shell::LayoutMode::Docked);
     }
 
     #[test]

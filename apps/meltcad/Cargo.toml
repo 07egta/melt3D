@@ -15,7 +15,7 @@ dbg_macro = "warn"
 todo = "warn"
 
 [dependencies]
-eframe = { workspace = true, features = ["default_fonts", "wgpu", "wayland", "x11"] }
+eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "wayland", "x11", "links"] }
 egui = { workspace = true }
 egui-wgpu = { workspace = true }
 wgpu = { workspace = true }
@@ -28,6 +28,9 @@ solidcraft-geom = { workspace = true }
 solidcraft-engine = { workspace = true }
 solidcraft-ui-egui = { workspace = true }
 ttf-parser = { workspace = true }
+ureq = { version = "3.4", default-features = false, features = ["rustls-no-provider", "platform-verifier"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+keyring = { version = "3.6", default-features = false, features = ["apple-native", "windows-native", "async-secret-service", "async-io", "crypto-rust"] }
 
 [dev-dependencies]
 naga = { version = "30.0.1", features = ["wgsl-in", "hlsl-out", "spv-out", "msl-out", "glsl-out"] }

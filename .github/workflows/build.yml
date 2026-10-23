@@ -153,10 +153,10 @@ jobs:
           path: ${{ runner.temp }}/melt3d-ui/*.png
 
   # Never replace the download with a build that failed tests, and never publish
-  # from a pull request or a branch other than the YURACAD working branch.
+  # from a pull request or a branch other than the canonical YURACAD source.
   publish:
     name: Publish tested YURACAD Windows release
-    if: github.event_name == 'push' && github.ref_name == 'easy-layout-and-melt'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/integration/yuracad-20261017'
     needs: [windows, tests]
     runs-on: ubuntu-latest
     # Serialize updates from successful workflows, rather than clobbering concurrently.
@@ -173,7 +173,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          branch_head="$(gh api "repos/${GITHUB_REPOSITORY}/branches/easy-layout-and-melt" --jq .commit.sha)"
+          release_branch='integration/yuracad-20261017'
+          encoded_branch="${release_branch//\//%2F}"
+          branch_head="$(gh api "repos/${GITHUB_REPOSITORY}/branches/${encoded_branch}" --jq .commit.sha)"
           if [ "$branch_head" = "$GITHUB_SHA" ]; then
             echo "publish=true" >> "$GITHUB_OUTPUT"
           else
@@ -207,7 +209,7 @@ jobs:
           cp dist/solidcraft.exe YURACAD-Classic.exe
           sha256sum YURACAD.exe YURACAD-Classic.exe > YURACAD-SHA256.txt
           cat > release-notes.txt <<EOF
-          Windows x64 downloads built from easy-layout-and-melt at ${GITHUB_SHA}.
+          Windows x64 downloads built from integration/yuracad-20261017 at ${GITHUB_SHA}.
 
           - YURACAD.exe: MELTCAD, the blob / sculpt-style modeller (.meltcad).
           - YURACAD-Classic.exe: SolidCraft, the parametric CAD app (.solidcraft).

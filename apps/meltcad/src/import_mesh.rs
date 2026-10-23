@@ -244,7 +244,7 @@ fn read_stl_binary(b: &[u8]) -> Result<ImportedMesh, String> {
     }
     let mut w = Welder::default();
     let mut triangles = Vec::with_capacity(n);
-    for rec in body.chunks_exact(50).take(n) {
+    for rec in body.as_chunks::<50>().0.iter().take(n) {
         let mut idx = [0u32; 3];
         for (k, slot) in idx.iter_mut().enumerate() {
             let o = 12 + 12 * k;

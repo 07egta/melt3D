@@ -265,7 +265,7 @@ fn interior_point(p: &[(f64, f64)]) -> (f64, f64) {
             }
         }
         xs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        for w in xs.chunks_exact(2) {
+        for w in xs.as_chunks::<2>().0.iter() {
             let span = w[1] - w[0];
             if best.is_none_or(|(s, _)| span > s) {
                 best = Some((span, ((w[0] + w[1]) * 0.5, y)));
@@ -974,7 +974,7 @@ impl Pen<'_> {
     }
 
     fn polygon(&mut self, pts: &[f64]) {
-        for p in pts.chunks_exact(2) {
+        for p in pts.as_chunks::<2>().0.iter() {
             if self.pt(p[0], p[1]).is_none() {
                 break;
             }

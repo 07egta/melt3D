@@ -2130,6 +2130,63 @@ mod headless_tests {
     /// error text (shown in the viewport and the log), never as a panic on the compile thread.
     /// Needs an adapter (the software one is fine); skips itself without.
     #[test]
+    #[ignore = "needs a graphics adapter"]
+    fn gpu_ground_is_transparent_and_colours_mix_without_a_dark_seam() {
+        use crate::model::{Kind, Material, Shape};
+        let start = std::time::Instant::now();
+        let mut gpu = headless::open(false).expect("a working graphics adapter and scene pipeline");
+        eprintln!("pipeline {:.1}s on {}", start.elapsed().as_secs_f64(), gpu.info);
+        let size = [128_u32, 128_u32];
+        let mut sc = Scene::default();
+        sc.groups[0].shapes =
+            vec![Shape::new(Kind::Sphere, [0.0, 0.0, -25.0], Material { color: [0.95, 0.04, 0.02], roughness: 0.8, ..Material::default() })];
+        sc.groups[0].shapes[0].size[0] = 15.0;
+        sc.env.grid = true;
+        sc.env.floor = true;
+        let mut cam = Camera { target: [0.0; 3], dist: 120.0, ..Camera::default() };
+        for above in [true, false] {
+            sc.groups[0].shapes[0].pos[2] = if above { -25.0 } else { 25.0 };
+            cam.look(0.0, if above { 1.568 } else { -1.568 });
+            let data = pack(&sc, &cam, [size[0] as f32, size[1] as f32], None, None, false);
+            let (rgba, _) = gpu.render(&data, size);
+            let red = rgba.chunks(4).filter(|p| p[0] > p[1].saturating_add(35) && p[0] > p[2].saturating_add(35)).count();
+            assert!(red > 60, "a model across the ground remains visible (above={above}, red={red})");
+        }
+        sc.env.grid = false;
+        sc.env.floor = false;
+        let material = Material { color: [1.0, 0.0, 0.0], roughness: 0.8, ..Material::default() };
+        let mut a = Shape::new(Kind::Sphere, [0.0, 0.0, 20.0], material);
+        a.blend = 8.0;
+        let mut b = a.clone();
+        b.material.color = [0.0, 0.0, 1.0];
+        sc.groups[0].shapes = vec![a, b];
+        cam = Camera::default();
+        cam.target = [0.0, 0.0, 20.0];
+        let data = pack(&sc, &cam, [size[0] as f32, size[1] as f32], None, None, false);
+        let (mixed, _) = gpu.render(&data, size);
+        sc.groups[0].shapes.truncate(1);
+        sc.groups[0].shapes[0].size[0] = 22.0;
+        sc.groups[0].shapes[0].material.color = [0.7297401, 0.0, 0.7297401];
+        let data = pack(&sc, &cam, [size[0] as f32, size[1] as f32], None, None, false);
+        let (reference, _) = gpu.render(&data, size);
+        let centre = ((size[1] / 2 * size[0] + size[0] / 2) * 4) as usize;
+        for i in 0..3 {
+            assert!(
+                (mixed[centre + i] as i16 - reference[centre + i] as i16).abs() < 6,
+                "GPU colour interpolation must match the expected linear-light mixture: {:?} vs {:?}",
+                &mixed[centre..centre + 3],
+                &reference[centre..centre + 3]
+            );
+        }
+    }
+
+    /// An imported mesh as the (software) GPU draws it, against the CPU field: our own STL of a small
+    /// model is read back, baked and put in a scene beside a sphere that melts into it and a
+    /// cylinder that carves it. The silhouettes of the two renderers must agree, and the mesh must
+    /// be there (it covers a good part of the picture).
+    /// `cargo test -p meltcad --release gpu_headless_mesh_matches_cpu -- --ignored --nocapture`
+    /// (OpenGL like the window: `WGPU_BACKEND=gl YURA_GL_LIMITS=1 xvfb-run ...`)
+    #[test]
     fn a_shader_the_driver_refuses_is_an_error_not_a_panic() {
         let Some((device, queue, info)) = headless::open_device(false) else {
             eprintln!("no adapter: skipped");

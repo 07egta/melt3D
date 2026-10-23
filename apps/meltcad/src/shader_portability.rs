@@ -316,6 +316,7 @@ fn inlining_cost_report() {
     assert!(copies("map_d") <= 11, "map_d is inlined {} times in fs", copies("map_d"));
     assert!(copies("map") <= 3, "map is inlined {} times in fs", copies("map"));
     assert!(copies("shape_dist") <= 15, "shape_dist is inlined {} times in fs", copies("shape_dist"));
-    // (152k: nested groups and the one-face melt added a measured ~10k; keep it knowingly)
-    assert!(t.fs_expanded <= 152_000, "fs is {} expressions after inlining", t.fs_expanded);
+    // Linear-light material blending adds 535 scalar expressions to the former 152k budget.
+    // Distance-function/map call limits above stay unchanged; permit only this measured increase.
+    assert!(t.fs_expanded <= 153_000, "fs is {} expressions after inlining", t.fs_expanded);
 }
