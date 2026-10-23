@@ -398,16 +398,9 @@ impl App {
                 ui.painter().rect_filled(r.rect, 7.0, Color32::from_white_alpha(22));
             }
         }
-        // a quiet list: the eye and the join/cut mark show on the row under the mouse or the
-        // picked one, and always when they say something unusual (hidden, cut, paint, overlap)
-        let near = selected || resp.hovered() || er.hovered() || orr.hovered();
-        if near || !visible {
-            glyphs::eye(ui.painter(), eye, visible, if er.hovered() { Color32::WHITE } else { style::DIM });
-        }
-        if near || op != Op::Add {
-            let opcol = style::op_color(op);
-            glyphs::op(ui.painter(), opr, op, opcol.gamma_multiply(if orr.hovered() { 1.0 } else { 0.8 }));
-        }
+        glyphs::eye(ui.painter(), eye, visible, if er.hovered() { Color32::WHITE } else { style::DIM });
+        let opcol = style::op_color(op);
+        glyphs::op(ui.painter(), opr, op, opcol.gamma_multiply(if orr.hovered() { 1.0 } else { 0.8 }));
         out.eye = er.clicked();
         out.op = orr.clicked();
         out.select = resp.clicked() && !out.eye && !out.op;
@@ -608,48 +601,33 @@ impl App {
                 // an imported mesh cannot become a primitive by a click: it shows where it came from instead
                 crate::mesh_dialog::inspector(ui, sh);
             } else {
-                // change what kind of shape this is, keeping where it sits: one button shows the
-                // kind it is now; the other kinds open from it
-                let now = sh.kind;
-                let kr = ui
-                    .horizontal(|ui| {
-                        ui.label(RichText::new("Kind").color(style::DIM).size(12.0));
-                        let r = style::icon_button(ui, 30.0, &format!("{} (click to change the kind)", now.label()), false, |p, r, ink| {
-                            glyphs::kind(p, r, now, ink, Color32::from_white_alpha(18))
-                        });
-                        ui.label(RichText::new(now.label()).size(12.5));
-                        r
-                    })
-                    .inner;
-                egui::Popup::menu(&kr).show(|ui| {
-                    ui.set_max_width(260.0);
-                    ui.horizontal_wrapped(|ui| {
-                        ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
-                        for k in Kind::ALL {
-                            let on = sh.kind == k;
-                            if style::icon_button(ui, 32.0, k.label(), on, |p, r, ink| glyphs::kind(p, r, k, ink, Color32::from_white_alpha(18)))
-                                .clicked()
-                                && !on
-                            {
-                                if sh.name == sh.kind.label() {
-                                    sh.name = k.label().to_string();
-                                }
-                                sh.kind = k;
-                                sh.size = k.default_size();
-                                sh.params = k.default_params();
-                                if k.uses_path() && sh.path.len() < 2 {
-                                    sh.path = k.default_path();
-                                }
-                                if k.uses_outline2() && sh.outline2.len() < 3 {
-                                    sh.outline2 = k.default_outline2();
-                                }
-                                if matches!(k, Kind::Revolve | Kind::Sweep) {
-                                    sh.outline = k.default_outline();
-                                }
-                                ui.close();
+                // change what kind of shape this is, keeping where it sits
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(RichText::new("Kind").color(style::DIM).size(12.0));
+                    ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
+                    for k in Kind::ALL {
+                        let on = sh.kind == k;
+                        if style::icon_button(ui, 32.0, k.label(), on, |p, r, ink| glyphs::kind(p, r, k, ink, Color32::from_white_alpha(18)))
+                            .clicked()
+                            && !on
+                        {
+                            if sh.name == sh.kind.label() {
+                                sh.name = k.label().to_string();
+                            }
+                            sh.kind = k;
+                            sh.size = k.default_size();
+                            sh.params = k.default_params();
+                            if k.uses_path() && sh.path.len() < 2 {
+                                sh.path = k.default_path();
+                            }
+                            if k.uses_outline2() && sh.outline2.len() < 3 {
+                                sh.outline2 = k.default_outline2();
+                            }
+                            if matches!(k, Kind::Revolve | Kind::Sweep) {
+                                sh.outline = k.default_outline();
                             }
                         }
-                    });
+                    }
                 });
             }
             style::xyz(ui, "Position", &mut sh.pos, 0.5, -5000.0..=5000.0, "");
@@ -704,43 +682,36 @@ impl App {
                     );
                 }
             }
-            // less used: hollow it out, or melt just one face. Folded away until used.
-            let used = sh.shell > 0.0 || sh.face_melt.face > 0;
-            egui::CollapsingHeader::new(RichText::new("Hollow · melt one face").size(12.0).color(style::DIM))
-                .id_salt(("shape_more", g, s))
-                .default_open(used)
-                .show(ui, |ui| {
-                    style::labeled_slider(ui, "Shell", &mut sh.shell, 0.0..=40.0, "Hollow out the inside, leaving walls this thick (mm). 0 = solid");
-                    // melt just one face: the rest keeps its exact size
-                    {
-                        let fm = &mut sh.face_melt;
-                        ui.label(RichText::new("Melt one face").color(style::DIM).size(12.0));
-                        let mut items: Vec<(&str, &str)> = vec![("None", "Whole shape keeps its exact size")];
-                        items.extend(crate::model::FaceMelt::FACES.iter().copied());
-                        let now = Some(usize::from(fm.face.min(6)));
-                        if let Some(i) = style::segmented(ui, "face_melt_face", &items, now, true) {
-                            fm.face = i.min(6) as u8;
-                            if fm.face > 0 {
-                                if fm.amount == 0.0 {
-                                    fm.amount = 4.0;
-                                }
-                                if fm.reach < 1.0 {
-                                    fm.reach = 12.0;
-                                }
-                            }
+            style::labeled_slider(ui, "Shell", &mut sh.shell, 0.0..=40.0, "Hollow out the inside, leaving walls this thick (mm). 0 = solid");
+            // melt just one face: the rest keeps its exact size
+            {
+                let fm = &mut sh.face_melt;
+                ui.label(RichText::new("Melt one face").color(style::DIM).size(12.0));
+                let mut items: Vec<(&str, &str)> = vec![("None", "Whole shape keeps its exact size")];
+                items.extend(crate::model::FaceMelt::FACES.iter().copied());
+                let now = Some(usize::from(fm.face.min(6)));
+                if let Some(i) = style::segmented(ui, "face_melt_face", &items, now, true) {
+                    fm.face = i.min(6) as u8;
+                    if fm.face > 0 {
+                        if fm.amount == 0.0 {
+                            fm.amount = 4.0;
                         }
-                        if fm.face > 0 {
-                            style::labeled_slider(
-                                ui,
-                                "Swell",
-                                &mut fm.amount,
-                                -30.0..=30.0,
-                                "How far this face swells out (+) or sinks in (-), in mm; other faces keep their size",
-                            );
-                            style::labeled_slider(ui, "Depth", &mut fm.reach, 2.0..=60.0, "How far the melt reaches from the face, in mm");
+                        if fm.reach < 1.0 {
+                            fm.reach = 12.0;
                         }
                     }
-                });
+                }
+                if fm.face > 0 {
+                    style::labeled_slider(
+                        ui,
+                        "Swell",
+                        &mut fm.amount,
+                        -30.0..=30.0,
+                        "How far this face swells out (+) or sinks in (-), in mm; other faces keep their size",
+                    );
+                    style::labeled_slider(ui, "Depth", &mut fm.reach, 2.0..=60.0, "How far the melt reaches from the face, in mm");
+                }
+            }
             if sh.kind.uses_outline() {
                 outline_changed = true;
                 top_changed = sh.kind.uses_outline2();

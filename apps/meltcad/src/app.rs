@@ -1575,20 +1575,6 @@ impl App {
                         }
                     });
                     style::menu_button(ui, "View", false, |ui| {
-                        // the mouse works by itself (right drag slides, middle drag turns, wheel zooms);
-                        // a trackpad is found from how it scrolls, and can be chosen here
-                        ui.label(RichText::new("Pointing device").size(11.5).color(style::DIM));
-                        for (dev, name, tip) in [
-                            (crate::view::InputDev::Auto, "Automatic", "Find out from how the scrolling arrives"),
-                            (crate::view::InputDev::Mouse, "Mouse", "Middle drag turns, right drag slides, the wheel zooms"),
-                            (crate::view::InputDev::Trackpad, "Trackpad", "Two fingers turn (Shift: slide), pinch zooms"),
-                        ] {
-                            if ui.selectable_label(self.input_dev == dev, name).on_hover_text(tip).clicked() {
-                                self.input_dev = dev;
-                                ui.close();
-                            }
-                        }
-                        ui.separator();
                         let pi = std::f32::consts::PI;
                         for (name, yaw, pitch) in [
                             ("Front  1", 0.0, 0.0),
@@ -1685,6 +1671,27 @@ impl App {
                                 ui.close();
                             }
                         });
+                        // Mouse or trackpad: Auto follows what the last scroll looked like
+                        {
+                            let eff = self.input_dev.device(self.input_seen);
+                            let items = [
+                                ("Mouse", "Wheel zooms, middle-drag turns, right-drag slides"),
+                                ("Trackpad", "Two fingers turn (Shift: slide), pinch zooms"),
+                            ];
+                            // nothing is chosen yet: the highlighted one is what the scrolling looked like
+                            let cur = match eff {
+                                crate::view::Device::Mouse => 0,
+                                crate::view::Device::Trackpad => 1,
+                            };
+                            let cur = match self.input_dev {
+                                crate::view::InputDev::Mouse => 0,
+                                crate::view::InputDev::Trackpad => 1,
+                                crate::view::InputDev::Auto => cur,
+                            };
+                            if let Some(i) = style::segmented(ui, "input_dev", &items, Some(cur), false) {
+                                self.input_dev = if i == 0 { crate::view::InputDev::Mouse } else { crate::view::InputDev::Trackpad };
+                            }
+                        }
                         let mut menu = crate::perf::MenuState { quality: self.perf.quality, hud: self.perf.hud, bench: false };
                         crate::perf::quality_menu(ui, &mut menu, |ui| self.gpu_menu_items(ui));
                         self.perf.quality = menu.quality;
