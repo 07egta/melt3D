@@ -291,7 +291,11 @@ impl App {
         }
 
         // Box selection (when one of the two box buttons is on) takes drags that start on empty space
-        let marquee_free = hover_handle.is_none() && !ct.taken && !ct.over && !over_gnomon;
+        // a press on a handle (or the axis ball) is never a box: judge by where the button went down
+        let press = ui.input(|i| i.pointer.press_origin());
+        let press_on_handle = matches!((&geom, press), (Some(g), Some(o)) if gizmo::hit(g, tool, o).is_some());
+        let press_on_gnomon = press.is_some_and(|o| self.gnomon_hit(rect, o).is_some() || Self::home_hit(rect, o));
+        let marquee_free = hover_handle.is_none() && !press_on_handle && !press_on_gnomon && !ct.taken && !ct.over && !over_gnomon;
         let marquee_taken = self.marquee_input(ui, &resp, rect, marquee_free, mods.shift);
         // A drag that starts on a handle moves the thing; a drag that starts anywhere else turns the view
         if resp.drag_started_by(PointerButton::Primary) && !mods.alt && !ct.taken && !marquee_taken && !self.sketch_active() {
