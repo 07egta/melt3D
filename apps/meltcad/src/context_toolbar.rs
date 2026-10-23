@@ -2,7 +2,7 @@
 //! Only tiny UI state is added: multi-selection is transient, never part of the saved project.
 //! The original keyboard shortcuts, SDF rendering, and single-selection gizmos are unchanged.
 
-use egui::{Color32, RichText, Ui, pos2, vec2};
+use egui::{Color32, RichText, Ui, vec2};
 
 use crate::app::{App, Tab};
 use crate::gizmo::Tool;
@@ -114,15 +114,11 @@ impl App {
 
     fn selected_shape_keys(&self) -> Option<Vec<(usize, usize)>> {
         let Some(Pick::Shape(g, s)) = self.sel else { return None };
-        if self.scene.shape(g, s).is_none() {
-            return None;
-        }
+        self.scene.shape(g, s)?;
         let mut picks = vec![(g, s)];
         for p in &self.multi {
             let Pick::Shape(g, s) = *p else { return None };
-            if self.scene.shape(g, s).is_none() {
-                return None;
-            }
+            self.scene.shape(g, s)?;
             picks.push((g, s));
         }
         picks.sort_unstable();
@@ -179,24 +175,15 @@ impl App {
         if self.sk.edit.is_some() {
             return vec![Action::EndSketchEdit, Action::Delete];
         }
-        if let Some(Pick::Shape(g, s)) = self.sel {
-            if let Some(sh) = self.scene.shape(g, s) {
-                if crate::sketch::editable(sh) {
-                    return if sh.kind == Kind::Extrude {
-                        vec![
-                            Action::EditSketch,
-                            Action::ExtrudeSettings,
-                            Action::Move,
-                            Action::Rotate,
-                            Action::Scale,
-                            Action::Duplicate,
-                            Action::Delete,
-                        ]
-                    } else {
-                        vec![Action::EditSketch, Action::Move, Action::Rotate, Action::Scale, Action::Duplicate, Action::Delete]
-                    };
-                }
-            }
+        if let Some(Pick::Shape(g, s)) = self.sel
+            && let Some(sh) = self.scene.shape(g, s)
+            && crate::sketch::editable(sh)
+        {
+            return if sh.kind == Kind::Extrude {
+                vec![Action::EditSketch, Action::ExtrudeSettings, Action::Move, Action::Rotate, Action::Scale, Action::Duplicate, Action::Delete]
+            } else {
+                vec![Action::EditSketch, Action::Move, Action::Rotate, Action::Scale, Action::Duplicate, Action::Delete]
+            };
         }
         vec![Action::Move, Action::Rotate, Action::Scale, Action::Duplicate, Action::Delete]
     }
@@ -475,6 +462,7 @@ impl App {
 mod tests {
     use super::*;
     use crate::model::{Material, Shape};
+    use egui::pos2;
     use std::time::Instant;
 
     #[test]

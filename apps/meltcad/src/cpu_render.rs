@@ -300,7 +300,7 @@ mod tests {
     fn gif_240_frame_animation_is_not_halved() {
         assert_eq!(gif_frame_step(239, 30), 1);
         assert_eq!(gif_frame_step(240, 30), 1);
-        assert_eq!((0..240u32).step_by(gif_frame_step(240, 30) as usize).last(), Some(239));
+        assert_eq!((0..240u32).step_by(gif_frame_step(240, 30) as usize).next_back(), Some(239));
         assert_eq!(gif_frame_step(241, 30), 2);
         assert_eq!(gif_frame_step(240, 60), 2, "60 fps needs >=2 centiseconds per GIF image");
     }

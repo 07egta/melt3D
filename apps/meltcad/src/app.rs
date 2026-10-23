@@ -84,7 +84,6 @@ pub struct App {
     status: (String, f64),
     pub renaming: Option<Pick>,
     /// Box selection: which kind is on, and the corner where the drag began.
-    pub marquee: Option<crate::marquee::Marquee>,
     pub marquee_from: Option<egui::Pos2>,
     pub marquee_to: egui::Pos2,
     /// How the view is turned and zoomed: the mouse's way or the trackpad's way (or follow what is used).
@@ -196,7 +195,6 @@ impl App {
             close_approved: false,
             status: (String::new(), 0.0),
             renaming: None,
-            marquee: None,
             marquee_from: None,
             marquee_to: egui::Pos2::ZERO,
             input_dev: crate::view::InputDev::Auto,

@@ -1406,8 +1406,7 @@ mod tests {
     use super::*;
 
     fn named(names: &[(&str, u8)]) -> Scene {
-        let mut sc = Scene::default();
-        sc.groups = names
+        let groups = names
             .iter()
             .map(|&(n, d)| {
                 let mut g = Group::new(n);
@@ -1415,7 +1414,7 @@ mod tests {
                 g
             })
             .collect();
-        sc
+        Scene { groups, ..Scene::default() }
     }
 
     fn layout(sc: &Scene) -> Vec<(String, u8)> {

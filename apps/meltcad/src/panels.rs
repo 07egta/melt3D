@@ -1329,7 +1329,7 @@ impl App {
                 k
             });
         }
-        let w = ui.available_width().min(284.0).max(80.0);
+        let w = ui.available_width().clamp(80.0, 284.0);
         let size = [(w as usize).max(1), 96];
         let spheres = crate::pattern::world_spheres(&scene);
         if spheres.is_empty() {
@@ -1342,6 +1342,8 @@ impl App {
         let c = sdf::mul(c, 1.0 / spheres.len() as f32);
         let r = spheres.iter().map(|b| sdf::len(sdf::sub(b.c, c)) + b.r).fold(1.0_f32, f32::max);
         let mut cam = self.cam;
+        cam.yaw = (cam.yaw / 0.35).round() * 0.35;
+        cam.pitch = (cam.pitch / 0.35).round() * 0.35;
         cam.frame(c, r);
         // what the picture depends on: the kept shapes, the groups' melt, the settings, the view
         use std::hash::{Hash, Hasher};
@@ -1366,9 +1368,13 @@ impl App {
                 .hash(&mut h);
             }
         }
-        format!("{:?} {:?} {:?} {:?}", self.scene.melt, cam.yaw, cam.pitch, size).hash(&mut h);
+        // the view's direction in coarse steps: turning the view does not redraw it every frame
+        let step = |a: f32| (a / 0.35).round() as i32;
+        format!("{:?} {} {} {:?}", self.scene.melt, step(cam.yaw), step(cam.pitch), size).hash(&mut h);
         let key = h.finish();
-        if self.melt_preview.as_ref().is_none_or(|(k, _)| *k != key) {
+        // while the mouse is held (dragging a handle, a slider, the view) keep the last picture
+        let busy = self.melt_preview.is_some() && ui.input(|i| i.pointer.any_down());
+        if !busy && self.melt_preview.as_ref().is_none_or(|(k, _)| *k != key) {
             let Some(rgba) = crate::easy_view::render(&scene, &cam, size, false, 2, &|| false) else { return false };
             let image = egui::ColorImage::from_rgba_unmultiplied(size, &rgba);
             let tex = ui.ctx().load_texture("melt_preview", image, egui::TextureOptions::LINEAR);
