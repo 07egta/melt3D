@@ -308,3 +308,84 @@ equal idle render/cache behaviour; lower GPU scene-pass ms in the relevant
 unlit/hover-interaction cases without worsening interactive p95 CPU frame
 times. Revert hover-fast transitions if pointer motion visibly causes repeated
 resolution changes or the elapsed hover-to-sharp time is unacceptable.
+
+## 2026-10-17: non-blocking long-running work (PR #29)
+
+This patch addresses **actual long-running UI calls** discovered by inspecting the
+`meltcad` application code:
+
+| Operation | Before | After this change |
+|---|---|---|
+| Native YURA/MELTCAD open | UI thread: `read_to_string` + `Scene::from_json_notes` | Worker: chunked read and JSON parse, progress, cooperative cancel; the old scene remains visible until an entire valid scene is ready |
+| Native save | UI thread: scene-to-JSON plus direct `fs::write` | Worker: serialization, staged write, completed-file commit; protects existing file on failure |
+| STL/OBJ/3MF/PLY/GLB mesh read | Already on worker but read-to-end had no cancel/progress | Worker with per-256 KiB cancellation checkpoints and progress; parser still may take time to reach its final cancel check |
+| SDF volume bake / high-resolution Boolean mesh export | Already worker-based via `BakeControl` / `export_job::Job` | Preserve existing threaded mesher and cancel; only one high-memory import/bake/export/print-check/native-file worker per window until the actual worker exits |
+| Export destination write | Worker but wrote final file(s) directly; abort could leave truncation/partial OBJ+MTL | Stage every file in same directory first; commit complete outputs and roll back an I/O failure |
+| Export estimate dialog | UI thread cloned and compared entire scene per repaint | Cache key now uses `App::track_scene` revision, selection and options |
+| Live Boolean editing / camera + GPU preview | Already computed by existing GPU render cache and CPU field on demand | Not changed: the interactive renderer keeps its existing adaptive quality and 30 Hz hover picking gate |
+
+The application also waits for a native save before continuing a pending
+Open/New/Close action. Any edit arriving after a save snapshot leaves the
+project dirty and requires another unsaved-work confirmation. A cancelled or
+failed load never replaces the previous scene. The worker's memory permit is
+released **on thread exit**, not when a dialog is hidden, to prevent
+multiple giant SDF jobs from running at once. The in-app GPU benchmark also holds this budget to avoid large concurrent texture allocations.
+
+The final file replacement is a very short **non-cancellable** stage.
+There is a reason printed on the progress card, and `Job::cancel` uses an
+atomic state transition so a late cancel cannot produce a half-installed
+file. An existing destination remains present while a sibling backup is
+copied, then the staged file replaces it with one rename. A later output
+failure restores earlier files from those backups without first removing their
+destination paths. Each replacement is failure-recoverable, but this is not a
+true multi-file filesystem transaction: unexpected process termination during
+an OBJ+MTL commit can leave one new file and one old file, along with a backup.
+No automatic recovery after a hard crash is claimed.
+
+### Reproduction and benchmarks
+
+Use the same Windows PC, plugged-in power mode, graphics backend, build profile,
+project files, and viewport for both the original base
+`fff80f282891593ecb4523442e0a0aa31725eb29` and the PR branch
+`fix/background-jobs-20261017`.
+
+```powershell
+cargo build --locked --release -p meltcad
+cargo test --release -p meltcad
+cargo test --release -p meltcad frame_cpu_bench -- --ignored --nocapture
+cargo test --release -p meltcad gpu_headless_matches_cpu -- --ignored --nocapture
+cargo test --release -p meltcad gpu_headless_mesh_matches_cpu -- --ignored --nocapture
+target\release\meltcad.exe --bench bench-jobs-gpu.txt --frames 12
+# In the desktop window, press F3 to see actual CPU/GPU frame timings.
+# In a second terminal during a 200 MB document load or an SDF bake:
+Get-Process meltcad | Select-Object CPU,WorkingSet64,PeakWorkingSet64
+```
+
+For interaction responsiveness, use the existing `frame_cpu_bench` (idle,
+hover, orbit, dragging; p95 from the measured frame times) and the new
+`document_io_frame_bench` test (document loading while the mouse moves).
+For cancellation latency, measure elapsed time from pressing Stop to the
+job status returning idle; native-file jobs also log this actual interval
+to the GPU/application log. Record memory as **peak process working set**
+from the OS, not the size of the mesh or scene vector, and state whether it
+includes the initial scene. Confirm no more than one high-memory permit per
+document window, though a single worker may use parallel CPU threads.
+
+Acceptance checks: ordinary success, invalid/missing source, cancelled load,
+cancelled SDF bake, repeated open attempts while a bake winds down, successful
+STL/3MF/OBJ+MTL export, cancelled export without overwriting old files, failed
+multi-file export rollback, save-before-open and save-before-close, Undo/Redo,
+and unchanged GPU/CPU silhouettes. Also try opening the same file being
+saved, and editing during a background save; the older result must not make
+those new edits appear saved.
+
+### Measurement status
+
+**No numbers measured for this change in this environment.** Rust/cargo,
+a running Windows UI, Windows process memory counters and the Intel Arc 140V
+are unavailable here. Do not use historical llvmpipe measurements as a
+before/after comparison for PR #29. The added tests and commands are a
+repeatable **verification plan**, not evidence that they passed or that the
+Windows UI meets a particular p95/peak RAM target. Do not merge until the
+new Rust tests compile and run, a Windows GUI pass is complete and memory
+consumption is acceptable.
