@@ -4,8 +4,8 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::mpsc::{Receiver, TryRecvError, channel};
 use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::mpsc::{Receiver, TryRecvError, channel};
 use std::time::Instant;
 
 use solidcraft_geom::melt::{self, TriMesh};
@@ -643,13 +643,7 @@ impl Job {
     }
 
     /// The UI passes an exclusive high-memory permit; it remains owned by the worker until exit.
-    pub fn start_with_permit(
-        scene: Scene,
-        sel: impl Into<Picks>,
-        opts: Options,
-        path: PathBuf,
-        permit: Option<crate::work_budget::Permit>,
-    ) -> Job {
+    pub fn start_with_permit(scene: Scene, sel: impl Into<Picks>, opts: Options, path: PathBuf, permit: Option<crate::work_budget::Permit>) -> Job {
         let sel: Picks = sel.into();
         let progress = Arc::new(Progress::new());
         let writing = Arc::new(AtomicU8::new(0));
@@ -716,17 +710,11 @@ impl Job {
     }
 }
 
-fn run(
-    scene: &Scene,
-    sel: Picks,
-    o: &Options,
-    path: &Path,
-    prog: &Progress,
-    writing: &AtomicU8,
-    t0: Instant,
-) -> Result<Report, String> {
+fn run(scene: &Scene, sel: Picks, o: &Options, path: &Path, prog: &Progress, writing: &AtomicU8, t0: Instant) -> Result<Report, String> {
     let built = build(scene, sel, o, prog)?;
-    if prog.cancelled() { return Err(export_mesh::CANCELLED.into()); }
+    if prog.cancelled() {
+        return Err(export_mesh::CANCELLED.into());
+    }
     prog.set(0.95);
     let files = serialize(&built, &o.sanitized(), path)?;
     let bytes = crate::atomic_files::write_files(

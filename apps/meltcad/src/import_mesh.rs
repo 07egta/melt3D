@@ -1045,7 +1045,9 @@ pub fn import_file_with_control(
     use std::io::Read;
     use std::sync::atomic::Ordering;
     let cancelled = || cancel.load(Ordering::Relaxed);
-    if cancelled() { return Err(IMPORT_CANCELLED.into()); }
+    if cancelled() {
+        return Err(IMPORT_CANCELLED.into());
+    }
     let mut f = std::fs::File::open(path).map_err(|e| format!("Can't open the file: {e}"))?;
     let len = f.metadata().map(|m| m.len()).unwrap_or(0);
     if len > MAX_FILE_BYTES as u64 {
@@ -1054,9 +1056,13 @@ pub fn import_file_with_control(
     let mut bytes = Vec::with_capacity(len.min(MAX_FILE_BYTES as u64) as usize);
     let mut buf = [0u8; 256 * 1024];
     loop {
-        if cancelled() { return Err(IMPORT_CANCELLED.into()); }
+        if cancelled() {
+            return Err(IMPORT_CANCELLED.into());
+        }
         let n = f.read(&mut buf).map_err(|e| format!("Can't read the file: {e}"))?;
-        if n == 0 { break; }
+        if n == 0 {
+            break;
+        }
         if bytes.len().saturating_add(n) > MAX_FILE_BYTES {
             return Err(TOO_BIG_FILE.into());
         }
@@ -1066,10 +1072,14 @@ pub fn import_file_with_control(
         }
     }
     progress.store(500, Ordering::Relaxed);
-    if cancelled() { return Err(IMPORT_CANCELLED.into()); }
+    if cancelled() {
+        return Err(IMPORT_CANCELLED.into());
+    }
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let loaded = import_bytes(&bytes, &name, opts)?;
-    if cancelled() { return Err(IMPORT_CANCELLED.into()); }
+    if cancelled() {
+        return Err(IMPORT_CANCELLED.into());
+    }
     progress.store(1000, Ordering::Relaxed);
     Ok(loaded)
 }

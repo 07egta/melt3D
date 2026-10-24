@@ -252,7 +252,6 @@ fn frame_cpu_bench() {
     }
 }
 
-
 /// Measures actual CPU frame-body responsiveness while a large native file loads.
 /// This is a UI-input benchmark, NOT a GPU benchmark. The file is deliberately padded
 /// with valid JSON whitespace so disk reading and parsing overlap mouse movement.
@@ -279,7 +278,13 @@ fn document_io_frame_bench() {
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
     let (avg, p95, max) = rig.stats();
-    eprintln!("native document load + 100 pointer frames: {:.2}s total, CPU avg {:.3}ms p95 {:.3}ms max {:.3}ms", begin.elapsed().as_secs_f64(), avg, p95, max);
+    eprintln!(
+        "native document load + 100 pointer frames: {:.2}s total, CPU avg {:.3}ms p95 {:.3}ms max {:.3}ms",
+        begin.elapsed().as_secs_f64(),
+        avg,
+        p95,
+        max
+    );
     // No arbitrary FPS or latency assertion: report actual machine/build values,
     // separately from the existing 100/300-shape and GPU timestamp benchmarks.
     assert!(avg.is_finite() && p95.is_finite() && max.is_finite());

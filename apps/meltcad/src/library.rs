@@ -3,9 +3,9 @@
 //! `library/README.md` for the format. The files are compiled in, so nothing is read at run time.
 
 use std::collections::HashSet;
-use std::sync::{Arc, Mutex, OnceLock};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use egui::Context;
 
@@ -61,13 +61,24 @@ const FILES: [&str; 15] = [
     include_str!("../library/town.json"),
 ];
 
-
 /// Labels and file order are fixed by the bundled JSON data. They let the tabs be
 /// drawn before any Group/Shape is deserialized.
 const LABELS: [&str; 15] = [
-    "ひと", "て", "どうぶつ", "どうぐ", "くらしのもの", "かぐ", "たべもの",
-    "のりもの", "たてもの", "しぜん", "3Dプリント", "プリントインプレース",
-    "リアルなひと", "デフォルメ", "まち",
+    "ひと",
+    "て",
+    "どうぶつ",
+    "どうぐ",
+    "くらしのもの",
+    "かぐ",
+    "たべもの",
+    "のりもの",
+    "たてもの",
+    "しぜん",
+    "3Dプリント",
+    "プリントインプレース",
+    "リアルなひと",
+    "デフォルメ",
+    "まち",
 ];
 
 pub fn count() -> usize {
@@ -80,8 +91,7 @@ pub fn label(index: usize) -> Option<&'static str> {
 
 /// Each category is deserialized only after its first visible card requests it.
 /// Errors are remembered so a broken built-in file cannot trigger infinite retries.
-static CATEGORIES: [OnceLock<Result<Category, String>>; 15] =
-    [const { OnceLock::new() }; 15];
+static CATEGORIES: [OnceLock<Result<Category, String>>; 15] = [const { OnceLock::new() }; 15];
 
 pub fn loaded(index: usize) -> Option<Result<&'static Category, &'static str>> {
     CATEGORIES.get(index)?.get().map(|c| c.as_ref().map_err(String::as_str))
@@ -122,12 +132,17 @@ struct IndexItem {
 /// serde ignores each item's \`group\`, so searching never builds CAD shapes.
 fn index_file(text: &str, category: usize) -> Result<Vec<SearchEntry>, String> {
     let data: IndexCategory = serde_json::from_str(text).map_err(|e| e.to_string())?;
-    Ok(data.items.into_iter().enumerate().map(|(item, raw)| SearchEntry {
-        category,
-        item,
-        key: format!("{} {}", raw.name.to_lowercase(), raw.tags.join(" ").to_lowercase()),
-        name: raw.name,
-    }).collect())
+    Ok(data
+        .items
+        .into_iter()
+        .enumerate()
+        .map(|(item, raw)| SearchEntry {
+            category,
+            item,
+            key: format!("{} {}", raw.name.to_lowercase(), raw.tags.join(" ").to_lowercase()),
+            name: raw.name,
+        })
+        .collect())
 }
 
 fn build_index() -> SearchIndex {
@@ -162,36 +177,38 @@ struct Loader {
 /// Its channel is created on the first visit to the library, not at process start.
 fn loader() -> Option<&'static Loader> {
     static WORKER: OnceLock<Option<Loader>> = OnceLock::new();
-    WORKER.get_or_init(|| {
-        let (tx, rx) = mpsc::channel();
-        let pending = Arc::new(Mutex::new(HashSet::new()));
-        let remaining = pending.clone();
-        std::thread::Builder::new()
-            .name("meltcad-library".into())
-            .spawn(move || {
-                for request in rx {
-                    match request {
-                        Request::Category(i, ctx) => {
-                            if let Some(slot) = CATEGORIES.get(i) {
-                                let parsed = std::panic::catch_unwind(|| parse(FILES[i]))
-                                    .unwrap_or_else(|_| Err("モデルデータの解析に失敗しました".into()));
-                                let _ = slot.set(parsed);
+    WORKER
+        .get_or_init(|| {
+            let (tx, rx) = mpsc::channel();
+            let pending = Arc::new(Mutex::new(HashSet::new()));
+            let remaining = pending.clone();
+            std::thread::Builder::new()
+                .name("meltcad-library".into())
+                .spawn(move || {
+                    for request in rx {
+                        match request {
+                            Request::Category(i, ctx) => {
+                                if let Some(slot) = CATEGORIES.get(i) {
+                                    let parsed = std::panic::catch_unwind(|| parse(FILES[i]))
+                                        .unwrap_or_else(|_| Err("モデルデータの解析に失敗しました".into()));
+                                    let _ = slot.set(parsed);
+                                }
+                                remaining.lock().unwrap_or_else(|e| e.into_inner()).remove(&i);
+                                ctx.request_repaint();
                             }
-                            remaining.lock().unwrap_or_else(|e| e.into_inner()).remove(&i);
-                            ctx.request_repaint();
-                        }
-                        Request::Search(ctx) => {
-                            let index = std::panic::catch_unwind(build_index)
-                                .unwrap_or(SearchIndex { entries: Vec::new(), failed_files: FILES.len() });
-                            let _ = SEARCH.set(index);
-                            ctx.request_repaint();
+                            Request::Search(ctx) => {
+                                let index =
+                                    std::panic::catch_unwind(build_index).unwrap_or(SearchIndex { entries: Vec::new(), failed_files: FILES.len() });
+                                let _ = SEARCH.set(index);
+                                ctx.request_repaint();
+                            }
                         }
                     }
-                }
-            })
-            .ok()?;
-        Some(Loader { tx, pending, search_asked: AtomicBool::new(false) })
-    }).as_ref()
+                })
+                .ok()?;
+            Some(Loader { tx, pending, search_asked: AtomicBool::new(false) })
+        })
+        .as_ref()
 }
 
 /// Returns false if a worker could not be started. Such a failure leaves the

@@ -400,10 +400,8 @@ impl App {
         // Fast mode (cheap shading, fewer pixels) runs while the view or a handle moves, and for a
         // moment after; then one full-quality frame follows.
         let cam_now = crate::perf::cam_key(&self.cam);
-        let editing_drag = self.drag.is_some() || ct.busy || self.sk.dragging
-            || self.sk.edit.as_ref().is_some_and(|e| e.drag.is_some());
-        if cam_now != self.perf.last_cam || editing_drag
-            || ((render_rev != rev || scene_changed) && ui.input(|i| i.pointer.any_down())) {
+        let editing_drag = self.drag.is_some() || ct.busy || self.sk.dragging || self.sk.edit.as_ref().is_some_and(|e| e.drag.is_some());
+        if cam_now != self.perf.last_cam || editing_drag || ((render_rev != rev || scene_changed) && ui.input(|i| i.pointer.any_down())) {
             self.perf.activity.touch(now);
         }
         self.perf.last_cam = cam_now;

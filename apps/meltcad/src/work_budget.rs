@@ -1,6 +1,6 @@
 //! One high-memory job per document window. The permit belongs to the worker, not the card:
- //! closing a dialog or requesting cancellation cannot start another large allocation until
- //! the previous worker has really stopped.
+//! closing a dialog or requesting cancellation cannot start another large allocation until
+//! the previous worker has really stopped.
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -11,9 +11,7 @@ struct Budget(Arc<AtomicBool>);
 
 impl Budget {
     fn try_acquire(&self) -> Result<Permit, String> {
-        self.0
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .map_err(|_| BUSY.to_string())?;
+        self.0.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).map_err(|_| BUSY.to_string())?;
         Ok(Permit { busy: self.0.clone() })
     }
 }
@@ -35,8 +33,7 @@ fn id() -> egui::Id {
 
 /// Is a high-memory worker still active? Closing a card does not release its permit.
 pub fn is_busy(ctx: &egui::Context) -> bool {
-    ctx.data(|data| data.get_temp::<Budget>(id()))
-        .is_some_and(|b| b.0.load(Ordering::Acquire))
+    ctx.data(|data| data.get_temp::<Budget>(id())).is_some_and(|b| b.0.load(Ordering::Acquire))
 }
 
 /// Context-scoped, so two independent document windows/tests do not block each other.

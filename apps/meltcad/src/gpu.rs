@@ -171,9 +171,8 @@ impl ScenePack {
     /// meshes and curves take the original path to avoid reusing context-dependent volume
     /// locations or an adaptively truncated curve.
     pub fn reusing(scene: &Scene, vols: VolumeSet, previous: Option<(&Scene, &ScenePack)>) -> ScenePack {
-        let old_slots: std::collections::HashMap<(usize, usize), usize> = previous
-            .map(|(_, pack)| pack.slots.iter().map(|&(g,s,slot)| ((g,s), slot)).collect())
-            .unwrap_or_default();
+        let old_slots: std::collections::HashMap<(usize, usize), usize> =
+            previous.map(|(_, pack)| pack.slots.iter().map(|&(g, s, slot)| ((g, s), slot)).collect()).unwrap_or_default();
         let resolved = crate::pattern::resolve(scene);
         let mut groups: Vec<f32> = Vec::new();
         let mut blocks: Vec<f32> = Vec::new();
@@ -212,12 +211,11 @@ impl ScenePack {
                 }
                 let reused = previous.is_some_and(|(old_scene, old_pack)| {
                     old_scene.shape(gi, si).is_some_and(|old| old == s)
-                        && old_slots.get(&(gi, si)).is_some_and(|&slot| {
-                            reuse_shape_pack(s, old_pack, slot, &vols, &mut shapes, &mut poly, &mut path)
-                        })
+                        && old_slots.get(&(gi, si)).is_some_and(|&slot| reuse_shape_pack(s, old_pack, slot, &vols, &mut shapes, &mut poly, &mut path))
                 });
-                if reused { shapes_reused += 1; }
-                else {
+                if reused {
+                    shapes_reused += 1;
+                } else {
                     pack_shape(s, &mut shapes, &mut poly, &mut path, &vols);
                     shapes_repacked += 1;
                 }
@@ -231,25 +229,24 @@ impl ScenePack {
             if count == 0 {
                 continue;
             }
-            let info = previous.and_then(|(old_scene, old_pack)| {
-                let old_group = old_scene.groups.get(gi)?;
-                // A group may be only partly admitted when earlier groups consume the
-                // MAX_SHAPES budget. Reusing its old bounds/blocks is safe only when the
-                // packed slice starts at the same offset and admits the same number of
-                // members; otherwise the new prefix can contain geometry the old bounds
-                // never covered (or retain blocks for shapes that are no longer packed).
-                let same_admission = old_pack.ranges.iter().any(
-                    |&(old_gi, old_first, old_count)| {
-                        old_gi == gi && old_first == first && old_count == count
-                    },
-                );
-                (old_group.shapes == g.shapes
-                    && old_scene.melt.mode == scene.melt.mode
-                    && old_scene.melt.amount == scene.melt.amount
-                    && same_admission)
-                    .then(|| old_pack.source_infos.get(&gi).cloned())
-                    .flatten()
-            }).unwrap_or_else(|| Arc::new(crate::accel::group_info(&members, &scene.melt)));
+            let info = previous
+                .and_then(|(old_scene, old_pack)| {
+                    let old_group = old_scene.groups.get(gi)?;
+                    // A group may be only partly admitted when earlier groups consume the
+                    // MAX_SHAPES budget. Reusing its old bounds/blocks is safe only when the
+                    // packed slice starts at the same offset and admits the same number of
+                    // members; otherwise the new prefix can contain geometry the old bounds
+                    // never covered (or retain blocks for shapes that are no longer packed).
+                    let same_admission =
+                        old_pack.ranges.iter().any(|&(old_gi, old_first, old_count)| old_gi == gi && old_first == first && old_count == count);
+                    (old_group.shapes == g.shapes
+                        && old_scene.melt.mode == scene.melt.mode
+                        && old_scene.melt.amount == scene.melt.amount
+                        && same_admission)
+                        .then(|| old_pack.source_infos.get(&gi).cloned())
+                        .flatten()
+                })
+                .unwrap_or_else(|| Arc::new(crate::accel::group_info(&members, &scene.melt)));
             source_infos.insert(gi, Arc::clone(&info));
             for b in &info.blocks {
                 push(&mut blocks, [b.bound.c[0], b.bound.c[1], b.bound.c[2], b.bound.r]);
@@ -397,8 +394,13 @@ impl ScenePack {
 /// Curves are reused only when their old path-pool offset is unchanged (the adaptive
 /// subdivision then had identical room); meshes only when volume layout is identical.
 fn reuse_shape_pack(
-    shape: &crate::model::Shape, old: &ScenePack, slot: usize, vols: &VolumeSet,
-    shapes: &mut Vec<f32>, poly: &mut Vec<f32>, path: &mut Vec<f32>,
+    shape: &crate::model::Shape,
+    old: &ScenePack,
+    slot: usize,
+    vols: &VolumeSet,
+    shapes: &mut Vec<f32>,
+    poly: &mut Vec<f32>,
+    path: &mut Vec<f32>,
 ) -> bool {
     use crate::model::Kind;
     if shape.kind == Kind::Mesh && !vols.same_as(&old.vols) {
@@ -415,12 +417,16 @@ fn reuse_shape_pack(
         // pack_curve starts with two bounding-box records, then points, then one
         // bounding sphere per GROUP_SEGMENTS edges. If the pool prefix is unchanged,
         // both the available adaptive-subdivision budget and all packed values match.
-        let old_start = data[12*4] as usize;
-        let count = data[12*4 + 1] as usize;
+        let old_start = data[12 * 4] as usize;
+        let count = data[12 * 4 + 1] as usize;
         let Some(first) = old_start.checked_sub(2) else { return false };
-        if count < 2 || first != path.len()/4 { return false; }
-        let nodes = 2 + count + (count-1).div_ceil(crate::curve::GROUP_SEGMENTS);
-        if first + nodes > PATH_V4 { return false; }
+        if count < 2 || first != path.len() / 4 {
+            return false;
+        }
+        let nodes = 2 + count + (count - 1).div_ceil(crate::curve::GROUP_SEGMENTS);
+        if first + nodes > PATH_V4 {
+            return false;
+        }
         let at = path_base + first * 4;
         let Some(old_path) = old.list.get(at..at + nodes * 4) else { return false };
         path.extend_from_slice(old_path);
@@ -428,41 +434,45 @@ fn reuse_shape_pack(
         return true;
     }
     let grab_poly = |start_slot: usize, count_slot: usize, enabled: bool, count_expected: usize| -> Option<&[f32]> {
-        if !enabled { return Some(&[]); }
+        if !enabled {
+            return Some(&[]);
+        }
         let (first, count) = (data[start_slot] as usize, data[count_slot] as usize);
-        if count != count_expected { return None; }
+        if count != count_expected {
+            return None;
+        }
         let at = poly_base.checked_add(first.checked_mul(2)?)?;
         let end = at.checked_add(count.checked_mul(2)?)?;
         old.list.get(at..end)
     };
-    let Some(outline) = grab_poly(7*4+2, 7*4+3, shape.kind.uses_outline(), shape.outline.len()) else { return false };
-    let Some(outline2) = grab_poly(12*4+2, 12*4+3, shape.kind.uses_outline2(), shape.outline2.len()) else { return false };
-    let (old_start, old_count) = (data[12*4] as usize, data[12*4+1] as usize);
+    let Some(outline) = grab_poly(7 * 4 + 2, 7 * 4 + 3, shape.kind.uses_outline(), shape.outline.len()) else { return false };
+    let Some(outline2) = grab_poly(12 * 4 + 2, 12 * 4 + 3, shape.kind.uses_outline2(), shape.outline2.len()) else { return false };
+    let (old_start, old_count) = (data[12 * 4] as usize, data[12 * 4 + 1] as usize);
     let path_slice = if shape.kind.uses_path() {
-        if old_count != shape.path.len() { return false; }
+        if old_count != shape.path.len() {
+            return false;
+        }
         let at = path_base + old_start * 4;
         let Some(nodes) = old.list.get(at..at + old_count * 4) else { return false };
         nodes
     } else {
         &[]
     };
-    if poly.len() / 2 + outline.len()/2 + outline2.len()/2 > POLY_PTS
-        || path.len()/4 + path_slice.len()/4 > PATH_V4
-    {
+    if poly.len() / 2 + outline.len() / 2 + outline2.len() / 2 > POLY_PTS || path.len() / 4 + path_slice.len() / 4 > PATH_V4 {
         return false;
     }
     let mut append_poly = |slot: usize, count: usize, enabled: bool, pts: &[f32]| {
         if enabled && count > 0 {
-            data[slot] = (poly.len()/2) as f32;
+            data[slot] = (poly.len() / 2) as f32;
             poly.extend_from_slice(pts);
         } else {
             data[slot] = 0.0;
         }
     };
-    append_poly(7*4+2, shape.outline.len(), shape.kind.uses_outline(), outline);
-    append_poly(12*4+2, shape.outline2.len(), shape.kind.uses_outline2(), outline2);
+    append_poly(7 * 4 + 2, shape.outline.len(), shape.kind.uses_outline(), outline);
+    append_poly(12 * 4 + 2, shape.outline2.len(), shape.kind.uses_outline2(), outline2);
     if shape.kind.uses_path() {
-        data[12*4] = (path.len()/4) as f32;
+        data[12 * 4] = (path.len() / 4) as f32;
         path.extend_from_slice(path_slice);
     }
     shapes.extend_from_slice(&data);
@@ -1821,7 +1831,9 @@ mod tests {
             group.op = if gi > 0 && gi % 4 == 0 { crate::model::Op::Subtract } else { crate::model::Op::Add };
             for si in 0..10 {
                 let i = gi * 10 + si;
-                if i >= count { break; }
+                if i >= count {
+                    break;
+                }
                 let kind = match i % 7 {
                     0 => crate::model::Kind::Sphere,
                     1 => crate::model::Kind::Extrude,
@@ -1832,8 +1844,12 @@ mod tests {
                     _ => crate::model::Kind::Curve, // deliberately uses the uncached exact path
                 };
                 let mut sh = Shape::new(kind, [(i % 20) as f32 * 25.0, (i / 20) as f32 * 25.0, 10.0], Material::default());
-                if i % 5 == 0 { sh.shell = 0.6; }
-                if i % 6 == 0 && si > 0 { sh.op = crate::model::Op::Subtract; }
+                if i % 5 == 0 {
+                    sh.shell = 0.6;
+                }
+                if i % 6 == 0 && si > 0 {
+                    sh.op = crate::model::Op::Subtract;
+                }
                 if matches!(kind, crate::model::Kind::Curve | crate::model::Kind::Sweep) {
                     sh.path = vec![[0.0, 0.0, 0.0, 2.0], [8.0, 0.0, 1.0, 2.0], [12.0, 8.0, 0.0, 2.0]];
                 }
@@ -1876,7 +1892,7 @@ mod tests {
             assert_eq!(undone.shape_n, n);
             let mut op_change = changed.clone();
             op_change.groups[0].shapes[3].op = crate::model::Op::Intersect;
-            let other = 1.min(op_change.groups.len()-1);
+            let other = 1.min(op_change.groups.len() - 1);
             op_change.groups[other].op = crate::model::Op::Subtract;
             let _ = same_pack_as_cold(&op_change, Some((&changed, &fresh)));
 
@@ -1900,18 +1916,10 @@ mod tests {
         let mut first = crate::model::Group::new(String::from("first"));
         let mut second = crate::model::Group::new(String::from("second"));
         for i in 0..508 {
-            first.shapes.push(Shape::new(
-                crate::model::Kind::Sphere,
-                [i as f32 * 3.0, 0.0, 10.0],
-                Material::default(),
-            ));
+            first.shapes.push(Shape::new(crate::model::Kind::Sphere, [i as f32 * 3.0, 0.0, 10.0], Material::default()));
         }
         for i in 0..7 {
-            second.shapes.push(Shape::new(
-                crate::model::Kind::Sphere,
-                [10_000.0 + i as f32 * 30.0, 0.0, 10.0],
-                Material::default(),
-            ));
+            second.shapes.push(Shape::new(crate::model::Kind::Sphere, [10_000.0 + i as f32 * 30.0, 0.0, 10.0], Material::default()));
         }
         original.groups = vec![first, second];
         assert_eq!(original.shape_count(), crate::model::MAX_SHAPES + 3);
@@ -1940,7 +1948,7 @@ mod tests {
             for k in 0..REPEATS {
                 let mut edited = scene.clone();
                 let si = k % n;
-                edited.groups[si/10].shapes[si%10].pos[0] += 0.3;
+                edited.groups[si / 10].shapes[si % 10].pos[0] += 0.3;
                 let started = Instant::now();
                 let cold = ScenePack::new(&edited, VolumeSet::of(&edited));
                 cold_time += started.elapsed();
@@ -1951,10 +1959,14 @@ mod tests {
                 scene = edited;
                 last = updated;
             }
-            eprintln!("GPU pack {:>3} shapes: cold {:.3}ms/edit, incremental {:.3}ms/edit, speedup {:.2}x ({} edits)",
-                n, cold_time.as_secs_f64()*1000.0/REPEATS as f64,
-                reuse_time.as_secs_f64()*1000.0/REPEATS as f64,
-                cold_time.as_secs_f64()/reuse_time.as_secs_f64().max(1e-12), REPEATS);
+            eprintln!(
+                "GPU pack {:>3} shapes: cold {:.3}ms/edit, incremental {:.3}ms/edit, speedup {:.2}x ({} edits)",
+                n,
+                cold_time.as_secs_f64() * 1000.0 / REPEATS as f64,
+                reuse_time.as_secs_f64() * 1000.0 / REPEATS as f64,
+                cold_time.as_secs_f64() / reuse_time.as_secs_f64().max(1e-12),
+                REPEATS
+            );
         }
     }
 

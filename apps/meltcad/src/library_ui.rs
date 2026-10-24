@@ -2,8 +2,8 @@
 //! the model into the scene as a new group next to what is already there.
 
 use std::collections::{HashSet, VecDeque};
-use std::sync::{Arc, Condvar, Mutex};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
 
 use egui::{Align2, Color32, RichText, TextureHandle, TextureOptions, Vec2};
 
@@ -73,39 +73,40 @@ fn worker(ctx: &egui::Context) -> Option<Arc<Worker>> {
         let (q, out, sent, errors) = (queue.clone(), done.clone(), asked.clone(), failed.clone());
         std::thread::Builder::new()
             .name("meltcad-thumbs".into())
-            .spawn(move || loop {
-                let job = {
-                    let (lock, cv) = &*q;
-                    let mut guard = lock.lock().unwrap_or_else(|e| e.into_inner());
-                    loop {
-                        if guard.shutdown {
-                            return;
-                        }
-                        if let Some(best_epoch) = guard.jobs.iter().map(|job| job.epoch).max() {
-                            // Newest visible pass first, top-left to bottom-right within it.
-                            let position = guard.jobs.iter().position(|job| job.epoch == best_epoch).unwrap_or(0);
-                            if let Some(job) = guard.jobs.remove(position) {
-                                break job;
+            .spawn(move || {
+                loop {
+                    let job = {
+                        let (lock, cv) = &*q;
+                        let mut guard = lock.lock().unwrap_or_else(|e| e.into_inner());
+                        loop {
+                            if guard.shutdown {
+                                return;
                             }
+                            if let Some(best_epoch) = guard.jobs.iter().map(|job| job.epoch).max() {
+                                // Newest visible pass first, top-left to bottom-right within it.
+                                let position = guard.jobs.iter().position(|job| job.epoch == best_epoch).unwrap_or(0);
+                                if let Some(job) = guard.jobs.remove(position) {
+                                    break job;
+                                }
+                            }
+                            guard = cv.wait(guard).unwrap_or_else(|e| e.into_inner());
                         }
-                        guard = cv.wait(guard).unwrap_or_else(|e| e.into_inner());
+                    };
+                    let rgba =
+                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| crate::cpu_render::thumb(&job.scene, THUMB))).unwrap_or_default();
+                    if rgba.len() == THUMB * THUMB * 4 {
+                        let mut ready = out.lock().unwrap_or_else(|e| e.into_inner());
+                        if ready.len() >= MAX_DONE
+                            && let Some((discarded, _)) = ready.pop_front()
+                        {
+                            sent.lock().unwrap_or_else(|e| e.into_inner()).remove(&discarded);
+                        }
+                        ready.push_back((job.key, rgba));
+                    } else {
+                        errors.lock().unwrap_or_else(|e| e.into_inner()).insert(job.key);
                     }
-                };
-                let rgba = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    crate::cpu_render::thumb(&job.scene, THUMB)
-                })).unwrap_or_default();
-                if rgba.len() == THUMB * THUMB * 4 {
-                    let mut ready = out.lock().unwrap_or_else(|e| e.into_inner());
-                    if ready.len() >= MAX_DONE
-                        && let Some((discarded, _)) = ready.pop_front()
-                    {
-                        sent.lock().unwrap_or_else(|e| e.into_inner()).remove(&discarded);
-                    }
-                    ready.push_back((job.key, rgba));
-                } else {
-                    errors.lock().unwrap_or_else(|e| e.into_inner()).insert(job.key);
+                    job.ctx.request_repaint();
                 }
-                job.ctx.request_repaint();
             })
             .ok()?;
         Some(Arc::new(Worker { queue, done, asked, failed, cache_order: Mutex::new(VecDeque::new()), epoch: AtomicU64::new(0) }))
@@ -207,9 +208,7 @@ fn ask(ctx: &egui::Context, cat: usize, item: usize, model: &Item) {
 /// Cancel queued CPU work when the library tab closes. Keep generated textures
 /// for instant reopening and let the single in-flight thumbnail finish normally.
 pub fn suspend(ctx: &egui::Context) {
-    let cached_worker = ctx.data(|d| {
-        d.get_temp::<Option<Arc<Worker>>>(egui::Id::new("library_thumbnail_worker"))
-    });
+    let cached_worker = ctx.data(|d| d.get_temp::<Option<Arc<Worker>>>(egui::Id::new("library_thumbnail_worker")));
     let Some(Some(w)) = cached_worker else { return };
     let mut asked = w.asked.lock().unwrap_or_else(|e| e.into_inner());
     let (lock, _) = &*w.queue;
@@ -232,10 +231,7 @@ fn cell(ui: &mut egui::Ui, ci: usize, ii: usize, name: &str, ctx: &egui::Context
     ui.allocate_ui_with_layout(Vec2::new(CELL - 3.0, ROW_HEIGHT), egui::Layout::top_down(egui::Align::Center), |ui| {
         ui.set_width(CELL - 8.0);
         ui.set_min_height(ROW_HEIGHT);
-        let (rect, response) = ui.allocate_exact_size(
-            Vec2::splat(THUMB as f32 + 8.0),
-            egui::Sense::click(),
-        );
+        let (rect, response) = ui.allocate_exact_size(Vec2::splat(THUMB as f32 + 8.0), egui::Sense::click());
         ui.painter().rect_filled(rect, 8.0, if response.hovered() { style::HOVER } else { style::INSET_BOTTOM });
         let texture = cached(ctx, ci, ii);
         if texture.is_none()
@@ -244,17 +240,9 @@ fn cell(ui: &mut egui::Ui, ci: usize, ii: usize, name: &str, ctx: &egui::Context
             ask(ctx, ci, ii, item);
         }
         if let Some(texture) = texture {
-            ui.painter().image(
-                texture.id(), rect.shrink(4.0),
-                egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
-                Color32::WHITE,
-            );
+            ui.painter().image(texture.id(), rect.shrink(4.0), egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)), Color32::WHITE);
         } else {
-            let indicator = if worker(ctx).is_none() || category.is_some_and(|c| c.is_err()) || failed(ctx, ci, ii) {
-                "!"
-            } else {
-                "…"
-            };
+            let indicator = if worker(ctx).is_none() || category.is_some_and(|c| c.is_err()) || failed(ctx, ci, ii) { "!" } else { "…" };
             ui.painter().text(rect.center(), Align2::CENTER_CENTER, indicator, egui::FontId::proportional(14.0), style::DIM);
         }
         let tip = format!("Add {name} to the scene");
@@ -263,7 +251,8 @@ fn cell(ui: &mut egui::Ui, ci: usize, ii: usize, name: &str, ctx: &egui::Context
         let label = ui.add(egui::Label::new(RichText::new(name).size(11.5)).truncate().sense(egui::Sense::click()));
         clicked |= label.on_hover_text(tip).on_hover_cursor(egui::CursorIcon::PointingHand).clicked();
         clicked
-    }).inner
+    })
+    .inner
 }
 
 fn visible_indices(range: std::ops::Range<usize>, per_row: usize, total: usize) -> std::ops::Range<usize> {
@@ -345,8 +334,7 @@ pub fn panel(app: &mut App, ui: &mut egui::Ui) {
     if let Some(w) = worker(&ctx) {
         w.epoch.fetch_add(1, Ordering::Relaxed);
     }
-    ui.add(egui::TextEdit::singleline(&mut app.lib_query)
-        .hint_text("Search by name").desired_width(f32::INFINITY));
+    ui.add(egui::TextEdit::singleline(&mut app.lib_query).hint_text("Search by name").desired_width(f32::INFINITY));
     ui.add_space(2.0);
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing = Vec2::new(4.0, 4.0);
@@ -401,10 +389,11 @@ pub fn panel(app: &mut App, ui: &mut egui::Ui) {
     let per_row = ((ui.available_width() / CELL).floor() as usize).max(1);
     let rows = hits.len().div_ceil(per_row);
     let mut picked = None;
-    egui::ScrollArea::vertical()
-        .id_salt(("library_grid", app.lib_cat, searching))
-        .auto_shrink([false, false])
-        .show_rows(ui, ROW_HEIGHT, rows, |ui, visible_rows| {
+    egui::ScrollArea::vertical().id_salt(("library_grid", app.lib_cat, searching)).auto_shrink([false, false]).show_rows(
+        ui,
+        ROW_HEIGHT,
+        rows,
+        |ui, visible_rows| {
             for row in visible_rows {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 0.0;
@@ -416,7 +405,8 @@ pub fn panel(app: &mut App, ui: &mut egui::Ui) {
                     }
                 });
             }
-        });
+        },
+    );
 
     if let Some((ci, ii)) = picked {
         if let Some(Ok(category)) = library::loaded(ci) {

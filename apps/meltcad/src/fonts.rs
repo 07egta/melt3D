@@ -81,11 +81,9 @@ pub struct FontJob(Option<std::sync::mpsc::Receiver<Option<Vec<u8>>>>);
 impl FontJob {
     pub fn start() -> FontJob {
         let (tx, rx) = std::sync::mpsc::channel();
-        let started = std::thread::Builder::new()
-            .name("meltcad-font".into())
-            .spawn(move || {
-                let _ = tx.send(find_cjk_font());
-            });
+        let started = std::thread::Builder::new().name("meltcad-font".into()).spawn(move || {
+            let _ = tx.send(find_cjk_font());
+        });
         FontJob(started.ok().map(|_| rx))
     }
 

@@ -297,10 +297,7 @@ impl App {
         self.field_builds.set(self.field_builds.get() + 1);
         // Keep only the most recent snapshot. Shape equality guards against stale cached SDFs
         // after edits, linked-copy changes, undo/redo and load (no probabilistic hash keys).
-        let f = std::rc::Rc::new(Field::reusing(
-            &self.scene,
-            cache.as_ref().map(|(_, field, old_scene)| (field.as_ref(), old_scene)),
-        ));
+        let f = std::rc::Rc::new(Field::reusing(&self.scene, cache.as_ref().map(|(_, field, old_scene)| (field.as_ref(), old_scene))));
         *cache = Some((self.scene_rev, f.clone(), self.scene.clone()));
         f
     }
@@ -1361,7 +1358,9 @@ impl App {
     /// Start and poll native file work without blocking a frame. Failed/cancelled results never
     /// replace the current Scene; edits made while an open was pending also prevent replacement.
     fn update_native_job(&mut self, ctx: &egui::Context) {
-        if self.native_job.is_none() && let Some(queued) = self.queued_open.take() {
+        if self.native_job.is_none()
+            && let Some(queued) = self.queued_open.take()
+        {
             if self.track_scene() != queued.base_revision {
                 self.say(ctx, "The design changed while the open was waiting, so it was cancelled");
             } else {
@@ -1437,7 +1436,9 @@ impl App {
             egui::Area::new(egui::Id::new("native_file_queue")).anchor(egui::Align2::RIGHT_BOTTOM, [-18.0, -24.0]).show(ctx, |ui| {
                 style::card().show(ui, |ui| {
                     ui.label("Waiting for another heavy job to finish before opening (memory guard)");
-                    if ui.button("Cancel open").clicked() { self.queued_open = None; }
+                    if ui.button("Cancel open").clicked() {
+                        self.queued_open = None;
+                    }
                 });
             });
             return;
@@ -1446,16 +1447,21 @@ impl App {
         egui::Area::new(egui::Id::new("native_file_progress")).anchor(egui::Align2::RIGHT_BOTTOM, [-18.0, -24.0]).show(ctx, |ui| {
             style::card().show(ui, |ui| {
                 ui.set_width(325.0);
-                ui.label(egui::RichText::new(match job.kind {
-                    crate::document_job::Kind::Open => "Opening the design…",
-                    crate::document_job::Kind::Save => "Saving the design…",
-                }).strong());
+                ui.label(
+                    egui::RichText::new(match job.kind {
+                        crate::document_job::Kind::Open => "Opening the design…",
+                        crate::document_job::Kind::Save => "Saving the design…",
+                    })
+                    .strong(),
+                );
                 ui.label(job.phase_name());
                 ui.add(egui::ProgressBar::new(job.fraction()).show_percentage());
                 ui.horizontal(|ui| {
                     ui.label(format!("{:.1} s", job.elapsed()));
                     if job.can_cancel() {
-                        if ui.button("Stop").clicked() { let _ = job.cancel(); }
+                        if ui.button("Stop").clicked() {
+                            let _ = job.cancel();
+                        }
                     } else if job.is_committing() {
                         ui.label("This last step cannot be stopped, to protect the original file");
                     } else {
@@ -2635,7 +2641,9 @@ mod tests {
     fn pump_native(app: &mut App, ctx: &egui::Context) {
         for _ in 0..600 {
             app.update_native_job(ctx);
-            if app.native_job.is_none() && app.queued_open.is_none() { return; }
+            if app.native_job.is_none() && app.queued_open.is_none() {
+                return;
+            }
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         panic!("native document worker did not finish");

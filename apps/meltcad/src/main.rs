@@ -9,6 +9,7 @@ mod anim;
 mod anim_ui;
 mod app;
 mod array;
+mod atomic_files;
 mod automation;
 mod backend;
 mod bench;
@@ -21,6 +22,7 @@ mod corner;
 mod cpu_render;
 mod curve;
 mod curve_tool;
+mod document_job;
 mod easy_view;
 mod export;
 mod export_decimate;
@@ -28,9 +30,6 @@ mod export_deflate;
 mod export_dialog;
 mod export_formats;
 mod export_job;
-mod work_budget;
-mod atomic_files;
-mod document_job;
 mod export_mesh;
 mod fonts;
 #[cfg(test)]
@@ -94,6 +93,7 @@ mod svg;
 mod svg_dialog;
 mod view;
 mod view_mode;
+mod work_budget;
 
 /// Tell the person why the program cannot start (there is no console in a Windows release build).
 fn fatal(message: &str) {
