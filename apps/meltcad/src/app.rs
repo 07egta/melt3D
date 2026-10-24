@@ -1310,6 +1310,12 @@ impl App {
         if name.is_empty() || name == self.doc_name() {
             return;
         }
+        // A save/open job was started for the old path; renaming now would let it write the old
+        // name back and restore it when it finishes (#262).
+        if self.native_job.is_some() || self.queued_open.is_some() || self.after_save.is_some() {
+            self.say(ctx, "保存が終わるのを待ってから名前を変えてください");
+            return;
+        }
         let Some(old) = self.path.clone() else {
             self.doc_title = name;
             return;
@@ -3647,6 +3653,27 @@ mod title_tests {
         app.animation_capture_finished(&ctx);
         assert_eq!(app.scene.anim.tracks[0].keys[0].1.pos, key_before);
         assert!(!app.dirty, "loading must not dirty or change the document");
+    }
+
+    #[test]
+    fn renaming_waits_for_a_running_file_job() {
+        let ctx = egui::Context::default();
+        let mut app = super::App::new(true, None);
+        let dir = std::env::temp_dir().join(format!("melt3d-rename-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let old = dir.join("Old.meltcad");
+        std::fs::write(&old, b"saved design").unwrap();
+        app.path = Some(old.clone());
+        app.queued_open = Some(super::QueuedOpen { path: dir.join("Other.meltcad"), base_revision: 0 });
+        app.rename_doc(&ctx, "New");
+        assert_eq!(app.path.as_deref(), Some(old.as_path()), "a pending file job keeps the old path");
+        assert!(old.exists(), "and the file is not moved under it");
+        app.queued_open = None;
+        app.rename_doc(&ctx, "New");
+        let stem = app.path.as_ref().and_then(|p| p.file_stem()).map(|s| s.to_string_lossy().into_owned());
+        assert_eq!(stem.as_deref(), Some("New"), "without a job the rename happens");
+        assert!(!old.exists() && app.path.as_ref().is_some_and(|p| p.exists()));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
