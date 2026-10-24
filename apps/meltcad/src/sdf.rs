@@ -407,9 +407,8 @@ impl Field {
         let mut groups = Vec::new();
         let mut sources: Vec<Arc<PreparedGroup>> = Vec::new();
         let mut made: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
-        let old_sources: std::collections::HashMap<usize, &Arc<PreparedGroup>> = previous
-            .map(|(field, _)| field.sources.iter().map(|p| (p.source_group, p)).collect())
-            .unwrap_or_default();
+        let old_sources: std::collections::HashMap<usize, &Arc<PreparedGroup>> =
+            previous.map(|(field, _)| field.sources.iter().map(|p| (p.source_group, p)).collect()).unwrap_or_default();
         let mut prepared_built = 0;
         let mut prepared_reused = 0;
         for rg in crate::pattern::resolve(scene) {
@@ -417,35 +416,33 @@ impl Field {
             let src = *made.entry(rg.src).or_insert_with(|| {
                 let older = old_sources.get(&rg.src).copied();
                 let prior_group = previous.and_then(|(_, old)| old.groups.get(rg.src));
-                let same_melt = previous.is_some_and(|(_, old)| {
-                    old.melt.mode == scene.melt.mode && old.melt.amount == scene.melt.amount
-                });
+                let same_melt = previous.is_some_and(|(_, old)| old.melt.mode == scene.melt.mode && old.melt.amount == scene.melt.amount);
                 if let (Some(old), Some(prior)) = (older, prior_group)
-                    && same_melt && prior.shapes == srcg.shapes
+                    && same_melt
+                    && prior.shapes == srcg.shapes
                 {
                     prepared_reused += old.shapes.len();
                     sources.push(Arc::clone(old));
                     return sources.len() - 1;
                 }
-                let old_shapes: std::collections::HashMap<usize, &Arc<Prepared>> =
-                    older.map(|old| old.origin.iter().enumerate()
-                        .filter_map(|(i, &(_, si))| old.shapes.get(i).map(|p| (si, p)))
-                        .collect()).unwrap_or_default();
+                let old_shapes: std::collections::HashMap<usize, &Arc<Prepared>> = older
+                    .map(|old| old.origin.iter().enumerate().filter_map(|(i, &(_, si))| old.shapes.get(i).map(|p| (si, p))).collect())
+                    .unwrap_or_default();
                 let mut shapes = Vec::new();
                 let mut origin = Vec::new();
                 let mut members: Vec<&Shape> = Vec::new();
                 for si in srcg.fold_order() {
                     let Some(s) = srcg.shapes.get(si) else { continue };
-                    if !s.solid() { continue; }
-                    let same = prior_group.and_then(|old| old.shapes.get(si))
-                        .is_some_and(|old| old == s);
-                    let prep = if same {
-                        old_shapes.get(&si).map(|p| Arc::clone(p))
+                    if !s.solid() {
+                        continue;
+                    }
+                    let same = prior_group.and_then(|old| old.shapes.get(si)).is_some_and(|old| old == s);
+                    let prep = if same { old_shapes.get(&si).map(|p| Arc::clone(p)) } else { None };
+                    if prep.is_some() {
+                        prepared_reused += 1;
                     } else {
-                        None
-                    };
-                    if prep.is_some() { prepared_reused += 1; }
-                    else { prepared_built += 1; }
+                        prepared_built += 1;
+                    }
                     shapes.push(prep.unwrap_or_else(|| Arc::new(Prepared::new(s))));
                     origin.push((rg.src, si));
                     members.push(s);
@@ -774,7 +771,9 @@ mod tests {
             group.blend = 1.0;
             for si in 0..10 {
                 let i = gi * 10 + si;
-                if i >= count { break; }
+                if i >= count {
+                    break;
+                }
                 let kind = match i % 5 {
                     0 => Kind::Sphere,
                     1 => Kind::Box,
@@ -783,8 +782,12 @@ mod tests {
                     _ => Kind::Cylinder,
                 };
                 let mut sh = Shape::new(kind, [(i % 20) as f32 * 24.0, (i / 20) as f32 * 24.0, 10.0], Material::default());
-                if i % 3 == 0 { sh.shell = 0.8; }
-                if i % 7 == 0 && si != 0 { sh.op = Op::Subtract; }
+                if i % 3 == 0 {
+                    sh.shell = 0.8;
+                }
+                if i % 7 == 0 && si != 0 {
+                    sh.op = Op::Subtract;
+                }
                 if kind == Kind::Curve {
                     sh.path = vec![[0.0, 0.0, 0.0, 2.0], [8.0, 0.0, 0.0, 2.0], [15.0, 8.0, 0.0, 2.0]];
                 }
@@ -820,8 +823,7 @@ mod tests {
             assert_eq!(after.prepared_built, 1, "{n} shapes");
             assert_eq!(after.prepared_reused, n - 1, "{n} shapes");
             if n > 10 {
-                assert!(Arc::ptr_eq(&before.sources[1], &after.sources[1]),
-                    "unchanged source group must be shared");
+                assert!(Arc::ptr_eq(&before.sources[1], &after.sources[1]), "unchanged source group must be shared");
             }
             assert!(Arc::ptr_eq(&before.sources[0].shapes[1], &after.sources[0].shapes[1]));
             same_field_samples(&after, &Field::new(&changed));
@@ -842,8 +844,7 @@ mod tests {
         changed.melt.mode = BlendMode::Gooey;
         let melt = Field::reusing(&changed, Some((&old, &original)));
         assert_eq!(melt.prepared_built, 0, "melt does not alter individual shape preparation");
-        assert!(!Arc::ptr_eq(&old.sources[0], &melt.sources[0]),
-            "blend-dependent acceleration bounds must be rebuilt");
+        assert!(!Arc::ptr_eq(&old.sources[0], &melt.sources[0]), "blend-dependent acceleration bounds must be rebuilt");
         same_field_samples(&melt, &Field::new(&changed));
 
         let prev = changed.clone();
@@ -884,10 +885,14 @@ mod tests {
                 scene = edited;
                 previous = incremental;
             }
-            eprintln!("SDF field {:>3} shapes: cold {:.3}ms/edit, incremental {:.3}ms/edit, speedup {:.2}x ({} edits)",
-                n, old_ms.as_secs_f64()*1000.0/REPEATS as f64,
-                new_ms.as_secs_f64()*1000.0/REPEATS as f64,
-                old_ms.as_secs_f64()/new_ms.as_secs_f64().max(1e-12), REPEATS);
+            eprintln!(
+                "SDF field {:>3} shapes: cold {:.3}ms/edit, incremental {:.3}ms/edit, speedup {:.2}x ({} edits)",
+                n,
+                old_ms.as_secs_f64() * 1000.0 / REPEATS as f64,
+                new_ms.as_secs_f64() * 1000.0 / REPEATS as f64,
+                old_ms.as_secs_f64() / new_ms.as_secs_f64().max(1e-12),
+                REPEATS
+            );
         }
     }
 

@@ -121,7 +121,13 @@ impl Anim {
 
     /// Frames that hold a pose, in order.
     pub fn key_frames(&self) -> Vec<u32> {
-        let mut f: Vec<u32> = self.tracks.iter().flat_map(|t| t.keys.iter().map(|k| k.0)).chain(self.links.iter().flat_map(|t| t.keys.iter().map(|k| k.0))).chain(self.melt.iter().map(|k| k.0)).collect();
+        let mut f: Vec<u32> = self
+            .tracks
+            .iter()
+            .flat_map(|t| t.keys.iter().map(|k| k.0))
+            .chain(self.links.iter().flat_map(|t| t.keys.iter().map(|k| k.0)))
+            .chain(self.melt.iter().map(|k| k.0))
+            .collect();
         f.sort_unstable();
         f.dedup();
         f

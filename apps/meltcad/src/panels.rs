@@ -1355,27 +1355,27 @@ impl App {
         let busy = self.melt_preview.is_some() && ui.input(|i| i.pointer.any_down());
         if !busy && self.melt_preview.as_ref().is_none_or(|(k, _)| *k != key) {
             // built only when the picture really changes: copying the scene every frame made big scenes lag
-        // only the picked parts, in their own groups, so what melts into what stays the same
-        let mut scene = self.scene.clone();
-        for (g, group) in scene.groups.iter_mut().enumerate() {
-            let mut s = 0;
-            group.shapes.retain(|_| {
-                let k = keep.contains(&(g, s));
-                s += 1;
-                k
-            });
-        }
-        let spheres = crate::pattern::world_spheres(&scene);
-        if spheres.is_empty() {
-            return false;
-        }
-        let mut c = [0.0_f32; 3];
-        for b in &spheres {
-            c = sdf::add(c, b.c);
-        }
-        let c = sdf::mul(c, 1.0 / spheres.len() as f32);
-        let r = spheres.iter().map(|b| sdf::len(sdf::sub(b.c, c)) + b.r).fold(1.0_f32, f32::max);
-        cam.frame(c, r);
+            // only the picked parts, in their own groups, so what melts into what stays the same
+            let mut scene = self.scene.clone();
+            for (g, group) in scene.groups.iter_mut().enumerate() {
+                let mut s = 0;
+                group.shapes.retain(|_| {
+                    let k = keep.contains(&(g, s));
+                    s += 1;
+                    k
+                });
+            }
+            let spheres = crate::pattern::world_spheres(&scene);
+            if spheres.is_empty() {
+                return false;
+            }
+            let mut c = [0.0_f32; 3];
+            for b in &spheres {
+                c = sdf::add(c, b.c);
+            }
+            let c = sdf::mul(c, 1.0 / spheres.len() as f32);
+            let r = spheres.iter().map(|b| sdf::len(sdf::sub(b.c, c)) + b.r).fold(1.0_f32, f32::max);
+            cam.frame(c, r);
             let Some(rgba) = crate::easy_view::render(&scene, &cam, size, false, 2, &|| false) else { return false };
             let image = egui::ColorImage::from_rgba_unmultiplied(size, &rgba);
             let tex = ui.ctx().load_texture("melt_preview", image, egui::TextureOptions::LINEAR);

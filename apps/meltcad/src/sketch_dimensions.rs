@@ -33,7 +33,12 @@ pub struct Dimensions {
 }
 
 /// The outline a dimension edits: the loft top, the newest hole, or the main outline.
-pub fn dim_profile<'a>(d: &Dimensions, profile: &'a mut Vec<[f32; 2]>, profile2: &'a mut Vec<[f32; 2]>, holes: &'a mut [Vec<[f32; 2]>]) -> &'a mut Vec<[f32; 2]> {
+pub fn dim_profile<'a>(
+    d: &Dimensions,
+    profile: &'a mut Vec<[f32; 2]>,
+    profile2: &'a mut Vec<[f32; 2]>,
+    holes: &'a mut [Vec<[f32; 2]>],
+) -> &'a mut Vec<[f32; 2]> {
     if d.top_profile {
         profile2
     } else if d.hole && !holes.is_empty() {

@@ -54,12 +54,15 @@ impl Job {
         let progress = Arc::new(AtomicU32::new(0));
         let (tx, rx) = channel();
         let (s, p) = (state.clone(), progress.clone());
-        std::thread::Builder::new().name("yura-native-document".into()).spawn(move || {
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| task(&s, &p)))
-                .unwrap_or_else(|_| Err("The file job stopped partway through".into()));
-            drop(permit);
-            let _ = tx.send(result);
-        }).map_err(|e| format!("Could not start the file job: {e}"))?;
+        std::thread::Builder::new()
+            .name("yura-native-document".into())
+            .spawn(move || {
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| task(&s, &p)))
+                    .unwrap_or_else(|_| Err("The file job stopped partway through".into()));
+                drop(permit);
+                let _ = tx.send(result);
+            })
+            .map_err(|e| format!("Could not start the file job: {e}"))?;
         Ok(Self { rx, state, progress, kind, base_revision, started: Instant::now(), cancelled_at: None })
     }
 
@@ -79,7 +82,9 @@ impl Job {
         Self::spawn(ctx, Kind::Save, base_revision, move |state, progress| {
             check_cancel(state)?;
             let text = scene.try_to_json()?;
-            if text.len() > MAX_DOCUMENT_BYTES { return Err("The design is too large (max 512 MiB)".into()); }
+            if text.len() > MAX_DOCUMENT_BYTES {
+                return Err("The design is too large (max 512 MiB)".into());
+            }
             progress.store(450, Ordering::Relaxed);
             check_cancel(state)?;
             let files = vec![(path.clone(), text.into_bytes())];
@@ -112,15 +117,29 @@ impl Job {
             false
         }
     }
-    pub fn can_cancel(&self) -> bool { self.state.load(Ordering::Acquire) == 0 }
-    pub fn is_committing(&self) -> bool { self.state.load(Ordering::Acquire) == 2 }
-    pub fn fraction(&self) -> f32 { (self.progress.load(Ordering::Relaxed) as f32 / 1000.0).clamp(0.0, 1.0) }
-    pub fn elapsed(&self) -> f64 { self.started.elapsed().as_secs_f64() }
-    pub fn cancel_elapsed(&self) -> Option<f64> { self.cancelled_at.map(|t| t.elapsed().as_secs_f64()) }
+    pub fn can_cancel(&self) -> bool {
+        self.state.load(Ordering::Acquire) == 0
+    }
+    pub fn is_committing(&self) -> bool {
+        self.state.load(Ordering::Acquire) == 2
+    }
+    pub fn fraction(&self) -> f32 {
+        (self.progress.load(Ordering::Relaxed) as f32 / 1000.0).clamp(0.0, 1.0)
+    }
+    pub fn elapsed(&self) -> f64 {
+        self.started.elapsed().as_secs_f64()
+    }
+    pub fn cancel_elapsed(&self) -> Option<f64> {
+        self.cancelled_at.map(|t| t.elapsed().as_secs_f64())
+    }
 
     pub fn phase_name(&self) -> &'static str {
-        if self.is_committing() { return "Finishing the file (cannot be stopped, to protect the original)"; }
-        if !self.can_cancel() { return "Waiting for the stop to finish…"; }
+        if self.is_committing() {
+            return "Finishing the file (cannot be stopped, to protect the original)";
+        }
+        if !self.can_cancel() {
+            return "Waiting for the stop to finish…";
+        }
         match (self.kind, self.fraction() < 0.5) {
             (Kind::Open, true) => "Reading the file",
             (Kind::Open, false) => "Checking the shape data",
@@ -142,7 +161,9 @@ mod tests {
 
     fn wait(job: &Job) -> Result<Completed, String> {
         for _ in 0..400 {
-            if let Some(result) = job.poll() { return result; }
+            if let Some(result) = job.poll() {
+                return result;
+            }
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         Err("timed out".into())

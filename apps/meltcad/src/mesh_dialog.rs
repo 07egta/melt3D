@@ -14,9 +14,9 @@ use egui::{Align2, Color32, RichText, Stroke};
 use crate::app::App;
 use crate::mesh_import::{self, Baked, Loaded, RES_CHOICES, Settings, Up};
 use crate::model::{Group, MAX_GROUPS, MAX_SHAPES, Material, MeshSource, Pick, Shape};
-use crate::sdf_volume::{BakeControl, ERR_CANCEL};
-use crate::work_budget;
+use crate::sdf_volume::{BakeControl, ERR_CANCEL, Volume};
 use crate::style;
+use crate::work_budget;
 
 /// A worker that holds its memory permit until the actual thread exits.
 struct Job<T> {
@@ -31,7 +31,9 @@ impl<T: Send + 'static> Job<T> {
         let permit = match work_budget::try_acquire(ctx) {
             Ok(permit) => permit,
             Err(e) => {
-                if let Ok(mut slot) = job.slot.lock() { *slot = Some(Err(e)); }
+                if let Ok(mut slot) = job.slot.lock() {
+                    *slot = Some(Err(e));
+                }
                 return job;
             }
         };
@@ -45,15 +47,25 @@ impl<T: Send + 'static> Job<T> {
                 *slot = Some(res);
             }
         });
-        if let Err(e) = spawned && let Ok(mut slot) = job.slot.lock() {
+        if let Err(e) = spawned
+            && let Ok(mut slot) = job.slot.lock()
+        {
             *slot = Some(Err(format!("Couldn't start loading: {e}")));
         }
         job
     }
-    fn cancel(&self) { self.cancel.store(true, Ordering::Relaxed); }
-    fn cancelled(&self) -> bool { self.cancel.load(Ordering::Relaxed) }
-    fn fraction(&self) -> f32 { (self.progress.load(Ordering::Relaxed) as f32 / 1000.0).clamp(0.0, 1.0) }
-    fn take(&self) -> Option<Result<T, String>> { self.slot.lock().ok()?.take() }
+    fn cancel(&self) {
+        self.cancel.store(true, Ordering::Relaxed);
+    }
+    fn cancelled(&self) -> bool {
+        self.cancel.load(Ordering::Relaxed)
+    }
+    fn fraction(&self) -> f32 {
+        (self.progress.load(Ordering::Relaxed) as f32 / 1000.0).clamp(0.0, 1.0)
+    }
+    fn take(&self) -> Option<Result<T, String>> {
+        self.slot.lock().ok()?.take()
+    }
 }
 
 /// The outcome of a SolidCraft transfer. A completed bake is not a success until its shape
@@ -145,6 +157,44 @@ fn check_rebake_source(original: &Shape, file_name: &str, mesh_hash: u64) -> Res
     Ok(())
 }
 
+/// The work of a re-bake. The file read, the residuals and the bake all watch the Stop flag of
+/// `c`, so Stop ends it promptly instead of after the whole file has been read.
+fn rebake_work(path: &Path, orig: &Shape, old: &Volume, resolution: u32, c: &BakeControl) -> Result<RebakeResult, String> {
+    let began = Instant::now();
+    let stopped = || c.cancel.load(Ordering::Relaxed);
+    let loaded = mesh_import::load_with_control(path, &c.cancel, &c.progress)?;
+    if stopped() {
+        return Err(ERR_CANCEL.into());
+    }
+    let hash = mesh_import::mesh_hash(&loaded.imported.mesh);
+    check_rebake_source(orig, &loaded.file_name, hash)?;
+    if stopped() {
+        return Err(ERR_CANCEL.into());
+    }
+    let y_up = orig.mesh_source.as_ref().map_or(loaded.imported.format.y_up_by_default(), |src| src.y_up);
+    let size = [0, 1, 2].map(|a| orig.size[a] * orig.scale[a]);
+    let before = mesh_import::surface_residual(&loaded.imported.mesh, y_up, orig.size, old);
+    if stopped() {
+        return Err(ERR_CANCEL.into());
+    }
+    // The old SDF is sampled in its original unscaled local coordinates.
+    // Convert the old residuals into conservative world-mm values.
+    let old_scale = orig.scale.into_iter().fold(0.0f32, f32::max);
+    let before = (before.0 * old_scale, before.1 * old_scale, before.2);
+    let baked = mesh_import::rebake(&loaded.imported.mesh, y_up, size, resolution, c)?;
+    if stopped() {
+        return Err(ERR_CANCEL.into());
+    }
+    let after = mesh_import::surface_residual(&loaded.imported.mesh, y_up, size, &baked.volume);
+    Ok(RebakeResult {
+        baked,
+        before,
+        after,
+        elapsed: began.elapsed().as_secs_f64(),
+        source: MeshSource { path: path.to_string_lossy().into_owned(), y_up, mesh_hash: hash },
+    })
+}
+
 fn launch_rebake(req: &mut RebakeRequest, ctx: &egui::Context) {
     let Some(path) = req.path.clone() else {
         req.msg = "Please pick the original mesh file again".into();
@@ -155,34 +205,7 @@ fn launch_rebake(req: &mut RebakeRequest, ctx: &egui::Context) {
     let resolution = req.res;
     let ctl = Arc::new(BakeControl::new());
     let c = ctl.clone();
-    let job = Job::spawn("meltcad-mesh-rebake", ctx, move |_, _| {
-        let began = Instant::now();
-        let loaded = mesh_import::load(&path)?;
-        let hash = mesh_import::mesh_hash(&loaded.imported.mesh);
-        check_rebake_source(&orig, &loaded.file_name, hash)?;
-        if c.cancel.load(Ordering::Relaxed) {
-            return Err(ERR_CANCEL.into());
-        }
-        let y_up = orig.mesh_source.as_ref().map_or(loaded.imported.format.y_up_by_default(), |src| src.y_up);
-        let size = [0, 1, 2].map(|a| orig.size[a] * orig.scale[a]);
-        let before = mesh_import::surface_residual(&loaded.imported.mesh, y_up, orig.size, &old);
-        // The old SDF is sampled in its original unscaled local coordinates.
-        // Convert the old residuals into conservative world-mm values.
-        let old_scale = orig.scale.into_iter().fold(0.0f32, f32::max);
-        let before = (before.0 * old_scale, before.1 * old_scale, before.2);
-        let baked = mesh_import::rebake(&loaded.imported.mesh, y_up, size, resolution, &c)?;
-        if c.cancel.load(Ordering::Relaxed) {
-            return Err(ERR_CANCEL.into());
-        }
-        let after = mesh_import::surface_residual(&loaded.imported.mesh, y_up, size, &baked.volume);
-        Ok(RebakeResult {
-            baked,
-            before,
-            after,
-            elapsed: began.elapsed().as_secs_f64(),
-            source: MeshSource { path: path.to_string_lossy().into_owned(), y_up, mesh_hash: hash },
-        })
-    });
+    let job = Job::spawn("meltcad-mesh-rebake", ctx, move |_, _| rebake_work(&path, &orig, &old, resolution, &c));
     req.job = Some(Arc::new(RebakeJob { job, ctl, started: Instant::now() }));
     req.msg.clear();
 }
@@ -480,7 +503,9 @@ fn start_bake(d: &mut Dlg, ctx: &egui::Context) {
     let (l, c) = (loaded.clone(), ctl.clone());
     let original = d.completion.is_some();
     let job = Job::spawn("meltcad-mesh-bake", ctx, move |cancel, _| {
-        if cancel.load(Ordering::Relaxed) { return Err(ERR_CANCEL.into()); }
+        if cancel.load(Ordering::Relaxed) {
+            return Err(ERR_CANCEL.into());
+        }
         let out = if original {
             mesh_import::bake_original(&l.imported.mesh, settings.res, &c)
         } else {
@@ -618,7 +643,9 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
                 ui.label(RichText::new("Reading the file…").color(style::DIM));
                 if let Some((job, _)) = &d.reading {
                     ui.add(egui::ProgressBar::new(job.fraction()).show_percentage());
-                    if job.cancelled() { ui.label("Waiting for the stop to finish (memory is freed after parsing)…"); }
+                    if job.cancelled() {
+                        ui.label("Waiting for the stop to finish (memory is freed after parsing)…");
+                    }
                 }
                 if let Some((_, p)) = &d.reading {
                     ui.label(RichText::new(p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()).size(11.5).color(style::DIM));
@@ -664,9 +691,13 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
                         b.ctl.cancel.store(true, Ordering::Relaxed);
                         b.job.cancel();
                     }
-                    if b.ctl.cancel.load(Ordering::Relaxed) { ui.label("Waiting for the stop to finish…"); }
+                    if b.ctl.cancel.load(Ordering::Relaxed) {
+                        ui.label("Waiting for the stop to finish…");
+                    }
                 } else if let Some((job, _)) = &d.reading {
-                    if style::pill(ui, "Stop", false).clicked() { job.cancel(); }
+                    if style::pill(ui, "Stop", false).clicked() {
+                        job.cancel();
+                    }
                 } else {
                     ui.add_enabled_ui(d.loaded.is_some() && !app.scene_structure_locked(), |ui| {
                         let b = egui::Button::new(RichText::new("Load").strong().color(Color32::WHITE))
@@ -856,6 +887,17 @@ pub fn reads(path: &Path) -> bool {
 mod tests {
     use super::*;
     use crate::model::Kind;
+
+    /// #200: Stop reaches the file read of a re-bake (it ends before the file is even opened).
+    #[test]
+    fn stop_ends_a_rebake_before_it_reads_the_file() {
+        let shape = Shape::new(Kind::Mesh, [0.0; 3], Material::default());
+        let old = Volume { dims: [1, 1, 1], origin: [0.0; 3], cell: 1.0, data: vec![0.0] };
+        let ctl = BakeControl::new();
+        ctl.cancel.store(true, Ordering::Relaxed);
+        let err = rebake_work(Path::new("/definitely/not/here.stl"), &shape, &old, 32, &ctl).err().unwrap();
+        assert_eq!(err, crate::import_mesh::IMPORT_CANCELLED, "stopped, not 'cannot read the file'");
+    }
 
     #[test]
     fn old_mesh_sources_never_accept_an_unrelated_file_silently() {

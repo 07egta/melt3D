@@ -42,7 +42,9 @@ impl<T: Clone + Send + 'static> Task<T> {
         let permit = match crate::work_budget::try_acquire(ctx) {
             Ok(permit) => permit,
             Err(e) => {
-                if let Ok(mut s) = self.slot.lock() { *s = Slot::Done(Err(e)); }
+                if let Ok(mut s) = self.slot.lock() {
+                    *s = Slot::Done(Err(e));
+                }
                 return;
             }
         };
@@ -300,7 +302,10 @@ fn start_job(app: &mut App, ctx: &egui::Context, o: Options, path: PathBuf) -> b
     }
     let permit = match crate::work_budget::try_acquire(ctx) {
         Ok(permit) => permit,
-        Err(e) => { app.say(ctx, e); return false; }
+        Err(e) => {
+            app.say(ctx, e);
+            return false;
+        }
     };
     let job = Job::start_with_permit(app.scene.clone(), app.picks(), o.clone(), path, Some(permit));
     ctx.data_mut(|m| {
@@ -356,7 +361,9 @@ fn running_card(app: &mut App, ctx: &egui::Context) {
                     ui.label(RichText::new(format!("{:.0}%  {:.0} sec", job.fraction() * 100.0, job.elapsed())).size(11.5).color(style::DIM));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if job.can_cancel() {
-                            if style::pill(ui, "Cancel", false).clicked() { job.cancel(); }
+                            if style::pill(ui, "Cancel", false).clicked() {
+                                job.cancel();
+                            }
                         } else {
                             ui.label(RichText::new(job.phase_name()).size(11.5).color(style::DIM));
                         }

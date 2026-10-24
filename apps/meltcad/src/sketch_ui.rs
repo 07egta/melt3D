@@ -3774,7 +3774,13 @@ mod tests {
         app.sk.pen = Pen::Line;
         app.sk.click([3.0, 4.0], false);
         ctx.input_mut(|i| {
-            i.events.push(egui::Event::Key { key: egui::Key::Tab, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::SHIFT })
+            i.events.push(egui::Event::Key {
+                key: egui::Key::Tab,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::SHIFT,
+            })
         });
         app.keys(&ctx);
         let Some(d) = app.sk.dimension.as_mut() else { panic!("X/Y editor expected (#222)") };
