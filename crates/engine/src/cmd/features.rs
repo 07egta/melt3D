@@ -860,7 +860,11 @@ fn revolve(s: &mut Session, p: &Value) -> Result<Value> {
 /// of the sketch wins over a construction axis of the same name.
 pub(super) fn axis_param(s: &Session, sketch: u64, p: &Value, cmd: &str) -> Result<AxisRef> {
     if let Some(o) = p.get("axis").filter(|v| v.is_object()) {
-        let origin = o.get("origin").and_then(vec3).unwrap_or(Vec3::ZERO);
+        // Only a missing origin means the design origin; one that is given must be a point (#251).
+        let origin = match o.get("origin") {
+            None | Some(Value::Null) => Vec3::ZERO,
+            Some(v) => vec3(v).ok_or_else(|| bad(cmd, "axis `origin` must be a point [x, y, z]"))?,
+        };
         let dir = o.get("dir").and_then(vec3).ok_or_else(|| bad(cmd, "axis needs `dir`"))?;
         return Ok(AxisRef::Line { origin: Position(origin), dir: Dir(dir) });
     }
@@ -1326,7 +1330,10 @@ fn move_bodies(s: &mut Session, p: &Value) -> Result<Value> {
         FeatureKind::Move {
             bodies: bodies.into_iter().map(BodyName).collect(),
             translate: t,
-            rotate_axis: p.get("axis").and_then(vec3).map(Dir),
+            rotate_axis: match p.get("axis") {
+                None | Some(Value::Null) => None,
+                Some(v) => Some(Dir(vec3(v).ok_or_else(|| bad(cmd, "`axis` must be a direction [x, y, z]"))?)),
+            },
             angle,
             copy: bool_(p, "copy").unwrap_or(false),
         },
