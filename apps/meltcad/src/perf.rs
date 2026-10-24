@@ -367,6 +367,8 @@ impl Drawn {
 pub struct PackCache {
     rev: Option<u64>,
     pack: Option<std::sync::Arc<crate::gpu::ScenePack>>,
+    /// One previous scene snapshot only; the cache cannot grow with the undo history.
+    snapshot: Option<Scene>,
     /// How many times the scene was packed (for tests and the HUD).
     pub packs: u64,
 }
@@ -379,9 +381,14 @@ impl PackCache {
         {
             return p.clone();
         }
-        let p = std::sync::Arc::new(crate::gpu::ScenePack::new(scene, crate::gpu::VolumeSet::of(scene)));
+        let p = std::sync::Arc::new(crate::gpu::ScenePack::reusing(
+            scene,
+            crate::gpu::VolumeSet::of(scene),
+            self.snapshot.as_ref().zip(self.pack.as_deref()),
+        ));
         self.rev = Some(rev);
         self.pack = Some(p.clone());
+        self.snapshot = Some(scene.clone());
         self.packs += 1;
         p
     }

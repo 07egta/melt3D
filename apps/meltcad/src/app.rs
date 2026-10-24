@@ -69,7 +69,7 @@ pub struct App {
     committed_rev: u64,
     deduped_rev: u64,
     /// The field for picking, made when picking needs it and the scene has changed since.
-    field_cache: std::cell::RefCell<Option<(u64, std::rc::Rc<Field>)>>,
+    field_cache: std::cell::RefCell<Option<(u64, std::rc::Rc<Field>, Scene)>>,
     /// How many times the field was built (tests and the HUD look at it).
     pub(crate) field_builds: std::cell::Cell<u64>,
     pub path: Option<PathBuf>,
@@ -254,14 +254,19 @@ impl App {
     /// (a drag or a camera move that picks nothing never builds it).
     pub fn field(&self) -> std::rc::Rc<Field> {
         let mut cache = self.field_cache.borrow_mut();
-        if let Some((rev, f)) = cache.as_ref()
+        if let Some((rev, f, _)) = cache.as_ref()
             && *rev == self.scene_rev
         {
             return f.clone();
         }
         self.field_builds.set(self.field_builds.get() + 1);
-        let f = std::rc::Rc::new(Field::new(&self.scene));
-        *cache = Some((self.scene_rev, f.clone()));
+        // Keep only the most recent snapshot. Shape equality guards against stale cached SDFs
+        // after edits, linked-copy changes, undo/redo and load (no probabilistic hash keys).
+        let f = std::rc::Rc::new(Field::reusing(
+            &self.scene,
+            cache.as_ref().map(|(_, field, old_scene)| (field.as_ref(), old_scene)),
+        ));
+        *cache = Some((self.scene_rev, f.clone(), self.scene.clone()));
         f
     }
 
@@ -454,6 +459,9 @@ impl App {
             self.committed = prev;
             self.fix_selection();
             self.animation_at_applied(self.an.frame);
+            // Invalidate both CPU field and GPU pack before any further hit test/draw.
+            self.track_scene();
+            self.committed_rev = self.scene_rev;
         }
     }
 
@@ -476,6 +484,8 @@ impl App {
             self.committed = next;
             self.fix_selection();
             self.animation_at_applied(self.an.frame);
+            self.track_scene();
+            self.committed_rev = self.scene_rev;
         }
     }
 
@@ -2492,6 +2502,38 @@ mod tests {
         assert!(restarted.pending_path().is_none(), "a clean scene must not produce an empty recovery file");
         restarted.normal_exit().expect("remove test lock");
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn undo_and_redo_invalidate_the_cpu_field_and_gpu_scene_pack_immediately() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        let p = [25.0, 0.0, 20.0];
+        let before = app.field();
+        let dist_before = before.distance(p);
+        let rev_before = app.scene_rev;
+        let pack_before = app.perf.pack.get(&app.scene, rev_before);
+
+        app.scene.shape_mut(0, 0).unwrap().pos[0] += 40.0;
+        app.settle(&ctx);
+        let rev_changed = app.scene_rev;
+        assert!(rev_changed > rev_before);
+        let after = app.field();
+        let dist_changed = after.distance(p);
+        assert_ne!(dist_changed, dist_before);
+        let pack_changed = app.perf.pack.get(&app.scene, rev_changed);
+        assert_ne!(pack_before.id, pack_changed.id);
+
+        app.undo();
+        assert!(app.scene_rev > rev_changed);
+        assert_eq!(app.field().distance(p).to_bits(), dist_before.to_bits());
+        let undo_pack = app.perf.pack.get(&app.scene, app.scene_rev);
+        assert_eq!(undo_pack.list.as_ref(), pack_before.list.as_ref());
+        app.redo();
+        assert_eq!(app.field().distance(p).to_bits(), dist_changed.to_bits());
+        let redo_pack = app.perf.pack.get(&app.scene, app.scene_rev);
+        assert_eq!(redo_pack.list.as_ref(), pack_changed.list.as_ref());
+        assert!(app.field_builds.get() >= 4, "each scene revision must refresh the SDF");
     }
 
     #[test]

@@ -144,6 +144,14 @@ pub struct ScenePack {
     /// Shapes in the list and groups to draw.
     pub shape_n: usize,
     pub group_n: usize,
+    /// Number of unchanged shapes whose packed data was safely reused.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub shapes_reused: usize,
+    #[cfg_attr(not(test), allow(dead_code))]
+    /// Number of shape payloads computed on this revision.
+    pub shapes_repacked: usize,
+    /// Group bounds/blocks are retained for unchanged source groups.
+    source_infos: std::collections::HashMap<usize, Arc<crate::accel::GroupInfo>>,
     offs: [f32; 4],
     offs2: [f32; 2],
     resolved: Vec<crate::pattern::RGroup>,
@@ -155,6 +163,17 @@ pub struct ScenePack {
 
 impl ScenePack {
     pub fn new(scene: &Scene, vols: VolumeSet) -> ScenePack {
+        Self::reusing(scene, vols, None)
+    }
+
+    /// Keep exact packed payloads of unchanged shapes while updating dependent group bounds,
+    /// ordering, Boolean operations and instance transforms. Pool offsets are rebased below;
+    /// meshes and curves take the original path to avoid reusing context-dependent volume
+    /// locations or an adaptively truncated curve.
+    pub fn reusing(scene: &Scene, vols: VolumeSet, previous: Option<(&Scene, &ScenePack)>) -> ScenePack {
+        let old_slots: std::collections::HashMap<(usize, usize), usize> = previous
+            .map(|(_, pack)| pack.slots.iter().map(|&(g,s,slot)| ((g,s), slot)).collect())
+            .unwrap_or_default();
         let resolved = crate::pattern::resolve(scene);
         let mut groups: Vec<f32> = Vec::new();
         let mut blocks: Vec<f32> = Vec::new();
@@ -168,6 +187,9 @@ impl ScenePack {
         let mut inst_n = 0usize;
         let mut slots: Vec<(usize, usize, usize)> = Vec::new();
         let mut ranges: Vec<(usize, usize, usize)> = Vec::new();
+        let mut shapes_reused = 0;
+        let mut shapes_repacked = 0;
+        let mut source_infos: std::collections::HashMap<usize, Arc<crate::accel::GroupInfo>> = std::collections::HashMap::new();
         // every group whose shapes are drawn (itself, or as the source of a linked copy) is packed once
         let mut srcs: Vec<usize> = resolved.iter().map(|r| r.src).collect();
         srcs.sort_unstable();
@@ -188,7 +210,17 @@ impl ScenePack {
                 if !s.solid() || shape_n >= MAX_SHAPES {
                     continue;
                 }
-                pack_shape(s, &mut shapes, &mut poly, &mut path, &vols);
+                let reused = previous.is_some_and(|(old_scene, old_pack)| {
+                    old_scene.shape(gi, si).is_some_and(|old| old == s)
+                        && old_slots.get(&(gi, si)).is_some_and(|&slot| {
+                            reuse_shape_pack(s, old_pack, slot, &vols, &mut shapes, &mut poly, &mut path)
+                        })
+                });
+                if reused { shapes_reused += 1; }
+                else {
+                    pack_shape(s, &mut shapes, &mut poly, &mut path, &vols);
+                    shapes_repacked += 1;
+                }
                 packed_overlap |= s.op == crate::model::Op::Intersect;
                 members.push(s);
                 slots.push((gi, si, shape_n));
@@ -199,7 +231,26 @@ impl ScenePack {
             if count == 0 {
                 continue;
             }
-            let info = crate::accel::group_info(&members, &scene.melt);
+            let info = previous.and_then(|(old_scene, old_pack)| {
+                let old_group = old_scene.groups.get(gi)?;
+                // A group may be only partly admitted when earlier groups consume the
+                // MAX_SHAPES budget. Reusing its old bounds/blocks is safe only when the
+                // packed slice starts at the same offset and admits the same number of
+                // members; otherwise the new prefix can contain geometry the old bounds
+                // never covered (or retain blocks for shapes that are no longer packed).
+                let same_admission = old_pack.ranges.iter().any(
+                    |&(old_gi, old_first, old_count)| {
+                        old_gi == gi && old_first == first && old_count == count
+                    },
+                );
+                (old_group.shapes == g.shapes
+                    && old_scene.melt.mode == scene.melt.mode
+                    && old_scene.melt.amount == scene.melt.amount
+                    && same_admission)
+                    .then(|| old_pack.source_infos.get(&gi).cloned())
+                    .flatten()
+            }).unwrap_or_else(|| Arc::new(crate::accel::group_info(&members, &scene.melt)));
+            source_infos.insert(gi, Arc::clone(&info));
             for b in &info.blocks {
                 push(&mut blocks, [b.bound.c[0], b.bound.c[1], b.bound.c[2], b.bound.r]);
                 push(&mut blocks, [b.kmax, if b.skippable { 0.0 } else { 1.0 }, (first + b.first) as f32, b.count as f32]);
@@ -264,6 +315,9 @@ impl ScenePack {
             instances: inst_n,
             shape_n,
             group_n,
+            shapes_reused,
+            shapes_repacked,
+            source_infos,
             offs: [0.0, block_base as f32, inst_base as f32, shape_base as f32],
             offs2: [poly_base as f32, path_base as f32],
             resolved,
@@ -335,6 +389,84 @@ impl ScenePack {
         }
         u
     }
+}
+
+/// Copy a previously packed unchanged shape without redoing transforms, CAD inset or polygon
+/// preparation. Rebase its outline/path indices to the current compact pools. Returns false
+/// (falling back to the original packer) if any pool would overflow or the old data was truncated.
+/// Curves are reused only when their old path-pool offset is unchanged (the adaptive
+/// subdivision then had identical room); meshes only when volume layout is identical.
+fn reuse_shape_pack(
+    shape: &crate::model::Shape, old: &ScenePack, slot: usize, vols: &VolumeSet,
+    shapes: &mut Vec<f32>, poly: &mut Vec<f32>, path: &mut Vec<f32>,
+) -> bool {
+    use crate::model::Kind;
+    if shape.kind == Kind::Mesh && !vols.same_as(&old.vols) {
+        return false;
+    }
+    let start = (old.offs[3] as usize + slot * S_STRIDE) * 4;
+    let Some(old_data) = old.list.get(start..start + S_STRIDE * 4) else { return false };
+    let mut data = old_data.to_vec();
+
+    let poly_base = old.offs2[0] as usize * 4;
+    let path_base = old.offs2[1] as usize * 4;
+
+    if shape.kind == Kind::Curve {
+        // pack_curve starts with two bounding-box records, then points, then one
+        // bounding sphere per GROUP_SEGMENTS edges. If the pool prefix is unchanged,
+        // both the available adaptive-subdivision budget and all packed values match.
+        let old_start = data[12*4] as usize;
+        let count = data[12*4 + 1] as usize;
+        let Some(first) = old_start.checked_sub(2) else { return false };
+        if count < 2 || first != path.len()/4 { return false; }
+        let nodes = 2 + count + (count-1).div_ceil(crate::curve::GROUP_SEGMENTS);
+        if first + nodes > PATH_V4 { return false; }
+        let at = path_base + first * 4;
+        let Some(old_path) = old.list.get(at..at + nodes * 4) else { return false };
+        path.extend_from_slice(old_path);
+        shapes.extend_from_slice(&data);
+        return true;
+    }
+    let grab_poly = |start_slot: usize, count_slot: usize, enabled: bool, count_expected: usize| -> Option<&[f32]> {
+        if !enabled { return Some(&[]); }
+        let (first, count) = (data[start_slot] as usize, data[count_slot] as usize);
+        if count != count_expected { return None; }
+        let at = poly_base.checked_add(first.checked_mul(2)?)?;
+        let end = at.checked_add(count.checked_mul(2)?)?;
+        old.list.get(at..end)
+    };
+    let Some(outline) = grab_poly(7*4+2, 7*4+3, shape.kind.uses_outline(), shape.outline.len()) else { return false };
+    let Some(outline2) = grab_poly(12*4+2, 12*4+3, shape.kind.uses_outline2(), shape.outline2.len()) else { return false };
+    let (old_start, old_count) = (data[12*4] as usize, data[12*4+1] as usize);
+    let path_slice = if shape.kind.uses_path() {
+        if old_count != shape.path.len() { return false; }
+        let at = path_base + old_start * 4;
+        let Some(nodes) = old.list.get(at..at + old_count * 4) else { return false };
+        nodes
+    } else {
+        &[]
+    };
+    if poly.len() / 2 + outline.len()/2 + outline2.len()/2 > POLY_PTS
+        || path.len()/4 + path_slice.len()/4 > PATH_V4
+    {
+        return false;
+    }
+    let mut append_poly = |slot: usize, count: usize, enabled: bool, pts: &[f32]| {
+        if enabled && count > 0 {
+            data[slot] = (poly.len()/2) as f32;
+            poly.extend_from_slice(pts);
+        } else {
+            data[slot] = 0.0;
+        }
+    };
+    append_poly(7*4+2, shape.outline.len(), shape.kind.uses_outline(), outline);
+    append_poly(12*4+2, shape.outline2.len(), shape.kind.uses_outline2(), outline2);
+    if shape.kind.uses_path() {
+        data[12*4] = (path.len()/4) as f32;
+        path.extend_from_slice(path_slice);
+    }
+    shapes.extend_from_slice(&data);
+    true
 }
 
 /// One shape's 16 vec4 (a bounding sphere, then `struct Shape`); its outline points and path nodes
@@ -1631,6 +1763,7 @@ pub(crate) mod offscreen {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::{Material, Shape};
 
     /// A reader for a packed frame: where each list starts.
     pub(super) struct Frame<'a> {
@@ -1676,6 +1809,152 @@ mod tests {
         }
         pub fn list_len(&self) -> usize {
             self.u.len() / 4 - GLOBAL_V4
+        }
+    }
+
+    fn incremental_pack_scene(count: usize) -> Scene {
+        let mut scene = Scene::default();
+        scene.groups.clear();
+        for gi in 0..count.div_ceil(10) {
+            let mut group = crate::model::Group::new(format!("group-{gi}"));
+            group.blend = 2.0;
+            group.op = if gi > 0 && gi % 4 == 0 { crate::model::Op::Subtract } else { crate::model::Op::Add };
+            for si in 0..10 {
+                let i = gi * 10 + si;
+                if i >= count { break; }
+                let kind = match i % 7 {
+                    0 => crate::model::Kind::Sphere,
+                    1 => crate::model::Kind::Extrude,
+                    2 => crate::model::Kind::Revolve,
+                    3 => crate::model::Kind::Sweep,
+                    4 => crate::model::Kind::Box,
+                    5 => crate::model::Kind::Cylinder,
+                    _ => crate::model::Kind::Curve, // deliberately uses the uncached exact path
+                };
+                let mut sh = Shape::new(kind, [(i % 20) as f32 * 25.0, (i / 20) as f32 * 25.0, 10.0], Material::default());
+                if i % 5 == 0 { sh.shell = 0.6; }
+                if i % 6 == 0 && si > 0 { sh.op = crate::model::Op::Subtract; }
+                if matches!(kind, crate::model::Kind::Curve | crate::model::Kind::Sweep) {
+                    sh.path = vec![[0.0, 0.0, 0.0, 2.0], [8.0, 0.0, 1.0, 2.0], [12.0, 8.0, 0.0, 2.0]];
+                }
+                group.shapes.push(sh);
+            }
+            scene.groups.push(group);
+        }
+        scene
+    }
+
+    fn same_pack_as_cold(scene: &Scene, prev: Option<(&Scene, &ScenePack)>) -> ScenePack {
+        let fast = ScenePack::reusing(scene, VolumeSet::of(scene), prev);
+        let cold = ScenePack::new(scene, VolumeSet::of(scene));
+        assert_eq!(fast.list.as_ref(), cold.list.as_ref(), "GPU input must be bit-for-bit identical");
+        assert_eq!(fast.offs, cold.offs);
+        assert_eq!(fast.offs2, cold.offs2);
+        assert_eq!(fast.slots, cold.slots);
+        assert_eq!(fast.ranges, cold.ranges);
+        assert_eq!(fast.shape_n, cold.shape_n);
+        assert_eq!(fast.group_n, cold.group_n);
+        assert_eq!(fast.glow, cold.glow);
+        assert_eq!(fast.overlaps, cold.overlaps);
+        fast
+    }
+
+    #[test]
+    fn incremental_gpu_pack_is_byte_identical_for_10_100_300_boolean_thin_and_path_shapes() {
+        for n in [10, 100, 300] {
+            let original = incremental_pack_scene(n);
+            let old = same_pack_as_cold(&original, None);
+            let mut changed = original.clone();
+            changed.groups[0].shapes[0].pos[0] += 1.25;
+            changed.melt.mode = crate::model::BlendMode::Gooey;
+            let fresh = same_pack_as_cold(&changed, Some((&original, &old)));
+            assert_eq!(fresh.shapes_reused, n - 1, "{n} shapes; unchanged curve payloads retain exact room");
+            assert_eq!(fresh.shapes_repacked, 1);
+
+            // Undo/redo must not resurrect cached positions or a previous Boolean op.
+            let undone = same_pack_as_cold(&original, Some((&changed, &fresh)));
+            assert_eq!(undone.shape_n, n);
+            let mut op_change = changed.clone();
+            op_change.groups[0].shapes[3].op = crate::model::Op::Intersect;
+            let other = 1.min(op_change.groups.len()-1);
+            op_change.groups[other].op = crate::model::Op::Subtract;
+            let _ = same_pack_as_cold(&op_change, Some((&changed, &fresh)));
+
+            // When an earlier path grows, a later Curve must fall back to exact
+            // adaptive packing; it cannot reuse a path offset from the old layout.
+            let mut path_change = original.clone();
+            path_change.groups[0].shapes[3].path.push([17.0, 8.0, 3.0, 2.0]);
+            let _ = same_pack_as_cold(&path_change, Some((&original, &old)));
+
+            // Insertion/deletion shifts the slots and polygon offsets; no old slot can leak.
+            let mut deleted = original.clone();
+            deleted.groups[0].shapes.remove(1);
+            let _ = same_pack_as_cold(&deleted, Some((&original, &old)));
+        }
+    }
+
+    #[test]
+    fn incremental_gpu_pack_rebuilds_group_bounds_when_shape_budget_admission_changes() {
+        let mut original = Scene::default();
+        original.groups[0].shapes.clear();
+        let mut first = crate::model::Group::new(String::from("first"));
+        let mut second = crate::model::Group::new(String::from("second"));
+        for i in 0..508 {
+            first.shapes.push(Shape::new(
+                crate::model::Kind::Sphere,
+                [i as f32 * 3.0, 0.0, 10.0],
+                Material::default(),
+            ));
+        }
+        for i in 0..7 {
+            second.shapes.push(Shape::new(
+                crate::model::Kind::Sphere,
+                [10_000.0 + i as f32 * 30.0, 0.0, 10.0],
+                Material::default(),
+            ));
+        }
+        original.groups = vec![first, second];
+        assert_eq!(original.shape_count(), crate::model::MAX_SHAPES + 3);
+        let old = same_pack_as_cold(&original, None);
+        assert_eq!(old.ranges[1].2, 4, "the final group is truncated by the shape cap");
+
+        // Removing three earlier shapes admits three more shapes from the unchanged
+        // second group. Its old source bounds cover only four of the now-seven members.
+        let mut changed = original.clone();
+        changed.groups[0].shapes.truncate(505);
+        let updated = same_pack_as_cold(&changed, Some((&original, &old)));
+        assert_eq!(updated.ranges[1].2, 7);
+    }
+
+    /// Run explicitly for comparative CPU packing timings on the actual target machine.
+    #[test]
+    #[ignore]
+    fn incremental_gpu_pack_timing_10_100_300() {
+        use std::time::{Duration, Instant};
+        const REPEATS: usize = 30;
+        for n in [10, 100, 300] {
+            let mut scene = incremental_pack_scene(n);
+            let mut last = ScenePack::new(&scene, VolumeSet::of(&scene));
+            let mut cold_time = Duration::ZERO;
+            let mut reuse_time = Duration::ZERO;
+            for k in 0..REPEATS {
+                let mut edited = scene.clone();
+                let si = k % n;
+                edited.groups[si/10].shapes[si%10].pos[0] += 0.3;
+                let started = Instant::now();
+                let cold = ScenePack::new(&edited, VolumeSet::of(&edited));
+                cold_time += started.elapsed();
+                let started = Instant::now();
+                let updated = ScenePack::reusing(&edited, VolumeSet::of(&edited), Some((&scene, &last)));
+                reuse_time += started.elapsed();
+                assert_eq!(updated.list.as_ref(), cold.list.as_ref());
+                scene = edited;
+                last = updated;
+            }
+            eprintln!("GPU pack {:>3} shapes: cold {:.3}ms/edit, incremental {:.3}ms/edit, speedup {:.2}x ({} edits)",
+                n, cold_time.as_secs_f64()*1000.0/REPEATS as f64,
+                reuse_time.as_secs_f64()*1000.0/REPEATS as f64,
+                cold_time.as_secs_f64()/reuse_time.as_secs_f64().max(1e-12), REPEATS);
         }
     }
 
