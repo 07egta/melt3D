@@ -410,6 +410,29 @@ mod tests {
         assert_eq!(key_name(egui::Key::K, egui::Modifiers { ctrl: true, shift: true, ..Default::default() }), "Ctrl+Shift+K");
     }
 
+    /// #248: a custom Ctrl+Shift+Z runs its command instead of Undo; Ctrl+Z still undoes.
+    #[test]
+    fn custom_ctrl_shift_z_is_not_taken_by_undo() {
+        let mut h = crate::scenario::Harness::new();
+        h.app.home.open = false;
+        h.app.run("solid.box", json!({"length": 10, "width": 10, "height": 10})).unwrap();
+        h.frames(1);
+        bind(&mut h.app, "solid.extrude", "Ctrl+Shift+Z", false).unwrap();
+        let undo = h.app.session.undo.len();
+        h.step(&json!({"key": "Z", "shift": true, "cmd": true})).unwrap();
+        h.frames(1);
+        assert_eq!(h.app.session.undo.len(), undo, "Ctrl+Shift+Z must not undo");
+        let started = h.app.dialog.is_some() || h.app.tool.is_some();
+        assert!(started, "the bound command starts");
+        h.step(&json!({"key": "Escape"})).unwrap();
+        h.frames(1);
+        h.app.dialog = None;
+        h.app.tool = None;
+        h.step(&json!({"key": "Z", "cmd": true})).unwrap();
+        h.frames(1);
+        assert_eq!(h.app.session.undo.len(), undo - 1, "Ctrl+Z still undoes");
+    }
+
     /// #3045: Shift+R starts the last tool again (here a sketch's Line after Escape put it
     /// down), R alone is still the rectangle; the menus show the key on Repeat, and no command
     /// can take it.

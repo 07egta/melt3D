@@ -1851,6 +1851,13 @@ pub fn shortcuts(app: &mut SolveApp, ctx: &egui::Context) {
             continue;
         }
         if mods.command {
+            // A key the user bound (Ctrl+Shift+Z…) runs its command before the app's own
+            // Ctrl handlers, which only look at the letter (#248).
+            let name = crate::keymap::key_name(k, mods);
+            if shown && !crate::keymap::RESERVED.contains(&name.as_str()) && !crate::keymap::commands_for(app, &name).is_empty() {
+                crate::keymap::press(app, &name);
+                continue;
+            }
             match k {
                 Key::N => crate::documents::new_design(app),
                 Key::Comma => crate::prefs::open_at(app, 0),
