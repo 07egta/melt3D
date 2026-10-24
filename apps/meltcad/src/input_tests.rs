@@ -943,6 +943,36 @@ fn solid_sketch_switching_to_pipe_discards_the_unconfirmed_extrusion() {
 }
 
 #[test]
+fn shift_tab_places_the_last_point_by_xy_for_line_and_polygon() {
+    for pen in [Pen::Line, Pen::Polygon] {
+        let mut r = Rig::new();
+        r.sketch(pen);
+        r.click(r.on_plane([3.0, 4.0]));
+        // Tab alone only offers the next segment's length and angle; Shift+Tab offers X/Y (#222).
+        r.mods = egui::Modifiers::SHIFT;
+        r.key(egui::Key::Tab);
+        r.mods = egui::Modifiers::NONE;
+        let d = r.app.sk.dimension.as_ref().unwrap_or_else(|| panic!("{pen:?}: Shift+Tab opens the point fields"));
+        assert_eq!(d.labels(), ["X", "Y"], "{pen:?} last point is placed by coordinate");
+        r.replace_text("0");
+        r.key(egui::Key::Tab);
+        r.replace_text("0");
+        r.key(egui::Key::Enter);
+        assert!(
+            r.app.sk.pts.first().is_some_and(|p| p[0].abs() < 1e-3 && p[1].abs() < 1e-3),
+            "{pen:?} point moved to 0,0: {:?}",
+            r.app.sk.pts
+        );
+    }
+    // Tab alone keeps its existing behaviour: the next segment's length and angle.
+    let mut t = Rig::new();
+    t.sketch(Pen::Line);
+    t.click(t.on_plane([3.0, 4.0]));
+    t.key(egui::Key::Tab);
+    assert_eq!(t.app.sk.dimension.as_ref().map(|d| d.labels()), Some(["Length", "Angle"]));
+}
+
+#[test]
 fn solid_sketch_circle_diameter_input_is_preserved_by_confirmation_and_extrusion() {
     let mut r = Rig::new();
     r.plain_sketch(Pen::Circle);
