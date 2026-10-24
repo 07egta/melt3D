@@ -1,6 +1,6 @@
 # EASY layout
 
-The EASY layout is a simpler way to work, closer to Rhino or Plasticity. It puts the commands most people use in one place. Nothing is removed: every command is still on the other tabs, in the command search, and in the command line.
+The EASY layout is a simpler way to work. It puts the commands most people use in one place. Nothing is removed: every command is still on the other tabs, in the command search, and in the command line.
 
 ## The EASY tab
 
@@ -18,7 +18,7 @@ The first few commands in each panel get large buttons. Commands that are planne
 
 ## Search: F or S
 
-Press **F** (or **S**) to open the command search. It lists every command. Matching ignores case. It also knows the other names a command goes by: Rhino's command names and Japanese names. Examples from the alias table in `easy.rs`:
+Press **F** (or **S**) to open the command search. It lists every command. Matching ignores case. It also knows the other names a command goes by: other common English names and Japanese names. Examples from the alias table in `easy.rs`:
 
 | You type | Command |
 |---|---|

@@ -8,6 +8,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::model::Scene;
+use crate::pattern::Xform;
 
 pub const MAX_FRAMES: u32 = 2400;
 pub const MAX_KEYS: usize = 600;
@@ -64,6 +65,23 @@ pub struct Track {
     pub keys: Vec<(u32, Vals)>,
 }
 
+/// The keys of one linked copy (found by its group `uid`): where it stands (#126).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct LinkTrack {
+    pub uid: u32,
+    pub keys: Vec<(u32, Xform)>,
+}
+
+fn lerp_xform(a: &Xform, b: &Xform, t: f32) -> Xform {
+    let l = |x: f32, y: f32| x + (y - x) * t;
+    let v3 = |x: [f32; 3], y: [f32; 3]| [l(x[0], y[0]), l(x[1], y[1]), l(x[2], y[2])];
+    Xform {
+        pos: v3(a.pos, b.pos),
+        rot: [turn(a.rot[0], b.rot[0], t), turn(a.rot[1], b.rot[1], t), turn(a.rot[2], b.rot[2], t)],
+        scale: l(a.scale, b.scale),
+    }
+}
+
 /// How the whole scene melts at a key.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct MeltKey {
@@ -80,12 +98,15 @@ pub struct Anim {
     /// Hold every pose for a few frames (stop-motion look).
     pub clay: bool,
     pub tracks: Vec<Track>,
+    /// Where linked copies stand at each pose (a linked copy has no shapes of its own).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub links: Vec<LinkTrack>,
     pub melt: Vec<(u32, MeltKey)>,
 }
 
 impl Default for Anim {
     fn default() -> Self {
-        Anim { fps: 24, length: 48, clay: false, tracks: Vec::new(), melt: Vec::new() }
+        Anim { fps: 24, length: 48, clay: false, tracks: Vec::new(), links: Vec::new(), melt: Vec::new() }
     }
 }
 
@@ -95,12 +116,12 @@ fn fin(v: f32, lo: f32, hi: f32, d: f32) -> f32 {
 
 impl Anim {
     pub fn is_empty(&self) -> bool {
-        self.tracks.is_empty() && self.melt.is_empty()
+        self.tracks.is_empty() && self.links.is_empty() && self.melt.is_empty()
     }
 
     /// Frames that hold a pose, in order.
     pub fn key_frames(&self) -> Vec<u32> {
-        let mut f: Vec<u32> = self.tracks.iter().flat_map(|t| t.keys.iter().map(|k| k.0)).chain(self.melt.iter().map(|k| k.0)).collect();
+        let mut f: Vec<u32> = self.tracks.iter().flat_map(|t| t.keys.iter().map(|k| k.0)).chain(self.links.iter().flat_map(|t| t.keys.iter().map(|k| k.0))).chain(self.melt.iter().map(|k| k.0)).collect();
         f.sort_unstable();
         f.dedup();
         f
@@ -132,6 +153,21 @@ impl Anim {
                 put(&mut t.keys, frame, v);
             }
         }
+        let linked: Vec<usize> = scene.groups.iter().enumerate().filter(|(_, g)| g.is_linked()).map(|(i, _)| i).collect();
+        for gi in linked {
+            let reserved = reserved_uid.max(self.links.iter().map(|t| t.uid).max().unwrap_or(0));
+            let Some(uid) = scene.ensure_group_uid_above(gi, reserved) else { continue };
+            let Some(xform) = scene.groups.get(gi).map(|g| g.xform) else { continue };
+            if self.links.iter().all(|t| t.uid != uid) {
+                if self.links.len() >= MAX_TRACKS {
+                    continue;
+                }
+                self.links.push(LinkTrack { uid, keys: Vec::new() });
+            }
+            if let Some(t) = self.links.iter_mut().find(|t| t.uid == uid) {
+                put(&mut t.keys, frame, xform);
+            }
+        }
         put(&mut self.melt, frame, MeltKey { amount: scene.melt.amount, drip: scene.melt.drip, ripple: scene.melt.ripple });
         if skipped > 0 {
             return Err(format!("Only {MAX_TRACKS} shapes can be animated; {skipped} shape(s) were not recorded"));
@@ -145,12 +181,17 @@ impl Anim {
             t.keys.retain(|k| k.0 != frame);
         }
         self.tracks.retain(|t| !t.keys.is_empty());
+        for t in &mut self.links {
+            t.keys.retain(|k| k.0 != frame);
+        }
+        self.links.retain(|t| !t.keys.is_empty());
         self.melt.retain(|k| k.0 != frame);
     }
 
     /// Forget every pose.
     pub fn clear(&mut self) {
         self.tracks.clear();
+        self.links.clear();
         self.melt.clear();
     }
 
@@ -182,6 +223,15 @@ impl Anim {
                 s.round = v.round;
             }
         }
+        for g in &mut scene.groups {
+            if g.uid == 0 || !g.is_linked() {
+                continue;
+            }
+            let Some(track) = self.links.iter().find(|tr| tr.uid == g.uid) else { continue };
+            if let Some(x) = sample(&track.keys, t, lerp_xform) {
+                g.xform = x;
+            }
+        }
         if let Some(m) = sample(&self.melt, t, |a: &MeltKey, b: &MeltKey, k| MeltKey {
             amount: a.amount + (b.amount - a.amount) * k,
             drip: a.drip + (b.drip - a.drip) * k,
@@ -200,6 +250,7 @@ impl Anim {
         let moved = |a: &Scene, b: &Scene| {
             a.melt != b.melt
                 || a.groups.iter().flat_map(|g| &g.shapes).zip(b.groups.iter().flat_map(|g| &g.shapes)).any(|(x, y)| Vals::of(x) != Vals::of(y))
+                || a.groups.iter().zip(&b.groups).any(|(x, y)| x.xform != y.xform)
                 || a.groups.iter().map(|g| g.shapes.len()).sum::<usize>() != b.groups.iter().map(|g| g.shapes.len()).sum::<usize>()
         };
         moved(scene, &posed)
@@ -235,6 +286,17 @@ impl Anim {
             t.keys.sort_by_key(|k| k.0);
             t.keys.dedup_by_key(|k| k.0);
         }
+        self.links.truncate(MAX_TRACKS);
+        for t in &mut self.links {
+            t.keys.truncate(MAX_KEYS);
+            for (f, x) in &mut t.keys {
+                *f = (*f).min(last);
+                x.sanitize();
+            }
+            t.keys.sort_by_key(|k| k.0);
+            t.keys.dedup_by_key(|k| k.0);
+        }
+        self.links.retain(|t| !t.keys.is_empty());
         self.melt.truncate(MAX_KEYS);
         for (f, m) in &mut self.melt {
             *f = (*f).min(last);
@@ -282,6 +344,37 @@ mod tests {
         assert!((turn(10.0, 350.0, 0.5) - 0.0).abs() < 1e-3);
         assert!((turn(0.0, 720.0, 0.5) - 360.0).abs() < 1e-3);
         assert!((turn(0.0, 90.0, 0.5) - 45.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn a_linked_copy_moves_with_its_poses() {
+        use crate::model::Group;
+        let mut sc = Scene::default();
+        let mut src = Group::new("src");
+        src.uid = 0;
+        sc.groups.push(src);
+        let uid = sc.ensure_group_uid(0).expect("uid");
+        let mut copy = Group::new("copy");
+        copy.instance_of = Some(uid);
+        sc.groups.push(copy);
+        let at = sc.groups.len() - 1;
+        let mut a = Anim::default();
+        a.capture(&mut sc, 0).expect("pose 0");
+        sc.groups[at].xform.pos = [100.0, 0.0, 0.0];
+        sc.groups[at].xform.rot = [0.0, 0.0, 90.0];
+        assert!(a.differs(&sc, 0), "moving a linked copy is an edit (#126)");
+        a.capture(&mut sc, 10).expect("pose 10");
+        assert_eq!(a.key_frames(), [0, 10]);
+        a.apply(&mut sc, 0);
+        assert_eq!(sc.groups[at].xform.pos, [0.0; 3]);
+        a.apply(&mut sc, 5);
+        assert!((sc.groups[at].xform.pos[0] - 50.0).abs() < 1e-3 && (sc.groups[at].xform.rot[2] - 45.0).abs() < 1e-3);
+        a.apply(&mut sc, 10);
+        assert_eq!(sc.groups[at].xform.pos, [100.0, 0.0, 0.0]);
+        let back: Anim = serde_json::from_str(&serde_json::to_string(&a).expect("save")).expect("load");
+        assert_eq!(back, a);
+        a.remove(10);
+        assert_eq!(a.key_frames(), [0]);
     }
 
     #[test]

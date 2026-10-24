@@ -71,7 +71,7 @@ impl App {
     /// right-click use this, so invalid numeric text can never confirm stale geometry.
     pub(crate) fn sketch_confirm(&mut self, ctx: &egui::Context) -> bool {
         if let Some(d) = &mut self.sk.dimension {
-            let profile = if d.top_profile { &self.sk.profile2 } else { &self.sk.profile };
+            let profile = crate::sketch_dimensions::dim_profile(d, &mut self.sk.profile, &mut self.sk.profile2, &mut self.sk.holes);
             if !d.accept(&self.sk.pts, profile) {
                 self.sk.msg = d.error.clone().unwrap_or_else(|| "Check the dimensions before finishing".into());
                 return false;
