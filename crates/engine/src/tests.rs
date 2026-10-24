@@ -4063,3 +4063,23 @@ fn failed_face_revolve_keeps_the_active_sketch() {
     assert_eq!(s.active_sketch, active, "the sketch stays open");
     assert_eq!(s.doc.features.len(), features, "nothing was added");
 }
+
+/// #251: an explicit axis or axis origin that is not a valid point is an input error, not the
+/// default axis.
+#[test]
+fn invalid_explicit_axes_are_refused() {
+    let mut s = Session::default();
+    run(&mut s, "solid.box", json!({"length": 10, "width": 10, "height": 10, "body_name": "Cube"}));
+    let features = s.doc.features.len();
+    let r = s.execute("solid.move", &json!({"bodies": ["Cube"], "axis": [1000000000, 0, 0], "angle": "90 deg"}));
+    assert!(r.is_err(), "solid.move with a huge axis: {r:?}");
+    let r = s.execute("solid.move", &json!({"bodies": ["Cube"], "axis": "up", "angle": "90 deg"}));
+    assert!(r.is_err(), "solid.move with a text axis: {r:?}");
+    assert_eq!(s.doc.features.len(), features, "nothing was added");
+    run(&mut s, "sketch.create", json!({"plane": "XY"}));
+    run(&mut s, "sketch.rectangle.two_point", json!({"p0": [20, 0], "p1": [30, 10]}));
+    let before = s.doc.features.len();
+    let r = s.execute("solid.revolve", &json!({"axis": {"origin": [10, 20], "dir": [0, 1, 0]}}));
+    assert!(r.as_ref().is_err_and(|e| e.to_string().contains("origin")), "solid.revolve with a 2D origin: {r:?}");
+    assert_eq!(s.doc.features.len(), before);
+}
