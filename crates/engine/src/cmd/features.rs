@@ -1279,7 +1279,13 @@ fn combine(s: &mut Session, p: &Value) -> Result<Value> {
     // New Component: the result goes into a component of its own.
     if bool_(p, "new_component").unwrap_or(false) {
         let name = str_(p, "component_name").map(str::to_string).unwrap_or_else(|| format!("{target} Combined"));
+        // The component is part of this Combine: its own undo step would leave the Combine
+        // without a component behind it, so only the Combine's step stays (#249).
+        let top = s.undo.last().map(|u| std::sync::Arc::as_ptr(&u.doc));
         let c = s.execute("component.create", &json!({"name": name, "activate": false}))?;
+        if s.undo.last().map(|u| std::sync::Arc::as_ptr(&u.doc)) != top {
+            s.undo.pop();
+        }
         super::component::transfer_constructor_result(s, &json!({"bodies": [target], "component": c["component"]}))?;
         out["component"] = c["component"].clone();
     }
