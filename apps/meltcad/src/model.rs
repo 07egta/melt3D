@@ -46,7 +46,7 @@ pub enum Kind {
     Revolve,
     /// `outline` at the bottom blends into `outline2` at the top over `size[0]` mm.
     Loft,
-    /// A tube through the `path` nodes (x, y, z, radius), like Womp's curve tool.
+    /// A tube through the `path` nodes (x, y, z, radius).
     Curve,
     /// `outline` pulled along `path`.
     Sweep,

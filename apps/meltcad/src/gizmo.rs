@@ -1,4 +1,4 @@
-//! The handles on the selected thing. The default gizmo is one tool that does it all, like Womp3D:
+//! The handles on the selected thing. The default gizmo is one tool that does it all:
 //! arrows to move along an axis, small squares to move in a plane, curved arrows to rotate, the
 //! middle dot to resize everything at once, and six small cubes on the faces of the box that stretch
 //! the thing along that one direction only (the opposite face stays put). The single tools
