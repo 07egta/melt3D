@@ -1212,23 +1212,33 @@ impl App {
         let mut targets = self.sel_targets();
         let mut seen: std::collections::HashSet<(usize, usize)> = targets.iter().copied().collect();
         let mut linked = std::collections::HashSet::new();
+        // Which groups are moving: a whole selected subtree and the groups of selected shapes.
+        // A linked copy whose source is among them already follows it (#261).
+        let mut selected_groups: std::collections::HashSet<usize> = std::collections::HashSet::new();
         // A group selection includes its descendants. The viewport's ordinary
         // targets helper only lists its own shapes; applying that here used to
         // leave nested children behind when nudging their parent.
         for pick in self.picks() {
-            if let Pick::Group(g) = pick {
-                for gi in g..self.scene.subtree_end(g) {
-                    if let Some(group) = self.scene.groups.get(gi) {
-                        if group.is_linked() {
-                            linked.insert(gi);
-                        }
-                        for si in 0..group.shapes.len() {
-                            if seen.insert((gi, si)) {
-                                targets.push((gi, si));
+            match pick {
+                Pick::Group(g) => {
+                    for gi in g..self.scene.subtree_end(g) {
+                        selected_groups.insert(gi);
+                        if let Some(group) = self.scene.groups.get(gi) {
+                            if group.is_linked() {
+                                linked.insert(gi);
+                            }
+                            for si in 0..group.shapes.len() {
+                                if seen.insert((gi, si)) {
+                                    targets.push((gi, si));
+                                }
                             }
                         }
                     }
                 }
+                Pick::Shape(g, _) => {
+                    selected_groups.insert(g);
+                }
+                _ => {}
             }
         }
         for (g, s) in targets {
@@ -1239,6 +1249,11 @@ impl App {
         // Linked copies have no shapes; move each transform once, including
         // links nested in selected parents or selected along with an ancestor.
         for g in linked {
+            // The source is moving too, so the copy already travels with it; adding to the
+            // link's own transform as well would move it twice.
+            if crate::pattern::link_source(&self.scene, g).is_some_and(|src| selected_groups.contains(&src)) {
+                continue;
+            }
             if let Some(gr) = self.scene.groups.get_mut(g) {
                 gr.xform.pos = [gr.xform.pos[0] + d[0], gr.xform.pos[1] + d[1], gr.xform.pos[2] + d[2]];
                 gr.xform.sanitize();
@@ -3651,13 +3666,37 @@ mod title_tests {
         app.nudge([10.0, 0.0, 0.0]);
         assert_eq!(app.scene.groups[0].shapes[0].pos[0], 10.0);
         assert_eq!(app.scene.groups[1].shapes[0].pos[0], 50.0);
-        assert_eq!(app.scene.groups[2].xform.pos[0], 10.0);
+        assert_eq!(app.scene.groups[2].xform.pos[0], 0.0, "the copy follows its moving source, not twice");
         // The same child also selected on its own must not move twice.
         app.multi_for = app.sel;
         app.multi.push(Pick::Shape(1, 0));
         app.nudge([10.0, 0.0, 0.0]);
         assert_eq!(app.scene.groups[1].shapes[0].pos[0], 60.0);
-        assert_eq!(app.scene.groups[2].xform.pos[0], 20.0);
+        assert_eq!(app.scene.groups[2].xform.pos[0], 0.0);
+    }
+
+    #[test]
+    fn moving_a_parent_with_a_linked_copy_does_not_double_move_the_copy() {
+        use crate::model::{Group, Kind, Material, Pick, Shape};
+        let mut app = super::App::new(true, None);
+        app.scene.groups.clear();
+        app.scene.groups.push(Group::new("Parent"));
+        let mut source = Group::new("Source");
+        source.depth = 1;
+        source.shapes.push(Shape::new(Kind::Box, [0.0, 0.0, 10.0], Material::default()));
+        app.scene.groups.push(source);
+        let uid = app.scene.ensure_group_uid(1).expect("source uid");
+        let mut link = Group::new("Copy");
+        link.depth = 1;
+        link.instance_of = Some(uid);
+        link.xform.pos = [30.0, 0.0, 0.0];
+        app.scene.groups.push(link);
+        // The copy stands 30 mm to the right of the source; moving the parent 10 mm must take it
+        // 10 mm, not 20 (#261).
+        app.sel = Some(Pick::Group(0));
+        app.nudge([10.0, 0.0, 0.0]);
+        assert_eq!(app.scene.groups[1].shapes[0].pos[0], 10.0);
+        assert_eq!(app.scene.groups[2].xform.pos[0], 30.0, "the copy keeps its offset and follows once");
     }
 
     #[test]
