@@ -4083,3 +4083,21 @@ fn invalid_explicit_axes_are_refused() {
     assert!(r.as_ref().is_err_and(|e| e.to_string().contains("origin")), "solid.revolve with a 2D origin: {r:?}");
     assert_eq!(s.doc.features.len(), before);
 }
+
+/// #256: a profile or edge index too large for a 32-bit `usize` is refused, never wrapped to 0
+/// (on wasm32 `4294967296 as usize` was profile 0 / edge 0).
+#[test]
+fn huge_profile_and_edge_indices_are_refused() {
+    let mut s = Session::default();
+    run(&mut s, "solid.box", json!({"length": 10, "width": 10, "height": 10, "body_name": "Cube"}));
+    run(&mut s, "sketch.create", json!({"plane": "XY"}));
+    run(&mut s, "sketch.rectangle.two_point", json!({"p0": [20, 0], "p1": [30, 10]}));
+    let features = s.doc.features.len();
+    for big in [json!(4294967296u64), json!([4294967296u64]), json!(u64::MAX)] {
+        let r = s.execute("solid.extrude", &json!({"profiles": big, "distance": 5}));
+        assert!(r.is_err(), "extrude profiles {big}: {r:?}");
+    }
+    let r = s.execute("solid.fillet", &json!({"edges": [{"body": "Cube", "index": 4294967296u64}], "radius": 1}));
+    assert!(r.is_err(), "fillet edge index: {r:?}");
+    assert_eq!(s.doc.features.len(), features, "nothing was added");
+}
