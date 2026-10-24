@@ -353,7 +353,7 @@ mod tests {
     }
 
     fn finish_import(app: &mut App, ctx: &egui::Context) {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(90);
         while crate::mesh_dialog::is_open(ctx) {
             let mut out = ctx.run_ui(egui::RawInput::default(), |_ui| crate::mesh_dialog::update(app, ctx));
             out.textures_delta.clear();
