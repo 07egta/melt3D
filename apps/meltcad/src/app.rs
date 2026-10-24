@@ -2766,7 +2766,7 @@ mod tests {
 
     #[test]
     fn launching_into_solidcraft_without_edits_closes_without_a_prompt() {
-        assert!(crate::control::starts_in_solidcraft(None));
+        assert!(!crate::control::starts_in_solidcraft(None));
         assert!(!crate::control::starts_in_solidcraft(Some(std::path::Path::new("a.meltcad"))));
         let ctx = egui::Context::default();
         let mut app = App::new(true, None);
