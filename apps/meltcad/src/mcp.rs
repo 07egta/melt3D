@@ -181,7 +181,14 @@ pub fn cli(args: &[std::ffi::OsString]) -> Option<bool> {
     if !args.iter().any(|a| a.to_str() == Some("--mcp")) {
         return None;
     }
-    let mut backend = match crate::control::port_arg(args) {
+    let port = match crate::control::port_arg(args) {
+        Ok(port) => port,
+        Err(e) => {
+            eprintln!("meltcad: {e}");
+            return Some(false);
+        }
+    };
+    let mut backend = match port {
         None => Backend::Local(Box::new(Scene { groups: Vec::new(), ..Scene::default() })),
         Some(port) => {
             let token = std::env::var("MELT3D_CONTROL_TOKEN")
