@@ -8,7 +8,7 @@ use egui::{Color32, Painter, PointerButton, Pos2, Rect, Stroke, Ui};
 use crate::app::App;
 use crate::gizmo;
 use crate::model::Pick;
-use crate::sdf::{Prepared, add, mul};
+use crate::sdf::{Prepared, add, mul, sub};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Marquee {
@@ -57,6 +57,52 @@ fn linked_box(app: &App, rect: Rect, g: usize) -> Option<(Rect, bool)> {
     screen_rect(app, rect, &world)
 }
 
+/// Does the shape itself (not just the box around it) show inside `area`? Rays are sent through
+/// a grid of points of the part of `area` that is over the shape's box and marched along its
+/// distance field, so a torus' hole or a notch is not "touched".
+fn shape_shows_in(app: &App, rect: Rect, sh: &crate::model::Shape, b: Rect, area: Rect) -> bool {
+    let region = area.intersect(b);
+    if region.width() < 0.0 || region.height() < 0.0 {
+        return false;
+    }
+    let prep = Prepared::new(sh);
+    let ext = gizmo::half_extents(sh);
+    let reach = 2.0 * (ext[0] * ext[0] + ext[1] * ext[1] + ext[2] * ext[2]).sqrt() + 1.0;
+    let eye = app.cam.eye();
+    let far = {
+        let d = sub(sh.pos, eye);
+        (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt() + reach
+    };
+    // about one ray per 3 px, at most 24 x 24; a tiny box still gets its middle
+    let cols = ((region.width() / 3.0).ceil() as usize).clamp(1, 24);
+    let rows = ((region.height() / 3.0).ceil() as usize).clamp(1, 24);
+    let eps = (reach * 1e-3).max(1e-3);
+    for j in 0..rows {
+        for i in 0..cols {
+            let at = Pos2::new(
+                region.min.x + region.width() * (i as f32 + 0.5) / cols as f32,
+                region.min.y + region.height() * (j as f32 + 0.5) / rows as f32,
+            );
+            let (o, d) = app.cam.ray_at(rect, at);
+            let mut t = 0.0f32;
+            for _ in 0..96 {
+                let dist = prep.distance(add(o, mul(d, t)));
+                if !dist.is_finite() {
+                    break;
+                }
+                if dist < eps {
+                    return true;
+                }
+                t += dist.max(eps * 0.5);
+                if t > far + reach {
+                    break;
+                }
+            }
+        }
+    }
+    false
+}
+
 /// The visible shapes that the box picks.
 pub fn pick_in_box(app: &App, rect: Rect, area: Rect, mode: Marquee) -> Vec<(usize, usize)> {
     let mut out = Vec::new();
@@ -83,7 +129,9 @@ pub fn pick_in_box(app: &App, rect: Rect, area: Rect, mode: Marquee) -> Vec<(usi
             let Some((b, all)) = screen_box(app, rect, g, s) else { continue };
             let hit = match mode {
                 Marquee::Inside => all && area.contains_rect(b),
-                Marquee::Touching => area.intersects(b),
+                // the box must touch the shape's own picture; with a corner behind the camera
+                // the box is only a guess, so it stays the answer
+                Marquee::Touching => area.intersects(b) && (!all || shape_shows_in(app, rect, sh, b, area)),
             };
             if hit {
                 out.push((g, s));
@@ -189,6 +237,26 @@ mod tests {
         // a box far from everything picks nothing
         let far = Rect::from_min_size(pos2(-500.0, -500.0), vec2(10.0, 10.0));
         assert!(pick_in_box(&app, rect, far, Marquee::Touching).is_empty());
+    }
+
+    /// #162: a box inside a torus' hole does not touch it; one over the ring does.
+    #[test]
+    fn touching_ignores_the_hole_of_a_torus() {
+        let mut app = App::new(true, None);
+        let ctx = egui::Context::default();
+        app.add_shape(&ctx, Kind::Torus);
+        let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0));
+        app.cam.pitch = std::f32::consts::FRAC_PI_2 - 0.001;
+        // the starting scene holds a sphere in the middle of the torus' hole: keep the torus only
+        for g in &mut app.scene.groups {
+            g.shapes.retain(|s| s.kind == Kind::Torus);
+        }
+        let pos = app.scene.groups.iter().flat_map(|g| g.shapes.iter()).next().map(|s| s.pos).unwrap();
+        let c = app.cam.project(rect, pos).unwrap();
+        let hole = Rect::from_center_size(c, vec2(3.0, 3.0));
+        assert!(pick_in_box(&app, rect, hole, Marquee::Touching).is_empty(), "the hole is empty space");
+        let big = Rect::from_center_size(c, vec2(700.0, 500.0));
+        assert!(!pick_in_box(&app, rect, big, Marquee::Touching).is_empty());
     }
 
     #[test]
