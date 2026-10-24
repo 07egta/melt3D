@@ -94,6 +94,26 @@ impl Dimensions {
         })
     }
 
+    /// X/Y of one point, whatever the pen. Shift+Tab uses this so a Line's last point can be
+    /// placed by coordinate instead of only by the next segment's length and angle (#222).
+    pub fn for_point(points: &[[f32; 2]], index: usize) -> Option<Self> {
+        let last = *points.get(index)?;
+        let fields = [number(last[0]), number(last[1])];
+        Some(Self {
+            target: Target::Point { index },
+            before_fields: fields.clone(),
+            fields,
+            selected: 0,
+            editing: true,
+            needs_focus: true,
+            error: None,
+            top_profile: false,
+            provisional: false,
+            before_profile: Vec::new(),
+            before_point: Some(last),
+        })
+    }
+
     /// Length and angle of the segment that ends at the last point (a polygon or a line).
     pub fn for_new_segment(points: &[[f32; 2]]) -> Option<Self> {
         let index = points.len().checked_sub(1)?;
