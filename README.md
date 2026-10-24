@@ -1,144 +1,48 @@
-<p align="center">
-  <img src="assets/icons/app/linux/exports/hicolor/256x256/apps/ai.storyteller.solidcraft.png" width="96" height="96" alt="SolidCraft" />
-</p>
-
-<h1 align="center">SolidCraft</h1>
+<h1 align="center">Melt 3D</h1>
 
 <p align="center">
-  <strong>An open-source parametric 3D CAD application built in pure Rust.</strong><br />
-  Sketch, constrain, and build solids with a parametric feature timeline. Change a dimension
-  and watch your model rebuild. Run it on your desktop, in your browser, or let AI agents
-  model through the built-in MCP server.
+  <strong>やわらかい形を かんたんに作れる 3D モデリングアプリ</strong><br />
+  An easy 3D modeller where shapes melt into each other, with CAD-style dimensions and a full
+  precise-solid mode. Written in Rust. Free and open source (MIT OR Apache-2.0).
 </p>
 
-<div align="center">
+## ダウンロード / Download
 
-[![Download for Windows][badge-windows]][windows-msi]
-[![Download for macOS][badge-macos]][macos-dmg]
-[![Download for Linux][badge-linux]][linux-appimage]
-[![Get it from the Snap Store][badge-snap]][snap-store]
-[![Try it in your browser][badge-web]][web-app]
+[Releases](https://github.com/07egta/melt3D/releases/latest) から、自分のパソコン用のファイルをダウンロードします。
+Download the file for your computer from [Releases](https://github.com/07egta/melt3D/releases/latest).
+Windows の「PCが保護されました」は、署名していない個人製作のアプリのときに出ます。信用できる場合だけ「詳細情報」→「実行」。
 
-</div>
+## できること / What it does
 
-<p align="center">
-  <a href="https://solidcraft.io">Website</a> ·
-  <a href="https://solidcraft.io/download">Download</a> ·
-  <a href="https://solidcraft.io/app">Try it in the browser</a> ·
-  <a href="https://docs.solidcraft.io/">Documentation</a> ·
-  <a href="https://www.blacksmith.sh"><img src="https://img.shields.io/badge/CI-Blacksmith-000000?logo=githubactions&logoColor=white" alt="CI powered by Blacksmith" /></a>
-  <a href="https://discord.gg/FtU4NQNVDH">Discord</a> ·
-  <a href="https://github.com/bherbruck/solidcore">SolidCore</a>
-</p>
+- 形どうしが とけて くっつく（Melt）、小さい形で くり抜く
+- 絵をかいて押し出す（スケッチ → 押し出し）、曲線とパイプ、アニメーション
+- 色・つや（ざいしつ）、STL / 3MF / OBJ / PLY / GLB への書き出し（3D プリント向けの点検つき）
+- **SolidCraft モード**: 拘束つきスケッチとパラメトリックな履歴を持つ精密な立体作りを、そのまま使えます。作った立体は Melt に取り込めます
 
-<p align="center">
-  <a href="https://github.com/tangency-labs/solidcraft/actions/workflows/ci.yml?query=branch%3Amain"><img src="https://github.com/tangency-labs/solidcraft/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI" /></a>
-  <a href="https://github.com/tangency-labs/solidcraft/releases/latest"><img src="https://img.shields.io/github/v/release/tangency-labs/solidcraft?label=release" alt="Latest release" /></a>
-  <a href="https://github.com/tangency-labs/solidcraft/releases"><img src="https://img.shields.io/github/downloads/tangency-labs/solidcraft/total?label=downloads" alt="Downloads" /></a>
-  <a href="LICENSE"><img src="https://img.shields.io/github/license/tangency-labs/solidcraft" alt="Licence" /></a>
-  <a href="https://discord.gg/FtU4NQNVDH"><img src="https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white" alt="Discord" /></a>
-  <a href="https://remade.wiki/projects/solidcraft/"><img src="https://remade.wiki/badges/listed-on-remade-classic.svg" alt="Listed on Remade" /></a>
-  <a href="https://github.com/tangency-labs/solidcraft/stargazers"><img src="https://img.shields.io/github/stars/tangency-labs/solidcraft?style=flat" alt="Stars" /></a>
-</p>
+操作の説明は [apps/meltcad/README.md](apps/meltcad/README.md)。
 
-<p align="center">
-  <a href="https://trendshift.io/repositories/296178?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-296178" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/trendshift/repositories/296178/daily" alt="tangency-labs%2Fsolidcraft | Trendshift" width="250" height="55"/></a>
-  <a href="https://trendshift.io/repositories/296178?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-296178" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/trendshift/repositories/296178/daily?language=Rust" alt="tangency-labs%2Fsolidcraft | Trendshift (Rust)" width="250" height="55"/></a>
-</p>
+## 土台にしているもの / Built on SolidCraft
 
-![SolidCraft 0.8: model a Raspberry Pi 4 case from an empty design: a sketch dimensioned with parameters, extrude, fillets and shell, a rim rounded in one pick, standoffs patterned on the board's mounting holes, port cut-outs, vent slots, "Pi 4" engraved in a font, a PETG material with its mass in Properties, and a height change in Parameters](docs/screenshots/demo-0.8.gif)
+Melt 3D は、オープンソースの CAD **SolidCraft**（<https://github.com/tangency-labs/solidcraft>、
+MIT OR Apache-2.0）のソースコードを取り込み、その上に作った別のプログラムです。
+`crates/`、`vendor/`、`xtask/` などは SolidCraft のコードで、Melt 3D 側の追加は主に `apps/meltcad/` にあります。
+SolidCraft の作者や Melt 3D の利用者以外の会社・団体とは**無関係**で、公式のものでも、承認を受けたものでもありません。
+SolidCraft の README は [docs/SOLIDCRAFT-UPSTREAM-README.md](docs/SOLIDCRAFT-UPSTREAM-README.md) に残してあります。
 
-*A Raspberry Pi 4 case from an empty design: a sketch dimensioned with the board's parameters, extrude, fillet, shell, the rim rounded in one pick, an M2.5 standoff patterned on the 58 × 49 mm hole rectangle, port cut-outs, vent slots, "Pi 4" engraved in DejaVu Sans Bold and a PETG material defined in the design, with its mass in Properties, then height 24 → 32 mm in Parameters and it all rebuilds. 9× playback. [Full video](https://github.com/tangency-labs/solidcraft/raw/refs/heads/main/docs/screenshots/demo-0.8.mp4), recorded with the [demo script](examples/demo/record_ui.sh).*
+## ライセンス / Licence
 
-## Download
+[MIT](LICENSE-MIT) または [Apache-2.0](LICENSE-APACHE) のどちらかを選べます。
+著作権表示は [NOTICE](NOTICE) と [LICENSE-MIT](LICENSE-MIT)、使っている画像・アイコンは [ATTRIBUTION.md](ATTRIBUTION.md)、
+使っているライブラリのライセンスは [THIRD-PARTY-LICENSES.txt](THIRD-PARTY-LICENSES.txt) に書いてあります。
+**無保証**です（作品の消失や破損について、作者は責任を負いません）。大切なデータは、こまめに別の場所にも保存してください。
 
-- **Windows:** the [installer][windows-msi], or `winget install bherbruck.SolidCraft`.
-- **macOS:** the [disk image][macos-dmg] (Apple silicon and Intel).
-- **Linux:** the [AppImage][linux-appimage], or `sudo snap install solidcraft` ([Snap Store][snap-store]).
-- **Web:** [try it in your browser][web-app], no install.
+## 他社製品との関係 / Independence and trademarks
 
-ARM64 and 32-bit builds, portable zip, .deb, .rpm, Flatpak and the other packages are on the
-[downloads page](docs/downloads.md). The downloads aren't signed yet: on Windows choose
-**More info**, then **Run anyway** in SmartScreen; on macOS right-click SolidCraft and choose **Open**
-the first time. On SolidCraft 0.11 to 0.14, download once by hand; see
-[updating](https://docs.solidcraft.io/guide/updates.html#updating-from-011-to-014).
+- Melt 3D は、商用 CAD や 3D ソフトのコード・アイコン・画像・文章・テンプレートを使っていません。アイコンはコードで描くか、独自に作ったものです。
+- 他の製品名（FreeCAD、Rhino、STEP など）は、読み込みや書き出しができるファイル形式を示すためだけに書いてあり、
+  それぞれの持ち主の商標です。その会社とは関係がありません。
+- This project is independent of, and not affiliated with or endorsed by, any CAD vendor or the SolidCraft authors.
+  All product names are trademarks of their owners and are used only to name file formats.
+- 問題に気づいたら（権利に関するものも）、[Issues](https://github.com/07egta/melt3D/issues) に書いてください。すぐ直します。
 
-## What works
-
-Early but usable for simple parts: 75 of 76 public reference parts match their analytic or
-FreeCAD-computed volume, area, centre of mass and bounding box ([oracle](docs/oracle.md)); the
-other is a tracked bug.
-
-- **Sketches and constraints:** lines, arcs, splines, text and more, solved by our own constraint solver, with parameter-driven dimensions.
-- **Features:** extrude, revolve, sweep, loft, fillet, chamfer, shell, draft, holes, threads, patterns, mirror, split and combine on an editable parametric timeline.
-- **Parameters and configurations** with unit-aware expressions.
-- **Assemblies** with joints, motion studies, contact sets, interference and mass properties.
-- **Sheet metal** with flanges, hems, fold/unfold and flat patterns, and plastic enclosure features.
-- **Files:** STEP, IGES, 3MF, STL, OBJ and glTF in and out where supported, URDF export, `.solidcraft` designs.
-- **Desktop app, browser app, headless CLI and MCP server**, all running the same commands.
-
-The full list is in [docs/capabilities.md](docs/capabilities.md) and [docs/features.md](docs/features.md);
-status and plans are in [ROADMAP.md](ROADMAP.md). See also [what people built](docs/showcase.md),
-[3D mouse support](docs/3d-mouse.md) and the [architecture](docs/architecture.md).
-
-## Build from source
-
-```sh
-cargo run --release -p solidcraft -- --sample      # desktop app with a sample part
-cargo run --release -p solidcraft-cli -- commands  # the command registry
-cargo run --release -p solidcraft-cli -- run examples/bracket.json --out bracket.step
-cargo xtask ci                                     # fmt, clippy, tests, icons, assets, layers, wasm
-```
-
-More commands, the Windows cross-build and the browser build are in [docs/building.md](docs/building.md).
-
-## AI agents (MCP)
-
-`solidcraft-cli mcp` is a [Model Context Protocol](https://modelcontextprotocol.io) server. Headless it
-runs its own design session, or with `--connect` it drives the running app so you can watch.
-Claude Code: `claude mcp add solidcraft -- solidcraft-cli mcp`. Tools, access rules and an
-example session: [docs/mcp.md](docs/mcp.md).
-
-## Scripts
-
-A script is a JSON list of the same commands the UI runs, executed with `solidcraft-cli run`.
-Format and example: [docs/scripts.md](docs/scripts.md). Pages can also be driven through the
-[browser command API](docs/browser-api.md).
-
-## Contributing
-
-Help is welcome. [CONTRIBUTING.md](CONTRIBUTING.md) covers how to build and test, the code map,
-the clean-room and licence rules, and where help is wanted most. Open work is in
-[GitHub issues](https://github.com/tangency-labs/solidcraft/issues); chat is on
-[Discord](https://discord.gg/FtU4NQNVDH).
-
-## Sponsors
-
-[![CI powered by Blacksmith](docs/sponsors/blacksmith-ci-powered.png)](https://www.blacksmith.sh)
-
-SolidCraft's continuous integration runs on [Blacksmith](https://www.blacksmith.sh), which
-sponsors its CI minutes.
-
-## Licence
-
-MIT OR Apache-2.0, at your option. Developed under the
-[clean-room contribution rules](AGENTS.md); third-party code and assets retain their
-documented licences and attribution.
-
-SolidCraft is independent. Behaviour is designed from public documentation, general CAD
-conventions and user feedback. Reference tests use analytic values and open-source tools.
-SolidCraft is not affiliated with, sponsored by or endorsed by Autodesk, Dassault Systèmes, PTC,
-Siemens or any other CAD vendor. Fusion, AutoCAD, Inventor, SolidWorks, Onshape, Creo, Blender and
-Tinkercad are trademarks of their respective owners, named only to describe compatibility
-(see [NOTICE](NOTICE)).
-
-[badge-windows]: https://img.shields.io/badge/Windows-Download-0078D6?style=for-the-badge&logo=data%3Aimage%2Fsvg%2Bxml%3Bbase64%2CPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0id2hpdGUiPjxwYXRoIGQ9Ik0yIDJoOS41djkuNUgyek0xMi41IDJIMjJ2OS41aC05LjV6TTIgMTIuNWg5LjVWMjJIMnpNMTIuNSAxMi41SDIyVjIyaC05LjV6Ii8%2BPC9zdmc%2B
-[badge-macos]: https://img.shields.io/badge/macOS-Download-333333?style=for-the-badge&logo=apple&logoColor=white
-[badge-linux]: https://img.shields.io/badge/Linux-AppImage-E95420?style=for-the-badge&logo=linux&logoColor=white
-[badge-snap]: https://img.shields.io/badge/Snap-Snap_Store-82BEA0?style=for-the-badge&logo=snapcraft&logoColor=white
-[badge-web]: https://img.shields.io/badge/Web-Try_in_browser-2EA44F?style=for-the-badge&logo=data%3Aimage%2Fsvg%2Bxml%3Bbase64%2CPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSJ3aGl0ZSIgc3Ryb2tlLXdpZHRoPSIyIj48Y2lyY2xlIGN4PSIxMiIgY3k9IjEyIiByPSIxMCIvPjxwYXRoIGQ9Ik0yIDEyaDIwTTEyIDJhMTUgMTUgMCAwIDEgMCAyME0xMiAyYTE1IDE1IDAgMCAwIDAgMjAiLz48L3N2Zz4%3D
-[windows-msi]: https://github.com/tangency-labs/solidcraft/releases/latest/download/solidcraft-windows-x64.msi
-[macos-dmg]: https://github.com/tangency-labs/solidcraft/releases/latest/download/solidcraft-macos-universal.dmg
-[linux-appimage]: https://github.com/tangency-labs/solidcraft/releases/latest/download/solidcraft-linux-x86_64.AppImage
-[snap-store]: https://snapcraft.io/solidcraft
-[web-app]: https://solidcraft.io/app
+*This is not legal advice.*
