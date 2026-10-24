@@ -101,17 +101,22 @@ pub fn mesh_body(positions: &[Vec3], triangles: &[[u32; 3]]) -> Result<Body> {
         if a == b || b == c || c == a {
             continue;
         }
+        // Corners in a line have no area and no normal: drop them too (#253).
+        let (Some(pa), Some(pb), Some(pc)) = (out.positions.get(a as usize), out.positions.get(b as usize), out.positions.get(c as usize)) else {
+            return Err(KernelError::Invalid("mesh triangle refers to a missing vertex".into()));
+        };
+        let normal = (*pb - *pa).cross(*pc - *pa);
+        let length = normal.len();
+        if !(length > 0.0 && length.is_finite()) {
+            continue;
+        }
         out.triangles.push([a, b, c]);
     }
     if out.triangles.is_empty() {
         return Err(KernelError::Invalid("mesh has no triangles".into()));
     }
-    unify_winding(&mut out);
-    if out.volume6() < 0.0 && is_closed(&out) {
-        for t in &mut out.triangles {
-            t.swap(1, 2);
-        }
-    }
+    let shells = unify_winding(&mut out);
+    orient_shells(&mut out, &shells);
     Ok(Body {
         solid: Arc::new(crate::body::Solid::new_unchecked(Vec::new())),
         size: out.span(),
@@ -133,8 +138,8 @@ pub fn mesh_body(positions: &[Vec3], triangles: &[[u32; 3]]) -> Result<Body> {
 
 /// Wind every connected piece one way: a triangle that runs a side in the same direction as
 /// its neighbour is turned over (files with stray inverted facets). Sides shared by more than
-/// two triangles are left alone.
-fn unify_winding(m: &mut TriMesh) {
+/// two triangles are left alone. Returns the pieces (edge-connected triangles).
+fn unify_winding(m: &mut TriMesh) -> Vec<Vec<usize>> {
     let mut sides: HashMap<(u32, u32), Vec<usize>> = HashMap::new();
     for (i, t) in m.triangles.iter().enumerate() {
         for (a, b) in [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
@@ -143,13 +148,16 @@ fn unify_winding(m: &mut TriMesh) {
     }
     let runs = |t: &[u32; 3], a: u32, b: u32| [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])].contains(&(a, b));
     let mut done = vec![false; m.triangles.len()];
+    let mut shells = Vec::new();
     for start in 0..m.triangles.len() {
         if done[start] {
             continue;
         }
         done[start] = true;
+        let mut shell = Vec::new();
         let mut stack = vec![start];
         while let Some(i) = stack.pop() {
+            shell.push(i);
             let Some(t) = m.triangles.get(i).copied() else { continue };
             for (a, b) in [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
                 let Some(list) = sides.get(&(a.min(b), a.max(b))) else { continue };
@@ -170,7 +178,175 @@ fn unify_winding(m: &mut TriMesh) {
                 }
             }
         }
+        shells.push(shell);
     }
+    shells
+}
+
+/// Most triangle-ray tests the shell nesting check may take before it leaves the rest of the
+/// mesh as [`unify_winding`] wound it.
+const NESTING_BUDGET: usize = 4_000_000;
+
+/// What orienting a shell needs to know about it.
+struct ShellInfo {
+    /// Signed volume ×6 (positive when wound outward).
+    volume6: f64,
+    /// Every side is shared by exactly two of its triangles, running opposite ways.
+    closed: bool,
+    bounds: solidcraft_geom::Aabb3,
+}
+
+fn shell_info(m: &TriMesh, tris: &[usize]) -> ShellInfo {
+    let mut volume6 = 0.0;
+    let mut bounds = solidcraft_geom::Aabb3::EMPTY;
+    let mut sides: HashMap<(u32, u32), i32> = HashMap::new();
+    for &i in tris {
+        let Some(t) = m.triangles.get(i) else { continue };
+        let (Some(a), Some(b), Some(c)) = (m.positions.get(t[0] as usize), m.positions.get(t[1] as usize), m.positions.get(t[2] as usize)) else {
+            continue;
+        };
+        volume6 += a.dot(b.cross(*c));
+        bounds.add(*a);
+        bounds.add(*b);
+        bounds.add(*c);
+        for (u, v) in [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
+            *sides.entry((u, v)).or_default() += 1;
+        }
+    }
+    let closed = sides.iter().all(|(&(a, b), &n)| n == 1 && sides.get(&(b, a)) == Some(&1));
+    ShellInfo { volume6, closed, bounds }
+}
+
+/// Orient each closed shell by its nesting: outer shells outward and shells held by an odd
+/// number of other shells (cavities) inward (#252). A shell whose nesting cannot be told
+/// (open, flat, or the budget spent) is left as [`unify_winding`] wound it.
+fn orient_shells(m: &mut TriMesh, shells: &[Vec<usize>]) {
+    if shells.len() == 1 {
+        // The one shell has no other to be inside: outward, as a whole mesh always was.
+        if m.volume6() < 0.0 && is_closed(m) {
+            turn(&mut m.triangles);
+        }
+        return;
+    }
+    let info: Vec<ShellInfo> = shells.iter().map(|t| shell_info(m, t)).collect();
+    let mut meshes: Vec<Option<Mesh>> = vec![None; shells.len()];
+    let mut budget = NESTING_BUDGET;
+    let mut flip = vec![false; shells.len()];
+    for i in 0..shells.len() {
+        if info[i].closed
+            && let Some(odd) = inside_odd_count(m, i, shells, &info, &mut meshes, &mut budget)
+        {
+            flip[i] = (info[i].volume6 < 0.0) != odd;
+        }
+    }
+    for (i, &f) in flip.iter().enumerate() {
+        if f {
+            for &t in &shells[i] {
+                if let Some(tri) = m.triangles.get_mut(t) {
+                    tri.swap(1, 2);
+                }
+            }
+        }
+    }
+}
+
+fn turn(triangles: &mut [[u32; 3]]) {
+    for t in triangles {
+        t.swap(1, 2);
+    }
+}
+
+/// The middle of a triangle of the mesh.
+fn shell_triangle_centroid(m: &TriMesh, tri: usize) -> Option<Vec3> {
+    let t = m.triangles.get(tri)?;
+    let a = m.positions.get(t[0] as usize)?;
+    let b = m.positions.get(t[1] as usize)?;
+    let c = m.positions.get(t[2] as usize)?;
+    Some((*a + *b + *c) / 3.0)
+}
+
+/// One shell's triangles as a mesh with shared positions, for point-in-shell tests.
+fn shell_mesh(m: &TriMesh, tris: &[usize]) -> Option<Mesh> {
+    let mut out = Mesh::default();
+    let mut remap: HashMap<u32, u32> = HashMap::new();
+    for &i in tris {
+        let t = m.triangles.get(i)?;
+        let mut local = [0u32; 3];
+        for (slot, &v) in local.iter_mut().zip(t) {
+            let p = m.positions.get(v as usize)?;
+            let idx = match remap.entry(v) {
+                std::collections::hash_map::Entry::Occupied(e) => *e.get(),
+                std::collections::hash_map::Entry::Vacant(e) => {
+                    let idx = u32::try_from(out.positions.len()).ok()?;
+                    out.positions.push(*p);
+                    e.insert(idx);
+                    idx
+                }
+            };
+            *slot = idx;
+        }
+        out.triangles.push(local);
+    }
+    Some(out)
+}
+
+/// Is shell `i` held by an odd number of the other closed shells? `None` when that cannot be
+/// told: it has no volume, a sample point or the budget runs out, or its samples disagree
+/// (surfaces that touch or cross). A point of the shell's surface lies inside exactly the other
+/// shells that enclose it; up to three spread over the shell are checked.
+fn inside_odd_count(
+    m: &TriMesh,
+    i: usize,
+    shells: &[Vec<usize>],
+    info: &[ShellInfo],
+    meshes: &mut [Option<Mesh>],
+    budget: &mut usize,
+) -> Option<bool> {
+    let own = info.get(i)?;
+    if !(own.volume6.is_finite() && own.volume6 != 0.0) {
+        return None;
+    }
+    let tris = shells.get(i)?;
+    let mut samples = vec![0usize];
+    if tris.len() > 2 {
+        samples.push(tris.len() / 2);
+        samples.push(tris.len() - 1);
+    } else if tris.len() > 1 {
+        samples.push(tris.len() - 1);
+    }
+    let mut odd = None;
+    for &k in &samples {
+        let centroid = shell_triangle_centroid(m, *tris.get(k)?)?;
+        let mut holders = 0usize;
+        for j in 0..shells.len() {
+            if j == i {
+                continue;
+            }
+            let other = info.get(j)?;
+            if !other.closed || !(other.volume6.is_finite() && other.volume6 != 0.0) || !other.bounds.contains(centroid) {
+                continue;
+            }
+            let cost = shells.get(j)?.len().saturating_mul(3);
+            if cost > *budget {
+                return None;
+            }
+            *budget -= cost;
+            let slot = meshes.get_mut(j)?;
+            if slot.is_none() {
+                *slot = Some(shell_mesh(m, shells.get(j)?)?);
+            }
+            if slot.as_ref()?.contains(centroid) {
+                holders += 1;
+            }
+        }
+        let here = holders % 2 == 1;
+        match odd {
+            None => odd = Some(here),
+            Some(seen) if seen == here => {}
+            Some(_) => return None,
+        }
+    }
+    odd
 }
 
 /// Every triangle side is shared by exactly two triangles in opposite directions.

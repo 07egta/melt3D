@@ -1454,6 +1454,98 @@ fn mesh_bodies_move_measure_and_refuse_solid_ops() {
     assert!(crate::mesh_body(&pos, &[[0, 0, 1]]).is_err());
 }
 
+/// The signed volume ×6 of some triangles of a mesh body's shared-vertex mesh.
+fn mesh_volume6(positions: &[Vec3], triangles: &[[u32; 3]]) -> f64 {
+    triangles
+        .iter()
+        .filter_map(|t| Some((positions.get(t[0] as usize)?, positions.get(t[1] as usize)?, positions.get(t[2] as usize)?)))
+        .map(|(a, b, c)| a.dot(b.cross(*c)))
+        .sum()
+}
+
+#[test]
+fn mesh_body_drops_collinear_triangles() {
+    // #253: three different corners on one line have no area and no normal.
+    let line = [Vec3::ZERO, Vec3::X, Vec3::new(2.0, 0.0, 0.0)];
+    let err = crate::mesh_body(&line, &[[0, 1, 2]]).unwrap_err().to_string();
+    assert!(err.contains("no triangles"), "{err}");
+    // A good triangle beside a collinear one keeps its area, and nothing else.
+    let pos = [Vec3::ZERO, Vec3::X, Vec3::Y, Vec3::new(2.0, 0.0, 0.0)];
+    let body = crate::mesh_body(&pos, &[[0, 1, 2], [0, 1, 3]]).unwrap();
+    let m = measure(&body).unwrap();
+    assert_eq!(m.faces, 1);
+    assert!((m.area - 0.5).abs() < 1e-12, "{}", m.area);
+}
+
+#[test]
+fn mesh_body_turns_each_closed_shell_outward() {
+    // #252: a small inward tetrahedron beside a larger outward one. The larger shell dominates
+    // the mesh's total volume, so the sign of that total left the small one inward.
+    let pos = [
+        Vec3::ZERO,
+        Vec3::X,
+        Vec3::Y,
+        Vec3::Z,
+        Vec3::new(10.0, 0.0, 0.0),
+        Vec3::new(12.0, 0.0, 0.0),
+        Vec3::new(10.0, 2.0, 0.0),
+        Vec3::new(10.0, 0.0, 2.0),
+    ];
+    let tris = [
+        [0, 1, 2],
+        [0, 3, 1],
+        [0, 2, 3],
+        [1, 3, 2], // small, wound inward
+        [4, 6, 5],
+        [4, 5, 7],
+        [4, 7, 6],
+        [5, 6, 7], // large, wound outward
+    ];
+    let body = crate::mesh_body(&pos, &tris).unwrap();
+    let (p, t) = body.triangle_mesh().unwrap();
+    assert_eq!(t.len(), 8);
+    assert!(mesh_volume6(p, &t[..4]) > 0.0, "small shell {}", mesh_volume6(p, &t[..4]));
+    assert!(mesh_volume6(p, &t[4..]) > 0.0, "large shell {}", mesh_volume6(p, &t[4..]));
+    let m = measure(&body).unwrap();
+    assert!((m.volume - 1.5).abs() < 1e-12, "{}", m.volume);
+    let area = 5.0 * (1.5 + 3.0f64.sqrt() / 2.0);
+    assert!((m.area - area).abs() < 1e-12, "{} vs {area}", m.area);
+}
+
+#[test]
+fn mesh_body_keeps_a_cavity_inward() {
+    // #252: an outer cube and a reversed inner cube (a cavity). The inner shell is inside an odd
+    // number of other shells, so it stays wound inward.
+    let mut pos = Vec::new();
+    let mut tris = Vec::new();
+    let mut cube = |lo: Vec3, hi: Vec3, inward: bool| {
+        let c = |i: u32| Vec3::new(if i & 1 == 0 { lo.x } else { hi.x }, if i & 2 == 0 { lo.y } else { hi.y }, if i & 4 == 0 { lo.z } else { hi.z });
+        let base = pos.len() as u32;
+        for i in 0..8 {
+            pos.push(c(i));
+        }
+        let quads = [[0, 2, 3, 1], [4, 5, 7, 6], [0, 1, 5, 4], [2, 6, 7, 3], [0, 4, 6, 2], [1, 3, 7, 5]];
+        for q in quads {
+            for mut t in [[q[0], q[2], q[1]], [q[0], q[3], q[2]]] {
+                if inward {
+                    t.swap(1, 2);
+                }
+                tris.push([base + t[0], base + t[1], base + t[2]]);
+            }
+        }
+    };
+    cube(Vec3::ZERO, Vec3::new(10.0, 10.0, 10.0), false);
+    cube(Vec3::new(3.0, 3.0, 3.0), Vec3::new(7.0, 7.0, 7.0), true);
+    let body = crate::mesh_body(&pos, &tris).unwrap();
+    let (p, t) = body.triangle_mesh().unwrap();
+    assert_eq!(t.len(), 24);
+    assert!(mesh_volume6(p, &t[..12]) > 0.0, "outer {}", mesh_volume6(p, &t[..12]));
+    assert!(mesh_volume6(p, &t[12..]) < 0.0, "cavity {}", mesh_volume6(p, &t[12..]));
+    let m = measure(&body).unwrap();
+    assert!((m.volume - 936.0).abs() < 1e-12, "{}", m.volume);
+    assert!((m.area - 696.0).abs() < 1e-12, "{}", m.area);
+}
+
 #[test]
 fn concave_fillet() {
     // An L made of a base and a wall (one solid), fillet the inside corner.
