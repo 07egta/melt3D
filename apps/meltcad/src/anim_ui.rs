@@ -28,15 +28,46 @@ fn save_gif_if_active(path: &std::path::Path, bytes: Vec<u8>, cancel: &AtomicBoo
     Ok(path.display().to_string())
 }
 
+/// Seconds of animation time to add for this frame (#183). Playback follows the wall clock, so a
+/// slow frame skips animation frames instead of slowing the animation down; only a long stall
+/// (a suspended laptop) is capped. The first frame after Play has no earlier time and uses the
+/// frame's own `fallback` step.
+pub(crate) fn playback_dt(last: Option<f64>, now: f64, fallback: f32) -> f32 {
+    match last {
+        Some(t) if now.is_finite() && t.is_finite() && now >= t => ((now - t) as f32).min(2.0),
+        _ => fallback.clamp(0.0, 0.1),
+    }
+}
+
 #[derive(Default)]
 pub struct State {
     pub open: bool,
     pub frame: u32,
     pub playing: bool,
     clock: f32,
+    /// Wall-clock time (egui seconds) of the previous playback frame; `None` right after Play.
+    last_t: Option<f64>,
     /// The scene revision last looked at for edits.
     rev: u64,
     job: Option<Job>,
+}
+
+impl Job {
+    #[cfg(test)]
+    pub fn for_test(rx: Receiver<Result<String, String>>, done: Arc<AtomicU32>, total: Arc<AtomicU32>, cancel: Arc<AtomicBool>) -> Job {
+        Job { rx, done, total, cancel }
+    }
+}
+
+impl State {
+    #[cfg(test)]
+    pub fn set_job_for_test(&mut self, job: Job) {
+        self.job = Some(job);
+    }
+    /// Is a GIF still being made? Closing the window would cut the file short.
+    pub fn gif_running(&self) -> bool {
+        self.job.is_some()
+    }
 }
 
 impl App {
@@ -77,6 +108,7 @@ impl App {
         self.an.playing = false;
         self.an.frame = frame.min(self.scene.anim.length.saturating_sub(1));
         self.an.clock = self.an.frame as f32;
+        self.an.last_t = None;
         self.an.rev = self.track_scene();
     }
 
@@ -172,7 +204,9 @@ impl App {
         }
         // playing
         if self.an.playing {
-            let dt = ctx.input(|i| i.stable_dt).min(0.1);
+            let now = ctx.input(|i| i.time);
+            let dt = playback_dt(self.an.last_t, now, ctx.input(|i| i.stable_dt));
+            self.an.last_t = Some(now);
             self.an.clock += dt * self.scene.anim.fps as f32;
             let f = (self.an.clock as u32) % length;
             if f != self.an.frame || self.an.clock < 1.0 {
@@ -199,6 +233,7 @@ impl App {
                     {
                         self.an.playing = !self.an.playing;
                         self.an.clock = self.an.frame as f32;
+                        self.an.last_t = None;
                     }
                     if ui.add_enabled(!editing, egui::Button::new("|<")).on_hover_text("Back to the first frame").clicked() {
                         self.an.playing = false;

@@ -571,6 +571,15 @@ impl Job {
         if self.lock().running {
             return;
         }
+        // The GPU benchmark allocates large textures: it must not overlap a high-resolution
+        // SDF bake, an export, or an importing document in the same window.
+        let permit = match crate::work_budget::try_acquire(ctx) {
+            Ok(permit) => permit,
+            Err(e) => {
+                *self.lock() = JobState { result: Some(Err(e)), ..Default::default() };
+                return;
+            }
+        };
         *self.lock() = JobState { running: true, progress: "Starting…".to_string(), ..Default::default() };
         self.stop.store(false, std::sync::atomic::Ordering::Relaxed);
         let shared = self.shared.clone();
@@ -606,6 +615,7 @@ impl Job {
                 Ok(Err(e)) => (Err(e), None),
                 Err(_) => (Err("An error happened during the test (panic)".to_string()), None),
             };
+            drop(permit);
             tell(&|st| {
                 st.running = false;
                 st.result = Some(result.clone());

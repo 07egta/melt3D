@@ -9,6 +9,7 @@ mod anim;
 mod anim_ui;
 mod app;
 mod array;
+mod atomic_files;
 mod automation;
 mod backend;
 mod bench;
@@ -21,6 +22,7 @@ mod corner;
 mod cpu_render;
 mod curve;
 mod curve_tool;
+mod document_job;
 mod easy_view;
 mod export;
 mod export_decimate;
@@ -29,7 +31,6 @@ mod export_dialog;
 mod export_formats;
 mod export_job;
 mod export_mesh;
-mod export_transaction;
 mod fonts;
 #[cfg(test)]
 mod frame_bench;
@@ -92,6 +93,7 @@ mod svg;
 mod svg_dialog;
 mod view;
 mod view_mode;
+mod work_budget;
 
 /// Tell the person why the program cannot start (there is no console in a Windows release build).
 fn fatal(message: &str) {
@@ -198,8 +200,11 @@ fn main() -> eframe::Result {
         options,
         Box::new(move |cc| {
             perf::mark("window and graphics ready");
-            fonts::install(&cc.egui_ctx, font_job.finish());
-            perf::mark("fonts installed");
+            let mut font_job = font_job;
+            if let Some(bytes) = font_job.poll() {
+                fonts::install(&cc.egui_ctx, bytes);
+                perf::mark("font installed before first frame");
+            }
             style::apply(&cc.egui_ctx);
             let rs = cc.wgpu_render_state.clone();
             if rs.is_none() {
@@ -208,6 +213,7 @@ fn main() -> eframe::Result {
             let srgb = rs.as_ref().is_none_or(|rs| rs.target_format.is_srgb());
             let all: Vec<std::ffi::OsString> = std::env::args_os().collect();
             let mut app = app::App::new(srgb, control::file_arg(&all));
+            app.attach_font_job(font_job);
             app.precise_services = Some(precise_services::services(rfd::AsyncFileDialog::new().set_parent(cc)));
             app.precise_prefs = cc.storage.and_then(|storage| storage.get_string(precise::PREFS_KEY));
             if let Some(port) = control::port_arg(&all) {

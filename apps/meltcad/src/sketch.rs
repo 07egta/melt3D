@@ -179,11 +179,27 @@ impl Frame {
     pub fn to_world(self, p: [f32; 2]) -> V3 {
         add(self.origin, add(mul(self.u, p[0]), mul(self.v, p[1])))
     }
-    /// The sketch coordinates of a world point (its distance from the plane is dropped).
+    /// The sketch coordinates of a world point (its distance from the plane is dropped). `u` and `v`
+    /// need not be perpendicular or unit (a stretched or slanted shape): this is the exact inverse of
+    /// `to_world` for points in the plane (#101).
     #[allow(clippy::wrong_self_convention)] // Paired forward/inverse frame transforms share one receiver.
     pub fn from_world(&self, w: V3) -> [f32; 2] {
         let d = sub(w, self.origin);
-        [dot(d, self.u) / dot(self.u, self.u).max(1e-12), dot(d, self.v) / dot(self.v, self.v).max(1e-12)]
+        let (uu, vv, uv) = (dot(self.u, self.u), dot(self.v, self.v), dot(self.u, self.v));
+        let (du, dv) = (dot(d, self.u), dot(d, self.v));
+        let det = uu * vv - uv * uv;
+        if det.abs() > 1e-9 * (uu * vv).max(1e-12) {
+            [(du * vv - dv * uv) / det, (dv * uu - du * uv) / det]
+        } else {
+            [du / uu.max(1e-12), dv / vv.max(1e-12)]
+        }
+    }
+    /// The same plane with unit, perpendicular axes, and `pts` re-expressed in it so they keep their
+    /// world positions. A shape's scale is baked into the points this way (#100).
+    pub fn bake_scale(&self, pts: &[[f32; 2]]) -> Option<(Frame, Vec<[f32; 2]>)> {
+        let unit = Frame::from_axes(self.origin, self.u, self.v)?;
+        let out: Vec<[f32; 2]> = pts.iter().map(|&p| unit.from_world(self.to_world(p))).collect();
+        out.iter().all(|p| p[0].is_finite() && p[1].is_finite()).then_some((unit, out))
     }
     /// Where a ray (origin `o`, direction `d`) meets the plane, in sketch coordinates. None when the
     /// ray runs along the plane, the plane is behind it, or the hit is absurdly far.
@@ -1264,6 +1280,31 @@ mod tests {
     }
     fn near(a: f32, b: f32) -> bool {
         (a - b).abs() < 1e-3
+    }
+
+    #[test]
+    fn a_slanted_stretched_sweep_frame_round_trips_points() {
+        let mut s = Shape::new(Kind::Sweep, [0.0; 3], Material::default());
+        s.path = vec![[0.0, 0.0, 0.0, 1.0], [20.0, 20.0, 20.0, 1.0]];
+        s.scale = [2.0, 1.0, 1.0];
+        let f = edit_frame(&s, Which::Main).expect("frame");
+        assert!(dot(f.u, f.v).abs() > 0.1, "the axes are not perpendicular");
+        let back = f.from_world(f.to_world([5.0, 5.0]));
+        assert!(near(back[0], 5.0) && near(back[1], 5.0), "{back:?} (#101)");
+    }
+
+    #[test]
+    fn baking_a_stretched_frame_keeps_world_positions() {
+        let f = Frame { origin: [1.0, 2.0, 3.0], u: [2.0, 0.0, 0.0], v: [0.0, 1.0, 0.0] };
+        let pts = rect([-15.0, -15.0], [15.0, 15.0]);
+        let (unit, baked) = f.bake_scale(&pts).expect("bake");
+        assert!(near(len(unit.u), 1.0) && near(len(unit.v), 1.0));
+        let (lo, hi) = bbox(&baked).expect("box");
+        assert!(near(hi[0] - lo[0], 60.0) && near(hi[1] - lo[1], 30.0), "world width is kept (#100)");
+        for (a, b) in pts.iter().zip(&baked) {
+            let (wa, wb) = (f.to_world(*a), unit.to_world(*b));
+            assert!((0..3).all(|i| near(wa[i], wb[i])));
+        }
     }
 
     #[test]

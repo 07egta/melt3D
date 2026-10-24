@@ -152,6 +152,25 @@ fn num(x: f64, dec: usize) -> String {
     if s == "-0" { "0".into() } else { s }
 }
 
+/// Decimals that keep a model's corners apart: 6 for anything of a millimetre or more, more for
+/// a model so small (a 1 mm part exported at 0.01 % in metres) that 6 would round it flat.
+fn decimals(mesh: &TriMesh) -> usize {
+    let (mut lo, mut hi) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
+    for p in &mesh.positions {
+        for k in 0..3 {
+            let v = fin(p[k]);
+            lo[k] = lo[k].min(v);
+            hi[k] = hi[k].max(v);
+        }
+    }
+    let side = (0..3).map(|k| hi[k] - lo[k]).fold(0.0_f64, f64::max);
+    if !side.is_finite() || side <= 0.0 {
+        return 6;
+    }
+    let extra = (-side.log10()).ceil().clamp(0.0, 9.0) as usize;
+    6 + extra
+}
+
 fn tri_corners(mesh: &TriMesh) -> impl Iterator<Item = (usize, [[f64; 3]; 3])> + '_ {
     mesh.triangles.iter().enumerate().filter_map(|(i, t)| {
         let a = mesh.positions.get(t[0] as usize)?;
@@ -239,8 +258,9 @@ pub fn obj_files(s: &Surface, name: &str, mtl_file: &str) -> Result<(String, Opt
         let _ = writeln!(out, "mtllib {mtl_file}");
     }
     let _ = writeln!(out, "o {}", name.replace(char::is_whitespace, "_"));
+    let dec = decimals(mesh);
     for p in &mesh.positions {
-        let _ = writeln!(out, "v {} {} {}", num(p[0], 6), num(p[1], 6), num(p[2], 6));
+        let _ = writeln!(out, "v {} {} {}", num(p[0], dec), num(p[1], dec), num(p[2], dec));
     }
     let n = mesh.positions.len() as u32;
     let ok = |t: &[u32; 3]| t.iter().all(|i| *i < n);
@@ -377,8 +397,9 @@ pub fn threemf(s: &Surface, name: &str, unit: Units) -> Result<Vec<u8>, String> 
         model.push_str("<object id=\"2\" type=\"model\">\n");
     }
     model.push_str("<mesh>\n<vertices>\n");
+    let dec = decimals(mesh);
     for p in &mesh.positions {
-        let _ = writeln!(model, "<vertex x=\"{}\" y=\"{}\" z=\"{}\"/>", num(p[0], 6), num(p[1], 6), num(p[2], 6));
+        let _ = writeln!(model, "<vertex x=\"{}\" y=\"{}\" z=\"{}\"/>", num(p[0], dec), num(p[1], dec), num(p[2], dec));
     }
     model.push_str("</vertices>\n<triangles>\n");
     let n = mesh.positions.len() as u32;
@@ -822,5 +843,18 @@ pub mod tests {
         assert_eq!(num(-0.0000001, 6), "0");
         assert_eq!(num(1.25, 6), "1.25");
         assert_eq!(num(f64::NAN, 6), "0");
+    }
+
+    /// #255: a 1 mm model written in metres at 0.01 % keeps its corners apart.
+    #[test]
+    fn tiny_models_keep_enough_decimals() {
+        let k = 1e-7;
+        let mesh = TriMesh { positions: vec![[0.0, 0.0, 0.0], [k, 0.0, 0.0], [0.0, k, 0.0]], triangles: vec![[0, 1, 2]] };
+        let dec = decimals(&mesh);
+        assert!(dec > 6);
+        assert_ne!(num(k, dec), "0");
+        assert_ne!(num(0.0, dec), num(k, dec));
+        let big = TriMesh { positions: vec![[0.0; 3], [50.0, 0.0, 0.0], [0.0, 50.0, 0.0]], triangles: vec![[0, 1, 2]] };
+        assert_eq!(decimals(&big), 6);
     }
 }

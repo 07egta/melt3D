@@ -28,10 +28,16 @@ pub enum ExportFormat {
     Obj,
 }
 
+#[allow(clippy::large_enum_variant)] // short-lived; boxing would only add noise
 enum PendingFileAction {
     New(Scene),
     Open(PathBuf),
     Close,
+}
+
+struct QueuedOpen {
+    path: PathBuf,
+    base_revision: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -69,7 +75,7 @@ pub struct App {
     committed_rev: u64,
     deduped_rev: u64,
     /// The field for picking, made when picking needs it and the scene has changed since.
-    field_cache: std::cell::RefCell<Option<(u64, std::rc::Rc<Field>)>>,
+    field_cache: std::cell::RefCell<Option<(u64, std::rc::Rc<Field>, Scene)>>,
     /// How many times the field was built (tests and the HUD look at it).
     pub(crate) field_builds: std::cell::Cell<u64>,
     pub path: Option<PathBuf>,
@@ -80,6 +86,11 @@ pub struct App {
     pub dirty: bool,
     recovery: crate::recovery::Store,
     pending_file_action: Option<PendingFileAction>,
+    /// Native document parsing and saving run off the UI thread.
+    native_job: Option<crate::document_job::Job>,
+    queued_open: Option<QueuedOpen>,
+    /// A Save-and-continue decision only runs after a complete successful save.
+    after_save: Option<PendingFileAction>,
     close_approved: bool,
     status: (String, f64),
     pub renaming: Option<Pick>,
@@ -140,6 +151,8 @@ pub struct App {
     pub lib_open: bool,
     pub lib_cat: usize,
     pub lib_query: String,
+    /// Font discovery runs on a worker; do not wait for it while opening the window.
+    font_job: Option<crate::fonts::FontJob>,
     /// A message from code that has no window context (shown in the status bar next frame).
     pub notice: Option<String>,
     /// The Melt tab's picture of the picked shapes melting (its fingerprint and the image).
@@ -197,6 +210,9 @@ impl App {
             dirty: false,
             recovery: crate::recovery::Store::new(crate::recovery::default_directory(), std::time::Instant::now()),
             pending_file_action: None,
+            native_job: None,
+            queued_open: None,
+            after_save: None,
             close_approved: false,
             status: (String::new(), 0.0),
             renaming: None,
@@ -238,6 +254,7 @@ impl App {
             lib_open: false,
             lib_cat: 0,
             lib_query: String::new(),
+            font_job: None,
             notice: None,
             melt_preview: None,
             gpu: Default::default(),
@@ -250,18 +267,38 @@ impl App {
         app
     }
 
+    pub fn attach_font_job(&mut self, job: crate::fonts::FontJob) {
+        if job.pending() {
+            self.font_job = Some(job);
+        }
+    }
+
+    fn poll_font(&mut self, ctx: &egui::Context) {
+        let Some(job) = &mut self.font_job else { return };
+        if let Some(bytes) = job.poll() {
+            crate::fonts::install(ctx, bytes);
+            crate::perf::mark("font installed without blocking startup");
+            self.font_job = None;
+            ctx.request_repaint();
+        } else {
+            ctx.request_repaint_after(std::time::Duration::from_millis(60));
+        }
+    }
+
     /// The field for picking. It is built when asked for, and again only after the scene changed
     /// (a drag or a camera move that picks nothing never builds it).
     pub fn field(&self) -> std::rc::Rc<Field> {
         let mut cache = self.field_cache.borrow_mut();
-        if let Some((rev, f)) = cache.as_ref()
+        if let Some((rev, f, _)) = cache.as_ref()
             && *rev == self.scene_rev
         {
             return f.clone();
         }
         self.field_builds.set(self.field_builds.get() + 1);
-        let f = std::rc::Rc::new(Field::new(&self.scene));
-        *cache = Some((self.scene_rev, f.clone()));
+        // Keep only the most recent snapshot. Shape equality guards against stale cached SDFs
+        // after edits, linked-copy changes, undo/redo and load (no probabilistic hash keys).
+        let f = std::rc::Rc::new(Field::reusing(&self.scene, cache.as_ref().map(|(_, field, old_scene)| (field.as_ref(), old_scene))));
+        *cache = Some((self.scene_rev, f.clone(), self.scene.clone()));
         f
     }
 
@@ -454,6 +491,9 @@ impl App {
             self.committed = prev;
             self.fix_selection();
             self.animation_at_applied(self.an.frame);
+            // Invalidate both CPU field and GPU pack before any further hit test/draw.
+            self.track_scene();
+            self.committed_rev = self.scene_rev;
         }
     }
 
@@ -476,6 +516,8 @@ impl App {
             self.committed = next;
             self.fix_selection();
             self.animation_at_applied(self.an.frame);
+            self.track_scene();
+            self.committed_rev = self.scene_rev;
         }
     }
 
@@ -516,7 +558,8 @@ impl App {
     }
 
     fn request_file_action(&mut self, action: PendingFileAction) {
-        if self.pending_file_action.is_some() {
+        if self.pending_file_action.is_some() || self.native_job.is_some() || self.queued_open.is_some() || self.after_save.is_some() {
+            self.notice = Some("Wait for the file job to finish before the next action".into());
             return;
         }
         if self.has_unsaved_work() {
@@ -528,19 +571,18 @@ impl App {
     }
 
     fn apply_file_action(&mut self, action: PendingFileAction) {
-        let (scene, path, notes) = match action {
-            PendingFileAction::New(scene) => (scene, None, Vec::new()),
-            PendingFileAction::Open(path) => match crate::recovery::read_project(&path) {
-                Ok((scene, notes)) => (scene, Some(path), notes),
-                Err(e) => {
-                    // through the notice queue: it is shown with the real time of this frame, so a
-                    // failure long after start-up still shows (#219)
-                    self.notice = Some(format!("Could not open: {e}"));
-                    return;
-                }
-            },
-            PendingFileAction::Close => return,
-        };
+        match action {
+            PendingFileAction::New(scene) => self.install_scene(scene, None, Vec::new()),
+            PendingFileAction::Open(path) => {
+                // No file I/O or JSON parsing on the UI thread. The current design stays
+                // visible until the worker reports a fully validated new Scene.
+                self.queued_open = Some(QueuedOpen { path, base_revision: self.track_scene() });
+            }
+            PendingFileAction::Close => {}
+        }
+    }
+
+    fn install_scene(&mut self, scene: Scene, path: Option<PathBuf>, notes: Vec<String>) {
         if let Err(e) = self.recovery.clear_active() {
             self.notice = Some(format!("Could not clean up recovery data: {e}"));
         }
@@ -572,7 +614,7 @@ impl App {
             PendingFileDecision::Discard => self.finish_pending_file_action(ctx, action),
             PendingFileDecision::Save => {
                 if self.try_save(ctx, false) {
-                    self.finish_pending_file_action(ctx, action);
+                    self.after_save = Some(action);
                 } else {
                     self.pending_file_action = Some(action);
                 }
@@ -590,6 +632,18 @@ impl App {
     }
 
     fn handle_close_request(&mut self, ctx: &egui::Context) {
+        if ctx.input(|i| i.viewport().close_requested())
+            && !self.close_approved
+            && (self.native_job.is_some()
+                || self.queued_open.is_some()
+                || self.after_save.is_some()
+                || self.an.gif_running()
+                || crate::work_budget::is_busy(ctx))
+        {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.say(ctx, "A file job is still running. Wait for it or stop it before closing");
+            return;
+        }
         if self.precise.as_ref().is_some_and(|p| p.app.quit_requested) {
             if let Some(p) = self.precise.as_mut() {
                 p.app.quit_requested = false;
@@ -628,7 +682,6 @@ impl App {
             if self.pending_file_action.is_none() {
                 self.pending_file_action = Some(PendingFileAction::Close);
             }
-            self.capture = None;
         }
     }
 
@@ -1263,6 +1316,10 @@ impl App {
     }
 
     fn try_save(&mut self, ctx: &egui::Context, ask: bool) -> bool {
+        if self.native_job.is_some() || self.queued_open.is_some() {
+            self.say(ctx, "Wait for the other file job to finish before saving");
+            return false;
+        }
         let pending_solid = self.sk.on && self.sk.separate;
         if (self.sketch_has_draft() || pending_solid) && (!self.sketch_confirm(ctx) || self.sketch_has_draft() || (self.sk.on && self.sk.separate)) {
             self.say(ctx, "Finish or cancel the current sketch or solid operation before saving".to_string());
@@ -1273,20 +1330,15 @@ impl App {
             _ => rfd::FileDialog::new().add_filter("Melt 3D", &["meltcad"]).set_file_name(format!("{}.meltcad", self.doc_name())).save_file(),
         };
         let Some(path) = path else { return false };
-        match crate::recovery::save_project(&path, &self.scene) {
-            Ok(()) => {
-                self.path = Some(path);
-                self.doc_title.clear();
-                self.dirty = false;
-                let revision = self.track_scene();
-                if let Err(e) = self.recovery.document_saved(revision) {
-                    self.notice = Some(format!("Could not clean up recovery data: {e}"));
-                }
-                self.say(ctx, "Saved");
-                true
+        let rev = self.track_scene();
+        match crate::document_job::Job::save(ctx, path, self.scene.clone(), rev) {
+            Ok(job) => {
+                self.native_job = Some(job);
+                ctx.request_repaint();
+                true // started, NOT yet saved successfully
             }
             Err(e) => {
-                self.say(ctx, format!("Could not save: {e}"));
+                self.say(ctx, format!("Could not start saving: {e}"));
                 false
             }
         }
@@ -1307,10 +1359,129 @@ impl App {
         crate::export_dialog::open_check(ctx);
     }
 
+    /// Start and poll native file work without blocking a frame. Failed/cancelled results never
+    /// replace the current Scene; edits made while an open was pending also prevent replacement.
+    fn update_native_job(&mut self, ctx: &egui::Context) {
+        if self.native_job.is_none()
+            && let Some(queued) = self.queued_open.take()
+        {
+            if self.track_scene() != queued.base_revision {
+                self.say(ctx, "The design changed while the open was waiting, so it was cancelled");
+            } else {
+                match crate::document_job::Job::open(ctx, queued.path.clone(), queued.base_revision) {
+                    Ok(job) => self.native_job = Some(job),
+                    Err(e) if e == crate::work_budget::BUSY => {
+                        self.queued_open = Some(queued);
+                        ctx.request_repaint_after(std::time::Duration::from_millis(80));
+                    }
+                    Err(e) => self.say(ctx, e),
+                }
+            }
+        }
+
+        let result = self.native_job.as_ref().and_then(|job| job.poll().map(|r| (job.kind, job.base_revision, job.cancel_elapsed(), r)));
+        if let Some((kind, base_revision, cancel_secs, result)) = result {
+            self.native_job = None;
+            if let Some(secs) = cancel_secs {
+                // Actual cancellation latency, not just the instant the button was clicked.
+                crate::gpu_log::log(&format!("document cancellation finished after {secs:.3} s"));
+            }
+            match (kind, result) {
+                (crate::document_job::Kind::Open, Ok(crate::document_job::Completed::Opened { scene, path, notes })) => {
+                    if self.track_scene() == base_revision {
+                        self.install_scene(scene, Some(path), notes);
+                        self.say(ctx, "Opened");
+                    } else {
+                        self.say(ctx, "The design changed while opening, so the loaded file was not applied");
+                    }
+                }
+                (crate::document_job::Kind::Save, Ok(crate::document_job::Completed::Saved { path })) => {
+                    self.path = Some(path);
+                    let same = self.track_scene() == base_revision;
+                    self.dirty = !same;
+                    if same {
+                        self.doc_title.clear();
+                        if let Err(e) = self.recovery.document_saved(base_revision) {
+                            self.notice = Some(format!("Could not clean up recovery data: {e}"));
+                        }
+                    }
+                    self.say(ctx, if same { "Saved" } else { "Edited while saving: the latest changes are not saved yet" });
+                    if let Some(next) = self.after_save.take() {
+                        if same {
+                            self.finish_pending_file_action(ctx, next);
+                        } else {
+                            self.pending_file_action = Some(next);
+                        }
+                    }
+                }
+                (_, Ok(_)) => self.say(ctx, "The file job returned an unexpected result"),
+                (_, Err(e)) => {
+                    if kind == crate::document_job::Kind::Save {
+                        self.pending_file_action = self.after_save.take();
+                    }
+                    let text = if e == crate::export_mesh::CANCELLED {
+                        "Stopped".into()
+                    } else if kind == crate::document_job::Kind::Open {
+                        format!("Could not open: {e}")
+                    } else {
+                        format!("Could not save: {e}")
+                    };
+                    self.say(ctx, text);
+                }
+            }
+        }
+        if self.native_job.is_some() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(70));
+        }
+    }
+
+    fn native_job_card(&mut self, ctx: &egui::Context) {
+        if self.queued_open.is_some() {
+            egui::Area::new(egui::Id::new("native_file_queue")).anchor(egui::Align2::RIGHT_BOTTOM, [-18.0, -24.0]).show(ctx, |ui| {
+                style::card().show(ui, |ui| {
+                    ui.label("Waiting for another heavy job to finish before opening (memory guard)");
+                    if ui.button("Cancel open").clicked() {
+                        self.queued_open = None;
+                    }
+                });
+            });
+            return;
+        }
+        let Some(job) = self.native_job.as_mut() else { return };
+        egui::Area::new(egui::Id::new("native_file_progress")).anchor(egui::Align2::RIGHT_BOTTOM, [-18.0, -24.0]).show(ctx, |ui| {
+            style::card().show(ui, |ui| {
+                ui.set_width(325.0);
+                ui.label(
+                    egui::RichText::new(match job.kind {
+                        crate::document_job::Kind::Open => "Opening the design…",
+                        crate::document_job::Kind::Save => "Saving the design…",
+                    })
+                    .strong(),
+                );
+                ui.label(job.phase_name());
+                ui.add(egui::ProgressBar::new(job.fraction()).show_percentage());
+                ui.horizontal(|ui| {
+                    ui.label(format!("{:.1} s", job.elapsed()));
+                    if job.can_cancel() {
+                        if ui.button("Stop").clicked() {
+                            let _ = job.cancel();
+                        }
+                    } else if job.is_committing() {
+                        ui.label("This last step cannot be stopped, to protect the original file");
+                    } else {
+                        ui.label("Waiting for the stop to finish…");
+                    }
+                });
+            });
+        });
+    }
+
     // ----- shortcuts -----
 
     pub(crate) fn keys(&mut self, ctx: &egui::Context) {
         if self.pending_file_action.is_some()
+            || self.native_job.is_some()
+            || self.queued_open.is_some()
             || self.recovery.pending_path().is_some()
             || crate::svg_dialog::is_open(ctx)
             || crate::array::is_open(ctx)
@@ -1958,7 +2129,11 @@ impl App {
                 style::panel_sheen(ui, ui.max_rect().expand2(egui::vec2(10.0, 10.0)), style::PANEL_DARK, style::Edge::Left);
                 let tabs = [("Scene", ""), ("Library", "")];
                 if let Some(i) = style::segmented(ui, "dock_tabs", &tabs, Some(usize::from(self.lib_open)), true) {
+                    let was_open = self.lib_open;
                     self.lib_open = i == 1;
+                    if was_open && !self.lib_open {
+                        crate::library_ui::suspend(ui.ctx());
+                    }
                 }
                 ui.add_space(6.0);
                 if self.lib_open {
@@ -2362,6 +2537,7 @@ impl App {
         static FIRST: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
         crate::perf::mark_once(&FIRST, "first ui frame");
         let ctx = ui.ctx().clone();
+        self.poll_font(&ctx);
         if self.gpu_device_lost {
             return;
         }
@@ -2377,6 +2553,7 @@ impl App {
         self.perf.stats.begin(ctx.input(|i| i.time));
         self.sync_precise_transfer(&ctx);
         self.run_control(&ctx);
+        self.update_native_job(&ctx);
         self.handle_close_request(&ctx);
         self.poll_gif_job(&ctx);
         if self.precise_frame(ui) {
@@ -2420,6 +2597,7 @@ impl App {
         }
         self.pending_file_dialog(&ctx);
         self.recovery_dialog(&ctx);
+        self.native_job_card(&ctx);
         self.capture_step(&ctx);
         self.animation_capture_finished(&ctx);
         self.settle(&ctx);
@@ -2452,6 +2630,28 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Native open/save run on a worker: wait (bounded) until it has been applied.
+    fn finish_file_jobs(app: &mut App, ctx: &egui::Context) {
+        for _ in 0..800 {
+            app.update_native_job(ctx);
+            if app.native_job.is_none() && app.queued_open.is_none() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
+    fn pump_native(app: &mut App, ctx: &egui::Context) {
+        for _ in 0..600 {
+            app.update_native_job(ctx);
+            if app.native_job.is_none() && app.queued_open.is_none() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        panic!("native document worker did not finish");
+    }
 
     #[test]
     fn graphics_loss_exit_checkpoints_current_unsaved_scene() {
@@ -2492,6 +2692,38 @@ mod tests {
         assert!(restarted.pending_path().is_none(), "a clean scene must not produce an empty recovery file");
         restarted.normal_exit().expect("remove test lock");
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn undo_and_redo_invalidate_the_cpu_field_and_gpu_scene_pack_immediately() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        let p = [25.0, 0.0, 20.0];
+        let before = app.field();
+        let dist_before = before.distance(p);
+        let rev_before = app.scene_rev;
+        let pack_before = app.perf.pack.get(&app.scene, rev_before);
+
+        app.scene.shape_mut(0, 0).unwrap().pos[0] += 40.0;
+        app.settle(&ctx);
+        let rev_changed = app.scene_rev;
+        assert!(rev_changed > rev_before);
+        let after = app.field();
+        let dist_changed = after.distance(p);
+        assert_ne!(dist_changed, dist_before);
+        let pack_changed = app.perf.pack.get(&app.scene, rev_changed);
+        assert_ne!(pack_before.id, pack_changed.id);
+
+        app.undo();
+        assert!(app.scene_rev > rev_changed);
+        assert_eq!(app.field().distance(p).to_bits(), dist_before.to_bits());
+        let undo_pack = app.perf.pack.get(&app.scene, app.scene_rev);
+        assert_eq!(undo_pack.list.as_ref(), pack_before.list.as_ref());
+        app.redo();
+        assert_eq!(app.field().distance(p).to_bits(), dist_changed.to_bits());
+        let redo_pack = app.perf.pack.get(&app.scene, app.scene_rev);
+        assert_eq!(redo_pack.list.as_ref(), pack_changed.list.as_ref());
+        assert!(app.field_builds.get() >= 4, "each scene revision must refresh the SDF");
     }
 
     #[test]
@@ -2668,6 +2900,8 @@ mod tests {
         assert_eq!(app.scene.shape_count(), 2, "Open must leave the edited work in place until a choice is made");
         assert!(app.pending_file_action.is_some());
         app.resolve_pending_file_action(&ctx, PendingFileDecision::Discard);
+        assert_eq!(app.scene.shape_count(), 2, "keep current scene until parsing finishes");
+        pump_native(&mut app, &ctx);
         assert_eq!(app.scene.shape_count(), 1);
         assert_eq!(app.path.as_ref(), Some(&path));
         assert!(!app.dirty);
@@ -2684,10 +2918,99 @@ mod tests {
         app.new_scene(Scene::default());
 
         app.resolve_pending_file_action(&ctx, PendingFileDecision::Save);
+        pump_native(&mut app, &ctx);
 
         assert_eq!(app.scene.shape_count(), 2);
         assert!(app.dirty);
-        assert!(app.pending_file_action.is_some());
+        assert!(app.pending_file_action.is_some(), "failed save must not discard the pending action");
+    }
+
+    #[test]
+    fn cancelling_or_failing_native_open_leaves_live_scene_unchanged() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        let before = app.scene.clone();
+        let dir = std::env::temp_dir().join(format!("yura_doc_cancel_app_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let invalid = dir.join("invalid.yura");
+        std::fs::write(&invalid, b"{invalid JSON").expect("fixture");
+        app.open_path(invalid);
+        pump_native(&mut app, &ctx);
+        assert_eq!(app.scene, before, "failure must never replace a design");
+
+        let valid = dir.join("valid.yura");
+        std::fs::write(&valid, Scene::default().to_json()).expect("fixture");
+        app.open_path(valid);
+        app.update_native_job(&ctx);
+        let job = app.native_job.as_mut().expect("started load");
+        assert!(job.cancel(), "the load is cancellable");
+        pump_native(&mut app, &ctx);
+        assert_eq!(app.scene, before, "cancelled results must never replace a design");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_heavy_worker_blocks_parallel_loading_without_blocking_the_ui() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        let dir = std::env::temp_dir().join(format!("yura_budget_open_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("valid.yura");
+        std::fs::write(&path, Scene::default().to_json()).expect("fixture");
+        let permit = crate::work_budget::try_acquire(&ctx).expect("other heavy job");
+        app.open_path(path.clone());
+        app.update_native_job(&ctx);
+        assert!(app.native_job.is_none() && app.queued_open.is_some(), "read is queued instead of allocating another large job");
+        assert!(app.scene.shape_count() > 0, "the existing model remains usable");
+        drop(permit);
+        pump_native(&mut app, &ctx);
+        assert_eq!(app.path.as_ref(), Some(&path));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn edits_while_an_open_waits_for_the_worker_are_preserved() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        let dir = std::env::temp_dir().join(format!("yura_queued_open_edit_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("replacement.yura");
+        std::fs::write(&path, Scene::default().to_json()).expect("fixture");
+        let permit = crate::work_budget::try_acquire(&ctx).expect("other heavy job");
+
+        app.open_path(path);
+        app.update_native_job(&ctx);
+        assert!(app.queued_open.is_some(), "open waits behind the existing worker");
+        app.add_shape(&ctx, Kind::Box);
+        let edited = app.scene.clone();
+        drop(permit);
+
+        pump_native(&mut app, &ctx);
+        assert_eq!(app.scene, edited, "the queued open must not discard edits made while it waited");
+        assert!(app.path.is_none(), "the rejected open must not change the current document path");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// #232: a running GIF export keeps the window from closing under it.
+    #[test]
+    fn closing_while_a_gif_is_being_made_is_refused() {
+        use std::sync::atomic::{AtomicBool, AtomicU32};
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        let (_tx, rx) = std::sync::mpsc::channel();
+        app.an.set_job_for_test(crate::anim_ui::Job::for_test(
+            rx,
+            std::sync::Arc::new(AtomicU32::new(0)),
+            std::sync::Arc::new(AtomicU32::new(1)),
+            std::sync::Arc::new(AtomicBool::new(false)),
+        ));
+        assert!(app.an.gif_running());
+        let mut input = egui::RawInput::default();
+        input.viewports.get_mut(&egui::ViewportId::ROOT).expect("root viewport").events.push(egui::ViewportEvent::Close);
+        let mut output = ctx.run_ui(input, |_ui| app.handle_close_request(&ctx));
+        output.textures_delta.clear();
+        assert!(output.viewport_output.get(&egui::ViewportId::ROOT).is_some_and(|v| v.commands.contains(&egui::ViewportCommand::CancelClose)));
+        assert!(!app.close_approved);
     }
 
     #[test]
@@ -2766,7 +3089,7 @@ mod tests {
 
     #[test]
     fn launching_into_solidcraft_without_edits_closes_without_a_prompt() {
-        assert!(crate::control::starts_in_solidcraft(None));
+        assert!(!crate::control::starts_in_solidcraft(None));
         assert!(!crate::control::starts_in_solidcraft(Some(std::path::Path::new("a.meltcad"))));
         let ctx = egui::Context::default();
         let mut app = App::new(true, None);
@@ -2900,9 +3223,15 @@ mod tests {
         let ctx = egui::Context::default();
         let mut app = App::new(true, None);
         app.apply_file_action(PendingFileAction::Open(std::path::PathBuf::from("/nonexistent/melt3d/missing.meltcad")));
-        let input = egui::RawInput { time: Some(60.0), ..Default::default() };
-        let mut out = ctx.run_ui(input, |ui| app.frame_body(ui));
-        out.textures_delta.clear();
+        for _ in 0..400 {
+            let input = egui::RawInput { time: Some(60.0), ..Default::default() };
+            let mut out = ctx.run_ui(input, |ui| app.frame_body(ui));
+            out.textures_delta.clear();
+            if app.native_job.is_none() && app.queued_open.is_none() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
         assert!(app.status.0.contains("Could not open"), "{:?}", app.status);
         assert!((app.status.1 - 60.0).abs() < 1.0, "shown at the time it happened, not at start-up (#219): {:?}", app.status);
     }
@@ -2913,11 +3242,13 @@ mod tests {
         std::fs::write(&path, Scene::default().to_json()).expect("initial file");
         let ctx = egui::Context::default();
         let mut app = App::new(true, Some(path.clone()));
+        pump_native(&mut app, &ctx);
         app.add_shape(&ctx, Kind::Box);
         app.settle(&ctx);
 
         app.open_path(path.clone());
         app.resolve_pending_file_action(&ctx, PendingFileDecision::Save);
+        pump_native(&mut app, &ctx);
 
         assert_eq!(app.scene.shape_count(), 2, "the just-saved edit must still be on screen");
         let disk = std::fs::read_to_string(&path).expect("saved file");
@@ -3119,6 +3450,7 @@ mod tests {
         app.sk.frame = crate::sketch::Frame::floor();
         app.sketch_done(crate::sketch_ui::Finished::Profile(crate::sketch::rect([0.0, 0.0], [20.0, 10.0])));
         assert!(app.try_save(&ctx, false));
+        finish_file_jobs(&mut app, &ctx);
         assert!(!app.sk.on);
         let (saved, _) = crate::recovery::read_project(&path).expect("saved file");
         assert_eq!(saved.groups.iter().flat_map(|g| &g.shapes).filter(|s| s.guide).count(), 1);
@@ -3142,6 +3474,7 @@ mod tests {
         assert!(app.make_from_selected_line(&ctx, crate::sketch_ui::Make::Extrude));
         app.sk.height = 32.0;
         assert!(app.try_save(&ctx, false));
+        finish_file_jobs(&mut app, &ctx);
         assert!(!app.sk.on && app.sk.live.is_none());
         let (saved, _) = crate::recovery::read_project(&path).expect("saved file");
         assert_eq!(saved.shape_count(), 2);

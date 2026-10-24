@@ -1454,6 +1454,42 @@ fn mesh_bodies_move_measure_and_refuse_solid_ops() {
     assert!(crate::mesh_body(&pos, &[[0, 0, 1]]).is_err());
 }
 
+/// #253: three distinct but collinear points make no triangle.
+#[test]
+fn mesh_body_drops_flat_triangles() {
+    let line = [Vec3::ZERO, Vec3::X, Vec3::new(2.0, 0.0, 0.0)];
+    assert!(crate::mesh_body(&line, &[[0, 1, 2]]).is_err());
+    let mut pos = line.to_vec();
+    pos.push(Vec3::Y);
+    let b = crate::mesh_body(&pos, &[[0, 1, 2], [0, 1, 3]]).unwrap();
+    assert_eq!(b.triangle_mesh().unwrap().1.len(), 1);
+}
+
+/// #252: two far-apart closed tetrahedra, one of them inside out, both come out outward.
+#[test]
+fn mesh_body_turns_each_closed_shell_outward() {
+    let tet = |o: f64, s: f64, flip: bool| {
+        let p = [Vec3::new(o, 0.0, 0.0), Vec3::new(o + s, 0.0, 0.0), Vec3::new(o, s, 0.0), Vec3::new(o, 0.0, s)];
+        let mut f = [[0u32, 2, 1], [0, 1, 3], [0, 3, 2], [1, 2, 3]];
+        if flip {
+            for t in &mut f {
+                t.swap(1, 2);
+            }
+        }
+        (p, f)
+    };
+    let (p1, f1) = tet(0.0, 10.0, false);
+    let (p2, f2) = tet(100.0, 2.0, true);
+    let pos: Vec<Vec3> = p1.iter().chain(p2.iter()).copied().collect();
+    let tris: Vec<[u32; 3]> = f1.iter().copied().chain(f2.iter().map(|t| [t[0] + 4, t[1] + 4, t[2] + 4])).collect();
+    let b = crate::mesh_body(&pos, &tris).unwrap();
+    let (p, t) = b.triangle_mesh().unwrap();
+    let shell_vol = |range: std::ops::Range<usize>| -> f64 {
+        t.iter().filter(|t| range.contains(&(t[0] as usize))).map(|t| p[t[0] as usize].dot(p[t[1] as usize].cross(p[t[2] as usize]))).sum()
+    };
+    assert!(shell_vol(0..4) > 0.0 && shell_vol(4..8) > 0.0, "{} {}", shell_vol(0..4), shell_vol(4..8));
+}
+
 #[test]
 fn concave_fillet() {
     // An L made of a base and a wall (one solid), fillet the inside corner.
