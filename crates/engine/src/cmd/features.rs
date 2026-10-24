@@ -811,7 +811,6 @@ fn revolve(s: &mut Session, p: &Value) -> Result<Value> {
     let (sketch, face_profile) = match p.get("face").and_then(vec3) {
         Some(fp) => {
             let (id, inside, _) = super::face::sketch_of_face(s, fp, cmd, str_(p, "face_body"))?;
-            s.active_sketch = None;
             (id, Some(ProfileSel::Points { points: vec![inside] }))
         }
         None => (feature_sketch(s, p, cmd)?, None),
@@ -849,6 +848,10 @@ fn revolve(s: &mut Session, p: &Value) -> Result<Value> {
         convention,
         to: to.map(FacePick),
     };
+    // The edited sketch is only put down once every input has been accepted (#250).
+    if p.get("face").and_then(vec3).is_some() {
+        s.active_sketch = None;
+    }
     add_feature(s, p, kind)
 }
 
