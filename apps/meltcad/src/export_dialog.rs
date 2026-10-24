@@ -12,7 +12,6 @@ use crate::app::{App, ExportFormat};
 use crate::export_formats::{Format, Units};
 use crate::export_job::{self, Estimate, Job, Lighten, MAX_TOLERANCE, MIN_TOLERANCE, Options, Picks, PrintCheck, Scope, Up};
 use crate::export_mesh::{CANCELLED, MAX_VERTS, Progress};
-use crate::model::Scene;
 use crate::style;
 
 // ---------------------------------------------------------------- small background tasks
@@ -74,7 +73,7 @@ impl<T: Clone + Send + 'static> Task<T> {
 struct Dlg {
     opts: Options,
     /// What the estimate and the check were made for.
-    snap: Option<(Scene, Picks, Options)>,
+    snap: Option<(u64, Picks, Options)>,
     est: Task<Estimate>,
     check: Task<PrintCheck>,
     /// The check should start by itself on the next frame.
@@ -366,9 +365,11 @@ fn row(ui: &mut egui::Ui, label: &str, add: impl FnOnce(&mut egui::Ui)) {
 
 /// Cached measurements depend on the entire export configuration, especially
 /// precision and physical scale. Never display a result from an older setting.
-fn snapshot_stale(snap: Option<&(Scene, Picks, Options)>, scene: &Scene, sel: impl Into<Picks>, opts: &Options) -> bool {
+/// The scene is told apart by its revision number (`App::track_scene`), so a frame without a
+/// change copies and compares nothing.
+fn snapshot_stale(snap: Option<&(u64, Picks, Options)>, rev: u64, sel: impl Into<Picks>, opts: &Options) -> bool {
     let sel: Picks = sel.into();
-    snap.is_none_or(|s| &s.0 != scene || s.1 != sel || &s.2 != opts)
+    snap.is_none_or(|s| s.0 != rev || s.1 != sel || &s.2 != opts)
 }
 
 /// Call once per frame: the progress of a running export and the card when it is open.
@@ -376,8 +377,9 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
     running_card(app, ctx);
     let Some(mut d) = ctx.data_mut(|m| m.remove_temp::<Dlg>(id())).filter(|d| d.open) else { return };
     // the estimate and the check are about the scene as it is now
-    let key = (app.scene.clone(), Picks::from(app.picks()), d.opts.clone());
-    let stale = snapshot_stale(d.snap.as_ref(), &key.0, key.1.clone(), &key.2);
+    let rev = app.track_scene();
+    let key = (rev, Picks::from(app.picks()), d.opts.clone());
+    let stale = snapshot_stale(d.snap.as_ref(), key.0, key.1.clone(), &key.2);
     if stale {
         d.snap = Some(key);
         d.check.reset();
@@ -775,17 +777,17 @@ mod tests {
 
     #[test]
     fn print_check_cache_invalidates_when_precision_or_scale_changes() {
-        let scene = Scene::default();
         let old = Options::default();
-        let snapshot = (scene.clone(), Picks::default(), old.clone());
-        assert!(!snapshot_stale(Some(&snapshot), &scene, None, &old));
+        let snapshot = (7u64, Picks::default(), old.clone());
+        assert!(!snapshot_stale(Some(&snapshot), 7, None, &old));
+        assert!(snapshot_stale(Some(&snapshot), 8, None, &old), "a changed scene has a new revision");
         let precise = Options { tolerance: 0.1, ..old.clone() };
-        assert!(snapshot_stale(Some(&snapshot), &scene, None, &precise), "precision affects measured thin walls");
+        assert!(snapshot_stale(Some(&snapshot), 7, None, &precise), "precision affects measured thin walls");
         let scaled = Options { scale_pct: 10.0, ..old.clone() };
-        assert!(snapshot_stale(Some(&snapshot), &scene, None, &scaled), "physical scale affects measured wall thickness");
+        assert!(snapshot_stale(Some(&snapshot), 7, None, &scaled), "physical scale affects measured wall thickness");
         let scope = Options { scope: Scope::Selected, ..old };
-        assert!(snapshot_stale(Some(&snapshot), &scene, None, &scope));
-        assert!(snapshot_stale(None, &scene, None, &scaled));
+        assert!(snapshot_stale(Some(&snapshot), 7, None, &scope));
+        assert!(snapshot_stale(None, 7, None, &scaled));
     }
 
     #[test]
