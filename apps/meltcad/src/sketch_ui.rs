@@ -19,7 +19,7 @@ use crate::curve_tool::Input;
 use crate::model::{Kind, MAX_OUTLINE, MAX_PATH, MAX_SHAPES, Material, Op, Pick, Shape};
 use crate::sdf::V3;
 use crate::sketch::{self, Frame, SketchError, SnapGeometry, SnapHit, SnapKind, Which};
-use crate::sketch_dimensions::Dimensions;
+use crate::sketch_dimensions::{Dimensions, dim_profile};
 use crate::sketch_edit_ops::{self, EditError};
 use crate::style;
 
@@ -980,6 +980,36 @@ impl App {
 
     // ----- what a finished gesture does -----
 
+    /// A drawing gesture ended: store it and set up its dimension fields (#98: a new hole gets
+    /// its own fields instead of replacing the outer outline).
+    pub(crate) fn finish_gesture(&mut self, d: Finished, measured: Option<([f32; 2], [f32; 2])>) {
+        let is_profile = matches!(d, Finished::Profile(_));
+        let top = self.sk.stage == Stage::LoftTop;
+        let pen = self.sk.active_pen();
+        let was_hole = self.sk.stage == Stage::Hole;
+        let holes_before = self.sk.holes.len();
+        if was_hole {
+            self.sk.dimension = None;
+        }
+        self.sketch_done(d);
+        if is_profile && let Some((a, b)) = measured {
+            if was_hole {
+                // the typed size belongs to the new hole, not the outer outline (#98)
+                if self.sk.holes.len() > holes_before
+                    && let Some(h) = self.sk.holes.last()
+                {
+                    self.sk.dimension = Dimensions::for_shape(pen, a, b, h, false);
+                    if let Some(d) = self.sk.dimension.as_mut() {
+                        d.hole = true;
+                    }
+                }
+            } else {
+                let p = if top { &self.sk.profile2 } else { &self.sk.profile };
+                self.sk.dimension = Dimensions::for_shape(pen, a, b, p, top);
+            }
+        }
+    }
+
     /// A profile or a line has been drawn.
     pub fn sketch_done(&mut self, done: Finished) {
         match done {
@@ -1240,14 +1270,7 @@ impl App {
             out.taken = true;
         }
         if let Some(d) = done {
-            let is_profile = matches!(d, Finished::Profile(_));
-            let top = self.sk.stage == Stage::LoftTop;
-            let pen = self.sk.active_pen();
-            self.sketch_done(d);
-            if is_profile && let Some((a, b)) = measured {
-                let p = if top { &self.sk.profile2 } else { &self.sk.profile };
-                self.sk.dimension = Dimensions::for_shape(pen, a, b, p, top);
-            }
+            self.finish_gesture(d, measured);
         }
         // Every primary sketch gesture belongs to the sketch, including drags
         // which have not produced a point. Never fall through to object picking.
@@ -1282,7 +1305,7 @@ impl App {
             }
             if hit(Key::Escape) {
                 if let Some(d) = self.sk.dimension.as_mut() {
-                    let profile = if d.top_profile { &mut self.sk.profile2 } else { &mut self.sk.profile };
+                    let profile = dim_profile(d, &mut self.sk.profile, &mut self.sk.profile2, &mut self.sk.holes);
                     d.cancel(&mut self.sk.pts, profile);
                     if d.provisional {
                         self.sk.dimension = None;
@@ -1291,7 +1314,7 @@ impl App {
             } else if hit(Key::Enter)
                 && let Some(d) = self.sk.dimension.as_mut()
             {
-                let profile = if d.top_profile { &self.sk.profile2 } else { &self.sk.profile };
+                let profile = dim_profile(d, &mut self.sk.profile, &mut self.sk.profile2, &mut self.sk.holes);
                 let ok = d.accept(&self.sk.pts, profile);
                 // a segment typed with Tab is placed: the next Tab starts the next one
                 if ok && d.provisional {
@@ -1299,6 +1322,17 @@ impl App {
                 }
             }
             // Stop all global shortcuts, including the numeric view keys.
+            return true;
+        }
+        // Shift+Tab types the X / Y of the vertex just placed (Tab alone types the next segment) (#222)
+        if self.sk.edit.is_none()
+            && matches!(self.sk.active_pen(), Pen::Line | Pen::Polygon)
+            && !self.sk.pts.is_empty()
+            && ctx.input_mut(|i| i.consume_key(Modifiers::SHIFT, Key::Tab))
+        {
+            if let Some(d) = Dimensions::for_vertex(&self.sk.pts) {
+                self.sk.dimension = Some(d);
+            }
             return true;
         }
         if self.sk.edit.is_none() && (self.sk.dimension.is_some() || !self.sk.pts.is_empty()) && hit(Key::Tab) {
@@ -1499,6 +1533,8 @@ impl App {
                     let Some(e) = self.sk.edit.as_ref() else { return };
                     let Some(sh) = self.scene.shape(e.g, e.s) else { return };
                     let Some(frame) = sketch::edit_frame(sh, e.which) else { return };
+                    // a scaled shape's stretch goes into the points, so the new outline is as wide as the preview (#100)
+                    let Some((frame, points)) = frame.bake_scale(&points) else { return };
                     self.sk.edit = None;
                     self.sk.on = true;
                     self.sk.reset();
@@ -2620,6 +2656,24 @@ impl App {
         }
     }
 
+    /// A typed dimension changed: update the outline and the live 3D solid, before Enter (#212).
+    pub(crate) fn dimension_field_changed(&mut self, index: usize) {
+        let Some(d) = self.sk.dimension.as_mut() else {
+            return;
+        };
+        d.selected = index;
+        let profile = dim_profile(d, &mut self.sk.profile, &mut self.sk.profile2, &mut self.sk.holes);
+        let prevent_cross = matches!(self.sk.pen, Pen::Polygon | Pen::Spline) && !self.sk.smooth;
+        d.update(&mut self.sk.pts, profile, index, prevent_cross);
+        if d.hole && d.error.is_none() {
+            // a resized hole must still sit inside the outline and apart from the others
+            if let Err(e) = sketch::validate_holes(&self.sk.profile, &self.sk.holes) {
+                d.error = Some(e.message());
+            }
+        }
+        self.live_update();
+    }
+
     /// Inline numeric fields; their edits change the visible sketch immediately.
     fn dimension_card(&mut self, ui: &mut Ui) {
         let Some(d) = self.sk.dimension.as_mut() else {
@@ -2658,12 +2712,12 @@ impl App {
             d.needs_focus = false;
         }
         if let Some(index) = changed {
-            d.selected = index;
-            let profile = if d.top_profile { &mut self.sk.profile2 } else { &mut self.sk.profile };
-            let prevent_cross = matches!(self.sk.pen, Pen::Polygon | Pen::Spline) && !self.sk.smooth;
-            d.update(&mut self.sk.pts, profile, index, prevent_cross);
+            self.dimension_field_changed(index);
             ui.ctx().request_repaint();
         }
+        let Some(d) = self.sk.dimension.as_ref() else {
+            return;
+        };
         if let Some(error) = &d.error {
             ui.colored_label(style::CUT, error);
         }
@@ -3078,6 +3132,28 @@ mod tests {
         st.click([1.0, 1.0], false);
         st.back();
         assert!(st.anchor.is_none());
+    }
+
+    #[test]
+    fn hole_dimensions_edit_the_hole_not_the_outer_outline() {
+        let mut app = app();
+        app.scene.groups.clear();
+        app.set_sketch_tool(true);
+        app.sk.pen = Pen::Rect;
+        done_ready(&mut app, Finished::Profile(sketch::rect([-25.0, -15.0], [15.0, 25.0])));
+        let outer = app.sk.profile.clone();
+        app.sk.stage = Stage::Hole;
+        app.finish_gesture(Finished::Profile(sketch::rect([-15.0, -5.0], [-5.0, 5.0])), Some(([-15.0, -5.0], [-5.0, 5.0])));
+        assert_eq!(app.sk.holes.len(), 1);
+        assert!(app.sk.dimension.as_ref().is_some_and(|d| d.hole));
+        if let Some(d) = app.sk.dimension.as_mut() {
+            d.fields = ["12".into(), "10".into()];
+        }
+        app.dimension_field_changed(0);
+        assert_eq!(app.sk.profile, outer, "the outer outline keeps its size");
+        assert_eq!(sketch::bbox(&app.sk.holes[0]), Some(([-15.0, -5.0], [-3.0, 5.0])));
+        let Some(d) = app.sk.dimension.as_mut() else { panic!("dimension") };
+        assert!(d.error.is_none(), "{:?}", d.error);
     }
 
     #[test]
@@ -3688,6 +3764,25 @@ mod tests {
         assert_eq!(app.scene.shape_count(), 1, "one Enter plus make: one scene edit");
         app.redo();
         assert_eq!(app.scene.shape(g, si).map(|s| &s.outline), Some(&original_outline));
+    }
+
+    #[test]
+    fn shift_tab_types_the_x_and_y_of_the_first_vertex() {
+        let ctx = egui::Context::default();
+        let mut app = app();
+        app.set_sketch_tool(true);
+        app.sk.pen = Pen::Line;
+        app.sk.click([3.0, 4.0], false);
+        ctx.input_mut(|i| {
+            i.events.push(egui::Event::Key { key: egui::Key::Tab, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::SHIFT })
+        });
+        app.keys(&ctx);
+        let Some(d) = app.sk.dimension.as_mut() else { panic!("X/Y editor expected (#222)") };
+        assert!(d.editing && !d.provisional);
+        assert_eq!(d.fields, ["3".to_string(), "4".to_string()]);
+        d.fields = ["0".into(), "0".into()];
+        app.dimension_field_changed(0);
+        assert_eq!(app.sk.pts, vec![[0.0, 0.0]], "the vertex moved; no second point was added");
     }
 
     #[test]
