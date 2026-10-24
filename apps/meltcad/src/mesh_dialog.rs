@@ -360,13 +360,16 @@ struct Dlg {
     msg: String,
     open: bool,
     path: Option<PathBuf>,
+    /// An automatic SolidCraft transfer is waiting for the previous worker to free the
+    /// memory budget. It starts itself as soon as the permit is free, without a click.
+    waiting: bool,
     /// An in-memory SolidCraft transfer, completed only after insertion or explicit cancellation.
     completion: Option<SolidImport>,
 }
 
 impl Default for Dlg {
     fn default() -> Dlg {
-        Dlg { reading: None, loaded: None, st: Settings::new([60.0; 3]), bake: None, msg: String::new(), open: false, path: None, completion: None }
+        Dlg { reading: None, loaded: None, st: Settings::new([60.0; 3]), bake: None, msg: String::new(), open: false, path: None, waiting: false, completion: None }
     }
 }
 
@@ -382,6 +385,7 @@ pub fn is_open(ctx: &egui::Context) -> bool {
 fn cancel_dialog(d: &Dlg, reason: &str) {
     if let Some(b) = &d.bake {
         b.ctl.cancel.store(true, Ordering::Relaxed);
+        b.job.cancel();
     }
     if let Some(completion) = &d.completion {
         completion.complete(Err(reason.into()));
@@ -498,6 +502,7 @@ fn jp_error(e: &str) -> String {
 
 fn start_bake(d: &mut Dlg, ctx: &egui::Context) {
     let Some(loaded) = d.loaded.clone() else { return };
+    d.waiting = false;
     let settings = d.st.sanitized();
     let ctl = Arc::new(BakeControl::new());
     let (l, c) = (loaded.clone(), ctl.clone());
@@ -595,6 +600,15 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
     }
     // the bake has finished
     let mut inserted = false;
+    // A cancelled worker holds the memory budget until it has really exited. An automatic
+    // transfer waits for it and starts itself: a "busy" card would need a click nobody expects.
+    if d.waiting && d.bake.is_none() {
+        if work_budget::is_busy(ctx) {
+            ctx.request_repaint_after(std::time::Duration::from_millis(60));
+        } else {
+            start_bake(&mut d, ctx);
+        }
+    }
     if let Some(b) = d.bake.clone() {
         match b.job.take() {
             Some(Ok(baked)) => {
@@ -610,7 +624,13 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
             }
             Some(Err(e)) => {
                 d.bake = None;
-                d.msg = jp_error(&e);
+                if e == work_budget::BUSY && d.completion.is_some() && d.loaded.is_some() {
+                    d.waiting = true;
+                    d.msg.clear();
+                    ctx.request_repaint_after(std::time::Duration::from_millis(60));
+                } else {
+                    d.msg = jp_error(&e);
+                }
             }
             None => ctx.request_repaint_after(std::time::Duration::from_millis(60)),
         }
@@ -650,6 +670,8 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
                 if let Some((_, p)) = &d.reading {
                     ui.label(RichText::new(p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()).size(11.5).color(style::DIM));
                 }
+            } else if d.waiting {
+                ui.label(RichText::new("前の作業が終わるのを待っています…").size(12.0).color(style::DIM));
             } else if original {
                 if let Some(loaded) = &d.loaded {
                     ui.label(RichText::new(format!("立体の大きさ: {}", size_text(loaded.size))).size(12.0));
@@ -676,7 +698,7 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
             ui.add_space(4.0);
             ui.horizontal(|ui| {
                 if original && d.reading.is_none() {
-                    if d.bake.is_none() {
+                    if d.bake.is_none() && !d.waiting {
                         ui.add_enabled_ui(d.loaded.is_some() && !app.scene_structure_locked(), |ui| {
                             if style::pill(ui, "もう一度", true).clicked() {
                                 go = true;
@@ -1035,6 +1057,29 @@ mod tests {
         assert!(ctx.data(|m| m.get_temp::<RebakeRequest>(rebake_id())).is_some());
         assert!(cancel(&ctx));
         assert!(!is_open(&ctx));
+    }
+
+    #[test]
+    fn an_automatic_transfer_waits_for_a_cancelled_worker_and_retries_itself() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        let before = app.scene.shape_count();
+        // A cancelled worker keeps the one-high-memory-job permit until it has really exited.
+        let permit = work_budget::try_acquire(&ctx).expect("previous worker");
+        let completion = open_solid(&ctx, offset_box()).expect("start transfer");
+        for _ in 0..5 {
+            ctx.run_ui(egui::RawInput::default(), |ui| update(&mut app, ui.ctx())).textures_delta.clear();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert_eq!(completion.take_result(), None, "waiting is not a failed transfer");
+        assert_eq!(app.scene.shape_count(), before, "nothing comes in while the permit is held");
+        assert!(is_open(&ctx), "the card stays open instead of asking for another click");
+        // The transfer starts itself once the old worker has exited; no click is needed.
+        drop(permit);
+        pump(&mut app, &ctx, |a| a.scene.shape_count() > before);
+        assert_eq!(completion.take_result(), Some(Ok(())), "the automatic retry brings the solid in");
+        assert!(!is_open(&ctx));
+        assert_eq!(app.scene.shape_count(), before + 1);
     }
 
     #[test]
