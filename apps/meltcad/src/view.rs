@@ -55,11 +55,23 @@ pub fn device_of_scroll(unit: egui::MouseWheelUnit, delta: egui::Vec2) -> Option
     }
 }
 
-/// The shapes a pick stands for.
+/// The shapes a pick stands for. A group pick stands for its whole subtree, so moving a parent
+/// by the viewport handles takes its children with it (#260).
 pub fn targets(scene: &Scene, pick: Option<Pick>) -> Vec<(usize, usize)> {
     match pick {
         Some(Pick::Shape(g, s)) if scene.shape(g, s).is_some() => vec![(g, s)],
-        Some(Pick::Group(g)) => scene.groups.get(g).map(|gr| (0..gr.shapes.len()).map(|s| (g, s)).collect()).unwrap_or_default(),
+        Some(Pick::Group(g)) => {
+            if g >= scene.groups.len() {
+                return Vec::new();
+            }
+            let mut out = Vec::new();
+            for gi in g..scene.subtree_end(g) {
+                if let Some(group) = scene.groups.get(gi) {
+                    out.extend((0..group.shapes.len()).map(|s| (gi, s)));
+                }
+            }
+            out
+        }
         _ => Vec::new(),
     }
 }
@@ -74,18 +86,23 @@ pub fn targets_all(scene: &Scene, picks: &[Pick]) -> Vec<(usize, usize)> {
     for p in picks {
         // Visit each selected range directly: no temporary Vec for each pick, and
         // no growing linear scan of all earlier selections for every shape.
-        let (g, range) = match *p {
-            Pick::Shape(g, s) if scene.shape(g, s).is_some() => (g, s..s + 1),
-            Pick::Group(g) => {
-                let Some(group) = scene.groups.get(g) else { continue };
-                (g, 0..group.shapes.len())
+        let (first, last) = match *p {
+            Pick::Shape(g, s) if scene.shape(g, s).is_some() => {
+                if seen.insert((g, s)) {
+                    out.push((g, s));
+                }
+                continue;
             }
+            Pick::Group(g) if g < scene.groups.len() => (g, scene.subtree_end(g)),
             _ => continue,
         };
-        for s in range {
-            let t = (g, s);
-            if seen.insert(t) {
-                out.push(t);
+        for gi in first..last {
+            let Some(group) = scene.groups.get(gi) else { continue };
+            for s in 0..group.shapes.len() {
+                let t = (gi, s);
+                if seen.insert(t) {
+                    out.push(t);
+                }
             }
         }
     }
@@ -706,6 +723,26 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_parent_pick_covers_its_child_groups() {
+        use crate::model::{Group, Kind, Material, Pick, Shape};
+        let mut scene = Scene::default();
+        scene.groups.clear();
+        scene.groups.push(Group::new("Parent"));
+        let mut child = Group::new("Child");
+        child.depth = 1;
+        child.shapes.push(Shape::new(Kind::Box, [40.0, 0.0, 10.0], Material::default()));
+        scene.groups.push(child);
+        let mut grand = Group::new("Grand");
+        grand.depth = 2;
+        grand.shapes.push(Shape::new(Kind::Sphere, [0.0, 0.0, 20.0], Material::default()));
+        scene.groups.push(grand);
+        // #260: the viewport handles of a parent must act on its whole subtree.
+        assert_eq!(targets(&scene, Some(Pick::Group(0))), vec![(1, 0), (2, 0)]);
+        assert_eq!(targets_all(&scene, &[Pick::Group(0)]), vec![(1, 0), (2, 0)]);
+        assert_eq!(centre_of(&scene, Some(Pick::Group(0))), Some([20.0, 0.0, 15.0]), "the handles sit on the children when the parent has no shapes");
+    }
 
     #[test]
     fn a_group_pick_covers_all_its_shapes() {
