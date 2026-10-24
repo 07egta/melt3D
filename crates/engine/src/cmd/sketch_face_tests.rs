@@ -677,3 +677,63 @@ fn every_flat_face_of_one_sketch_extruded_up_and_down_takes_an_attached_sketch()
     assert_eq!(sketch_and_extrude_on_every_flat_face(&logo, &dir, "logo"), 12);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A face given next to `plane` instead of inside it was ignored and the sketch went to XY:
+/// it is refused, with where it belongs, and nothing is added. Inside `plane` it attaches.
+#[test]
+fn a_face_next_to_plane_is_refused_not_ignored() {
+    let mut s = Session::default();
+    run(&mut s, "solid.box", json!({"length": 20, "width": 20, "height": 10}));
+    let features = s.doc.features.len();
+    for p in [
+        json!({"face": [10, 10, 10]}),
+        json!({"plane": "XY", "face": [10, 10, 10]}),
+        json!({"origin": [0, 0, 5], "x_dir": [1, 0, 0], "y_dir": [0, 1, 0]}),
+    ] {
+        let e = s.execute("sketch.create", &p).unwrap_err().to_string();
+        assert!(e.contains("belongs inside `plane`"), "{p}: {e}");
+    }
+    assert_eq!(s.doc.features.len(), features);
+    assert!(s.active_sketch.is_none());
+    let r = run(&mut s, "sketch.create", json!({"plane": {"face": [10, 10, 10]}}));
+    assert_eq!(r["attachment"], "exact_face", "{r}");
+}
+
+/// #3248: a custom plane's `origin` that is present but not three numbers (an expression such as
+/// "w/2", a number with a unit, too few values) became [0, 0, 0] without a word. It is refused,
+/// like a bad `x_dir`, and nothing is added. A missing origin is still the world origin.
+#[test]
+fn a_custom_plane_origin_that_is_not_numbers_is_refused_not_zeroed() {
+    let mut s = Session::default();
+    run(&mut s, "parameters.add", json!({"name": "w", "expression": "40 mm"}));
+    let features = s.doc.features.len();
+    for origin in [json!(["w/2", 0, 0]), json!(["20 mm", 0, 0]), json!([20, 0]), json!("w"), json!([20, 0, null])] {
+        let p = json!({"plane": {"origin": origin, "x_dir": [0, 1, 0], "y_dir": [0, 0, 1]}});
+        let e = s.execute("sketch.create", &p).unwrap_err().to_string();
+        assert!(e.contains("origin"), "{p}: {e}");
+    }
+    assert_eq!(s.doc.features.len(), features);
+    assert!(s.active_sketch.is_none());
+    let origin_of = |s: &mut Session, plane: Value| {
+        run(s, "sketch.create", json!({"plane": plane}));
+        let r = run(s, "sketch.inspect", json!({}));
+        run(s, "sketch.finish", json!({}));
+        r["plane"]["origin"].clone()
+    };
+    assert_eq!(origin_of(&mut s, json!({"origin": [20, 0, 0], "x_dir": [0, 1, 0], "y_dir": [0, 0, 1]})), json!([20.0, 0.0, 0.0]));
+    assert_eq!(origin_of(&mut s, json!({"x_dir": [0, 1, 0], "y_dir": [0, 0, 1]})), json!([0.0, 0.0, 0.0]));
+}
+/// A sketch on a body's face projects that face's edges from the body's display mesh. The body
+/// it projects from is the model's own, not a copy that meshes it again: on a body whose curved
+/// edges are slow to mesh, the copy's mesh was thrown away and the next feature meshed the body
+/// a second time, which made a sketch on a face as slow as a cut.
+#[test]
+fn a_sketch_on_a_face_meshes_its_body_once() {
+    let mut s = Session::default();
+    run(&mut s, "solid.box", json!({"length":10,"width":10,"height":10,"body_name":"Base","name":"BaseFeature"}));
+    assert!(s.model.state().body("Base").unwrap().cached_mesh().is_none());
+    let pick = top_pick(&s, "Base");
+    run(&mut s, "sketch.create", json!({"name":"Attached","plane":pick}));
+    run(&mut s, "sketch.finish", json!({}));
+    assert!(s.model.state().body("Base").unwrap().cached_mesh().is_some(), "the sketch's projection meshed a copy of the body");
+}

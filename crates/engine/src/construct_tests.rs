@@ -282,6 +282,30 @@ fn construction_follows_the_model() {
     assert!(on_line(o, d, Vec3::new(40.0, 30.0, 50.0)) && on_line(o, d, Vec3::ZERO));
 }
 
+/// #568: a plane through three vertices follows them when a parameter moves them. Two of them
+/// sit on the box's end at x = 40; the box grows to 100 mm, so the vertices nearest the old
+/// picks are the ones at x = 0, on a line with the first: found by the names of the edges that
+/// meet there, they are the moved ones.
+#[test]
+fn a_plane_through_three_vertices_follows_them() {
+    let mut s = Session::default();
+    run(&mut s, "parameters.add", json!({"name": "len", "expression": "40 mm"}));
+    run(&mut s, "solid.box", json!({"length": "len", "width": 30, "height": 20, "body_name": "Box"}));
+    run(
+        &mut s,
+        "construct.plane.three_points",
+        json!({"a": {"vertex": [0, 0, 20]}, "b": {"vertex": [40, 0, 20]}, "c": {"vertex": [40, 30, 0]}, "name": "T"}),
+    );
+    run(&mut s, "parameters.change", json!({"name": "len", "expression": "100 mm"}));
+    let id = s.doc.features.iter().find(|f| f.name == "T").map(|f| f.id).unwrap_or_else(|| panic!("feature T"));
+    let error = s.model.result(id).and_then(|r| r.error.clone());
+    assert_eq!(error, None);
+    let t = plane(&s, "T");
+    for p in [Vec3::new(0.0, 0.0, 20.0), Vec3::new(100.0, 0.0, 20.0), Vec3::new(100.0, 30.0, 0.0)] {
+        assert!(on_plane(&t, p), "{p:?} is off {t:?}");
+    }
+}
+
 /// In a component moved 50 mm along X, picks given in the world land on its geometry, and the
 /// axis and point move with the occurrence.
 #[test]
@@ -425,4 +449,18 @@ fn ambiguity_error_names_the_other_origin_alias() {
         let inspected = run(&mut s, "sketch.inspect", json!({}));
         assert_eq!(inspected["plane"]["origin"], json!([0.0, 0.0, 0.0]));
     }
+}
+
+/// #257: a tagged point reference gets the coordinate limits of the untagged one.
+#[test]
+fn tagged_references_keep_to_the_coordinate_limits() {
+    let mut s = Session::default();
+    for point in [json!({"type": "point", "p": [1e300, 0, 0]}), json!({"type": "face", "at": [0, 1e10, 0]})] {
+        let r = s.execute("construct.point.vertex", &json!({"point": point}));
+        assert!(r.is_err(), "{point} was accepted: {r:?}");
+    }
+    assert!(s.execute("construct.point.vertex", &json!({"point": [1e300, 0, 0]})).is_err());
+    let before = s.doc.features.len();
+    run(&mut s, "construct.point.vertex", json!({"point": {"type": "point", "p": [1, 2, 3]}}));
+    assert_eq!(s.doc.features.len(), before + 1, "a normal tagged point still works");
 }

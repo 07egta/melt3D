@@ -1,3 +1,8 @@
+Melt 3D
+Copyright (c) 2026 07egta (the apps/meltcad/ application and the Melt 3D changes).
+Melt 3D is a separate program built on SolidCraft's source code; it is not affiliated with the
+SolidCraft project. The same MIT OR Apache-2.0 terms apply.
+
 SolidCraft
 Copyright (c) 2026 SolidCraft contributors.
 Licensed under the MIT License or the Apache License, Version 2.0, at your option
@@ -29,5 +34,8 @@ for sketch text, BIZ UDPGothic for web Japanese display) are licensed under SIL 
 per-file list is in ATTRIBUTION.md.
 
 SolidCraft is an independent project and is not affiliated with, sponsored by or endorsed by
-Autodesk, Inc. Autodesk and Fusion are trademarks of Autodesk, Inc.; they are used here only to
-describe compatibility goals.
+Autodesk, Dassault Systèmes, PTC, Siemens, Blender or any other CAD vendor. Fusion, AutoCAD,
+Inventor, Alias and Tinkercad are trademarks of Autodesk, Inc.; SolidWorks is a trademark of
+Dassault Systèmes; Onshape and Creo are trademarks of PTC; Blender is a trademark of the Blender
+Foundation. Product names appear only to describe compatibility, such as the mouse navigation
+presets in Preferences › Navigation and file formats from public specifications.

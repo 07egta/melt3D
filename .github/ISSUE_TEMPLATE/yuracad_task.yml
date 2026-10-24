@@ -1,0 +1,32 @@
+name: YuraCAD work item (作業の登録)
+description: One unit of YuraCAD work, tracked on the Project board
+labels: ["yuracad", "task"]
+body:
+  - type: input
+    id: pr
+    attributes:
+      label: Owning PR (担当PR)
+      placeholder: "#123 or 'not opened yet'"
+  - type: textarea
+    id: files
+    attributes:
+      label: Files you plan to change (変更予定ファイル)
+      placeholder: apps/meltcad/src/sketch_ui.rs
+    validations:
+      required: true
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority (優先度)
+      options: ["P0 crash / data loss", "P1 blocks everyday use", "P2 improvement", "P3 nice to have"]
+    validations:
+      required: true
+  - type: textarea
+    id: unverified
+    attributes:
+      label: Not verified yet (未検証事項)
+  - type: dropdown
+    id: status
+    attributes:
+      label: Status (進み具合)
+      options: ["In progress (作業中)", "PR open (PR提出)", "Waiting for tests (テスト待ち)", "Waiting to integrate (統合待ち)", "Done (完了)"]

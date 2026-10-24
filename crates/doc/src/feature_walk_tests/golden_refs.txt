@@ -60,10 +60,14 @@ hole_countersink
   remap_refs: points.sketch
 thread
 loft
-  sketches: [4, 5]
-  remap_refs: sections[0].sketch, sections[1].sketch
+  sketches: [4, 5, 6]
+  remap_refs: rails[0].sketch, sections[0].sketch, sections[1].sketch
   remap_bodies: targets[0]
 sweep
+  sketches: [1, 2]
+  remap_refs: path_sketch, sketch
+  remap_bodies: targets[0]
+sweep_options
   sketches: [1, 2]
   remap_refs: path_sketch, sketch
   remap_bodies: targets[0]
@@ -77,6 +81,10 @@ construction_plane
 split
   remap_refs: plane.base.base.name
   remap_bodies: body, tool.body
+split_line
+  sketches: [6]
+  remap_refs: plane.base.base.name, sketch
+  remap_bodies: body
 construction_axis
 construction_point_planes
 construction_point_along
@@ -159,10 +167,28 @@ surface_revolve
 surface_sweep
   sketches: [1, 2]
   remap_refs: path_sketch, sketch
+surface_sweep_options
+  sketches: [1, 2]
+  remap_refs: path_sketch, sketch
 surface_loft
-  sketches: [4, 5]
-  remap_refs: sections[0].sketch, sections[1].sketch
+  sketches: [4, 5, 6]
+  remap_refs: rails[0].sketch, sections[0].sketch, sections[1].sketch
+surface_blend
+  remap_bodies: from.body
 surface_offset
+  remap_bodies: body
+surface_blend
+  remap_bodies: from.body
+surface_boundary
+  sketches: [1]
+  remap_refs: sketch
+surface_network
+  sketches: [1, 2]
+  remap_refs: u[0].sketch, v[0].sketch
+  remap_bodies: u[1].body
+surface_match
+  remap_bodies: body
+surface_fair
   remap_bodies: body
 unstitch
   remap_bodies: body
@@ -182,6 +208,13 @@ surface_ruled
 surface_trim
   remap_refs: plane.base.base.name
   remap_bodies: body, tool.body
+surface_trim_curves
+  sketches: [1]
+  remap_refs: curves.sketch, plane.base.base.name
+  remap_bodies: body
+surface_trim_mutual
+  remap_refs: plane.base.base.name
+  remap_bodies: body, with
 move
   remap_bodies: bodies[0]
 import
