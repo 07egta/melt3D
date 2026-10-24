@@ -1,5 +1,5 @@
 //! The curve (kind 18): a smooth tube through the nodes of `Shape::path` (x, y, z, radius), in the
-//! shape's own space, like Womp's line tool. The shader copy is `shader_curve.wgsl`; keep the two
+//! shape's own space. The shader copy is `shader_curve.wgsl`; keep the two
 //! in step.
 //!
 //! The nodes are first resampled with a (centripetal) Catmull-Rom spline into at most `MAX_POINTS` points (the
