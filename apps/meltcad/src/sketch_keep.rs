@@ -36,7 +36,13 @@ impl App {
             self.sk.msg = format!("Up to {MAX_SHAPES} shapes");
             return false;
         }
-        let mut sh = match crate::sketch_saved::create(self.sk.pframe, points, &self.sk.holes, closed) {
+        let editing_shape = editing.and_then(|(g, s)| self.scene.shape(g, s)).cloned();
+        let created = match &editing_shape {
+            // Editing keeps the saved sketch's rotation, scale and identity (#189).
+            Some(original) => crate::sketch_saved::replace(original, None, points, Some(&self.sk.holes), closed),
+            None => crate::sketch_saved::create(self.sk.pframe, points, &self.sk.holes, closed),
+        };
+        let mut sh = match created {
             Ok(sh) => sh,
             Err(e) => {
                 self.sk.msg = e;
@@ -506,6 +512,35 @@ mod tests {
             Some(Pick::Shape(g, s)) => (g, s),
             _ => panic!("saved sketch selected"),
         }
+    }
+
+    #[test]
+    fn editing_a_rotated_scaled_sketch_keeps_its_transform() {
+        // #189: confirming an edited saved sketch used to replace it with a fresh Shape, which
+        // reset rot to 0 and scale to 1 (and silently changed the coordinate system).
+        let mut app = App::new(true, None);
+        app.scene.groups.clear();
+        let (g, s) = save_profile(&mut app, Frame::horizontal(15.0), sketch::rect([0.0, 0.0], [30.0, 20.0]));
+        {
+            let sh = app.scene.shape_mut(g, s).expect("guide");
+            sh.rot = [0.0, 0.0, 30.0_f32.to_radians()];
+            sh.scale = [2.0, 1.0, 1.0];
+        }
+        let (rot, scale) = {
+            let sh = app.scene.shape(g, s).expect("guide");
+            (sh.rot, sh.scale)
+        };
+        assert!(app.edit_saved_sketch(g, s));
+        app.sk.profile = sketch::rect([0.0, 0.0], [50.0, 40.0]);
+        app.sk.dimension = None;
+        assert!(app.sketch_confirm(&egui::Context::default()));
+        let edited = app.scene.shape(g, s).expect("edited guide");
+        assert_eq!(edited.rot, rot, "rotation survives Edit Sketch");
+        assert_eq!(edited.scale, scale, "non-uniform scale survives Edit Sketch");
+        // The edited world geometry is still 50 x 40; the kept transform lives in rot/scale.
+        let (_frame, profile) = app.curve_profile(g, s).expect("profile");
+        let size = sketch::rectangle_size(&profile).expect("rectangle");
+        assert!((size[0] - 50.0).abs() < 1e-2 && (size[1] - 40.0).abs() < 1e-2, "world size {size:?}");
     }
 
     #[test]
