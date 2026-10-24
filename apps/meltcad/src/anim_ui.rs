@@ -52,6 +52,24 @@ pub struct State {
     job: Option<Job>,
 }
 
+impl Job {
+    #[cfg(test)]
+    pub fn for_test(rx: Receiver<Result<String, String>>, done: Arc<AtomicU32>, total: Arc<AtomicU32>, cancel: Arc<AtomicBool>) -> Job {
+        Job { rx, done, total, cancel }
+    }
+}
+
+impl State {
+    #[cfg(test)]
+    pub fn set_job_for_test(&mut self, job: Job) {
+        self.job = Some(job);
+    }
+    /// Is a GIF still being made? Closing the window would cut the file short.
+    pub fn gif_running(&self) -> bool {
+        self.job.is_some()
+    }
+}
+
 impl App {
     /// Poll GIF completion even when the timeline itself is closed.
     pub(crate) fn poll_gif_job(&mut self, ctx: &egui::Context) {

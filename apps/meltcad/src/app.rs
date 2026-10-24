@@ -634,7 +634,11 @@ impl App {
     fn handle_close_request(&mut self, ctx: &egui::Context) {
         if ctx.input(|i| i.viewport().close_requested())
             && !self.close_approved
-            && (self.native_job.is_some() || self.queued_open.is_some() || self.after_save.is_some() || crate::work_budget::is_busy(ctx))
+            && (self.native_job.is_some()
+                || self.queued_open.is_some()
+                || self.after_save.is_some()
+                || self.an.gif_running()
+                || crate::work_budget::is_busy(ctx))
         {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.say(ctx, "A file job is still running. Wait for it or stop it before closing");
@@ -2985,6 +2989,28 @@ mod tests {
         assert_eq!(app.scene, edited, "the queued open must not discard edits made while it waited");
         assert!(app.path.is_none(), "the rejected open must not change the current document path");
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// #232: a running GIF export keeps the window from closing under it.
+    #[test]
+    fn closing_while_a_gif_is_being_made_is_refused() {
+        use std::sync::atomic::{AtomicBool, AtomicU32};
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        let (_tx, rx) = std::sync::mpsc::channel();
+        app.an.set_job_for_test(crate::anim_ui::Job::for_test(
+            rx,
+            std::sync::Arc::new(AtomicU32::new(0)),
+            std::sync::Arc::new(AtomicU32::new(1)),
+            std::sync::Arc::new(AtomicBool::new(false)),
+        ));
+        assert!(app.an.gif_running());
+        let mut input = egui::RawInput::default();
+        input.viewports.get_mut(&egui::ViewportId::ROOT).expect("root viewport").events.push(egui::ViewportEvent::Close);
+        let mut output = ctx.run_ui(input, |_ui| app.handle_close_request(&ctx));
+        output.textures_delta.clear();
+        assert!(output.viewport_output.get(&egui::ViewportId::ROOT).is_some_and(|v| v.commands.contains(&egui::ViewportCommand::CancelClose)));
+        assert!(!app.close_approved);
     }
 
     #[test]
