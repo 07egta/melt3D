@@ -34,9 +34,19 @@ pub struct State {
     pub frame: u32,
     pub playing: bool,
     clock: f32,
+    /// egui's time when the previous played frame was drawn: playback follows the wall clock so a
+    /// slow frame skips animation frames instead of playing the animation in slow motion (#183).
+    played_at: Option<f64>,
     /// The scene revision last looked at for edits.
     rev: u64,
     job: Option<Job>,
+}
+
+/// The playhead after `seconds` of real time. Slow frames produce one large step instead of a
+/// capped one; a stall of an hour is treated as at most an hour so the f32 clock stays sane.
+fn advance_clock(clock: f32, seconds: f64, fps: u32) -> f32 {
+    let next = clock + seconds.clamp(0.0, 3600.0) as f32 * fps as f32;
+    if next.is_finite() { next } else { 0.0 }
 }
 
 impl App {
@@ -143,6 +153,7 @@ impl App {
 
         if !self.an.open {
             self.an.playing = false;
+            self.an.played_at = None;
             let mut reopen_timeline = false;
             if let Some(job) = &self.an.job {
                 egui::Panel::bottom("gif_background_progress").exact_size(32.0).show(ui, |ui| {
@@ -170,15 +181,21 @@ impl App {
         if editing {
             self.an.playing = false;
         }
-        // playing
+        // playing: the wall clock decides the pose, so a slow frame skips animation frames
+        // instead of stretching the animation (#183)
         if self.an.playing {
-            let dt = ctx.input(|i| i.stable_dt).min(0.1);
-            self.an.clock += dt * self.scene.anim.fps as f32;
+            let now = ctx.input(|i| i.time);
+            // The first played frame has no previous sample: advance by that frame's own time.
+            let seconds = self.an.played_at.map_or_else(|| ctx.input(|i| i.stable_dt) as f64, |t| now - t);
+            self.an.played_at = Some(now);
+            self.an.clock = advance_clock(self.an.clock, seconds, self.scene.anim.fps);
             let f = (self.an.clock as u32) % length;
             if f != self.an.frame || self.an.clock < 1.0 {
                 self.show_pose(f);
             }
             ctx.request_repaint();
+        } else {
+            self.an.played_at = None;
         }
 
         let mut go: Option<u32> = None;

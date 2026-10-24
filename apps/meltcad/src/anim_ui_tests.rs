@@ -34,6 +34,44 @@ fn bar(app: &mut App, ctx: &egui::Context) {
     output.textures_delta.clear();
 }
 
+/// One frame at an explicit wall-clock time (the real frame time drives playback).
+fn bar_at(app: &mut App, ctx: &egui::Context, time: f64) {
+    let input = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(1500.0, 300.0))),
+        time: Some(time),
+        ..Default::default()
+    };
+    let mut output = ctx.run_ui(input, |ui| app.anim_bar(ui));
+    output.textures_delta.clear();
+}
+
+#[test]
+fn a_slow_frame_advances_the_playhead_by_real_time() {
+    assert!((advance_clock(0.0, 0.2, 24) - 4.8).abs() < 1e-3, "0.2 s at 24 fps is 4.8 animation frames, not 2.4");
+    assert!((advance_clock(10.0, 0.5, 12) - 16.0).abs() < 1e-3);
+    assert_eq!(advance_clock(1.0, -1.0, 24), 1.0, "time never runs backwards");
+    assert!((advance_clock(1.0, 7200.0, 24) - (1.0 + 3600.0 * 24.0)).abs() < 1.0, "a very long stall is capped, not infinite");
+}
+
+#[test]
+fn playback_follows_the_wall_clock_when_frames_are_slow() {
+    let ctx = egui::Context::default();
+    let mut app = animated();
+    let fps = app.scene.anim.fps;
+    app.an.clock = 0.0;
+    app.an.playing = true;
+    // Two frames 0.2 s apart (5 fps): the old capped dt advanced only 0.1 s worth.
+    bar_at(&mut app, &ctx, 10.0);
+    let started = app.an.clock;
+    bar_at(&mut app, &ctx, 10.2);
+    let expected = 0.2 * fps as f32;
+    assert!(
+        (app.an.clock - started - expected).abs() < 1e-3,
+        "playhead moved {} in 0.2 s, expected {expected} (not a capped dt)",
+        app.an.clock - started
+    );
+}
+
 #[test]
 fn late_cancel_does_not_overwrite_preexisting_gif() {
     let path = std::env::temp_dir().join(format!("melt3d_cancel_{}_test.gif", std::process::id()));
