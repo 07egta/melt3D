@@ -450,3 +450,17 @@ fn ambiguity_error_names_the_other_origin_alias() {
         assert_eq!(inspected["plane"]["origin"], json!([0.0, 0.0, 0.0]));
     }
 }
+
+/// #257: a tagged point reference gets the coordinate limits of the untagged one.
+#[test]
+fn tagged_references_keep_to_the_coordinate_limits() {
+    let mut s = Session::default();
+    for point in [json!({"type": "point", "p": [1e300, 0, 0]}), json!({"type": "face", "at": [0, 1e10, 0]})] {
+        let r = s.execute("construct.point.vertex", &json!({"point": point}));
+        assert!(r.is_err(), "{point} was accepted: {r:?}");
+    }
+    assert!(s.execute("construct.point.vertex", &json!({"point": [1e300, 0, 0]})).is_err());
+    let before = s.doc.features.len();
+    run(&mut s, "construct.point.vertex", json!({"point": {"type": "point", "p": [1, 2, 3]}}));
+    assert_eq!(s.doc.features.len(), before + 1, "a normal tagged point still works");
+}

@@ -93,7 +93,19 @@ fn geo(s: &Session, v: Option<&Value>, cmd: &str, what: &str) -> Result<GeoRef> 
     let v = v.ok_or_else(|| bad(cmd, format!("`{what}` is required: {REF}")))?;
     let p3 = |k: &str| v.get(k).and_then(vec3);
     let mut g = if v.get("type").is_some() {
-        serde_json::from_value::<GeoRef>(v.clone()).map_err(|e| bad(cmd, format!("`{what}`: {e}")))?
+        let g = serde_json::from_value::<GeoRef>(v.clone()).map_err(|e| bad(cmd, format!("`{what}`: {e}")))?;
+        // A tagged reference gets the same coordinate limits as the untagged forms (#257).
+        let at = match &g {
+            GeoRef::Point { p } => Some(*p),
+            GeoRef::Vertex { at, .. } | GeoRef::Edge { at, .. } | GeoRef::Face { at, .. } => Some(*at),
+            _ => None,
+        };
+        if let Some(a) = at
+            && ![a.x, a.y, a.z].into_iter().all(|c| crate::params::finite(c).is_some())
+        {
+            return Err(bad(cmd, format!("`{what}`: coordinates must be finite and below 1e9 in size")));
+        }
+        g
     } else if let Some(at) = p3("face") {
         GeoRef::Face { at, name: None }
     } else if let Some(at) = p3("edge") {
