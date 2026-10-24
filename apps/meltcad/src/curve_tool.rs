@@ -168,10 +168,19 @@ const END_GAP: f32 = 17.0;
 const PLUS_R: f32 = 9.0;
 const MID_R: f32 = 6.5;
 
+/// The point halfway along segment `seg` of the *drawn* curve (Bezier handles included), where the
+/// segment's "+" sits and where a node is inserted (#103).
+pub fn mid_point(s: &Shape, seg: usize) -> [f32; 4] {
+    if s.kind == Kind::Curve {
+        return curve::segment_shape(s, seg, 0.5);
+    }
+    curve::segment_point(&s.path, seg, 0.5, 0.0, false)
+}
+
 /// Lay a curve or sweep path out on screen.
 pub fn layout(cam: &Camera, rect: Rect, s: &Shape) -> Layout {
     let is_curve = s.kind == Kind::Curve;
-    let (closed, smooth, _, thick) = if is_curve { curve::settings(&s.params) } else { (false, 0.0, false, 1.0) };
+    let (closed, _, _, thick) = if is_curve { curve::settings(&s.params) } else { (false, 0.0, false, 1.0) };
     let k = s.scale[0].min(s.scale[1]).min(s.scale[2]) * thick;
     let n = s.path.len();
     let mut out = Layout::default();
@@ -181,7 +190,7 @@ pub fn layout(cam: &Camera, rect: Rect, s: &Shape) -> Layout {
     }
     let segs = if closed && n >= 3 { n } else { n.saturating_sub(1) };
     for i in 0..segs {
-        let m = curve::segment_point(&s.path, i, 0.5, smooth, closed);
+        let m = mid_point(s, i);
         if let Some(c) = cam.project(rect, to_world(s, [m[0], m[1], m[2]])) {
             out.mids.push((i, c));
         }
@@ -314,7 +323,7 @@ impl App {
             return None;
         }
         match self.sel {
-            Some(Pick::Shape(g, s)) if self.scene.shape(g, s).is_some_and(|x| x.kind.uses_path()) => Some((g, s)),
+            Some(Pick::Shape(g, s)) if self.scene.shape(g, s).is_some_and(|x| x.kind.uses_path() && !x.guide) => Some((g, s)),
             _ => None,
         }
     }
@@ -446,8 +455,7 @@ impl App {
                 drag.i = idx;
             }
             Hit::Mid(seg) => {
-                let (closed, smooth, _, _) = if sh.kind == Kind::Curve { curve::settings(&sh.params) } else { (false, 0.0, false, 1.0) };
-                let m = curve::segment_point(&sh.path, seg, 0.5, smooth, closed && n >= 3);
+                let m = mid_point(sh, seg);
                 let Some(idx) = insert_node(&mut sh.path, seg, m) else { return false };
                 if !sh.curve_handles.is_empty() {
                     sh.curve_handles.insert(idx, CurveHandles::default());
@@ -566,9 +574,7 @@ impl App {
             }
             Hit::Mid(seg) => {
                 let Some(sh) = self.scene.shape_mut(g, s) else { return false };
-                let n = sh.path.len();
-                let (closed, smooth, _, _) = if sh.kind == Kind::Curve { curve::settings(&sh.params) } else { (false, 0.0, false, 1.0) };
-                let m = curve::segment_point(&sh.path, seg, 0.5, smooth, closed && n >= 3);
+                let m = mid_point(sh, seg);
                 if let Some(idx) = insert_node(&mut sh.path, seg, m) {
                     if !sh.curve_handles.is_empty() {
                         sh.curve_handles.insert(idx, CurveHandles::default());
@@ -1057,6 +1063,35 @@ mod tests {
 
     fn rect() -> Rect {
         Rect::from_min_size(pos2(10.0, 20.0), vec2(800.0, 500.0))
+    }
+
+    #[test]
+    fn saved_sketches_have_no_free_node_dragging() {
+        let mut app = App::new(true, None);
+        let mut sk = Shape::new(Kind::Curve, [0.0; 3], Material::default());
+        sk.path = vec![[0.0, 0.0, 0.0, 1.0], [10.0, 0.0, 0.0, 1.0], [10.0, 10.0, 0.0, 1.0]];
+        sk.guide = true;
+        app.scene.groups[0].shapes.push(sk);
+        let idx = app.scene.groups[0].shapes.len() - 1;
+        app.sel = Some(Pick::Shape(0, idx));
+        app.ct.edit_nodes = true;
+        assert_eq!(app.node_shape(), None, "a saved sketch stays on its plane (#102)");
+        app.scene.groups[0].shapes[idx].guide = false;
+        assert_eq!(app.node_shape(), Some((0, idx)));
+    }
+
+    #[test]
+    fn plus_sits_on_the_bezier_curve_not_on_the_chord() {
+        use crate::model::{CurveHandles, CurveNodeMode};
+        let mut s = Shape::new(Kind::Curve, [0.0; 3], Material::default());
+        s.path = vec![[-10.0, 0.0, 0.0, 1.0], [10.0, 0.0, 0.0, 1.0]];
+        let up = [0.0, 20.0, 0.0];
+        s.curve_handles = vec![
+            CurveHandles { mode: CurveNodeMode::Corner, incoming: [0.0; 3], outgoing: up },
+            CurveHandles { mode: CurveNodeMode::Corner, incoming: up, outgoing: [0.0; 3] },
+        ];
+        let m = mid_point(&s, 0);
+        assert!((m[0]).abs() < 1e-3 && (m[1] - 15.0).abs() < 1e-3, "true midpoint of the arch (#103): {m:?}");
     }
 
     #[test]
