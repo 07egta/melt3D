@@ -469,6 +469,12 @@ mod tests {
         app.sync_precise_transfer(&ctx);
         assert!(!app.precise_transfer_pending());
         assert!(app.precise.as_ref().unwrap().sent.is_none());
+        // the cancelled worker keeps its memory permit until its thread has really exited; a retry
+        // before that is refused as busy (a slow machine hits this window)
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(90);
+        while crate::work_budget::is_busy(&ctx) && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
         app.set_precise_mode(&ctx, true).unwrap();
         app.set_precise_mode(&ctx, false).unwrap();
         assert!(app.precise_transfer_pending(), "retry unchanged geometry after cancellation");
