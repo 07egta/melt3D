@@ -860,7 +860,7 @@ impl Session {
                 Ok(v)
             }
             Err(e) => {
-                if changed || self.pending_moves != before.pending_moves {
+                if changed || self.pending_moves != before.pending_moves || self.active_sketch != before.active_sketch {
                     self.doc = before.doc;
                     self.active_sketch = before.active_sketch;
                     self.pending_moves = before.pending_moves;

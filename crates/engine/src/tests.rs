@@ -4050,3 +4050,16 @@ fn combine_with_new_component_is_one_undo_step() {
     assert!(!s.doc.features.iter().any(|f| matches!(f.kind, solidcraft_doc::FeatureKind::Combine { .. })), "no Combine is left");
     assert!(s.doc.find_component("Base Combined").is_none(), "no component is left");
 }
+
+/// #250: a face revolve that fails (no axis) leaves the edited sketch open.
+#[test]
+fn failed_face_revolve_keeps_the_active_sketch() {
+    let mut s = Session::default();
+    run(&mut s, "solid.box", json!({"length": 10, "width": 10, "height": 10}));
+    run(&mut s, "sketch.create", json!({"plane": "XY"}));
+    let (active, features) = (s.active_sketch, s.doc.features.len());
+    assert!(active.is_some());
+    assert!(s.execute("solid.revolve", &json!({"face": [5, 5, 10]})).is_err());
+    assert_eq!(s.active_sketch, active, "the sketch stays open");
+    assert_eq!(s.doc.features.len(), features, "nothing was added");
+}
