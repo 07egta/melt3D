@@ -118,7 +118,8 @@ fn no_graphics(choice: backend::Choice, plan: backend::Plan, tried: &[backend::B
             all.push(b);
         }
         gpu_log::log(&format!("starting again with {next:?}"));
-        let r = backend::Relaunch { choice: None, tried: all, file: control::file_arg(&std::env::args_os().collect::<Vec<_>>()) };
+        let args: Vec<std::ffi::OsString> = std::env::args_os().collect();
+        let r = backend::Relaunch { choice: None, tried: all, file: control::file_arg(&args), keep: backend::kept_options(&args) };
         if backend::relaunch(&r).is_ok() {
             std::process::exit(0);
         }
