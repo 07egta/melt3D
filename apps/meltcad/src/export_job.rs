@@ -4,6 +4,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
 use std::time::Instant;
 
@@ -631,14 +632,21 @@ pub struct Job {
     rx: std::sync::Mutex<Receiver<Result<Report, String>>>,
     started: Instant,
     pub label: String,
-    writing: Arc<std::sync::atomic::AtomicBool>,
+    // 0 = cancellable; 1 = cancel requested; 2 = final commit (cannot cancel).
+    writing: Arc<AtomicU8>,
 }
 
 impl Job {
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn start(scene: Scene, sel: impl Into<Picks>, opts: Options, path: PathBuf) -> Job {
+        Self::start_with_permit(scene, sel, opts, path, None)
+    }
+
+    /// The UI passes an exclusive high-memory permit; it remains owned by the worker until exit.
+    pub fn start_with_permit(scene: Scene, sel: impl Into<Picks>, opts: Options, path: PathBuf, permit: Option<crate::work_budget::Permit>) -> Job {
         let sel: Picks = sel.into();
         let progress = Arc::new(Progress::new());
-        let writing = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let writing = Arc::new(AtomicU8::new(0));
         let (tx, rx) = channel();
         let p = progress.clone();
         let w = writing.clone();
@@ -647,6 +655,7 @@ impl Job {
             let t0 = Instant::now();
             let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(&scene, sel.clone(), &opts, &path, &p, &w, t0)));
             let res = res.unwrap_or_else(|_| Err("the export stopped unexpectedly".into()));
+            drop(permit); // unlock before the completion is observed on the next UI frame
             let _ = tx.send(res);
         });
         if let Err(e) = spawned {
@@ -667,8 +676,18 @@ impl Job {
         }
     }
 
-    pub fn cancel(&self) {
-        self.progress.cancel();
+    /// Cancellation wins only while the worker has not entered the final file commit.
+    pub fn cancel(&self) -> bool {
+        if self.writing.compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire).is_ok() {
+            self.progress.cancel();
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn can_cancel(&self) -> bool {
+        self.writing.load(Ordering::Acquire) == 0
     }
 
     pub fn elapsed(&self) -> f64 {
@@ -681,30 +700,29 @@ impl Job {
     }
 
     pub fn phase_name(&self) -> &'static str {
-        if self.writing.load(std::sync::atomic::Ordering::Relaxed) {
-            return "Writing the file…";
+        if self.writing.load(Ordering::Acquire) == 2 {
+            return "Writing the file (this last step cannot be stopped)…";
+        }
+        if self.writing.load(Ordering::Acquire) == 1 {
+            return "Waiting for the stop to finish…";
         }
         NAMES.get(self.progress.phase() as usize).copied().unwrap_or("Building…")
     }
 }
 
-fn run(
-    scene: &Scene,
-    sel: Picks,
-    o: &Options,
-    path: &Path,
-    prog: &Progress,
-    writing: &std::sync::atomic::AtomicBool,
-    t0: Instant,
-) -> Result<Report, String> {
+fn run(scene: &Scene, sel: Picks, o: &Options, path: &Path, prog: &Progress, writing: &AtomicU8, t0: Instant) -> Result<Report, String> {
     let built = build(scene, sel, o, prog)?;
-    writing.store(true, std::sync::atomic::Ordering::Relaxed);
+    if prog.cancelled() {
+        return Err(export_mesh::CANCELLED.into());
+    }
     prog.set(0.95);
     let files = serialize(&built, &o.sanitized(), path)?;
-    let bytes: u64 = files.iter().map(|(_, data)| data.len() as u64).sum();
-    // OBJ+MTL must commit as one logical output. A failure on the second
-    // file can no longer silently leave the first output overwritten.
-    crate::export_transaction::write_many(&files, || prog.cancelled()).map_err(|e| format!("could not save export: {e}"))?;
+    let bytes = crate::atomic_files::write_files(
+        &files,
+        &|| prog.cancelled(),
+        &|| writing.compare_exchange(0, 2, Ordering::AcqRel, Ordering::Acquire).is_ok(),
+        &|p| prog.set(0.96 + f64::from(p) * 0.039),
+    )?;
     prog.set(1.0);
     Ok(Report {
         path: path.to_path_buf(),
@@ -1060,6 +1078,36 @@ mod tests {
         let outside = painter.look([8.0, -10.0, 0.0]);
         assert_eq!(inside.rgb, [0, 255, 0]);
         assert_eq!(outside.rgb, [255, 0, 0], "mask outside should keep the base colour");
+    }
+
+    #[test]
+    fn incremental_preparation_never_changes_thin_shell_boolean_stl_export() {
+        let mut wall = sphere_at(0.0, 12.0, red());
+        wall.shell = 1.2; // precision-sensitive hollow wall
+        let mut cut = sphere_at(8.0, 5.0, blue());
+        cut.op = Op::Subtract;
+        let before = scene_of(vec![wall, cut]);
+        let previous = Field::new(&before);
+        let mut scene = before.clone();
+        scene.groups[0].shapes[1].pos[0] += 0.7;
+        let incremental = Field::reusing(&scene, Some((&previous, &before)));
+        let cold = Field::new(&scene);
+        assert_eq!(incremental.prepared_built, 1);
+        assert_eq!(incremental.prepared_reused, 1);
+        for x in -15..=15 {
+            for z in [8.0, 12.0, 20.0, 31.0] {
+                let p = [x as f32, 0.0, z];
+                assert_eq!(incremental.distance(p).to_bits(), cold.distance(p).to_bits());
+            }
+        }
+        // Export intentionally takes an uncached, exact Field::new. Both exports must be
+        // identical at the same tolerance, and the STL must round-trip every triangle.
+        let options = opts(Format::Stl, 0.55);
+        let output = build(&scene, None, &options, &Progress::new()).unwrap();
+        let bytes = crate::export_formats::stl_binary(&output.surface.mesh, "shell-boolean");
+        let faces = read_stl_binary(&bytes);
+        assert_eq!(faces.len(), output.surface.mesh.triangles.len());
+        assert!(!faces.is_empty());
     }
 
     #[test]

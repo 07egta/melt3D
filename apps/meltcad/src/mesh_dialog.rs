@@ -5,7 +5,7 @@
 //! The state lives in egui's memory like the other cards, so `App` needs no new fields.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -14,30 +14,54 @@ use egui::{Align2, Color32, RichText, Stroke};
 use crate::app::App;
 use crate::mesh_import::{self, Baked, Loaded, RES_CHOICES, Settings, Up};
 use crate::model::{Group, MAX_GROUPS, MAX_SHAPES, Material, MeshSource, Pick, Shape};
-use crate::sdf_volume::{BakeControl, ERR_CANCEL};
+use crate::sdf_volume::{BakeControl, ERR_CANCEL, Volume};
 use crate::style;
+use crate::work_budget;
 
-/// A job on another thread whose answer is picked up later.
+/// A worker that holds its memory permit until the actual thread exits.
 struct Job<T> {
     slot: Mutex<Option<Result<T, String>>>,
+    cancel: AtomicBool,
+    progress: AtomicU32,
 }
 
 impl<T: Send + 'static> Job<T> {
-    fn spawn(name: &str, f: impl FnOnce() -> Result<T, String> + Send + 'static) -> Arc<Job<T>> {
-        let job = Arc::new(Job { slot: Mutex::new(None) });
+    fn spawn(name: &str, ctx: &egui::Context, f: impl FnOnce(&AtomicBool, &AtomicU32) -> Result<T, String> + Send + 'static) -> Arc<Job<T>> {
+        let job = Arc::new(Job { slot: Mutex::new(None), cancel: AtomicBool::new(false), progress: AtomicU32::new(0) });
+        let permit = match work_budget::try_acquire(ctx) {
+            Ok(permit) => permit,
+            Err(e) => {
+                if let Ok(mut slot) = job.slot.lock() {
+                    *slot = Some(Err(e));
+                }
+                return job;
+            }
+        };
         let j = job.clone();
         let spawned = std::thread::Builder::new().name(name.into()).spawn(move || {
-            let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).unwrap_or_else(|_| Err("Stopped partway through".into()));
-            if let Ok(mut s) = j.slot.lock() {
-                *s = Some(res);
+            let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(&j.cancel, &j.progress)))
+                .unwrap_or_else(|_| Err("Stopped partway through".into()));
+            let res = if j.cancel.load(Ordering::Relaxed) { Err(crate::import_mesh::IMPORT_CANCELLED.into()) } else { res };
+            drop(permit); // free the budget before the UI can see a completed read
+            if let Ok(mut slot) = j.slot.lock() {
+                *slot = Some(res);
             }
         });
-        if spawned.is_err()
-            && let Ok(mut s) = job.slot.lock()
+        if let Err(e) = spawned
+            && let Ok(mut slot) = job.slot.lock()
         {
-            *s = Some(Err("Couldn't start loading".into()));
+            *slot = Some(Err(format!("Couldn't start loading: {e}")));
         }
         job
+    }
+    fn cancel(&self) {
+        self.cancel.store(true, Ordering::Relaxed);
+    }
+    fn cancelled(&self) -> bool {
+        self.cancel.load(Ordering::Relaxed)
+    }
+    fn fraction(&self) -> f32 {
+        (self.progress.load(Ordering::Relaxed) as f32 / 1000.0).clamp(0.0, 1.0)
     }
     fn take(&self) -> Option<Result<T, String>> {
         self.slot.lock().ok()?.take()
@@ -133,7 +157,45 @@ fn check_rebake_source(original: &Shape, file_name: &str, mesh_hash: u64) -> Res
     Ok(())
 }
 
-fn launch_rebake(req: &mut RebakeRequest) {
+/// The work of a re-bake. The file read, the residuals and the bake all watch the Stop flag of
+/// `c`, so Stop ends it promptly instead of after the whole file has been read.
+fn rebake_work(path: &Path, orig: &Shape, old: &Volume, resolution: u32, c: &BakeControl) -> Result<RebakeResult, String> {
+    let began = Instant::now();
+    let stopped = || c.cancel.load(Ordering::Relaxed);
+    let loaded = mesh_import::load_with_control(path, &c.cancel, &c.progress)?;
+    if stopped() {
+        return Err(ERR_CANCEL.into());
+    }
+    let hash = mesh_import::mesh_hash(&loaded.imported.mesh);
+    check_rebake_source(orig, &loaded.file_name, hash)?;
+    if stopped() {
+        return Err(ERR_CANCEL.into());
+    }
+    let y_up = orig.mesh_source.as_ref().map_or(loaded.imported.format.y_up_by_default(), |src| src.y_up);
+    let size = [0, 1, 2].map(|a| orig.size[a] * orig.scale[a]);
+    let before = mesh_import::surface_residual(&loaded.imported.mesh, y_up, orig.size, old);
+    if stopped() {
+        return Err(ERR_CANCEL.into());
+    }
+    // The old SDF is sampled in its original unscaled local coordinates.
+    // Convert the old residuals into conservative world-mm values.
+    let old_scale = orig.scale.into_iter().fold(0.0f32, f32::max);
+    let before = (before.0 * old_scale, before.1 * old_scale, before.2);
+    let baked = mesh_import::rebake(&loaded.imported.mesh, y_up, size, resolution, c)?;
+    if stopped() {
+        return Err(ERR_CANCEL.into());
+    }
+    let after = mesh_import::surface_residual(&loaded.imported.mesh, y_up, size, &baked.volume);
+    Ok(RebakeResult {
+        baked,
+        before,
+        after,
+        elapsed: began.elapsed().as_secs_f64(),
+        source: MeshSource { path: path.to_string_lossy().into_owned(), y_up, mesh_hash: hash },
+    })
+}
+
+fn launch_rebake(req: &mut RebakeRequest, ctx: &egui::Context) {
     let Some(path) = req.path.clone() else {
         req.msg = "Please pick the original mesh file again".into();
         return;
@@ -143,34 +205,7 @@ fn launch_rebake(req: &mut RebakeRequest) {
     let resolution = req.res;
     let ctl = Arc::new(BakeControl::new());
     let c = ctl.clone();
-    let job = Job::spawn("meltcad-mesh-rebake", move || {
-        let began = Instant::now();
-        let loaded = mesh_import::load(&path)?;
-        let hash = mesh_import::mesh_hash(&loaded.imported.mesh);
-        check_rebake_source(&orig, &loaded.file_name, hash)?;
-        if c.cancel.load(Ordering::Relaxed) {
-            return Err(ERR_CANCEL.into());
-        }
-        let y_up = orig.mesh_source.as_ref().map_or(loaded.imported.format.y_up_by_default(), |src| src.y_up);
-        let size = [0, 1, 2].map(|a| orig.size[a] * orig.scale[a]);
-        let before = mesh_import::surface_residual(&loaded.imported.mesh, y_up, orig.size, &old);
-        // The old SDF is sampled in its original unscaled local coordinates.
-        // Convert the old residuals into conservative world-mm values.
-        let old_scale = orig.scale.into_iter().fold(0.0f32, f32::max);
-        let before = (before.0 * old_scale, before.1 * old_scale, before.2);
-        let baked = mesh_import::rebake(&loaded.imported.mesh, y_up, size, resolution, &c)?;
-        if c.cancel.load(Ordering::Relaxed) {
-            return Err(ERR_CANCEL.into());
-        }
-        let after = mesh_import::surface_residual(&loaded.imported.mesh, y_up, size, &baked.volume);
-        Ok(RebakeResult {
-            baked,
-            before,
-            after,
-            elapsed: began.elapsed().as_secs_f64(),
-            source: MeshSource { path: path.to_string_lossy().into_owned(), y_up, mesh_hash: hash },
-        })
-    });
+    let job = Job::spawn("meltcad-mesh-rebake", ctx, move |_, _| rebake_work(&path, &orig, &old, resolution, &c));
     req.job = Some(Arc::new(RebakeJob { job, ctl, started: Instant::now() }));
     req.msg.clear();
 }
@@ -304,7 +339,7 @@ fn rebake_panel(app: &mut App, ctx: &egui::Context) {
         req.path = Some(path);
     }
     if start {
-        launch_rebake(&mut req);
+        launch_rebake(&mut req, ctx);
     }
     if close {
         if let Some(j) = &req.job {
@@ -384,7 +419,7 @@ pub fn open_solid(ctx: &egui::Context, loaded: Loaded) -> Result<SolidImport, St
     let st =
         Settings { target_mm: loaded.size.into_iter().fold(0.0, f32::max), up: Up::Z, floor: false, centre: false, ..Settings::new(loaded.size) };
     let mut d = Dlg { loaded: Some(Arc::new(loaded)), st, open: true, completion: Some(completion.clone()), ..Dlg::default() };
-    start_bake(&mut d);
+    start_bake(&mut d, ctx);
     ctx.data_mut(|m| m.insert_temp(id(), d));
     ctx.request_repaint();
     Ok(completion)
@@ -401,13 +436,21 @@ pub fn open(ctx: &egui::Context) {
 /// Show the card for this file (a dropped file, or the one just chosen).
 pub fn open_path(ctx: &egui::Context, path: PathBuf) {
     if let Some(d) = ctx.data_mut(|m| m.remove_temp::<Dlg>(id())) {
+        // A cancelled worker still owns large allocations until it has actually exited.
+        // (a pending SolidCraft transfer is cancelled below instead, as before)
+        if d.open && d.completion.is_none() && (d.reading.is_some() || d.bake.is_some()) {
+            let mut d = d;
+            d.msg = "Busy. Stop the current job and wait for it to end before opening another file".into();
+            ctx.data_mut(|m| m.insert_temp(id(), d));
+            return;
+        }
         cancel_dialog(&d, "別のメッシュの読み込みに切り替えたため、SolidCraft の取り込みを取り消しました");
     }
     let p = path.clone();
     let d = Dlg {
         open: true,
         path: Some(path.clone()),
-        reading: Some((Job::spawn("meltcad-mesh-read", move || mesh_import::load(&p)), path)),
+        reading: Some((Job::spawn("meltcad-mesh-read", ctx, move |cancel, progress| mesh_import::load_with_control(&p, cancel, progress)), path)),
         ..Dlg::default()
     };
     ctx.data_mut(|m| m.insert_temp(id(), d));
@@ -450,21 +493,25 @@ fn size_text(s: [f32; 3]) -> String {
 
 /// Friendly words for an error from the readers or the bake.
 fn jp_error(e: &str) -> String {
-    if e == ERR_CANCEL { "Cancelled".into() } else { e.to_string() }
+    if e == ERR_CANCEL || e == crate::import_mesh::IMPORT_CANCELLED { "Cancelled".into() } else { e.to_string() }
 }
 
-fn start_bake(d: &mut Dlg) {
+fn start_bake(d: &mut Dlg, ctx: &egui::Context) {
     let Some(loaded) = d.loaded.clone() else { return };
     let settings = d.st.sanitized();
     let ctl = Arc::new(BakeControl::new());
     let (l, c) = (loaded.clone(), ctl.clone());
     let original = d.completion.is_some();
-    let job = Job::spawn("meltcad-mesh-bake", move || {
-        if original {
+    let job = Job::spawn("meltcad-mesh-bake", ctx, move |cancel, _| {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(ERR_CANCEL.into());
+        }
+        let out = if original {
             mesh_import::bake_original(&l.imported.mesh, settings.res, &c)
         } else {
             mesh_import::bake(&l.imported.mesh, l.imported.format, &settings, &c)
-        }
+        };
+        if cancel.load(Ordering::Relaxed) { Err(ERR_CANCEL.into()) } else { out }
     });
     d.bake = Some(Arc::new(BakeJob { job, ctl, started: Instant::now(), loaded, settings, path: d.path.clone(), original }));
     d.msg.clear();
@@ -528,6 +575,12 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
     if let Some((job, path)) = d.reading.clone() {
         match job.take() {
             Some(Ok(l)) => {
+                if job.cancelled() {
+                    d.reading = None;
+                    d.msg = "Cancelled".into();
+                    ctx.data_mut(|m| m.insert_temp(id(), d));
+                    return;
+                }
                 d.st = Settings::new(l.size);
                 d.msg.clear();
                 d.loaded = Some(Arc::new(l));
@@ -546,9 +599,13 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
         match b.job.take() {
             Some(Ok(baked)) => {
                 d.bake = None;
-                match finish(app, ctx, &b, &baked) {
-                    Ok(()) => inserted = true,
-                    Err(e) => d.msg = e,
+                if b.ctl.cancel.load(Ordering::Relaxed) || b.job.cancelled() {
+                    d.msg = "Cancelled".into();
+                } else {
+                    match finish(app, ctx, &b, &baked) {
+                        Ok(()) => inserted = true,
+                        Err(e) => d.msg = e,
+                    }
                 }
             }
             Some(Err(e)) => {
@@ -584,6 +641,12 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
                 baking(ui, &b);
             } else if busy_read {
                 ui.label(RichText::new("Reading the file…").color(style::DIM));
+                if let Some((job, _)) = &d.reading {
+                    ui.add(egui::ProgressBar::new(job.fraction()).show_percentage());
+                    if job.cancelled() {
+                        ui.label("Waiting for the stop to finish (memory is freed after parsing)…");
+                    }
+                }
                 if let Some((_, p)) = &d.reading {
                     ui.label(RichText::new(p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()).size(11.5).color(style::DIM));
                 }
@@ -612,7 +675,7 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
             }
             ui.add_space(4.0);
             ui.horizontal(|ui| {
-                if original {
+                if original && d.reading.is_none() {
                     if d.bake.is_none() {
                         ui.add_enabled_ui(d.loaded.is_some() && !app.scene_structure_locked(), |ui| {
                             if style::pill(ui, "もう一度", true).clicked() {
@@ -623,11 +686,17 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
                     if ui.button("取消").clicked() {
                         close = true;
                     }
-                } else if d.bake.is_some() {
-                    if style::pill(ui, "Stop", false).clicked()
-                        && let Some(b) = &d.bake
-                    {
+                } else if let Some(b) = &d.bake {
+                    if style::pill(ui, "Stop", false).clicked() {
                         b.ctl.cancel.store(true, Ordering::Relaxed);
+                        b.job.cancel();
+                    }
+                    if b.ctl.cancel.load(Ordering::Relaxed) {
+                        ui.label("Waiting for the stop to finish…");
+                    }
+                } else if let Some((job, _)) = &d.reading {
+                    if style::pill(ui, "Stop", false).clicked() {
+                        job.cancel();
                     }
                 } else {
                     ui.add_enabled_ui(d.loaded.is_some() && !app.scene_structure_locked(), |ui| {
@@ -656,7 +725,7 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
         });
         match mesh_import::refuse(&app.scene, nodes) {
             Some(why) => d.msg = why.to_string(),
-            None => start_bake(&mut d),
+            None => start_bake(&mut d, ctx),
         }
     }
     if close {
@@ -819,6 +888,17 @@ mod tests {
     use super::*;
     use crate::model::Kind;
 
+    /// #200: Stop reaches the file read of a re-bake (it ends before the file is even opened).
+    #[test]
+    fn stop_ends_a_rebake_before_it_reads_the_file() {
+        let shape = Shape::new(Kind::Mesh, [0.0; 3], Material::default());
+        let old = Volume { dims: [1, 1, 1], origin: [0.0; 3], cell: 1.0, data: vec![0.0] };
+        let ctl = BakeControl::new();
+        ctl.cancel.store(true, Ordering::Relaxed);
+        let err = rebake_work(Path::new("/definitely/not/here.stl"), &shape, &old, 32, &ctl).err().unwrap();
+        assert_eq!(err, crate::import_mesh::IMPORT_CANCELLED, "stopped, not 'cannot read the file'");
+    }
+
     #[test]
     fn old_mesh_sources_never_accept_an_unrelated_file_silently() {
         let mut shape = Shape::new(Kind::Mesh, [0.0; 3], Material::default());
@@ -967,7 +1047,7 @@ mod tests {
         let mut d = ctx.data(|m| m.get_temp::<Dlg>(id())).expect("failed transfer remains open");
         assert!(!d.msg.is_empty());
         assert_eq!(completion.take_result(), None);
-        start_bake(&mut d);
+        start_bake(&mut d, &ctx);
         ctx.data_mut(|m| m.insert_temp(id(), d));
         pump(&mut app, &ctx, |_| ctx.data(|m| m.get_temp::<Dlg>(id())).is_some_and(|d| d.bake.is_none()));
         assert_eq!(completion.take_result(), None, "retry failure is not acknowledged as insertion");
@@ -993,7 +1073,7 @@ mod tests {
         assert_eq!(app.scene.shape_count(), before);
         app.scene.groups.pop();
         app.settle(&ctx);
-        start_bake(&mut d);
+        start_bake(&mut d, &ctx);
         ctx.data_mut(|m| m.insert_temp(id(), d));
         pump(&mut app, &ctx, |a| a.scene.shape_count() > before);
         assert_eq!(completion.take_result(), Some(Ok(())));
@@ -1023,7 +1103,7 @@ mod tests {
         d.st.floor = true;
         d.st.centre = true;
         app.cam.target = [40.0, -10.0, 0.0];
-        start_bake(&mut d);
+        start_bake(&mut d, &ctx);
         ctx.data_mut(|m| m.insert_temp(id(), d));
         pump(&mut app, &ctx, |a| a.scene.groups.len() > groups);
         assert_eq!((app.scene.groups.len(), app.scene.shape_count()), (groups + 1, shapes + 1), "a new group with one shape");
@@ -1071,7 +1151,7 @@ mod tests {
         pump(&mut app, &ctx, |_| ctx.data(|m| m.get_temp::<Dlg>(id())).is_some_and(|d| d.loaded.is_some()));
         let mut d = ctx.data(|m| m.get_temp::<Dlg>(id())).unwrap();
         d.st.res = 160;
-        start_bake(&mut d);
+        start_bake(&mut d, &ctx);
         if let Some(b) = &d.bake {
             b.ctl.cancel.store(true, Ordering::Relaxed);
         }

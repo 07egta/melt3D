@@ -251,3 +251,42 @@ fn frame_cpu_bench() {
         }
     }
 }
+
+/// Measures actual CPU frame-body responsiveness while a large native file loads.
+/// This is a UI-input benchmark, NOT a GPU benchmark. The file is deliberately padded
+/// with valid JSON whitespace so disk reading and parsing overlap mouse movement.
+/// `cargo test --release -p meltcad document_io_frame_bench -- --ignored --nocapture`
+#[test]
+#[ignore]
+fn document_io_frame_bench() {
+    let sc = crate::bench::library_scene(300);
+    let path = std::env::temp_dir().join(format!("yura_document_frame_{}.yura", std::process::id()));
+    let mut payload = sc.to_json().into_bytes();
+    payload.resize(payload.len() + 32 * 1024 * 1024, b' ');
+    std::fs::write(&path, &payload).expect("prepare large document");
+    drop(payload);
+
+    let mut rig = Rig::new(Scene::default());
+    let centre = viewport_centre(&rig);
+    rig.app.open_path(path.clone());
+    rig.times.clear();
+    let begin = Instant::now();
+    for k in 0..100 {
+        // True egui pointer events while the document worker runs.
+        let p = centre + vec2((k as f32 * 2.0).sin() * 100.0, (k as f32 * 0.1).cos() * 60.0);
+        rig.frame(vec![Event::PointerMoved(p)]);
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    let (avg, p95, max) = rig.stats();
+    eprintln!(
+        "native document load + 100 pointer frames: {:.2}s total, CPU avg {:.3}ms p95 {:.3}ms max {:.3}ms",
+        begin.elapsed().as_secs_f64(),
+        avg,
+        p95,
+        max
+    );
+    // No arbitrary FPS or latency assertion: report actual machine/build values,
+    // separately from the existing 100/300-shape and GPU timestamp benchmarks.
+    assert!(avg.is_finite() && p95.is_finite() && max.is_finite());
+    let _ = std::fs::remove_file(path);
+}
