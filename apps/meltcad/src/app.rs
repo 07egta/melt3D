@@ -28,6 +28,7 @@ pub enum ExportFormat {
     Obj,
 }
 
+#[allow(clippy::large_enum_variant)] // short-lived; boxing would only add noise
 enum PendingFileAction {
     New(Scene),
     Open(PathBuf),
