@@ -227,15 +227,23 @@ pub fn bake_original(mesh: &ImportedMesh, res: u32, ctl: &BakeControl) -> Result
 }
 
 /// Surface-centroid SDF residual (mean, maximum, number sampled), not Hausdorff error.
-pub fn surface_residual(mesh: &ImportedMesh, y_up: bool, final_size: [f32; 3], volume: &Volume) -> (f32, f32, usize) {
+/// Returns `None` as soon as `cancel` is set (checked between samples), so a Stop on a large mesh
+/// does not keep the worker busy until the whole sample loop ends (#200).
+pub fn surface_residual(
+    mesh: &ImportedMesh,
+    y_up: bool,
+    final_size: [f32; 3],
+    volume: &Volume,
+    cancel: &std::sync::atomic::AtomicBool,
+) -> Option<(f32, f32, usize)> {
     let mut m = mesh.clone();
     if y_up {
         m.y_up_to_z_up();
     }
-    let Some((lo, hi)) = m.bounds() else { return (0.0, 0.0, 0) };
+    let Some((lo, hi)) = m.bounds() else { return Some((0.0, 0.0, 0)) };
     let sz = m.size();
     if sz.iter().any(|x| *x <= 0.0) {
-        return (0.0, 0.0, 0);
+        return Some((0.0, 0.0, 0));
     }
     let c = [0, 1, 2].map(|a| (lo[a] + hi[a]) * 0.5);
     let mut total = 0.0f64;
@@ -243,6 +251,9 @@ pub fn surface_residual(mesh: &ImportedMesh, y_up: bool, final_size: [f32; 3], v
     let mut n = 0usize;
     let stride = (m.triangles.len() / 2048).max(1);
     for tri in m.triangles.iter().step_by(stride) {
+        if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+            return None;
+        }
         let (Some(a), Some(b), Some(d)) = (m.positions.get(tri[0] as usize), m.positions.get(tri[1] as usize), m.positions.get(tri[2] as usize))
         else {
             continue;
@@ -255,7 +266,7 @@ pub fn surface_residual(mesh: &ImportedMesh, y_up: bool, final_size: [f32; 3], v
             n += 1;
         }
     }
-    (if n > 0 { (total / n as f64) as f32 } else { 0.0 }, worst, n)
+    Some((if n > 0 { (total / n as f64) as f32 } else { 0.0 }, worst, n))
 }
 
 /// Turn, centre, scale and bake. Cancelling through `ctl` gives `Err("Stopped")`.
@@ -305,6 +316,7 @@ pub(crate) mod tests {
     use crate::import_mesh::tests::{box_mesh, sphere_mesh};
     use crate::model::{Group, Kind, Material, Scene, Shape};
     use crate::sdf::Field;
+    use std::sync::atomic::AtomicBool;
 
     fn scene_with(shape: Shape) -> Scene {
         let mut g = Group::new("g");
@@ -579,6 +591,18 @@ pub(crate) mod tests {
         eprintln!("end to end: {checked} points, worst difference {worst:.3} mm, cell {cell:.3} mm, volume {} nodes", baked.volume.nodes());
     }
     #[test]
+    fn a_cancelled_surface_residual_stops_before_sampling() {
+        let mesh = sphere_mesh(5.0, 16, 32);
+        let ctrl = BakeControl::new();
+        let size = [20.0, 10.0, 10.0];
+        let baked = rebake(&mesh, false, size, 24, &ctrl).expect("bake");
+        let cancel = AtomicBool::new(true);
+        assert_eq!(surface_residual(&mesh, false, size, &baked.volume, &cancel), None, "Stop must end the residual pass");
+        cancel.store(false, std::sync::atomic::Ordering::Relaxed);
+        assert!(surface_residual(&mesh, false, size, &baked.volume, &cancel).is_some(), "without Stop the numbers are still available");
+    }
+
+    #[test]
     fn rebake_reduces_cell_width_and_records_surface_residuals() {
         let mesh = sphere_mesh(5.0, 16, 32);
         let ctrl = BakeControl::new();
@@ -591,8 +615,8 @@ pub(crate) mod tests {
         let high_secs = started.elapsed().as_secs_f64();
         assert!(high.volume.cell < low.volume.cell);
         assert_eq!(high.size, size);
-        let e0 = surface_residual(&mesh, false, size, &low.volume);
-        let e1 = surface_residual(&mesh, false, size, &high.volume);
+        let e0 = surface_residual(&mesh, false, size, &low.volume, &AtomicBool::new(false)).expect("not cancelled");
+        let e1 = surface_residual(&mesh, false, size, &high.volume, &AtomicBool::new(false)).expect("not cancelled");
         assert!(e0.2 > 0 && e1.2 > 0);
         assert!(e0.0.is_finite() && e1.0.is_finite());
         eprintln!(

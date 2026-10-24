@@ -155,26 +155,26 @@ fn launch_rebake(req: &mut RebakeRequest, ctx: &egui::Context) {
     let resolution = req.res;
     let ctl = Arc::new(BakeControl::new());
     let c = ctl.clone();
-    let job = Job::spawn("meltcad-mesh-rebake", ctx, move |_, _| {
+    let job = Job::spawn("meltcad-mesh-rebake", ctx, move |cancel, progress| {
         let began = Instant::now();
-        let loaded = mesh_import::load(&path)?;
+        let loaded = mesh_import::load_with_control(&path, cancel, progress)?;
         let hash = mesh_import::mesh_hash(&loaded.imported.mesh);
         check_rebake_source(&orig, &loaded.file_name, hash)?;
-        if c.cancel.load(Ordering::Relaxed) {
+        if cancel.load(Ordering::Relaxed) || c.cancel.load(Ordering::Relaxed) {
             return Err(ERR_CANCEL.into());
         }
         let y_up = orig.mesh_source.as_ref().map_or(loaded.imported.format.y_up_by_default(), |src| src.y_up);
         let size = [0, 1, 2].map(|a| orig.size[a] * orig.scale[a]);
-        let before = mesh_import::surface_residual(&loaded.imported.mesh, y_up, orig.size, &old);
+        let before = mesh_import::surface_residual(&loaded.imported.mesh, y_up, orig.size, &old, cancel).ok_or_else(|| ERR_CANCEL.to_string())?;
         // The old SDF is sampled in its original unscaled local coordinates.
         // Convert the old residuals into conservative world-mm values.
         let old_scale = orig.scale.into_iter().fold(0.0f32, f32::max);
         let before = (before.0 * old_scale, before.1 * old_scale, before.2);
         let baked = mesh_import::rebake(&loaded.imported.mesh, y_up, size, resolution, &c)?;
-        if c.cancel.load(Ordering::Relaxed) {
+        if cancel.load(Ordering::Relaxed) || c.cancel.load(Ordering::Relaxed) {
             return Err(ERR_CANCEL.into());
         }
-        let after = mesh_import::surface_residual(&loaded.imported.mesh, y_up, size, &baked.volume);
+        let after = mesh_import::surface_residual(&loaded.imported.mesh, y_up, size, &baked.volume, cancel).ok_or_else(|| ERR_CANCEL.to_string())?;
         Ok(RebakeResult {
             baked,
             before,
