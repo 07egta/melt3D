@@ -385,12 +385,19 @@ pub(crate) fn profiles(p: &Value, cmd: &str) -> Result<ProfileSel> {
             Ok(ProfileSel::OffsetBoundaries { associations })
         }
         Value::String(s) if s.eq_ignore_ascii_case("all") => Ok(ProfileSel::All),
-        Value::Number(n) => Ok(ProfileSel::Indices { indices: vec![n.as_u64().ok_or_else(|| bad(cmd, "profile index"))? as usize] }),
+        Value::Number(n) => {
+            Ok(ProfileSel::Indices { indices: vec![n.as_u64().and_then(|x| usize::try_from(x).ok()).ok_or_else(|| bad(cmd, "profile index"))?] })
+        }
         Value::Array(a) if a.is_empty() => Err(bad(cmd, "`profiles` is empty")),
         Value::Array(a) if a.len() > 10_000 => Err(bad(cmd, "too many profiles")),
         Value::Array(a) => {
             if a.iter().all(Value::is_u64) {
-                return Ok(ProfileSel::Indices { indices: a.iter().filter_map(Value::as_u64).map(|x| x as usize).collect() });
+                let indices = a
+                    .iter()
+                    .filter_map(Value::as_u64)
+                    .map(|x| usize::try_from(x).map_err(|_| bad(cmd, "profile index is too large")))
+                    .collect::<Result<Vec<_>>>()?;
+                return Ok(ProfileSel::Indices { indices });
             }
             if a.iter().all(|x| x.get("point").is_some()) {
                 let pts =
@@ -1027,7 +1034,7 @@ fn edge_points(s: &Session, p: &Value, cmd: &str) -> Result<Vec<Vec3>> {
         let pt = match edge_ref_form(e).map_err(|why| bad(cmd, why))? {
             EdgeRefForm::Point(pt) => pt,
             EdgeRefForm::Index { body, index } => {
-                let idx = index as usize;
+                let idx = usize::try_from(index).map_err(|_| bad(cmd, format!("edge index {index} is too large")))?;
                 let b = st.body(body).ok_or_else(|| bad(cmd, format!("no body `{body}`")))?;
                 let tol = (b.body.size() * 2e-3).max(1e-3);
                 let edges = b.body.edges(tol)?;
