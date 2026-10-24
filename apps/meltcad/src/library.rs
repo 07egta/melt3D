@@ -2,7 +2,12 @@
 //! the scene with one click. Each category is a JSON file in `apps/meltcad/library/`; see
 //! `library/README.md` for the format. The files are compiled in, so nothing is read at run time.
 
-use std::sync::OnceLock;
+use std::collections::HashSet;
+use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
+
+use egui::Context;
 
 use serde::Deserialize;
 
@@ -31,6 +36,8 @@ pub struct Item {
 }
 
 pub struct Category {
+    /// Bundled category name, kept for benchmark/test callers of all().
+    #[allow(dead_code)]
     pub name: String,
     pub items: Vec<Item>,
 }
@@ -53,6 +60,177 @@ const FILES: [&str; 15] = [
     include_str!("../library/toon.json"),
     include_str!("../library/town.json"),
 ];
+
+
+/// Labels and file order are fixed by the bundled JSON data. They let the tabs be
+/// drawn before any Group/Shape is deserialized.
+const LABELS: [&str; 15] = [
+    "ひと", "て", "どうぶつ", "どうぐ", "くらしのもの", "かぐ", "たべもの",
+    "のりもの", "たてもの", "しぜん", "3Dプリント", "プリントインプレース",
+    "リアルなひと", "デフォルメ", "まち",
+];
+
+pub fn count() -> usize {
+    FILES.len()
+}
+
+pub fn label(index: usize) -> Option<&'static str> {
+    LABELS.get(index).copied()
+}
+
+/// Each category is deserialized only after its first visible card requests it.
+/// Errors are remembered so a broken built-in file cannot trigger infinite retries.
+static CATEGORIES: [OnceLock<Result<Category, String>>; 15] =
+    [const { OnceLock::new() }; 15];
+
+pub fn loaded(index: usize) -> Option<Result<&'static Category, &'static str>> {
+    CATEGORIES.get(index)?.get().map(|c| c.as_ref().map_err(String::as_str))
+}
+
+/// Search metadata deliberately does not contain full models.
+pub struct SearchEntry {
+    pub category: usize,
+    pub item: usize,
+    pub name: String,
+    key: String,
+}
+
+impl SearchEntry {
+    pub fn matches(&self, normalized_query: &str) -> bool {
+        self.key.contains(normalized_query)
+    }
+}
+
+pub struct SearchIndex {
+    pub entries: Vec<SearchEntry>,
+    pub failed_files: usize,
+}
+
+#[derive(Deserialize)]
+struct IndexCategory {
+    #[serde(default)]
+    items: Vec<IndexItem>,
+}
+
+#[derive(Deserialize)]
+struct IndexItem {
+    name: String,
+    #[serde(default)]
+    tags: Vec<String>,
+}
+
+/// serde ignores each item's \`group\`, so searching never builds CAD shapes.
+fn index_file(text: &str, category: usize) -> Result<Vec<SearchEntry>, String> {
+    let data: IndexCategory = serde_json::from_str(text).map_err(|e| e.to_string())?;
+    Ok(data.items.into_iter().enumerate().map(|(item, raw)| SearchEntry {
+        category,
+        item,
+        key: format!("{} {}", raw.name.to_lowercase(), raw.tags.join(" ").to_lowercase()),
+        name: raw.name,
+    }).collect())
+}
+
+fn build_index() -> SearchIndex {
+    let mut result = SearchIndex { entries: Vec::new(), failed_files: 0 };
+    for (i, json) in FILES.iter().enumerate() {
+        match index_file(json, i) {
+            Ok(items) => result.entries.extend(items),
+            Err(_) => result.failed_files += 1,
+        }
+    }
+    result
+}
+
+static SEARCH: OnceLock<SearchIndex> = OnceLock::new();
+
+pub fn search_index() -> Option<&'static SearchIndex> {
+    SEARCH.get()
+}
+
+enum Request {
+    Category(usize, Context),
+    Search(Context),
+}
+
+struct Loader {
+    tx: mpsc::Sender<Request>,
+    pending: Arc<Mutex<HashSet<usize>>>,
+    search_asked: AtomicBool,
+}
+
+/// Reuse one background loader for category JSON and the lightweight search index.
+/// Its channel is created on the first visit to the library, not at process start.
+fn loader() -> Option<&'static Loader> {
+    static WORKER: OnceLock<Option<Loader>> = OnceLock::new();
+    WORKER.get_or_init(|| {
+        let (tx, rx) = mpsc::channel();
+        let pending = Arc::new(Mutex::new(HashSet::new()));
+        let remaining = pending.clone();
+        std::thread::Builder::new()
+            .name("meltcad-library".into())
+            .spawn(move || {
+                for request in rx {
+                    match request {
+                        Request::Category(i, ctx) => {
+                            if let Some(slot) = CATEGORIES.get(i) {
+                                let parsed = std::panic::catch_unwind(|| parse(FILES[i]))
+                                    .unwrap_or_else(|_| Err("モデルデータの解析に失敗しました".into()));
+                                let _ = slot.set(parsed);
+                            }
+                            remaining.lock().unwrap_or_else(|e| e.into_inner()).remove(&i);
+                            ctx.request_repaint();
+                        }
+                        Request::Search(ctx) => {
+                            let index = std::panic::catch_unwind(build_index)
+                                .unwrap_or(SearchIndex { entries: Vec::new(), failed_files: FILES.len() });
+                            let _ = SEARCH.set(index);
+                            ctx.request_repaint();
+                        }
+                    }
+                }
+            })
+            .ok()?;
+        Some(Loader { tx, pending, search_asked: AtomicBool::new(false) })
+    }).as_ref()
+}
+
+/// Returns false if a worker could not be started. Such a failure leaves the
+/// rest of the application usable and shows an explanatory placeholder.
+pub fn request_category(index: usize, ctx: &Context) -> bool {
+    if index >= FILES.len() {
+        return false;
+    }
+    if loaded(index).is_some() {
+        return true;
+    }
+    let Some(worker) = loader() else { return false };
+    {
+        let mut pending = worker.pending.lock().unwrap_or_else(|e| e.into_inner());
+        if !pending.insert(index) {
+            return true;
+        }
+    }
+    if worker.tx.send(Request::Category(index, ctx.clone())).is_err() {
+        worker.pending.lock().unwrap_or_else(|e| e.into_inner()).remove(&index);
+        return false;
+    }
+    true
+}
+
+pub fn request_search(ctx: &Context) -> bool {
+    if SEARCH.get().is_some() {
+        return true;
+    }
+    let Some(worker) = loader() else { return false };
+    if worker.search_asked.swap(true, Ordering::Relaxed) {
+        return true;
+    }
+    if worker.tx.send(Request::Search(ctx.clone())).is_err() {
+        worker.search_asked.store(false, Ordering::Relaxed);
+        return false;
+    }
+    true
+}
 
 /// All categories (parsed once). A damaged file is skipped, never a crash; a test checks they all parse.
 pub fn all() -> &'static [Category] {
@@ -78,6 +256,7 @@ fn parse(text: &str) -> Result<Category, String> {
 
 impl Item {
     /// Does the search text match the name or a tag (case-insensitive)?
+    #[allow(dead_code)] // Older callers can still perform an Item search directly.
     pub fn matches(&self, q: &str) -> bool {
         let q = q.trim().to_lowercase();
         q.is_empty() || self.name.to_lowercase().contains(&q) || self.tags.iter().any(|t| t.to_lowercase().contains(&q))
@@ -152,6 +331,31 @@ mod tests {
                 assert_eq!(sc, before, "{} has numbers outside the safe ranges", it.name);
             }
         }
+    }
+
+    #[test]
+    fn labels_and_search_index_preserve_json_item_order() {
+        for (i, data) in FILES.iter().enumerate() {
+            let parsed = parse(data).expect("valid library category");
+            assert_eq!(label(i), Some(parsed.name.as_str()));
+            let metadata = index_file(data, i).expect("metadata only");
+            assert_eq!(metadata.len(), parsed.items.len());
+            for (j, (m, item)) in metadata.iter().zip(&parsed.items).enumerate() {
+                assert_eq!(m.category, i);
+                assert_eq!(m.item, j);
+                assert_eq!(m.name, item.name);
+                for tag in &item.tags {
+                    assert!(m.matches(&tag.to_lowercase()));
+                }
+            }
+        }
+        assert_eq!(count(), FILES.len());
+    }
+
+    #[test]
+    fn invalid_search_file_is_an_error_but_does_not_crash() {
+        assert!(index_file("not-json", 0).is_err());
+        assert_eq!(index_file(r#"{"items":[]}"#, 0).expect("empty").len(), 0);
     }
 
     #[test]

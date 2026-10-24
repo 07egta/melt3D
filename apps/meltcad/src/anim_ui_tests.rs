@@ -252,3 +252,16 @@ fn a_deleted_pose_stays_deleted() {
     app.settle(&ctx);
     assert_eq!(app.scene.anim.key_frames(), vec![0], "the automatic capture must not bring the pose back (#88)");
 }
+
+#[test]
+fn playback_follows_the_wall_clock_when_frames_are_slow() {
+    // 200 ms per drawn frame is still 0.2 s of animation per frame, not the old 0.1 s cap (#183).
+    assert_eq!(playback_dt(Some(1.0), 1.2, 0.2), 0.2_f32.min((1.2_f64 - 1.0) as f32));
+    assert!(playback_dt(Some(1.0), 1.2, 0.2) > 0.15);
+    // first frame after Play, a clock that ran backwards, and NaN all fall back safely
+    assert_eq!(playback_dt(None, 5.0, 0.05), 0.05);
+    assert_eq!(playback_dt(Some(2.0), 1.0, 0.05), 0.05);
+    assert_eq!(playback_dt(Some(f64::NAN), 1.0, 0.05), 0.05);
+    // a long stall is capped
+    assert_eq!(playback_dt(Some(0.0), 600.0, 0.05), 2.0);
+}

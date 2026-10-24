@@ -1025,18 +1025,53 @@ pub fn import_bytes(bytes: &[u8], name: &str, opts: &ImportOptions) -> Result<Im
     Ok(Imported { mesh, appearance: appearance_info.material, format, turned_y_up: y_up, dropped_triangles, health, notes })
 }
 
+pub const IMPORT_CANCELLED: &str = "Import cancelled";
+
 /// Read a mesh file (refusing anything over 256 MB).
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn import_file(path: &std::path::Path, opts: &ImportOptions) -> Result<Imported, String> {
+    import_file_with_control(path, opts, &std::sync::atomic::AtomicBool::new(false), &std::sync::atomic::AtomicU32::new(0))
+}
+
+/// The file read checks cancellation every 256 KiB, not only after allocating the entire
+/// input. Parsing/cleaning is not interruptible internally yet; its result is discarded if
+/// cancellation arrived during that step, so no partial shape can be committed.
+pub fn import_file_with_control(
+    path: &std::path::Path,
+    opts: &ImportOptions,
+    cancel: &std::sync::atomic::AtomicBool,
+    progress: &std::sync::atomic::AtomicU32,
+) -> Result<Imported, String> {
     use std::io::Read;
-    let f = std::fs::File::open(path).map_err(|e| format!("Can't open the file: {e}"))?;
+    use std::sync::atomic::Ordering;
+    let cancelled = || cancel.load(Ordering::Relaxed);
+    if cancelled() { return Err(IMPORT_CANCELLED.into()); }
+    let mut f = std::fs::File::open(path).map_err(|e| format!("Can't open the file: {e}"))?;
     let len = f.metadata().map(|m| m.len()).unwrap_or(0);
     if len > MAX_FILE_BYTES as u64 {
         return Err(TOO_BIG_FILE.into());
     }
-    let mut bytes = Vec::with_capacity(len as usize);
-    f.take(MAX_FILE_BYTES as u64 + 1).read_to_end(&mut bytes).map_err(|e| format!("Can't read the file: {e}"))?;
+    let mut bytes = Vec::with_capacity(len.min(MAX_FILE_BYTES as u64) as usize);
+    let mut buf = [0u8; 256 * 1024];
+    loop {
+        if cancelled() { return Err(IMPORT_CANCELLED.into()); }
+        let n = f.read(&mut buf).map_err(|e| format!("Can't read the file: {e}"))?;
+        if n == 0 { break; }
+        if bytes.len().saturating_add(n) > MAX_FILE_BYTES {
+            return Err(TOO_BIG_FILE.into());
+        }
+        bytes.extend_from_slice(&buf[..n]);
+        if len > 0 {
+            progress.store(((bytes.len() as f64 / len as f64).min(1.0) * 500.0) as u32, Ordering::Relaxed);
+        }
+    }
+    progress.store(500, Ordering::Relaxed);
+    if cancelled() { return Err(IMPORT_CANCELLED.into()); }
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    import_bytes(&bytes, &name, opts)
+    let loaded = import_bytes(&bytes, &name, opts)?;
+    if cancelled() { return Err(IMPORT_CANCELLED.into()); }
+    progress.store(1000, Ordering::Relaxed);
+    Ok(loaded)
 }
 
 #[cfg(test)]
@@ -1056,6 +1091,16 @@ pub mod tests {
     }
     use crate::export_formats::{self, Look, Mat8, Surface, Units};
     use solidcraft_geom::melt::TriMesh;
+
+    #[test]
+    fn pre_cancelled_mesh_read_does_not_parse_or_allocate_a_model() {
+        use std::sync::atomic::{AtomicBool, AtomicU32};
+        let cancelled = AtomicBool::new(true);
+        let progress = AtomicU32::new(0);
+        let bad_path = std::path::Path::new("file-that-does-not-need-to-exist.obj");
+        assert_eq!(import_file_with_control(bad_path, &ImportOptions::default(), &cancelled, &progress).unwrap_err(), IMPORT_CANCELLED);
+        assert_eq!(progress.load(std::sync::atomic::Ordering::Relaxed), 0);
+    }
 
     /// A closed unit-ish box from `lo` to `hi`, outward facing, 12 triangles.
     pub fn box_mesh(lo: [f32; 3], hi: [f32; 3]) -> ImportedMesh {

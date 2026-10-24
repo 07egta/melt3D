@@ -223,3 +223,44 @@ fn both_sides_centres_the_solid_on_the_plane() {
     let moved = ((one[0] - two[0]).powi(2) + (one[1] - two[1]).powi(2) + (one[2] - two[2]).powi(2)).sqrt();
     assert!((moved - a.sk.height * 0.5).abs() < 1e-3, "moved {moved}");
 }
+
+#[test]
+fn typed_dimension_updates_the_live_solid_before_enter() {
+    use crate::sketch_dimensions::Dimensions;
+    use crate::sketch_ui::Pen;
+    let mut app = app();
+    direct_solid_tool(&mut app);
+    app.sk.pen = Pen::Rect;
+    let raw = sketch::rect([0.0, 0.0], [20.0, 10.0]);
+    app.sketch_done(Finished::Profile(raw.clone()));
+    app.sk.dimension = Dimensions::for_shape(Pen::Rect, [0.0, 0.0], [20.0, 10.0], &raw, false);
+    let Some((g, s)) = app.sk.live else { panic!("live solid expected") };
+    let width = |app: &App| app.scene.shape(g, s).and_then(|sh| sketch::bbox(&sh.outline)).map(|(a, b)| b[0] - a[0]);
+    assert_eq!(width(&app), Some(20.0));
+    let Some(d) = app.sk.dimension.as_mut() else { panic!("editor missing") };
+    d.fields = ["80".into(), "10".into()];
+    app.dimension_field_changed(0);
+    assert_eq!(width(&app), Some(80.0), "the solid follows the typed width without Enter (#212)");
+}
+
+#[test]
+fn sweeping_a_bezier_curve_follows_the_drawn_arch() {
+    use crate::model::{CurveHandles, CurveNodeMode, Material, Pick, Shape};
+    let mut app = app();
+    app.set_sketch_tool(true);
+    let mut curve = Shape::new(Kind::Curve, [0.0; 3], Material::default());
+    curve.path = vec![[-10.0, 0.0, 0.0, 1.0], [10.0, 0.0, 0.0, 1.0]];
+    let up = [0.0, 20.0, 0.0];
+    curve.curve_handles = vec![
+        CurveHandles { mode: CurveNodeMode::Corner, incoming: [0.0; 3], outgoing: up },
+        CurveHandles { mode: CurveNodeMode::Corner, incoming: up, outgoing: [0.0; 3] },
+    ];
+    app.scene.groups[0].shapes.push(curve);
+    let idx = app.scene.groups[0].shapes.len() - 1;
+    app.sel = Some(Pick::Shape(0, idx));
+    app.sk.make = Make::Sweep;
+    assert!(app.sweep_from_curve(), "{}", app.sk.msg);
+    assert!(app.sk.path.len() > 2, "the sampled arch, not the two end nodes (#160)");
+    let top = app.sk.path.iter().map(|p| p[1].max(p[2])).fold(f32::MIN, f32::max);
+    assert!(top > 10.0, "the path rises with the arch: {top}");
+}

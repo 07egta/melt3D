@@ -753,16 +753,21 @@ impl Scene {
             .iter()
             .flat_map(|g| g.shapes.iter().map(|s| s.uid).chain(std::iter::once(g.uid)))
             .chain(self.anim.tracks.iter().map(|t| t.uid))
+            .chain(self.anim.links.iter().map(|t| t.uid))
             .max()
             .unwrap_or(0)
     }
     /// The `uid` of a group, given one first if it had none.
     pub fn ensure_group_uid(&mut self, gi: usize) -> Option<u32> {
+        self.ensure_group_uid_above(gi, 0)
+    }
+    /// Like `ensure_group_uid` while the timeline is detached: `reserved` is its highest uid.
+    pub(crate) fn ensure_group_uid_above(&mut self, gi: usize, reserved: u32) -> Option<u32> {
         let existing = self.groups.get(gi)?.uid;
         if existing != 0 {
             return Some(existing);
         }
-        let fresh = self.max_uid().checked_add(1)?;
+        let fresh = self.max_uid().max(reserved).checked_add(1)?;
         self.groups.get_mut(gi)?.uid = fresh;
         Some(fresh)
     }
