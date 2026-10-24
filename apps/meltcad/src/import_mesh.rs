@@ -103,6 +103,8 @@ pub struct Health {
     pub open_edges: usize,
     /// Edges shared by more than two triangles.
     pub nonmanifold_edges: usize,
+    /// Edges shared by two triangles that run along it in the same direction (a reversed face).
+    pub inconsistent_winding_edges: usize,
 }
 
 impl Health {
@@ -802,24 +804,31 @@ impl ImportedMesh {
 
     /// Count the edges that are open or shared by too many triangles (the points should be welded).
     pub fn health(&self) -> Health {
-        let mut edges: Vec<u64> = Vec::with_capacity(self.triangles.len() * 3);
+        // (edge, direction): the direction is the lowest bit, so equal edges sit together
+        let mut edges: Vec<u128> = Vec::with_capacity(self.triangles.len() * 3);
         for t in &self.triangles {
             for e in 0..3 {
                 let (a, b) = (t[e], t[(e + 1) % 3]);
-                edges.push((u64::from(a.min(b)) << 32) | u64::from(a.max(b)));
+                let key = (u64::from(a.min(b)) << 32) | u64::from(a.max(b));
+                edges.push((u128::from(key) << 1) | u128::from(a > b));
             }
         }
         edges.sort_unstable();
         let mut h = Health::default();
         let mut i = 0;
         while i < edges.len() {
+            let key = edges.get(i).map(|e| e >> 1);
             let mut j = i;
-            while j < edges.len() && edges.get(j) == edges.get(i) {
+            while j < edges.len() && edges.get(j).map(|e| e >> 1) == key {
                 j += 1;
             }
             match j - i {
                 1 => h.open_edges += 1,
-                2 => {}
+                2 => {
+                    if edges.get(i).map(|e| e & 1) == edges.get(i + 1).map(|e| e & 1) {
+                        h.inconsistent_winding_edges += 1;
+                    }
+                }
                 _ => h.nonmanifold_edges += 1,
             }
             i = j;
@@ -1001,6 +1010,9 @@ pub fn import_bytes(bytes: &[u8], name: &str, opts: &ImportOptions) -> Result<Im
     }
     if health.nonmanifold_edges > 0 {
         notes.push(format!("Some edges have 3 or more faces meeting ({} edges)", health.nonmanifold_edges));
+    }
+    if health.inconsistent_winding_edges > 0 {
+        notes.push(format!("Some faces are turned the wrong way ({} edges). Inside and outside may be mixed up", health.inconsistent_winding_edges));
     }
     if dropped_triangles > 0 {
         notes.push(format!("Removed {dropped_triangles} zero-area triangles"));
@@ -1460,6 +1472,27 @@ pub mod tests {
         f.scale_to_size(f32::NAN);
         f.scale(-3.0);
         assert_eq!(f, b);
+    }
+
+    /// #156: one reversed face of a closed box is reported, not called a normal closed surface.
+    #[test]
+    fn a_reversed_face_is_reported() {
+        let mut b = box_mesh([0.0; 3], [1.0; 3]);
+        assert_eq!(b.health().inconsistent_winding_edges, 0);
+        if let Some(t) = b.triangles.first_mut() {
+            t.swap(1, 2);
+        }
+        let h = b.health();
+        assert_eq!((h.open_edges, h.inconsistent_winding_edges), (0, 3));
+        for t in &mut b.triangles {
+            t.swap(1, 2);
+        }
+        // everything reversed again but the first: still 3; all reversed together: 0
+        let mut all = box_mesh([0.0; 3], [1.0; 3]);
+        for t in &mut all.triangles {
+            t.swap(1, 2);
+        }
+        assert_eq!(all.health().inconsistent_winding_edges, 0);
     }
 
     #[test]
