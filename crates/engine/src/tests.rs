@@ -4034,3 +4034,19 @@ fn creating_a_component_recomputes_nothing() {
         run(&mut s, "component.activate", json!({"component": "root"}));
     }
 }
+
+/// #249: a Combine with `new_component` is one undo step: the first Undo takes the whole
+/// Combine back (bodies and component), the second the step before it.
+#[test]
+fn combine_with_new_component_is_one_undo_step() {
+    let mut s = Session::default();
+    run(&mut s, "solid.box", json!({"length": 10, "width": 10, "height": 10, "body_name": "Base"}));
+    run(&mut s, "solid.box", json!({"base": [5, 0, 0], "length": 10, "width": 10, "height": 10, "body_name": "Tool", "operation": "new_body"}));
+    let before = s.undo.len();
+    run(&mut s, "solid.combine", json!({"target": "Base", "tools": ["Tool"], "operation": "join", "new_component": true}));
+    assert_eq!(s.undo.len(), before + 1, "one step for the Combine");
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(s.undo.len(), before, "the second step is the one before the Combine");
+    assert!(!s.doc.features.iter().any(|f| matches!(f.kind, solidcraft_doc::FeatureKind::Combine { .. })), "no Combine is left");
+    assert!(s.doc.find_component("Base Combined").is_none(), "no component is left");
+}
