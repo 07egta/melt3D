@@ -23,11 +23,25 @@ pub struct Dimensions {
     pub error: Option<String>,
     /// True for a drawn loft top instead of the main outline.
     pub top_profile: bool,
+    /// True when the drawn outline is the newest hole, not the main outline (#98).
+    pub hole: bool,
     /// The point was added by Tab for this edit: Esc takes it away again.
     pub provisional: bool,
     before_fields: [String; 2],
     before_profile: Vec<[f32; 2]>,
     before_point: Option<[f32; 2]>,
+}
+
+/// The outline a dimension edits: the loft top, the newest hole, or the main outline.
+pub fn dim_profile<'a>(d: &Dimensions, profile: &'a mut Vec<[f32; 2]>, profile2: &'a mut Vec<[f32; 2]>, holes: &'a mut [Vec<[f32; 2]>]) -> &'a mut Vec<[f32; 2]> {
+    if d.top_profile {
+        profile2
+    } else if d.hole && !holes.is_empty() {
+        let last = holes.len() - 1;
+        &mut holes[last]
+    } else {
+        profile
+    }
 }
 
 fn number(v: f32) -> String {
@@ -62,10 +76,23 @@ impl Dimensions {
             needs_focus: true,
             error: None,
             top_profile: top,
+            hole: false,
             provisional: false,
             before_profile: profile.to_vec(),
             before_point: None,
         })
+    }
+
+    /// X and Y of the vertex just placed, for any pen (a line's first vertex has no segment).
+    pub fn for_vertex(points: &[[f32; 2]]) -> Option<Self> {
+        let index = points.len().checked_sub(1)?;
+        let last = *points.get(index)?;
+        let mut d = Self::for_last_point(&points[..1], Pen::Polygon)?;
+        d.target = Target::Point { index };
+        d.fields = [number(last[0]), number(last[1])];
+        d.before_fields = d.fields.clone();
+        d.before_point = Some(last);
+        Some(d)
     }
 
     pub fn for_last_point(points: &[[f32; 2]], pen: Pen) -> Option<Self> {
@@ -88,6 +115,7 @@ impl Dimensions {
             needs_focus: true,
             error: None,
             top_profile: false,
+            hole: false,
             provisional: false,
             before_profile: Vec::new(),
             before_point: Some(last),
@@ -113,6 +141,7 @@ impl Dimensions {
             needs_focus: true,
             error: None,
             top_profile: false,
+            hole: false,
             provisional: true,
             before_profile: Vec::new(),
             before_point: Some(last),

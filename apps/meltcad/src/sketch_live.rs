@@ -266,10 +266,19 @@ impl App {
     }
 
     /// With a curve selected, sweep a round tube along it right away.
-    fn sweep_from_curve(&mut self) -> bool {
+    pub(crate) fn sweep_from_curve(&mut self) -> bool {
         let Some(Pick::Shape(g, s)) = self.sel else { return false };
         let Some(sh) = self.scene.shape(g, s).filter(|sh| sh.kind == Kind::Curve) else { return false };
-        let path: Vec<V3> = sh.path.iter().map(|n| crate::curve_tool::to_world(sh, [n[0], n[1], n[2]])).collect();
+        // the drawn (smoothed / Bezier) curve, not just its control nodes (#160); a sweep path holds MAX_PATH points
+        let mut drawn = crate::curve::build_shape_max(sh, crate::model::MAX_PATH);
+        if sh.path.len() < 2 {
+            return false;
+        }
+        let (closed, ..) = crate::curve::settings(&sh.params);
+        if closed && sh.path.len() >= 3 && drawn.len() > 2 {
+            drawn.pop(); // the sampled closed ring repeats its first point
+        }
+        let path: Vec<V3> = drawn.iter().map(|n| crate::curve_tool::to_world(sh, [n[0], n[1], n[2]])).collect();
         self.sk.clear_drawing();
         self.sk.path = path;
         self.sk.sweep_round = true;
