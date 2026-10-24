@@ -420,85 +420,104 @@ pub(crate) fn appearance_3mf(bytes: &[u8]) -> crate::import_mesh::AppearanceInfo
     let Ok(zip) = Zip::open(bytes) else { return out };
     let Ok(path) = model_path(&zip) else { return out };
     let Some(entry) = zip.find(&path) else { return out };
-    let Ok(xml) = zip.read(entry, MAX_MODEL_BYTES) else { return out };
-    let mut pos = 0;
-    let mut groups: HashMap<u32, Vec<crate::model::Material>> = HashMap::new();
-    let mut current_group: Option<u32> = None;
-    // what each object asks for, which objects it is made of, and what the build places
-    let mut refs: HashMap<u32, Vec<(u32, usize)>> = HashMap::new();
-    let mut parts: HashMap<u32, Vec<u32>> = HashMap::new();
-    let mut items: Vec<u32> = Vec::new();
-    let mut current_object: Option<u32> = None;
-    let mut unsupported = false;
-    let mut textures = false;
-    while let Ok(Some(t)) = next_tag(&xml, &mut pos) {
-        if t.closing {
-            if t.name == b"basematerials" || t.name == b"colorgroup" {
-                current_group = None;
-            }
-            if t.name == b"object" {
-                current_object = None;
-            }
+    let Ok(main_xml) = zip.read(entry, MAX_MODEL_BYTES) else { return out };
+    // The main model first, then the models its components live in (`p:path`): an id is told
+    // apart by the file it is in (file number in the upper half), so each file keeps its own.
+    let norm = |p: &str| p.trim_start_matches('/').to_ascii_lowercase();
+    let mut names: Vec<String> = vec![norm(&path)];
+    let mut sources: Vec<Vec<u8>> = vec![main_xml];
+    for e in zip.entries.iter() {
+        let n = norm(&e.name);
+        if sources.len() >= 16 || !n.ends_with(".model") || names.contains(&n) {
             continue;
         }
-        match t.name {
-            b"basematerials" | b"colorgroup" => {
-                current_group = t.attr("id").and_then(|s| s.parse::<u32>().ok());
-                if let Some(id) = current_group {
-                    groups.entry(id).or_default();
-                }
-                if t.self_closing {
+        if let Ok(xml) = zip.read(e, MAX_MODEL_BYTES) {
+            names.push(n);
+            sources.push(xml);
+        }
+    }
+    let key = |file: usize, id: u32| (file as u64) << 32 | u64::from(id);
+    let mut groups: HashMap<u64, Vec<crate::model::Material>> = HashMap::new();
+    // what each object asks for, which objects it is made of, and what the build places
+    let mut refs: HashMap<u64, Vec<(u64, usize)>> = HashMap::new();
+    let mut parts: HashMap<u64, Vec<u64>> = HashMap::new();
+    let mut items: Vec<u64> = Vec::new();
+    let mut unsupported = false;
+    let mut textures = false;
+    for (fi, xml) in sources.iter().enumerate() {
+        let mut pos = 0;
+        let mut current_group: Option<u32> = None;
+        let mut current_object: Option<u32> = None;
+        let file_of = |t: &Tag| t.attr("p:path").and_then(|p| names.iter().position(|n| *n == norm(p))).unwrap_or(fi);
+        while let Ok(Some(t)) = next_tag(xml, &mut pos) {
+            if t.closing {
+                if t.name == b"basematerials" || t.name == b"colorgroup" {
                     current_group = None;
                 }
+                if t.name == b"object" {
+                    current_object = None;
+                }
+                continue;
             }
-            b"base" | b"color" if current_group.is_some() => {
-                let value = t.attr("displaycolor").or_else(|| t.attr("color"));
-                if let Some(m) = value.and_then(crate::materials::from_3mf_hex) {
-                    if let Some(g) = current_group.and_then(|id| groups.get_mut(&id)) {
-                        if g.len() < 65536 {
-                            g.push(m);
-                        } else {
-                            unsupported = true;
-                        }
+            match t.name {
+                b"basematerials" | b"colorgroup" => {
+                    current_group = t.attr("id").and_then(|s| s.parse::<u32>().ok());
+                    if let Some(id) = current_group {
+                        groups.entry(key(fi, id)).or_default();
                     }
-                } else {
-                    unsupported = true;
-                }
-            }
-            b"object" => {
-                let id = t.attr("id").and_then(|s| s.parse::<u32>().ok());
-                current_object = if t.self_closing { None } else { id };
-                if let (Some(id), Some(pid), Some(idx)) =
-                    (id, t.attr("pid").and_then(|s| s.parse::<u32>().ok()), t.attr("pindex").and_then(|s| s.parse::<usize>().ok()))
-                {
-                    refs.entry(id).or_default().push((pid, idx));
-                }
-            }
-            b"component" => {
-                if let (Some(obj), Some(part)) = (current_object, t.attr("objectid").and_then(|s| s.parse::<u32>().ok())) {
-                    parts.entry(obj).or_default().push(part);
-                }
-            }
-            b"item" => {
-                if let Some(id) = t.attr("objectid").and_then(|s| s.parse::<u32>().ok()) {
-                    items.push(id);
-                }
-            }
-            b"triangle" => {
-                if let (Some(obj), Some(pid)) = (current_object, t.attr("pid").and_then(|s| s.parse::<u32>().ok())) {
-                    let p1 = t.attr("p1").and_then(|s| s.parse::<usize>().ok()).unwrap_or(0);
-                    let list = refs.entry(obj).or_default();
-                    list.push((pid, p1));
-                    for key in ["p2", "p3"] {
-                        if let Some(index) = t.attr(key).and_then(|s| s.parse::<usize>().ok()) {
-                            list.push((pid, index));
-                        }
+                    if t.self_closing {
+                        current_group = None;
                     }
                 }
+                b"base" | b"color" if current_group.is_some() => {
+                    let value = t.attr("displaycolor").or_else(|| t.attr("color"));
+                    if let Some(m) = value.and_then(crate::materials::from_3mf_hex) {
+                        if let Some(g) = current_group.and_then(|id| groups.get_mut(&key(fi, id))) {
+                            if g.len() < 65536 {
+                                g.push(m);
+                            } else {
+                                unsupported = true;
+                            }
+                        }
+                    } else {
+                        unsupported = true;
+                    }
+                }
+                b"object" => {
+                    let id = t.attr("id").and_then(|s| s.parse::<u32>().ok());
+                    current_object = if t.self_closing { None } else { id };
+                    if let (Some(id), Some(pid), Some(idx)) =
+                        (id, t.attr("pid").and_then(|s| s.parse::<u32>().ok()), t.attr("pindex").and_then(|s| s.parse::<usize>().ok()))
+                    {
+                        refs.entry(key(fi, id)).or_default().push((key(fi, pid), idx));
+                    }
+                }
+                b"component" => {
+                    if let (Some(obj), Some(part)) = (current_object, t.attr("objectid").and_then(|s| s.parse::<u32>().ok())) {
+                        parts.entry(key(fi, obj)).or_default().push(key(file_of(&t), part));
+                    }
+                }
+                b"item" => {
+                    if let Some(id) = t.attr("objectid").and_then(|s| s.parse::<u32>().ok()) {
+                        items.push(key(file_of(&t), id));
+                    }
+                }
+                b"triangle" => {
+                    if let (Some(obj), Some(pid)) = (current_object, t.attr("pid").and_then(|s| s.parse::<u32>().ok())) {
+                        let p1 = t.attr("p1").and_then(|s| s.parse::<usize>().ok()).unwrap_or(0);
+                        let list = refs.entry(key(fi, obj)).or_default();
+                        list.push((key(fi, pid), p1));
+                        for pk in ["p2", "p3"] {
+                            if let Some(index) = t.attr(pk).and_then(|s| s.parse::<usize>().ok()) {
+                                list.push((key(fi, pid), index));
+                            }
+                        }
+                    }
+                }
+                b"texture2d" | b"texture2dgroup" => textures = true,
+                b"compositematerials" | b"multiproperties" => unsupported = true,
+                _ => {}
             }
-            b"texture2d" | b"texture2dgroup" => textures = true,
-            b"compositematerials" | b"multiproperties" => unsupported = true,
-            _ => {}
         }
     }
     // Resources may be written after objects, so resolve the palette once parsing is complete.
@@ -507,13 +526,13 @@ pub(crate) fn appearance_3mf(bytes: &[u8]) -> crate::import_mesh::AppearanceInfo
     // (without a build section: the objects nobody else uses as a part)
     let mut roots = items;
     if roots.is_empty() {
-        let used: std::collections::HashSet<u32> = parts.values().flatten().copied().collect();
-        let mut all: Vec<u32> = refs.keys().chain(parts.keys()).copied().filter(|i| !used.contains(i)).collect();
+        let used: std::collections::HashSet<u64> = parts.values().flatten().copied().collect();
+        let mut all: Vec<u64> = refs.keys().chain(parts.keys()).copied().filter(|i| !used.contains(i)).collect();
         all.sort_unstable();
         all.dedup();
         roots = all;
     }
-    let mut placed: Vec<u32> = Vec::new();
+    let mut placed: Vec<u64> = Vec::new();
     while let Some(id) = roots.pop() {
         if placed.contains(&id) || placed.len() > 4096 {
             continue;
@@ -522,7 +541,7 @@ pub(crate) fn appearance_3mf(bytes: &[u8]) -> crate::import_mesh::AppearanceInfo
         roots.extend(parts.get(&id).into_iter().flatten().copied());
     }
     placed.sort_unstable();
-    let palette_refs: Vec<(u32, usize)> = placed.iter().flat_map(|id| refs.get(id).into_iter().flatten().copied()).collect();
+    let palette_refs: Vec<(u64, usize)> = placed.iter().flat_map(|id| refs.get(id).into_iter().flatten().copied()).collect();
     let mut distinct: Vec<crate::model::Material> = Vec::new();
     for (pid, idx) in palette_refs {
         if let Some(m) = groups.get(&pid).and_then(|v| v.get(idx)).copied() {
@@ -679,6 +698,33 @@ mod tests {
         // the referenced file is missing
         let z = zip(&[("3D/3dmodel.model", &main)], false);
         assert!(read_3mf(&z).is_err());
+    }
+
+    /// #254: the colour is read from the model file the component lives in.
+    #[test]
+    fn the_colour_of_an_object_in_another_model_file_is_kept() {
+        let main = model(
+            "millimeter",
+            "<resources><object id=\"5\"><components><component objectid=\"1\" p:path=\"/3D/Objects/part.model\" xmlns:p=\"http://schemas.microsoft.com/3dmanufacturing/production/2015/06\"/></components></object></resources><build><item objectid=\"5\"/></build>",
+        );
+        let part = model(
+            "millimeter",
+            &format!(
+                "<resources><basematerials id=\"3\"><base name=\"red\" displaycolor=\"#FF0000\"/></basematerials><object id=\"1\" pid=\"3\" pindex=\"0\">{TETRA}</object></resources>"
+            ),
+        );
+        let z = zip(&[("3D/3dmodel.model", &main), ("3D/Objects/part.model", &part)], true);
+        let info = appearance_3mf(&z);
+        let m = info.material.expect("the red of the part file");
+        assert!(m.color[0] > 0.9 && m.color[1] < 0.1 && m.color[2] < 0.1, "{:?}", m.color);
+        assert!(!info.varies);
+        // two colours in the part file are noticed as well
+        let part2 = model(
+            "millimeter",
+            "<resources><basematerials id=\"3\"><base name=\"red\" displaycolor=\"#FF0000\"/><base name=\"blue\" displaycolor=\"#0000FF\"/></basematerials><object id=\"1\" pid=\"3\" pindex=\"0\"><mesh><vertices><vertex x=\"0\" y=\"0\" z=\"0\"/><vertex x=\"1\" y=\"0\" z=\"0\"/><vertex x=\"0\" y=\"1\" z=\"0\"/></vertices><triangles><triangle v1=\"0\" v2=\"1\" v3=\"2\" pid=\"3\" p1=\"1\"/></triangles></mesh></object></resources>",
+        );
+        let z = zip(&[("3D/3dmodel.model", &main), ("3D/Objects/part.model", &part2)], true);
+        assert!(appearance_3mf(&z).varies);
     }
 
     #[test]
