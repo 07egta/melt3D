@@ -12,7 +12,6 @@ use crate::app::{App, ExportFormat};
 use crate::export_formats::{Format, Units};
 use crate::export_job::{self, Estimate, Job, Lighten, MAX_TOLERANCE, MIN_TOLERANCE, Options, Picks, PrintCheck, Scope, Up};
 use crate::export_mesh::{CANCELLED, MAX_VERTS, Progress};
-use crate::model::Scene;
 use crate::style;
 
 // ---------------------------------------------------------------- small background tasks
@@ -34,14 +33,22 @@ impl<T: Clone + Send + 'static> Task<T> {
     fn idle() -> Task<T> {
         Task { slot: Arc::new(Mutex::new(Slot::Idle)), prog: Arc::new(Progress::new()) }
     }
-    fn start(&mut self, f: impl FnOnce(&Progress) -> Result<T, String> + Send + 'static) {
+    fn start(&mut self, ctx: &egui::Context, f: impl FnOnce(&Progress) -> Result<T, String> + Send + 'static) {
         self.prog.cancel();
         let slot = Arc::new(Mutex::new(Slot::Running));
         let prog = Arc::new(Progress::new());
         self.slot = slot.clone();
         self.prog = prog.clone();
+        let permit = match crate::work_budget::try_acquire(ctx) {
+            Ok(permit) => permit,
+            Err(e) => {
+                if let Ok(mut s) = self.slot.lock() { *s = Slot::Done(Err(e)); }
+                return;
+            }
+        };
         let spawned = std::thread::Builder::new().name("yura-export-task".into()).spawn(move || {
             let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(&prog))).unwrap_or_else(|_| Err("stopped unexpectedly".into()));
+            drop(permit);
             if let Ok(mut s) = slot.lock() {
                 *s = Slot::Done(res);
             }
@@ -74,7 +81,7 @@ impl<T: Clone + Send + 'static> Task<T> {
 struct Dlg {
     opts: Options,
     /// What the estimate and the check were made for.
-    snap: Option<(Scene, Picks, Options)>,
+    snap: Option<(u64, Picks, Options)>,
     est: Task<Estimate>,
     check: Task<PrintCheck>,
     /// The check should start by itself on the next frame.
@@ -291,7 +298,11 @@ fn start_job(app: &mut App, ctx: &egui::Context, o: Options, path: PathBuf) -> b
         app.say(ctx, "Export is already running");
         return false;
     }
-    let job = Job::start(app.scene.clone(), app.picks(), o.clone(), path);
+    let permit = match crate::work_budget::try_acquire(ctx) {
+        Ok(permit) => permit,
+        Err(e) => { app.say(ctx, e); return false; }
+    };
+    let job = Job::start_with_permit(app.scene.clone(), app.picks(), o.clone(), path, Some(permit));
     ctx.data_mut(|m| {
         m.insert_temp(job_id(), Running(Some(Arc::new(job))));
         m.insert_temp(last_id(), o);
@@ -344,8 +355,10 @@ fn running_card(app: &mut App, ctx: &egui::Context) {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(format!("{:.0}%  {:.0} sec", job.fraction() * 100.0, job.elapsed())).size(11.5).color(style::DIM));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if style::pill(ui, "Cancel", false).clicked() {
-                            job.cancel();
+                        if job.can_cancel() {
+                            if style::pill(ui, "Cancel", false).clicked() { job.cancel(); }
+                        } else {
+                            ui.label(RichText::new(job.phase_name()).size(11.5).color(style::DIM));
                         }
                     });
                 });
@@ -366,9 +379,9 @@ fn row(ui: &mut egui::Ui, label: &str, add: impl FnOnce(&mut egui::Ui)) {
 
 /// Cached measurements depend on the entire export configuration, especially
 /// precision and physical scale. Never display a result from an older setting.
-fn snapshot_stale(snap: Option<&(Scene, Picks, Options)>, scene: &Scene, sel: impl Into<Picks>, opts: &Options) -> bool {
+fn snapshot_stale(snap: Option<&(u64, Picks, Options)>, revision: u64, sel: impl Into<Picks>, opts: &Options) -> bool {
     let sel: Picks = sel.into();
-    snap.is_none_or(|s| &s.0 != scene || s.1 != sel || &s.2 != opts)
+    snap.is_none_or(|s| s.0 != revision || s.1 != sel || &s.2 != opts)
 }
 
 /// Call once per frame: the progress of a running export and the card when it is open.
@@ -376,18 +389,34 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
     running_card(app, ctx);
     let Some(mut d) = ctx.data_mut(|m| m.remove_temp::<Dlg>(id())).filter(|d| d.open) else { return };
     // the estimate and the check are about the scene as it is now
-    let key = (app.scene.clone(), Picks::from(app.picks()), d.opts.clone());
-    let stale = snapshot_stale(d.snap.as_ref(), &key.0, key.1.clone(), &key.2);
+    // App already tracks scene edits by revision: cloning/comparing a large mesh-bearing
+    // Scene on every repaint duplicates megabytes and stalls the UI unnecessarily.
+    let key = (app.track_scene(), Picks::from(app.picks()), d.opts.clone());
+    let stale = snapshot_stale(d.snap.as_ref(), key.0, key.1.clone(), &key.2);
     if stale {
         d.snap = Some(key);
         d.check.reset();
         let (scene, sel, o) = (app.scene.clone(), app.picks(), d.opts.clone());
-        d.est.start(move |p| export_job::estimate(&scene, sel.clone(), &o, p));
+        d.est.start(ctx, move |p| export_job::estimate(&scene, sel.clone(), &o, p));
     }
     if d.run_check {
-        d.run_check = false;
         let (scene, sel, o) = (app.scene.clone(), app.picks(), d.opts.clone());
-        d.check.start(move |p| export_job::print_check(&scene, sel.clone(), &o, p));
+        d.check.start(ctx, move |p| export_job::print_check(&scene, sel.clone(), &o, p));
+        // The estimate above may already own the single high-memory permit. Keep the
+        // automatically requested check queued until that worker exits instead of
+        // consuming the request as a BUSY error.
+        d.run_check = matches!(d.check.result(), Some(Err(ref e)) if e == crate::work_budget::BUSY);
+        if d.run_check {
+            ctx.request_repaint_after(std::time::Duration::from_millis(150));
+        }
+    }
+    if let Some(Err(e)) = d.est.result()
+        && e == crate::work_budget::BUSY
+    {
+        // A previous cancelled worker may still own the permit. Retry *later* instead
+        // of holding a second large scene snapshot or discarding the estimate forever.
+        d.snap = None;
+        ctx.request_repaint_after(std::time::Duration::from_millis(150));
     }
     if d.est.running() || d.check.running() {
         ctx.request_repaint_after(std::time::Duration::from_millis(100));
@@ -651,7 +680,7 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
     d.opts = d.opts.sanitized_for_edit();
     if check {
         let (scene, sel, o) = (app.scene.clone(), app.picks(), d.opts.clone());
-        d.check.start(move |p| export_job::print_check(&scene, sel.clone(), &o, p));
+        d.check.start(ctx, move |p| export_job::print_check(&scene, sel.clone(), &o, p));
     }
     if go {
         let o = d.opts.clone();
@@ -775,17 +804,17 @@ mod tests {
 
     #[test]
     fn print_check_cache_invalidates_when_precision_or_scale_changes() {
-        let scene = Scene::default();
+        let scene = 7u64;
         let old = Options::default();
-        let snapshot = (scene.clone(), Picks::default(), old.clone());
-        assert!(!snapshot_stale(Some(&snapshot), &scene, None, &old));
+        let snapshot = (scene, Picks::default(), old.clone());
+        assert!(!snapshot_stale(Some(&snapshot), scene, None, &old));
         let precise = Options { tolerance: 0.1, ..old.clone() };
-        assert!(snapshot_stale(Some(&snapshot), &scene, None, &precise), "precision affects measured thin walls");
+        assert!(snapshot_stale(Some(&snapshot), scene, None, &precise), "precision affects measured thin walls");
         let scaled = Options { scale_pct: 10.0, ..old.clone() };
-        assert!(snapshot_stale(Some(&snapshot), &scene, None, &scaled), "physical scale affects measured wall thickness");
+        assert!(snapshot_stale(Some(&snapshot), scene, None, &scaled), "physical scale affects measured wall thickness");
         let scope = Options { scope: Scope::Selected, ..old };
-        assert!(snapshot_stale(Some(&snapshot), &scene, None, &scope));
-        assert!(snapshot_stale(None, &scene, None, &scaled));
+        assert!(snapshot_stale(Some(&snapshot), scene, None, &scope));
+        assert!(snapshot_stale(None, scene, None, &scaled));
     }
 
     #[test]
@@ -815,6 +844,32 @@ mod tests {
         assert!(d.advanced);
         assert_eq!(d.opts.scale_pct, 125.0);
         assert!(!new_dlg(&egui::Context::default(), None).advanced);
+    }
+
+    #[test]
+    fn automatic_print_check_retries_after_the_shared_worker_permit_is_busy() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        let permit = crate::work_budget::try_acquire(&ctx).expect("other heavy worker");
+        open_check(&ctx);
+        frame(&mut app, &ctx);
+        let d = ctx.data(|m| m.get_temp::<Dlg>(id())).expect("open dialog");
+        assert!(d.run_check, "a BUSY print check remains queued");
+        assert!(matches!(d.check.result(), Some(Err(ref e)) if e == crate::work_budget::BUSY));
+
+        drop(permit);
+        let started = std::time::Instant::now();
+        loop {
+            frame(&mut app, &ctx);
+            let d = ctx.data(|m| m.get_temp::<Dlg>(id())).expect("open dialog");
+            if let Some(result) = d.check.result()
+                && result.is_ok()
+            {
+                break;
+            }
+            assert!(started.elapsed().as_secs() < 60, "the queued print check never completed");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
     }
 
     #[test]
