@@ -1862,8 +1862,8 @@ pub fn shortcuts(app: &mut SolveApp, ctx: &egui::Context) {
                     });
                 }
                 _ if !shown => {}
-                Key::Z => drop(app.run("edit.undo", json!({}))),
-                Key::Y => drop(app.run("edit.redo", json!({}))),
+                Key::Z if !mods.shift && !mods.alt => drop(app.run("edit.undo", json!({}))),
+                Key::Y if !mods.shift && !mods.alt => drop(app.run("edit.redo", json!({}))),
                 // Copy, Cut and Paste (`edit_clipboard::handle`).
                 Key::C | Key::X | Key::V if !mods.shift && !mods.alt => {}
                 Key::S => save(app),
@@ -1935,6 +1935,33 @@ pub fn shortcuts(app: &mut SolveApp, ctx: &egui::Context) {
             }
             _ => crate::keymap::press(app, &crate::keymap::key_name(k, mods)),
         }
+    }
+}
+
+#[cfg(test)]
+mod shortcut_tests {
+    use super::*;
+
+    /// #248: a user shortcut on a modifier combination the app also uses must run that command,
+    /// not the app's own edit action.
+    #[test]
+    fn a_custom_ctrl_shift_z_runs_instead_of_undo_and_plain_ctrl_z_still_undoes() {
+        let mut h = crate::scenario::Harness::new();
+        let made = h.call("engine.execute", json!({"command":"solid.box","params":{"length":20,"width":10,"height":6,"name":"B"}}));
+        assert_eq!(made["ok"], true, "the box must be created: {made}");
+        let undo = h.app.session.undo.len();
+        assert!(undo > 0, "the box is an undoable step");
+
+        crate::keymap::bind(&mut h.app, "parameters.change", "Ctrl+Shift+Z", true).expect("Ctrl+Shift+Z is bindable");
+
+        h.call("ui.key", json!({"key":"Z","cmd":true,"shift":true}));
+        h.frames(3);
+        assert!(h.app.params.is_some(), "the bound command ran");
+        assert_eq!(h.app.session.undo.len(), undo, "and it did not also undo");
+
+        h.call("ui.key", json!({"key":"Z","cmd":true}));
+        h.frames(3);
+        assert!(h.app.session.undo.len() < undo, "plain Ctrl+Z still undoes");
     }
 }
 
