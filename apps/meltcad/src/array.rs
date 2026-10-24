@@ -138,8 +138,11 @@ impl App {
                             .unwrap_or([0.0; 3])
                     })
                     .collect();
+                let mut next = self.scene.next_uid();
                 for k in 1..=copies {
                     let mut copy = tree.clone();
+                    // each copy is a set of its own: links and patterns inside it follow it
+                    crate::model::Scene::renumber_copies(&mut next, &mut copy);
                     for (c, centre) in copy.iter_mut().zip(&centres) {
                         for s in &mut c.shapes {
                             place(s, d, k);

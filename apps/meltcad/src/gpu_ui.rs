@@ -183,7 +183,8 @@ impl App {
                 s.failed.clear();
             });
         }
-        let r = Relaunch { choice: choice.map(|b| b.name().to_string()), tried: Vec::new(), file: self.path.clone() };
+        let keep = crate::backend::kept_options(&std::env::args_os().collect::<Vec<_>>());
+        let r = Relaunch { choice: choice.map(|b| b.name().to_string()), tried: Vec::new(), file: self.path.clone(), keep };
         match crate::backend::relaunch(&r) {
             Ok(()) => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
             Err(e) => {

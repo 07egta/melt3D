@@ -781,6 +781,61 @@ impl Scene {
         self.shape_mut(gi, si)?.uid = fresh;
         Some(fresh)
     }
+    /// The first `uid` no group, shape or animation track uses yet.
+    pub(crate) fn next_uid(&self) -> u32 {
+        self.max_uid().saturating_add(1)
+    }
+
+    /// A copied block of groups (Duplicate, Array) gets numbers of its own, and what inside the
+    /// block points at a group or shape of the block (a linked copy, a pattern's path or source)
+    /// follows the copy instead of the original (#202 #184). References outside the block stay.
+    /// `next` is the first free number; it moves on past the ones given out.
+    pub(crate) fn renumber_copies(next: &mut u32, copies: &mut [Group]) {
+        let mut groups = std::collections::HashMap::new();
+        let mut shapes = std::collections::HashMap::new();
+        let mut fresh = |old: u32, map: &mut std::collections::HashMap<u32, u32>| -> u32 {
+            let n = *next;
+            *next = next.saturating_add(1);
+            map.insert(old, n);
+            n
+        };
+        for g in copies.iter_mut() {
+            if g.uid != 0 {
+                g.uid = fresh(g.uid, &mut groups);
+            }
+            for s in &mut g.shapes {
+                if s.uid != 0 {
+                    s.uid = fresh(s.uid, &mut shapes);
+                }
+            }
+        }
+        for g in copies.iter_mut() {
+            if let Some(src) = g.instance_of
+                && let Some(n) = groups.get(&src)
+            {
+                g.instance_of = Some(*n);
+            }
+            match &mut g.pattern {
+                Some(Pattern::Path { source, .. }) => {
+                    if let Some(n) = shapes.get(source) {
+                        *source = *n;
+                    }
+                }
+                Some(Pattern::Geometry { source: Source::Shape(u), .. }) => {
+                    if let Some(n) = shapes.get(u) {
+                        *u = *n;
+                    }
+                }
+                Some(Pattern::Geometry { source: Source::Group(u), .. }) => {
+                    if let Some(n) = groups.get(u) {
+                        *u = *n;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
     /// A copied group or shape carries its original's `uid`: the first one in the list keeps it,
     /// later ones lose it (and so are not what a pattern follows).
     pub fn dedupe_uids(&mut self) {

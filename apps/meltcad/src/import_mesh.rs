@@ -910,6 +910,43 @@ fn appearance_obj(bytes: &[u8]) -> AppearanceInfo {
     if names_materials {
         out.notes.push("The OBJ's material file (.mtl) is not read, so its colours and materials are not kept".into());
     }
+    // `v x y z r g b`: vertex colours. A shape has one colour, so it takes their average and says so (#190)
+    let (mut sum, mut n, mut first, mut varies) = ([0f64; 3], 0u64, None::<[f32; 3]>, false);
+    for line in bytes.split(|c| *c == b'\n') {
+        let line = line.split(|c| *c == b'#').next().unwrap_or(&[]);
+        let mut it = words(line);
+        if it.next() != Some(b"v") {
+            continue;
+        }
+        let nums: Vec<f32> = it.filter_map(parse_f32).take(7).collect();
+        if nums.len() < 6 {
+            continue;
+        }
+        let mut c = [nums[3], nums[4], nums[5]];
+        // some writers use 0..255
+        if c.iter().any(|v| *v > 1.0) {
+            c = c.map(|v| v / 255.0);
+        }
+        if !c.iter().all(|v| v.is_finite()) {
+            continue;
+        }
+        let c = c.map(|v| v.clamp(0.0, 1.0));
+        match first {
+            None => first = Some(c),
+            Some(f) if (0..3).any(|i| (f[i] - c[i]).abs() > 1.0 / 255.0) => varies = true,
+            _ => {}
+        }
+        for i in 0..3 {
+            sum[i] += f64::from(c[i]);
+        }
+        n += 1;
+    }
+    if n > 0 {
+        let avg = sum.map(|v| (v / n as f64) as f32);
+        out.material = Some(crate::model::Material::plain(avg, 0.5, 0.0));
+        // several colours: the importer's usual note says one main colour is used
+        out.varies = varies;
+    }
     out
 }
 
@@ -993,6 +1030,18 @@ pub fn import_file(path: &std::path::Path, opts: &ImportOptions) -> Result<Impor
 #[cfg(test)]
 pub mod tests {
     use super::*;
+
+    #[test]
+    fn obj_vertex_colours_give_the_shape_their_colour() {
+        let obj = b"v 0 0 0 1 0 0\nv 10 0 0 1 0 0\nv 0 10 0 1 0 0\nv 0 0 10 1 0 0\nf 1 3 2\nf 1 2 4\nf 2 3 4\nf 3 1 4\n";
+        let got = import_bytes(obj, "red.obj", &ImportOptions { y_up: Some(false) }).expect("reads");
+        let m = got.appearance.expect("the vertex colour is kept (#190)");
+        assert!((m.color[0] - 1.0).abs() < 1e-3 && m.color[1] < 1e-3 && m.color[2] < 1e-3, "{:?}", m.color);
+        let two = b"v 0 0 0 255 0 0\nv 10 0 0 0 0 255\nv 0 10 0 0 0 255\nv 0 0 10 255 0 0\nf 1 3 2\nf 1 2 4\nf 2 3 4\nf 3 1 4\n";
+        let got = import_bytes(two, "two.obj", &ImportOptions { y_up: Some(false) }).expect("reads");
+        assert!(got.appearance.is_some());
+        assert!(got.notes.iter().any(|n| n.contains("Several colours")), "{:?}", got.notes);
+    }
     use crate::export_formats::{self, Look, Mat8, Surface, Units};
     use solidcraft_geom::melt::TriMesh;
 

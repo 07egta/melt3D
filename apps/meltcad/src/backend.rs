@@ -304,11 +304,29 @@ pub struct Relaunch {
     pub tried: Vec<Backend>,
     /// The design to open.
     pub file: Option<PathBuf>,
+    /// Options of this run the new one keeps (`--control PORT`, so a program driving the window
+    /// finds it again on the same port, #221).
+    pub keep: Vec<OsString>,
+}
+
+/// The options of a command line a restart passes on: `--control` with its port.
+pub fn kept_options(args: &[OsString]) -> Vec<OsString> {
+    let mut out = Vec::new();
+    let mut it = args.iter().skip(1);
+    while let Some(a) = it.next() {
+        if a.to_str() == Some("--control")
+            && let Some(port) = it.next()
+        {
+            out.push(a.clone());
+            out.push(port.clone());
+        }
+    }
+    out
 }
 
 /// The command line and environment of the new run.
 pub fn relaunch_args(r: &Relaunch) -> (Vec<OsString>, Vec<(String, String)>) {
-    let args: Vec<OsString> = r.file.iter().map(|f| f.clone().into_os_string()).collect();
+    let args: Vec<OsString> = r.keep.iter().cloned().chain(r.file.iter().map(|f| f.clone().into_os_string())).collect();
     let envs =
         vec![("MELTCAD_BACKEND".to_string(), r.choice.clone().unwrap_or_default()), ("MELTCAD_BACKEND_TRIED".to_string(), tried_text(&r.tried))];
     (args, envs)
@@ -527,12 +545,20 @@ mod tests {
 
     #[test]
     fn a_restart_carries_the_choice_the_tried_list_and_the_file() {
-        let r = Relaunch { choice: Some("dx12".into()), tried: vec![Backend::Vulkan], file: Some(PathBuf::from("/tmp/作品.meltcad")) };
+        let r =
+            Relaunch { choice: Some("dx12".into()), tried: vec![Backend::Vulkan], file: Some(PathBuf::from("/tmp/作品.meltcad")), keep: vec![] };
         let (args, envs) = relaunch_args(&r);
         assert_eq!(args, vec![OsString::from("/tmp/作品.meltcad")]);
         assert!(envs.contains(&("MELTCAD_BACKEND".to_string(), "dx12".to_string())));
         assert!(envs.contains(&("MELTCAD_BACKEND_TRIED".to_string(), "vulkan".to_string())));
-        let auto = Relaunch { choice: None, tried: vec![], file: None };
+        // a window driven over the control port is found again on the same port (#221)
+        let cmd: Vec<OsString> = ["meltcad", "--control", "7777", "/tmp/a.meltcad"].iter().map(OsString::from).collect();
+        let keep = kept_options(&cmd);
+        assert_eq!(keep, vec![OsString::from("--control"), OsString::from("7777")]);
+        let again = Relaunch { choice: None, tried: vec![], file: Some(PathBuf::from("/tmp/a.meltcad")), keep };
+        let (args, _) = relaunch_args(&again);
+        assert_eq!(args, vec![OsString::from("--control"), OsString::from("7777"), OsString::from("/tmp/a.meltcad")]);
+        let auto = Relaunch { choice: None, tried: vec![], file: None, keep: vec![] };
         let (args, envs) = relaunch_args(&auto);
         assert!(args.is_empty());
         assert!(envs.contains(&("MELTCAD_BACKEND".to_string(), String::new())), "empty means: remove it, auto");

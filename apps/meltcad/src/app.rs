@@ -760,6 +760,10 @@ impl App {
                     self.notice = Some(why.into());
                     return;
                 }
+                // the copy is a set of its own: links and patterns inside it follow the copy
+                let mut copies = copies;
+                let mut next = self.scene.next_uid();
+                Scene::renumber_copies(&mut next, &mut copies);
                 for (i, mut c) in copies.into_iter().enumerate() {
                     if i == 0 {
                         c.name = format!("{} copy", c.name);
@@ -2852,6 +2856,28 @@ mod tests {
         let text = app.selection_size().expect("a size");
         let want = format!("W {:.1} × D {:.1} × H {:.1} mm", h[1] * 2.0, h[0] * 2.0, h[2] * 2.0);
         assert_eq!(text, want, "a quarter turn about Z swaps width and depth (#195)");
+    }
+
+    #[test]
+    fn a_duplicated_parent_group_links_its_own_copy_not_the_original() {
+        let mut app = App::new(true, None);
+        let mut p = Group::new("P");
+        p.uid = 0;
+        let mut a = Group::new("A");
+        a.depth = 1;
+        a.uid = 5;
+        a.shapes.push(Shape::new(Kind::Sphere, [0.0; 3], crate::model::Material::default()));
+        let mut b = Group::new("B");
+        b.depth = 1;
+        b.instance_of = Some(5);
+        app.scene.groups = vec![p, a, b];
+        app.sel = Some(Pick::Group(0));
+        app.duplicate();
+        assert_eq!(app.scene.groups.len(), 6);
+        let (a2, b2) = (&app.scene.groups[4], &app.scene.groups[5]);
+        assert_ne!(a2.uid, 5, "the copy has a number of its own");
+        assert_eq!(b2.instance_of, Some(a2.uid), "the copied link shows the copied group (#202)");
+        assert_eq!(app.scene.groups[2].instance_of, Some(5), "the original link is untouched");
     }
 
     #[test]
