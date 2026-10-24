@@ -274,7 +274,15 @@ pub fn shape_radius(s: &Shape) -> f32 {
     let h = s.local_half();
     let sc = s.scale;
     let v = [h[0] * sc[0].abs(), h[1] * sc[1].abs(), h[2] * sc[2].abs()];
-    let swell = s.face_melt.parts().map_or(0.0, |m| m.2.abs());
+    let top = sc[0].abs().max(sc[1].abs()).max(sc[2].abs());
+    let low = sc[0].abs().min(sc[1].abs()).min(sc[2].abs());
+    // a stretched shape's distance is only a lower bound (it is scaled by the smallest factor), so
+    // it can read near where a sphere says "far": such a shape is never skipped (#97)
+    if top.is_finite() && low.is_finite() && top > low * 1.0001 + 1e-6 {
+        return 1.0e4;
+    }
+    // the swell is made in the shape's own units and grows with its scale (#96)
+    let swell = s.face_melt.parts().map_or(0.0, |m| m.2.abs() * top);
     let r = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt() * 1.08 + 1.0 + swell;
     if r.is_finite() { r.min(1.0e4) } else { 1.0e4 }
 }

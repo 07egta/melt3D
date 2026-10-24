@@ -733,6 +733,41 @@ mod tests {
         assert!(f(Kind::Extrude, [0.0, 0.0, 0.0]) < 0.0);
     }
 
+    /// #96: an enlarged shape's face melt swells with its scale, so culling must not cut it off.
+    /// #97: a stretched shape is never culled, so the order of two blended shapes does not matter.
+    #[test]
+    fn culling_keeps_scaled_face_melts_and_stretched_shapes() {
+        let mut far = ball(0.0, 1.0);
+        far.pos = [2.0, 0.0, 100.0];
+        let mut big = ball(0.0, 1.0);
+        big.scale = [20.0; 3];
+        big.face_melt = crate::model::FaceMelt { face: 5, amount: 30.0, reach: 60.0 };
+        let sc = scene_of(vec![far, big]);
+        let (fast, slow) = (Field::new(&sc), Field::new(&sc).without_culling());
+        for z in [60.0, 100.0, 140.0] {
+            let p = [0.0, 0.0, z];
+            assert!((fast.distance(p) - slow.distance(p)).abs() < 1e-3, "{z}: {} against {}", fast.distance(p), slow.distance(p));
+        }
+        let small = || {
+            let mut s = ball(10.0, 1.0);
+            s.blend = 4.0;
+            s
+        };
+        let stretched = || {
+            let mut s = ball(0.0, 1.0);
+            s.scale = [4.0, 1.0, 1.0];
+            s.blend = 4.0;
+            s
+        };
+        let (mut a, mut b) = (scene_of(vec![small(), stretched()]), scene_of(vec![stretched(), small()]));
+        a.melt.amount = 1.0;
+        b.melt.amount = 1.0;
+        let (fa, fb) = (Field::new(&a), Field::new(&b));
+        let p = [10.0, 1.2, 0.0];
+        assert!((fa.distance(p) - fb.distance(p)).abs() < 1e-3, "{} against {}", fa.distance(p), fb.distance(p));
+        assert!((fa.distance(p) - Field::new(&a).without_culling().distance(p)).abs() < 1e-3);
+    }
+
     fn ball(x: f32, r: f32) -> Shape {
         let mut s = Shape::new(Kind::Sphere, [x, 0.0, 0.0], Material::default());
         s.size[0] = r;
