@@ -1,4 +1,4 @@
-//! Editing curves (and sweep paths) in the viewport, the way Womp3D does it: the nodes show as
+//! Editing curves (and sweep paths) in the viewport: the nodes show as
 //! small circles; drag one to move it, drag from the `+` at an end to pull out a new node, click
 //! the `+` between two nodes to add one there. Also the "せん" tool that draws a new curve by
 //! clicking, and the inspector section for curves.
