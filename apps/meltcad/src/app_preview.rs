@@ -249,7 +249,7 @@ fn app_preview() {
         let stl = std::env::temp_dir().join("meltcad_preview_model.stl");
         let _ = std::fs::write(&stl, crate::mesh_import::tests::sample_stl());
         if which == "card" {
-            crate::mesh_dialog::open_path(&ctx, stl);
+            crate::mesh_dialog::open_path(&ctx, stl, app.document_generation());
         } else if let Ok(l) = crate::mesh_import::load(&stl) {
             let st = crate::mesh_import::Settings { res: 48, ..crate::mesh_import::Settings::new(l.size) };
             if let Ok(b) = crate::mesh_import::bake(&l.imported.mesh, l.imported.format, &st, &crate::sdf_volume::BakeControl::new()) {

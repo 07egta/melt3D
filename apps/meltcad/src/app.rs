@@ -74,6 +74,10 @@ pub struct App {
     /// The revision `committed` is current for, and the one `dedupe_uids` last ran for.
     committed_rev: u64,
     deduped_rev: u64,
+    /// Which document the scene shows. A new or opened design (or a control command that
+    /// replaces the scene) starts the next one, so work started for the old document can tell
+    /// that its result must not be put into the new one.
+    document_generation: u64,
     /// The field for picking, made when picking needs it and the scene has changed since.
     field_cache: std::cell::RefCell<Option<(u64, std::rc::Rc<Field>, Scene)>>,
     /// How many times the field was built (tests and the HUD look at it).
@@ -189,6 +193,7 @@ impl App {
             scene_rev: 1,
             committed_rev: 1,
             deduped_rev: 0,
+            document_generation: 0,
             field_cache: std::cell::RefCell::new(None),
             field_builds: std::cell::Cell::new(0),
             scene,
@@ -587,6 +592,7 @@ impl App {
             self.notice = Some(format!("Could not clean up recovery data: {e}"));
         }
         self.clear_document_gestures();
+        self.document_generation = self.document_generation.wrapping_add(1);
         self.scene = scene.clone();
         self.committed = scene;
         self.undo.clear();
@@ -914,17 +920,19 @@ impl App {
         if shapes.is_empty() && groups.is_empty() {
             return false;
         }
+        let _ = parents;
         shapes.iter().all(|&(g, s)| self.scene.shape(g, s).is_some_and(|x| x.blend > 0.0))
-            && groups.iter().chain(parents.iter()).all(|&g| self.scene.groups.get(g).is_some_and(|x| x.blend > 0.0))
+            && groups.iter().all(|&g| self.scene.groups.get(g).is_some_and(|x| x.blend > 0.0))
     }
 
     /// One press: melt what is picked into its neighbours (the shapes AND the groups, which used to
     /// be two switches), or take the melt away again. With nothing picked, it is the whole scene.
     pub fn toggle_melt_selected(&mut self) {
-        let (mut shapes, mut groups, mut parents) = self.melt_targets();
+        let (mut shapes, groups, mut parents) = self.melt_targets();
         if shapes.is_empty() && groups.is_empty() {
-            groups = (0..self.scene.groups.len()).collect();
-            shapes = groups.iter().flat_map(|&g| (0..self.scene.groups[g].shapes.len()).map(move |s| (g, s))).collect();
+            // the whole scene: the shapes inside their groups only; different groups stay apart
+            // unless a group row is picked and melted on purpose
+            shapes = (0..self.scene.groups.len()).flat_map(|g| (0..self.scene.groups[g].shapes.len()).map(move |s| (g, s))).collect();
             parents.clear();
         }
         let on = !self.selection_melts_of(&shapes, &groups, &parents);
@@ -947,7 +955,8 @@ impl App {
                 })
                 .collect()
         };
-        for &g in groups.iter().chain(if on { parents.iter() } else { emptied.iter() }) {
+        // (turning melt on for a shape never makes its group melt into the other groups)
+        for &g in groups.iter().chain(emptied.iter()) {
             if let Some(gr) = self.scene.groups.get_mut(g) {
                 gr.blend = if on { if gr.blend > 0.0 { gr.blend } else { 12.0 } } else { 0.0 };
             }
@@ -955,9 +964,10 @@ impl App {
     }
 
     fn selection_melts_of(&self, shapes: &[(usize, usize)], groups: &[usize], parents: &[usize]) -> bool {
+        let _ = parents;
         !(shapes.is_empty() && groups.is_empty())
             && shapes.iter().all(|&(g, s)| self.scene.shape(g, s).is_some_and(|x| x.blend > 0.0))
-            && groups.iter().chain(parents.iter()).all(|&g| self.scene.groups.get(g).is_some_and(|x| x.blend > 0.0))
+            && groups.iter().all(|&g| self.scene.groups.get(g).is_some_and(|x| x.blend > 0.0))
     }
 
     /// The shapes of everything that is selected, each once.
@@ -1155,9 +1165,17 @@ impl App {
                 if self.scene.shape(g, s).is_none() || g2 >= self.scene.groups.len() {
                     return;
                 }
+                // A loose shape lives in a group. Dropped on the line above a group row it joins the
+                // group that ends there (the one above, #279); below the row it becomes that group's first shape.
                 let sh = self.scene.groups[g].shapes.remove(s);
-                self.scene.groups[g2].shapes.push(sh);
-                self.sel = Some(Pick::Shape(g2, self.scene.groups[g2].shapes.len() - 1));
+                if after {
+                    self.scene.groups[g2].shapes.insert(0, sh);
+                    self.sel = Some(Pick::Shape(g2, 0));
+                } else {
+                    let target = g2.saturating_sub(1);
+                    self.scene.groups[target].shapes.push(sh);
+                    self.sel = Some(Pick::Shape(target, self.scene.groups[target].shapes.len() - 1));
+                }
             }
             (Pick::Group(g), Pick::Group(g2) | Pick::Shape(g2, _)) => {
                 if g >= self.scene.groups.len() || g2 >= self.scene.groups.len() || g == g2 {
@@ -1192,8 +1210,13 @@ impl App {
             return Err("Finish or cancel the active command first");
         }
         match from {
-            Pick::Shape(..) => {
-                self.move_layer(from, Pick::Group(into), true);
+            Pick::Shape(g, s) => {
+                if self.scene.shape(g, s).is_none() || into >= self.scene.groups.len() {
+                    return Ok(());
+                }
+                let sh = self.scene.groups[g].shapes.remove(s);
+                self.scene.groups[into].shapes.push(sh);
+                self.sel = Some(Pick::Shape(into, self.scene.groups[into].shapes.len() - 1));
                 Ok(())
             }
             Pick::Group(g) => {
@@ -1207,8 +1230,81 @@ impl App {
         }
     }
 
+    /// Several picked rows dropped inside group `into`: the loose shapes keep their order and join it,
+    /// the picked groups (with what is nested in them) nest in it.
+    pub fn move_picks_into(&mut self, picks: &[Pick], into: usize) -> Result<(), &'static str> {
+        if !self.allow_scene_structure_change() {
+            return Err("Finish or cancel the active command first");
+        }
+        let n = self.scene.groups.len();
+        if into >= n {
+            return Ok(());
+        }
+        let mut starts: Vec<usize> = picks.iter().filter_map(|p| if let Pick::Group(g) = p { Some(*g) } else { None }).filter(|g| *g < n).collect();
+        starts.sort_unstable();
+        starts.dedup();
+        let mut ranges: Vec<(usize, usize)> = Vec::new();
+        for &g in &starts {
+            if !ranges.iter().any(|&(a, b)| g >= a && g < b) {
+                ranges.push((g, self.scene.subtree_end(g)));
+            }
+        }
+        if ranges.iter().any(|&(a, b)| (a..b).contains(&into)) {
+            return Err("A group cannot go inside itself, or more than 4 levels deep");
+        }
+        let mut shapes: Vec<(usize, usize)> = picks
+            .iter()
+            .filter_map(|p| if let Pick::Shape(g, s) = p { Some((*g, *s)) } else { None })
+            .filter(|(g, _)| *g != into && !ranges.iter().any(|&(a, b)| *g >= a && *g < b))
+            .collect();
+        shapes.sort_unstable();
+        shapes.dedup();
+        for &(g, s) in shapes.iter().rev() {
+            if self.scene.shape(g, s).is_some() {
+                let sh = self.scene.groups[g].shapes.remove(s);
+                self.scene.groups[into].shapes.insert(0, sh);
+            }
+        }
+        // one group at a time; the places of the others and of the target shift after each move
+        let mut pending: Vec<usize> = ranges.iter().map(|r| r.0).collect();
+        let mut target = into;
+        let mut result = Ok(());
+        while !pending.is_empty() {
+            let g = pending.remove(0);
+            let e = self.scene.subtree_end(g);
+            let Some(at) = self.scene.move_group_into(g, target) else {
+                result = Err("A group cannot go inside itself, or more than 4 levels deep");
+                break;
+            };
+            let remap = |i: usize| -> usize {
+                if (g..e).contains(&i) {
+                    return at + (i - g);
+                }
+                let j = if i >= e { i - (e - g) } else { i };
+                if j >= at { j + (e - g) } else { j }
+            };
+            target = remap(target);
+            for x in &mut pending {
+                *x = remap(*x);
+            }
+        }
+        self.folded.clear();
+        self.multi.clear();
+        self.sel = Some(Pick::Group(target.min(self.scene.groups.len().saturating_sub(1))));
+        self.multi_for = self.sel;
+        result
+    }
+
     /// Move the selection by `d` millimetres.
     pub fn nudge(&mut self, d: [f32; 3]) {
+        // A ball chosen in the scene list is moved on its own: its siblings, the curve through
+        // them and the group's melt all stay as they are.
+        if let Some((g, s, i)) = self.picked_node()
+            && let Some(w) = self.node_world(g, s, i)
+        {
+            self.set_node_world(g, s, i, [w[0] + d[0], w[1] + d[1], w[2] + d[2]]);
+            return;
+        }
         let mut targets = self.sel_targets();
         let mut seen: std::collections::HashSet<(usize, usize)> = targets.iter().copied().collect();
         let mut linked = std::collections::HashSet::new();
@@ -1708,7 +1804,7 @@ impl App {
                             .on_hover_text("STL, OBJ, 3MF, PLY, GLB")
                             .clicked()
                         {
-                            crate::mesh_dialog::open(&ctx);
+                            crate::mesh_dialog::open(&ctx, self.document_generation());
                             ui.close();
                         }
                         if ui.button(style::keys("Save  Ctrl+S")).clicked() {
@@ -1999,7 +2095,7 @@ impl App {
                                 for k in Kind::MAIN {
                                     let r = ui.add_enabled(!self.scene_structure_locked(), |ui: &mut Ui| {
                                         style::wide_button(ui, k.label(), k.label(), false, None, |p, r, ink| {
-                                            glyphs::kind(p, r, k, ink, Color32::from_white_alpha(18))
+                                            glyphs::kind(p, r, k, ink, ink.gamma_multiply(0.15))
                                         })
                                     });
                                     if r.clicked() {
@@ -2016,7 +2112,8 @@ impl App {
                                     for k in Kind::MORE {
                                         let r = ui.horizontal(|ui| {
                                             let (rc, _) = ui.allocate_exact_size(egui::vec2(24.0, 24.0), egui::Sense::hover());
-                                            glyphs::kind(ui.painter(), rc, k, ui.visuals().text_color(), Color32::from_white_alpha(18));
+                                            let ink = ui.visuals().text_color();
+                                            glyphs::kind(ui.painter(), rc, k, ink, ink.gamma_multiply(0.15));
                                             ui.selectable_label(false, k.label())
                                         });
                                         if r.inner.clicked() {
@@ -2029,7 +2126,8 @@ impl App {
                                     for k in Kind::CAD {
                                         let r = ui.horizontal(|ui| {
                                             let (rc, _) = ui.allocate_exact_size(egui::vec2(24.0, 24.0), egui::Sense::hover());
-                                            glyphs::kind(ui.painter(), rc, k, ui.visuals().text_color(), Color32::from_white_alpha(18));
+                                            let ink = ui.visuals().text_color();
+                                            glyphs::kind(ui.painter(), rc, k, ink, ink.gamma_multiply(0.15));
                                             ui.selectable_label(false, k.label())
                                         });
                                         if r.inner.clicked() {
@@ -2454,6 +2552,11 @@ impl App {
         }
     }
 
+    /// Which document the scene shows: a transfer started for another one must not land here.
+    pub(crate) fn document_generation(&self) -> u64 {
+        self.document_generation
+    }
+
     pub(crate) fn scene_edit_in_progress(&self) -> bool {
         self.scene_structure_locked()
             || self.sketch_active()
@@ -2470,7 +2573,7 @@ impl App {
     }
 
     /// Runs the commands that arrived on the control channel (at most a few per frame).
-    fn run_control(&mut self, ctx: &egui::Context) {
+    pub(crate) fn run_control(&mut self, ctx: &egui::Context) {
         let Some(rx) = self.control.take() else { return };
         let mut ran = false;
         for _ in 0..32 {
@@ -2513,6 +2616,11 @@ impl App {
                     self.settle(ctx);
                     self.clear_document_gestures();
                     self.scene = next;
+                    // A command that replaces the whole design starts a new document, like
+                    // File > New / Open does: no transfer from the old one may land in it.
+                    if matches!(name, Some("scene.new" | "scene.set" | "load")) {
+                        self.document_generation = self.document_generation.wrapping_add(1);
+                    }
                     self.sel = if let Some(g) = value.get("group").and_then(serde_json::Value::as_u64) {
                         Some(match value.get("shape").and_then(serde_json::Value::as_u64) {
                             Some(s) => Pick::Shape(g as usize, s as usize),
@@ -2605,6 +2713,7 @@ impl App {
             self.sketch_card(&ctx);
             self.keys_card(ui);
             crate::svg_dialog::update(self, &ctx);
+            crate::precise::transfer_card(self, &ctx);
             crate::mesh_dialog::update(self, &ctx);
             crate::array::update(self, &ctx);
             crate::export_dialog::update(self, &ctx);
@@ -2623,15 +2732,25 @@ impl App {
         self.settle(&ctx);
         if !cfg!(test) {
             ctx.request_repaint_after(crate::recovery::INTERVAL);
+            // Publish a checkpoint that finished on its worker, then consider a new one.
+            // Serializing the scene never happens in this frame (only the worker does it).
+            if let Some(result) = self.recovery.poll_checkpoint()
+                && let Err(e) = result
+            {
+                self.notice = Some(format!("Could not save auto-recovery data: {e}"));
+            }
             // Finding out whether the scene changed compares all of it, so it is only done when
-            // the checkpoint is due (`checkpoint` would ignore the answer otherwise).
+            // a checkpoint is due (`start_checkpoint` would ignore the answer otherwise).
             let now = std::time::Instant::now();
             if self.recovery.due(now) {
                 let rev = self.track_scene();
                 let changed = self.has_unsaved_work();
-                if let Err(e) = self.recovery.checkpoint(&self.scene, self.path.as_deref(), changed, rev, now) {
+                if let Err(e) = self.recovery.start_checkpoint(&self.scene, self.path.as_deref(), changed, rev, now) {
                     self.notice = Some(format!("Could not save auto-recovery data: {e}"));
                 }
+            }
+            if self.recovery.checkpoint_running() {
+                ctx.request_repaint_after(std::time::Duration::from_millis(150));
             }
         }
         self.test_hooks(&ctx);
@@ -3086,6 +3205,13 @@ mod tests {
         assert_eq!(answer["precise"], false);
         assert_eq!(answer["importing"], true);
         assert!(app.precise_transfer_pending());
+        // The STL is written and parsed on a worker; the bake card opens when it is ready.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(90);
+        while !crate::mesh_dialog::is_open(&ctx) {
+            app.sync_precise_transfer(&ctx);
+            assert!(std::time::Instant::now() < deadline, "the transfer did not reach the bake");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
         assert!(crate::mesh_dialog::cancel(&ctx));
         app.sync_precise_transfer(&ctx);
     }
@@ -3193,6 +3319,35 @@ mod tests {
     }
 
     #[test]
+    fn melting_shapes_never_melts_their_groups_into_each_other() {
+        let ball = |x: f32| {
+            let mut s = Shape::new(Kind::Box, [x, 0.0, 0.0], crate::model::Material::default());
+            s.blend = 0.0;
+            s
+        };
+        let mut app = App::new(true, None);
+        let mut a = Group::new("A");
+        a.shapes = vec![ball(-21.0), ball(-5.0)];
+        let mut b = Group::new("B");
+        b.shapes = vec![ball(21.0)];
+        app.scene.groups = vec![a, b];
+        // a shape picked: its own melt turns on, its group stays hard against the other groups
+        app.sel = Some(Pick::Shape(1, 0));
+        app.toggle_melt_selected();
+        assert!(app.scene.groups[1].shapes[0].blend > 0.0);
+        assert_eq!(app.scene.groups[1].blend, 0.0, "different groups do not melt unless the group itself is melted");
+        // nothing picked: the whole scene melts inside the groups only
+        app.sel = None;
+        app.multi.clear();
+        app.toggle_melt_selected();
+        assert!(app.scene.groups.iter().all(|g| g.blend == 0.0));
+        // a picked group row melts into the groups before it on purpose
+        app.sel = Some(Pick::Group(1));
+        app.toggle_melt_selected();
+        assert!(app.scene.groups[1].blend > 0.0);
+    }
+
+    #[test]
     fn a_quarter_turned_box_shows_its_sizes_along_the_world_axes() {
         let mut app = App::new(true, None);
         let mut b = Shape::new(Kind::Box, [0.0; 3], crate::model::Material::default());
@@ -3241,6 +3396,47 @@ mod tests {
         app.move_layer(Pick::Group(0), Pick::Group(3), true);
         let after: Vec<(String, u8)> = app.scene.groups.iter().map(|x| (x.name.clone(), x.depth)).collect();
         assert_eq!(after, before, "a parent group cannot land among nested groups; nothing is flattened (#203)");
+    }
+
+    #[test]
+    fn a_shape_dropped_on_the_line_above_a_group_joins_the_group_above() {
+        let mut app = App::new(true, None);
+        let sp = || Shape::new(Kind::Sphere, [0.0; 3], crate::model::Material::default());
+        let mut a = Group::new("A");
+        a.shapes = vec![sp()];
+        let mut b = Group::new("B");
+        b.shapes = vec![sp(), sp()];
+        app.scene.groups = vec![a, b];
+        let c = Group::new("C");
+        app.scene.groups.push(c);
+        // dropped on the line above C, which is the end of B
+        app.move_layer(Pick::Shape(0, 0), Pick::Group(2), false);
+        assert_eq!(app.scene.groups[1].shapes.len(), 3, "it joined B, the group above the line (#279)");
+        assert_eq!(app.scene.groups[2].shapes.len(), 0, "and did not go into C below the line");
+        assert_eq!(app.scene.groups[0].shapes.len(), 0);
+        // on the lower edge of a group row it becomes that group's first shape
+        app.move_layer(Pick::Shape(1, 2), Pick::Group(2), true);
+        assert_eq!(app.scene.groups[2].shapes.len(), 1);
+    }
+
+    #[test]
+    fn several_picked_rows_go_into_a_group_together() {
+        let mut app = App::new(true, None);
+        let sp = || Shape::new(Kind::Sphere, [0.0; 3], crate::model::Material::default());
+        let mut a = Group::new("A");
+        a.shapes = vec![sp(), sp()];
+        let mut b = Group::new("B");
+        b.shapes = vec![sp()];
+        let c = Group::new("C");
+        let d = Group::new("D");
+        app.scene.groups = vec![a, b, c, d];
+        let picks = [Pick::Shape(0, 0), Pick::Shape(0, 1), Pick::Group(1), Pick::Group(2)];
+        app.move_picks_into(&picks, 3).unwrap();
+        assert_eq!(app.scene.groups[0].shapes.len(), 0, "A lost both shapes");
+        let names: Vec<(&str, u8)> = app.scene.groups.iter().map(|g| (g.name.as_str(), g.depth)).collect();
+        assert_eq!(names, vec![("A", 0), ("D", 0), ("B", 1), ("C", 1)], "B and C are inside D");
+        assert_eq!(app.scene.groups[1].shapes.len(), 2, "the shapes joined D");
+        assert!(app.move_picks_into(&[Pick::Group(1)], 2).is_err(), "a group cannot go into what is inside it");
     }
 
     #[test]
@@ -3316,7 +3512,7 @@ mod tests {
         app.add_shape(&ctx, Kind::Box);
         let n = app.scene.shape_count();
         for open in [
-            (|c: &egui::Context| crate::mesh_dialog::open_path(c, std::env::temp_dir().join("meltcad-no-such-mesh.stl"))) as fn(&egui::Context),
+            (|c: &egui::Context| crate::mesh_dialog::open_path(c, std::env::temp_dir().join("meltcad-no-such-mesh.stl"), 0)) as fn(&egui::Context),
             |c| crate::export_dialog::open(c, None),
         ] {
             open(&ctx);
@@ -3429,7 +3625,7 @@ mod tests {
         app.move_layer(Pick::Shape(0, 0), Pick::Shape(0, 2), true);
         assert_eq!(names(&app), vec![Kind::Sphere, Kind::Box, Kind::Cone]);
         app.add_group();
-        app.move_layer(Pick::Shape(0, 1), Pick::Group(1), false);
+        app.move_layer(Pick::Shape(0, 1), Pick::Group(1), true);
         assert_eq!((app.scene.groups[0].shapes.len(), app.scene.groups[1].shapes.len()), (2, 1));
         app.move_layer(Pick::Group(1), Pick::Group(0), false);
         assert_eq!(app.scene.groups[0].shapes.len(), 1);
@@ -3607,6 +3803,68 @@ mod tests {
         app.sel = Some(Pick::Group(0));
         app.duplicate();
         assert_eq!(app.scene.groups[1].shapes[0].pos, at);
+    }
+
+    #[test]
+    fn a_chosen_ball_moves_alone_and_a_group_still_moves_every_child() {
+        use crate::model::{Group, Kind, Material, Pick, Shape};
+        let mut app = super::App::new(true, None);
+        app.scene.groups.clear();
+        let mut group = Group::new("Pipe");
+        let mut sibling = Shape::new(Kind::Sphere, [0.0, 0.0, 80.0], Material::default());
+        sibling.name = "Sibling".into();
+        group.shapes.push(sibling);
+        let mut pipe = Shape::new(Kind::Curve, [10.0, 0.0, 10.0], Material::default());
+        pipe.name = "Pipe".into();
+        pipe.path = vec![[-20.0, 0.0, 0.0, 4.0], [0.0, 0.0, 0.0, 4.0], [20.0, 0.0, 0.0, 4.0], [40.0, 0.0, 0.0, 4.0], [60.0, 0.0, 0.0, 4.0]];
+        group.shapes.push(pipe);
+        app.scene.groups.push(group);
+        app.committed_sync();
+
+        // The row of "Ball 4" picks shape 1 and node 3.
+        app.sel = Some(Pick::Shape(0, 1));
+        app.ct.node = Some((0, 1, 3));
+        assert_eq!(app.picks(), vec![Pick::Shape(0, 1)]);
+        assert_eq!(app.sel_targets(), vec![(0, 1)], "the selection is the pipe shape, not the group");
+
+        let before = app.scene.groups[0].shapes[1].path.clone();
+        let pipe_pos = app.scene.groups[0].shapes[1].pos;
+        let sibling_pos = app.scene.groups[0].shapes[0].pos;
+        app.nudge([5.0, 0.0, 0.0]);
+        let after = &app.scene.groups[0].shapes[1].path;
+        for i in 0..before.len() {
+            if i == 3 {
+                assert!((after[i][0] - before[i][0] - 5.0).abs() < 1e-4, "the chosen ball moved by 5 mm");
+                assert_eq!([after[i][1], after[i][2], after[i][3]], [before[i][1], before[i][2], before[i][3]]);
+            } else {
+                assert_eq!(after[i], before[i], "node {i} is untouched");
+            }
+        }
+        assert_eq!(app.scene.groups[0].shapes[1].pos, pipe_pos, "the pipe itself did not move");
+        assert_eq!(app.scene.groups[0].shapes[0].pos, sibling_pos, "its sibling shape did not move");
+
+        // One nudge is one undo step.
+        let ctx = egui::Context::default();
+        app.settle(&ctx);
+        assert_eq!(app.undo_depth(), 1);
+        app.undo();
+        assert_eq!(app.scene.groups[0].shapes[1].path, before, "undo puts the ball back");
+
+        // The same movement survives save and reload.
+        app.sel = Some(Pick::Shape(0, 1));
+        app.ct.node = Some((0, 1, 3));
+        app.nudge([1.0, 2.0, 3.0]);
+        let moved = app.scene.groups[0].shapes[1].path.clone();
+        let reloaded = crate::model::Scene::from_json(&app.scene.to_json()).unwrap_or_default();
+        assert_eq!(reloaded.groups[0].shapes[1].path, moved, "the ball's offset round-trips");
+
+        // A group pick still moves the pipe and every other shape in it (#260).
+        app.sel = Some(Pick::Group(0));
+        let sibling_x = app.scene.groups[0].shapes[0].pos[0];
+        let pipe_x = app.scene.groups[0].shapes[1].pos[0];
+        app.nudge([5.0, 0.0, 0.0]);
+        assert_eq!(app.scene.groups[0].shapes[0].pos[0], sibling_x + 5.0);
+        assert_eq!(app.scene.groups[0].shapes[1].pos[0], pipe_x + 5.0);
     }
 }
 

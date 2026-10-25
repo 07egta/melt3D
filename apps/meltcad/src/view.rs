@@ -195,7 +195,7 @@ impl App {
         let geom = if clean || self.ct.drawing || self.pt.on || self.sketch_active() {
             None
         } else {
-            gizmo::build_multi(&self.cam, rect, &self.scene, &self.picks(), tool)
+            gizmo::build_multi_node(&self.cam, rect, &self.scene, &self.picks(), self.picked_node(), tool)
         };
         let over_gnomon = !clean && pos.is_some_and(|p| self.gnomon_hit(rect, p).is_some() || Self::home_hit(rect, p));
         let hover_handle = match (&geom, pos, &self.drag) {
@@ -326,7 +326,9 @@ impl App {
                 self.drag = Some(self.begin_drag(h, g, rect, o, tool, mods.shift));
                 self.orbiting = false;
             } else {
-                self.orbiting = origin.is_some_and(|o| self.gnomon_hit(rect, o).is_none() && !Self::home_hit(rect, o));
+                // A drag that starts on the axis ball turns the view like a drag on empty space;
+                // only the home button keeps its press for itself (a click there goes home).
+                self.orbiting = origin.is_some_and(|o| !Self::home_hit(rect, o));
             }
         }
         if self.sketch_active() {
@@ -496,7 +498,7 @@ impl App {
         let draw_geom = if clean || self.ct.drawing || self.pt.on || self.sketch_active() {
             None
         } else if moved_camera || self.drag.is_some() {
-            gizmo::build_multi(&self.cam, rect, &self.scene, &self.picks(), tool)
+            gizmo::build_multi_node(&self.cam, rect, &self.scene, &self.picks(), self.picked_node(), tool)
         } else {
             geom
         };
@@ -535,7 +537,7 @@ impl App {
         (q.moving_scale().unwrap_or_else(|| self.perf.scale.scale()), q.still_scale())
     }
 
-    fn gnomon_items(&self, rect: Rect) -> Vec<(V3, Pos2, bool)> {
+    pub(crate) fn gnomon_items(&self, rect: Rect) -> Vec<(V3, Pos2, bool)> {
         let origin = pos2(rect.right() - 62.0, rect.top() + 62.0);
         let (right, up, _) = self.cam.basis();
         let mut v = Vec::new();
@@ -551,7 +553,7 @@ impl App {
         v
     }
 
-    fn gnomon_hit(&self, rect: Rect, p: Pos2) -> Option<V3> {
+    pub(crate) fn gnomon_hit(&self, rect: Rect, p: Pos2) -> Option<V3> {
         self.gnomon_items(rect)
             .into_iter()
             .filter(|(_, c, positive)| *positive && (*c - p).length() < 10.0)
@@ -561,11 +563,11 @@ impl App {
     }
 
     /// The home button sits at the upper left of the axis ball.
-    fn home_centre(rect: Rect) -> Pos2 {
+    pub(crate) fn home_centre(rect: Rect) -> Pos2 {
         pos2(rect.right() - 62.0 - 44.0, rect.top() + 62.0 - 44.0)
     }
 
-    fn home_hit(rect: Rect, p: Pos2) -> bool {
+    pub(crate) fn home_hit(rect: Rect, p: Pos2) -> bool {
         (Self::home_centre(rect) - p).length() < HOME_RADIUS + 2.0
     }
 

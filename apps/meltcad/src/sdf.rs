@@ -98,6 +98,8 @@ pub struct FieldGroup {
     /// The scene group this stands for.
     pub gi: usize,
     pub op: Op,
+    /// The reach it melts by: its own amount, raised to the parent group's when that is larger
+    /// (see `Scene::group_melt_reach`).
     pub blend: f32,
     pub src: usize,
     pub insts: Vec<crate::pattern::Inst>,
@@ -454,7 +456,8 @@ impl Field {
             });
             let depth = usize::from(g.depth);
             let leaf = scene.groups.get(rg.gi + 1).is_none_or(|n| usize::from(n.depth) <= depth);
-            groups.push(FieldGroup { gi: rg.gi, op: g.op, blend: g.blend, src, insts: rg.insts, linked: rg.linked, depth, leaf });
+            let blend = scene.group_melt_reach(rg.gi);
+            groups.push(FieldGroup { gi: rg.gi, op: g.op, blend, src, insts: rg.insts, linked: rg.linked, depth, leaf });
         }
         let m = scene.melt;
         Field { groups, sources, mode: m.mode, amount: m.amount, drip: m.drip, ripple: m.ripple, prepared_built, prepared_reused }
@@ -1054,6 +1057,53 @@ mod tests {
         assert!(melted < hard, "the children melt together inside the parent ({melted} vs {hard})");
         // the empty parent is only a container: it adds nothing of its own
         assert!(Field::new(&sc).distance([0.0, 40.0, 0.0]) > 25.0);
+    }
+
+    fn with_blend(mut s: Shape, blend: f32) -> Shape {
+        s.blend = blend;
+        s
+    }
+
+    fn child_group_scene(parent_blend: f32, parent_shapes: Vec<Shape>) -> Scene {
+        let mut sc = Scene { groups: vec![], melt: Default::default(), env: Default::default(), saved: Vec::new(), anim: Default::default() };
+        let mut parent = group_of("parent", 0, parent_shapes);
+        parent.blend = parent_blend;
+        sc.groups.push(parent);
+        sc.groups.push(group_of("c1", 1, vec![ball(-9.0, 10.0)]));
+        sc.groups.push(group_of("c2", 1, vec![ball(9.0, 10.0)]));
+        sc.normalize_depths();
+        sc
+    }
+
+    /// The user's report: two groups inside a parent did not melt although the parent's Melt was on.
+    #[test]
+    fn sibling_groups_melt_by_the_parent_amount() {
+        let nested = Field::new(&child_group_scene(67.38, vec![]));
+        // the same two shapes in one group, melting with the parent's amount
+        let single = Field::new(&scene_of(vec![with_blend(ball(-9.0, 10.0), 67.38), with_blend(ball(9.0, 10.0), 67.38)]));
+        let p = [0.0, 0.0, 0.0];
+        let (groups, one_group) = (nested.distance(p), single.distance(p));
+        assert!((groups - one_group).abs() < 1e-3, "two child groups must melt like one group: {groups} vs {one_group}");
+        assert!(groups < -2.0, "the parent's melt must pull the midpoint in, not union it: {groups}");
+    }
+
+    #[test]
+    fn a_child_group_melts_with_the_parents_own_shapes() {
+        let nested = Field::new(&child_group_scene(67.38, vec![ball(0.0, 5.0)]));
+        let single = Field::new(&scene_of(vec![ball(0.0, 5.0), with_blend(ball(-9.0, 10.0), 67.38), with_blend(ball(9.0, 10.0), 67.38)]));
+        for p in [[0.0, 0.0, 0.0], [0.0, 0.0, 4.0], [-14.0, 0.0, 0.0]] {
+            let (groups, one_group) = (nested.distance(p), single.distance(p));
+            assert!((groups - one_group).abs() < 1e-3, "at {p:?}: {groups} vs {one_group}");
+        }
+        assert!(nested.distance([0.0, 0.0, 0.0]) < -2.0, "the child groups melt into the parent's own shape");
+    }
+
+    #[test]
+    fn child_groups_with_melt_off_still_union_plainly() {
+        let hard = Field::new(&child_group_scene(0.0, vec![])).distance([0.0, 0.0, 0.0]);
+        let plain = Field::new(&scene_of(vec![ball(-9.0, 10.0), ball(9.0, 10.0)])).distance([0.0, 0.0, 0.0]);
+        assert!((hard - plain).abs() < 1e-6, "Melt off must be a hard union: {hard} vs {plain}");
+        assert!((hard + 1.0).abs() < 1e-4, "the midpoint stays at min(-1, -1) = -1: {hard}");
     }
 
     #[test]

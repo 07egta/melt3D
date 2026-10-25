@@ -226,6 +226,48 @@ fn a_node_of_a_freshly_traced_pipe_can_be_dragged_too() {
 }
 
 #[test]
+fn clicking_a_ball_row_moves_that_ball_only_with_the_arrow_keys() {
+    let mut r = Rig::new();
+    r.app.scene.groups.clear();
+    let mut group = crate::model::Group::new("Pipe");
+    group.shapes.push(Shape::new(Kind::Sphere, [0.0, 0.0, 120.0], Material::default()));
+    let mut pipe = Shape::new(Kind::Curve, [0.0, 0.0, 20.0], Material::default());
+    pipe.name = "Pipe".into();
+    pipe.path = vec![[-20.0, 0.0, 0.0, 4.0], [0.0, 0.0, 0.0, 4.0], [20.0, 0.0, 0.0, 4.0], [40.0, 0.0, 0.0, 4.0], [60.0, 0.0, 0.0, 4.0]];
+    group.shapes.push(pipe);
+    r.app.scene.groups.push(group);
+    r.app.sel = Some(Pick::Shape(0, 1));
+    r.app.committed_sync();
+
+    // Draw the real scene list, then click the "Ball 4" row under the selected pipe.
+    r.full_ui = true;
+    r.frame(vec![]);
+    r.frame(vec![]);
+    let row = r.row_rect(Pick::Shape(0, 1));
+    let ball_4 = pos2(row.left() + 110.0, row.bottom() + 2.0 + 3.0 * (24.0 + 2.0) + 12.0);
+    r.click(ball_4);
+    assert_eq!(r.app.ct.node, Some((0, 1, 3)), "clicking the row chooses Ball 4");
+    assert_eq!(r.app.sel, Some(Pick::Shape(0, 1)));
+    assert_eq!(r.app.picks(), vec![Pick::Shape(0, 1)], "the ball does not turn the pick into the group");
+
+    let before = r.app.scene.groups[0].shapes[1].path.clone();
+    let pipe_pos = r.app.scene.groups[0].shapes[1].pos;
+    let sibling = r.app.scene.groups[0].shapes[0].pos;
+    r.key(egui::Key::ArrowRight);
+    let after = &r.app.scene.groups[0].shapes[1].path;
+    assert!((after[3][0] - before[3][0] - 1.0).abs() < 1e-4, "Ball 4 moved 1 mm: {:?}", after[3]);
+    for i in [0, 1, 2, 4] {
+        assert_eq!(after[i], before[i], "node {i} stays");
+    }
+    assert_eq!(r.app.scene.groups[0].shapes[1].pos, pipe_pos, "the pipe itself did not move");
+    assert_eq!(r.app.scene.groups[0].shapes[0].pos, sibling, "the sibling shape did not move");
+
+    // One arrow key is one undo step.
+    r.app.undo();
+    assert_eq!(r.app.scene.groups[0].shapes[1].path, before, "undo restores the ball");
+}
+
+#[test]
 fn a_right_click_ends_the_pipe_tool() {
     let mut r = Rig::new();
     r.app.set_pipe_tool(true);
@@ -257,6 +299,86 @@ fn a_left_drag_on_empty_space_box_selects_by_direction_and_never_turns_the_view(
     // a big box to the right takes it
     r.drag(c + vec2(-260.0, -260.0), c + vec2(260.0, 260.0));
     assert_eq!(r.app.sel, Some(Pick::Shape(0, 0)));
+}
+
+/// A screen point the viewport draws as one of the axis balls (the positive end of `axis`).
+fn gnomon_ball(r: &Rig, axis: usize) -> Pos2 {
+    let rect = r.app.view_rect;
+    let ball = r
+        .app
+        .gnomon_items(rect)
+        .into_iter()
+        .find(|(d, _, positive)| *positive && d[axis] > 0.5)
+        .map(|(_, p, _)| p)
+        .expect("the positive axis ball is drawn");
+    assert!(r.app.gnomon_hit(rect, ball).is_some(), "the test point must hit the axis ball");
+    assert!(!App::home_hit(rect, ball), "the axis ball is not the home button");
+    ball
+}
+
+#[test]
+fn a_drag_that_starts_on_the_axis_ball_turns_the_view() {
+    let mut r = Rig::new();
+    r.app.cam.look(0.6, 0.42);
+    r.app.fly = None;
+    let ball = gnomon_ball(&r, 0);
+    let before = (r.app.cam.yaw, r.app.cam.pitch);
+    r.drag(ball, ball + vec2(70.0, 45.0));
+    assert_ne!((r.app.cam.yaw, r.app.cam.pitch), before, "dragging the axis ball must turn the view");
+    assert!(r.app.fly.is_none(), "a drag is not a click: it must not snap to the axis");
+}
+
+#[test]
+fn a_shift_drag_that_starts_on_the_axis_ball_slides_the_view() {
+    let mut r = Rig::new();
+    r.app.cam.look(0.6, 0.42);
+    r.app.fly = None;
+    let ball = gnomon_ball(&r, 1);
+    let before = (r.app.cam.yaw, r.app.cam.pitch);
+    let target = r.app.cam.target;
+    r.mods = egui::Modifiers::SHIFT;
+    r.drag(ball, ball + vec2(60.0, 40.0));
+    r.mods = egui::Modifiers::NONE;
+    assert_eq!((r.app.cam.yaw, r.app.cam.pitch), before, "Shift+drag pans; it does not turn the view");
+    assert_ne!(r.app.cam.target, target, "a Shift+drag on the axis ball slides the view");
+}
+
+#[test]
+fn a_click_on_the_axis_ball_still_snaps_the_view_to_that_axis() {
+    let mut r = Rig::new();
+    r.app.cam.look(0.6, 0.42);
+    r.app.fly = None;
+    let ball = gnomon_ball(&r, 0);
+    let axis = r.app.gnomon_hit(r.app.view_rect, ball).expect("the click is on an axis");
+    let yaw = r.app.cam.yaw;
+    r.click(ball);
+    assert_eq!(r.app.cam.yaw, yaw, "a click snaps by gliding; it must not orbit");
+    let goal = r.app.fly.expect("clicking an axis glides to that view");
+    let pitch = axis[2].clamp(-1.0, 1.0).asin();
+    let want_yaw = if axis[2].abs() > 0.9 { yaw } else { axis[0].atan2(-axis[1]) };
+    assert!((goal.yaw - want_yaw).abs() < 1e-5 && (goal.pitch - pitch).abs() < 1e-5, "goal {:?}", (goal.yaw, goal.pitch));
+    for _ in 0..200 {
+        r.app.step_fly(0.016);
+    }
+    assert!(r.app.fly.is_none(), "the glide finishes");
+    assert!((r.app.cam.yaw - want_yaw).abs() < 1e-3 && (r.app.cam.pitch - pitch).abs() < 1e-3, "the view looks along the clicked axis");
+}
+
+#[test]
+fn a_press_on_the_home_button_never_turns_the_view_and_a_click_goes_home() {
+    let mut r = Rig::new();
+    r.app.cam.look(2.0, -0.4);
+    r.app.fly = None;
+    let home = App::home_centre(r.app.view_rect);
+    assert!(App::home_hit(r.app.view_rect, home));
+    let before = (r.app.cam.yaw, r.app.cam.pitch);
+    r.drag(home, home + vec2(50.0, 30.0));
+    assert_eq!((r.app.cam.yaw, r.app.cam.pitch), before, "the home button is not an orbit handle");
+    assert!(r.app.fly.is_none(), "a press that turns into a drag does not go home");
+    r.click(home);
+    let goal = r.app.fly.expect("a click on the home button glides home");
+    let first = crate::camera::Camera::default();
+    assert_eq!((goal.yaw, goal.pitch), (first.yaw, first.pitch));
 }
 
 #[test]
@@ -1413,7 +1535,7 @@ fn control_preserves_an_inspector_textedit_until_its_input_is_finished() {
     r.frame(vec![]);
     r.time += 0.016;
     let input = RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, r.size)), time: Some(r.time), ..Default::default() };
-    let out = r.ctx.run_ui(input, |ui| r.app.frame_body(ui));
+    let mut out = r.ctx.run_ui(input, |ui| r.app.frame_body(ui));
     // Locate the actual inspector's name TextEdit from its painted text, so the
     // test clicks the real field without hard-coding panel or font coordinates.
     let name = &r.app.scene.shape(0, 0).expect("selected shape").name;
@@ -1425,6 +1547,7 @@ fn control_preserves_an_inspector_textedit_until_its_input_is_finished() {
             _ => None,
         })
         .expect("the selected shape's name is visible in the inspector");
+    out.textures_delta.clear();
     r.click(field.center());
     r.replace_text("Edited before control");
     assert_eq!(r.app.scene.shape(0, 0).expect("edited shape").name, "Edited before control");

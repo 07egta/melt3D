@@ -181,6 +181,11 @@ impl App {
                         } else {
                             self.select_pick(Some(Pick::Shape(gi, si)), false);
                         }
+                        // A plain click on the shape's own row is about the whole shape, not the
+                        // ball that happened to be chosen before.
+                        if !ctrl && !shift {
+                            self.ct.node = None;
+                        }
                     }
                     if row.drag_started {
                         self.layer_drag = Some(Pick::Shape(gi, si));
@@ -253,6 +258,9 @@ impl App {
                 if on { style::TEXT } else { style::DIM },
             );
             if resp.clicked() {
+                // The ball is one node of this shape: keep the shape picked (the bend/radius
+                // controls stay available) and put the handles on that one ball.
+                self.select_pick(Some(Pick::Shape(gi, si)), false);
                 self.ct.node = Some((gi, si, i));
             }
         }
@@ -265,19 +273,34 @@ impl App {
             return;
         }
         let Some(from) = self.layer_drag else { return };
+        // dragging one of several picked rows takes all of them along
+        let picks = self.picks();
+        let dragged: Vec<Pick> = if picks.len() > 1 && picks.contains(&from) { picks } else { vec![from] };
         let (pos, down) = ui.input(|i| (i.pointer.interact_pos(), i.pointer.primary_down()));
         let target =
             pos.and_then(|p| self.row_rects.iter().find(|(_, r)| r.y_range().contains(p.y) && r.x_range().contains(p.x)).map(|(k, r)| (*k, *r, p)));
         if let Some((to, rect, p)) = target {
             let into = match to {
-                Pick::Group(g) if Pick::Group(g) != from => {
+                Pick::Group(g) if !dragged.contains(&Pick::Group(g)) => {
                     let q = rect.height() * 0.25;
-                    (rect.top() + q..=rect.bottom() - q).contains(&p.y).then_some(g)
+                    if (rect.top() + q..=rect.bottom() - q).contains(&p.y) {
+                        Some(g)
+                    } else if p.y < rect.top() + q && g > 0 && !dragged.contains(&Pick::Group(g - 1)) {
+                        // the line above a group row is the end of the group above: a shape lands in it,
+                        // a group does when the pointer sits right of this row's own indent
+                        let own_indent = rect.left() + 18.0 + f32::from(self.scene.groups.get(g).map_or(0, |x| x.depth)) * 14.0 + 28.0;
+                        let shapes_only = dragged.iter().all(|d| matches!(d, Pick::Shape(..)));
+                        (shapes_only || p.x > own_indent).then_some(g - 1)
+                    } else {
+                        None
+                    }
                 }
                 _ => None,
             };
             if let Some(g) = into {
-                let r = rect.shrink2(egui::vec2(3.0, 2.0));
+                // light up the group it lands in (for the line above a row that is the row above)
+                let header = self.row_rects.iter().find(|(k, _)| *k == Pick::Group(g)).map_or(rect, |(_, r)| *r);
+                let r = header.shrink2(egui::vec2(3.0, 2.0));
                 ui.painter().rect_filled(r, 6.0, style::ACCENT.gamma_multiply(0.18));
                 ui.painter().rect_stroke(r, 6.0, Stroke::new(2.0, style::ACCENT), egui::StrokeKind::Inside);
                 ui.painter().text(
@@ -288,7 +311,8 @@ impl App {
                     style::ACCENT,
                 );
                 if !down {
-                    if let Err(why) = self.move_layer_into(from, g) {
+                    let done = if dragged.len() > 1 { self.move_picks_into(&dragged, g) } else { self.move_layer_into(from, g) };
+                    if let Err(why) = done {
                         self.notice = Some(why.into());
                     }
                     self.layer_drag = None;
@@ -544,12 +568,31 @@ impl App {
             }
         }
         self.piece_card(ui, g);
-        // what it melts with: the shapes inside it melt together, and the groups at the same level melt with each other
+        // What it melts with: groups at the same level that share the parent's Melt (or whose own
+        // Melt is on), plus the parent group's own shapes when this group melts into them. A pair
+        // melts when the group that closes later has a reach, so the list mirrors the field.
         let into = parent.clone().unwrap_or("Scene".to_string());
-        let partners: Vec<String> = (0..self.scene.groups.len())
-            .filter(|&i| i != g && self.scene.groups[i].depth == self.scene.groups[g].depth && self.scene.parent_of(i) == self.scene.parent_of(g))
-            .map(|i| self.scene.groups[i].name.clone())
+        let parent_index = self.scene.parent_of(g);
+        let depth = self.scene.groups.get(g).map(|group| group.depth);
+        let mut partners: Vec<String> = (0..self.scene.groups.len())
+            .filter(|&i| {
+                i != g
+                    && depth.is_some_and(|depth| {
+                        self.scene.groups.get(i).is_some_and(|other| other.visible && other.depth == depth) && self.scene.parent_of(i) == parent_index
+                    })
+            })
+            .filter(|&i| {
+                let later = if i < g { g } else { i };
+                self.scene.group_melt_reach(later) > 0.0
+            })
+            .filter_map(|i| self.scene.groups.get(i).map(|other| other.name.clone()))
             .collect();
+        if self.scene.group_melt_reach(g) > 0.0
+            && parent_index.is_some_and(|p| self.scene.groups.get(p).is_some_and(|p| p.shapes.iter().any(|s| s.solid())))
+            && let Some(name) = parent.as_ref()
+        {
+            partners.push(format!("the shapes of “{name}”"));
+        }
         ui.label(
             RichText::new(format!(
                 "Melts with: {} (inside {into})",
@@ -636,8 +679,7 @@ impl App {
                     ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
                     for k in Kind::ALL {
                         let on = sh.kind == k;
-                        if style::icon_button(ui, 32.0, k.label(), on, |p, r, ink| glyphs::kind(p, r, k, ink, Color32::from_white_alpha(18)))
-                            .clicked()
+                        if style::icon_button(ui, 32.0, k.label(), on, |p, r, ink| glyphs::kind(p, r, k, ink, ink.gamma_multiply(0.15))).clicked()
                             && !on
                         {
                             if sh.name == sh.kind.label() {

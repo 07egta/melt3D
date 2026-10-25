@@ -9,6 +9,9 @@ use egui::{Color32, Painter, Pos2, Rect, Shape, Stroke, pos2, vec2};
 const PI: f32 = std::f32::consts::PI;
 const SEG: usize = 24;
 
+/// A list of unit-coordinate points.
+pub(crate) type UnitPath = Vec<(f32, f32)>;
+
 /// Square icon area centred in `rect` with a 10% margin on each side.
 pub(crate) fn frame(rect: Rect) -> Rect {
     let s = rect.width().min(rect.height()) * 0.8;
@@ -63,7 +66,7 @@ pub(crate) fn round_path(p: &Painter, mut pts: Vec<Pos2>, s: Stroke, closed: boo
 }
 
 /// Unit coordinates to screen points.
-fn at(f: Rect, u: f32, v: f32) -> Pos2 {
+pub(crate) fn at(f: Rect, u: f32, v: f32) -> Pos2 {
     pos2(f.left() + f.width() * u, f.top() + f.height() * v)
 }
 
@@ -134,6 +137,95 @@ fn polygon(p: &Painter, f: Rect, pts: &[(f32, f32)], fill: Color32, s: Stroke) {
 
 fn segment(p: &Painter, f: Rect, a: (f32, f32), b: (f32, f32), s: Stroke) {
     round_path(p, vec![at(f, a.0, a.1), at(f, b.0, b.1)], s, false);
+}
+
+/// The one smooth path shared by the pipe, pen, curve and sweep icons, in unit coordinates.
+/// It starts low on the left, turns over in the middle and ends high on the right.
+pub(crate) fn family_path(n: usize) -> UnitPath {
+    let (a, c1, c2, b) = ((0.12, 0.62), (0.42, 0.62), (0.58, 0.38), (0.88, 0.38));
+    (0..=n)
+        .map(|i| {
+            let t = i as f32 / n.max(1) as f32;
+            let m = 1.0 - t;
+            let w = |p: f32, q: f32, r: f32, s: f32| m * m * m * p + 3.0 * m * m * t * q + 3.0 * m * t * t * r + t * t * t * s;
+            (w(a.0, c1.0, c2.0, b.0), w(a.1, c1.1, c2.1, b.1))
+        })
+        .collect()
+}
+
+/// The control-node mark shared by every member of the pipe / pen / curve / sweep family.
+pub(crate) fn node_mark(p: &Painter, f: Rect, q: (f32, f32), ink: Color32) {
+    p.circle_filled(at(f, q.0, q.1), f.width() * 0.062, ink);
+}
+
+/// Marks control nodes at fractions of `path` (0 = start, 1 = end).
+pub(crate) fn node_marks(p: &Painter, f: Rect, path: &[(f32, f32)], ts: &[f32], ink: Color32) {
+    let last = path.len().saturating_sub(1);
+    if last == 0 {
+        return;
+    }
+    for &t in ts {
+        let i = (t.clamp(0.0, 1.0) * last as f32).round() as usize;
+        if let Some(&q) = path.get(i) {
+            node_mark(p, f, q, ink);
+        }
+    }
+}
+
+/// A slim pen nib whose tip is at `tip`; `back` points from the tip along the body.
+pub(crate) fn pen_nib(p: &Painter, f: Rect, tip: (f32, f32), back: (f32, f32), s: Stroke) {
+    let t = at(f, tip.0, tip.1);
+    let d = vec2(back.0, back.1);
+    if d.length_sq() < 1e-6 {
+        return;
+    }
+    let d = d.normalized();
+    let n = vec2(-d.y, d.x);
+    let w = f.width() * 0.05;
+    let a = t + d * (f.width() * 0.10);
+    let b = t + d * (f.width() * 0.34);
+    round_path(p, vec![t, a + n * w, b + n * w * 0.8, b - n * w * 0.8, a - n * w], s, true);
+    round_path(p, vec![t, a], s, false);
+}
+
+/// Two sides of a band, offset from `path` by `half`.
+pub(crate) fn offset_path(path: &[(f32, f32)], half: f32) -> (UnitPath, UnitPath) {
+    let mut a = Vec::with_capacity(path.len());
+    let mut b = Vec::with_capacity(path.len());
+    for (i, &q) in path.iter().enumerate() {
+        let p0 = path.get(i.saturating_sub(1)).copied().unwrap_or(q);
+        let p1 = path.get(i + 1).copied().unwrap_or(q);
+        let (tx, ty) = (p1.0 - p0.0, p1.1 - p0.1);
+        let l = tx.hypot(ty).max(1e-6);
+        let (nx, ny) = (-ty / l, tx / l);
+        a.push((q.0 + nx * half, q.1 + ny * half));
+        b.push((q.0 - nx * half, q.1 - ny * half));
+    }
+    (a, b)
+}
+
+/// A filled band between two sides of equal length; no outline.
+pub(crate) fn band(p: &Painter, f: Rect, a: &[(f32, f32)], b: &[(f32, f32)], fill: Color32) {
+    if fill.a() == 0 {
+        return;
+    }
+    let mut m = egui::epaint::Mesh::default();
+    for (&pa, &pb) in a.iter().zip(b.iter()) {
+        m.colored_vertex(at(f, pa.0, pa.1), fill);
+        m.colored_vertex(at(f, pb.0, pb.1), fill);
+    }
+    let n = a.len().min(b.len()) as u32;
+    for i in 0..n.saturating_sub(1) {
+        let k = 2 * i;
+        m.add_triangle(k, k + 1, k + 2);
+        m.add_triangle(k + 1, k + 3, k + 2);
+    }
+    p.add(Shape::mesh(m));
+}
+
+/// Screen points for unit coordinates along `path`.
+pub(crate) fn path_points(f: Rect, path: &[(f32, f32)]) -> Vec<Pos2> {
+    path.iter().map(|&(u, v)| at(f, u, v)).collect()
 }
 
 /// Draws a solid model primitive icon as a flat line drawing in `ink` (a thin outline, like the other
@@ -337,6 +429,26 @@ mod tests {
     }
 
     #[test]
+    fn family_tool_icons_fit_a_strip_button() {
+        let ctx = egui::Context::default();
+        let rect = Rect::from_min_size(pos2(16.0, 16.0), vec2(26.0, 26.0));
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            crate::curve_tool::glyph(ui.painter(), rect, Color32::WHITE);
+            crate::pipe_tool::glyph(ui.painter(), rect, Color32::WHITE);
+            crate::sketch_ui::glyph(ui.painter(), rect, Color32::WHITE);
+            crate::sketch_icons::pen_tool(ui.painter(), rect, crate::sketch_ui::Pen::Spline, Color32::WHITE);
+            crate::sketch_icons::sweep(ui.painter(), rect, Color32::WHITE);
+        });
+        for shape in &out.shapes {
+            let bounds = shape.shape.visual_bounding_rect();
+            if bounds.is_positive() {
+                assert!(rect.expand(1.0).contains_rect(bounds), "family icon escapes the strip button: {bounds:?}");
+            }
+        }
+        out.textures_delta.clear();
+    }
+
+    #[test]
     fn every_icon_draws() {
         let ctx = egui::Context::default();
         let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
@@ -344,7 +456,7 @@ mod tests {
             let r = Rect::from_min_size(pos2(10.0, 10.0), vec2(34.0, 34.0));
             for k in Kind::ALL {
                 for ink in [Color32::from_rgb(230, 230, 240), Color32::WHITE] {
-                    kind(&p, r, k, ink, Color32::from_white_alpha(18));
+                    kind(&p, r, k, ink, ink.gamma_multiply(0.15));
                 }
                 kind(&p, r, k, Color32::WHITE, Color32::from_rgb(200, 100, 100));
                 kind(&p, Rect::from_min_size(pos2(0.0, 0.0), vec2(1.0, 1.0)), k, Color32::WHITE, Color32::TRANSPARENT);
@@ -365,27 +477,65 @@ mod tests {
     }
 }
 
-/// `YURA_GLYPHS=/path/sheet.ppm cargo test -p meltcad glyph_sheet -- --ignored`: every shape icon, large and at 34 px.
+/// `YURA_GLYPHS=/path/sheet.ppm cargo test -p meltcad glyph_sheet -- --ignored`: every shape icon,
+/// large and at 34 px, plus the pipe / pen / curve / sweep family at tool-strip size.
 #[cfg(test)]
 #[test]
 #[ignore]
 fn glyph_sheet() {
     use crate::style::preview::{Textures, apply_deltas, raster, write_ppm};
+
+    fn kind_fill(p: &Painter, r: Rect, ink: Color32, k: Kind) {
+        kind(p, r, k, ink, ink.gamma_multiply(0.15));
+    }
+    fn kind_curve(p: &Painter, r: Rect, ink: Color32) {
+        kind_fill(p, r, ink, Kind::Curve);
+    }
+    fn kind_sweep(p: &Painter, r: Rect, ink: Color32) {
+        kind_fill(p, r, ink, Kind::Sweep);
+    }
+    fn kind_tube(p: &Painter, r: Rect, ink: Color32) {
+        kind_fill(p, r, ink, Kind::Tube);
+    }
+    fn spline(p: &Painter, r: Rect, ink: Color32) {
+        crate::sketch_icons::pen_tool(p, r, crate::sketch_ui::Pen::Spline, ink);
+    }
+
     let ppp = 2.0;
     let ctx = egui::Context::default();
     ctx.set_pixels_per_point(ppp);
     let mut tex = Textures::new();
-    let size = vec2(760.0, 330.0);
+    let size = vec2(900.0, 400.0);
     let input = egui::RawInput { screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), size)), ..Default::default() };
     let mut out = ctx.run_ui(input, |ui| {
         let p = ui.painter().clone();
         p.rect_filled(ui.max_rect(), 0.0, Color32::from_rgb(31, 31, 32));
+        let ink = Color32::from_rgb(230, 230, 230);
         for (i, k) in Kind::ALL.iter().enumerate() {
             let (col, row) = (i % 10, i / 10);
             let big = Rect::from_min_size(pos2(8.0 + col as f32 * 74.0, 8.0 + row as f32 * 118.0), vec2(68.0, 68.0));
-            kind(&p, big, *k, Color32::from_rgb(230, 230, 230), Color32::from_white_alpha(18));
+            kind(&p, big, *k, ink, ink.gamma_multiply(0.15));
             let small = Rect::from_min_size(pos2(big.left() + 17.0, big.bottom() + 6.0), vec2(34.0, 34.0));
-            kind(&p, small, *k, Color32::from_rgb(230, 230, 230), Color32::from_white_alpha(18));
+            kind(&p, small, *k, ink, ink.gamma_multiply(0.15));
+        }
+        type Draw = fn(&Painter, Rect, Color32);
+        let family: [(&str, Draw); 8] = [
+            ("Curve", kind_curve),
+            ("Sweep", kind_sweep),
+            ("Pipe solid", kind_tube),
+            ("Curve tool", crate::curve_tool::glyph),
+            ("Pipe tool", crate::pipe_tool::glyph),
+            ("Sketch tool", crate::sketch_ui::glyph),
+            ("Spline pen", spline),
+            ("Sweep button", crate::sketch_icons::sweep),
+        ];
+        for (i, (label, draw)) in family.iter().enumerate() {
+            let x = 8.0 + i as f32 * 110.0;
+            let big = Rect::from_min_size(pos2(x, 258.0), vec2(68.0, 68.0));
+            draw(&p, big, ink);
+            let small = Rect::from_min_size(pos2(big.left() + 17.0, big.bottom() + 6.0), vec2(34.0, 34.0));
+            draw(&p, small, ink);
+            p.text(pos2(big.center().x, big.bottom() + 48.0), egui::Align2::CENTER_CENTER, *label, egui::FontId::proportional(11.0), ink);
         }
     });
     apply_deltas(&mut tex, &out.textures_delta);
@@ -394,4 +544,68 @@ fn glyph_sheet() {
     let (w, h) = ((size.x * ppp) as usize, (size.y * ppp) as usize);
     let img = raster(&prims, &tex, w, h, ppp, [0.12, 0.12, 0.125]);
     write_ppm(img, w, h, &std::env::var("YURA_GLYPHS").unwrap_or_else(|_| "glyphs.ppm".into()));
+}
+
+/// `YURA_GLYPHS_TINY=/path/tiny.ppm cargo test -p meltcad glyph_tiny_sheet -- --ignored`:
+/// every Kind and the pipe / pen / curve / sweep family at the 24 px and 16 px sizes the
+/// review notes ask about. The normal sheet's "small" row is 34 px, which is too generous.
+#[cfg(test)]
+#[test]
+#[ignore]
+fn glyph_tiny_sheet() {
+    use crate::style::preview::{Textures, apply_deltas, raster, write_ppm};
+
+    fn kind_small(p: &Painter, r: Rect, ink: Color32, k: Kind) {
+        kind(p, r, k, ink, ink.gamma_multiply(0.15));
+    }
+    fn curve_small(p: &Painter, r: Rect, ink: Color32) {
+        kind_small(p, r, ink, Kind::Curve);
+    }
+    fn sweep_small(p: &Painter, r: Rect, ink: Color32) {
+        kind_small(p, r, ink, Kind::Sweep);
+    }
+    fn spline(p: &Painter, r: Rect, ink: Color32) {
+        crate::sketch_icons::pen_tool(p, r, crate::sketch_ui::Pen::Spline, ink);
+    }
+
+    let ppp = 4.0;
+    let ctx = egui::Context::default();
+    ctx.set_pixels_per_point(ppp);
+    let mut tex = Textures::new();
+    let size = vec2(820.0, 190.0);
+    let input = egui::RawInput { screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), size)), ..Default::default() };
+    let mut out = ctx.run_ui(input, |ui| {
+        let p = ui.painter().clone();
+        p.rect_filled(ui.max_rect(), 0.0, Color32::from_rgb(31, 31, 32));
+        let ink = Color32::from_rgb(230, 230, 230);
+        for (i, k) in Kind::ALL.iter().enumerate() {
+            let (col, row) = (i % 10, i / 10);
+            let x = 8.0 + col as f32 * 80.0;
+            let y = 4.0 + row as f32 * 48.0;
+            kind(&p, Rect::from_min_size(pos2(x, y), vec2(24.0, 24.0)), *k, ink, ink.gamma_multiply(0.15));
+            kind(&p, Rect::from_min_size(pos2(x + 30.0, y + 4.0), vec2(16.0, 16.0)), *k, ink, ink.gamma_multiply(0.15));
+        }
+        type Draw = fn(&Painter, Rect, Color32);
+        let family: [(&str, Draw); 7] = [
+            ("Curve", curve_small),
+            ("Sweep", sweep_small),
+            ("Curve tool", crate::curve_tool::glyph),
+            ("Pipe tool", crate::pipe_tool::glyph),
+            ("Sketch tool", crate::sketch_ui::glyph),
+            ("Spline pen", spline),
+            ("Sweep button", crate::sketch_icons::sweep),
+        ];
+        for (i, (label, draw)) in family.iter().enumerate() {
+            let x = 8.0 + i as f32 * 112.0;
+            draw(&p, Rect::from_min_size(pos2(x, 112.0), vec2(24.0, 24.0)), ink);
+            draw(&p, Rect::from_min_size(pos2(x + 30.0, 116.0), vec2(16.0, 16.0)), ink);
+            p.text(pos2(x + 20.0, 166.0), egui::Align2::CENTER_CENTER, *label, egui::FontId::proportional(10.0), ink);
+        }
+    });
+    apply_deltas(&mut tex, &out.textures_delta);
+    out.textures_delta.clear();
+    let prims = ctx.tessellate(out.shapes, ppp);
+    let (w, h) = ((size.x * ppp) as usize, (size.y * ppp) as usize);
+    let img = raster(&prims, &tex, w, h, ppp, [0.12, 0.12, 0.125]);
+    write_ppm(img, w, h, &std::env::var("YURA_GLYPHS_TINY").unwrap_or_else(|_| "glyphs_tiny.ppm".into()));
 }

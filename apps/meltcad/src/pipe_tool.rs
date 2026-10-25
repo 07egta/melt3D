@@ -5,7 +5,7 @@
 //! `stroke.rs`; this file is the glue to the mouse, the keys, the little card and the icon. Editing
 //! the pipe afterwards is the ordinary curve editing of `curve_tool.rs` (nodes, radii, smoothness).
 
-use egui::{Color32, Painter, Pos2, Rect, Stroke, Ui, pos2, vec2};
+use egui::{Color32, Painter, Pos2, Rect, Stroke, Ui, pos2};
 
 use crate::app::App;
 use crate::curve_tool::{self, Input};
@@ -72,6 +72,11 @@ pub struct State {
     pub hover: Option<V3>,
     /// The pipe made last (group, shape): the card edits it while it is selected.
     pub last: Option<(usize, usize)>,
+    /// The card of the pipe made last stays on screen until it is put away (Done, Esc, or picking
+    /// something else); this is that "still open" flag.
+    pub card_open: bool,
+    /// The card shows the extra choices (wall, ends, closed loop, plane).
+    pub more: bool,
 }
 
 impl Default for State {
@@ -87,6 +92,8 @@ impl Default for State {
             last_screen: None,
             hover: None,
             last: None,
+            card_open: false,
+            more: false,
         }
     }
 }
@@ -121,6 +128,7 @@ impl App {
             self.sketch_off();
         }
         self.pt.on = on;
+        self.pt.card_open = on;
         self.pt.stroke.clear();
         self.pt.stroke_skin.clear();
         self.pt.stroke_plane.clear();
@@ -174,7 +182,11 @@ impl App {
         stroke::bridge_surface_gaps(&mut raw, &self.pt.stroke_skin, &self.pt.stroke_plane, self.pt.cfg.radius);
         self.pt.stroke_skin.clear();
         self.pt.stroke_plane.clear();
-        self.pipe_from_stroke(&raw)
+        let made = self.pipe_from_stroke(&raw);
+        if made {
+            self.pt.card_open = true;
+        }
+        made
     }
 
     /// Throw the stroke away (Esc).
@@ -312,6 +324,10 @@ impl App {
     /// Esc: drop the stroke being traced, or else switch the tool off. Other keys stay with the node editing.
     pub fn pipe_keys(&mut self, ctx: &egui::Context) {
         if !self.pt.on {
+            // the card of a finished pipe: Esc puts it away
+            if self.pt.card_open && self.pipe_last_selected() && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+                self.pt.card_open = false;
+            }
             return;
         }
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
@@ -352,12 +368,13 @@ impl App {
 
     /// The little card under the top bar while the tool is on (and while its pipe is selected).
     pub fn pipe_card(&mut self, ctx: &egui::Context) {
-        if !(self.pt.on || self.pipe_last_selected()) {
+        if !(self.pt.on || (self.pt.card_open && self.pipe_last_selected())) {
             return;
         }
         let rect = self.view_rect;
         let before = self.pt.cfg;
         let mut off = false;
+        let mut done = false;
         egui::Area::new(egui::Id::new("pipe_card"))
             .order(egui::Order::Middle)
             .pivot(egui::Align2::CENTER_TOP)
@@ -374,9 +391,22 @@ impl App {
                             }
                         } else {
                             ui.label(egui::RichText::new("Fix the selected pipe").size(11.0).color(style::DIM));
+                            if style::pill(ui, "Done", false).on_hover_text("Put this card away (Esc)").clicked() {
+                                done = true;
+                            }
                         }
                     });
                     style::labeled_slider(ui, "Outer radius", &mut cfg.radius, 0.5..=40.0, "Outer radius of the pipe (mm)");
+                    ui.horizontal(|ui| {
+                        style::color_edit(ui, &mut cfg.color);
+                        let label = if self.pt.more { "Less" } else { "More…" };
+                        if style::pill(ui, label, self.pt.more).on_hover_text("Wall, ends, closed loop").clicked() {
+                            self.pt.more = !self.pt.more;
+                        }
+                    });
+                    if !self.pt.more {
+                        return;
+                    }
                     let max_wall = (cfg.radius - 0.1).clamp(0.0, 20.0);
                     style::labeled_slider(ui, "Wall\nthickness", &mut cfg.wall, 0.0..=max_wall.max(0.1), "0 = solid rod / larger = hollow pipe (mm)");
                     ui.horizontal(|ui| {
@@ -390,7 +420,6 @@ impl App {
                         if style::pill(ui, "Flat", cfg.open_ends).on_hover_text("Cut the ends straight (shows the hole)").clicked() {
                             cfg.open_ends = true;
                         }
-                        style::color_edit(ui, &mut cfg.color);
                     });
                     if self.pt.on {
                         ui.horizontal(|ui| {
@@ -417,40 +446,42 @@ impl App {
         if off {
             self.set_pipe_tool(false);
         }
+        if done {
+            self.pt.card_open = false;
+        }
     }
 }
 
-/// The icon of the pipe tool: a thin outline of a bent pipe with its open end showing the hole.
+/// The icon of the pipe tool: the family path drawn as a thin tube, open at the near end.
 pub fn glyph(p: &Painter, r: Rect, ink: Color32) {
-    // What the tool does: drag across the view and a fat, round tube follows the mouse. So: a thick
-    // round stroke (a tube, lit on top) drawn freehand, with the pencil still drawing it.
-    let side = r.width().min(r.height());
-    let f = Rect::from_center_size(r.center(), vec2(side, side));
-    let at = |u: f32, v: f32| pos2(f.left() + f.width() * u, f.top() + f.height() * v);
-    let path: Vec<Pos2> = (0..=20)
-        .map(|i| {
-            let t = i as f32 / 20.0;
-            at(0.10 + 0.56 * t, 0.70 - 0.30 * t + 0.12 * (t * std::f32::consts::TAU).sin())
-        })
-        .collect();
-    let fat = side * 0.22;
-    p.add(egui::Shape::line(path.clone(), Stroke::new(fat, ink.gamma_multiply(0.55))));
-    for e in [path[0], path[path.len() - 1]] {
-        p.circle_filled(e, fat * 0.5, ink.gamma_multiply(0.55));
+    let f = crate::glyphs::frame(r);
+    let s = crate::glyphs::pen(r, ink);
+    let path = crate::glyphs::family_path(24);
+    let (a, b) = crate::glyphs::offset_path(&path, 0.105);
+    crate::glyphs::band(p, f, &a, &b, ink.gamma_multiply(0.18));
+    crate::glyphs::round_path(p, crate::glyphs::path_points(f, &a), s, false);
+    crate::glyphs::round_path(p, crate::glyphs::path_points(f, &b), s, false);
+    // close the far end with a flat cut
+    if let (Some(&qa), Some(&qb)) = (a.last(), b.last()) {
+        let (qa, qb) = (crate::glyphs::at(f, qa.0, qa.1), crate::glyphs::at(f, qb.0, qb.1));
+        crate::glyphs::round_path(p, vec![qa, qb], s, false);
     }
-    // the shine along the top: it reads as round, a tube, not a flat line
-    let shine: Vec<Pos2> = path.iter().map(|q| *q + vec2(-fat * 0.12, -fat * 0.2)).collect();
-    p.add(egui::Shape::line(shine, Stroke::new(fat * 0.28, ink)));
-    // the pencil at the end of the tube, still drawing it
-    let tip = path[path.len() - 1] + vec2(fat * 0.35, -fat * 0.35);
-    let h = std::f32::consts::FRAC_1_SQRT_2;
-    let d = vec2(h, -h);
-    let n = vec2(h, h);
-    let w = side * 0.085;
-    let l = side * 0.34;
-    let body = vec![tip + d * (w * 1.3) + n * w, tip + d * l + n * w, tip + d * l - n * w, tip + d * (w * 1.3) - n * w];
-    p.add(egui::Shape::convex_polygon(body, ink, Stroke::NONE));
-    p.add(egui::Shape::convex_polygon(vec![tip, tip + d * (w * 1.3) + n * w, tip + d * (w * 1.3) - n * w], ink.gamma_multiply(0.7), Stroke::NONE));
+    // the open near end shows the bore
+    if let Some(&c) = path.first() {
+        let ctr = crate::glyphs::at(f, c.0, c.1);
+        let ring = |k: f32| -> Vec<Pos2> {
+            (0..=24)
+                .map(|i| {
+                    let a = std::f32::consts::TAU * i as f32 / 24.0;
+                    pos2(ctr.x + f.width() * 0.105 * 0.45 * k * a.cos(), ctr.y + f.width() * 0.105 * k * a.sin())
+                })
+                .collect()
+        };
+        let inner = ring(0.48);
+        p.add(egui::Shape::convex_polygon(inner.clone(), ink.gamma_multiply(0.35), Stroke::NONE));
+        p.add(egui::Shape::line(ring(1.0), s));
+        p.add(egui::Shape::line(inner, s));
+    }
 }
 
 #[cfg(test)]
@@ -458,6 +489,7 @@ mod tests {
     use super::*;
     use crate::camera::Camera;
     use crate::sdf::{len, sub};
+    use egui::vec2;
 
     fn rect() -> Rect {
         Rect::from_min_size(pos2(10.0, 20.0), vec2(800.0, 500.0))
