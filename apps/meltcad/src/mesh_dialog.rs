@@ -19,14 +19,18 @@ use crate::style;
 use crate::work_budget;
 
 /// A worker that holds its memory permit until the actual thread exits.
-struct Job<T> {
+pub(crate) struct Job<T> {
     slot: Mutex<Option<Result<T, String>>>,
     cancel: AtomicBool,
     progress: AtomicU32,
 }
 
 impl<T: Send + 'static> Job<T> {
-    fn spawn(name: &str, ctx: &egui::Context, f: impl FnOnce(&AtomicBool, &AtomicU32) -> Result<T, String> + Send + 'static) -> Arc<Job<T>> {
+    pub(crate) fn spawn(
+        name: &str,
+        ctx: &egui::Context,
+        f: impl FnOnce(&AtomicBool, &AtomicU32) -> Result<T, String> + Send + 'static,
+    ) -> Arc<Job<T>> {
         let job = Arc::new(Job { slot: Mutex::new(None), cancel: AtomicBool::new(false), progress: AtomicU32::new(0) });
         let permit = match work_budget::try_acquire(ctx) {
             Ok(permit) => permit,
@@ -54,19 +58,23 @@ impl<T: Send + 'static> Job<T> {
         }
         job
     }
-    fn cancel(&self) {
+    pub(crate) fn cancel(&self) {
         self.cancel.store(true, Ordering::Relaxed);
     }
-    fn cancelled(&self) -> bool {
+    pub(crate) fn cancelled(&self) -> bool {
         self.cancel.load(Ordering::Relaxed)
     }
-    fn fraction(&self) -> f32 {
+    pub(crate) fn fraction(&self) -> f32 {
         (self.progress.load(Ordering::Relaxed) as f32 / 1000.0).clamp(0.0, 1.0)
     }
-    fn take(&self) -> Option<Result<T, String>> {
+    pub(crate) fn take(&self) -> Option<Result<T, String>> {
         self.slot.lock().ok()?.take()
     }
 }
+
+/// Why a transfer is dropped: the document it was started for is gone (a new or opened design,
+/// or a control command that replaced the scene). It must never land in the new document.
+pub(crate) const DOCUMENT_REPLACED: &str = "別の作品が開かれたため、取り込みを取り消しました";
 
 /// The outcome of a SolidCraft transfer. A completed bake is not a success until its shape
 /// has actually been inserted into the Melt scene.
@@ -365,11 +373,25 @@ struct Dlg {
     waiting: bool,
     /// An in-memory SolidCraft transfer, completed only after insertion or explicit cancellation.
     completion: Option<SolidImport>,
+    /// The document it belongs to (see `App::document_generation`): a card started for another
+    /// document is discarded instead of adding its shape to the new one.
+    generation: u64,
 }
 
 impl Default for Dlg {
     fn default() -> Dlg {
-        Dlg { reading: None, loaded: None, st: Settings::new([60.0; 3]), bake: None, msg: String::new(), open: false, path: None, waiting: false, completion: None }
+        Dlg {
+            reading: None,
+            loaded: None,
+            st: Settings::new([60.0; 3]),
+            bake: None,
+            msg: String::new(),
+            open: false,
+            path: None,
+            waiting: false,
+            completion: None,
+            generation: 0,
+        }
     }
 }
 
@@ -383,6 +405,9 @@ pub fn is_open(ctx: &egui::Context) -> bool {
 }
 
 fn cancel_dialog(d: &Dlg, reason: &str) {
+    if let Some((job, _)) = &d.reading {
+        job.cancel();
+    }
     if let Some(b) = &d.bake {
         b.ctl.cancel.store(true, Ordering::Relaxed);
         b.job.cancel();
@@ -415,14 +440,15 @@ pub fn cancel(ctx: &egui::Context) -> bool {
 
 /// Start converting an already loaded exact solid, retaining its original Z-up millimetres.
 /// An existing import is left intact so another operation cannot silently replace it.
-pub fn open_solid(ctx: &egui::Context, loaded: Loaded) -> Result<SolidImport, String> {
+/// `generation` is the document it was started for (see `App::document_generation`).
+pub fn open_solid(ctx: &egui::Context, loaded: Loaded, generation: u64) -> Result<SolidImport, String> {
     if is_open(ctx) {
         return Err("先にメッシュの取り込みや再計算を完了するか、取り消してください".into());
     }
     let completion = SolidImport::new();
     let st =
         Settings { target_mm: loaded.size.into_iter().fold(0.0, f32::max), up: Up::Z, floor: false, centre: false, ..Settings::new(loaded.size) };
-    let mut d = Dlg { loaded: Some(Arc::new(loaded)), st, open: true, completion: Some(completion.clone()), ..Dlg::default() };
+    let mut d = Dlg { loaded: Some(Arc::new(loaded)), st, open: true, completion: Some(completion.clone()), generation, ..Dlg::default() };
     start_bake(&mut d, ctx);
     ctx.data_mut(|m| m.insert_temp(id(), d));
     ctx.request_repaint();
@@ -430,15 +456,15 @@ pub fn open_solid(ctx: &egui::Context, loaded: Loaded) -> Result<SolidImport, St
 }
 
 /// Menu entry "Import mesh…": ask for a file, then show the card.
-pub fn open(ctx: &egui::Context) {
+pub fn open(ctx: &egui::Context, generation: u64) {
     let Some(path) = rfd::FileDialog::new().add_filter("Mesh (STL, OBJ, 3MF, PLY, GLB)", &mesh_import::EXTENSIONS).pick_file() else {
         return;
     };
-    open_path(ctx, path);
+    open_path(ctx, path, generation);
 }
 
 /// Show the card for this file (a dropped file, or the one just chosen).
-pub fn open_path(ctx: &egui::Context, path: PathBuf) {
+pub fn open_path(ctx: &egui::Context, path: PathBuf, generation: u64) {
     if let Some(d) = ctx.data_mut(|m| m.remove_temp::<Dlg>(id())) {
         // A cancelled worker still owns large allocations until it has actually exited.
         // (a pending SolidCraft transfer is cancelled below instead, as before)
@@ -455,6 +481,7 @@ pub fn open_path(ctx: &egui::Context, path: PathBuf) {
         open: true,
         path: Some(path.clone()),
         reading: Some((Job::spawn("meltcad-mesh-read", ctx, move |cancel, progress| mesh_import::load_with_control(&p, cancel, progress)), path)),
+        generation,
         ..Dlg::default()
     };
     ctx.data_mut(|m| m.insert_temp(id(), d));
@@ -462,12 +489,12 @@ pub fn open_path(ctx: &egui::Context, path: PathBuf) {
 }
 
 /// Dropped mesh files open the card (other kinds are left for the rest of the app).
-fn take_drops(ctx: &egui::Context) {
+fn take_drops(ctx: &egui::Context, generation: u64) {
     let files = ctx.input(|i| i.raw.dropped_files.clone());
     for f in files {
         let path = f.path().to_path_buf();
         if mesh_import::is_mesh_file(&path) {
-            open_path(ctx, path);
+            open_path(ctx, path, generation);
             break;
         }
     }
@@ -572,10 +599,17 @@ fn finish(app: &mut App, ctx: &egui::Context, b: &BakeJob, baked: &Baked) -> Res
 
 /// Call once per frame: handles dropped files, the running jobs, and shows the card when it is open.
 pub fn update(app: &mut App, ctx: &egui::Context) {
-    take_drops(ctx);
+    take_drops(ctx, app.document_generation());
     begin_selected_rebake(app, ctx);
     rebake_panel(app, ctx);
+    let generation = app.document_generation();
     let Some(mut d) = ctx.data_mut(|m| m.remove_temp::<Dlg>(id())).filter(|d| d.open) else { return };
+    if d.generation != generation {
+        // The document this card was started for is gone (File > New / Open, or a control
+        // command). Its shape belongs to the old one: drop it without touching this scene.
+        cancel_dialog(&d, DOCUMENT_REPLACED);
+        return;
+    }
     // the file has been read
     if let Some((job, path)) = d.reading.clone() {
         match job.take() {
@@ -738,7 +772,7 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
     });
     if pick && let Some(p) = rfd::FileDialog::new().add_filter("Mesh", &mesh_import::EXTENSIONS).pick_file() {
         ctx.data_mut(|m| m.insert_temp(id(), d));
-        open_path(ctx, p);
+        open_path(ctx, p, generation);
         return;
     }
     if go {
@@ -985,7 +1019,7 @@ mod tests {
         let mut app = App::new(true, None);
         app.cam.target = [-200.0, 300.0, 0.0];
         let before = app.scene.shape_count();
-        let completion = open_solid(&ctx, offset_box()).expect("start transfer");
+        let completion = open_solid(&ctx, offset_box(), 0).expect("start transfer");
         assert!(is_open(&ctx));
         assert_eq!(completion.take_result(), None, "a worker finishing alone is not an insertion");
         let d = ctx.data(|m| m.get_temp::<Dlg>(id())).expect("transfer card");
@@ -1011,20 +1045,20 @@ mod tests {
     fn solid_transfers_do_not_replace_existing_imports_and_cancelled_transfers_can_retry() {
         let ctx = egui::Context::default();
         let manual = PathBuf::from("/nonexistent/meltcad-existing-import.stl");
-        open_path(&ctx, manual.clone());
-        assert!(open_solid(&ctx, offset_box()).is_err());
+        open_path(&ctx, manual.clone(), 0);
+        assert!(open_solid(&ctx, offset_box(), 0).is_err());
         assert_eq!(ctx.data(|m| m.get_temp::<Dlg>(id())).and_then(|d| d.path), Some(manual));
         assert!(cancel(&ctx));
         assert!(!is_open(&ctx));
 
-        let completion = open_solid(&ctx, offset_box()).expect("start transfer");
-        assert!(open_solid(&ctx, offset_box()).is_err(), "an automatic transfer is protected too");
+        let completion = open_solid(&ctx, offset_box(), 0).expect("start transfer");
+        assert!(open_solid(&ctx, offset_box(), 0).is_err(), "an automatic transfer is protected too");
         assert_eq!(completion.take_result(), None);
         assert!(cancel(&ctx));
         assert!(completion.take_result().is_some_and(|r| r.is_err()));
         assert_eq!(completion.take_result(), None);
         assert!(!is_open(&ctx));
-        let retry = open_solid(&ctx, offset_box()).expect("cancel does not prevent retry");
+        let retry = open_solid(&ctx, offset_box(), 0).expect("cancel does not prevent retry");
         assert_eq!(retry.take_result(), None);
         cancel(&ctx);
         assert!(retry.take_result().is_some_and(|r| r.is_err()));
@@ -1033,9 +1067,9 @@ mod tests {
     #[test]
     fn choosing_a_manual_file_cancels_the_previous_solid_transfer() {
         let ctx = egui::Context::default();
-        let completion = open_solid(&ctx, offset_box()).expect("start transfer");
+        let completion = open_solid(&ctx, offset_box(), 0).expect("start transfer");
         let path = PathBuf::from("/nonexistent/meltcad-replacement-import.stl");
-        open_path(&ctx, path.clone());
+        open_path(&ctx, path.clone(), 0);
         assert!(completion.take_result().is_some_and(|r| r.is_err()));
         let d = ctx.data(|m| m.get_temp::<Dlg>(id())).expect("manual card");
         assert_eq!(d.path, Some(path));
@@ -1053,7 +1087,7 @@ mod tests {
             m.insert_temp(rebake_id(), RebakeRequest { group: 0, shape: 0, original, res: 128, path: None, job: None, msg: String::new() });
         });
         assert!(is_open(&ctx));
-        assert!(open_solid(&ctx, offset_box()).is_err());
+        assert!(open_solid(&ctx, offset_box(), 0).is_err());
         assert!(ctx.data(|m| m.get_temp::<RebakeRequest>(rebake_id())).is_some());
         assert!(cancel(&ctx));
         assert!(!is_open(&ctx));
@@ -1066,7 +1100,7 @@ mod tests {
         let before = app.scene.shape_count();
         // A cancelled worker keeps the one-high-memory-job permit until it has really exited.
         let permit = work_budget::try_acquire(&ctx).expect("previous worker");
-        let completion = open_solid(&ctx, offset_box()).expect("start transfer");
+        let completion = open_solid(&ctx, offset_box(), 0).expect("start transfer");
         for _ in 0..5 {
             ctx.run_ui(egui::RawInput::default(), |ui| update(&mut app, ui.ctx())).textures_delta.clear();
             std::thread::sleep(std::time::Duration::from_millis(20));
@@ -1087,7 +1121,7 @@ mod tests {
         let ctx = egui::Context::default();
         let mut app = App::new(true, None);
         let before = app.scene.shape_count();
-        let completion = open_solid(&ctx, loaded_box([0.0; 3], [2001.0, 10.0, 10.0])).expect("conversion reports its error in the card");
+        let completion = open_solid(&ctx, loaded_box([0.0; 3], [2001.0, 10.0, 10.0]), 0).expect("conversion reports its error in the card");
         pump(&mut app, &ctx, |_| ctx.data(|m| m.get_temp::<Dlg>(id())).is_some_and(|d| d.bake.is_none()));
         let mut d = ctx.data(|m| m.get_temp::<Dlg>(id())).expect("failed transfer remains open");
         assert!(!d.msg.is_empty());
@@ -1110,7 +1144,7 @@ mod tests {
         }
         app.settle(&ctx);
         let before = app.scene.shape_count();
-        let completion = open_solid(&ctx, offset_box()).expect("start transfer");
+        let completion = open_solid(&ctx, offset_box(), 0).expect("start transfer");
         pump(&mut app, &ctx, |_| ctx.data(|m| m.get_temp::<Dlg>(id())).is_some_and(|d| d.bake.is_none()));
         let mut d = ctx.data(|m| m.get_temp::<Dlg>(id())).expect("rejected insertion stays open");
         assert!(d.msg.contains("groups"), "{}", d.msg);
@@ -1134,7 +1168,7 @@ mod tests {
         let ctx = egui::Context::default();
         let mut app = App::new(true, None);
         let (groups, shapes) = (app.scene.groups.len(), app.scene.shape_count());
-        open_path(&ctx, path);
+        open_path(&ctx, path, 0);
         // reading
         pump(&mut app, &ctx, |_| ctx.data(|m| m.get_temp::<Dlg>(id())).is_some_and(|d| d.loaded.is_some()));
         let d = ctx.data(|m| m.get_temp::<Dlg>(id())).unwrap();
@@ -1184,7 +1218,7 @@ mod tests {
         std::fs::write(&bad, b"solid x\nthis is not a mesh\n").unwrap();
         let ctx = egui::Context::default();
         let mut app = App::new(true, None);
-        open_path(&ctx, bad);
+        open_path(&ctx, bad, 0);
         pump(&mut app, &ctx, |_| ctx.data(|m| m.get_temp::<Dlg>(id())).is_some_and(|d| d.reading.is_none()));
         let d = ctx.data(|m| m.get_temp::<Dlg>(id())).unwrap();
         assert!(d.loaded.is_none() && !d.msg.is_empty() && d.open, "{}", d.msg);
@@ -1192,7 +1226,7 @@ mod tests {
         // cancelling a bake leaves the scene alone
         let good = dir.join("ok.stl");
         std::fs::write(&good, mesh_import::tests::sample_stl()).unwrap();
-        open_path(&ctx, good);
+        open_path(&ctx, good, 0);
         pump(&mut app, &ctx, |_| ctx.data(|m| m.get_temp::<Dlg>(id())).is_some_and(|d| d.loaded.is_some()));
         let mut d = ctx.data(|m| m.get_temp::<Dlg>(id())).unwrap();
         d.st.res = 160;
