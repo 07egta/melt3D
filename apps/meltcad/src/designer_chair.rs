@@ -9,7 +9,7 @@
 use egui::{RichText, Ui};
 use serde::{Deserialize, Serialize};
 
-use crate::model::{Group, Kind, Material, Op, Shape};
+use crate::model::{Group, Kind, Material, Shape};
 use crate::style;
 
 pub const GENERATOR_TAG: &str = "meltcad:designer-chair:v1";
@@ -419,7 +419,9 @@ pub fn presets() -> Vec<crate::library::Item> {
 }
 
 #[cfg(test)]
+#[allow(clippy::field_reassign_with_default)]
 mod tests {
+    use crate::model::Op;
     use super::*;
     use crate::export_formats::Format;
     use crate::export_job::{self, Options, Scope};
