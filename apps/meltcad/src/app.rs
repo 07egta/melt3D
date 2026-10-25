@@ -1209,6 +1209,14 @@ impl App {
 
     /// Move the selection by `d` millimetres.
     pub fn nudge(&mut self, d: [f32; 3]) {
+        // A ball chosen in the scene list is moved on its own: its siblings, the curve through
+        // them and the group's melt all stay as they are.
+        if let Some((g, s, i)) = self.picked_node()
+            && let Some(w) = self.node_world(g, s, i)
+        {
+            self.set_node_world(g, s, i, [w[0] + d[0], w[1] + d[1], w[2] + d[2]]);
+            return;
+        }
         let mut targets = self.sel_targets();
         let mut seen: std::collections::HashSet<(usize, usize)> = targets.iter().copied().collect();
         let mut linked = std::collections::HashSet::new();
@@ -1238,7 +1246,6 @@ impl App {
                 Pick::Shape(g, _) => {
                     selected_groups.insert(g);
                 }
-                _ => {}
             }
         }
         for (g, s) in targets {
@@ -3603,6 +3610,68 @@ mod tests {
         app.sel = Some(Pick::Group(0));
         app.duplicate();
         assert_eq!(app.scene.groups[1].shapes[0].pos, at);
+    }
+
+    #[test]
+    fn a_chosen_ball_moves_alone_and_a_group_still_moves_every_child() {
+        use crate::model::{Group, Kind, Material, Pick, Shape};
+        let mut app = super::App::new(true, None);
+        app.scene.groups.clear();
+        let mut group = Group::new("Pipe");
+        let mut sibling = Shape::new(Kind::Sphere, [0.0, 0.0, 80.0], Material::default());
+        sibling.name = "Sibling".into();
+        group.shapes.push(sibling);
+        let mut pipe = Shape::new(Kind::Curve, [10.0, 0.0, 10.0], Material::default());
+        pipe.name = "Pipe".into();
+        pipe.path = vec![[-20.0, 0.0, 0.0, 4.0], [0.0, 0.0, 0.0, 4.0], [20.0, 0.0, 0.0, 4.0], [40.0, 0.0, 0.0, 4.0], [60.0, 0.0, 0.0, 4.0]];
+        group.shapes.push(pipe);
+        app.scene.groups.push(group);
+        app.committed_sync();
+
+        // The row of "Ball 4" picks shape 1 and node 3.
+        app.sel = Some(Pick::Shape(0, 1));
+        app.ct.node = Some((0, 1, 3));
+        assert_eq!(app.picks(), vec![Pick::Shape(0, 1)]);
+        assert_eq!(app.sel_targets(), vec![(0, 1)], "the selection is the pipe shape, not the group");
+
+        let before = app.scene.groups[0].shapes[1].path.clone();
+        let pipe_pos = app.scene.groups[0].shapes[1].pos;
+        let sibling_pos = app.scene.groups[0].shapes[0].pos;
+        app.nudge([5.0, 0.0, 0.0]);
+        let after = &app.scene.groups[0].shapes[1].path;
+        for i in 0..before.len() {
+            if i == 3 {
+                assert!((after[i][0] - before[i][0] - 5.0).abs() < 1e-4, "the chosen ball moved by 5 mm");
+                assert_eq!([after[i][1], after[i][2], after[i][3]], [before[i][1], before[i][2], before[i][3]]);
+            } else {
+                assert_eq!(after[i], before[i], "node {i} is untouched");
+            }
+        }
+        assert_eq!(app.scene.groups[0].shapes[1].pos, pipe_pos, "the pipe itself did not move");
+        assert_eq!(app.scene.groups[0].shapes[0].pos, sibling_pos, "its sibling shape did not move");
+
+        // One nudge is one undo step.
+        let ctx = egui::Context::default();
+        app.settle(&ctx);
+        assert_eq!(app.undo_depth(), 1);
+        app.undo();
+        assert_eq!(app.scene.groups[0].shapes[1].path, before, "undo puts the ball back");
+
+        // The same movement survives save and reload.
+        app.sel = Some(Pick::Shape(0, 1));
+        app.ct.node = Some((0, 1, 3));
+        app.nudge([1.0, 2.0, 3.0]);
+        let moved = app.scene.groups[0].shapes[1].path.clone();
+        let reloaded = crate::model::Scene::from_json(&app.scene.to_json()).unwrap_or_default();
+        assert_eq!(reloaded.groups[0].shapes[1].path, moved, "the ball's offset round-trips");
+
+        // A group pick still moves the pipe and every other shape in it (#260).
+        app.sel = Some(Pick::Group(0));
+        let sibling_x = app.scene.groups[0].shapes[0].pos[0];
+        let pipe_x = app.scene.groups[0].shapes[1].pos[0];
+        app.nudge([5.0, 0.0, 0.0]);
+        assert_eq!(app.scene.groups[0].shapes[0].pos[0], sibling_x + 5.0);
+        assert_eq!(app.scene.groups[0].shapes[1].pos[0], pipe_x + 5.0);
     }
 }
 

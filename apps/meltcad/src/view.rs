@@ -195,7 +195,7 @@ impl App {
         let geom = if clean || self.ct.drawing || self.pt.on || self.sketch_active() {
             None
         } else {
-            gizmo::build_multi(&self.cam, rect, &self.scene, &self.picks(), tool)
+            gizmo::build_multi_node(&self.cam, rect, &self.scene, &self.picks(), self.picked_node(), tool)
         };
         let over_gnomon = !clean && pos.is_some_and(|p| self.gnomon_hit(rect, p).is_some() || Self::home_hit(rect, p));
         let hover_handle = match (&geom, pos, &self.drag) {
@@ -496,7 +496,7 @@ impl App {
         let draw_geom = if clean || self.ct.drawing || self.pt.on || self.sketch_active() {
             None
         } else if moved_camera || self.drag.is_some() {
-            gizmo::build_multi(&self.cam, rect, &self.scene, &self.picks(), tool)
+            gizmo::build_multi_node(&self.cam, rect, &self.scene, &self.picks(), self.picked_node(), tool)
         } else {
             geom
         };
