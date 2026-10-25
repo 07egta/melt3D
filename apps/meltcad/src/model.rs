@@ -732,6 +732,9 @@ pub struct Group {
     /// This group represents one extrusion with independent subtractive sketch holes.
     #[serde(default)]
     pub sketch_holes: bool,
+    /// Parametric Designer Bag settings. Stored alongside editable parts in scene files.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bag: Option<crate::designer_bag::BagConfig>,
     /// A number linked copies and patterns find this group by (0 = none; see `Scene::ensure_group_uid`).
     #[serde(default, skip_serializing_if = "is_zero")]
     pub uid: u32,
@@ -783,6 +786,7 @@ impl Group {
             shapes: Vec::new(),
             depth: 0,
             sketch_holes: false,
+            bag: None,
             uid: 0,
             pattern: None,
             instance_of: None,
@@ -1297,6 +1301,9 @@ impl Scene {
                 if let Some(path) = &mut p.path {
                     path.truncate(path.char_indices().nth(MAX_PIECE_PATH).map_or(path.len(), |(i, _)| i));
                 }
+            }
+            if let Some(bag) = &mut g.bag {
+                bag.sanitize();
             }
             if let Some(p) = &mut g.pattern {
                 p.sanitize();

@@ -545,6 +545,9 @@ impl App {
                 );
             }
         }
+        if let Some(gr) = self.scene.groups.get_mut(g) {
+            crate::designer_bag::inspector(ui, gr);
+        }
         self.piece_card(ui, g);
         // What it melts with: groups at the same level that share the parent's Melt (or whose own
         // Melt is on), plus the parent group's own shapes when this group melts into them. A pair
