@@ -1535,7 +1535,7 @@ fn control_preserves_an_inspector_textedit_until_its_input_is_finished() {
     r.frame(vec![]);
     r.time += 0.016;
     let input = RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, r.size)), time: Some(r.time), ..Default::default() };
-    let out = r.ctx.run_ui(input, |ui| r.app.frame_body(ui));
+    let mut out = r.ctx.run_ui(input, |ui| r.app.frame_body(ui));
     // Locate the actual inspector's name TextEdit from its painted text, so the
     // test clicks the real field without hard-coding panel or font coordinates.
     let name = &r.app.scene.shape(0, 0).expect("selected shape").name;
@@ -1547,6 +1547,7 @@ fn control_preserves_an_inspector_textedit_until_its_input_is_finished() {
             _ => None,
         })
         .expect("the selected shape's name is visible in the inspector");
+    out.textures_delta.clear();
     r.click(field.center());
     r.replace_text("Edited before control");
     assert_eq!(r.app.scene.shape(0, 0).expect("edited shape").name, "Edited before control");
