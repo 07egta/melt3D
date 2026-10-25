@@ -56,16 +56,38 @@ impl Rig {
     /// Use the real window-thread control queue, including commands batched in one frame.
     fn control(&mut self, commands: &[serde_json::Value]) -> Vec<Result<serde_json::Value, String>> {
         let (send, requests) = std::sync::mpsc::channel();
-        let (reply, answers) = std::sync::mpsc::channel();
         self.app.control = Some(requests);
-        for cmd in commands {
-            send.send(crate::control::Request { cmd: cmd.clone(), reply: reply.clone() }).expect("queue the control command");
-        }
+        // one answer channel per command: a picture is answered later than the others
+        let answers: Vec<_> = commands
+            .iter()
+            .map(|cmd| {
+                let (reply, answer) = std::sync::mpsc::channel();
+                send.send(crate::control::Request { cmd: cmd.clone(), reply }).expect("queue the control command");
+                answer
+            })
+            .collect();
         let full_ui = self.full_ui;
         self.full_ui = true;
         self.frame(vec![]);
         self.full_ui = full_ui;
-        commands.iter().map(|_| answers.try_recv().expect("the frame replied to every command")).collect()
+        // a picture is drawn on a worker: keep drawing frames until its answer arrives
+        answers
+            .iter()
+            .map(|answer| {
+                for _ in 0..600 {
+                    if let Ok(result) = answer.try_recv() {
+                        return result;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                    // the full frame is the one that collects a finished picture
+                    let full_ui = self.full_ui;
+                    self.full_ui = true;
+                    self.frame(vec![]);
+                    self.full_ui = full_ui;
+                }
+                Err("the frame never replied to the command".into())
+            })
+            .collect()
     }
 
     fn right_click(&mut self, p: Pos2) {
