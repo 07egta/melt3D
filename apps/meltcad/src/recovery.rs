@@ -5,7 +5,9 @@ use std::ffi::OsString;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -76,7 +78,9 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
     atomic_write_with(path, bytes, |_| Ok(()))
 }
 
-fn atomic_write_with<F: FnOnce(&Path) -> io::Result<()>>(path: &Path, bytes: &[u8], before_rename: F) -> io::Result<()> {
+/// Write a complete, synced copy beside `path` and return its temporary name.
+/// The caller publishes it (an atomic rename) only after it is still wanted.
+fn write_temp(path: &Path, bytes: &[u8]) -> io::Result<PathBuf> {
     if bytes.is_empty() || bytes.len() as u64 > MAX_FILE_BYTES {
         return Err(size_error());
     }
@@ -94,23 +98,35 @@ fn atomic_write_with<F: FnOnce(&Path) -> io::Result<()>>(path: &Path, bytes: &[u
         };
         let result = (|| {
             file.write_all(bytes)?;
-            file.sync_all()?;
-            drop(file);
-            before_rename(&tmp)?;
-            fs::rename(&tmp, path)?;
-            // Best effort: Windows cannot sync a directory using File::open.
-            #[cfg(unix)]
-            {
-                let _ = File::open(parent).and_then(|dir| dir.sync_all());
-            }
-            Ok(())
+            file.sync_all()
         })();
-        if result.is_err() {
+        drop(file);
+        if let Err(e) = result {
             let _ = fs::remove_file(&tmp);
+            return Err(e);
         }
-        return result;
+        return Ok(tmp);
     }
     Err(io::Error::new(io::ErrorKind::AlreadyExists, "Could not create a temp file"))
+}
+
+fn atomic_write_with<F: FnOnce(&Path) -> io::Result<()>>(path: &Path, bytes: &[u8], before_rename: F) -> io::Result<()> {
+    let tmp = write_temp(path, bytes)?;
+    let result = (|| {
+        before_rename(&tmp)?;
+        fs::rename(&tmp, path)?;
+        // Best effort: Windows cannot sync a directory using File::open.
+        #[cfg(unix)]
+        {
+            let parent = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or_else(|| Path::new("."));
+            let _ = File::open(parent).and_then(|dir| dir.sync_all());
+        }
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+    result
 }
 
 pub fn save_project(path: &Path, scene: &Scene) -> Result<(), String> {
@@ -186,6 +202,52 @@ pub struct Store {
     restored_from: Option<PathBuf>,
     last_snapshot_rev: Option<u64>,
     next_due: Instant,
+    /// Bumped whenever the document is saved, opened or otherwise replaced. A checkpoint that
+    /// was already serializing belongs to the old generation and must never be published.
+    epoch: u64,
+    /// At most one checkpoint worker at a time: serializing a big scene is not free.
+    in_flight: Option<CheckpointJob>,
+    #[cfg(test)]
+    hook: Option<SerializeHook>,
+}
+
+type SerializeHook = Arc<dyn Fn() + Send + Sync>;
+
+struct CheckpointDone {
+    /// The complete snapshot, still unnamed for the user: renamed into place on the UI thread.
+    temp: PathBuf,
+    rev: u64,
+}
+
+struct CheckpointJob {
+    rx: Receiver<Result<CheckpointDone, String>>,
+    epoch: u64,
+    cancel: Arc<AtomicBool>,
+}
+
+impl Drop for CheckpointJob {
+    fn drop(&mut self) {
+        // Nobody will publish this snapshot any more. Stop the worker and remove a
+        // staged file that already arrived; a still-running worker cleans its own
+        // temp file when its send fails.
+        self.cancel.store(true, Ordering::Release);
+        if let Ok(Ok(done)) = self.rx.try_recv() {
+            let _ = fs::remove_file(&done.temp);
+        }
+    }
+}
+
+/// Serialize a snapshot and stage it on a worker. This function itself never touches the caller's
+/// scene: it runs on the checkpoint thread.
+fn write_checkpoint(own: &Path, scene: &Scene, source: Option<&str>, rev: u64, cancel: &AtomicBool) -> Result<CheckpointDone, String> {
+    let payload = scene.try_to_json()?;
+    let snapshot = Snapshot { version: FORMAT_VERSION, source: source.map(str::to_owned), checksum: checksum(payload.as_bytes()), payload };
+    let bytes = serde_json::to_vec(&snapshot).map_err(|e| e.to_string())?;
+    if cancel.load(Ordering::Acquire) {
+        return Err("Stopped".into());
+    }
+    let temp = write_temp(own, &bytes).map_err(|e| e.to_string())?;
+    Ok(CheckpointDone { temp, rev })
 }
 
 impl Store {
@@ -207,7 +269,19 @@ impl Store {
         }
         pending.sort_by_key(|path| fs::metadata(path).and_then(|m| m.modified()).ok());
         pending.reverse();
-        Store { root, own, lock, pending, restored_from: None, last_snapshot_rev: None, next_due: now + INTERVAL }
+        Store {
+            root,
+            own,
+            lock,
+            pending,
+            restored_from: None,
+            last_snapshot_rev: None,
+            next_due: now + INTERVAL,
+            epoch: 0,
+            in_flight: None,
+            #[cfg(test)]
+            hook: None,
+        }
     }
 
     pub fn pending_path(&self) -> Option<&Path> {
@@ -239,11 +313,52 @@ impl Store {
         let restored = read_snapshot(path)?;
         self.restored_from = Some(path.clone());
         self.pending.remove(0);
+        // The scene on screen is being replaced: a snapshot still being made for it is stale.
+        self.epoch = self.epoch.wrapping_add(1);
         Ok(restored)
     }
 
+    /// Start serializing and staging a checkpoint on a worker. The caller is never
+    /// blocked and never serializes the scene. Returns true only if a worker started.
+    /// The clock is injected so interval behavior can be tested without sleeps.
+    pub fn start_checkpoint(&mut self, scene: &Scene, source: Option<&Path>, changed: bool, rev: u64, now: Instant) -> Result<bool, String> {
+        if self.in_flight.is_some() || now < self.next_due {
+            return Ok(false);
+        }
+        self.next_due = now + INTERVAL;
+        if !changed || self.last_snapshot_rev == Some(rev) {
+            return Ok(false);
+        }
+        fs::create_dir_all(&self.root).map_err(|e| e.to_string())?;
+        self.in_flight = Some(self.spawn_checkpoint(scene.clone(), source.map(|p| p.to_string_lossy().into_owned()), rev)?);
+        Ok(true)
+    }
+
+    /// Is a checkpoint still serializing or staged? Used to schedule a repaint for its commit.
+    pub fn checkpoint_running(&self) -> bool {
+        self.in_flight.is_some()
+    }
+
+    /// Collect a finished worker. The staged snapshot is renamed into place only here,
+    /// on the document's own thread, and only when the document has not been saved,
+    /// opened or replaced since the work started (the generation guard).
+    pub fn poll_checkpoint(&mut self) -> Option<Result<bool, String>> {
+        let job = self.in_flight.as_ref()?;
+        let result = match job.rx.try_recv() {
+            Ok(result) => result,
+            Err(TryRecvError::Empty) => return None,
+            Err(TryRecvError::Disconnected) => Err("The recovery checkpoint stopped unexpectedly".into()),
+        };
+        let Some(job) = self.in_flight.take() else {
+            return Some(Err("The recovery checkpoint disappeared".into()));
+        };
+        Some(self.finish_checkpoint(&job, result))
+    }
+
     /// Returns true only if a new recovery was written. The clock is injected
-    /// so interval behavior can be tested without sleeps.
+    /// so interval behavior can be tested without sleeps. Unlike `start_checkpoint`
+    /// this waits for the result: use it only when the window is closing and there
+    /// is no next frame to collect a worker (a lost graphics device).
     pub fn checkpoint(&mut self, scene: &Scene, source: Option<&Path>, changed: bool, rev: u64, now: Instant) -> Result<bool, String> {
         if now < self.next_due {
             return Ok(false);
@@ -253,21 +368,85 @@ impl Store {
             return Ok(false);
         }
         fs::create_dir_all(&self.root).map_err(|e| e.to_string())?;
-        let payload = scene.try_to_json()?;
-        let snapshot = Snapshot {
-            version: FORMAT_VERSION,
-            source: source.map(|p| p.to_string_lossy().into_owned()),
-            checksum: checksum(payload.as_bytes()),
-            payload,
+        self.abandon_checkpoint();
+        let job = self.spawn_checkpoint(scene.clone(), source.map(|p| p.to_string_lossy().into_owned()), rev)?;
+        let result = match job.rx.recv() {
+            Ok(result) => result,
+            Err(_) => return Err("The recovery checkpoint stopped unexpectedly".to_owned()),
         };
-        let bytes = serde_json::to_vec(&snapshot).map_err(|e| e.to_string())?;
-        atomic_write(&self.own, &bytes).map_err(|e| e.to_string())?;
-        self.last_snapshot_rev = Some(rev);
+        self.finish_checkpoint(&job, result)
+    }
+
+    fn spawn_checkpoint(&self, scene: Scene, source: Option<String>, rev: u64) -> Result<CheckpointJob, String> {
+        let own = self.own.clone();
+        let epoch = self.epoch;
+        let cancel = Arc::new(AtomicBool::new(false));
+        let worker_cancel = cancel.clone();
+        #[cfg(test)]
+        let hook = self.hook.clone();
+        #[cfg(not(test))]
+        let hook: Option<SerializeHook> = None;
+        let (tx, rx) = mpsc::channel();
+        std::thread::Builder::new()
+            .name("yura-recovery-checkpoint".into())
+            .spawn(move || {
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    if let Some(hook) = hook {
+                        hook();
+                    }
+                    write_checkpoint(&own, &scene, source.as_deref(), rev, &worker_cancel)
+                }))
+                .unwrap_or_else(|_| Err("The recovery checkpoint stopped partway through".to_owned()));
+                let result = match result {
+                    Ok(done) if worker_cancel.load(Ordering::Acquire) => {
+                        let _ = fs::remove_file(&done.temp);
+                        Err("Stopped".into())
+                    }
+                    other => other,
+                };
+                if let Err(mpsc::SendError(done)) = tx.send(result)
+                    && let Ok(done) = done
+                {
+                    let _ = fs::remove_file(&done.temp);
+                }
+            })
+            .map_err(|e| format!("Could not start the recovery checkpoint: {e}"))?;
+        Ok(CheckpointJob { rx, epoch, cancel })
+    }
+
+    fn finish_checkpoint(&mut self, job: &CheckpointJob, result: Result<CheckpointDone, String>) -> Result<bool, String> {
+        let done = result?;
+        if job.epoch != self.epoch {
+            // Saved, opened or replaced while this snapshot was being made.
+            let _ = fs::remove_file(&done.temp);
+            return Ok(false);
+        }
+        if let Err(e) = fs::rename(&done.temp, &self.own) {
+            let _ = fs::remove_file(&done.temp);
+            return Err(e.to_string());
+        }
+        #[cfg(unix)]
+        {
+            if let Some(parent) = self.own.parent() {
+                let _ = File::open(parent).and_then(|dir| dir.sync_all());
+            }
+        }
+        self.last_snapshot_rev = Some(done.rev);
         Ok(true)
+    }
+
+    /// Stop a checkpoint that is still making a snapshot; its staged file is removed.
+    fn abandon_checkpoint(&mut self) {
+        if let Some(job) = self.in_flight.take() {
+            drop(job);
+        }
     }
 
     /// A successful manual Save or an explicitly discarded/opened document.
     pub fn clear_active(&mut self) -> io::Result<()> {
+        // A checkpoint that has not been committed yet belongs to the document being
+        // saved or replaced. Its result is dropped by `poll_checkpoint`.
+        self.epoch = self.epoch.wrapping_add(1);
         remove_if_present(&self.own)?;
         if let Some(path) = &self.restored_from {
             remove_if_present(path)?;
@@ -287,6 +466,7 @@ impl Store {
     /// Called only after an approved, normal window exit. A crash does not
     /// execute this cleanup; never use Drop to delete a recovery.
     pub fn normal_exit(&mut self) -> io::Result<()> {
+        self.abandon_checkpoint();
         self.clear_active()?;
         if self.lock.take().is_some() {
             remove_if_present(&self.own.with_extension("lock"))?;
@@ -297,6 +477,11 @@ impl Store {
     #[cfg(test)]
     fn own_path(&self) -> &Path {
         &self.own
+    }
+
+    #[cfg(test)]
+    fn set_serialize_hook(&mut self, hook: SerializeHook) {
+        self.hook = Some(hook);
     }
 }
 
@@ -454,6 +639,79 @@ mod tests {
         drop(running);
         let second = Store::new(root.clone(), now);
         assert!(second.pending_path().is_some());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_due_checkpoint_serializes_on_a_worker_not_on_the_caller() {
+        let root = temp_root();
+        let now = Instant::now();
+        let mut store = Store::new(root.clone(), now);
+        let caller = std::thread::current().id();
+        let seen: Arc<std::sync::Mutex<Option<std::thread::ThreadId>>> = Arc::new(std::sync::Mutex::new(None));
+        let record = seen.clone();
+        store.set_serialize_hook(Arc::new(move || {
+            if let Ok(mut slot) = record.lock() {
+                *slot = Some(std::thread::current().id());
+            }
+        }));
+
+        assert!(store.start_checkpoint(&edited(), None, true, 2, now + INTERVAL).expect("due checkpoint"));
+        assert!(store.checkpoint_running(), "the caller returned while the worker still holds the snapshot");
+
+        let mut outcome = None;
+        for _ in 0..600 {
+            if let Some(result) = store.poll_checkpoint() {
+                outcome = Some(result);
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        assert!(outcome.expect("worker result").expect("published"));
+        let worker = seen.lock().ok().and_then(|slot| *slot);
+        assert!(worker.is_some(), "the snapshot was serialized");
+        assert_ne!(worker, Some(caller), "the UI thread must never serialize a recovery checkpoint");
+        assert!(store.own_path().exists());
+        store.normal_exit().expect("cleanup");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_checkpoint_that_finishes_after_a_save_leaves_no_recovery_file() {
+        let root = temp_root();
+        let now = Instant::now();
+        let mut store = Store::new(root.clone(), now);
+        assert!(store.start_checkpoint(&edited(), None, true, 2, now + INTERVAL).expect("due checkpoint"));
+
+        // The document is saved while the snapshot is still being made.
+        store.document_saved(2).expect("save cleanup");
+
+        let mut outcome = None;
+        for _ in 0..600 {
+            if let Some(result) = store.poll_checkpoint() {
+                outcome = Some(result);
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        assert!(!outcome.expect("worker result").expect("no error"), "a stale snapshot must not be published");
+        assert!(!store.own_path().exists(), "a saved document must not get a recovery file back");
+        let staged = fs::read_dir(&root).expect("list").flatten().filter(|entry| entry.file_name().to_string_lossy().contains(".tmp")).count();
+        assert_eq!(staged, 0, "the staged snapshot is removed");
+
+        // A later edit is still recoverable: the generation guard skipped one snapshot, not all.
+        assert!(store.start_checkpoint(&edited(), None, true, 3, Instant::now() + INTERVAL * 2).expect("later checkpoint"));
+        let mut later = None;
+        for _ in 0..600 {
+            if let Some(result) = store.poll_checkpoint() {
+                later = Some(result);
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        assert!(later.expect("worker result").expect("published"));
+        assert!(store.own_path().exists());
+        store.normal_exit().expect("cleanup");
         let _ = fs::remove_dir_all(root);
     }
 }

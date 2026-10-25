@@ -2640,10 +2640,20 @@ impl App {
         self.settle(&ctx);
         if !cfg!(test) {
             ctx.request_repaint_after(crate::recovery::INTERVAL);
+            // Publish a checkpoint that finished on its worker, then consider a new one.
+            // Serializing the scene never happens in this frame (only the worker does it).
+            if let Some(result) = self.recovery.poll_checkpoint()
+                && let Err(e) = result
+            {
+                self.notice = Some(format!("Could not save auto-recovery data: {e}"));
+            }
             let rev = self.track_scene();
             let changed = self.has_unsaved_work();
-            if let Err(e) = self.recovery.checkpoint(&self.scene, self.path.as_deref(), changed, rev, std::time::Instant::now()) {
+            if let Err(e) = self.recovery.start_checkpoint(&self.scene, self.path.as_deref(), changed, rev, std::time::Instant::now()) {
                 self.notice = Some(format!("Could not save auto-recovery data: {e}"));
+            }
+            if self.recovery.checkpoint_running() {
+                ctx.request_repaint_after(std::time::Duration::from_millis(150));
             }
         }
         self.test_hooks(&ctx);
