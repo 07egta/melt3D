@@ -1608,6 +1608,7 @@ impl App {
             || crate::svg_dialog::is_open(ctx)
             || crate::array::is_open(ctx)
             || crate::mesh_dialog::is_open(ctx)
+            || crate::melt_preset::is_open(ctx)
             || crate::export_dialog::is_open(ctx)
         {
             return;
@@ -2136,6 +2137,10 @@ impl App {
                                         }
                                     }
                                     ui.separator();
+                                    if ui.button("Melt (dripping shape)…").on_hover_text("A gravity drip made from a sphere or box; editable afterwards").clicked() {
+                                        crate::melt_preset::open(&ctx);
+                                        ui.close();
+                                    }
                                     if ui.button("Organic blob…").on_hover_text("A smooth irregular shape from a seed and sliders").clicked() {
                                         crate::organic_blob::open(&ctx);
                                         ui.close();
@@ -2836,6 +2841,7 @@ impl App {
             crate::array::update(self, &ctx);
             crate::export_dialog::update(self, &ctx);
             self.palette_ui(&ctx);
+            crate::melt_preset::update(self, &ctx);
             if std::mem::take(&mut self.perf.bench_requested) {
                 let backends = self.current_backend().map(|b| b.to_wgpu());
                 self.bench.start(&ctx, backends);

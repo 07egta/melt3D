@@ -58,6 +58,7 @@ mod library_ui;
 mod marquee;
 mod materials;
 mod mcp;
+mod melt_preset;
 mod mesh;
 mod mesh_dialog;
 mod mesh_import;

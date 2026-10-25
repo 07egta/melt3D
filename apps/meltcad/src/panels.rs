@@ -671,6 +671,11 @@ impl App {
         }
         crate::organic_furniture::inspector(self, ui, g);
         self.pattern_section(ui, g);
+        if let Some(settings) = self.scene.groups.get(g).and_then(|group| group.melt_preset.clone())
+            && ui.button("Meltの形を再編集…").on_hover_text("本数や垂れ方を変更。手動で動かした液だれは再生成されます").clicked()
+        {
+            crate::melt_preset::open_edit(ui.ctx(), g, settings);
+        }
         self.actions(ui);
         let linked = self.scene.groups.get(g).is_some_and(crate::model::Group::is_linked);
         let hint = if linked { "Linked copy: set position, rotation and scale above" } else { "Move, rotate and scale the whole group" };
@@ -704,6 +709,11 @@ impl App {
             ui.label(RichText::new("このパーツは家具プリセットの一部です。設定を変更すると配置を作り直します。").size(11.0).color(style::DIM));
         }
         crate::puffy_text_ui::inspector_button(self, ui, g);
+        if let Some(settings) = self.scene.groups.get(g).and_then(|group| group.melt_preset.clone())
+            && ui.button("Edit this melt preset…").clicked()
+        {
+            crate::melt_preset::open_edit(ui.ctx(), g, settings);
+        }
         let ngroups = self.scene.groups.len();
         let nshapes = self.scene.groups[g].shapes.len();
         let mut move_to: Option<usize> = None;

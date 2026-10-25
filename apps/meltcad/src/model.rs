@@ -794,6 +794,9 @@ pub struct Group {
     /// Regenerable SDF furniture controls (old scene files simply omit this field).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub organic_furniture: Option<crate::organic_furniture::Settings>,
+    /// Re-editable gravity-melt preset settings; old project files omit this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub melt_preset: Option<crate::melt_preset::Settings>,
 }
 
 /// Which file a piece of the big file came from, so it can be read again or saved back.
@@ -841,6 +844,7 @@ impl Group {
             organic_furniture: None,
             fusion: None,
             puffy_text: None,
+            melt_preset: None,
         }
     }
 }
@@ -1370,6 +1374,9 @@ impl Scene {
                 params.sanitize();
             }
             if let Some(meta) = &mut g.puffy_text { meta.sanitize(); }
+            if let Some(preset) = &mut g.melt_preset {
+                preset.sanitize();
+            }
             if g.instance_of.is_some() {
                 g.organic_furniture = None;
                 // a linked copy shows its source's shapes, not its own

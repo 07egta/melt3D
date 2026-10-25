@@ -15,6 +15,7 @@ use crate::style;
 pub enum Action {
     AddShape(Kind),
     OrganicTube(crate::organic_tube::Preset),
+    MeltPreset,
     AddGroup,
     /// (category, item)
     Insert(usize, usize),
@@ -164,6 +165,7 @@ pub fn entries() -> Vec<Entry> {
         }
     }
     v.extend([
+        cmd("Melt (dripping shape)", "melt preset syrup dripping viscous blob みずあめ とろける たれる", Action::MeltPreset),
         cmd("Group", "group new まとめる グループを作る", Action::AddGroup),
         cmd("Undo", "undo もどす 元に戻す", Action::Undo),
         cmd("Redo", "redo やり直し", Action::Redo),
