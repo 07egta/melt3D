@@ -331,10 +331,8 @@ pub fn rebuild(g: &mut Group, mut config: BagConfig) {
     }
     // Restore a deleted managed part at the end without moving user slots.
     for (role, is_used) in used.iter().enumerate() {
-        if !is_used {
-            if let Some(shape) = fresh.shapes.get(role) {
-                rebuilt.push(shape.clone());
-            }
+        if !is_used && let Some(shape) = fresh.shapes.get(role) {
+            rebuilt.push(shape.clone());
         }
     }
     g.shapes = rebuilt;
@@ -558,12 +556,7 @@ mod tests {
 
     #[test]
     fn bad_values_clamp_before_geometry_and_scene_sanitization() {
-        let mut p = BagConfig::default();
-        p.width = f32::NAN;
-        p.depth = 0.0;
-        p.wall = f32::INFINITY;
-        p.handle_curve = -50.0;
-        p.origin_xy = [f32::INFINITY, -999999.0];
+        let p = BagConfig { width: f32::NAN, depth: 0.0, wall: f32::INFINITY, handle_curve: -50.0, origin_xy: [f32::INFINITY, -999999.0], ..Default::default() };
         let mut g = make_group(p);
         assert!(g.bag.as_ref().is_some_and(|p| p.width.is_finite() && p.wall > 1.0));
         let before = g.clone();
