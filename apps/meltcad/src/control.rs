@@ -3,7 +3,9 @@
 //! `meltcad --control 7777` listens on 127.0.0.1 only. Each line is one JSON command (see
 //! `automation.rs`) with an optional `"id"`; the first request of a connection must carry the launch
 //! token as `"token"`. The answer is one line: `{"id":1,"ok":true,"result":...}` or
-//! `{"id":1,"ok":false,"error":"..."}`. Commands run on the window's own thread, so undo works.
+//! `{"id":1,"ok":false,"error":"..."}`. Commands run on the window's own thread, so undo works;
+//! the heavy picture commands (`render`, `anim.render`) are drawn on a worker and answered when
+//! their complete file exists, so the window keeps drawing meanwhile.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
