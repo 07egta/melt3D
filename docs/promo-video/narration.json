@@ -1,0 +1,191 @@
+[
+ {
+  "id": "01_hook",
+  "kind": "hook",
+  "color": "pink",
+  "tag": "",
+  "title": "",
+  "text": "11日間で、772回アップデートしたのだ！"
+ },
+ {
+  "id": "02_title",
+  "kind": "clip",
+  "color": "yellow",
+  "tag": "",
+  "title": "Melt 3D",
+  "text": "高校生とAIで作った、3Dモデリングアプリ、メルト3Dなのだ！",
+  "src": "title",
+  "ss": 0
+ },
+ {
+  "id": "03_melt",
+  "kind": "clip",
+  "color": "green",
+  "tag": "",
+  "title": "形が とける",
+  "text": "形を並べると、とろーっと、なめらかにくっつくのだ！",
+  "src": "melt",
+  "ss": 0
+ },
+ {
+  "id": "04_melt2",
+  "kind": "clip",
+  "color": "green",
+  "tag": "",
+  "title": "とけぐあいを 自由に",
+  "text": "スライダーひとつで、とけぐあいも自由自在なのだ！",
+  "src": "melt",
+  "ss": 16
+ },
+ {
+  "id": "05_ops",
+  "kind": "clip",
+  "color": "blue",
+  "tag": "",
+  "title": "足す・削る・ぬる",
+  "text": "足す、削る、ぬる。形を組み合わせて、なんでも作れるのだ！",
+  "src": "ops",
+  "ss": 0
+ },
+ {
+  "id": "06_ops2",
+  "kind": "clip",
+  "color": "blue",
+  "tag": "",
+  "title": "くり抜きも かんたん",
+  "text": "ボールで削って、穴もあけて、色もぬれるのだ！",
+  "src": "ops",
+  "ss": 16
+ },
+ {
+  "id": "07_sketch",
+  "kind": "clip",
+  "color": "purple",
+  "tag": "",
+  "title": "かいて 押し出す",
+  "text": "絵をかいて、ぐーっと押し出すのだ！",
+  "src": "sketch",
+  "ss": 0
+ },
+ {
+  "id": "08_mat",
+  "kind": "clip",
+  "color": "pink",
+  "tag": "",
+  "title": "色・材質も ワンクリック",
+  "text": "色や材質も、ワンクリックで変えられるのだ！",
+  "src": "ui",
+  "ss": 1
+ },
+ {
+  "id": "08b_preset",
+  "kind": "clip",
+  "color": "green",
+  "tag": "",
+  "title": "とけ方プリセット",
+  "text": "チーズやハチミツみたいな、とけ方の見本もあるのだ！",
+  "src": "ui",
+  "ss": 9
+ },
+ {
+  "id": "09_look",
+  "kind": "clip",
+  "color": "yellow",
+  "tag": "",
+  "title": "光も 背景も 思いのまま",
+  "text": "光も背景も、夕焼けにできるのだ！",
+  "src": "ui",
+  "ss": 19
+ },
+ {
+  "id": "10_solid",
+  "kind": "clip",
+  "color": "blue",
+  "tag": "",
+  "title": "SolidCraft",
+  "text": "寸法が大事なときは、本格CADのソリッドクラフトなのだ！",
+  "src": "solid3",
+  "ss": 0
+ },
+ {
+  "id": "11_solid2",
+  "kind": "clip",
+  "color": "blue",
+  "tag": "",
+  "title": "SolidCraft：履歴で いつでも戻れる",
+  "text": "作った手順は履歴に残って、いつでも直せるのだ！",
+  "src": "solid3",
+  "ss": 9
+ },
+ {
+  "id": "12_anim",
+  "kind": "clip",
+  "color": "yellow",
+  "tag": "",
+  "title": "粘土アニメ",
+  "text": "ポーズを置くだけで、粘土アニメみたいに動くのだ！ボクも、メルト3Dで作ったのだ！",
+  "src": "07_anim"
+ },
+ {
+  "id": "13_print",
+  "kind": "clip",
+  "color": "green",
+  "tag": "",
+  "title": "書き出し & 印刷チェック",
+  "text": "STLや3MFで書き出せて、印刷できるか、チェックもできるのだ！",
+  "src": "print",
+  "ss": 1
+ },
+ {
+  "id": "14_ai",
+  "kind": "clip",
+  "color": "purple",
+  "tag": "",
+  "title": "AI と つながる",
+  "text": "AIにも、つながるのだ！ことばで頼むと、メルト3Dを動かしてくれるのだ！",
+  "src": "ai",
+  "ss": 4,
+  "split": [
+   "$ claude mcp add melt3d \\",
+   "    -- meltcad --mcp --control 7777",
+   "",
+   "「球をふたつ並べて、とかして」",
+   "",
+   "{\"cmd\":\"shape.add\",\"kind\":\"Sphere\"}",
+   "{\"cmd\":\"shape.add\",\"kind\":\"Sphere\"}",
+   "{\"cmd\":\"melt.set\",\"amount\":1.4}"
+  ]
+ },
+ {
+  "id": "15_math",
+  "kind": "code",
+  "color": "blue",
+  "tag": "",
+  "title": "「とける」は たった3行",
+  "text": "とけるの正体は、たった3行の式なのだ！"
+ },
+ {
+  "id": "16_rust",
+  "kind": "stats",
+  "color": "purple",
+  "tag": "",
+  "title": "Rust 製",
+  "text": "中身はラスト製！59万行、テスト7000本以上、GPUで描くから軽くて速いのだ！"
+ },
+ {
+  "id": "17_can",
+  "kind": "can",
+  "color": "blue",
+  "tag": "",
+  "title": "これが ぜんぶ できる",
+  "text": "とかす、足す削る、スケッチ、ソリッド、アニメ、書き出し、AI連携！ぜんぶ入ってるのだ！"
+ },
+ {
+  "id": "18_end",
+  "kind": "end",
+  "color": "yellow",
+  "tag": "",
+  "title": "",
+  "text": "メルト3Dは、無料でオープンソース！みんなも、形を、とかしてみるのだ！"
+ }
+]
