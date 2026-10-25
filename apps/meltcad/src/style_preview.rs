@@ -153,7 +153,7 @@ fn preview() {
                         ui.spacing_mut().item_spacing.x = 4.0;
                         for k in crate::model::Kind::MAIN {
                             icon_button(ui, 38.0, "", k == crate::model::Kind::Torus, |p, r, ink| {
-                                crate::glyphs::kind(p, r, k, ink, Color32::from_white_alpha(18))
+                                crate::glyphs::kind(p, r, k, ink, ink.gamma_multiply(0.15))
                             });
                         }
                     });
@@ -202,7 +202,7 @@ fn preview() {
                     ui.horizontal(|ui| {
                         for k in crate::model::Kind::MAIN {
                             let (r, _) = ui.allocate_exact_size(vec2(30.0, 30.0), Sense::hover());
-                            crate::glyphs::kind(ui.painter(), r, k, TEXT, Color32::TRANSPARENT);
+                            crate::glyphs::kind(ui.painter(), r, k, TEXT, TEXT.gamma_multiply(0.15));
                         }
                     });
                     ui.horizontal(|ui| {
