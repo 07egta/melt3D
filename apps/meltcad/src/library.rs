@@ -376,8 +376,6 @@ mod tests {
     }
 
     #[test]
-
-    #[test]
     fn home_appliances_are_unique_searchable_and_save_round_trip() {
         let c = parse(FILES[4]).expect("everyday library must parse");
         assert_eq!(c.name, "くらしのもの");
@@ -409,8 +407,6 @@ mod tests {
             assert_eq!(reopened.groups[0], it.group, "{name}: scene round trip changed geometry");
         }
     }
-
-    #[test]
 
     #[test]
     fn placing_moves_the_geometry_midpoint_without_resizing_or_lifting_it() {
