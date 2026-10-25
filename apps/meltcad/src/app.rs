@@ -74,6 +74,10 @@ pub struct App {
     /// The revision `committed` is current for, and the one `dedupe_uids` last ran for.
     committed_rev: u64,
     deduped_rev: u64,
+    /// Which document the scene shows. A new or opened design (or a control command that
+    /// replaces the scene) starts the next one, so work started for the old document can tell
+    /// that its result must not be put into the new one.
+    document_generation: u64,
     /// The field for picking, made when picking needs it and the scene has changed since.
     field_cache: std::cell::RefCell<Option<(u64, std::rc::Rc<Field>, Scene)>>,
     /// How many times the field was built (tests and the HUD look at it).
@@ -189,6 +193,7 @@ impl App {
             scene_rev: 1,
             committed_rev: 1,
             deduped_rev: 0,
+            document_generation: 0,
             field_cache: std::cell::RefCell::new(None),
             field_builds: std::cell::Cell::new(0),
             scene,
@@ -587,6 +592,7 @@ impl App {
             self.notice = Some(format!("Could not clean up recovery data: {e}"));
         }
         self.clear_document_gestures();
+        self.document_generation = self.document_generation.wrapping_add(1);
         self.scene = scene.clone();
         self.committed = scene;
         self.undo.clear();
@@ -1238,7 +1244,6 @@ impl App {
                 Pick::Shape(g, _) => {
                     selected_groups.insert(g);
                 }
-                _ => {}
             }
         }
         for (g, s) in targets {
@@ -1709,7 +1714,7 @@ impl App {
                             .on_hover_text("STL, OBJ, 3MF, PLY, GLB")
                             .clicked()
                         {
-                            crate::mesh_dialog::open(&ctx);
+                            crate::mesh_dialog::open(&ctx, self.document_generation());
                             ui.close();
                         }
                         if ui.button(style::keys("Save  Ctrl+S")).clicked() {
@@ -2455,6 +2460,11 @@ impl App {
         }
     }
 
+    /// Which document the scene shows: a transfer started for another one must not land here.
+    pub(crate) fn document_generation(&self) -> u64 {
+        self.document_generation
+    }
+
     pub(crate) fn scene_edit_in_progress(&self) -> bool {
         self.scene_structure_locked()
             || self.sketch_active()
@@ -2471,7 +2481,7 @@ impl App {
     }
 
     /// Runs the commands that arrived on the control channel (at most a few per frame).
-    fn run_control(&mut self, ctx: &egui::Context) {
+    pub(crate) fn run_control(&mut self, ctx: &egui::Context) {
         let Some(rx) = self.control.take() else { return };
         let mut ran = false;
         for _ in 0..32 {
@@ -2514,6 +2524,11 @@ impl App {
                     self.settle(ctx);
                     self.clear_document_gestures();
                     self.scene = next;
+                    // A command that replaces the whole design starts a new document, like
+                    // File > New / Open does: no transfer from the old one may land in it.
+                    if matches!(name, Some("scene.new" | "scene.set" | "load")) {
+                        self.document_generation = self.document_generation.wrapping_add(1);
+                    }
                     self.sel = if let Some(g) = value.get("group").and_then(serde_json::Value::as_u64) {
                         Some(match value.get("shape").and_then(serde_json::Value::as_u64) {
                             Some(s) => Pick::Shape(g as usize, s as usize),
@@ -2606,6 +2621,7 @@ impl App {
             self.sketch_card(&ctx);
             self.keys_card(ui);
             crate::svg_dialog::update(self, &ctx);
+            crate::precise::transfer_card(self, &ctx);
             crate::mesh_dialog::update(self, &ctx);
             crate::array::update(self, &ctx);
             crate::export_dialog::update(self, &ctx);
@@ -3082,6 +3098,13 @@ mod tests {
         assert_eq!(answer["precise"], false);
         assert_eq!(answer["importing"], true);
         assert!(app.precise_transfer_pending());
+        // The STL is written and parsed on a worker; the bake card opens when it is ready.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(90);
+        while !crate::mesh_dialog::is_open(&ctx) {
+            app.sync_precise_transfer(&ctx);
+            assert!(std::time::Instant::now() < deadline, "the transfer did not reach the bake");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
         assert!(crate::mesh_dialog::cancel(&ctx));
         app.sync_precise_transfer(&ctx);
     }
@@ -3312,7 +3335,7 @@ mod tests {
         app.add_shape(&ctx, Kind::Box);
         let n = app.scene.shape_count();
         for open in [
-            (|c: &egui::Context| crate::mesh_dialog::open_path(c, std::env::temp_dir().join("meltcad-no-such-mesh.stl"))) as fn(&egui::Context),
+            (|c: &egui::Context| crate::mesh_dialog::open_path(c, std::env::temp_dir().join("meltcad-no-such-mesh.stl"), 0)) as fn(&egui::Context),
             |c| crate::export_dialog::open(c, None),
         ] {
             open(&ctx);
