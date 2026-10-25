@@ -831,6 +831,8 @@ impl App {
                     if i == 0 {
                         c.name = format!("{} copy", c.name);
                     }
+                    // a copy of one letter is a plain solid, not a second owner of the text's identity
+                    c.puffy_text = None;
                     self.scene.groups.insert(e + i, c);
                 }
                 self.sel = Some(Pick::Group(e));
@@ -1760,6 +1762,10 @@ impl App {
                         }
                         if ui.button(style::keys("Open…  Ctrl+O")).clicked() {
                             self.open_dialog(&ctx);
+                            ui.close();
+                        }
+                        if ui.button("Puffy Text…").on_hover_text("Turn Japanese or English letters into puffy solids").clicked() {
+                            crate::puffy_text_ui::open(self, &ctx);
                             ui.close();
                         }
                         if ui.button(style::keys("Save  Ctrl+S")).clicked() {
@@ -2806,6 +2812,7 @@ impl App {
             self.keys_card(ui);
             crate::svg_dialog::update(self, &ctx);
             crate::precise::transfer_card(self, &ctx);
+            crate::puffy_text_ui::update(self, &ctx);
             crate::mesh_dialog::update(self, &ctx);
             crate::array::update(self, &ctx);
             crate::export_dialog::update(self, &ctx);

@@ -543,6 +543,7 @@ impl App {
     fn group_inspector(&mut self, ui: &mut Ui, g: usize) {
         style::title(ui, "Group");
         let parent = self.scene.parent_of(g).and_then(|p| self.scene.groups.get(p)).map(|p| p.name.clone());
+        crate::puffy_text_ui::inspector_button(self, ui, g);
         {
             let id = egui::Id::new(("group_melt_memory", g));
             let gr = &mut self.scene.groups[g];
@@ -702,6 +703,7 @@ impl App {
             }
             ui.label(RichText::new("このパーツは家具プリセットの一部です。設定を変更すると配置を作り直します。").size(11.0).color(style::DIM));
         }
+        crate::puffy_text_ui::inspector_button(self, ui, g);
         let ngroups = self.scene.groups.len();
         let nshapes = self.scene.groups[g].shapes.len();
         let mut move_to: Option<usize> = None;

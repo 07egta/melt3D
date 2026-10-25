@@ -253,7 +253,10 @@ impl Prepared {
                 let r = if self.round > 0.0 { self.round.min(hh).min(self.poly_limit) } else { 0.0 };
                 let d2 = if r > 0.0 { crate::cad::polygon_inset(&self.outline, xy, r, self.poly_orient, false) } else { polygon(&self.outline, xy) };
                 let w = [d2, q[2].abs() - hh + r];
+                // A signed outward offset creates the inflated text surface. Negative
+                // offsets on subtractive contours shrink the cutter so counters stay open.
                 w[0].max(w[1]).min(0.0) + w[0].max(0.0).hypot(w[1].max(0.0)) - r
+                    - self.params[0].clamp(-40.0, 40.0)
             }
             Kind::Curve => crate::curve::distance(self, q),
             // (the volume is in the mesh's own units, so a scaled shape is handled by `distance`)

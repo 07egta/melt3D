@@ -90,6 +90,11 @@ fn add_shapes(app: &mut App, mut shapes: Vec<Shape>) -> Result<String, String> {
     if shapes.is_empty() {
         return Err("It was empty".into());
     }
+    // Pasted letter contours stay usable solids but must not keep the source text identity,
+    // or editing the original text would regenerate the pasted copy as well.
+    for g in &mut block {
+        g.puffy_text = None;
+    }
     if app.scene.shape_count() + shapes.len() > MAX_SHAPES {
         return Err(format!("Up to {MAX_SHAPES} shapes"));
     }

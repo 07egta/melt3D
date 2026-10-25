@@ -63,6 +63,8 @@ mod mesh_dialog;
 mod mesh_import;
 mod designer_bag;
 mod designer_lamp;
+mod puffy_text;
+mod puffy_text_ui;
 mod model;
 mod organic_vase;
 mod palette_prefs;
