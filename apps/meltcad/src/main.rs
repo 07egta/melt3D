@@ -65,6 +65,8 @@ mod designer_bag;
 mod designer_lamp;
 mod puffy_text;
 mod puffy_text_ui;
+mod chess;
+mod chess_dialog;
 mod model;
 mod organic_vase;
 mod palette_prefs;

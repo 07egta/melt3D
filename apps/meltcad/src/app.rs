@@ -1768,6 +1768,10 @@ impl App {
                             crate::puffy_text_ui::open(self, &ctx);
                             ui.close();
                         }
+                        if ui.button("Chess Set…").on_hover_text("Chess pieces in three designs").clicked() {
+                            crate::chess_dialog::open(&ctx, self);
+                            ui.close();
+                        }
                         if ui.button(style::keys("Save  Ctrl+S")).clicked() {
                             self.save(&ctx, false);
                             ui.close();
@@ -2827,6 +2831,7 @@ impl App {
             crate::precise::transfer_card(self, &ctx);
             crate::puffy_text_ui::update(self, &ctx);
             crate::organic_blob::update(self, &ctx);
+            crate::chess_dialog::update(self, &ctx);
             crate::mesh_dialog::update(self, &ctx);
             crate::array::update(self, &ctx);
             crate::export_dialog::update(self, &ctx);
