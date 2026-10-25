@@ -366,8 +366,8 @@ pub fn full_set(s: Settings, at: [f32; 2]) -> Vec<Group> {
     groups.push(board(s, at));
     let back = [Piece::Rook, Piece::Knight, Piece::Bishop, Piece::Queen, Piece::King, Piece::Bishop, Piece::Knight, Piece::Rook];
     for (side, home, pawn) in [(Side::White,0_usize,1_usize), (Side::Black,7,6)] {
-        for file in 0..8 {
-            for (piece, rank) in [(back[file], home), (Piece::Pawn, pawn)] {
+        for (file, &back_piece) in back.iter().enumerate() {
+            for (piece, rank) in [(back_piece, home), (Piece::Pawn, pawn)] {
                 let piece_s = Settings { piece, side, height_mm: s.height_mm*piece.board_height(), diameter_mm: s.diameter_mm*piece.board_diameter(), ..s };
                 groups.push(make_piece(piece_s, square_xy(pitch, at, file, rank), &square(file, rank)));
             }

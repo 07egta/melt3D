@@ -8,12 +8,9 @@ use crate::chess::{self, Design, Piece, Settings, Side};
 use crate::model::{Pick, Scene};
 use crate::style;
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 struct Dlg {
     settings: Settings,
-}
-impl Default for Dlg {
-    fn default() -> Self { Self { settings: Settings::default() } }
 }
 #[derive(Clone, Copy)]
 enum Action { AddOne, ReplaceSelected, FullSet }
@@ -198,7 +195,8 @@ mod tests {
         assert_eq!(app.scene.groups.len(),34);
         let copied = &app.scene.groups[2];
         assert!(chess::preset_of(copied).is_some());
-        assert_eq!(copied.shapes[0].pos[0],original[0]+8.0);
+        // a duplicate stands where the original does (the app's duplicate no longer offsets it)
+        assert_eq!(copied.shapes[0].pos[0],original[0]);
         ctx.run_ui(egui::RawInput::default(), |ui| app.settle(ui.ctx())).textures_delta.clear();
         app.undo();
         assert_eq!(app.scene.groups.len(),33);
