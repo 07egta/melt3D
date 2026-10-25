@@ -1734,6 +1734,13 @@ pub(crate) mod offscreen {
         /// The picture's pixels (RGBA8), for a look at what was drawn.
         #[cfg_attr(not(test), allow(dead_code))]
         pub fn read(&self, pic: &Picture) -> Vec<u8> {
+            let mut px = Vec::new();
+            self.read_into(pic, &mut px);
+            px
+        }
+
+        /// The picture's pixels, into a buffer that a run of pictures can reuse (#217).
+        pub fn read_into(&self, pic: &Picture, px: &mut Vec<u8>) {
             let (w, h) = (pic.size[0], pic.size[1]);
             let bpr = (w * 4).next_multiple_of(256);
             let out = self.device.create_buffer(&wgpu::BufferDescriptor {
@@ -1755,7 +1762,8 @@ pub(crate) mod offscreen {
             let slice = out.slice(..);
             slice.map_async(wgpu::MapMode::Read, |_| {});
             let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
-            let mut px = Vec::with_capacity((w * h * 4) as usize);
+            px.clear();
+            px.reserve((w * h * 4) as usize);
             if let Ok(mapped) = slice.get_mapped_range() {
                 for y in 0..h {
                     let row = (y * bpr) as usize;
@@ -1765,7 +1773,6 @@ pub(crate) mod offscreen {
                 }
             }
             out.unmap();
-            px
         }
     }
 }

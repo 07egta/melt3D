@@ -29,47 +29,49 @@ fn shade(f: &Field, o: [f32; 3], d: [f32; 3]) -> [f32; 3] {
     }
 }
 
-/// One picture of the scene from `cam`, `w` x `h` RGBA (for animation frames).
+/// One picture of the scene from `cam`, `w` x `h` RGBA, for a single picture (tests); a run of
+/// pictures draws into a buffer it reuses with [`view_into`].
+#[cfg(test)]
 pub fn view(scene: &Scene, cam: &Camera, w: usize, h: usize) -> Vec<u8> {
+    let mut out = Vec::new();
+    view_into(scene, cam, w, h, &mut out);
+    out
+}
+
+/// Draw one picture into `out` (made `w` x `h` x 4 long). The rows are shared between the threads
+/// as one buffer, so a whole run of animation pictures can reuse the same allocation (#217).
+pub fn view_into(scene: &Scene, cam: &Camera, w: usize, h: usize, out: &mut Vec<u8>) {
     let (w, h) = (w.clamp(16, 1200), h.clamp(16, 1200));
     let f = Field::new(scene);
     let aspect = w as f32 / h as f32;
-    let rows: Vec<Vec<u8>> = std::thread::scope(|sc| {
+    out.clear();
+    out.resize(w * h * 4, 0);
+    std::thread::scope(|sc| {
         let threads = std::thread::available_parallelism().map_or(2, |n| n.get()).clamp(1, 8);
-        let hs: Vec<_> = (0..threads)
-            .map(|k| {
-                let f = &f;
-                sc.spawn(move || {
-                    let mut part = Vec::new();
-                    for y in (k..h).step_by(threads) {
-                        let mut row = vec![0u8; w * 4];
-                        for x in 0..w {
-                            let nx = (x as f32 + 0.5) / w as f32 * 2.0 - 1.0;
-                            let ny = 1.0 - (y as f32 + 0.5) / h as f32 * 2.0;
-                            let (o, d) = cam.ray([nx, ny], aspect);
-                            let col = shade(f, o, d);
-                            for c in 0..3 {
-                                row[x * 4 + c] = (col[c].clamp(0.0, 1.0).powf(1.0 / 2.2) * 255.0) as u8;
+        let rows = h.div_ceil(threads).max(1);
+        for (k, part) in out.chunks_mut(rows * w * 4).enumerate() {
+            let f = &f;
+            sc.spawn(move || {
+                for (j, row) in part.chunks_mut(w * 4).enumerate() {
+                    let y = k * rows + j;
+                    for x in 0..w {
+                        let nx = (x as f32 + 0.5) / w as f32 * 2.0 - 1.0;
+                        let ny = 1.0 - (y as f32 + 0.5) / h as f32 * 2.0;
+                        let (o, d) = cam.ray([nx, ny], aspect);
+                        let col = shade(f, o, d);
+                        for (c, v) in col.iter().enumerate() {
+                            if let Some(slot) = row.get_mut(x * 4 + c) {
+                                *slot = (v.clamp(0.0, 1.0).powf(1.0 / 2.2) * 255.0) as u8;
                             }
-                            row[x * 4 + 3] = 255;
                         }
-                        part.push((y, row));
+                        if let Some(slot) = row.get_mut(x * 4 + 3) {
+                            *slot = 255;
+                        }
                     }
-                    part
-                })
-            })
-            .collect();
-        let mut rows = vec![Vec::new(); h];
-        for hnd in hs {
-            for (y, row) in hnd.join().unwrap_or_default() {
-                if let Some(slot) = rows.get_mut(y) {
-                    *slot = row;
                 }
-            }
+            });
         }
-        rows
     });
-    rows.concat()
 }
 
 /// Render the four views into one RGBA sheet (2 x size wide and high).
@@ -196,6 +198,36 @@ fn gif_frame_step(length: u32, fps: u32) -> u32 {
     (length.saturating_sub(1) / 240 + 1).max(fps.max(1).div_ceil(50))
 }
 
+/// Encode `count` pictures as they are drawn. `draw` fills the single picture buffer for picture
+/// `i`; that picture is written to the GIF before the next one is drawn, so the loop keeps two
+/// full pictures at most (the one being drawn and the writer's 8-bit index picture) instead of
+/// all of them (#217). Returns the GIF and the most full pictures that were alive at once.
+fn encode_stream(
+    w: usize,
+    h: usize,
+    count: usize,
+    mut delay_of: impl FnMut(usize) -> u16,
+    mut draw: impl FnMut(usize, &mut Vec<u8>) -> Result<(), String>,
+    mut progress: impl FnMut(u32, u32) -> bool,
+) -> Result<(Vec<u8>, usize), String> {
+    let mut writer = crate::gif::Writer::new(w, h)?;
+    let mut pic = vec![0u8; writer.picture_len()];
+    let total = count.min(u32::MAX as usize) as u32;
+    for i in 0..count {
+        if !progress(i as u32, total) {
+            return Err("Stopped".into());
+        }
+        draw(i, &mut pic)?;
+        writer.push(&pic, delay_of(i))?;
+    }
+    if !progress(total, total) {
+        return Err("Stopped".into());
+    }
+    // the picture buffer above, plus the writer's index picture
+    let peak = 1 + writer.peak_pictures();
+    Ok((writer.finish(), peak))
+}
+
 /// The whole animation as a GIF: every frame (or every `step`-th) drawn from `cam`, or from a
 /// camera that fits the piece at all its poses. `size` is the width in pixels.
 pub fn animation_gif(
@@ -236,37 +268,43 @@ pub fn animation_gif(
     // (and the waits shared out evenly) so the animation still takes as long as it should
     let step = gif_frame_step(a.length, a.fps);
     let frames: Vec<u32> = (0..a.length).step_by(step as usize).collect();
-    let total = frames.len() as u32;
+    let delays = crate::gif::delays(frames.len(), 100.0 * step as f32 / a.fps.max(1) as f32);
     // the same picture as the window when there is a graphics card to ask (else the plain CPU one)
     let mut gpu = if use_gpu { crate::gpu::offscreen::Offscreen::open_with(None, None).ok() } else { None };
     let pic = gpu.as_ref().map(|g| g.picture([w as u32, h as u32]));
-    let mut pics = Vec::new();
-    for (i, &f) in frames.iter().enumerate() {
-        if !progress(i as u32, total) {
-            return Err("Stopped".into());
-        }
-        let mut s = scene.clone();
-        a.apply(&mut s, f);
-        match (gpu.as_mut(), pic.as_ref()) {
-            (Some(g), Some(pic)) => {
-                let pack = crate::gpu::ScenePack::new(&s, crate::gpu::VolumeSet::of(&s));
-                g.load(&pack);
-                let mut globals = pack.globals(&s, &cam, [w as f32, h as f32], None, None, false);
-                crate::gpu::set_view_flags(&mut globals, crate::perf::view_flags(false, false, pack.glow));
-                g.frame(pic, &globals, false);
-                pics.push(g.read(pic));
+    let (gif, _peak) = encode_stream(
+        w,
+        h,
+        frames.len(),
+        |i| delays.get(i).copied().unwrap_or(2),
+        |i, out| {
+            let Some(&f) = frames.get(i) else { return Err("Missing frame".into()) };
+            let mut s = scene.clone();
+            a.apply(&mut s, f);
+            match (gpu.as_mut(), pic.as_ref()) {
+                (Some(g), Some(pic)) => {
+                    let pack = crate::gpu::ScenePack::new(&s, crate::gpu::VolumeSet::of(&s));
+                    g.load(&pack);
+                    let mut globals = pack.globals(&s, &cam, [w as f32, h as f32], None, None, false);
+                    crate::gpu::set_view_flags(&mut globals, crate::perf::view_flags(false, false, pack.glow));
+                    g.frame(pic, &globals, false);
+                    if out.len() != (w * h * 4) {
+                        return Err("Bad picture size".into());
+                    }
+                    g.read_into(pic, out);
+                    Ok(())
+                }
+                _ => {
+                    view_into(&s, &cam, w, h, out);
+                    Ok(())
+                }
             }
-            _ => pics.push(view(&s, &cam, w, h)),
-        }
-    }
-    if !progress(total, total) {
-        return Err("Stopped".into());
-    }
-    let delays = crate::gif::delays(pics.len(), 100.0 * step as f32 / a.fps.max(1) as f32);
-    let gif = crate::gif::encode_timed(w, h, &pics, &delays)?;
+        },
+        &mut progress,
+    )?;
     // Encoding a complete set of frames may take time; cancellation can arrive
     // while the palette/LZW encoder runs, before the caller writes a file.
-    if !progress(total, total) {
+    if !progress(frames.len() as u32, frames.len() as u32) {
         return Err("Stopped".into());
     }
     Ok(gif)
@@ -314,6 +352,65 @@ mod tests {
         assert_eq!(render_cli_size(Some(&"999999999".into())), 600);
         assert_eq!(render_cli_size(Some(&"1".into())), 40);
         assert_eq!(render_cli_size(Some(&"bad".into())), 220);
+    }
+
+    #[test]
+    fn view_into_fills_a_reused_buffer_like_view() {
+        // The animation draws into one buffer again and again; it must be the same picture.
+        let scene = Scene::default();
+        let cam = Camera::default();
+        let one = view(&scene, &cam, 24, 20);
+        let mut reused = vec![7u8; 100];
+        view_into(&scene, &cam, 24, 20, &mut reused);
+        assert_eq!(one, reused);
+    }
+
+    #[test]
+    fn a_long_gif_export_holds_two_pictures_at_most() {
+        // 72 pictures at 32 x 24: the run draws into one reused buffer and encodes each picture
+        // before drawing the next, so peak memory does not grow with the length (#217).
+        let (w, h, n) = (32usize, 24usize, 72usize);
+        let mut seen: Vec<usize> = Vec::new();
+        let (gif, peak) = encode_stream(
+            w,
+            h,
+            n,
+            |i| 2 + (i % 3) as u16,
+            |i, pic| {
+                seen.push(pic.as_ptr() as usize);
+                assert_eq!(pic.len(), w * h * 4);
+                for (k, px) in pic.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+                    *px = [(k % 251) as u8, i as u8, 40, 255];
+                }
+                Ok(())
+            },
+            |_, _| true,
+        )
+        .unwrap();
+        assert_eq!(peak, 2, "the picture being drawn and the writer's index picture");
+        assert_eq!(seen.len(), n);
+        assert!(seen.iter().all(|p| *p == seen[0]), "one picture buffer is reused for the whole run");
+        assert!(gif.starts_with(b"GIF89a"));
+        assert_eq!(gif.last(), Some(&0x3B));
+    }
+
+    #[test]
+    fn a_stopped_gif_export_keeps_no_pictures_and_no_output() {
+        let mut drawn = 0;
+        let r = encode_stream(
+            32,
+            24,
+            50,
+            |_| 4,
+            |_, pic| {
+                drawn += 1;
+                pic.fill(0);
+                Ok(())
+            },
+            |i, _| i < 5,
+        );
+        assert_eq!(r.err().as_deref(), Some("Stopped"));
+        assert_eq!(drawn, 5, "stops at the cancelled picture");
     }
 
     #[test]
