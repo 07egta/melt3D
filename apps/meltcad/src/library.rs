@@ -261,6 +261,19 @@ pub fn all() -> &'static [Category] {
                 .map(|(name, tags, group)| Item { name, tags, group })
                 .collect(),
         });
+        // Generated once from the exact same parametric state users later edit.
+        // No baked mesh assets, no extra runtime file reads and no duplicate SDF engine.
+        let items = crate::organic_vase::Design::ALL.into_iter().map(|design| {
+            let mut group = Group::new(design.name());
+            group.blend = 0.0;
+            group.shapes.push(crate::organic_vase::new(design));
+            Item {
+                name: design.name().to_string(),
+                tags: vec!["organic vase".into(), "有機 花瓶".into(), "vase".into(), "3Dプリント".into()],
+                group,
+            }
+        }).collect();
+        categories.push(Category { name: "花瓶・Vase".into(), items });
         categories
     })
 }
@@ -519,6 +532,22 @@ mod tests {
             assert!((p.origin_xy[0] - 120.0).abs() < 1e-3);
             assert!((p.origin_xy[1] + 80.0).abs() < 1e-3);
             assert_eq!(g.shapes.len(), 5);
+        }
+    }
+
+    #[test]
+    fn parametric_organic_vases_appear_in_the_library_and_stay_editable() {
+        let cat = all().iter().find(|c| c.name == "花瓶・Vase").expect("vase category");
+        assert_eq!(cat.items.len(), 3);
+        for item in &cat.items {
+            assert!(item.matches("organic vase"));
+            assert!(item.fits(0, 0));
+            let mut scene = item.scene();
+            assert_eq!(scene.groups[0].shapes.len(), 1, "no Boolean primitive stacks");
+            assert!(scene.groups[0].shapes[0].vase.is_some(), "preset remains parametric");
+            let before = scene.clone();
+            scene.sanitize();
+            assert_eq!(scene, before);
         }
     }
 

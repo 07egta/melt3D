@@ -61,6 +61,7 @@ mod mesh_dialog;
 mod mesh_import;
 mod designer_bag;
 mod model;
+mod organic_vase;
 mod palette_prefs;
 mod panels;
 mod pattern;

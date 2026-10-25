@@ -667,6 +667,8 @@ impl App {
                                 sh.name = k.label().to_string();
                             }
                             sh.kind = k;
+                            // A different primitive must never inherit stale vase parameters.
+                            sh.vase = None;
                             sh.size = k.default_size();
                             sh.params = k.default_params();
                             if k.uses_path() && sh.path.len() < 2 {
@@ -685,6 +687,9 @@ impl App {
             style::xyz(ui, "Position", &mut sh.pos, 0.5, -5000.0..=5000.0, "");
             style::xyz(ui, "Rotation", &mut sh.rot, 1.0, -3600.0..=3600.0, "°");
             style::xyz(ui, "Scale", &mut sh.scale, 0.01, 0.01..=100.0, "×");
+            if sh.vase.is_some() {
+                crate::organic_vase::inspector(ui, sh);
+            } else {
             let labels = sh.kind.size_labels();
             ui.horizontal_wrapped(|ui| {
                 for (i, l) in labels.iter().enumerate() {
@@ -764,7 +769,8 @@ impl App {
                     style::labeled_slider(ui, "Depth", &mut fm.reach, 2.0..=60.0, "How far the melt reaches from the face, in mm");
                 }
             }
-            if sh.kind.uses_outline() {
+            }
+            if sh.kind.uses_outline() && sh.vase.is_none() {
                 outline_changed = true;
                 top_changed = sh.kind.uses_outline2();
             }

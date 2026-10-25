@@ -319,7 +319,15 @@ pub fn insert(app: &mut App, ctx: &egui::Context, item: &Item) -> bool {
         [0.0, 0.0]
     };
     app.scene.groups.push(item.placed(at));
-    app.sel = Some(Pick::Group(app.scene.groups.len() - 1));
+    let gi = app.scene.groups.len() - 1;
+    // A single parametric vase should open its size/wave controls immediately.
+    app.sel = if app.scene.groups[gi].shapes.len() == 1
+        && app.scene.groups[gi].shapes[0].vase.is_some()
+    {
+        Some(Pick::Shape(gi, 0))
+    } else {
+        Some(Pick::Group(gi))
+    };
     app.frame_view(false);
     app.say(ctx, format!("Added {}", item.name));
     true
@@ -474,6 +482,18 @@ mod tests {
         assert!(insert(&mut app, &ctx, &item()));
         let (a, b) = (app.scene.groups[0].shapes[0].pos, app.scene.groups[1].shapes[0].pos);
         assert!((a[0] - b[0]).hypot(a[1] - b[1]) < 300.0, "near the old model, not at the origin: {a:?} {b:?}");
+    }
+
+    #[test]
+    fn adding_an_organic_vase_opens_its_parametric_inspector() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        let category = library::all().iter().find(|c| c.name == "花瓶・Vase").expect("vases");
+        assert!(insert(&mut app, &ctx, &category.items[0]));
+        assert_eq!(app.sel, Some(Pick::Shape(1, 0)));
+        let shape = app.scene.shape(1, 0).expect("vase");
+        assert!(shape.vase.is_some());
+        assert_eq!(shape.kind, Kind::Revolve);
     }
 
     #[test]
