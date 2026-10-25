@@ -498,10 +498,7 @@ mod tests {
 
     #[test]
     fn malformed_params_are_sanitized_and_bad_split_is_atomic() {
-        let mut p = LampParams::default();
-        p.thickness = f32::NAN;
-        p.curvature = f32::INFINITY;
-        p.offset = [f32::NAN, 10_000.0];
+        let p = LampParams { thickness: f32::NAN, curvature: f32::INFINITY, offset: [f32::NAN, 10_000.0], ..Default::default() };
         let g = build(p);
         assert!(g.lamp.unwrap().thickness.is_finite());
         assert!(g.lamp.unwrap().offset.iter().all(|v| v.is_finite()));
