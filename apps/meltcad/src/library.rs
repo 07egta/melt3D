@@ -401,6 +401,64 @@ mod tests {
         assert!(placed.centre_xy().iter().all(|x| x.abs() < 1e-3));
     }
 
+
+    /// Smoke-test the ten common animals through the same paths as search, placement,
+    /// scene save/load and thumbnail creation. Geometry export is checked for the two new models.
+    #[test]
+    fn familiar_animals_are_searchable_placeable_and_round_trip() {
+        let category = parse(FILES[2]).expect("animal category");
+        assert_eq!(category.name, "どうぶつ");
+        for (name, query) in [
+            ("いぬ", "dog"), ("ねこ", "cat"), ("うさぎ", "rabbit"), ("くま", "bear"),
+            ("パンダ", "panda"), ("ぞう", "elephant"), ("きりん", "giraffe"),
+            ("ペンギン", "penguin"), ("うま", "horse"), ("さかな", "fish"),
+        ] {
+            let it = category.items.iter().find(|it| it.name == name).expect("missing animal model");
+            assert!(it.matches(query), "{name} search failed");
+            assert!(it.fits(0, 0), "{name} exceeds scene limits");
+            let scene = it.scene();
+            let encoded = serde_json::to_string(&scene).expect("save scene");
+            let decoded: Scene = serde_json::from_str(&encoded).expect("reopen scene");
+            assert_eq!(decoded, scene, "{name} changed after reload");
+            let placed = it.placed([80.0, -50.0]);
+            assert_eq!(placed.shapes.len(), it.group.shapes.len());
+            assert_eq!(placed.shapes[0].pos[2], it.group.shapes[0].pos[2]);
+            assert_eq!(crate::cpu_render::thumb(&scene, 24).len(), 24 * 24 * 4);
+        }
+    }
+
+    #[test]
+    fn new_animals_can_export_obj_and_3mf() {
+        use crate::export_formats::Format;
+        use crate::export_job::{self, Lighten, Options};
+        use crate::export_mesh::Progress;
+        use std::path::Path;
+
+        let category = parse(FILES[2]).expect("animal category");
+        for name in ["パンダ", "うま"] {
+            let it = category.items.iter().find(|it| it.name == name).expect("missing new model");
+            for (format, ext, magic) in [
+                (Format::Obj, "obj", &b"# MELTCAD"[..]),
+                (Format::ThreeMf, "3mf", &b"PK"[..]),
+            ] {
+                let opts = Options {
+                    format,
+                    tolerance: 1.5,
+                    lighten: Lighten::Off,
+                    ..Options::default()
+                };
+                let built = export_job::build(&it.scene(), None, &opts, &Progress::new())
+                    .unwrap_or_else(|e| panic!("{name}: {format:?} mesh failed: {e}"));
+                assert!(built.tris > 0, "{name} has no mesh faces");
+                let path = format!("animal.{ext}");
+                let files = export_job::serialize(&built, &opts, Path::new(&path))
+                    .unwrap_or_else(|e| panic!("{name}: {format:?} writing failed: {e}"));
+                assert!(files.iter().any(|(p, bytes)| p.extension().is_some_and(|e| e == ext)
+                    && bytes.starts_with(magic)), "{name}: invalid {ext} output");
+            }
+        }
+    }
+
     #[test]
     fn search_matches_names_and_tags() {
         let it = Item { name: "いぬ".into(), tags: vec!["Dog".into()], group: Group::new("x") };
