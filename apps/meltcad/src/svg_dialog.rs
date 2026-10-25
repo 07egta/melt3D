@@ -283,14 +283,16 @@ fn import(app: &mut App, ctx: &egui::Context, d: &Dlg) -> bool {
         return false;
     }
     let o = BuildOpts { target_mm: d.target, height_mm: d.height, round_mm: d.round, flip: d.flip, at: [app.cam.target[0], app.cam.target[1]] };
-    let (group, note) = svg::build_group(art, &d.name, &o, room);
-    if group.shapes.is_empty() {
+    let groups_room = MAX_GROUPS.saturating_sub(app.scene.groups.len());
+    let (groups, note) = svg::build_group(art, &d.name, &o, room, groups_room);
+    let n: usize = groups.iter().map(|g| g.shapes.len()).sum();
+    if n == 0 {
         app.say(ctx, note.unwrap_or_else(|| "No shapes could be added".into()));
         return false;
     }
-    let n = group.shapes.len();
-    app.scene.groups.push(group);
-    app.sel = Some(Pick::Group(app.scene.groups.len() - 1));
+    let first = app.scene.groups.len();
+    app.scene.groups.extend(groups);
+    app.sel = Some(Pick::Group(first));
     app.say(ctx, note.unwrap_or_else(|| format!("Added SVG ({n} shapes)")));
     true
 }
@@ -311,9 +313,15 @@ mod tests {
         ctx.data_mut(|m| m.insert_temp(id(), d.clone()));
         ctx.run_ui(egui::RawInput::default(), |ui| update(&mut app, ui.ctx())).textures_delta.clear();
         let (groups, shapes) = (app.scene.groups.len(), app.scene.shape_count());
+        let before = app.scene.clone();
         assert!(import(&mut app, &ctx, &d));
-        assert_eq!((app.scene.groups.len(), app.scene.shape_count()), (groups + 1, shapes + 3));
+        assert_eq!((app.scene.groups.len(), app.scene.shape_count()), (groups + 2, shapes + 3));
         assert_eq!(app.sel, Some(Pick::Group(groups)));
+        // the whole import is one undo step, even though it is several groups
+        app.settle(&ctx);
+        assert_eq!(app.undo_depth(), 1);
+        app.undo();
+        assert_eq!(app.scene, before);
         // a bad file only shows a message
         set_art(&mut d, svg::parse("hello"), "x".into());
         assert!(d.art.is_none() && !d.msg.is_empty());

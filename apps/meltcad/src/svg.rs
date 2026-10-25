@@ -1500,28 +1500,39 @@ impl Default for BuildOpts {
     }
 }
 
-/// One group named `name` with an `Extrude` for every solid and a taller minus `Extrude` right after
-/// it for every hole. At most `room` shapes; a solid and its holes always stay together.
-/// The second value says when complete components were left out.
-pub fn build_group(art: &Artwork, name: &str, o: &BuildOpts, room: usize) -> (Group, Option<String>) {
+/// The import group `name` and its child groups. An `Extrude` is made for every solid and a taller
+/// minus `Extrude` for every hole. A solid with holes sits in a child group together with those
+/// holes, melting into the import group; a hole therefore only cuts the solid it belongs to.
+/// At most `room` shapes and `group_room` groups (the import group is the first one); a solid and
+/// its holes always stay together. The second value says when complete components were left out.
+pub fn build_group(art: &Artwork, name: &str, o: &BuildOpts, room: usize, group_room: usize) -> (Vec<Group>, Option<String>) {
     let fin = |v: f32, d: f32, lo: f32, hi: f32| if v.is_finite() { v.clamp(lo, hi) } else { d };
     let h = fin(o.height_mm, 10.0, 0.2, 500.0);
     let round = fin(o.round_mm, 0.0, 0.0, 100.0).min(h * 0.5);
     let at = [fin(o.at[0], 0.0, -1000.0, 1000.0), fin(o.at[1], 0.0, -1000.0, 1000.0)];
-    let mut group = Group::new(name);
+    if group_room == 0 {
+        return (Vec::new(), Some(format!("{} SVG outlines did not fit (no group room). Solids and their holes are kept together", art.solids())));
+    }
+    let mut parent = Group::new(name);
+    let mut children: Vec<Group> = Vec::new();
+    let child_room = group_room.saturating_sub(1);
     let mut left_out = 0usize;
     let (mut ns, mut nh) = (0usize, 0usize);
+    let mut used = 0usize;
+    let mut part = 0usize;
     let mut contours = art.placed(o.target_mm, o.flip).into_iter();
     while let Some(first) = contours.next() {
         let holes = contours.as_slice().iter().take_while(|c| c.hole).count();
         let count = 1 + holes;
-        if first.hole || count > room.saturating_sub(group.shapes.len()) {
+        let full = count > room.saturating_sub(used);
+        if first.hole || full || (holes > 0 && children.len() >= child_room) {
             left_out += count;
             for _ in 0..holes {
                 contours.next();
             }
             continue;
         }
+        let mut shapes = Vec::with_capacity(count);
         for c in std::iter::once(first).chain(contours.by_ref().take(holes)) {
             let mut sh = Shape::new(Kind::Extrude, [at[0], at[1], h * 0.5], Material::plain(c.color.unwrap_or([0.93, 0.56, 0.45]), 0.45, 0.0));
             sh.outline = c.pts;
@@ -1538,11 +1549,25 @@ pub fn build_group(art: &Artwork, name: &str, o: &BuildOpts, room: usize) -> (Gr
                 sh.name = format!("{name} {ns}");
                 sh.size[0] = h;
             }
-            group.shapes.push(sh);
+            shapes.push(sh);
+        }
+        used += count;
+        if holes == 0 {
+            // No holes, so nothing can leak out of it: it can stay in the import group.
+            parent.shapes.append(&mut shapes);
+        } else {
+            part += 1;
+            let mut child = Group::new(format!("{name} {part}"));
+            child.depth = 1;
+            child.shapes = shapes;
+            children.push(child);
         }
     }
+    let mut groups = Vec::with_capacity(1 + children.len());
+    groups.push(parent);
+    groups.append(&mut children);
     let note = (left_out > 0).then(|| format!("{left_out} SVG outlines did not fit. Solids and their holes are kept together"));
-    (group, note)
+    (groups, note)
 }
 
 #[cfg(test)]
@@ -1567,6 +1592,12 @@ mod tests {
     }
     fn solid_area(art: &Artwork) -> f32 {
         art.placed(60.0, false).iter().map(|c| if c.hole { -area32(&c.pts) } else { area32(&c.pts) }).sum()
+    }
+    fn all_shapes(groups: &[Group]) -> Vec<&Shape> {
+        groups.iter().flat_map(|g| &g.shapes).collect()
+    }
+    fn all_ops(groups: &[Group]) -> Vec<Op> {
+        groups.iter().flat_map(|g| g.shapes.iter().map(|s| s.op)).collect()
     }
 
     #[test]
@@ -1703,23 +1734,56 @@ mod tests {
     fn a_hole_follows_its_solid_in_the_group() {
         let a = parse(SAMPLE_SVG).unwrap();
         assert_eq!((a.solids(), a.holes()), (2, 1));
-        let (g, note) = build_group(&a, "sample", &BuildOpts { height_mm: 8.0, ..BuildOpts::default() }, 64);
-        assert!(note.is_none() && g.shapes.len() == 3);
-        let ops: Vec<Op> = g.shapes.iter().map(|s| s.op).collect();
+        let (groups, note) = build_group(&a, "sample", &BuildOpts { height_mm: 8.0, ..BuildOpts::default() }, 64, 8);
+        assert!(note.is_none());
+        let shapes = all_shapes(&groups);
+        assert_eq!(shapes.len(), 3);
+        assert_eq!(groups[0].depth, 0, "the import group comes first");
+        assert!(groups[1..].iter().all(|g| g.depth == 1), "each solid with holes melts in from a child group");
+        let ring = groups.iter().find(|g| g.shapes.iter().any(|s| s.op == Op::Subtract)).expect("the ring group");
+        let ops: Vec<Op> = ring.shapes.iter().map(|s| s.op).collect();
         let hole = ops.iter().position(|o| *o == Op::Subtract).unwrap();
         assert!(hole > 0 && ops[hole - 1] == Op::Add);
-        assert!(g.shapes.iter().all(|s| s.kind == Kind::Extrude && s.blend == 0.0 && s.outline.len() >= 3 && s.outline.len() <= MAX_OUTLINE));
-        assert!(g.shapes[hole].size[0] > g.shapes[hole - 1].size[0]);
+        assert!(shapes.iter().all(|s| s.kind == Kind::Extrude && s.blend == 0.0 && s.outline.len() >= 3 && s.outline.len() <= MAX_OUTLINE));
+        assert!(ring.shapes[hole].size[0] > ring.shapes[hole - 1].size[0]);
         // the star keeps its 10 corners
         assert!(a.contours.iter().any(|c| !c.hole && c.pts.len() == 10));
         // limits
-        let (g2, note2) = build_group(&a, "sample", &BuildOpts::default(), 2);
-        assert!(g2.shapes.len() == 1 && note2.is_some(), "the ring is omitted together with its hole");
-        // a scene with it stays valid
+        let (g2, note2) = build_group(&a, "sample", &BuildOpts::default(), 2, 8);
+        assert_eq!(all_shapes(&g2).len(), 1);
+        assert!(note2.is_some(), "the ring is omitted together with its hole");
+        // a scene with it stays valid, and the whole import is one block of groups
         let mut s = crate::model::Scene::default();
-        s.groups.push(g);
+        s.groups.clear();
+        s.groups.extend(groups);
         let back = crate::model::Scene::from_json(&s.to_json()).unwrap();
-        assert_eq!(back.groups.last().map(|g| g.shapes.len()), Some(3));
+        assert_eq!(back.groups.iter().map(|g| g.shapes.len()).sum::<usize>(), 3);
+    }
+
+    #[test]
+    fn a_hole_of_one_element_does_not_cut_another_elements_fill() {
+        let a = parse(&wrap(
+            r##"<path fill="#ff8c00" fill-rule="evenodd"
+                  d="M0 0 H100 V100 H0 Z M30 30 H70 V70 H30 Z"/>
+                <rect x="42" y="42" width="16" height="16" fill="#0088ee"/>"##,
+        ))
+        .unwrap();
+        assert_eq!((a.solids(), a.holes()), (2, 1));
+        let (groups, note) = build_group(&a, "overlap", &BuildOpts::default(), 64, 8);
+        assert!(note.is_none());
+        // The orange solid and its hole share a child group; the blue rect is added to the import group.
+        assert_eq!(groups[0].shapes.len(), 1);
+        let ring = groups.iter().find(|g| g.shapes.iter().any(|s| s.op == Op::Subtract)).expect("the orange hole group");
+        assert_eq!(ring.shapes.iter().map(|s| s.op).collect::<Vec<_>>(), vec![Op::Add, Op::Subtract]);
+        // The picture is 60 mm wide and centred: SVG (50, 50) is the world origin, (35, 35) is in the hole.
+        let mut scene = crate::model::Scene::default();
+        scene.groups.clear();
+        scene.groups = groups;
+        let field = crate::sdf::Field::new(&scene);
+        assert!(field.distance([0.0, 0.0, 5.0]) < 0.0, "the blue rectangle inside the orange hole stays solid");
+        assert!(field.distance([0.0, 0.0, 5.0]) <= -4.0, "it is solid well inside the rectangle, not a thin sliver");
+        assert!(field.distance([9.0, 9.0, 5.0]) > 0.0, "the orange hole is still open around the rectangle");
+        assert!(field.distance([-15.0, 15.0, 5.0]) < 0.0, "the orange solid around the hole is still there");
     }
 
     #[test]
@@ -1796,8 +1860,8 @@ mod tests {
         ))
         .unwrap();
         assert_eq!((a.solids(), a.holes()), (1, 1));
-        let (g, _) = build_group(&a, "ring", &BuildOpts::default(), 64);
-        assert_eq!(g.shapes.iter().map(|s| s.op).collect::<Vec<_>>(), vec![Op::Add, Op::Subtract]);
+        let (groups, _) = build_group(&a, "ring", &BuildOpts::default(), 64, 8);
+        assert_eq!(all_ops(&groups), vec![Op::Add, Op::Subtract]);
     }
 
     #[test]
@@ -1883,11 +1947,14 @@ mod tests {
     #[test]
     fn scene_capacity_never_fills_a_missing_hole() {
         let ring = parse(&wrap(r#"<path fill-rule="evenodd" d="M0 0 H80 V80 H0 Z M20 20 H60 V60 H20 Z"/>"#)).unwrap();
-        let (g, note) = build_group(&ring, "ring", &BuildOpts::default(), 1);
-        assert!(g.shapes.is_empty() && note.is_some());
-        let (g, note) = build_group(&ring, "ring", &BuildOpts::default(), 2);
-        assert_eq!(g.shapes.iter().map(|s| s.op).collect::<Vec<_>>(), vec![Op::Add, Op::Subtract]);
+        let (g, note) = build_group(&ring, "ring", &BuildOpts::default(), 1, 8);
+        assert!(all_shapes(&g).is_empty() && note.is_some());
+        let (g, note) = build_group(&ring, "ring", &BuildOpts::default(), 2, 8);
+        assert_eq!(all_ops(&g), vec![Op::Add, Op::Subtract]);
         assert!(note.is_none());
+        // no group slot for the child means the solid and its hole stay out together
+        let (g, note) = build_group(&ring, "ring", &BuildOpts::default(), 2, 1);
+        assert!(all_shapes(&g).is_empty() && note.is_some());
     }
 
     #[test]
@@ -1941,20 +2008,20 @@ mod tests {
         let many: String = (0..2000).map(|i| format!("<rect x=\"{}\" y=\"{}\" width=\"3\" height=\"3\"/>", i % 50 * 5, i / 50 * 5)).collect();
         let a = parse(&format!("<svg>{many}</svg>")).unwrap();
         assert!(a.contours.len() <= MAX_CONTOURS && a.dropped > 0);
-        let (g, note) = build_group(&a, "x", &BuildOpts::default(), 64);
-        assert!(g.shapes.len() == 64 && note.is_some());
+        let (groups, note) = build_group(&a, "x", &BuildOpts::default(), 64, 64);
+        assert!(all_shapes(&groups).len() == 64 && note.is_some());
     }
 
     #[test]
     fn build_options_are_made_safe() {
         let a = parse(SAMPLE_SVG).unwrap();
         let o = BuildOpts { target_mm: f32::NAN, height_mm: f32::INFINITY, round_mm: -4.0, flip: true, at: [f32::NAN, 1e30] };
-        let (g, _) = build_group(&a, "x", &o, 64);
+        let (groups, _) = build_group(&a, "x", &o, 64, 64);
         let mut s = crate::model::Scene::default();
-        s.groups.push(g.clone());
+        s.groups.extend(groups.clone());
         let before = s.clone();
         s.sanitize();
         assert_eq!(s, before, "already within the limits");
-        assert!(g.shapes.iter().all(|s| s.round >= 0.0 && s.pos.iter().all(|v| v.is_finite())));
+        assert!(all_shapes(&groups).iter().all(|s| s.round >= 0.0 && s.pos.iter().all(|v| v.is_finite())));
     }
 }
