@@ -21,10 +21,15 @@ pub struct Request {
 const MAX_LINE: u64 = 1 << 20;
 const MAX_CONNECTIONS: usize = 8;
 
-/// The port after `--control`, if given.
-pub fn port_arg(args: &[std::ffi::OsString]) -> Option<u16> {
-    let i = args.iter().position(|a| a.to_str() == Some("--control"))?;
-    args.get(i + 1)?.to_str()?.parse().ok()
+/// The port after `--control`. `Ok(None)` when the option is absent; an explicit but unusable value
+/// is an error, so `--mcp --control nope` cannot silently fall back to a local empty scene (#264).
+pub fn port_arg(args: &[std::ffi::OsString]) -> Result<Option<u16>, String> {
+    let Some(i) = args.iter().position(|a| a.to_str() == Some("--control")) else { return Ok(None) };
+    let value = args.get(i + 1).and_then(|a| a.to_str());
+    match value.and_then(|v| v.trim().parse::<u16>().ok()) {
+        Some(port) => Ok(Some(port)),
+        None => Err("--control needs a port number between 0 and 65535".into()),
+    }
 }
 
 /// Melt 3D always opens on its own screen; SolidCraft is entered from the button (a file is a melt design).
@@ -312,9 +317,12 @@ mod tests {
     #[test]
     fn the_file_argument_skips_options() {
         let a = |v: &[&str]| v.iter().map(std::ffi::OsString::from).collect::<Vec<_>>();
-        assert_eq!(port_arg(&a(&["m", "--control", "7777"])), Some(7777));
+        assert_eq!(port_arg(&a(&["m", "--control", "7777"])), Ok(Some(7777)));
         assert_eq!(file_arg(&a(&["m", "--control", "7777", "x.yura"])), Some("x.yura".into()));
         assert_eq!(file_arg(&a(&["m", "--control", "7777"])), None);
-        assert_eq!(port_arg(&a(&["m", "--control", "abc"])), None);
+        assert_eq!(port_arg(&a(&["m"])), Ok(None), "no --control is not an error");
+        assert!(port_arg(&a(&["m", "--control", "abc"])).is_err(), "a bad value must not become a local scene");
+        assert!(port_arg(&a(&["m", "--control", "99999"])).is_err(), "a value outside u16 must be refused");
+        assert!(port_arg(&a(&["m", "--control"])).is_err(), "a missing value must be refused");
     }
 }
