@@ -158,7 +158,7 @@ fn support_xy(p: Settings, index: usize) -> [f32; 2] {
             (p.width * 0.30 * theta.cos(), p.depth * 0.30 * theta.sin())
         }
         Legs::Four => {
-            let sx = if index % 2 == 0 { -1.0 } else { 1.0 };
+            let sx = if index.is_multiple_of(2) { -1.0 } else { 1.0 };
             let sy = if index / 2 == 0 { -1.0 } else { 1.0 };
             (sx * p.width * 0.30, sy * p.depth * 0.30)
         }
