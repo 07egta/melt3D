@@ -182,6 +182,7 @@ impl VaseParams {
         report
     }
 
+    #[cfg(test)]
     pub fn estimated_min_wall(&self) -> f32 {
         self.wall_report().minimum_mm
     }

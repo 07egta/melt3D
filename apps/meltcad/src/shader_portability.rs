@@ -317,6 +317,7 @@ fn inlining_cost_report() {
     assert!(copies("map") <= 3, "map is inlined {} times in fs", copies("map"));
     assert!(copies("shape_dist") <= 15, "shape_dist is inlined {} times in fs", copies("shape_dist"));
     // Linear-light material blending adds 535 scalar expressions to the former 152k budget.
-    // Distance-function/map call limits above stay unchanged; permit only this measured increase.
-    assert!(t.fs_expanded <= 153_000, "fs is {} expressions after inlining", t.fs_expanded);
+    // Distance-function/map call limits above stay unchanged; permit only this measured increase
+    // (the parametric vase profile adds about 900 more).
+    assert!(t.fs_expanded <= 154_500, "fs is {} expressions after inlining", t.fs_expanded);
 }
