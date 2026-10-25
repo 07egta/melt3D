@@ -203,6 +203,7 @@ impl App {
     /// Leaving the precise view puts the solid there into the melt view (as a mesh that melts like
     /// any shape). It does nothing when there is no solid or it was sent already.
     fn send_precise_solid(&mut self, ctx: &egui::Context) -> Result<(), String> {
+        let generation = self.document_generation();
         let Some(p) = self.precise.as_mut() else { return Ok(()) };
         if let Some(a) = p.app.autosave.as_mut() {
             a.save(&p.app.session).map_err(|e| format!("精密データの自動保存に失敗しました: {e}"))?;
@@ -230,7 +231,7 @@ impl App {
         let imported = crate::import_mesh::import_bytes(&bytes, "SolidCraft.stl", &crate::import_mesh::ImportOptions { y_up: Some(false) })?;
         let size = imported.mesh.size();
         let loaded = crate::mesh_import::Loaded { file_name: "SolidCraft".into(), stem: p.app.session.doc.name.clone(), imported, size };
-        p.pending = Some((hash, crate::mesh_dialog::open_solid(ctx, loaded)?));
+        p.pending = Some((hash, crate::mesh_dialog::open_solid(ctx, loaded, generation)?));
         p.message = None;
         Ok(())
     }
@@ -457,6 +458,43 @@ mod tests {
         let again = app.scene.shape(g2, s2).unwrap();
         assert_eq!(again.pos, [130.0, 12.0, 6.0], "it stays where it was moved");
         assert_eq!(app.sel, Some(Pick::Shape(g2, s2)));
+    }
+
+    /// #263: a transfer started for one document must never add its shape to another one.
+    #[test]
+    fn replacing_the_document_discards_a_running_transfer() {
+        use crate::control::Request;
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        exact_box(&mut app, &ctx);
+        let (sender, receiver) = std::sync::mpsc::channel();
+        app.control = Some(receiver);
+        let replace = |app: &mut App, cmd: serde_json::Value| {
+            let (reply, results) = std::sync::mpsc::channel();
+            sender.send(Request { cmd, reply }).unwrap();
+            app.run_control(&ctx);
+            results.recv().unwrap().expect("control command");
+        };
+
+        // the document changes while the solid is on its way in
+        app.set_precise_mode(&ctx, false).unwrap();
+        replace(&mut app, json!({"cmd":"scene.new"}));
+        assert_eq!(app.scene.shape_count(), 0, "the new document is empty");
+        finish_import(&mut app, &ctx);
+        assert_eq!(app.scene.shape_count(), 0, "the old transfer did not land in the new document");
+        assert!(!crate::mesh_dialog::is_open(&ctx), "the card is gone");
+        assert!(app.precise.as_ref().is_some_and(|p| p.message.is_some()), "the transfer said why it stopped");
+
+        // and it changes while the bake itself is running
+        app.set_precise_mode(&ctx, true).unwrap();
+        app.set_precise_mode(&ctx, false).unwrap();
+        assert!(app.precise_transfer_pending());
+        replace(&mut app, json!({"cmd":"scene.new","sphere":true}));
+        assert_eq!(app.scene.shape_count(), 1, "the new document keeps its own shape");
+        finish_import(&mut app, &ctx);
+        assert_eq!(app.scene.shape_count(), 1, "the bake did not land in the new document");
+        assert!(!crate::mesh_dialog::is_open(&ctx), "the card is gone");
+        assert!(app.precise.as_ref().is_some_and(|p| p.message.is_some()));
     }
 
     #[test]
