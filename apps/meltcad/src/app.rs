@@ -2621,6 +2621,7 @@ impl App {
             self.sketch_card(&ctx);
             self.keys_card(ui);
             crate::svg_dialog::update(self, &ctx);
+            crate::precise::transfer_card(self, &ctx);
             crate::mesh_dialog::update(self, &ctx);
             crate::array::update(self, &ctx);
             crate::export_dialog::update(self, &ctx);
@@ -3097,6 +3098,13 @@ mod tests {
         assert_eq!(answer["precise"], false);
         assert_eq!(answer["importing"], true);
         assert!(app.precise_transfer_pending());
+        // The STL is written and parsed on a worker; the bake card opens when it is ready.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(90);
+        while !crate::mesh_dialog::is_open(&ctx) {
+            app.sync_precise_transfer(&ctx);
+            assert!(std::time::Instant::now() < deadline, "the transfer did not reach the bake");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
         assert!(crate::mesh_dialog::cancel(&ctx));
         app.sync_precise_transfer(&ctx);
     }
