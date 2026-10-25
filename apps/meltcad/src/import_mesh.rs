@@ -894,8 +894,14 @@ fn lower_ext(name: &str) -> String {
     std::path::Path::new(name).extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default()
 }
 
+/// A UTF-8 byte-order mark (as written by Windows text editors) is not part of a model's text.
+fn without_bom(b: &[u8]) -> &[u8] {
+    b.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(b)
+}
+
 /// Which format a file is, by its first bytes and then by its name.
 pub fn sniff(b: &[u8], name: &str) -> Option<MeshFormat> {
+    let b = without_bom(b);
     if b.starts_with(b"PK\x03\x04") || b.starts_with(b"PK\x05\x06") {
         return Some(MeshFormat::ThreeMf);
     }
@@ -998,6 +1004,14 @@ pub fn import_bytes(bytes: &[u8], name: &str, opts: &ImportOptions) -> Result<Im
         return Err(TOO_BIG_FILE.into());
     }
     let format = sniff(bytes, name).ok_or("Can't tell this file's format (supports STL, OBJ, PLY, 3MF, GLB)")?;
+    // Text formats may start with a byte-order mark, which is not part of the model: left in
+    // place it hid the first OBJ vertex, so every face named the wrong corner. Binary
+    // containers (3MF, GLB, a binary STL) keep every byte they have.
+    let bytes = if matches!(format, MeshFormat::ThreeMf | MeshFormat::Glb) || (format == MeshFormat::Stl && stl_is_binary(bytes)) {
+        bytes
+    } else {
+        without_bom(bytes)
+    };
     let appearance_info = match format {
         MeshFormat::ThreeMf => crate::import_3mf::appearance_3mf(bytes),
         MeshFormat::Glb => crate::import_glb::appearance_glb(bytes),
@@ -1379,6 +1393,29 @@ pub mod tests {
         let ply = "ply\nformat ascii 1.0\nelement vertex 3\nproperty float x\nproperty float y\nproperty float z\nproperty uchar red\nproperty uchar green\nproperty uchar blue\nelement face 1\nproperty list uchar int vertex_indices\nend_header\n0 0 0 255 0 0\n1 0 0 255 0 0\n0 1 0 255 0 0\n3 0 1 2\n";
         let r = import_bytes(ply.as_bytes(), "a.ply", &opts()).unwrap();
         assert!(r.notes.iter().any(|n| n.contains("vertex colours")), "{:?}", r.notes);
+    }
+
+    /// A UTF-8 byte-order mark (Notepad and other Windows tools write one) must not shift the
+    /// indices of a text model or stop it from loading. A BOM-prefixed OBJ used to lose its first
+    /// vertex, so every face named the wrong corner, and BOM-prefixed STL/PLY files were refused.
+    #[test]
+    fn a_utf8_bom_does_not_shift_or_break_a_text_model() {
+        let obj = "v 0 0 0\nv 10 0 0\nv 0 10 0\nv 99 99 99\nf 1 2 3\n";
+        let plain = load(obj.as_bytes(), "t.obj");
+        let with_bom = load(format!("\u{feff}{obj}").as_bytes(), "t.obj");
+        assert_eq!(with_bom.mesh.positions, plain.mesh.positions);
+        assert_eq!(with_bom.mesh.triangles, plain.mesh.triangles);
+        assert!((with_bom.mesh.surface_area() - 50.0).abs() < 1e-4, "the wrong corners: {}", with_bom.mesh.surface_area());
+        let stl = load(format!("\u{feff}{ASCII_TETRA}").as_bytes(), "t.stl");
+        assert_eq!(stl.mesh.triangles.len(), 4);
+        assert!((stl.mesh.signed_volume() - 1.0 / 6.0).abs() < 1e-9, "{}", stl.mesh.signed_volume());
+        let ply = load(format!("\u{feff}{}", ply_ascii()).as_bytes(), "t.ply");
+        assert_eq!((ply.mesh.positions.len(), ply.mesh.triangles.len()), (4, 4));
+        // a BOM by itself is still an empty file, and a binary file is not touched
+        assert!(import_bytes(b"\xEF\xBB\xBF", "t.obj", &opts()).is_err());
+        let b = box_mesh([0.0; 3], [1.0; 3]);
+        let bin = export_formats::stl_binary(&to_trimesh(&b), "b");
+        assert_eq!(load(&bin, "b.stl").mesh.triangles.len(), 12);
     }
 
     #[test]
