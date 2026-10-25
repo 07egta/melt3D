@@ -950,11 +950,26 @@ impl App {
                 if ui.checkbox(&mut closed, "Closed loop").on_hover_text("Join the last and first node").changed() {
                     sh.params[0] = if closed { 1.0 } else { 0.0 };
                 }
-                let mut flat = sh.params[2] > 0.5;
-                if ui.checkbox(&mut flat, "Flat ends").on_hover_text("Cut both ends square instead of rounding").changed() {
-                    sh.params[2] = if flat { 1.0 } else { 0.0 };
+            });
+            if sh.params[0] < 0.5 {
+                let mut roundness = 1.0 - sh.params[2].clamp(0.0, 1.0);
+                if ui.add(egui::Slider::new(&mut roundness, 0.0..=1.0).text("End roundness"))
+                    .on_hover_text("1 = round like a ball / 0 = cut flat. Values in between work too").changed()
+                {
+                    sh.params[2] = 1.0 - roundness;
+                }
+            }
+            // A Curve uses only size[1..=2] for the section.
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Section").color(style::DIM).size(12.0));
+                if style::pill(ui, "Round", sh.size[2] < 1.5).on_hover_text("丸いSection。幅の比率で楕円にもできます").clicked() {
+                    sh.size[2] = 1.0;
+                }
+                if style::pill(ui, "Soft square", sh.size[2] >= 1.5).on_hover_text("四隅が滑らかな角丸状のSection").clicked() {
+                    sh.size[2] = 2.0;
                 }
             });
+            style::labeled_slider(ui, "断面の幅", &mut sh.size[1], 0.45..=1.0, "1 = 円、0.45 = 細長い楕円 / 角丸断面");
             if !(sh.params[3].is_finite() && sh.params[3] > 0.0) {
                 sh.params[3] = 1.0;
             }

@@ -192,6 +192,30 @@ impl Rig {
     }
 }
 
+#[test]
+fn organic_tube_control_point_drags_through_real_egui_pointer_events() {
+    let mut r = Rig::new();
+    r.app.add_organic_tube(&r.ctx, crate::organic_tube::Preset::Wave);
+    // The application animates frame_view over time; the viewport-only test
+    // rig does not run frame_body/step_fly, so take the camera goal directly.
+    if let Some(goal) = r.app.fly.take() {
+        r.app.cam = goal;
+    }
+    r.frame(vec![]);
+    let Some(Pick::Shape(g, s)) = r.app.sel else { panic!("Organic Tube selected") };
+    let before = r.app.scene.shape(g, s).expect("tube").path[3];
+    let layout = layout(&r.app.cam, r.app.view_rect, r.app.scene.shape(g, s).expect("tube"));
+    let node = layout.nodes[3].expect("visible control point");
+    let before_cam = (r.app.cam.yaw, r.app.cam.pitch);
+    r.drag(node.c, node.c + vec2(45.0, -20.0));
+    let after = r.app.scene.shape(g, s).expect("tube").path[3];
+    assert_ne!(after[..3], before[..3], "node must move on the native curve");
+    assert_eq!((r.app.cam.yaw, r.app.cam.pitch), before_cam, "node drag must not orbit the camera");
+    let text = r.app.scene.to_json();
+    let saved = crate::model::Scene::from_json(&text).expect("native save");
+    assert_eq!(saved.shape(g, s).expect("tube").path[3], after);
+}
+
 fn curve_shape() -> Shape {
     let mut s = Shape::new(Kind::Curve, [0.0, 0.0, 0.0], Material::default());
     s.path = vec![[-30.0, 0.0, 10.0, 5.0], [0.0, 0.0, 30.0, 5.0], [30.0, 0.0, 10.0, 5.0]];

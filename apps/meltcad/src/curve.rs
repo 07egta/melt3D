@@ -10,7 +10,7 @@
 //! Extra numbers (`Shape::params`): 0 = closed loop (0 / 1), 1 = smoothness 0..1 (0 = straight
 //! pieces with round joints), 2 = flat ends (0 round / 1 flat), 3 = thickness multiplier (all radii).
 
-use crate::sdf::{Prepared, V3, dot, len, mul, norm, sub};
+use crate::sdf::{Prepared, V3, add, cross, dot, len, mul, norm, sub};
 
 /// Most points one curve gives to the GPU.
 pub const MAX_POINTS: usize = 96;
@@ -164,6 +164,11 @@ pub fn resample_max(path: &[[f32; 4]], smooth: f32, closed: bool, max_points: us
         }
     }
     out.push(if closed { nodes[0] } else { nodes[n - 1] });
+    // A resampled closed loop must have exactly coincident endpoints. Catmull
+    // evaluation at t=0 can differ from the stored node by a rounding ULP.
+    if closed && !out.is_empty() {
+        out[0] = nodes[0];
+    }
     out.truncate(max_points);
     out
 }
@@ -328,9 +333,11 @@ pub fn build_shape_max(shape: &crate::model::Shape, cap: usize) -> Vec<[f32; 4]>
 /// Uses the full shape so explicit curve handles and node modes are respected.
 pub fn half_extent_shape(shape: &crate::model::Shape) -> V3 {
     let mut h = [1.0_f32; 3];
+    // the rounded-square section reaches further out than the round one
+    let radius_factor = if shape.size[2].is_finite() && shape.size[2] >= 1.5 { 1.5 } else { 1.25 };
     for p in build_shape(shape) {
         for i in 0..3 {
-            h[i] = h[i].max(p[i].abs() + p[3] * 1.25);
+            h[i] = h[i].max(p[i].abs() + p[3] * radius_factor);
         }
     }
     h
@@ -338,6 +345,12 @@ pub fn half_extent_shape(shape: &crate::model::Shape) -> V3 {
 
 /// A box around the points, grown by their largest radius: (low corner, high corner).
 pub fn bounds(points: &[[f32; 4]]) -> (V3, V3) {
+    bounds_profile(points, false)
+}
+
+/// The rounded-square option reaches up to 2^(1/4) times the circular radius
+/// across a diagonal. Reserve enough margin for the existing local smooth joints.
+pub fn bounds_profile(points: &[[f32; 4]], squircle: bool) -> (V3, V3) {
     let mut lo = [f32::MAX; 3];
     let mut hi = [f32::MIN; 3];
     let mut rmax = 0.0_f32;
@@ -353,7 +366,7 @@ pub fn bounds(points: &[[f32; 4]]) -> (V3, V3) {
     }
     // A smooth join can extend at most k/4 beyond a round cone. joint_blend caps k below
     // 0.71 * the local radius, so 0.25 radius covers every join, including a group boundary.
-    let g = rmax * 1.25 + 0.01;
+    let g = rmax * if squircle { 1.5 } else { 1.25 } + 0.01;
     ([lo[0] - g, lo[1] - g, lo[2] - g], [hi[0] + g, hi[1] + g, hi[2] + g])
 }
 
@@ -362,6 +375,11 @@ pub fn bounds(points: &[[f32; 4]]) -> (V3, V3) {
 /// the distance to the group is at least the distance to its sphere, and the tube has a point
 /// inside each sphere (the distance is at most the distance to the centre plus the radius).
 pub fn group_spheres(points: &[[f32; 4]]) -> Vec<[f32; 4]> {
+    group_spheres_profile(points, false)
+}
+
+pub fn group_spheres_profile(points: &[[f32; 4]], squircle: bool) -> Vec<[f32; 4]> {
+    let radius_factor = if squircle { 1.5 } else { 1.25 };
     let segs = points.len().saturating_sub(1);
     (0..segs.div_ceil(GROUP_SEGMENTS))
         .map(|g| {
@@ -372,7 +390,7 @@ pub fn group_spheres(points: &[[f32; 4]]) -> Vec<[f32; 4]> {
                 ([lo[0].min(p[0]), lo[1].min(p[1]), lo[2].min(p[2])], [hi[0].max(p[0]), hi[1].max(p[1]), hi[2].max(p[2])])
             });
             let c = [(lo[0] + hi[0]) * 0.5, (lo[1] + hi[1]) * 0.5, (lo[2] + hi[2]) * 0.5];
-            let r = part.iter().map(|p| len(sub([p[0], p[1], p[2]], c)) + p[3] * 1.25).fold(0.0_f32, f32::max);
+            let r = part.iter().map(|p| len(sub([p[0], p[1], p[2]], c)) + p[3] * radius_factor).fold(0.0_f32, f32::max);
             [c[0], c[1], c[2], r * 1.0005 + 0.005]
         })
         .collect()
@@ -405,6 +423,45 @@ pub fn round_cone(q: V3, a: V3, ra: f32, b: V3, rb: f32) -> f32 {
     } else {
         ((x2 * a2 * il2).sqrt() + y * rr) * il2 - ra
     }
+}
+
+/// Distance of a segment to a selectable circular, oval or rounded-square section.
+/// The segment's centreline and existing radius interpolation stay unchanged.
+/// With aspect=1 and squircle=false this is exactly the original round cone.
+///
+/// The transverse norm is 1-Lipschitz after multiplying the distance by
+/// aspect <= 1; this is important for conservative SDF meshing/ray stepping.
+pub fn section_cone(q: V3, a: V3, ra: f32, b: V3, rb: f32, aspect: f32, squircle: bool) -> f32 {
+    let aspect = if aspect.is_finite() { aspect.clamp(0.45, 1.0) } else { 1.0 };
+    if aspect >= 0.9999 && !squircle {
+        return round_cone(q, a, ra, b, rb);
+    }
+    let delta = sub(b, a);
+    if len(delta) < 1.0e-4 {
+        // Coincident control points still produce a finite, closed ball.
+        return round_cone(q, a, ra, b, rb);
+    }
+    let tangent = norm(delta);
+    // A local cross-section orthogonal to the span; choosing a fallback
+    // prevents a singular basis at vertical tangents.
+    // Blend the frame's reference axis instead of snapping it at near-
+    // vertical tangents. A hard axis switch creates a visible half-twist
+    // in oval/rounded-square sections even though the SDF stays finite.
+    let w = ((tangent[2].abs() - 0.80) / 0.18).clamp(0.0, 1.0);
+    let w = w * w * (3.0 - 2.0 * w);
+    let reference = [0.0, w, 1.0 - w];
+    let side = norm(cross(reference, tangent));
+    let up = cross(tangent, side);
+    let v = sub(q, a);
+    let x = dot(v, side) / aspect;
+    let y = dot(v, up);
+    let transverse = if squircle {
+        (x.powi(4) + y.powi(4)).sqrt().sqrt()
+    } else {
+        x.hypot(y)
+    };
+    let q2 = add(a, add(mul(tangent, dot(v, tangent)), mul(side, transverse)));
+    round_cone(q2, a, ra, b, rb) * aspect
 }
 
 /// Distance to the tube through already-resampled `points`; `flat` cuts the two ends flat.
@@ -459,12 +516,19 @@ fn joint_min(a: f32, b: f32, k: f32) -> f32 {
 /// The rounded path. Each adjacent pair is softened independently, so a long chain never grows
 /// with its number of nodes. Unrelated spans and straight joins keep their exact round-cone SDF.
 pub fn smooth_tube(points: &[[f32; 4]], q: V3, flat: bool, closed: bool) -> f32 {
+    let d = smooth_tube_section(points, q, closed, 1.0, false);
+    if flat { d.max(end_cut(points, q)) } else { d }
+}
+
+/// Identical local-joint blending to smooth_tube, changing only each span's
+/// cross-section. No per-point mesh is generated during interactive editing.
+pub fn smooth_tube_section(points: &[[f32; 4]], q: V3, closed: bool, aspect: f32, squircle: bool) -> f32 {
     let mut d = 1.0e6_f32;
     let mut first = None;
     let mut prev = None;
     for (i, w) in points.windows(2).enumerate() {
         let (a, b) = (w[0], w[1]);
-        let one = round_cone(q, [a[0], a[1], a[2]], a[3], [b[0], b[1], b[2]], b[3]);
+        let one = section_cone(q, [a[0], a[1], a[2]], a[3], [b[0], b[1], b[2]], b[3], aspect, squircle);
         d = d.min(one);
         if let Some(before) = prev {
             d = d.min(joint_min(before, one, joint_blend(points[i - 1], a, b)));
@@ -477,11 +541,17 @@ pub fn smooth_tube(points: &[[f32; 4]], q: V3, flat: bool, closed: bool) -> f32 
         let k = closed_joint_blend(points, closed);
         d = d.min(joint_min(last, first, k));
     }
-    if flat { d.max(end_cut(points, q)) } else { d }
+    d
 }
 
 /// The two half-spaces that cut a tube flat at its first and last point (positive beyond an end).
 fn end_cut(points: &[[f32; 4]], q: V3) -> f32 {
+    end_cut_amount(points, q, 1.0)
+}
+
+/// 0 = original fully rounded ends; 1 = flat caps through the end nodes.
+/// Intermediate values move the cut inward continuously without opening a hole.
+fn end_cut_amount(points: &[[f32; 4]], q: V3, flatness: f32) -> f32 {
     if points.len() < 2 {
         return -1.0e6;
     }
@@ -489,8 +559,9 @@ fn end_cut(points: &[[f32; 4]], q: V3) -> f32 {
     let (last, before) = (points[points.len() - 1], points[points.len() - 2]);
     let t0 = norm(sub([second[0], second[1], second[2]], [first[0], first[1], first[2]]));
     let t1 = norm(sub([last[0], last[1], last[2]], [before[0], before[1], before[2]]));
-    let c0 = dot(sub(q, [first[0], first[1], first[2]]), mul(t0, -1.0));
-    let c1 = dot(sub(q, [last[0], last[1], last[2]]), t1);
+    let round = 1.0 - flatness.clamp(0.0, 1.0);
+    let c0 = dot(sub(q, [first[0], first[1], first[2]]), mul(t0, -1.0)) - round * first[3];
+    let c1 = dot(sub(q, [last[0], last[1], last[2]]), t1) - round * last[3];
     c0.max(c1)
 }
 
@@ -503,17 +574,22 @@ fn hollow(d: f32, wall: f32) -> f32 {
 /// world mm) hollows the tube here rather than in `Prepared::distance`, so that a pipe with flat
 /// ends is cut open *after* it is hollowed: the bore shows at the ends.
 pub fn distance(p: &Prepared, q: V3) -> f32 {
-    let (closed, _, flat, _) = settings(&p.params);
+    let (closed, _, _, _) = settings(&p.params);
     if p.path.len() < 2 {
         return 1.0e6;
     }
-    let cut = flat && !closed;
+    let flatness = if p.params[2].is_finite() { p.params[2].clamp(0.0, 1.0) } else { 0.0 };
+    let aspect = if p.size[1].is_finite() { p.size[1].clamp(0.45, 1.0) } else { 1.0 };
+    let squircle = p.size[2].is_finite() && p.size[2] >= 1.5;
+    let mut d = smooth_tube_section(&p.path, q, closed, aspect, squircle);
     let wall = if p.shell.is_finite() { p.shell.max(0.0) / p.min_scale().max(1.0e-6) } else { 0.0 };
     if wall > 0.0 {
-        let d = hollow(smooth_tube(&p.path, q, false, closed), wall);
-        return if cut { d.max(end_cut(&p.path, q)) } else { d };
+        d = hollow(d, wall);
     }
-    smooth_tube(&p.path, q, cut, closed)
+    if !closed && flatness > 0.0 {
+        d = d.max(end_cut_amount(&p.path, q, flatness));
+    }
+    d
 }
 
 #[cfg(test)]
@@ -531,6 +607,85 @@ mod tests {
     fn lcg(seed: &mut u32) -> f32 {
         *seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
         (*seed >> 8) as f32 / (1 << 24) as f32
+    }
+
+    #[test]
+    fn old_circular_tube_remains_numerically_unchanged() {
+        let path = [[-16.0, 0.0, 0.0, 5.0], [0.0, 6.0, 0.0, 7.0], [15.0, -2.0, 0.0, 4.0]];
+        let mut seed = 47;
+        for _ in 0..250 {
+            let q = [
+                lcg(&mut seed) * 75.0 - 37.5,
+                lcg(&mut seed) * 75.0 - 37.5,
+                lcg(&mut seed) * 40.0 - 20.0,
+            ];
+            let original = smooth_tube(&path, q, false, false);
+            let profiled = smooth_tube_section(&path, q, false, 1.0, false);
+            assert_eq!(original, profiled, "default sections must keep old curves exactly");
+        }
+    }
+
+    #[test]
+    fn oval_and_rounded_square_sections_are_stable_and_distinct() {
+        let (a, b) = ([-25.0, 0.0, 0.0], [25.0, 0.0, 0.0]);
+        // The section's transverse axes are Y/Z for this X-oriented path.
+        let oval_side = section_cone([0.0, 2.5, 0.0], a, 5.0, b, 5.0, 0.5, false);
+        let oval_top = section_cone([0.0, 0.0, 5.0], a, 5.0, b, 5.0, 0.5, false);
+        assert!(oval_side.abs() < 1e-4, "{oval_side}");
+        assert!(oval_top.abs() < 1e-4, "{oval_top}");
+        let round = section_cone([0.0, 4.0, 4.0], a, 5.0, b, 5.0, 1.0, false);
+        let soft_square = section_cone([0.0, 4.0, 4.0], a, 5.0, b, 5.0, 1.0, true);
+        assert!(round > 0.1 && soft_square < -0.1, "{round}, {soft_square}");
+        // A tight bend or a nearly vertical segment may not divide by zero.
+        for b in [[0.0, 0.0, 40.0], [0.0, 0.0, -40.0], [0.001, 0.001, 0.001]] {
+            for squircle in [false, true] {
+                for aspect in [0.45, 0.7, 1.0] {
+                    for x in [-10.0, 0.0, 10.0] {
+                        assert!(section_cone([x, 1.0, 3.0], [0.0; 3], 5.0, b, 2.0, aspect, squircle).is_finite());
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn cap_roundness_is_continuous_and_preserves_flat_end_compatibility() {
+        let mut s = Shape::new(Kind::Curve, [0.0; 3], Material::default());
+        s.path = vec![[-15.0, 0.0, 0.0, 5.0], [15.0, 0.0, 0.0, 5.0]];
+        for flatness in [0.0, 0.25, 0.5, 0.75, 1.0] {
+            s.params = [0.0, 0.0, flatness, 1.0];
+            let d = Prepared::new(&s).distance([-17.0, 0.0, 0.0]);
+            assert!(d.is_finite());
+            if flatness == 0.0 {
+                assert!(d < -1.0, "rounded cap must still surround the point: {d}");
+            }
+            if flatness == 1.0 {
+                assert!(d > 1.0, "flat cap must cut at the end node: {d}");
+            }
+        }
+    }
+
+    #[test]
+    fn tight_hairpins_keep_finite_closed_sdf_for_both_sections() {
+        let mut s = Shape::new(Kind::Curve, [0.0; 3], Material::default());
+        s.path = vec![[-22.0, 0.0, 0.0, 4.0], [0.0, 0.0, 0.0, 5.0], [-0.6, 1.0, 0.0, 5.0], [-22.0, 3.0, 0.0, 3.0]];
+        s.params = [0.0, 1.0, 0.0, 1.0];
+        for aspect in [0.5, 1.0] {
+            for squared in [1.0, 2.0] {
+                s.size[1] = aspect;
+                s.size[2] = squared;
+                let prepared = Prepared::new(&s);
+                for p in &s.path {
+                    let d = prepared.distance([p[0], p[1], p[2]]);
+                    assert!(d.is_finite() && d < -0.05, "hairpin control point must remain inside: {d}");
+                }
+                let points = build(&s.path, &s.params);
+                let (lo, hi) = bounds_profile(&points, squared >= 1.5);
+                for a in 0..3 {
+                    assert!(lo[a] < hi[a] && lo[a].is_finite() && hi[a].is_finite());
+                }
+            }
+        }
     }
 
     #[test]

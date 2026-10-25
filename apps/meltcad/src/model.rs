@@ -195,6 +195,8 @@ impl Kind {
             Kind::Star => [24.0, 14.0, 1.0],
             Kind::Revolve => [1.0, 1.0, 1.0],
             Kind::Loft => [40.0, 1.0, 1.0],
+            // Curve uses size.y = cross-section width (0.45..1), size.z = rounded-square selector.
+            // 1,1 keeps existing circular paths bit-for-bit on the fast SDF route.
             Kind::Curve => [1.0, 1.0, 1.0],
             Kind::Sweep => [1.0, 1.0, 1.0],
             Kind::Mesh => [1.0, 1.0, 1.0],
@@ -1405,6 +1407,11 @@ impl Scene {
                 }
                 for v in &mut s.params {
                     fix(v, -5000.0, 5000.0, 0.0);
+                }
+                if s.kind == Kind::Curve {
+                    fix(&mut s.size[1], 0.45, 1.0, 1.0);
+                    fix(&mut s.size[2], 1.0, 2.0, 1.0);
+                    fix(&mut s.params[2], 0.0, 1.0, 0.0);
                 }
                 fix(&mut s.shell, 0.0, 500.0, 0.0);
                 s.outline2.truncate(MAX_OUTLINE);

@@ -2132,6 +2132,14 @@ impl App {
                                         }
                                     }
                                     ui.separator();
+                                    ui.label(egui::RichText::new("Organic tube").size(12.0).color(style::DIM));
+                                    for preset in crate::organic_tube::Preset::ALL {
+                                        if ui.button(preset.label()).on_hover_text("Points, thickness and section stay editable afterwards").clicked() {
+                                            self.add_organic_tube(&ctx, preset);
+                                            ui.close();
+                                        }
+                                    }
+                                    ui.separator();
                                     ui.label(egui::RichText::new("Organic furniture").size(12.0).color(style::DIM));
                                     for design in crate::organic_furniture::Design::ALL {
                                         if ui.button(design.label()).on_hover_text("Width, height and legs stay editable after it is made").clicked() {

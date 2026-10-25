@@ -1111,6 +1111,40 @@ mod tests {
     }
 
     #[test]
+    fn organic_tubes_export_as_closed_meshes_in_stl_and_3mf() {
+        use crate::organic_tube::Preset;
+        for (preset, format) in [(Preset::Wave, Format::Stl), (Preset::Ring, Format::ThreeMf)] {
+            let mut shape = preset.shape();
+            if preset == Preset::Wave {
+                shape.size[1] = 0.68;
+                shape.size[2] = 2.0;
+                shape.params[2] = 0.35;
+            }
+            let scene = scene_of(vec![shape]);
+            let result = build(&scene, None, &opts(format, 0.75), &Progress::new())
+                .unwrap_or_else(|e| panic!("{preset:?} export failed: {e}"));
+            assert!(result.closed, "{preset:?} must export a closed 2-manifold surface");
+            assert!(melt::is_watertight(&result.surface.mesh), "{preset:?}: open/non-manifold boundary");
+            assert!(melt::volume(&result.surface.mesh) > 10.0, "{preset:?}: no filled solid");
+            assert!(!result.surface.mesh.triangles.is_empty());
+        }
+    }
+
+    /// Slow, high-precision reference: can run on a Windows build runner during
+    /// release qualification, without slowing the normal editing test suite.
+    #[test]
+    #[ignore]
+    fn organic_tube_high_precision_stl_is_watertight() {
+        let mut shape = crate::organic_tube::Preset::S.shape();
+        shape.size[1] = 0.55;
+        shape.size[2] = 2.0;
+        let result = build(&scene_of(vec![shape]), None, &opts(Format::Stl, 0.25), &Progress::new())
+            .expect("high-precision Organic Tube export");
+        assert!(result.closed && melt::is_watertight(&result.surface.mesh));
+        assert!(melt::volume(&result.surface.mesh) > 10.0);
+    }
+
+    #[test]
     fn the_default_sphere_is_closed_has_the_right_volume_and_few_triangles() {
         let b = build(&Scene::default(), None, &opts(Format::Stl, 0.25), &Progress::new()).unwrap();
         assert!(b.closed);

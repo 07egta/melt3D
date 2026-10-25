@@ -14,6 +14,7 @@ use crate::style;
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Action {
     AddShape(Kind),
+    OrganicTube(crate::organic_tube::Preset),
     AddGroup,
     /// (category, item)
     Insert(usize, usize),
@@ -141,6 +142,14 @@ pub fn entries() -> Vec<Entry> {
             tag: "Shape",
             words: format!("{} {}", k.label(), kind_words(k)).to_lowercase(),
             action: Action::AddShape(k),
+        });
+    }
+    for preset in crate::organic_tube::Preset::ALL {
+        v.push(Entry {
+            label: format!("Organic Tube・{}を作る", preset.label()),
+            tag: "プリセット",
+            words: preset.search_words().to_owned(),
+            action: Action::OrganicTube(preset),
         });
     }
     for (ci, c) in library::all().iter().enumerate() {
@@ -335,6 +344,7 @@ impl App {
         let pi = std::f32::consts::PI;
         match a {
             Action::AddShape(k) => self.add_shape(ctx, k),
+            Action::OrganicTube(preset) => self.add_organic_tube(ctx, preset),
             Action::AddGroup => self.add_group(),
             Action::Insert(c, i) => {
                 if let Some(item) = library::all().get(c).and_then(|c| c.items.get(i)) {
@@ -630,6 +640,9 @@ mod tests {
         assert_eq!(top("元に戻す"), Some(Action::Undo));
         assert_eq!(top("stl"), Some(Action::Export(ExportFormat::Stl)));
         assert_eq!(top("array"), Some(Action::Array));
+        assert_eq!(top("organic tube wave"), Some(Action::OrganicTube(crate::organic_tube::Preset::Wave)));
+        assert_eq!(top("organic tube ring"), Some(Action::OrganicTube(crate::organic_tube::Preset::Ring)));
+        assert_eq!(top("organic tube s"), Some(Action::OrganicTube(crate::organic_tube::Preset::S)));
         assert_eq!(top("ならべ"), Some(Action::Array));
     }
 
