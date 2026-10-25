@@ -242,6 +242,12 @@ impl Store {
         Ok(restored)
     }
 
+    /// Is `checkpoint` going to do anything at `now`? Its callers do the expensive part (finding
+    /// out whether the scene changed, which compares the whole scene) only when it is.
+    pub fn due(&self, now: Instant) -> bool {
+        now >= self.next_due
+    }
+
     /// Returns true only if a new recovery was written. The clock is injected
     /// so interval behavior can be tested without sleeps.
     pub fn checkpoint(&mut self, scene: &Scene, source: Option<&Path>, changed: bool, rev: u64, now: Instant) -> Result<bool, String> {
@@ -325,6 +331,27 @@ mod tests {
         assert!(store.checkpoint(&scene, None, true, 2, now + INTERVAL * 2).expect("modified"));
         assert!(!store.checkpoint(&scene, None, true, 2, now + INTERVAL * 3).expect("same revision"));
         assert!(store.checkpoint(&scene, None, true, 3, now + INTERVAL * 4).expect("new revision"));
+        store.normal_exit().expect("cleanup");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn due_is_true_exactly_when_a_checkpoint_would_be_written() {
+        // The window asks `due` before it compares the whole scene; if the two disagreed, an
+        // edit would never reach the recovery file (or every frame would compare the scene).
+        let root = temp_root();
+        let now = Instant::now();
+        let mut store = Store::new(root.clone(), now);
+        let scene = edited();
+        assert!(!store.due(now), "a fresh store waits one interval");
+        assert!(!store.due(now + INTERVAL - Duration::from_millis(1)));
+        assert!(store.due(now + INTERVAL));
+        assert!(store.checkpoint(&scene, None, true, 2, now + INTERVAL).expect("write"));
+        assert!(!store.due(now + INTERVAL), "the write scheduled the next one");
+        assert!(!store.due(now + INTERVAL * 2 - Duration::from_millis(1)));
+        assert!(store.due(now + INTERVAL * 2));
+        // and a scene that did not change costs nothing even when due
+        assert!(!store.checkpoint(&scene, None, false, 2, now + INTERVAL * 2).expect("clean"));
         store.normal_exit().expect("cleanup");
         let _ = fs::remove_dir_all(root);
     }

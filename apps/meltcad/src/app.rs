@@ -1238,7 +1238,6 @@ impl App {
                 Pick::Shape(g, _) => {
                     selected_groups.insert(g);
                 }
-                _ => {}
             }
         }
         for (g, s) in targets {
@@ -2624,10 +2623,15 @@ impl App {
         self.settle(&ctx);
         if !cfg!(test) {
             ctx.request_repaint_after(crate::recovery::INTERVAL);
-            let rev = self.track_scene();
-            let changed = self.has_unsaved_work();
-            if let Err(e) = self.recovery.checkpoint(&self.scene, self.path.as_deref(), changed, rev, std::time::Instant::now()) {
-                self.notice = Some(format!("Could not save auto-recovery data: {e}"));
+            // Finding out whether the scene changed compares all of it, so it is only done when
+            // the checkpoint is due (`checkpoint` would ignore the answer otherwise).
+            let now = std::time::Instant::now();
+            if self.recovery.due(now) {
+                let rev = self.track_scene();
+                let changed = self.has_unsaved_work();
+                if let Err(e) = self.recovery.checkpoint(&self.scene, self.path.as_deref(), changed, rev, now) {
+                    self.notice = Some(format!("Could not save auto-recovery data: {e}"));
+                }
             }
         }
         self.test_hooks(&ctx);
