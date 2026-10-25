@@ -181,6 +181,11 @@ impl App {
                         } else {
                             self.select_pick(Some(Pick::Shape(gi, si)), false);
                         }
+                        // A plain click on the shape's own row is about the whole shape, not the
+                        // ball that happened to be chosen before.
+                        if !ctrl && !shift {
+                            self.ct.node = None;
+                        }
                     }
                     if row.drag_started {
                         self.layer_drag = Some(Pick::Shape(gi, si));
@@ -246,6 +251,9 @@ impl App {
                 if on { style::TEXT } else { style::DIM },
             );
             if resp.clicked() {
+                // The ball is one node of this shape: keep the shape picked (the bend/radius
+                // controls stay available) and put the handles on that one ball.
+                self.select_pick(Some(Pick::Shape(gi, si)), false);
                 self.ct.node = Some((gi, si, i));
             }
         }
