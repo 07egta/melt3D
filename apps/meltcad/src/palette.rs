@@ -210,6 +210,12 @@ pub fn entries() -> Vec<Entry> {
 
 /// How well `q` matches an entry: None = no match, lower is better.
 fn score(e: &Entry, q: &str) -> Option<u32> {
+    // library parts rank after commands: a growing library must not push a command (「たま」= sphere) down
+    let base = if e.tag == "Library" { 10 } else { 0 };
+    score_raw(e, q).map(|s| s + base)
+}
+
+fn score_raw(e: &Entry, q: &str) -> Option<u32> {
     let label = e.label.to_lowercase();
     if label == q {
         return Some(0);
