@@ -609,6 +609,9 @@ impl App {
             self.sel = Some(Pick::Group(i));
             self.folded.clear();
         }
+        if self.designer_lamp_inspector(ui, g) {
+            return;
+        }
         self.pattern_section(ui, g);
         self.actions(ui);
         let linked = self.scene.groups.get(g).is_some_and(crate::model::Group::is_linked);
@@ -622,6 +625,9 @@ impl App {
             return;
         }
         style::title(ui, "Shape");
+        if self.designer_lamp_inspector(ui, g) {
+            return;
+        }
         let ngroups = self.scene.groups.len();
         let nshapes = self.scene.groups[g].shapes.len();
         let mut move_to: Option<usize> = None;

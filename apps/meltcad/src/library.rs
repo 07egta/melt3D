@@ -12,6 +12,7 @@ use egui::Context;
 use serde::Deserialize;
 
 use crate::model::{Group, MAX_GROUPS, MAX_SHAPES, Scene};
+use crate::designer_lamp::{self, LampParams, LampStyle};
 
 #[derive(Deserialize)]
 struct RawCategory {
@@ -274,6 +275,17 @@ pub fn all() -> &'static [Category] {
             }
         }).collect();
         categories.push(Category { name: "花瓶・Vase".into(), items });
+        // Add native parametric models to the EXISTING furniture category rather
+        // than duplicating the thumbnail, library-search or insertion code.
+        if let Some(furniture) = categories.iter_mut().find(|c| c.name == "かぐ") {
+            for style in LampStyle::ALL {
+                furniture.items.push(Item {
+                    name: format!("Designer Lamp（{}）", style.label()),
+                    tags: vec!["designer lamp".into(), "lamp".into(), "lighting".into(), "照明".into(), style.english().into(), style.label().into()],
+                    group: designer_lamp::build(LampParams::for_style(style)),
+                });
+            }
+        }
         categories
     })
 }
@@ -346,6 +358,10 @@ impl Item {
         if let Some(bag) = &mut g.bag {
             bag.origin_xy[0] += dx;
             bag.origin_xy[1] += dy;
+        }
+        if let Some(p) = &mut g.lamp {
+            p.offset[0] += dx;
+            p.offset[1] += dy;
         }
         g
     }
@@ -548,6 +564,24 @@ mod tests {
             let before = scene.clone();
             scene.sanitize();
             assert_eq!(scene, before);
+        }
+    }
+
+    #[test]
+    fn designer_lamps_are_library_models_with_real_thumbnail_geometry() {
+        let lamps: Vec<&Item> = all().iter().flat_map(|c| &c.items).filter(|item| item.group.lamp.is_some()).collect();
+        assert_eq!(lamps.len(), 3);
+        for item in lamps {
+            assert!(item.matches("lamp") && item.matches("照明"));
+            assert_eq!(item.group.shapes.len(), 3);
+            assert_eq!(item.group.shapes[0].kind, crate::model::Kind::Revolve);
+            let placed = item.placed([120.0, -45.0]);
+            let spec = placed.lamp.unwrap();
+            let mut refreshed = placed.clone();
+            crate::designer_lamp::regenerate(&mut refreshed, spec);
+            assert_eq!(refreshed.shapes[0].pos, placed.shapes[0].pos);
+            let pixels = crate::cpu_render::thumb(&item.scene(), 32);
+            assert_eq!(pixels.len(), 32 * 32 * 4);
         }
     }
 

@@ -20,6 +20,13 @@ geometry, and the standard OBJ/3MF exporters operate on it without special-case 
 **Physical load-bearing strength and minimum printable feature size depend on the printer
 and material and are not guaranteed.**
 
+The three procedural **Designer Lamp** models are registered in the existing furniture category by
+`src/library.rs` from `src/designer_lamp.rs` (not duplicated in generated JSON). Their real
+Revolve/Curve/Cylinder geometry shares the normal library thumbnails, 3D selection, editable
+parameters, scene saves and STL/3MF/OBJ export. The inspector can separate three parts onto the
+build plate as independent groups; export each group with **Selected** scope. Real-world electrical
+safety, supports and mechanical joint fits are not automatically guaranteed.
+
 ## File format
 
 ```json

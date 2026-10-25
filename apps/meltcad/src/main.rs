@@ -60,6 +60,7 @@ mod mesh;
 mod mesh_dialog;
 mod mesh_import;
 mod designer_bag;
+mod designer_lamp;
 mod model;
 mod organic_vase;
 mod palette_prefs;

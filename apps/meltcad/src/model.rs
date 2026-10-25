@@ -757,6 +757,9 @@ pub struct Group {
     /// Set when the group holds a whole file that was added to this one ("Add file"): a piece of the big file.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub piece: Option<Piece>,
+    /// Editable native Designer Lamp parameters; old projects omit this optional field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lamp: Option<crate::designer_lamp::LampParams>,
 }
 
 /// Which file a piece of the big file came from, so it can be read again or saved back.
@@ -799,6 +802,7 @@ impl Group {
             instance_of: None,
             xform: Xform::default(),
             piece: None,
+            lamp: None,
         }
     }
 }
@@ -1322,6 +1326,9 @@ impl Scene {
             }
             g.shapes.truncate(left);
             left -= g.shapes.len();
+            if let Some(lamp) = &mut g.lamp {
+                lamp.sanitize();
+            }
             for s in &mut g.shapes {
                 for v in &mut s.size {
                     fix(v, 0.01, 2000.0, 10.0);
