@@ -336,6 +336,38 @@ impl App {
         }
     }
 
+    /// The ball chosen in the scene list (group, shape, node), if it can be edited on its own.
+    /// A group pick is not a node: it still moves every child as before (#260).
+    pub(crate) fn picked_node(&self) -> Option<(usize, usize, usize)> {
+        let (g, s) = self.node_shape()?;
+        Some((g, s, self.chosen_node(g, s)?))
+    }
+
+    /// Where node `i` of the shape sits in the world.
+    pub(crate) fn node_world(&self, g: usize, s: usize, i: usize) -> Option<V3> {
+        let shape = self.scene.shape(g, s)?;
+        let node = shape.path.get(i)?;
+        Some(to_world(shape, [node[0], node[1], node[2]]))
+    }
+
+    /// Put node `i` at a world point, stored in the shape's own space. False for a missing or
+    /// hostile point. This moves one ball only: the other nodes keep their places.
+    pub(crate) fn set_node_world(&mut self, g: usize, s: usize, i: usize, world: V3) -> bool {
+        if !world.iter().all(|v| v.is_finite()) {
+            return false;
+        }
+        let Some(shape) = self.scene.shape_mut(g, s) else { return false };
+        let local = to_local(shape, world);
+        if !local.iter().all(|v| v.is_finite()) {
+            return false;
+        }
+        let Some(node) = shape.path.get_mut(i) else { return false };
+        node[0] = local[0].clamp(-5000.0, 5000.0);
+        node[1] = local[1].clamp(-5000.0, 5000.0);
+        node[2] = local[2].clamp(-5000.0, 5000.0);
+        true
+    }
+
     /// The mouse for the curve tool. Call every frame before the gizmo is looked at.
     pub fn curve_input(&mut self, ui: &Ui, resp: &egui::Response, rect: Rect, pos: Option<Pos2>, mods: egui::Modifiers) -> Input {
         let mut out = Input::default();

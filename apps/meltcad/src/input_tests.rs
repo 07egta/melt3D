@@ -226,6 +226,48 @@ fn a_node_of_a_freshly_traced_pipe_can_be_dragged_too() {
 }
 
 #[test]
+fn clicking_a_ball_row_moves_that_ball_only_with_the_arrow_keys() {
+    let mut r = Rig::new();
+    r.app.scene.groups.clear();
+    let mut group = crate::model::Group::new("Pipe");
+    group.shapes.push(Shape::new(Kind::Sphere, [0.0, 0.0, 120.0], Material::default()));
+    let mut pipe = Shape::new(Kind::Curve, [0.0, 0.0, 20.0], Material::default());
+    pipe.name = "Pipe".into();
+    pipe.path = vec![[-20.0, 0.0, 0.0, 4.0], [0.0, 0.0, 0.0, 4.0], [20.0, 0.0, 0.0, 4.0], [40.0, 0.0, 0.0, 4.0], [60.0, 0.0, 0.0, 4.0]];
+    group.shapes.push(pipe);
+    r.app.scene.groups.push(group);
+    r.app.sel = Some(Pick::Shape(0, 1));
+    r.app.committed_sync();
+
+    // Draw the real scene list, then click the "Ball 4" row under the selected pipe.
+    r.full_ui = true;
+    r.frame(vec![]);
+    r.frame(vec![]);
+    let row = r.row_rect(Pick::Shape(0, 1));
+    let ball_4 = pos2(row.left() + 110.0, row.bottom() + 2.0 + 3.0 * (24.0 + 2.0) + 12.0);
+    r.click(ball_4);
+    assert_eq!(r.app.ct.node, Some((0, 1, 3)), "clicking the row chooses Ball 4");
+    assert_eq!(r.app.sel, Some(Pick::Shape(0, 1)));
+    assert_eq!(r.app.picks(), vec![Pick::Shape(0, 1)], "the ball does not turn the pick into the group");
+
+    let before = r.app.scene.groups[0].shapes[1].path.clone();
+    let pipe_pos = r.app.scene.groups[0].shapes[1].pos;
+    let sibling = r.app.scene.groups[0].shapes[0].pos;
+    r.key(egui::Key::ArrowRight);
+    let after = &r.app.scene.groups[0].shapes[1].path;
+    assert!((after[3][0] - before[3][0] - 1.0).abs() < 1e-4, "Ball 4 moved 1 mm: {:?}", after[3]);
+    for i in [0, 1, 2, 4] {
+        assert_eq!(after[i], before[i], "node {i} stays");
+    }
+    assert_eq!(r.app.scene.groups[0].shapes[1].pos, pipe_pos, "the pipe itself did not move");
+    assert_eq!(r.app.scene.groups[0].shapes[0].pos, sibling, "the sibling shape did not move");
+
+    // One arrow key is one undo step.
+    r.app.undo();
+    assert_eq!(r.app.scene.groups[0].shapes[1].path, before, "undo restores the ball");
+}
+
+#[test]
 fn a_right_click_ends_the_pipe_tool() {
     let mut r = Rig::new();
     r.app.set_pipe_tool(true);
