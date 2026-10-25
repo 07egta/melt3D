@@ -130,8 +130,7 @@ pub fn generate(settings: Settings) -> Group {
 }
 
 fn preview_scene(settings: Settings) -> Scene {
-    let mut scene = Scene::default();
-    scene.groups = vec![generate(settings)];
+    let mut scene = Scene { groups: vec![generate(settings)], ..Scene::default() };
     scene.env.grid = false;
     scene.env.floor = false;
     scene
@@ -164,9 +163,11 @@ pub fn insert(app: &mut App, ctx: &egui::Context, settings: Settings) -> Result<
     Ok(())
 }
 
+type PreviewResult = Arc<Mutex<Option<(Settings, Vec<u8>)>>>;
+
 #[derive(Clone)]
 struct PreviewTask {
-    done: Arc<Mutex<Option<(Settings, Vec<u8>)>>>,
+    done: PreviewResult,
 }
 
 #[derive(Clone)]

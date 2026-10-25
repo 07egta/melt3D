@@ -377,6 +377,7 @@ impl App {
             Action::PrintCheck => self.print_check(ctx),
             Action::ImportSvg => crate::svg_dialog::open(ctx),
             Action::ImportMesh => crate::mesh_dialog::open(ctx, self.document_generation()),
+            Action::OrganicBlob => crate::organic_blob::open(ctx),
             Action::OpenPrecise => self.open_precise(ctx),
             Action::FrameAll => self.frame_view(false),
             Action::FrameSelection => self.frame_view(true),
