@@ -259,6 +259,86 @@ fn a_left_drag_on_empty_space_box_selects_by_direction_and_never_turns_the_view(
     assert_eq!(r.app.sel, Some(Pick::Shape(0, 0)));
 }
 
+/// A screen point the viewport draws as one of the axis balls (the positive end of `axis`).
+fn gnomon_ball(r: &Rig, axis: usize) -> Pos2 {
+    let rect = r.app.view_rect;
+    let ball = r
+        .app
+        .gnomon_items(rect)
+        .into_iter()
+        .find(|(d, _, positive)| *positive && d[axis] > 0.5)
+        .map(|(_, p, _)| p)
+        .expect("the positive axis ball is drawn");
+    assert!(r.app.gnomon_hit(rect, ball).is_some(), "the test point must hit the axis ball");
+    assert!(!App::home_hit(rect, ball), "the axis ball is not the home button");
+    ball
+}
+
+#[test]
+fn a_drag_that_starts_on_the_axis_ball_turns_the_view() {
+    let mut r = Rig::new();
+    r.app.cam.look(0.6, 0.42);
+    r.app.fly = None;
+    let ball = gnomon_ball(&r, 0);
+    let before = (r.app.cam.yaw, r.app.cam.pitch);
+    r.drag(ball, ball + vec2(70.0, 45.0));
+    assert_ne!((r.app.cam.yaw, r.app.cam.pitch), before, "dragging the axis ball must turn the view");
+    assert!(r.app.fly.is_none(), "a drag is not a click: it must not snap to the axis");
+}
+
+#[test]
+fn a_shift_drag_that_starts_on_the_axis_ball_slides_the_view() {
+    let mut r = Rig::new();
+    r.app.cam.look(0.6, 0.42);
+    r.app.fly = None;
+    let ball = gnomon_ball(&r, 1);
+    let before = (r.app.cam.yaw, r.app.cam.pitch);
+    let target = r.app.cam.target;
+    r.mods = egui::Modifiers::SHIFT;
+    r.drag(ball, ball + vec2(60.0, 40.0));
+    r.mods = egui::Modifiers::NONE;
+    assert_eq!((r.app.cam.yaw, r.app.cam.pitch), before, "Shift+drag pans; it does not turn the view");
+    assert_ne!(r.app.cam.target, target, "a Shift+drag on the axis ball slides the view");
+}
+
+#[test]
+fn a_click_on_the_axis_ball_still_snaps_the_view_to_that_axis() {
+    let mut r = Rig::new();
+    r.app.cam.look(0.6, 0.42);
+    r.app.fly = None;
+    let ball = gnomon_ball(&r, 0);
+    let axis = r.app.gnomon_hit(r.app.view_rect, ball).expect("the click is on an axis");
+    let yaw = r.app.cam.yaw;
+    r.click(ball);
+    assert_eq!(r.app.cam.yaw, yaw, "a click snaps by gliding; it must not orbit");
+    let goal = r.app.fly.expect("clicking an axis glides to that view");
+    let pitch = axis[2].clamp(-1.0, 1.0).asin();
+    let want_yaw = if axis[2].abs() > 0.9 { yaw } else { axis[0].atan2(-axis[1]) };
+    assert!((goal.yaw - want_yaw).abs() < 1e-5 && (goal.pitch - pitch).abs() < 1e-5, "goal {:?}", (goal.yaw, goal.pitch));
+    for _ in 0..200 {
+        r.app.step_fly(0.016);
+    }
+    assert!(r.app.fly.is_none(), "the glide finishes");
+    assert!((r.app.cam.yaw - want_yaw).abs() < 1e-3 && (r.app.cam.pitch - pitch).abs() < 1e-3, "the view looks along the clicked axis");
+}
+
+#[test]
+fn a_press_on_the_home_button_never_turns_the_view_and_a_click_goes_home() {
+    let mut r = Rig::new();
+    r.app.cam.look(2.0, -0.4);
+    r.app.fly = None;
+    let home = App::home_centre(r.app.view_rect);
+    assert!(App::home_hit(r.app.view_rect, home));
+    let before = (r.app.cam.yaw, r.app.cam.pitch);
+    r.drag(home, home + vec2(50.0, 30.0));
+    assert_eq!((r.app.cam.yaw, r.app.cam.pitch), before, "the home button is not an orbit handle");
+    assert!(r.app.fly.is_none(), "a press that turns into a drag does not go home");
+    r.click(home);
+    let goal = r.app.fly.expect("a click on the home button glides home");
+    let first = crate::camera::Camera::default();
+    assert_eq!((goal.yaw, goal.pitch), (first.yaw, first.pitch));
+}
+
 #[test]
 fn one_drag_draws_one_pipe_then_the_tool_ends_and_its_nodes_can_be_moved() {
     let mut r = Rig::new();
