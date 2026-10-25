@@ -9,7 +9,7 @@ use egui::{Align2, Color32, RichText, TextureHandle, TextureOptions, Vec2};
 
 use crate::app::App;
 use crate::library::{self, Item};
-use crate::model::{MAX_GROUPS, MAX_SHAPES, Pick};
+use crate::model::{BlendMode, MAX_GROUPS, MAX_SHAPES, Pick};
 use crate::style;
 
 const THUMB: usize = 62;
@@ -328,8 +328,21 @@ pub fn insert(app: &mut App, ctx: &egui::Context, item: &Item) -> bool {
     } else {
         Some(Pick::Group(gi))
     };
+    if item.group.fusion.is_some() {
+        // The existing SDF/GPU smooth union is scene-wide (Melt.mode).
+        // Reuse it rather than introducing another Boolean implementation.
+        app.scene.melt.mode = BlendMode::Smooth;
+        app.scene.melt.amount = 1.0;
+        app.scene.melt.drip = 0.0;
+        app.tab = crate::app::Tab::Shape;
+        app.lib_open = false; // show individual editable children in the scene list
+    }
     app.frame_view(false);
-    app.say(ctx, format!("Added {}", item.name));
+    if item.group.fusion.is_some() {
+        app.say(ctx, format!("Added {}; the whole scene's Melt is now Smooth", item.name));
+    } else {
+        app.say(ctx, format!("Added {}", item.name));
+    }
     true
 }
 
@@ -494,6 +507,25 @@ mod tests {
         let shape = app.scene.shape(1, 0).expect("vase");
         assert!(shape.vase.is_some());
         assert_eq!(shape.kind, Kind::Revolve);
+    }
+
+    #[test]
+    fn fusion_uses_the_existing_library_path_and_restores_smooth_union() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        app.scene.melt.mode = BlendMode::Gooey;
+        app.scene.melt.drip = 8.0;
+        app.scene.melt.amount = 2.0;
+        app.lib_open = true;
+        let item = crate::fusion::sample(6).unwrap();
+        assert!(insert(&mut app, &ctx, &item));
+        assert_eq!(app.scene.groups.last().unwrap().shapes.len(), 6);
+        assert!(app.scene.groups.last().unwrap().fusion.is_some());
+        assert_eq!(app.scene.melt.mode, BlendMode::Smooth);
+        assert_eq!(app.scene.melt.amount, 1.0);
+        assert_eq!(app.scene.melt.drip, 0.0);
+        assert_eq!(app.tab, crate::app::Tab::Shape);
+        assert!(!app.lib_open);
     }
 
     #[test]

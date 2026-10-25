@@ -1,0 +1,37 @@
+name: MeltCAD Smooth Fusion checks
+
+on:
+  pull_request:
+    branches: [easy-layout-and-melt]
+    paths:
+      - 'apps/meltcad/src/**'
+      - 'apps/meltcad/SMOOTH_FUSION.md'
+      - '.github/workflows/meltcad-smooth-fusion.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fusion-tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Linux GUI dependency headers
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-dev libwayland-dev libx11-dev mesa-vulkan-drivers
+      - name: Smooth Fusion tests with timings
+        run: cargo test --locked -p meltcad fusion::tests -- --nocapture
+      - name: Full MeltCAD regression suite
+        run: cargo test --locked -p meltcad
+      - name: Compile Release executable
+        run: cargo build --release --locked -p meltcad

@@ -725,6 +725,22 @@ fn clean_blend(blend: f32) -> f32 {
 /// other inside the big group, and the big group melts with the rest as one piece.
 pub const MAX_DEPTH: u8 = 1;
 
+/// Editor controls for a non-destructive Smooth Fusion preset.
+/// Actual geometry uses each editable Shape's existing SDF blend and position.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SmoothFusion {
+    /// Smooth-union transition width in millimetres (Shape::blend).
+    pub radius_mm: f32,
+    /// 0 = deep overlap, 1 = nearly touching, implemented by changing spacing.
+    pub contact: f32,
+}
+
+impl Default for SmoothFusion {
+    fn default() -> Self {
+        Self { radius_mm: 14.0, contact: 0.38 }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Group {
     pub name: String,
@@ -745,6 +761,9 @@ pub struct Group {
     /// Re-editable Designer Chair parameters; none for ordinary groups and old scenes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub designer_chair: Option<crate::designer_chair::Parameters>,
+    /// Optional Smooth Fusion editor settings (old files omit this field).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fusion: Option<SmoothFusion>,
     /// A number linked copies and patterns find this group by (0 = none; see `Scene::ensure_group_uid`).
     #[serde(default, skip_serializing_if = "is_zero")]
     pub uid: u32,
@@ -811,6 +830,7 @@ impl Group {
             lamp: None,
             designer_chair: None,
             organic_furniture: None,
+            fusion: None,
         }
     }
 }
@@ -1328,6 +1348,10 @@ impl Scene {
             if let Some(p) = &mut g.designer_chair {
                 p.sanitize();
             }
+            if let Some(fusion) = &mut g.fusion {
+                fix(&mut fusion.radius_mm, 0.0, 80.0, 14.0);
+                fix(&mut fusion.contact, 0.0, 1.0, 0.38);
+            }
             if let Some(p) = &mut g.pattern {
                 p.sanitize();
             }
@@ -1339,6 +1363,7 @@ impl Scene {
                 g.organic_furniture = None;
                 // a linked copy shows its source's shapes, not its own
                 g.shapes.clear();
+                g.fusion = None;
             }
             g.shapes.truncate(left);
             left -= g.shapes.len();

@@ -86,7 +86,7 @@ const LABELS: [&str; 15] = [
 
 /// Categories made in Rust (parametric bags, vases, lamps, chairs). They stand after the files in the tabs
 /// and need no parsing, so they are ready at once.
-const EXTRA_LABELS: [&str; 4] = ["バッグ", "花瓶・Vase", "Designer Lamp", "Designer Chair"];
+const EXTRA_LABELS: [&str; 5] = ["バッグ", "花瓶・Vase", "Designer Lamp", "Designer Chair", "Fusion"];
 
 fn extras() -> &'static [Category] {
     static EXTRA: OnceLock<Vec<Category>> = OnceLock::new();
@@ -115,7 +115,7 @@ fn extras() -> &'static [Category] {
             })
             .collect();
         let chairs = crate::designer_chair::presets();
-        let items = [bags, vases, lamps, chairs];
+        let items = [bags, vases, lamps, chairs, crate::fusion::library_category().items];
         EXTRA_LABELS.iter().zip(items).map(|(name, items)| Category { name: (*name).into(), items }).collect()
     })
 }

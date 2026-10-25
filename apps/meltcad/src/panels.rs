@@ -5,7 +5,7 @@ use egui::{Align2, Color32, FontId, Pos2, Rect, RichText, Sense, Stroke, Ui, vec
 
 use crate::app::{App, Tab};
 use crate::materials::{self, Category};
-use crate::model::{BlendMode, Corner, Kind, Light, MAX_LIGHTS, MAX_OUTLINE, MAX_SAVED, Material, Melt, Op, Pick, ROUND_MAX};
+use crate::model::{BlendMode, Corner, Group, Kind, Light, MAX_LIGHTS, MAX_OUTLINE, MAX_SAVED, Material, Melt, Op, Pick, ROUND_MAX};
 use crate::sdf;
 use crate::{glyphs, style};
 
@@ -81,7 +81,8 @@ impl App {
         ui.spacing_mut().item_spacing.y = 2.0;
         let ngroups = self.scene.groups.len();
         // "x12" after a patterned group, "link" after a linked copy (looked up once for the whole list)
-        let badges: Vec<String> = if self.scene.groups.iter().any(|g| g.pattern.is_some() || g.is_linked() || g.piece.is_some()) {
+        let fused = self.scene.groups.iter().any(|g| g.fusion.is_some());
+        let badges: Vec<String> = if fused || self.scene.groups.iter().any(|g| g.pattern.is_some() || g.is_linked() || g.piece.is_some()) {
             let resolved = crate::pattern::resolve(&self.scene);
             (0..ngroups)
                 .map(|gi| {
@@ -91,6 +92,7 @@ impl App {
                         (true, true) => format!("Linked ×{n}"),
                         (true, false) => "Linked".to_string(),
                         (false, true) => format!("×{n}"),
+                        _ if g.fusion.is_some() => format!("Fusion · {}", g.shapes.len()),
                         _ if g.piece.is_some() => "File".to_string(),
                         _ => String::new(),
                     }
@@ -509,6 +511,35 @@ impl App {
         }
     }
 
+    /// Group-level editor for editable Smooth Fusion primitives. The old smooth
+    /// union kernel handles rendering; only shape.blend/positions are changed here.
+    fn fusion_controls(ui: &mut Ui, group: &mut Group) {
+        let Some(settings) = group.fusion else { return };
+        style::title(ui, "Smooth Fusion（なめらか合体）");
+        ui.label(RichText::new(format!("{}個の形が別々に編集できます", group.shapes.len())).size(12.0).color(style::DIM));
+        let mut radius = settings.radius_mm;
+        if style::labeled_slider(
+            ui, "接合部の丸み", &mut radius, 0.0..=80.0,
+            "Smooth Unionの丸み（mm）。0mmは普通のBoolean Unionです",
+        ) {
+            crate::fusion::set_radius(group, radius);
+        }
+        let mut contact = settings.contact;
+        if style::labeled_slider(
+            ui, "融合範囲", &mut contact, 0.0..=1.0,
+            "0=深く重ねて完全融合、1=離して軽い接触。位置のみ更新、各形の回転とサイズは維持",
+        ) {
+            crate::fusion::set_contact(group, contact);
+        }
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("完全融合").size(11.0).color(style::DIM));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label(RichText::new("軽い接触").size(11.0).color(style::DIM));
+            });
+        });
+        ui.label(RichText::new("画面で形を直接ドラッグできます。形を個別に選ぶと位置・回転・大きさ・色を編集できます。").size(11.5).color(style::DIM));
+    }
+
     fn group_inspector(&mut self, ui: &mut Ui, g: usize) {
         style::title(ui, "Group");
         let parent = self.scene.parent_of(g).and_then(|p| self.scene.groups.get(p)).map(|p| p.name.clone());
@@ -547,6 +578,24 @@ impl App {
         }
         if let Some(gr) = self.scene.groups.get_mut(g) {
             crate::designer_bag::inspector(ui, gr);
+        }
+        if let Some(gr) = self.scene.groups.get_mut(g) {
+            Self::fusion_controls(ui, gr);
+        }
+        if self.scene.groups.get(g).is_some_and(|group| group.fusion.is_some()) {
+            if self.scene.melt.mode != BlendMode::Smooth || self.scene.melt.amount != 1.0 || self.scene.melt.drip != 0.0 {
+                ui.colored_label(style::CUT, "The scene's Melt settings changed, so Smooth Fusion looks different");
+                if ui.button("Back to the Smooth Fusion melt").clicked() {
+                    self.scene.melt.mode = BlendMode::Smooth;
+                    self.scene.melt.amount = 1.0;
+                    self.scene.melt.drip = 0.0;
+                }
+            }
+            if ui.button("Edit the parts").on_hover_text("Selects the first shape; pick the others in the scene list").clicked()
+                && !self.scene.groups[g].shapes.is_empty()
+            {
+                self.sel = Some(Pick::Shape(g, 0));
+            }
         }
         let other_shapes = self.scene.shape_count().saturating_sub(self.scene.groups.get(g).map_or(0, |gr| gr.shapes.len()));
         if let Some(gr) = self.scene.groups.get_mut(g)

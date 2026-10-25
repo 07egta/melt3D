@@ -52,6 +52,7 @@ mod import_inflate;
 mod import_mesh;
 #[cfg(test)]
 mod input_tests;
+mod fusion;
 mod library;
 mod library_ui;
 mod marquee;
