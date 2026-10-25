@@ -44,6 +44,7 @@ pub enum Action {
     ImportSvg,
     ImportMesh,
     OpenPrecise,
+    OrganicBlob,
     FrameAll,
     FrameSelection,
     TogglePerspective,
@@ -192,6 +193,7 @@ pub fn entries() -> Vec<Entry> {
         cmd("Export PNG", "export png image screenshot がぞう 画像で書き出す", Action::ExportPng),
         cmd("Print Check", "print check volume size 体積 おおきさ プリントチェック", Action::PrintCheck),
         cmd("Import SVG", "svg import いんぽーと SVGを読み込む", Action::ImportSvg),
+        cmd("Organic Blob", "organic blob metaball soft smooth puffy ぷっくり ぶろぶ ぼこぼこ 有機 生成 preset プリセット", Action::OrganicBlob),
         cmd("Import Mesh", "mesh stl obj 3mf ply glb import めっしゅ よみこむ とりこむ 取り込み メッシュを読み込む", Action::ImportMesh),
         cmd("SolidCraft で精密に作る", "solid solidcraft precise cad 精密 ソリッド", Action::OpenPrecise),
         cmd("Frame All", "frame all home ぜんたい 全体を見る", Action::FrameAll),
@@ -629,6 +631,16 @@ mod tests {
     fn top(q: &str) -> Option<Action> {
         let all = entries();
         search(&all, q, 5).first().and_then(|i| all.get(*i)).map(|e| e.action)
+    }
+
+    #[test]
+    fn organic_blob_preset_is_discoverable_in_japanese_and_english() {
+        let e = entries();
+        let is_blob = |q: &str| search(&e, q, 10).iter()
+            .any(|i| matches!(e[*i].action, Action::OrganicBlob));
+        assert!(is_blob("Organic Blob"));
+        assert!(is_blob("ぷっくり"));
+        assert!(is_blob("メタボール") || is_blob("metaball"));
     }
 
     #[test]

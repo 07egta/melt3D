@@ -70,6 +70,7 @@ mod organic_vase;
 mod palette_prefs;
 mod organic_furniture;
 mod organic_tube;
+mod organic_blob;
 mod panels;
 mod pattern;
 mod pattern_ui;

@@ -2132,6 +2132,11 @@ impl App {
                                         }
                                     }
                                     ui.separator();
+                                    if ui.button("Organic blob…").on_hover_text("A smooth irregular shape from a seed and sliders").clicked() {
+                                        crate::organic_blob::open(&ctx);
+                                        ui.close();
+                                    }
+                                    ui.separator();
                                     ui.label(egui::RichText::new("Organic tube").size(12.0).color(style::DIM));
                                     for preset in crate::organic_tube::Preset::ALL {
                                         if ui.button(preset.label()).on_hover_text("Points, thickness and section stay editable afterwards").clicked() {
@@ -2821,6 +2826,7 @@ impl App {
             crate::svg_dialog::update(self, &ctx);
             crate::precise::transfer_card(self, &ctx);
             crate::puffy_text_ui::update(self, &ctx);
+            crate::organic_blob::update(self, &ctx);
             crate::mesh_dialog::update(self, &ctx);
             crate::array::update(self, &ctx);
             crate::export_dialog::update(self, &ctx);
