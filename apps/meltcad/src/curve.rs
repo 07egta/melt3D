@@ -343,6 +343,7 @@ pub fn half_extent_shape(shape: &crate::model::Shape) -> V3 {
     h
 }
 
+#[cfg(test)]
 /// A box around the points, grown by their largest radius: (low corner, high corner).
 pub fn bounds(points: &[[f32; 4]]) -> (V3, V3) {
     bounds_profile(points, false)
@@ -370,6 +371,7 @@ pub fn bounds_profile(points: &[[f32; 4]], squircle: bool) -> (V3, V3) {
     ([lo[0] - g, lo[1] - g, lo[2] - g], [hi[0] + g, hi[1] + g, hi[2] + g])
 }
 
+#[cfg(test)]
 /// One bounding sphere (centre, radius) for every `GROUP_SEGMENTS` segments of the resampled
 /// points, thick enough to hold the tube there: every round cone of the group lies inside it, so
 /// the distance to the group is at least the distance to its sphere, and the tube has a point
@@ -513,6 +515,7 @@ fn joint_min(a: f32, b: f32, k: f32) -> f32 {
     b + (a - b) * h - k * h * (1.0 - h)
 }
 
+#[cfg(test)]
 /// The rounded path. Each adjacent pair is softened independently, so a long chain never grows
 /// with its number of nodes. Unrelated spans and straight joins keep their exact round-cone SDF.
 pub fn smooth_tube(points: &[[f32; 4]], q: V3, flat: bool, closed: bool) -> f32 {
@@ -544,6 +547,7 @@ pub fn smooth_tube_section(points: &[[f32; 4]], q: V3, closed: bool, aspect: f32
     d
 }
 
+#[cfg(test)]
 /// The two half-spaces that cut a tube flat at its first and last point (positive beyond an end).
 fn end_cut(points: &[[f32; 4]], q: V3) -> f32 {
     end_cut_amount(points, q, 1.0)
