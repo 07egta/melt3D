@@ -6,7 +6,6 @@ use crate::library::{Category, Item};
 use crate::model::{Group, Kind, Material, Op, Shape, SmoothFusion};
 
 pub const COUNTS: [usize; 6] = [3, 4, 5, 6, 7, 8];
-const DEFAULT_CONTACT: f32 = 0.38;
 
 /// Relative centroid spacing. The two endpoints approximate a fully merged
 /// sculpture and a gently touching arrangement, depending on individual radii.
@@ -40,8 +39,8 @@ pub fn set_contact(group: &mut Group, contact: f32) {
     let n = group.shapes.len() as f32;
     let centre: [f32; 3] = [0, 1, 2].map(|a| group.shapes.iter().map(|s| f64::from(s.pos[a])).sum::<f64>() as f32 / n);
     for s in &mut group.shapes {
-        for a in 0..3 {
-            s.pos[a] = (centre[a] + (s.pos[a] - centre[a]) * ratio).clamp(-5000.0, 5000.0);
+        for (p, c) in s.pos.iter_mut().zip(centre) {
+            *p = (c + (*p - c) * ratio).clamp(-5000.0, 5000.0);
         }
     }
     f.contact = contact;
@@ -124,7 +123,7 @@ pub fn sample(count: usize) -> Option<Item> {
                 ball(&mut g, x, y, z, 18.0 + (i % 3) as f32);
             }
         }
-        _ => unreachable!(),
+        _ => return None,
     }
     Some(Item {
         name: name.into(),
@@ -141,13 +140,6 @@ pub fn library_category() -> Category {
         name: "Fusion".into(),
         items: COUNTS.into_iter().filter_map(sample).collect(),
     }
-}
-
-//// Add a sample through the existing library insertion route, so capacity limits,
-//// scene selection, framing and undo handling are exactly the usual ones.
-pub fn insert(app: &mut crate::app::App, ctx: &egui::Context, count: usize) -> bool {
-    let Some(item) = sample(count) else { return false };
-    crate::library_ui::insert(app, ctx, &item)
 }
 
 #[cfg(test)]
