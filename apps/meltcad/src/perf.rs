@@ -283,7 +283,8 @@ pub fn shape_radius(s: &Shape) -> f32 {
     }
     // the swell is made in the shape's own units and grows with its scale (#96)
     let swell = s.face_melt.parts().map_or(0.0, |m| m.2.abs() * top);
-    let r = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt() * 1.08 + 1.0 + swell;
+    let ripple = s.ripple.map_or(0.0, |r| if r.preserve_outline { 0.0 } else { r.height * top });
+    let r = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt() * 1.08 + 1.0 + swell + ripple;
     if r.is_finite() { r.min(1.0e4) } else { 1.0e4 }
 }
 

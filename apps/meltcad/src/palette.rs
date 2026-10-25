@@ -17,6 +17,7 @@ pub enum Action {
     OrganicTube(crate::organic_tube::Preset),
     MeltPreset,
     AddGroup,
+    Ripple(crate::ripple::RippleMode),
     /// (category, item)
     Insert(usize, usize),
     Undo,
@@ -165,6 +166,9 @@ pub fn entries() -> Vec<Entry> {
         }
     }
     v.extend([
+        cmd("Ripple: Concentric", "ripple 波打つ 表面 同心円 リップル concentric", Action::Ripple(crate::ripple::RippleMode::Concentric)),
+        cmd("Ripple: Linear", "ripple wave 直線 波紋 リップル linear", Action::Ripple(crate::ripple::RippleMode::Linear)),
+        cmd("Ripple: Random", "ripple random 波 ランダム リップル", Action::Ripple(crate::ripple::RippleMode::Random)),
         cmd("Melt (dripping shape)", "melt preset syrup dripping viscous blob みずあめ とろける たれる", Action::MeltPreset),
         cmd("Group", "group new まとめる グループを作る", Action::AddGroup),
         cmd("Undo", "undo もどす 元に戻す", Action::Undo),
@@ -350,6 +354,17 @@ impl App {
             Action::AddShape(k) => self.add_shape(ctx, k),
             Action::OrganicTube(preset) => self.add_organic_tube(ctx, preset),
             Action::AddGroup => self.add_group(),
+            Action::Ripple(mode) => {
+                if let Some(crate::model::Pick::Shape(g, s)) = self.sel {
+                    if let Some(sh) = self.scene.shape_mut(g, s) { sh.ripple = Some(crate::ripple::Ripple { mode, ..Default::default() }); }
+                } else {
+                    self.add_shape(ctx, Kind::Box);
+                    if let Some(crate::model::Pick::Shape(g, s)) = self.sel {
+                        if let Some(sh) = self.scene.shape_mut(g, s) { sh.ripple = Some(crate::ripple::Ripple { mode, ..Default::default() }); }
+                    }
+                }
+                self.tab = super::Tab::Shape;
+            },
             Action::Insert(c, i) => {
                 if let Some(item) = library::all().get(c).and_then(|c| c.items.get(i)) {
                     crate::library_ui::insert(self, ctx, item);

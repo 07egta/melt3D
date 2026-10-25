@@ -226,7 +226,8 @@ fn reach_of(s: &Shape) -> f64 {
         _ => s.local_half().iter().map(|v| f64::from(*v) * f64::from(*v)).sum::<f64>().sqrt(),
     };
     let scale = s.scale.iter().map(|v| f64::from(*v)).fold(0.0_f64, f64::max);
-    let r = local * scale;
+    let extra = s.ripple.map_or(0.0, |p| if p.preserve_outline { 0.0 } else { f64::from(p.height) * scale });
+    let r = local * scale + extra;
     // hollow shapes and rounded corners never reach farther than the solid
     if r.is_finite() { r } else { 0.0 }
 }

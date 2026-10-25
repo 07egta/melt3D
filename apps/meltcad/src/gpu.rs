@@ -36,7 +36,7 @@ pub const ROW: usize = 1024;
 const G_STRIDE: usize = 3;
 const B_STRIDE: usize = 2;
 const I_STRIDE: usize = 4;
-const S_STRIDE: usize = 16;
+const S_STRIDE: usize = 19;
 /// Outline points the lists hold (two points per vec4) and path nodes (one per vec4).
 pub const POLY_PTS: usize = 65536;
 /// Path nodes one curve takes: its two box records, `curve::MAX_POINTS` points and one bounding
@@ -551,6 +551,11 @@ fn pack_shape(s: &crate::model::Shape, out: &mut Vec<f32>, poly: &mut Vec<f32>, 
     push(out, [p.shell, p.poly_limit, p.poly_orient, if p.chamfer && p.round > 0.0 { 1.0 } else { 0.0 }]);
     push(out, [m.color2[0], m.color2[1], m.color2[2], if m.has_gradient() { m.gradient } else { 0.0 }]);
     push(out, [f32::from(m.grad_axis.min(2)) + if m.grad_local { 3.0 } else { 0.0 }, m.grad_soft, m.grad_from, m.grad_to]);
+    let r = s.ripple.unwrap_or_default();
+    push(out, [if s.ripple.is_some() { r.mode.id() } else { 0.0 }, r.height, r.spacing, f32::from(r.count)]);
+    push(out, [r.direction, r.edge_fade, if r.preserve_outline { 1.0 } else { 0.0 }, f32::from(r.detail)]);
+    let h = s.local_half();
+    push(out, [h[0], h[1], h[2], 0.0]);
 }
 
 /// A curve's smoothed points go into the path list behind two header entries (the low and high
