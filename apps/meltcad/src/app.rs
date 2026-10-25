@@ -118,6 +118,8 @@ pub struct App {
     pub(crate) precise_services: Option<solidcraft_ui_egui::Services>,
     pub(crate) precise_prefs: Option<String>,
     pub control: Option<std::sync::mpsc::Receiver<crate::control::Request>>,
+    /// A picture requested over the control channel: drawn and written on a worker.
+    render_job: Option<crate::render_job::Job>,
     /// The shape under the mouse.
     pub hover: Option<Pick>,
     /// Where the camera is gliding to.
@@ -228,6 +230,7 @@ impl App {
             view_rect: egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0)),
             capture: None,
             control: None,
+            render_job: None,
             an: Default::default(),
             precise: None,
             precise_services: None,
@@ -637,6 +640,7 @@ impl App {
             && (self.native_job.is_some()
                 || self.queued_open.is_some()
                 || self.after_save.is_some()
+                || self.render_job.is_some()
                 || self.an.gif_running()
                 || crate::work_budget::is_busy(ctx))
         {
@@ -2422,6 +2426,8 @@ impl eframe::App for App {
         let _ = ctx;
     }
     fn on_exit(&mut self) {
+        // A control picture that has not been renamed yet must not be published.
+        self.render_job = None;
         if let Some(p) = self.precise.as_mut() {
             solidcraft_ui_egui::agent_chat::shutdown(&mut p.app);
             solidcraft_ui_egui::save_job::tick(&mut p.app, true);
@@ -2494,6 +2500,16 @@ impl App {
                 continue;
             }
             let name = req.cmd.get("cmd").and_then(serde_json::Value::as_str);
+            if matches!(name, Some("render" | "anim.render")) {
+                // Drawing four views or a whole animation can take longer than a
+                // frame: do it on a worker and answer when the complete file exists.
+                let crate::control::Request { cmd, reply } = req;
+                if let Err(e) = self.start_control_picture(ctx, &cmd, reply) {
+                    self.say(ctx, e);
+                }
+                ran = true;
+                continue;
+            }
             let read_only = matches!(name, Some("commands" | "scene.get" | "scene.summary" | "render" | "anim.get" | "anim.render"));
             let busy = self.precise_on || self.scene_edit_in_progress() || ctx.egui_wants_keyboard_input() || ctx.input(|i| i.pointer.any_down());
             let result = if !read_only && busy {
@@ -2552,6 +2568,73 @@ impl App {
         }
     }
 
+    /// A `render` / `anim.render` request from `--control`: copy the scene here (cheap next
+    /// to drawing) and let a worker draw and write the file. The answer goes out when the
+    /// complete picture is on disk, so the window keeps drawing frames meanwhile.
+    fn start_control_picture(
+        &mut self,
+        ctx: &egui::Context,
+        cmd: &serde_json::Value,
+        reply: std::sync::mpsc::Sender<Result<serde_json::Value, String>>,
+    ) -> Result<(), String> {
+        if self.render_job.is_some() {
+            let e = "A picture is already being drawn; wait for it to finish".to_owned();
+            let _ = reply.send(Err(e.clone()));
+            return Err(e);
+        }
+        let parsed = (|| -> Result<(std::path::PathBuf, crate::render_job::Work), String> {
+            let kind = cmd.get("cmd").and_then(serde_json::Value::as_str).ok_or("Missing \"cmd\"")?;
+            let path = cmd.get("path").and_then(serde_json::Value::as_str).filter(|p| !p.is_empty()).ok_or("Missing \"path\"")?;
+            let size = cmd.get("size").and_then(serde_json::Value::as_u64);
+            let work = if kind == "render" {
+                crate::render_job::Work::Sheet { size: size.unwrap_or(220).clamp(40, 600) as usize }
+            } else {
+                crate::render_job::Work::Animation {
+                    size: size.unwrap_or(240).clamp(64, 640) as usize,
+                    gpu: cmd.get("gpu").and_then(serde_json::Value::as_bool).unwrap_or(false),
+                }
+            };
+            Ok((std::path::PathBuf::from(path), work))
+        })();
+        let (path, work) = match parsed {
+            Ok(parsed) => parsed,
+            Err(e) => {
+                let _ = reply.send(Err(e.clone()));
+                return Err(e);
+            }
+        };
+        // The worker owns its copy: edits made while the picture is drawn cannot mix into it.
+        let scene = self.scene.clone();
+        match crate::render_job::start(ctx, scene, path, work, reply.clone()) {
+            Ok(job) => {
+                self.render_job = Some(job);
+                ctx.request_repaint();
+                Ok(())
+            }
+            Err(e) => {
+                let _ = reply.send(Err(e.clone()));
+                Err(e)
+            }
+        }
+    }
+
+    /// Collect a finished control picture and forward its answer to the waiting client.
+    fn poll_render_job(&mut self, ctx: &egui::Context) {
+        let result = self.render_job.as_mut().and_then(crate::render_job::Job::poll);
+        if let Some(result) = result {
+            self.render_job = None;
+            match result {
+                Ok(value) => {
+                    let path = value.get("png").or_else(|| value.get("gif")).and_then(serde_json::Value::as_str).unwrap_or_default();
+                    self.say(ctx, format!("Saved {path}"));
+                }
+                Err(e) => self.say(ctx, format!("Picture not saved: {e}")),
+            }
+        } else if self.render_job.is_some() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(120));
+        }
+    }
+
     /// One frame of the window (what `eframe::App::ui` does; a method of its own so that tests can run it).
     pub(crate) fn frame_body(&mut self, ui: &mut Ui) {
         static FIRST: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -2572,6 +2655,7 @@ impl App {
         let frame_began = std::time::Instant::now();
         self.perf.stats.begin(ctx.input(|i| i.time));
         self.sync_precise_transfer(&ctx);
+        self.poll_render_job(&ctx);
         self.run_control(&ctx);
         self.update_native_job(&ctx);
         self.handle_close_request(&ctx);
@@ -3757,5 +3841,112 @@ mod title_tests {
         assert_eq!(clean_title("..."), "");
         assert_eq!(clean_title("\n\t"), "");
         assert_eq!(clean_title(&"x".repeat(500)).chars().count(), 80);
+    }
+
+    fn picture_dir(name: &str) -> std::path::PathBuf {
+        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
+        let dir = std::env::temp_dir().join(format!("meltcad_picture_{name}_{stamp}"));
+        std::fs::create_dir_all(&dir).expect("picture directory");
+        dir
+    }
+
+    fn wait_for_picture(app: &mut super::App, ctx: &egui::Context) {
+        for _ in 0..1200 {
+            app.poll_render_job(ctx);
+            if app.render_job.is_none() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        panic!("control picture worker did not finish");
+    }
+
+    #[test]
+    fn a_control_picture_is_drawn_on_a_worker_while_the_frame_loop_keeps_running() {
+        let dir = picture_dir("worker");
+        let path = dir.join("sheet.png");
+        let release = crate::render_job::test_gate::hold(&path);
+        let ctx = egui::Context::default();
+        let mut app = super::App::new(true, None);
+        let (tx, rx) = std::sync::mpsc::channel();
+        let (reply, answer) = std::sync::mpsc::channel();
+        app.control = Some(rx);
+        tx.send(crate::control::Request { cmd: serde_json::json!({"cmd": "render", "path": path.display().to_string(), "size": 64}), reply })
+            .expect("queue the request");
+
+        app.run_control(&ctx);
+        assert!(app.render_job.is_some(), "the request returned while the picture is still being made");
+        assert!(
+            matches!(answer.try_recv(), Err(std::sync::mpsc::TryRecvError::Empty)),
+            "the window thread must not answer before a complete picture exists"
+        );
+
+        // The held worker cannot draw unless another thread runs: a whole frame still advances.
+        let input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(960.0, 600.0))), ..Default::default() };
+        let mut drew = 0;
+        let mut output = ctx.run_ui(input, |ui| {
+            drew += 1;
+            app.frame_body(ui);
+        });
+        output.textures_delta.clear();
+        assert_eq!(drew, 1, "a frame was drawn");
+        assert!(app.render_job.is_some(), "the frame finished while the picture was still being drawn");
+        assert!(!path.exists(), "nothing is written before the picture is complete");
+        assert!(matches!(answer.try_recv(), Err(std::sync::mpsc::TryRecvError::Empty)), "still no answer");
+
+        release.send(()).expect("release the worker");
+        wait_for_picture(&mut app, &ctx);
+        let answer = answer.recv_timeout(std::time::Duration::from_secs(10)).expect("the request was answered").expect("picture saved");
+        assert_eq!(answer["png"], serde_json::json!(path.display().to_string()));
+        let bytes = std::fs::read(&path).expect("picture file");
+        assert!(bytes.starts_with(&[137, 80, 78, 71, 13, 10, 26, 10]), "a complete PNG is on disk");
+        assert_eq!(std::fs::read_dir(&dir).expect("list").count(), 1, "no staged file is left");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_stopped_control_picture_keeps_the_previous_file_and_leaves_no_partial_output() {
+        let dir = picture_dir("stopped");
+        let path = dir.join("sheet.png");
+        std::fs::write(&path, b"previous picture").expect("previous output");
+        let release = crate::render_job::test_gate::hold(&path);
+        let ctx = egui::Context::default();
+        let mut app = super::App::new(true, None);
+        let (tx, rx) = std::sync::mpsc::channel();
+        let (reply, answer) = std::sync::mpsc::channel();
+        app.control = Some(rx);
+        tx.send(crate::control::Request { cmd: serde_json::json!({"cmd": "render", "path": path.display().to_string(), "size": 40}), reply })
+            .expect("queue the request");
+        app.run_control(&ctx);
+        app.render_job.as_ref().expect("worker started").cancel();
+        release.send(()).expect("release the worker");
+        wait_for_picture(&mut app, &ctx);
+
+        let result = answer.recv_timeout(std::time::Duration::from_secs(10)).expect("the request was answered");
+        assert!(result.is_err(), "a stopped picture is reported as an error");
+        assert_eq!(std::fs::read(&path).expect("old output"), b"previous picture", "the previous picture is untouched");
+        assert_eq!(std::fs::read_dir(&dir).expect("list").count(), 1, "no staged partial file is left");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_failed_control_picture_writes_nothing() {
+        let dir = picture_dir("failed");
+        let path = dir.join("missing").join("sheet.png");
+        let ctx = egui::Context::default();
+        let mut app = super::App::new(true, None);
+        let (tx, rx) = std::sync::mpsc::channel();
+        let (reply, answer) = std::sync::mpsc::channel();
+        app.control = Some(rx);
+        tx.send(crate::control::Request { cmd: serde_json::json!({"cmd": "render", "path": path.display().to_string(), "size": 40}), reply })
+            .expect("queue the request");
+        app.run_control(&ctx);
+        wait_for_picture(&mut app, &ctx);
+
+        let result = answer.recv_timeout(std::time::Duration::from_secs(10)).expect("the request was answered");
+        assert!(result.is_err(), "a write failure is reported");
+        assert!(!path.exists(), "a failed picture is not published");
+        assert_eq!(std::fs::read_dir(&dir).expect("list").count(), 0, "no temporary output is left");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
