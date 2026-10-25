@@ -9,7 +9,8 @@ use std::time::Instant;
 use crate::model::Scene;
 
 // Prevent an untrusted design file from allocating an unlimited JSON buffer and parsed copy.
-pub const MAX_DOCUMENT_BYTES: usize = 512 * 1024 * 1024;
+// Saving uses the reader's limit too: a larger file here could never be opened again.
+pub const MAX_DOCUMENT_BYTES: usize = crate::recovery::MAX_PROJECT_BYTES as usize;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
@@ -40,6 +41,12 @@ fn cancelled(state: &AtomicU8) -> bool {
 
 fn check_cancel(state: &AtomicU8) -> Result<(), String> {
     if cancelled(state) { Err(crate::export_mesh::CANCELLED.into()) } else { Ok(()) }
+}
+
+/// Would the reader refuse a serialized document of this size? Save must refuse it first,
+/// or it publishes a file the app cannot open again.
+fn too_large_to_publish(bytes: usize) -> bool {
+    bytes > MAX_DOCUMENT_BYTES
 }
 
 impl Job {
@@ -82,8 +89,8 @@ impl Job {
         Self::spawn(ctx, Kind::Save, base_revision, move |state, progress| {
             check_cancel(state)?;
             let text = scene.try_to_json()?;
-            if text.len() > MAX_DOCUMENT_BYTES {
-                return Err("The design is too large (max 512 MiB)".into());
+            if too_large_to_publish(text.len()) {
+                return Err(format!("The design is too large (max {} MiB)", MAX_DOCUMENT_BYTES / (1024 * 1024)));
             }
             progress.store(450, Ordering::Relaxed);
             check_cancel(state)?;
@@ -196,6 +203,14 @@ mod tests {
         };
         assert_eq!(error, crate::export_mesh::CANCELLED);
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn save_never_publishes_more_than_the_reader_accepts() {
+        // The reader and the recovery writer stop at 128 MiB, so a larger save limit would
+        // publish a design this app can never open again.
+        assert!(!too_large_to_publish(128 * 1024 * 1024));
+        assert!(too_large_to_publish(128 * 1024 * 1024 + 1));
     }
 
     #[test]

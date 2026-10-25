@@ -13,7 +13,9 @@ use serde::{Deserialize, Serialize};
 use crate::model::Scene;
 
 pub const INTERVAL: Duration = Duration::from_secs(30);
-const MAX_FILE_BYTES: u64 = 128 * 1024 * 1024;
+/// The most a project file may hold when it is read *or* written. Saving must never publish a
+/// file this app refuses to open again (recovery and Open share this bound).
+pub const MAX_PROJECT_BYTES: u64 = 128 * 1024 * 1024;
 const FORMAT_VERSION: u32 = 1;
 static NEXT_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -47,12 +49,12 @@ fn size_error() -> io::Error {
 
 fn read_limited(path: &Path) -> io::Result<Vec<u8>> {
     let file = File::open(path)?;
-    if file.metadata()?.len() > MAX_FILE_BYTES {
+    if file.metadata()?.len() > MAX_PROJECT_BYTES {
         return Err(size_error());
     }
     let mut bytes = Vec::new();
-    file.take(MAX_FILE_BYTES + 1).read_to_end(&mut bytes)?;
-    if bytes.len() as u64 > MAX_FILE_BYTES {
+    file.take(MAX_PROJECT_BYTES + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_PROJECT_BYTES {
         return Err(size_error());
     }
     Ok(bytes)
@@ -77,7 +79,7 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
 }
 
 fn atomic_write_with<F: FnOnce(&Path) -> io::Result<()>>(path: &Path, bytes: &[u8], before_rename: F) -> io::Result<()> {
-    if bytes.is_empty() || bytes.len() as u64 > MAX_FILE_BYTES {
+    if bytes.is_empty() || bytes.len() as u64 > MAX_PROJECT_BYTES {
         return Err(size_error());
     }
     let parent = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or_else(|| Path::new("."));
