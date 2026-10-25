@@ -243,6 +243,55 @@ fn inside(poly: &[(f64, f64)], pt: (f64, f64)) -> bool {
     c
 }
 
+/// The part of `subject` inside the convex polygon `clip` (Sutherland–Hodgman). The result can be
+/// empty or a line when the outline only touches the region.
+fn clip_polygon(subject: &[(f64, f64)], clip: &[(f64, f64)]) -> Vec<(f64, f64)> {
+    if clip.len() < 3 {
+        return subject.to_vec();
+    }
+    let sign = if area(clip) < 0.0 { -1.0 } else { 1.0 };
+    let mut out = subject.to_vec();
+    for i in 0..clip.len() {
+        if out.is_empty() {
+            break;
+        }
+        let a = clip[i];
+        let b = clip[(i + 1) % clip.len()];
+        // Positive on the inside of this edge; the sign makes the test independent of winding.
+        let side = |p: (f64, f64)| sign * ((b.0 - a.0) * (p.1 - a.1) - (b.1 - a.1) * (p.0 - a.0));
+        let mut next = Vec::with_capacity(out.len() + 4);
+        for j in 0..out.len() {
+            let p = out[j];
+            let q = out[(j + 1) % out.len()];
+            let (sp, sq) = (side(p), side(q));
+            let (pin, qin) = (sp >= 0.0, sq >= 0.0);
+            if pin {
+                next.push(p);
+            }
+            if pin != qin {
+                let d = sp - sq;
+                if d != 0.0 {
+                    let t = (sp / d).clamp(0.0, 1.0);
+                    next.push((p.0 + (q.0 - p.0) * t, p.1 + (q.1 - p.1) * t));
+                }
+            }
+        }
+        out = next;
+    }
+    // A corner exactly on the clip edge can be emitted twice: drop repeats so simplify() sees a
+    // clean outline.
+    let mut clean: Vec<(f64, f64)> = Vec::with_capacity(out.len());
+    for p in out {
+        if clean.last().is_none_or(|q| (q.0 - p.0).abs() > 1e-9 || (q.1 - p.1).abs() > 1e-9) {
+            clean.push(p);
+        }
+    }
+    if clean.len() > 1 && clean.first().zip(clean.last()).is_some_and(|(a, b)| (a.0 - b.0).abs() <= 1e-9 && (a.1 - b.1).abs() <= 1e-9) {
+        clean.pop();
+    }
+    clean
+}
+
 /// A point that is surely inside the outline (even a concave one).
 fn interior_point(p: &[(f64, f64)]) -> (f64, f64) {
     let n = p.len().max(1) as f64;
@@ -1038,6 +1087,8 @@ struct State {
     /// The CSS `color` property, which `fill="currentColor"` means.
     current: Option<[f32; 3]>,
     current_fill: bool,
+    /// The visible part of the nested `<svg>` viewports above this element, in document coordinates.
+    clip: Option<Vec<(f64, f64)>>,
 }
 
 /// Names whose contents are never drawn by us.
@@ -1114,6 +1165,7 @@ fn walk(src: &str, tol: Option<f64>, ids: &HashMap<&str, (usize, usize)>, limite
         color: None,
         current: None,
         current_fill: false,
+        clip: None,
     };
     walk_part(src, src, tol, ids, &mut budget, &mut out, initial, None, &mut Vec::new());
     *limited |= budget.limited;
@@ -1165,6 +1217,7 @@ fn walk_part<'a>(
         }
         let name = tag.name.as_str();
         let reference_root = first && reference_viewport.is_some();
+        let outermost = first && reference_viewport.is_none();
         first = false;
         let hide = tag.prop("display").is_some_and(|v| v == "none") || tag.prop("opacity").and_then(opacity).is_some_and(|o| o <= 0.0);
         if (skipped(name) && !(reference_root && name == "symbol")) || hide {
@@ -1188,6 +1241,21 @@ fn walk_part<'a>(
         if name == "svg" || (reference_root && name == "symbol") {
             if name == "svg" {
                 xf = xf.mul(&Affine([1.0, 0.0, 0.0, 1.0, tag.len("x").unwrap_or(0.0), tag.len("y").unwrap_or(0.0)]));
+            }
+            // A nested viewport (or a symbol/template shown by <use>) clips what it shows. The
+            // outermost <svg> is the picture itself, so it has no viewport above it to clip to.
+            if !outermost && clips_viewport(&tag) {
+                let [uw, uh] = reference_viewport.unwrap_or([None, None]);
+                let w = if reference_root { uw.or_else(|| tag.len("width")) } else { tag.len("width") };
+                let h = if reference_root { uh.or_else(|| tag.len("height")) } else { tag.len("height") };
+                if let (Some(w), Some(h)) = (w, h)
+                    && let Some(rect) = view_rect(&xf, w, h)
+                {
+                    st.clip = Some(match st.clip.take() {
+                        Some(old) => clip_polygon(&old, &rect),
+                        None => rect,
+                    });
+                }
             }
             xf = xf.mul(&root_transform(&tag, if reference_root { reference_viewport } else { None }));
         }
@@ -1285,7 +1353,21 @@ fn walk_part<'a>(
                     }
                 }
                 // Do not retain only the beginning of a compound path: later subpaths may be holes.
-                let polys = if pen.budget.limited { Vec::new() } else { std::mem::take(&mut pen.out) };
+                let polys = if pen.budget.limited {
+                    Vec::new()
+                } else {
+                    let drawn = std::mem::take(&mut pen.out);
+                    match st.clip.as_deref() {
+                        None => drawn,
+                        Some(clip) => drawn
+                            .into_iter()
+                            .filter_map(|p| {
+                                let inside = clip_polygon(&p, clip);
+                                (inside.len() >= 3).then_some(inside)
+                            })
+                            .collect(),
+                    }
+                };
                 if !polys.is_empty() {
                     out.push(Raw { polys, evenodd: st.evenodd, color: st.color });
                 }
@@ -1304,6 +1386,20 @@ fn walk_part<'a>(
             }
         }
     }
+}
+
+/// The `<svg>` viewport rectangle (width × height in its own coordinates) in document space.
+fn view_rect(xf: &Affine, w: f64, h: f64) -> Option<Vec<(f64, f64)>> {
+    if !(w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0) {
+        return None;
+    }
+    let pts: Vec<(f64, f64)> = [(0.0, 0.0), (w, 0.0), (w, h), (0.0, h)].iter().map(|&(x, y)| xf.apply(x, y)).collect();
+    pts.iter().all(|p| p.0.is_finite() && p.1.is_finite() && p.0.abs() < 1e12 && p.1.abs() < 1e12).then_some(pts)
+}
+
+/// A nested viewport clips by default; `overflow="visible"` shows the geometry outside it.
+fn clips_viewport(tag: &Tag) -> bool {
+    !tag.prop("overflow").is_some_and(|v| v.trim().eq_ignore_ascii_case("visible"))
 }
 
 /// The matrix from the `<svg>` element's viewBox to its width and height (px).
@@ -1889,6 +1985,31 @@ mod tests {
         let t = root_transform(&tag, None);
         assert_eq!(t.apply(0.0, 0.0), (0.0, -20.0));
         assert_eq!(t.apply(10.0, 10.0), (40.0, 20.0));
+    }
+
+    #[test]
+    fn nested_svg_viewports_clip_slice_meet_and_visible_overflow() {
+        let doc = |inner: &str| format!(r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">{inner}</svg>"#);
+        // The browser shows only the inner 100 × 50 viewport of the 100 × 100 sliced picture.
+        let slice = parse(&doc(r#"<svg x="50" y="75" width="100" height="50" viewBox="0 0 100 100" preserveAspectRatio="xMidYMid slice">
+                 <rect width="100" height="100" fill="black"/></svg>"#))
+        .unwrap();
+        let (lo, hi) = extent(&slice);
+        assert!((hi[0] - lo[0] - 60.0).abs() < 1e-2, "the visible width is 100 units");
+        assert!((hi[1] - lo[1] - 30.0).abs() < 1e-2, "slice is clipped to the 100 × 50 viewport, not 100 × 100");
+        // meet: the letterboxed content is still clipped to the viewport.
+        let meet = parse(&doc(r#"<svg x="50" y="75" width="100" height="50" viewBox="0 0 100 100" preserveAspectRatio="xMidYMid meet">
+                 <rect x="-50" y="-50" width="200" height="200"/></svg>"#))
+        .unwrap();
+        let (lo, hi) = extent(&meet);
+        assert!((hi[0] - lo[0] - 60.0).abs() < 1e-2 && (hi[1] - lo[1] - 30.0).abs() < 1e-2, "{} {}", hi[0] - lo[0], hi[1] - lo[1]);
+        // overflow="visible" keeps everything the viewBox transform shows.
+        let visible =
+            parse(&doc(r#"<svg x="50" y="75" width="100" height="50" viewBox="0 0 100 100" preserveAspectRatio="xMidYMid slice" overflow="visible">
+                 <rect width="100" height="100" fill="black"/></svg>"#))
+            .unwrap();
+        let (lo, hi) = extent(&visible);
+        assert!((hi[0] - lo[0] - 60.0).abs() < 1e-2 && (hi[1] - lo[1] - 60.0).abs() < 1e-2, "{} {}", hi[0] - lo[0], hi[1] - lo[1]);
     }
 
     #[test]
