@@ -65,6 +65,7 @@ mod designer_lamp;
 mod model;
 mod organic_vase;
 mod palette_prefs;
+mod organic_furniture;
 mod panels;
 mod pattern;
 mod pattern_ui;

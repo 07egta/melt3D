@@ -2126,6 +2126,14 @@ impl App {
                                         }
                                     }
                                     ui.separator();
+                                    ui.label(egui::RichText::new("Organic furniture").size(12.0).color(style::DIM));
+                                    for design in crate::organic_furniture::Design::ALL {
+                                        if ui.button(design.label()).on_hover_text("Width, height and legs stay editable after it is made").clicked() {
+                                            crate::organic_furniture::insert(self, &ctx, design);
+                                            ui.close();
+                                        }
+                                    }
+                                    ui.separator();
                                     ui.label(egui::RichText::new("CAD tools").size(12.0).color(style::DIM));
                                     for k in Kind::CAD {
                                         let r = ui.horizontal(|ui| {

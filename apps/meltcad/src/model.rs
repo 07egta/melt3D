@@ -763,6 +763,9 @@ pub struct Group {
     /// Editable native Designer Lamp parameters; old projects omit this optional field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lamp: Option<crate::designer_lamp::LampParams>,
+    /// Regenerable SDF furniture controls (old scene files simply omit this field).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub organic_furniture: Option<crate::organic_furniture::Settings>,
 }
 
 /// Which file a piece of the big file came from, so it can be read again or saved back.
@@ -807,6 +810,7 @@ impl Group {
             piece: None,
             lamp: None,
             designer_chair: None,
+            organic_furniture: None,
         }
     }
 }
@@ -1293,6 +1297,7 @@ impl Scene {
             *v = if v.is_finite() { v.clamp(lo, hi) } else { d };
         };
         let (mut lost, mut over) = (0usize, 0usize);
+        let mut broken_furniture = 0usize;
         let mut vol_shapes = 0usize;
         let mut vol_nodes = 0usize;
         let mut vol_seen: Vec<usize> = Vec::new();
@@ -1327,7 +1332,11 @@ impl Scene {
                 p.sanitize();
             }
             g.xform.sanitize();
+            if let Some(params) = &mut g.organic_furniture {
+                params.sanitize();
+            }
             if g.instance_of.is_some() {
+                g.organic_furniture = None;
                 // a linked copy shows its source's shapes, not its own
                 g.shapes.clear();
             }
@@ -1447,6 +1456,12 @@ impl Scene {
                 }
                 true
             });
+            if g.organic_furniture.as_ref().is_some_and(|p| !crate::organic_furniture::is_generated_group(g, p)) {
+                // A user may have deleted or reordered the managed shapes. Keep the geometry
+                // exactly as it is, but drop metadata that could overwrite the wrong parts.
+                g.organic_furniture = None;
+                broken_furniture += 1;
+            }
         }
         let mut notes = Vec::new();
         if lost > 0 {
@@ -1457,6 +1472,9 @@ impl Scene {
                 "メッシュが多すぎるので、{over}個を取りのぞきました（{}個・データ量に上限があります）",
                 crate::mesh::MAX_VOLUME_SHAPES
             ));
+        }
+        if broken_furniture > 0 {
+            notes.push(format!("家具プリセットの部品が変わった{broken_furniture}組は、形を残して通常のグループとして開きました"));
         }
         notes
     }
