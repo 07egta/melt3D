@@ -548,6 +548,13 @@ impl App {
         if let Some(gr) = self.scene.groups.get_mut(g) {
             crate::designer_bag::inspector(ui, gr);
         }
+        let other_shapes = self.scene.shape_count().saturating_sub(self.scene.groups.get(g).map_or(0, |gr| gr.shapes.len()));
+        if let Some(gr) = self.scene.groups.get_mut(g)
+            && gr.designer_chair.is_some()
+            && !gr.is_linked()
+        {
+            crate::designer_chair::controls(ui, gr, other_shapes);
+        }
         self.piece_card(ui, g);
         // What it melts with: groups at the same level that share the parent's Melt (or whose own
         // Melt is on), plus the parent group's own shapes when this group melts into them. A pair
@@ -627,6 +634,14 @@ impl App {
         style::title(ui, "Shape");
         if self.designer_lamp_inspector(ui, g) {
             return;
+        }
+        if self.scene.groups.get(g).is_some_and(|gr| gr.designer_chair.is_some()) {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new("Designer Chair の個別パーツ").size(11.5).color(style::DIM));
+                if ui.small_button("椅子全体の設定").clicked() {
+                    self.sel = Some(Pick::Group(g));
+                }
+            });
         }
         let ngroups = self.scene.groups.len();
         let nshapes = self.scene.groups[g].shapes.len();

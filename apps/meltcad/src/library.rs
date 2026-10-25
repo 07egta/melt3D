@@ -29,6 +29,7 @@ struct RawItem {
     group: Group,
 }
 
+#[derive(Clone)]
 pub struct Item {
     pub name: String,
     /// Extra words the search matches (hiragana, English, ...).
@@ -36,6 +37,7 @@ pub struct Item {
     pub group: Group,
 }
 
+#[derive(Clone)]
 pub struct Category {
     /// Bundled category name, kept for benchmark/test callers of all().
     #[allow(dead_code)]
@@ -82,12 +84,48 @@ const LABELS: [&str; 15] = [
     "まち",
 ];
 
+/// Categories made in Rust (parametric bags, vases, lamps, chairs). They stand after the files in the tabs
+/// and need no parsing, so they are ready at once.
+const EXTRA_LABELS: [&str; 4] = ["バッグ", "花瓶・Vase", "Designer Lamp", "Designer Chair"];
+
+fn extras() -> &'static [Category] {
+    static EXTRA: OnceLock<Vec<Category>> = OnceLock::new();
+    EXTRA.get_or_init(|| {
+        let bags = crate::designer_bag::library_groups().into_iter().map(|(name, tags, group)| Item { name, tags, group }).collect();
+        // Generated once from the exact same parametric state users later edit.
+        let vases = crate::organic_vase::Design::ALL
+            .into_iter()
+            .map(|design| {
+                let mut group = Group::new(design.name());
+                group.blend = 0.0;
+                group.shapes.push(crate::organic_vase::new(design));
+                Item {
+                    name: design.name().to_string(),
+                    tags: vec!["organic vase".into(), "有機 花瓶".into(), "vase".into(), "3Dプリント".into()],
+                    group,
+                }
+            })
+            .collect();
+        let lamps = LampStyle::ALL
+            .into_iter()
+            .map(|style| Item {
+                name: format!("Designer Lamp（{}）", style.label()),
+                tags: vec!["designer lamp".into(), "lamp".into(), "lighting".into(), "照明".into(), style.english().into(), style.label().into()],
+                group: designer_lamp::build(LampParams::for_style(style)),
+            })
+            .collect();
+        let chairs = crate::designer_chair::presets();
+        let items = [bags, vases, lamps, chairs];
+        EXTRA_LABELS.iter().zip(items).map(|(name, items)| Category { name: (*name).into(), items }).collect()
+    })
+}
+
 pub fn count() -> usize {
-    FILES.len()
+    FILES.len() + EXTRA_LABELS.len()
 }
 
 pub fn label(index: usize) -> Option<&'static str> {
-    LABELS.get(index).copied()
+    LABELS.get(index).copied().or_else(|| EXTRA_LABELS.get(index.checked_sub(FILES.len())?).copied())
 }
 
 /// Each category is deserialized only after its first visible card requests it.
@@ -95,6 +133,9 @@ pub fn label(index: usize) -> Option<&'static str> {
 static CATEGORIES: [OnceLock<Result<Category, String>>; 15] = [const { OnceLock::new() }; 15];
 
 pub fn loaded(index: usize) -> Option<Result<&'static Category, &'static str>> {
+    if index >= FILES.len() {
+        return extras().get(index - FILES.len()).map(Ok);
+    }
     CATEGORIES.get(index)?.get().map(|c| c.as_ref().map_err(String::as_str))
 }
 
@@ -152,6 +193,16 @@ fn build_index() -> SearchIndex {
         match index_file(json, i) {
             Ok(items) => result.entries.extend(items),
             Err(_) => result.failed_files += 1,
+        }
+    }
+    for (c, cat) in extras().iter().enumerate() {
+        for (item, it) in cat.items.iter().enumerate() {
+            result.entries.push(SearchEntry {
+                category: FILES.len() + c,
+                item,
+                key: format!("{} {}", it.name.to_lowercase(), it.tags.join(" ").to_lowercase()),
+                name: it.name.clone(),
+            });
         }
     }
     result
@@ -216,7 +267,7 @@ fn loader() -> Option<&'static Loader> {
 /// rest of the application usable and shows an explanatory placeholder.
 pub fn request_category(index: usize, ctx: &Context) -> bool {
     if index >= FILES.len() {
-        return false;
+        return index < count();
     }
     if loaded(index).is_some() {
         return true;
@@ -254,38 +305,10 @@ pub fn request_search(ctx: &Context) -> bool {
 pub fn all() -> &'static [Category] {
     static LIB: OnceLock<Vec<Category>> = OnceLock::new();
     LIB.get_or_init(|| {
-        let mut categories: Vec<Category> = FILES.iter().filter_map(|t| parse(t).ok()).filter(|c| !c.items.is_empty()).collect();
-        categories.push(Category {
-            name: "バッグ".into(),
-            items: crate::designer_bag::library_groups()
-                .into_iter()
-                .map(|(name, tags, group)| Item { name, tags, group })
-                .collect(),
-        });
-        // Generated once from the exact same parametric state users later edit.
-        // No baked mesh assets, no extra runtime file reads and no duplicate SDF engine.
-        let items = crate::organic_vase::Design::ALL.into_iter().map(|design| {
-            let mut group = Group::new(design.name());
-            group.blend = 0.0;
-            group.shapes.push(crate::organic_vase::new(design));
-            Item {
-                name: design.name().to_string(),
-                tags: vec!["organic vase".into(), "有機 花瓶".into(), "vase".into(), "3Dプリント".into()],
-                group,
-            }
-        }).collect();
-        categories.push(Category { name: "花瓶・Vase".into(), items });
-        // Add native parametric models to the EXISTING furniture category rather
-        // than duplicating the thumbnail, library-search or insertion code.
-        if let Some(furniture) = categories.iter_mut().find(|c| c.name == "かぐ") {
-            for style in LampStyle::ALL {
-                furniture.items.push(Item {
-                    name: format!("Designer Lamp（{}）", style.label()),
-                    tags: vec!["designer lamp".into(), "lamp".into(), "lighting".into(), "照明".into(), style.english().into(), style.label().into()],
-                    group: designer_lamp::build(LampParams::for_style(style)),
-                });
-            }
-        }
+        let mut categories: Vec<Category> =
+            FILES.iter().map(|t| parse(t).unwrap_or(Category { name: String::new(), items: Vec::new() })).collect();
+        // the built-in (Rust) categories stand after the files, in the order of the tabs
+        categories.extend(extras().iter().map(|c| Category { name: c.name.clone(), items: c.items.clone() }));
         categories
     })
 }
@@ -411,7 +434,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(count(), FILES.len());
+        assert_eq!(count(), FILES.len() + EXTRA_LABELS.len());
     }
 
     #[test]
@@ -450,6 +473,24 @@ mod tests {
             let stored = it.scene().to_json();
             let reopened = Scene::from_json(&stored).expect("library model must reopen");
             assert_eq!(reopened.groups[0], it.group, "{name}: scene round trip changed geometry");
+        }
+    }
+
+    #[test]
+    fn procedural_chair_presets_are_registered_in_the_regular_library() {
+        let categories = all();
+        let chairs = categories.iter().filter(|c| c.name == "Designer Chair").collect::<Vec<_>>();
+        assert_eq!(chairs.len(), 1);
+        assert_eq!(chairs[0].items.len(), 3);
+        for item in &chairs[0].items {
+            assert!(item.matches("DESIGNER CHAIR") && item.matches("いす"));
+            assert!(item.fits(0, 0));
+            let g = item.placed([100.0, 50.0]);
+            assert!(g.designer_chair.is_some());
+            assert!(g.shapes.iter().any(|s| s.name == "座面"));
+            assert!(g.shapes.iter().any(|s| s.name == "背もたれ"));
+            let back = Scene::from_json(&item.scene().to_json()).unwrap();
+            assert_eq!(back.groups[0], item.group);
         }
     }
 

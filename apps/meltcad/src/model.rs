@@ -742,6 +742,9 @@ pub struct Group {
     /// Parametric Designer Bag settings. Stored alongside editable parts in scene files.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bag: Option<crate::designer_bag::BagConfig>,
+    /// Re-editable Designer Chair parameters; none for ordinary groups and old scenes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub designer_chair: Option<crate::designer_chair::Parameters>,
     /// A number linked copies and patterns find this group by (0 = none; see `Scene::ensure_group_uid`).
     #[serde(default, skip_serializing_if = "is_zero")]
     pub uid: u32,
@@ -803,6 +806,7 @@ impl Group {
             xform: Xform::default(),
             piece: None,
             lamp: None,
+            designer_chair: None,
         }
     }
 }
@@ -1315,6 +1319,9 @@ impl Scene {
             }
             if let Some(bag) = &mut g.bag {
                 bag.sanitize();
+            }
+            if let Some(p) = &mut g.designer_chair {
+                p.sanitize();
             }
             if let Some(p) = &mut g.pattern {
                 p.sanitize();

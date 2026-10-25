@@ -24,6 +24,7 @@ mod curve;
 mod curve_tool;
 mod document_job;
 mod easy_view;
+mod designer_chair;
 mod export;
 mod export_decimate;
 mod export_deflate;

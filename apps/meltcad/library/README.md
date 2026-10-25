@@ -27,6 +27,8 @@ parameters, scene saves and STL/3MF/OBJ export. The inspector can separate three
 build plate as independent groups; export each group with **Selected** scope. Real-world electrical
 safety, supports and mechanical joint fits are not automatically guaranteed.
 
+**Designer Chair** is an intentional exception: its three parametric presets are built in `src/designer_chair.rs` and listed as the last library tab.
+
 ## File format
 
 ```json
