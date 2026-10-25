@@ -221,7 +221,7 @@ fn reach_of(s: &Shape) -> f64 {
         Kind::Torus => sz[0] + sz[1],
         Kind::Extrude => {
             let wide = s.outline.iter().map(|p| f64::from(p[0]).hypot(f64::from(p[1]))).fold(0.0_f64, f64::max);
-            wide.hypot(sz[0] * 0.5) + f64::from(s.params[0].max(0.0).min(40.0))
+            wide.hypot(sz[0] * 0.5) + f64::from(if s.params[0].is_nan() { 0.0 } else { s.params[0].clamp(0.0, 40.0) })
         }
         _ => s.local_half().iter().map(|v| f64::from(*v) * f64::from(*v)).sum::<f64>().sqrt(),
     };

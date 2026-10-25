@@ -218,7 +218,9 @@ fn mean_centre(group: &Group) -> V3 {
     let n = group.shapes.len().max(1) as f32;
     let mut out = [0.0; 3];
     for s in &group.shapes {
-        for axis in 0..3 { out[axis] += s.pos[axis] / n; }
+        for (o, p) in out.iter_mut().zip(s.pos) {
+            *o += p / n;
+        }
     }
     out
 }
@@ -252,7 +254,15 @@ fn glyph_group(art: &Artwork, ch: char, index: usize, settings: &Settings, cente
         flip: true, // SVG maps Y downward; font outlines have Y upward
         at: center,
     };
-    let (mut group, note) = svg::build_group(art, &name, &options, MAX_SHAPES);
+    let (mut parts, note) = svg::build_group(art, &name, &options, MAX_SHAPES, MAX_GROUPS);
+    // one letter is one group: the solids and the counters of a glyph go together
+    let mut parts = parts.drain(..);
+    let Some(mut group) = parts.next() else {
+        return Err(format!("「{ch}」の輪郭を立体にできませんでした"));
+    };
+    for part in parts {
+        group.shapes.extend(part.shapes);
+    }
     if note.is_some() || group.shapes.is_empty() {
         return Err(format!("「{ch}」の輪郭を立体にできませんでした"));
     }
@@ -419,6 +429,7 @@ pub fn selected(scene: &Scene, pick: Option<Pick>) -> Option<&LetterMeta> {
 }
 
 #[cfg(test)]
+#[allow(clippy::field_reassign_with_default)]
 mod tests {
     use super::*;
     use crate::sdf::Field;

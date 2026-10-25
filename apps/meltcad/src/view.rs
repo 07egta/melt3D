@@ -159,7 +159,7 @@ pub fn radius_of(s: &crate::model::Shape) -> f32 {
         Kind::Torus => s.size[0] + s.size[1],
         Kind::Extrude => {
             let w = s.outline.iter().map(|p| (p[0] * p[0] + p[1] * p[1]).sqrt()).fold(0.0_f32, f32::max);
-            let puff = s.params[0].max(0.0).min(40.0);
+            let puff = if s.params[0].is_nan() { 0.0 } else { s.params[0].clamp(0.0, 40.0) };
             len([w, s.size[0] * 0.5, 0.0]) + puff
         }
         _ => len(s.local_half()),

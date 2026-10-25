@@ -617,7 +617,7 @@ impl Shape {
             Kind::Torus => [s[0] + s[1], s[0] + s[1], s[1]],
             Kind::Extrude => {
                 // params[0] is an optional signed puff distance. Legacy extrusions use zero.
-                let swell = self.params[0].max(0.0).min(40.0);
+                let swell = if self.params[0].is_nan() { 0.0 } else { self.params[0].clamp(0.0, 40.0) };
                 [mx(&self.outline, 0) + swell, mx(&self.outline, 1) + swell, s[0] * 0.5 + swell]
             },
             Kind::Prism3 | Kind::PrismN | Kind::Star | Kind::Pyramid => [s[0], s[0], s[1] * 0.5],
