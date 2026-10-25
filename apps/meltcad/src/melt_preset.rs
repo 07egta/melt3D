@@ -119,7 +119,7 @@ impl Settings {
         let mut group = Group::new("Melt（とろける形状）");
         group.melt_preset = Some(cfg.clone());
         let dims = cfg.body_dims();
-        let mut body = Shape::new(match cfg.base { Base::Sphere => Kind::Sphere, Base::Box => Kind::Box }, centre, material.clone());
+        let mut body = Shape::new(match cfg.base { Base::Sphere => Kind::Sphere, Base::Box => Kind::Box }, centre, material);
         body.name = "元の形状".into();
         match cfg.base {
             Base::Sphere => {
@@ -182,7 +182,7 @@ impl Settings {
             // Store the path in the Curve's own space (shared body centre), not
             // in absolute world coordinates: picking, framing and export bounds
             // must remain stable even for a model far from the origin.
-            let mut drip = Shape::new(Kind::Curve, centre, material.clone());
+            let mut drip = Shape::new(Kind::Curve, centre, material);
             drip.name = format!("液だれ {}", i + 1);
             drip.op = Op::Add;
             drip.blend = (r * (1.15 + cfg.viscosity * 0.55)).min(spacing * 0.18);
@@ -233,11 +233,10 @@ pub fn syrup_material() -> Material {
     m
 }
 
+type PreviewSlot = Arc<Mutex<Option<Vec<u8>>>>;
+
 fn preview_scene(settings: &Settings, melt: Melt, material: Material) -> Scene {
-    let mut scene = Scene::default();
-    scene.groups = vec![settings.generate([0.0, 0.0, settings.centre_height()], material)];
-    scene.melt = melt;
-    scene
+    Scene { groups: vec![settings.generate([0.0, 0.0, settings.centre_height()], material)], melt, ..Scene::default() }
 }
 
 #[derive(Clone, PartialEq)]
@@ -253,7 +252,7 @@ struct Editor {
     editing: Option<usize>,
     preview: Option<TextureHandle>,
     preview_key: Option<PreviewKey>,
-    running: Option<(PreviewKey, Arc<Mutex<Option<Vec<u8>>>>)>,
+    running: Option<(PreviewKey, PreviewSlot)>,
     error: Option<String>,
     failed_preview: Option<PreviewKey>,
 }
@@ -308,7 +307,7 @@ fn preview_progress(ctx: &egui::Context, editor: &mut Editor, key: PreviewKey) {
     }
     let output = Arc::new(Mutex::new(None));
     let shared = output.clone();
-    let scene = preview_scene(&key.settings, key.melt, key.material.clone());
+    let scene = preview_scene(&key.settings, key.melt, key.material);
     let wake = ctx.clone();
     let spawned = std::thread::Builder::new().name("melt-preset-preview".into()).spawn(move || {
         let bytes = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| crate::cpu_render::thumb(&scene, PREVIEW_SIZE))).unwrap_or_default();
@@ -335,7 +334,7 @@ fn apply(app: &mut App, settings: &Settings, editing: Option<usize>) -> Result<(
     if old.is_some_and(Group::is_linked) {
         return Err("リンクコピーは元のグループを編集してください".into());
     }
-    let material = old.and_then(|g| g.shapes.first()).map(|sh| sh.material.clone()).unwrap_or_else(syrup_material);
+    let material = old.and_then(|g| g.shapes.first()).map(|sh| sh.material).unwrap_or_else(syrup_material);
     let centre = old.and_then(|g| g.shapes.first()).map(|sh| sh.pos).unwrap_or_else(|| {
         let (c, r) = crate::gpu::bounds(&app.scene, None);
         let pad = cfg.body_dims()[0] * 0.5 + 16.0;
@@ -377,7 +376,7 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
     let material = editor.editing
         .and_then(|g| app.scene.groups.get(g))
         .and_then(|g| g.shapes.first())
-        .map(|sh| sh.material.clone())
+        .map(|sh| sh.material)
         .unwrap_or_else(syrup_material);
     let key = PreviewKey { settings: editor.settings.clone(), melt: app.scene.melt, material };
     preview_progress(ctx, &mut editor, key.clone());
@@ -478,6 +477,7 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
 }
 
 #[cfg(test)]
+#[allow(clippy::field_reassign_with_default)]
 mod tests {
     use super::*;
     use crate::sdf::Field;
