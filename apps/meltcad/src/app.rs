@@ -1238,7 +1238,6 @@ impl App {
                 Pick::Shape(g, _) => {
                     selected_groups.insert(g);
                 }
-                _ => {}
             }
         }
         for (g, s) in targets {
@@ -2000,7 +1999,7 @@ impl App {
                                 for k in Kind::MAIN {
                                     let r = ui.add_enabled(!self.scene_structure_locked(), |ui: &mut Ui| {
                                         style::wide_button(ui, k.label(), k.label(), false, None, |p, r, ink| {
-                                            glyphs::kind(p, r, k, ink, Color32::from_white_alpha(18))
+                                            glyphs::kind(p, r, k, ink, ink.gamma_multiply(0.15))
                                         })
                                     });
                                     if r.clicked() {
@@ -2017,7 +2016,8 @@ impl App {
                                     for k in Kind::MORE {
                                         let r = ui.horizontal(|ui| {
                                             let (rc, _) = ui.allocate_exact_size(egui::vec2(24.0, 24.0), egui::Sense::hover());
-                                            glyphs::kind(ui.painter(), rc, k, ui.visuals().text_color(), Color32::from_white_alpha(18));
+                                            let ink = ui.visuals().text_color();
+                                            glyphs::kind(ui.painter(), rc, k, ink, ink.gamma_multiply(0.15));
                                             ui.selectable_label(false, k.label())
                                         });
                                         if r.inner.clicked() {
@@ -2030,7 +2030,8 @@ impl App {
                                     for k in Kind::CAD {
                                         let r = ui.horizontal(|ui| {
                                             let (rc, _) = ui.allocate_exact_size(egui::vec2(24.0, 24.0), egui::Sense::hover());
-                                            glyphs::kind(ui.painter(), rc, k, ui.visuals().text_color(), Color32::from_white_alpha(18));
+                                            let ink = ui.visuals().text_color();
+                                            glyphs::kind(ui.painter(), rc, k, ink, ink.gamma_multiply(0.15));
                                             ui.selectable_label(false, k.label())
                                         });
                                         if r.inner.clicked() {
