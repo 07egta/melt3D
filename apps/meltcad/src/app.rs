@@ -74,6 +74,10 @@ pub struct App {
     /// The revision `committed` is current for, and the one `dedupe_uids` last ran for.
     committed_rev: u64,
     deduped_rev: u64,
+    /// Which document the scene shows. A new or opened design (or a control command that
+    /// replaces the scene) starts the next one, so work started for the old document can tell
+    /// that its result must not be put into the new one.
+    document_generation: u64,
     /// The field for picking, made when picking needs it and the scene has changed since.
     field_cache: std::cell::RefCell<Option<(u64, std::rc::Rc<Field>, Scene)>>,
     /// How many times the field was built (tests and the HUD look at it).
@@ -189,6 +193,7 @@ impl App {
             scene_rev: 1,
             committed_rev: 1,
             deduped_rev: 0,
+            document_generation: 0,
             field_cache: std::cell::RefCell::new(None),
             field_builds: std::cell::Cell::new(0),
             scene,
@@ -587,6 +592,7 @@ impl App {
             self.notice = Some(format!("Could not clean up recovery data: {e}"));
         }
         self.clear_document_gestures();
+        self.document_generation = self.document_generation.wrapping_add(1);
         self.scene = scene.clone();
         self.committed = scene;
         self.undo.clear();
@@ -1291,6 +1297,14 @@ impl App {
 
     /// Move the selection by `d` millimetres.
     pub fn nudge(&mut self, d: [f32; 3]) {
+        // A ball chosen in the scene list is moved on its own: its siblings, the curve through
+        // them and the group's melt all stay as they are.
+        if let Some((g, s, i)) = self.picked_node()
+            && let Some(w) = self.node_world(g, s, i)
+        {
+            self.set_node_world(g, s, i, [w[0] + d[0], w[1] + d[1], w[2] + d[2]]);
+            return;
+        }
         let mut targets = self.sel_targets();
         let mut seen: std::collections::HashSet<(usize, usize)> = targets.iter().copied().collect();
         let mut linked = std::collections::HashSet::new();
@@ -1790,7 +1804,7 @@ impl App {
                             .on_hover_text("STL, OBJ, 3MF, PLY, GLB")
                             .clicked()
                         {
-                            crate::mesh_dialog::open(&ctx);
+                            crate::mesh_dialog::open(&ctx, self.document_generation());
                             ui.close();
                         }
                         if ui.button(style::keys("Save  Ctrl+S")).clicked() {
@@ -2081,7 +2095,7 @@ impl App {
                                 for k in Kind::MAIN {
                                     let r = ui.add_enabled(!self.scene_structure_locked(), |ui: &mut Ui| {
                                         style::wide_button(ui, k.label(), k.label(), false, None, |p, r, ink| {
-                                            glyphs::kind(p, r, k, ink, Color32::from_white_alpha(18))
+                                            glyphs::kind(p, r, k, ink, ink.gamma_multiply(0.15))
                                         })
                                     });
                                     if r.clicked() {
@@ -2098,7 +2112,8 @@ impl App {
                                     for k in Kind::MORE {
                                         let r = ui.horizontal(|ui| {
                                             let (rc, _) = ui.allocate_exact_size(egui::vec2(24.0, 24.0), egui::Sense::hover());
-                                            glyphs::kind(ui.painter(), rc, k, ui.visuals().text_color(), Color32::from_white_alpha(18));
+                                            let ink = ui.visuals().text_color();
+                                            glyphs::kind(ui.painter(), rc, k, ink, ink.gamma_multiply(0.15));
                                             ui.selectable_label(false, k.label())
                                         });
                                         if r.inner.clicked() {
@@ -2111,7 +2126,8 @@ impl App {
                                     for k in Kind::CAD {
                                         let r = ui.horizontal(|ui| {
                                             let (rc, _) = ui.allocate_exact_size(egui::vec2(24.0, 24.0), egui::Sense::hover());
-                                            glyphs::kind(ui.painter(), rc, k, ui.visuals().text_color(), Color32::from_white_alpha(18));
+                                            let ink = ui.visuals().text_color();
+                                            glyphs::kind(ui.painter(), rc, k, ink, ink.gamma_multiply(0.15));
                                             ui.selectable_label(false, k.label())
                                         });
                                         if r.inner.clicked() {
@@ -2536,6 +2552,11 @@ impl App {
         }
     }
 
+    /// Which document the scene shows: a transfer started for another one must not land here.
+    pub(crate) fn document_generation(&self) -> u64 {
+        self.document_generation
+    }
+
     pub(crate) fn scene_edit_in_progress(&self) -> bool {
         self.scene_structure_locked()
             || self.sketch_active()
@@ -2552,7 +2573,7 @@ impl App {
     }
 
     /// Runs the commands that arrived on the control channel (at most a few per frame).
-    fn run_control(&mut self, ctx: &egui::Context) {
+    pub(crate) fn run_control(&mut self, ctx: &egui::Context) {
         let Some(rx) = self.control.take() else { return };
         let mut ran = false;
         for _ in 0..32 {
@@ -2595,6 +2616,11 @@ impl App {
                     self.settle(ctx);
                     self.clear_document_gestures();
                     self.scene = next;
+                    // A command that replaces the whole design starts a new document, like
+                    // File > New / Open does: no transfer from the old one may land in it.
+                    if matches!(name, Some("scene.new" | "scene.set" | "load")) {
+                        self.document_generation = self.document_generation.wrapping_add(1);
+                    }
                     self.sel = if let Some(g) = value.get("group").and_then(serde_json::Value::as_u64) {
                         Some(match value.get("shape").and_then(serde_json::Value::as_u64) {
                             Some(s) => Pick::Shape(g as usize, s as usize),
@@ -2687,6 +2713,7 @@ impl App {
             self.sketch_card(&ctx);
             self.keys_card(ui);
             crate::svg_dialog::update(self, &ctx);
+            crate::precise::transfer_card(self, &ctx);
             crate::mesh_dialog::update(self, &ctx);
             crate::array::update(self, &ctx);
             crate::export_dialog::update(self, &ctx);
@@ -2705,10 +2732,20 @@ impl App {
         self.settle(&ctx);
         if !cfg!(test) {
             ctx.request_repaint_after(crate::recovery::INTERVAL);
+            // Publish a checkpoint that finished on its worker, then consider a new one.
+            // Serializing the scene never happens in this frame (only the worker does it).
+            if let Some(result) = self.recovery.poll_checkpoint()
+                && let Err(e) = result
+            {
+                self.notice = Some(format!("Could not save auto-recovery data: {e}"));
+            }
             let rev = self.track_scene();
             let changed = self.has_unsaved_work();
-            if let Err(e) = self.recovery.checkpoint(&self.scene, self.path.as_deref(), changed, rev, std::time::Instant::now()) {
+            if let Err(e) = self.recovery.start_checkpoint(&self.scene, self.path.as_deref(), changed, rev, std::time::Instant::now()) {
                 self.notice = Some(format!("Could not save auto-recovery data: {e}"));
+            }
+            if self.recovery.checkpoint_running() {
+                ctx.request_repaint_after(std::time::Duration::from_millis(150));
             }
         }
         self.test_hooks(&ctx);
@@ -3163,6 +3200,13 @@ mod tests {
         assert_eq!(answer["precise"], false);
         assert_eq!(answer["importing"], true);
         assert!(app.precise_transfer_pending());
+        // The STL is written and parsed on a worker; the bake card opens when it is ready.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(90);
+        while !crate::mesh_dialog::is_open(&ctx) {
+            app.sync_precise_transfer(&ctx);
+            assert!(std::time::Instant::now() < deadline, "the transfer did not reach the bake");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
         assert!(crate::mesh_dialog::cancel(&ctx));
         app.sync_precise_transfer(&ctx);
     }
@@ -3463,7 +3507,7 @@ mod tests {
         app.add_shape(&ctx, Kind::Box);
         let n = app.scene.shape_count();
         for open in [
-            (|c: &egui::Context| crate::mesh_dialog::open_path(c, std::env::temp_dir().join("meltcad-no-such-mesh.stl"))) as fn(&egui::Context),
+            (|c: &egui::Context| crate::mesh_dialog::open_path(c, std::env::temp_dir().join("meltcad-no-such-mesh.stl"), 0)) as fn(&egui::Context),
             |c| crate::export_dialog::open(c, None),
         ] {
             open(&ctx);
@@ -3754,6 +3798,68 @@ mod tests {
         app.sel = Some(Pick::Group(0));
         app.duplicate();
         assert_eq!(app.scene.groups[1].shapes[0].pos, at);
+    }
+
+    #[test]
+    fn a_chosen_ball_moves_alone_and_a_group_still_moves_every_child() {
+        use crate::model::{Group, Kind, Material, Pick, Shape};
+        let mut app = super::App::new(true, None);
+        app.scene.groups.clear();
+        let mut group = Group::new("Pipe");
+        let mut sibling = Shape::new(Kind::Sphere, [0.0, 0.0, 80.0], Material::default());
+        sibling.name = "Sibling".into();
+        group.shapes.push(sibling);
+        let mut pipe = Shape::new(Kind::Curve, [10.0, 0.0, 10.0], Material::default());
+        pipe.name = "Pipe".into();
+        pipe.path = vec![[-20.0, 0.0, 0.0, 4.0], [0.0, 0.0, 0.0, 4.0], [20.0, 0.0, 0.0, 4.0], [40.0, 0.0, 0.0, 4.0], [60.0, 0.0, 0.0, 4.0]];
+        group.shapes.push(pipe);
+        app.scene.groups.push(group);
+        app.committed_sync();
+
+        // The row of "Ball 4" picks shape 1 and node 3.
+        app.sel = Some(Pick::Shape(0, 1));
+        app.ct.node = Some((0, 1, 3));
+        assert_eq!(app.picks(), vec![Pick::Shape(0, 1)]);
+        assert_eq!(app.sel_targets(), vec![(0, 1)], "the selection is the pipe shape, not the group");
+
+        let before = app.scene.groups[0].shapes[1].path.clone();
+        let pipe_pos = app.scene.groups[0].shapes[1].pos;
+        let sibling_pos = app.scene.groups[0].shapes[0].pos;
+        app.nudge([5.0, 0.0, 0.0]);
+        let after = &app.scene.groups[0].shapes[1].path;
+        for i in 0..before.len() {
+            if i == 3 {
+                assert!((after[i][0] - before[i][0] - 5.0).abs() < 1e-4, "the chosen ball moved by 5 mm");
+                assert_eq!([after[i][1], after[i][2], after[i][3]], [before[i][1], before[i][2], before[i][3]]);
+            } else {
+                assert_eq!(after[i], before[i], "node {i} is untouched");
+            }
+        }
+        assert_eq!(app.scene.groups[0].shapes[1].pos, pipe_pos, "the pipe itself did not move");
+        assert_eq!(app.scene.groups[0].shapes[0].pos, sibling_pos, "its sibling shape did not move");
+
+        // One nudge is one undo step.
+        let ctx = egui::Context::default();
+        app.settle(&ctx);
+        assert_eq!(app.undo_depth(), 1);
+        app.undo();
+        assert_eq!(app.scene.groups[0].shapes[1].path, before, "undo puts the ball back");
+
+        // The same movement survives save and reload.
+        app.sel = Some(Pick::Shape(0, 1));
+        app.ct.node = Some((0, 1, 3));
+        app.nudge([1.0, 2.0, 3.0]);
+        let moved = app.scene.groups[0].shapes[1].path.clone();
+        let reloaded = crate::model::Scene::from_json(&app.scene.to_json()).unwrap_or_default();
+        assert_eq!(reloaded.groups[0].shapes[1].path, moved, "the ball's offset round-trips");
+
+        // A group pick still moves the pipe and every other shape in it (#260).
+        app.sel = Some(Pick::Group(0));
+        let sibling_x = app.scene.groups[0].shapes[0].pos[0];
+        let pipe_x = app.scene.groups[0].shapes[1].pos[0];
+        app.nudge([5.0, 0.0, 0.0]);
+        assert_eq!(app.scene.groups[0].shapes[0].pos[0], sibling_x + 5.0);
+        assert_eq!(app.scene.groups[0].shapes[1].pos[0], pipe_x + 5.0);
     }
 }
 

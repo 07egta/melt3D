@@ -39,7 +39,13 @@ const I_STRIDE: usize = 4;
 const S_STRIDE: usize = 16;
 /// Outline points the lists hold (two points per vec4) and path nodes (one per vec4).
 pub const POLY_PTS: usize = 65536;
-pub const PATH_V4: usize = 32768;
+/// Path nodes one curve takes: its two box records, `curve::MAX_POINTS` points and one bounding
+/// sphere per `curve::GROUP_SEGMENTS` of them (the same shape `pack_curve` writes).
+pub const CURVE_PATH_V4: usize = 2 + crate::curve::MAX_POINTS + (crate::curve::MAX_POINTS - 1).div_ceil(crate::curve::GROUP_SEGMENTS);
+/// Room for a whole scene of curves (`MAX_SHAPES`): the path pool never has to shorten or drop a
+/// curve, so the GPU measures the same points as the CPU SDF and the exports (#201). A shape that
+/// is not a curve takes at most `model::MAX_PATH` (`< CURVE_PATH_V4`) nodes.
+pub const PATH_V4: usize = MAX_SHAPES * CURVE_PATH_V4;
 /// The longest the scene list can ever be (vec4), well inside a 2048-row texture.
 pub const MAX_POOL_V4: usize = MAX_GROUPS * G_STRIDE
     + MAX_SHAPES * (S_STRIDE + B_STRIDE)
@@ -275,7 +281,7 @@ impl ScenePack {
                 push(&mut insts, [c[0], c[1], c[2], i.s]);
                 inst_n += 1;
             }
-            push(&mut groups, [p.first_block as f32, p.n_blocks as f32, g.op.sign(), g.blend]);
+            push(&mut groups, [p.first_block as f32, p.n_blocks as f32, g.op.sign(), scene.group_melt_reach(rg.gi)]);
             // (the third number is this group's first item: every instance, or the group itself, is one item the march can leave out)
             let nested_below = scene.groups.get(rg.gi + 1).is_some_and(|n| n.depth > g.depth);
             push(
@@ -552,14 +558,16 @@ fn pack_shape(s: &crate::model::Shape, out: &mut Vec<f32>, poly: &mut Vec<f32>, 
 /// the tube's thickness) for every `curve::GROUP_SEGMENTS` segments: the shader looks at those
 /// first and measures only the groups that can hold the nearest piece. Returns (first point,
 /// count); (0, 0) when there is no room.
+///
+/// `PATH_V4` holds `CURVE_PATH_V4` for every shape a scene may have, so the full `build_shape`
+/// points always fit: the GPU and the CPU SDF measure exactly the same curve (#201). The old code
+/// thinned the points (or dropped the curve) when the pool was full, which made the viewport and
+/// the exports show different shapes.
 fn pack_curve(s: &crate::model::Shape, path: &mut Vec<f32>) -> (usize, usize) {
     let used = path.len() / 4;
     let room = PATH_V4.saturating_sub(used + 2);
     let need = |n: usize| n + n.saturating_sub(1).div_ceil(crate::curve::GROUP_SEGMENTS);
-    let mut pts = crate::curve::build_shape(s);
-    if need(pts.len()) > room {
-        pts = crate::curve::build_shape_max(s, (room * crate::curve::GROUP_SEGMENTS / (crate::curve::GROUP_SEGMENTS + 1)).max(4));
-    }
+    let pts = crate::curve::build_shape(s);
     if pts.len() < 2 || need(pts.len()) > room {
         return (0, 0);
     }
@@ -601,7 +609,7 @@ fn bounds_of(scene: &Scene, selected: Option<Pick>, resolved: &[crate::pattern::
             }
             // a lamp's glow reaches a good way out
             let halo = if s.material.glow > 0.0 { 30.0 } else { 0.0 };
-            let reach = (s.blend + g.blend) * scene.melt.amount * 1.5 + scene.melt.drip + 2.0 + halo;
+            let reach = (s.blend + scene.group_melt_reach(rg.gi)) * scene.melt.amount * 1.5 + scene.melt.drip + 2.0 + halo;
             parts.push(Bound { c: s.pos, r: crate::view::radius_of(s) + reach });
         }
         if parts.is_empty() {
@@ -1734,6 +1742,13 @@ pub(crate) mod offscreen {
         /// The picture's pixels (RGBA8), for a look at what was drawn.
         #[cfg_attr(not(test), allow(dead_code))]
         pub fn read(&self, pic: &Picture) -> Vec<u8> {
+            let mut px = Vec::new();
+            self.read_into(pic, &mut px);
+            px
+        }
+
+        /// The picture's pixels, into a buffer that a run of pictures can reuse (#217).
+        pub fn read_into(&self, pic: &Picture, px: &mut Vec<u8>) {
             let (w, h) = (pic.size[0], pic.size[1]);
             let bpr = (w * 4).next_multiple_of(256);
             let out = self.device.create_buffer(&wgpu::BufferDescriptor {
@@ -1755,7 +1770,8 @@ pub(crate) mod offscreen {
             let slice = out.slice(..);
             slice.map_async(wgpu::MapMode::Read, |_| {});
             let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
-            let mut px = Vec::with_capacity((w * h * 4) as usize);
+            px.clear();
+            px.reserve((w * h * 4) as usize);
             if let Ok(mapped) = slice.get_mapped_range() {
                 for y in 0..h {
                     let row = (y * bpr) as usize;
@@ -1765,7 +1781,6 @@ pub(crate) mod offscreen {
                 }
             }
             out.unmap();
-            px
         }
     }
 }
@@ -2154,7 +2169,7 @@ mod curve_tests {
         let mut g = Group::new("g");
         for i in 0..n {
             let mut s = Shape::new(Kind::Curve, [i as f32 * 3.0, 0.0, 10.0], Material::default());
-            s.path = (0..32).map(|k| [k as f32 * 2.0, (k * k) as f32 * 0.1, 0.0, 3.0]).collect();
+            s.path = (0..crate::model::MAX_PATH).map(|k| [k as f32 * 2.0, (k * k) as f32 * 0.1, 0.0, 3.0]).collect();
             g.shapes.push(s);
         }
         Scene { groups: vec![g], melt: Default::default(), env: Default::default(), saved: Vec::new(), anim: Default::default() }
@@ -2186,19 +2201,46 @@ mod curve_tests {
         let scene = scene_with_curves(crate::model::MAX_SHAPES);
         let u = pack(&scene, &Camera::default(), [800.0, 600.0], None, None, true);
         let f = Frame::new(&u);
-        let mut used = 0;
         let mut drawn = 0;
         for i in 0..scene.shape_count() {
             let ext = f.shape(i, 12);
             let (start, count) = (ext[0] as usize, ext[1] as usize);
             if count > 0 {
                 assert!(start + count + (count - 1).div_ceil(crate::curve::GROUP_SEGMENTS) <= PATH_V4, "curve {i} runs past the list");
-                used = used.max(start + count);
                 drawn += 1;
             }
         }
-        assert!(used > 0 && drawn >= 100, "{drawn} curves fit");
+        assert_eq!(drawn, crate::model::MAX_SHAPES, "the path pool holds every curve");
         assert!(f.list_len() <= MAX_POOL_V4);
+    }
+
+    /// #201: when most of the model is curves, the GPU used to thin (or drop) the curves that ran
+    /// the old 32768-node pool out, while the CPU SDF and the exports kept every point. The pool
+    /// now holds a full `curve::MAX_POINTS` curve for every shape a scene may have, so both sides
+    /// measure exactly the same points.
+    #[test]
+    fn a_full_scene_of_curves_gives_the_gpu_the_same_points_the_cpu_sdf_uses() {
+        let scene = scene_with_curves(crate::model::MAX_SHAPES);
+        let u = pack(&scene, &Camera::default(), [800.0, 600.0], None, None, true);
+        let f = Frame::new(&u);
+        let at = |slot: usize| f.d(f.path_base() + slot);
+        let mut drawn = 0usize;
+        let mut nodes = 0usize;
+        for (i, s) in scene.groups[0].shapes.iter().enumerate() {
+            // what the CPU SDF and the mesher measure
+            let cpu = Prepared::new(s).path;
+            let ext = f.shape(i, 12);
+            let (start, count) = (ext[0] as usize, ext[1] as usize);
+            assert_eq!(count, cpu.len(), "curve {i}: the GPU must get the whole curve, not a thinner copy");
+            for (k, want) in cpu.iter().enumerate() {
+                assert_eq!(at(start + k), *want, "curve {i} point {k}");
+            }
+            drawn += 1;
+            nodes += count;
+            assert!(start + count + (count - 1).div_ceil(crate::curve::GROUP_SEGMENTS) <= PATH_V4);
+        }
+        assert_eq!(drawn, crate::model::MAX_SHAPES, "every curve is drawn");
+        assert!(nodes > 32768, "this scene is bigger than the old path pool ({nodes} points)");
     }
 
     #[test]

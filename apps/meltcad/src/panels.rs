@@ -181,6 +181,11 @@ impl App {
                         } else {
                             self.select_pick(Some(Pick::Shape(gi, si)), false);
                         }
+                        // A plain click on the shape's own row is about the whole shape, not the
+                        // ball that happened to be chosen before.
+                        if !ctrl && !shift {
+                            self.ct.node = None;
+                        }
                     }
                     if row.drag_started {
                         self.layer_drag = Some(Pick::Shape(gi, si));
@@ -246,6 +251,9 @@ impl App {
                 if on { style::TEXT } else { style::DIM },
             );
             if resp.clicked() {
+                // The ball is one node of this shape: keep the shape picked (the bend/radius
+                // controls stay available) and put the handles on that one ball.
+                self.select_pick(Some(Pick::Shape(gi, si)), false);
                 self.ct.node = Some((gi, si, i));
             }
         }
@@ -538,12 +546,31 @@ impl App {
             }
         }
         self.piece_card(ui, g);
-        // what it melts with: the shapes inside it melt together, and the groups at the same level melt with each other
+        // What it melts with: groups at the same level that share the parent's Melt (or whose own
+        // Melt is on), plus the parent group's own shapes when this group melts into them. A pair
+        // melts when the group that closes later has a reach, so the list mirrors the field.
         let into = parent.clone().unwrap_or("Scene".to_string());
-        let partners: Vec<String> = (0..self.scene.groups.len())
-            .filter(|&i| i != g && self.scene.groups[i].depth == self.scene.groups[g].depth && self.scene.parent_of(i) == self.scene.parent_of(g))
-            .map(|i| self.scene.groups[i].name.clone())
+        let parent_index = self.scene.parent_of(g);
+        let depth = self.scene.groups.get(g).map(|group| group.depth);
+        let mut partners: Vec<String> = (0..self.scene.groups.len())
+            .filter(|&i| {
+                i != g
+                    && depth.is_some_and(|depth| {
+                        self.scene.groups.get(i).is_some_and(|other| other.visible && other.depth == depth) && self.scene.parent_of(i) == parent_index
+                    })
+            })
+            .filter(|&i| {
+                let later = if i < g { g } else { i };
+                self.scene.group_melt_reach(later) > 0.0
+            })
+            .filter_map(|i| self.scene.groups.get(i).map(|other| other.name.clone()))
             .collect();
+        if self.scene.group_melt_reach(g) > 0.0
+            && parent_index.is_some_and(|p| self.scene.groups.get(p).is_some_and(|p| p.shapes.iter().any(|s| s.solid())))
+            && let Some(name) = parent.as_ref()
+        {
+            partners.push(format!("the shapes of “{name}”"));
+        }
         ui.label(
             RichText::new(format!(
                 "Melts with: {} (inside {into})",
@@ -630,8 +657,7 @@ impl App {
                     ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
                     for k in Kind::ALL {
                         let on = sh.kind == k;
-                        if style::icon_button(ui, 32.0, k.label(), on, |p, r, ink| glyphs::kind(p, r, k, ink, Color32::from_white_alpha(18)))
-                            .clicked()
+                        if style::icon_button(ui, 32.0, k.label(), on, |p, r, ink| glyphs::kind(p, r, k, ink, ink.gamma_multiply(0.15))).clicked()
                             && !on
                         {
                             if sh.name == sh.kind.label() {
