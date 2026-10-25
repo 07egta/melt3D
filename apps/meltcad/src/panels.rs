@@ -614,8 +614,7 @@ impl App {
                     ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
                     for k in Kind::ALL {
                         let on = sh.kind == k;
-                        if style::icon_button(ui, 32.0, k.label(), on, |p, r, ink| glyphs::kind(p, r, k, ink, Color32::from_white_alpha(18)))
-                            .clicked()
+                        if style::icon_button(ui, 32.0, k.label(), on, |p, r, ink| glyphs::kind(p, r, k, ink, ink.gamma_multiply(0.15))).clicked()
                             && !on
                         {
                             if sh.name == sh.kind.label() {
