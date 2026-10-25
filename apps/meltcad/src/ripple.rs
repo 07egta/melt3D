@@ -52,6 +52,7 @@ fn smooth01(t: f32) -> f32 {
     t * t * (3.0 - 2.0 * t)
 }
 
+#[allow(dead_code)]
 impl Ripple {
     pub fn concentric() -> Self { Self::default() }
     pub fn linear() -> Self { Self { mode: RippleMode::Linear, count: 6, ..Self::default() } }

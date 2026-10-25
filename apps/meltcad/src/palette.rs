@@ -355,16 +355,16 @@ impl App {
             Action::OrganicTube(preset) => self.add_organic_tube(ctx, preset),
             Action::AddGroup => self.add_group(),
             Action::Ripple(mode) => {
-                if let Some(crate::model::Pick::Shape(g, s)) = self.sel {
-                    if let Some(sh) = self.scene.shape_mut(g, s) { sh.ripple = Some(crate::ripple::Ripple { mode, ..Default::default() }); }
-                } else {
+                if !matches!(self.sel, Some(crate::model::Pick::Shape(..))) {
                     self.add_shape(ctx, Kind::Box);
-                    if let Some(crate::model::Pick::Shape(g, s)) = self.sel {
-                        if let Some(sh) = self.scene.shape_mut(g, s) { sh.ripple = Some(crate::ripple::Ripple { mode, ..Default::default() }); }
-                    }
+                }
+                if let Some(crate::model::Pick::Shape(g, s)) = self.sel
+                    && let Some(sh) = self.scene.shape_mut(g, s)
+                {
+                    sh.ripple = Some(crate::ripple::Ripple { mode, ..Default::default() });
                 }
                 self.tab = super::Tab::Shape;
-            },
+            }
             Action::Insert(c, i) => {
                 if let Some(item) = library::all().get(c).and_then(|c| c.items.get(i)) {
                     crate::library_ui::insert(self, ctx, item);

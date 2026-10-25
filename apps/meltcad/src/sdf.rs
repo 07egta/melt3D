@@ -65,7 +65,6 @@ pub struct Prepared {
     /// Wall thickness of the hollowed-out shape (0 = solid).
     pub shell: f32,
     pub face_melt: Option<(usize, f32, f32, f32)>,
-    pub half: V3,
     /// The corners are cut flat (a chamfer) instead of rounded.
     pub chamfer: bool,
     /// Winding (+1 / -1) and the largest safe rounding of the profile (revolve, sweep, extrude).
@@ -160,7 +159,6 @@ impl Prepared {
             outline2: s.outline2.clone(),
             shell: if s.shell.is_finite() { s.shell.max(0.0) } else { 0.0 },
             face_melt: s.face_melt.parts(),
-            half: s.local_half(),
             poly_orient,
             poly_limit,
             grad_half,
