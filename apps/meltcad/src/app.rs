@@ -914,17 +914,19 @@ impl App {
         if shapes.is_empty() && groups.is_empty() {
             return false;
         }
+        let _ = parents;
         shapes.iter().all(|&(g, s)| self.scene.shape(g, s).is_some_and(|x| x.blend > 0.0))
-            && groups.iter().chain(parents.iter()).all(|&g| self.scene.groups.get(g).is_some_and(|x| x.blend > 0.0))
+            && groups.iter().all(|&g| self.scene.groups.get(g).is_some_and(|x| x.blend > 0.0))
     }
 
     /// One press: melt what is picked into its neighbours (the shapes AND the groups, which used to
     /// be two switches), or take the melt away again. With nothing picked, it is the whole scene.
     pub fn toggle_melt_selected(&mut self) {
-        let (mut shapes, mut groups, mut parents) = self.melt_targets();
+        let (mut shapes, groups, mut parents) = self.melt_targets();
         if shapes.is_empty() && groups.is_empty() {
-            groups = (0..self.scene.groups.len()).collect();
-            shapes = groups.iter().flat_map(|&g| (0..self.scene.groups[g].shapes.len()).map(move |s| (g, s))).collect();
+            // the whole scene: the shapes inside their groups only; different groups stay apart
+            // unless a group row is picked and melted on purpose
+            shapes = (0..self.scene.groups.len()).flat_map(|g| (0..self.scene.groups[g].shapes.len()).map(move |s| (g, s))).collect();
             parents.clear();
         }
         let on = !self.selection_melts_of(&shapes, &groups, &parents);
@@ -947,7 +949,8 @@ impl App {
                 })
                 .collect()
         };
-        for &g in groups.iter().chain(if on { parents.iter() } else { emptied.iter() }) {
+        // (turning melt on for a shape never makes its group melt into the other groups)
+        for &g in groups.iter().chain(emptied.iter()) {
             if let Some(gr) = self.scene.groups.get_mut(g) {
                 gr.blend = if on { if gr.blend > 0.0 { gr.blend } else { 12.0 } } else { 0.0 };
             }
@@ -955,9 +958,10 @@ impl App {
     }
 
     fn selection_melts_of(&self, shapes: &[(usize, usize)], groups: &[usize], parents: &[usize]) -> bool {
+        let _ = parents;
         !(shapes.is_empty() && groups.is_empty())
             && shapes.iter().all(|&(g, s)| self.scene.shape(g, s).is_some_and(|x| x.blend > 0.0))
-            && groups.iter().chain(parents.iter()).all(|&g| self.scene.groups.get(g).is_some_and(|x| x.blend > 0.0))
+            && groups.iter().all(|&g| self.scene.groups.get(g).is_some_and(|x| x.blend > 0.0))
     }
 
     /// The shapes of everything that is selected, each once.
@@ -1155,9 +1159,17 @@ impl App {
                 if self.scene.shape(g, s).is_none() || g2 >= self.scene.groups.len() {
                     return;
                 }
+                // A loose shape lives in a group. Dropped on the line above a group row it joins the
+                // group that ends there (the one above, #279); below the row it becomes that group's first shape.
                 let sh = self.scene.groups[g].shapes.remove(s);
-                self.scene.groups[g2].shapes.push(sh);
-                self.sel = Some(Pick::Shape(g2, self.scene.groups[g2].shapes.len() - 1));
+                if after {
+                    self.scene.groups[g2].shapes.insert(0, sh);
+                    self.sel = Some(Pick::Shape(g2, 0));
+                } else {
+                    let target = g2.saturating_sub(1);
+                    self.scene.groups[target].shapes.push(sh);
+                    self.sel = Some(Pick::Shape(target, self.scene.groups[target].shapes.len() - 1));
+                }
             }
             (Pick::Group(g), Pick::Group(g2) | Pick::Shape(g2, _)) => {
                 if g >= self.scene.groups.len() || g2 >= self.scene.groups.len() || g == g2 {
@@ -1192,8 +1204,13 @@ impl App {
             return Err("Finish or cancel the active command first");
         }
         match from {
-            Pick::Shape(..) => {
-                self.move_layer(from, Pick::Group(into), true);
+            Pick::Shape(g, s) => {
+                if self.scene.shape(g, s).is_none() || into >= self.scene.groups.len() {
+                    return Ok(());
+                }
+                let sh = self.scene.groups[g].shapes.remove(s);
+                self.scene.groups[into].shapes.push(sh);
+                self.sel = Some(Pick::Shape(into, self.scene.groups[into].shapes.len() - 1));
                 Ok(())
             }
             Pick::Group(g) => {
@@ -1205,6 +1222,71 @@ impl App {
                 Ok(())
             }
         }
+    }
+
+    /// Several picked rows dropped inside group `into`: the loose shapes keep their order and join it,
+    /// the picked groups (with what is nested in them) nest in it.
+    pub fn move_picks_into(&mut self, picks: &[Pick], into: usize) -> Result<(), &'static str> {
+        if !self.allow_scene_structure_change() {
+            return Err("Finish or cancel the active command first");
+        }
+        let n = self.scene.groups.len();
+        if into >= n {
+            return Ok(());
+        }
+        let mut starts: Vec<usize> = picks.iter().filter_map(|p| if let Pick::Group(g) = p { Some(*g) } else { None }).filter(|g| *g < n).collect();
+        starts.sort_unstable();
+        starts.dedup();
+        let mut ranges: Vec<(usize, usize)> = Vec::new();
+        for &g in &starts {
+            if !ranges.iter().any(|&(a, b)| g >= a && g < b) {
+                ranges.push((g, self.scene.subtree_end(g)));
+            }
+        }
+        if ranges.iter().any(|&(a, b)| (a..b).contains(&into)) {
+            return Err("A group cannot go inside itself, or more than 4 levels deep");
+        }
+        let mut shapes: Vec<(usize, usize)> = picks
+            .iter()
+            .filter_map(|p| if let Pick::Shape(g, s) = p { Some((*g, *s)) } else { None })
+            .filter(|(g, _)| *g != into && !ranges.iter().any(|&(a, b)| *g >= a && *g < b))
+            .collect();
+        shapes.sort_unstable();
+        shapes.dedup();
+        for &(g, s) in shapes.iter().rev() {
+            if self.scene.shape(g, s).is_some() {
+                let sh = self.scene.groups[g].shapes.remove(s);
+                self.scene.groups[into].shapes.insert(0, sh);
+            }
+        }
+        // one group at a time; the places of the others and of the target shift after each move
+        let mut pending: Vec<usize> = ranges.iter().map(|r| r.0).collect();
+        let mut target = into;
+        let mut result = Ok(());
+        while !pending.is_empty() {
+            let g = pending.remove(0);
+            let e = self.scene.subtree_end(g);
+            let Some(at) = self.scene.move_group_into(g, target) else {
+                result = Err("A group cannot go inside itself, or more than 4 levels deep");
+                break;
+            };
+            let remap = |i: usize| -> usize {
+                if (g..e).contains(&i) {
+                    return at + (i - g);
+                }
+                let j = if i >= e { i - (e - g) } else { i };
+                if j >= at { j + (e - g) } else { j }
+            };
+            target = remap(target);
+            for x in &mut pending {
+                *x = remap(*x);
+            }
+        }
+        self.folded.clear();
+        self.multi.clear();
+        self.sel = Some(Pick::Group(target.min(self.scene.groups.len().saturating_sub(1))));
+        self.multi_for = self.sel;
+        result
     }
 
     /// Move the selection by `d` millimetres.
@@ -1238,7 +1320,6 @@ impl App {
                 Pick::Shape(g, _) => {
                     selected_groups.insert(g);
                 }
-                _ => {}
             }
         }
         for (g, s) in targets {
@@ -3189,6 +3270,35 @@ mod tests {
     }
 
     #[test]
+    fn melting_shapes_never_melts_their_groups_into_each_other() {
+        let ball = |x: f32| {
+            let mut s = Shape::new(Kind::Box, [x, 0.0, 0.0], crate::model::Material::default());
+            s.blend = 0.0;
+            s
+        };
+        let mut app = App::new(true, None);
+        let mut a = Group::new("A");
+        a.shapes = vec![ball(-21.0), ball(-5.0)];
+        let mut b = Group::new("B");
+        b.shapes = vec![ball(21.0)];
+        app.scene.groups = vec![a, b];
+        // a shape picked: its own melt turns on, its group stays hard against the other groups
+        app.sel = Some(Pick::Shape(1, 0));
+        app.toggle_melt_selected();
+        assert!(app.scene.groups[1].shapes[0].blend > 0.0);
+        assert_eq!(app.scene.groups[1].blend, 0.0, "different groups do not melt unless the group itself is melted");
+        // nothing picked: the whole scene melts inside the groups only
+        app.sel = None;
+        app.multi.clear();
+        app.toggle_melt_selected();
+        assert!(app.scene.groups.iter().all(|g| g.blend == 0.0));
+        // a picked group row melts into the groups before it on purpose
+        app.sel = Some(Pick::Group(1));
+        app.toggle_melt_selected();
+        assert!(app.scene.groups[1].blend > 0.0);
+    }
+
+    #[test]
     fn a_quarter_turned_box_shows_its_sizes_along_the_world_axes() {
         let mut app = App::new(true, None);
         let mut b = Shape::new(Kind::Box, [0.0; 3], crate::model::Material::default());
@@ -3237,6 +3347,47 @@ mod tests {
         app.move_layer(Pick::Group(0), Pick::Group(3), true);
         let after: Vec<(String, u8)> = app.scene.groups.iter().map(|x| (x.name.clone(), x.depth)).collect();
         assert_eq!(after, before, "a parent group cannot land among nested groups; nothing is flattened (#203)");
+    }
+
+    #[test]
+    fn a_shape_dropped_on_the_line_above_a_group_joins_the_group_above() {
+        let mut app = App::new(true, None);
+        let sp = || Shape::new(Kind::Sphere, [0.0; 3], crate::model::Material::default());
+        let mut a = Group::new("A");
+        a.shapes = vec![sp()];
+        let mut b = Group::new("B");
+        b.shapes = vec![sp(), sp()];
+        app.scene.groups = vec![a, b];
+        let c = Group::new("C");
+        app.scene.groups.push(c);
+        // dropped on the line above C, which is the end of B
+        app.move_layer(Pick::Shape(0, 0), Pick::Group(2), false);
+        assert_eq!(app.scene.groups[1].shapes.len(), 3, "it joined B, the group above the line (#279)");
+        assert_eq!(app.scene.groups[2].shapes.len(), 0, "and did not go into C below the line");
+        assert_eq!(app.scene.groups[0].shapes.len(), 0);
+        // on the lower edge of a group row it becomes that group's first shape
+        app.move_layer(Pick::Shape(1, 2), Pick::Group(2), true);
+        assert_eq!(app.scene.groups[2].shapes.len(), 1);
+    }
+
+    #[test]
+    fn several_picked_rows_go_into_a_group_together() {
+        let mut app = App::new(true, None);
+        let sp = || Shape::new(Kind::Sphere, [0.0; 3], crate::model::Material::default());
+        let mut a = Group::new("A");
+        a.shapes = vec![sp(), sp()];
+        let mut b = Group::new("B");
+        b.shapes = vec![sp()];
+        let c = Group::new("C");
+        let d = Group::new("D");
+        app.scene.groups = vec![a, b, c, d];
+        let picks = [Pick::Shape(0, 0), Pick::Shape(0, 1), Pick::Group(1), Pick::Group(2)];
+        app.move_picks_into(&picks, 3).unwrap();
+        assert_eq!(app.scene.groups[0].shapes.len(), 0, "A lost both shapes");
+        let names: Vec<(&str, u8)> = app.scene.groups.iter().map(|g| (g.name.as_str(), g.depth)).collect();
+        assert_eq!(names, vec![("A", 0), ("D", 0), ("B", 1), ("C", 1)], "B and C are inside D");
+        assert_eq!(app.scene.groups[1].shapes.len(), 2, "the shapes joined D");
+        assert!(app.move_picks_into(&[Pick::Group(1)], 2).is_err(), "a group cannot go into what is inside it");
     }
 
     #[test]
@@ -3425,7 +3576,7 @@ mod tests {
         app.move_layer(Pick::Shape(0, 0), Pick::Shape(0, 2), true);
         assert_eq!(names(&app), vec![Kind::Sphere, Kind::Box, Kind::Cone]);
         app.add_group();
-        app.move_layer(Pick::Shape(0, 1), Pick::Group(1), false);
+        app.move_layer(Pick::Shape(0, 1), Pick::Group(1), true);
         assert_eq!((app.scene.groups[0].shapes.len(), app.scene.groups[1].shapes.len()), (2, 1));
         app.move_layer(Pick::Group(1), Pick::Group(0), false);
         assert_eq!(app.scene.groups[0].shapes.len(), 1);
