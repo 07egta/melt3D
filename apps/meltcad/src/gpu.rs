@@ -281,7 +281,7 @@ impl ScenePack {
                 push(&mut insts, [c[0], c[1], c[2], i.s]);
                 inst_n += 1;
             }
-            push(&mut groups, [p.first_block as f32, p.n_blocks as f32, g.op.sign(), g.blend]);
+            push(&mut groups, [p.first_block as f32, p.n_blocks as f32, g.op.sign(), scene.group_melt_reach(rg.gi)]);
             // (the third number is this group's first item: every instance, or the group itself, is one item the march can leave out)
             let nested_below = scene.groups.get(rg.gi + 1).is_some_and(|n| n.depth > g.depth);
             push(
@@ -609,7 +609,7 @@ fn bounds_of(scene: &Scene, selected: Option<Pick>, resolved: &[crate::pattern::
             }
             // a lamp's glow reaches a good way out
             let halo = if s.material.glow > 0.0 { 30.0 } else { 0.0 };
-            let reach = (s.blend + g.blend) * scene.melt.amount * 1.5 + scene.melt.drip + 2.0 + halo;
+            let reach = (s.blend + scene.group_melt_reach(rg.gi)) * scene.melt.amount * 1.5 + scene.melt.drip + 2.0 + halo;
             parts.push(Bound { c: s.pos, r: crate::view::radius_of(s) + reach });
         }
         if parts.is_empty() {

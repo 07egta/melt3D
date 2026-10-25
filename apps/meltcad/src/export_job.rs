@@ -250,7 +250,7 @@ pub fn bounds(scene: &Scene) -> Result<([f64; 3], [f64; 3]), String> {
         let one = [crate::pattern::Inst::IDENTITY];
         let insts: &[crate::pattern::Inst] = if rg.insts.is_empty() { &one } else { &rg.insts };
         for s in src.shapes.iter().filter(|s| s.solid() && s.op == Op::Add) {
-            let r = reach_of(s) * 1.05 + (f64::from(s.blend.max(0.0)) + f64::from(g.blend.max(0.0))) * amount * factor;
+            let r = reach_of(s) * 1.05 + (f64::from(s.blend.max(0.0)) + f64::from(scene.group_melt_reach(rg.gi))) * amount * factor;
             for inst in insts {
                 let at = inst.apply(s.pos);
                 let r = r * f64::from(inst.s);
