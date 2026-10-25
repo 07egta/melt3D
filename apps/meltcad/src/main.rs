@@ -72,6 +72,7 @@ mod precise;
 mod precise_services;
 mod prims;
 mod recovery;
+mod render_job;
 mod sdf;
 mod sdf_volume;
 #[cfg(test)]
