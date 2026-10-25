@@ -708,6 +708,11 @@ fn is_zero_u8(v: &u8) -> bool {
     *v == 0
 }
 
+/// A saved blend amount made safe: negative and non-finite values melt nothing.
+fn clean_blend(blend: f32) -> f32 {
+    if blend.is_finite() { blend.max(0.0) } else { 0.0 }
+}
+
 /// The deepest a group can be nested.
 /// Two levels are enough: a big group holds groups, and groups hold shapes. Groups melt into each
 /// other inside the big group, and the big group melts with the rest as one piece.
@@ -1106,6 +1111,22 @@ impl Scene {
         (0..g).rev().find(|&i| self.groups[i].depth < d)
     }
 
+    /// How far a group melts into what comes before it: its own Melt amount, raised to the amount
+    /// of the group around it when that is larger. Melt on a parent therefore also melts the
+    /// groups inside it, without changing any saved amount. The scene's `Melt.amount` multiplies
+    /// this later.
+    pub fn group_melt_reach(&self, g: usize) -> f32 {
+        let Some(group) = self.groups.get(g) else { return 0.0 };
+        let mut reach = clean_blend(group.blend);
+        let mut above = self.parent_of(g);
+        while let Some(p) = above {
+            let Some(parent) = self.groups.get(p) else { break };
+            reach = reach.max(clean_blend(parent.blend));
+            above = self.parent_of(p);
+        }
+        reach
+    }
+
     /// Put `g` (with what is nested in it) into the group just above it.
     pub fn indent_group(&mut self, g: usize) -> bool {
         let e = self.subtree_end(g);
@@ -1467,6 +1488,22 @@ mod tests {
         assert_eq!(sc, before, "a refused move changes nothing");
         assert!(sc.move_group_into(3, 0).is_some(), "but a group can move from one big group to another");
         assert_eq!(layout(&sc), vec![("A".into(), 0), ("a1".into(), 1), ("b1".into(), 1), ("B".into(), 0)]);
+    }
+
+    #[test]
+    fn a_parent_melt_reaches_the_groups_inside_it() {
+        let mut sc = named(&[("parent", 0), ("child a", 1), ("child b", 1), ("top", 0)]);
+        sc.groups[0].blend = 67.38;
+        assert_eq!(sc.group_melt_reach(0), 67.38);
+        assert_eq!(sc.group_melt_reach(1), 67.38, "a parent's Melt melts the groups inside it");
+        assert_eq!(sc.group_melt_reach(2), 67.38);
+        assert_eq!(sc.group_melt_reach(3), 0.0, "a group outside the parent keeps its own amount");
+        sc.groups[1].blend = 80.0;
+        assert_eq!(sc.group_melt_reach(1), 80.0, "a child may melt further than its parent");
+        sc.groups[0].blend = 0.0;
+        assert_eq!(sc.group_melt_reach(2), 0.0, "Melt off everywhere unions plainly");
+        sc.groups[0].blend = f32::NAN;
+        assert_eq!(sc.group_melt_reach(2), 0.0, "a hostile amount melts nothing");
     }
 
     #[test]

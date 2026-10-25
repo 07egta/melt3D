@@ -522,12 +522,31 @@ impl App {
             }
         }
         self.piece_card(ui, g);
-        // what it melts with: the shapes inside it melt together, and the groups at the same level melt with each other
+        // What it melts with: groups at the same level that share the parent's Melt (or whose own
+        // Melt is on), plus the parent group's own shapes when this group melts into them. A pair
+        // melts when the group that closes later has a reach, so the list mirrors the field.
         let into = parent.clone().unwrap_or("Scene".to_string());
-        let partners: Vec<String> = (0..self.scene.groups.len())
-            .filter(|&i| i != g && self.scene.groups[i].depth == self.scene.groups[g].depth && self.scene.parent_of(i) == self.scene.parent_of(g))
-            .map(|i| self.scene.groups[i].name.clone())
+        let parent_index = self.scene.parent_of(g);
+        let depth = self.scene.groups.get(g).map(|group| group.depth);
+        let mut partners: Vec<String> = (0..self.scene.groups.len())
+            .filter(|&i| {
+                i != g
+                    && depth.is_some_and(|depth| {
+                        self.scene.groups.get(i).is_some_and(|other| other.visible && other.depth == depth) && self.scene.parent_of(i) == parent_index
+                    })
+            })
+            .filter(|&i| {
+                let later = if i < g { g } else { i };
+                self.scene.group_melt_reach(later) > 0.0
+            })
+            .filter_map(|i| self.scene.groups.get(i).map(|other| other.name.clone()))
             .collect();
+        if self.scene.group_melt_reach(g) > 0.0
+            && parent_index.is_some_and(|p| self.scene.groups.get(p).is_some_and(|p| p.shapes.iter().any(|s| s.solid())))
+            && let Some(name) = parent.as_ref()
+        {
+            partners.push(format!("the shapes of “{name}”"));
+        }
         ui.label(
             RichText::new(format!(
                 "Melts with: {} (inside {into})",
