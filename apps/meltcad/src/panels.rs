@@ -4,8 +4,9 @@
 use egui::{Align2, Color32, FontId, Pos2, Rect, RichText, Sense, Stroke, Ui, vec2};
 
 use crate::app::{App, Tab};
+use crate::camera::Camera;
 use crate::materials::{self, Category};
-use crate::model::{BlendMode, Corner, Group, Kind, Light, MAX_LIGHTS, MAX_OUTLINE, MAX_SAVED, Material, Melt, Op, Pick, ROUND_MAX};
+use crate::model::{BlendMode, Corner, Group, Kind, Light, MAX_LIGHTS, MAX_OUTLINE, MAX_SAVED, Material, Melt, Op, Pick, ROUND_MAX, Scene};
 use crate::sdf;
 use crate::ripple::{Ripple, RippleMode};
 use crate::{glyphs, style};
@@ -19,6 +20,90 @@ const MELT_PRESETS: [(&str, BlendMode, f32, f32, f32); 6] = [
     ("Honey", BlendMode::Gooey, 1.5, 16.0, 0.7),
     ("Runny", BlendMode::Gooey, 2.4, 28.0, 1.0),
 ];
+
+/// The two colours of the Melt card's shape preview: neighbouring shapes take turns, so the
+/// melt between them reads at card size. Only the picture changes; the viewport, the materials
+/// and the export keep the design's own colours.
+const PREVIEW_RED: [f32; 3] = [0.88, 0.18, 0.14];
+const PREVIEW_BLUE: [f32; 3] = [0.10, 0.34, 0.95];
+/// A neutral dark backdrop for the card: light shapes used to fade into a bright room.
+const PREVIEW_BACKDROP: [f32; 3] = [0.12, 0.13, 0.16];
+
+/// The material of the `n`th of `count` shapes in the card. Several shapes take red and blue in
+/// turn, so what melts into what reads at once; a lone shape has nothing to melt into yet, so it
+/// gets the same red and blue as a two-tone shading from left to right. Geometry, operations and
+/// melt amounts stay exactly as the design has them; the medium roughness reads at the card's
+/// roughly 300 x 120 px.
+fn preview_material(n: usize, count: usize) -> Material {
+    if count > 1 {
+        return Material::plain(if n.is_multiple_of(2) { PREVIEW_RED } else { PREVIEW_BLUE }, 0.55, 0.0);
+    }
+    let mut m = Material::plain(PREVIEW_RED, 0.55, 0.0);
+    m.color2 = PREVIEW_BLUE;
+    m.gradient = 1.0;
+    m.grad_axis = 0;
+    m.grad_local = true;
+    m.grad_soft = 0.35;
+    m
+}
+
+/// The card's copy of the scene: only `keep`, the shapes in red and blue, and no room grid.
+/// A clone only, so the design, the viewport and the export never see these preview colours.
+fn melt_preview_scene(scene: &Scene, keep: &[(usize, usize)]) -> Scene {
+    let mut preview = scene.clone();
+    for (g, group) in preview.groups.iter_mut().enumerate() {
+        let mut s = 0;
+        group.shapes.retain(|_| {
+            let k = keep.contains(&(g, s));
+            s += 1;
+            k
+        });
+    }
+    let count = preview.shape_count();
+    let mut n = 0;
+    for group in &mut preview.groups {
+        for shape in &mut group.shapes {
+            shape.material = preview_material(n, count);
+            n += 1;
+        }
+    }
+    preview.env.grid = false;
+    preview.env.floor = false;
+    preview.env.backdrop = PREVIEW_BACKDROP;
+    preview
+}
+
+/// What the preview picture depends on: the kept shapes, the groups' melt, the settings, the
+/// view direction in coarse steps and the card size. Any change makes the card redraw, so the
+/// selection or a mode button never leaves a stale picture.
+fn melt_preview_key(scene: &Scene, keep: &[(usize, usize)], cam: &Camera, size: [usize; 2]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    for &(g, s) in keep {
+        if let (Some(sh), Some(gr)) = (scene.shape(g, s), scene.groups.get(g)) {
+            format!(
+                "{g} {:?} {:?} {:?} {:?} {:?} {} {:?} {} {:?} {} {} {}",
+                sh.kind,
+                sh.size,
+                sh.pos,
+                sh.rot,
+                sh.scale,
+                sh.blend,
+                sh.op,
+                sh.round,
+                sh.material.color,
+                gr.blend,
+                gr.depth,
+                sh.volume.as_ref().map_or(0, |v| v.key())
+            )
+            .hash(&mut h);
+        }
+    }
+    // the view's direction in coarse steps: turning the view does not redraw it every frame
+    let step = |a: f32| (a / 0.35).round() as i32;
+    format!("{:?} {} {} {:?}", scene.melt, step(cam.yaw), step(cam.pitch), size).hash(&mut h);
+    h.finish()
+}
 
 const BACKDROPS: [[f32; 3]; 10] = [
     [0.27, 0.27, 0.285],
@@ -1477,8 +1562,9 @@ struct RowResult {
 }
 
 impl App {
-    /// The picked shapes (or the whole scene when nothing is picked) as they are, melting into each
-    /// other with these settings, seen from the view's direction. False when there is nothing to show.
+    /// The picked shapes (or the whole scene when nothing is picked), with their own geometry,
+    /// melting into each other with these settings, seen from the view's direction and painted in
+    /// the card's red and blue. False when there is nothing to show.
     fn real_melt_preview(&mut self, ui: &mut Ui) -> bool {
         let picks = self.picks();
         let keep: Vec<(usize, usize)> = if picks.is_empty() {
@@ -1495,47 +1581,14 @@ impl App {
         let mut cam = self.cam;
         cam.yaw = (cam.yaw / 0.35).round() * 0.35;
         cam.pitch = (cam.pitch / 0.35).round() * 0.35;
-        // what the picture depends on: the kept shapes, the groups' melt, the settings, the view
-        use std::hash::{Hash, Hasher};
-        let mut h = std::collections::hash_map::DefaultHasher::new();
-        for &(g, s) in &keep {
-            if let (Some(sh), Some(gr)) = (self.scene.shape(g, s), self.scene.groups.get(g)) {
-                format!(
-                    "{g} {:?} {:?} {:?} {:?} {:?} {} {:?} {} {:?} {} {} {}",
-                    sh.kind,
-                    sh.size,
-                    sh.pos,
-                    sh.rot,
-                    sh.scale,
-                    sh.blend,
-                    sh.op,
-                    sh.round,
-                    sh.material.color,
-                    gr.blend,
-                    gr.depth,
-                    sh.volume.as_ref().map_or(0, |v| v.key())
-                )
-                .hash(&mut h);
-            }
-        }
-        // the view's direction in coarse steps: turning the view does not redraw it every frame
-        let step = |a: f32| (a / 0.35).round() as i32;
-        format!("{:?} {} {} {:?}", self.scene.melt, step(cam.yaw), step(cam.pitch), size).hash(&mut h);
-        let key = h.finish();
+        let key = melt_preview_key(&self.scene, &keep, &cam, size);
         // while the mouse is held (dragging a handle, a slider, the view) keep the last picture
         let busy = self.melt_preview.is_some() && ui.input(|i| i.pointer.any_down());
         if !busy && self.melt_preview.as_ref().is_none_or(|(k, _)| *k != key) {
-            // built only when the picture really changes: copying the scene every frame made big scenes lag
-            // only the picked parts, in their own groups, so what melts into what stays the same
-            let mut scene = self.scene.clone();
-            for (g, group) in scene.groups.iter_mut().enumerate() {
-                let mut s = 0;
-                group.shapes.retain(|_| {
-                    let k = keep.contains(&(g, s));
-                    s += 1;
-                    k
-                });
-            }
+            // built only when the picture really changes: copying the scene every frame made big scenes lag.
+            // Only the picked parts, in their own groups, so what melts into what stays the same; the card
+            // paints them red and blue (`melt_preview_scene`) so the melt reads at card size.
+            let scene = melt_preview_scene(&self.scene, &keep);
             let spheres = crate::pattern::world_spheres(&scene);
             if spheres.is_empty() {
                 return false;
@@ -1588,10 +1641,13 @@ fn melt_preview(ui: &mut Ui, m: &Melt) {
             let (d, h) = sdf::smin(d1, d2, k, m.mode);
             if d < 0.5 {
                 let depth = (-d / r).clamp(0.0, 1.0);
+                // the same red and blue as the shape card, blended where the two blobs meet
+                let t = (1.0 - h).clamp(0.0, 1.0);
+                let mix = |a: f32, b: f32| (a + (b - a) * t) * 255.0;
                 let base = Color32::from_rgb(
-                    (236.0 + (120.0 - 236.0) * (1.0 - h)) as u8,
-                    (140.0 + (150.0 - 140.0) * (1.0 - h)) as u8,
-                    (110.0 + (250.0 - 110.0) * (1.0 - h)) as u8,
+                    mix(PREVIEW_RED[0], PREVIEW_BLUE[0]) as u8,
+                    mix(PREVIEW_RED[1], PREVIEW_BLUE[1]) as u8,
+                    mix(PREVIEW_RED[2], PREVIEW_BLUE[2]) as u8,
                 );
                 let shade = 0.62 + 0.38 * depth;
                 let col = Color32::from_rgb((base.r() as f32 * shade) as u8, (base.g() as f32 * shade) as u8, (base.b() as f32 * shade) as u8);
@@ -1628,4 +1684,103 @@ fn gradient_controls(ui: &mut Ui, m: &mut Material) {
     style::labeled_slider(ui, "Strength", &mut m.gradient, 0.05..=1.0, "How much of the end color shows");
     style::labeled_slider(ui, "From", &mut m.grad_from, 0.0..=1.0, "Where the color starts to change (0 = edge)");
     style::labeled_slider(ui, "To", &mut m.grad_to, 0.0..=1.0, "Where the color finishes changing (1 = opposite edge)");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::Shape;
+
+    /// Two light shapes with the same pale material: exactly the case that used to read as one
+    /// white blob in the Melt card.
+    fn two_white_balls() -> Scene {
+        let mut group = Group::new("Melt pair");
+        group.blend = 12.0;
+        for x in [-9.0, 9.0] {
+            group.shapes.push(Shape::new(Kind::Sphere, [x, 0.0, 10.0], Material::plain([0.94, 0.94, 0.94], 0.8, 0.0)));
+        }
+        Scene { groups: vec![group], ..Scene::default() }
+    }
+
+    #[test]
+    fn the_card_alternates_red_and_blue_and_never_changes_the_design() {
+        let scene = two_white_balls();
+        let before = scene.clone();
+        let preview = melt_preview_scene(&scene, &[(0, 0), (0, 1)]);
+        assert_eq!(scene, before, "the card draws a copy, not the design");
+        let first = preview.shape(0, 0).map(|s| s.material).expect("first preview shape");
+        let second = preview.shape(0, 1).map(|s| s.material).expect("second preview shape");
+        assert_eq!(first.color, PREVIEW_RED);
+        assert_eq!(second.color, PREVIEW_BLUE);
+        assert_eq!(first.gradient, 0.0, "two shapes are told apart by flat red and blue");
+        assert_eq!(second.gradient, 0.0);
+        for m in [first, second] {
+            let optical = (m.metallic, m.glass, m.glow, m.iridescence, m.coat, m.translucency);
+            assert_eq!(optical, (0.0, 0.0, 0.0, 0.0, 0.0, 0.0), "the tint must not turn into glass or glow");
+        }
+        assert!(!preview.env.grid && !preview.env.floor, "the card shows the melt, not the room's grid");
+        assert_eq!(preview.env.backdrop, PREVIEW_BACKDROP);
+    }
+
+    #[test]
+    fn the_card_shows_only_the_picked_shapes() {
+        let preview = melt_preview_scene(&two_white_balls(), &[(0, 1)]);
+        assert_eq!(preview.shape_count(), 1);
+        assert_eq!(preview.shape(0, 0).map(|s| s.material.color), Some(PREVIEW_RED));
+    }
+
+    fn rendered_colours(scene: &Scene, radius: f32) -> (usize, usize) {
+        let mut cam = Camera::default();
+        cam.frame([0.0, 0.0, 10.0], radius);
+        let rgba = crate::easy_view::render(scene, &cam, [120, 96], false, 2, &|| false).expect("the software rasteriser draws the card");
+        let (mut red, mut blue) = (0usize, 0usize);
+        for px in rgba.as_chunks::<4>().0 {
+            let (r, g, b) = (px[0], px[1], px[2]);
+            if r > g.saturating_add(30) && r > b.saturating_add(30) {
+                red += 1;
+            }
+            if b > r.saturating_add(30) && b > g.saturating_add(30) {
+                blue += 1;
+            }
+        }
+        (red, blue)
+    }
+
+    #[test]
+    fn a_rendered_pair_shows_red_and_blue_at_card_size() {
+        let preview = melt_preview_scene(&two_white_balls(), &[(0, 0), (0, 1)]);
+        let (red, blue) = rendered_colours(&preview, 32.0);
+        assert!(red > 100, "the first shape must read red at card size: {red} red pixels");
+        assert!(blue > 100, "the second shape must read blue at card size: {blue} blue pixels");
+    }
+
+    #[test]
+    fn a_lone_picked_shape_still_shows_red_and_blue() {
+        let preview = melt_preview_scene(&two_white_balls(), &[(0, 0)]);
+        let m = preview.shape(0, 0).map(|s| s.material).expect("the picked preview shape");
+        assert_eq!((m.color, m.color2), (PREVIEW_RED, PREVIEW_BLUE));
+        assert!(m.gradient > 0.5, "one shape gets a red/blue two-tone instead of a flat colour");
+        let (red, blue) = rendered_colours(&preview, 18.0);
+        assert!(red > 100, "a lone shape must still read red: {red} red pixels");
+        assert!(blue > 100, "a lone shape must still read blue: {blue} blue pixels");
+    }
+
+    #[test]
+    fn the_card_key_follows_the_selection_mode_amount_and_shape() {
+        let scene = two_white_balls();
+        let cam = Camera::default();
+        let size = [284, 96];
+        let both = [(0, 0), (0, 1)];
+        let base = melt_preview_key(&scene, &both, &cam, size);
+        assert_ne!(base, melt_preview_key(&scene, &[(0, 0)], &cam, size), "a new selection must redraw the card");
+        let mut round = scene.clone();
+        round.melt.mode = BlendMode::Round;
+        assert_ne!(base, melt_preview_key(&round, &both, &cam, size), "a new mode must redraw the card");
+        let mut strong = scene.clone();
+        strong.melt.amount = 2.0;
+        assert_ne!(base, melt_preview_key(&strong, &both, &cam, size), "a new amount must redraw the card");
+        let mut moved = scene.clone();
+        moved.groups[0].shapes[1].pos[0] += 4.0;
+        assert_ne!(base, melt_preview_key(&moved, &both, &cam, size), "a moved shape must redraw the card");
+    }
 }
