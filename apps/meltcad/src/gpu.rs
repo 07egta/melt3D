@@ -203,26 +203,43 @@ impl ScenePack {
         for gi in srcs {
             let Some(g) = scene.groups.get(gi) else { continue };
             let first = shape_n;
-            let mut members: Vec<&crate::model::Shape> = Vec::new();
+            let mut members: Vec<crate::model::Shape> = Vec::new();
+            let patterned = g.shapes.iter().any(|s| s.pattern.is_some());
+            let shape_insts = resolved.iter().find(|r| r.src == gi).map(|r| &r.shape_insts);
             for si in g.fold_order() {
                 let Some(s) = g.shapes.get(si) else { continue };
-                if !s.solid() || shape_n >= MAX_SHAPES {
+                if !s.solid() {
                     continue;
                 }
-                let reused = previous.is_some_and(|(old_scene, old_pack)| {
-                    old_scene.shape(gi, si).is_some_and(|old| old == s)
-                        && old_slots.get(&(gi, si)).is_some_and(|&slot| reuse_shape_pack(s, old_pack, slot, &vols, &mut shapes, &mut poly, &mut path))
-                });
-                if reused {
-                    shapes_reused += 1;
-                } else {
-                    pack_shape(s, &mut shapes, &mut poly, &mut path, &vols);
-                    shapes_repacked += 1;
+                let insts: Vec<crate::pattern::Inst> =
+                    shape_insts.and_then(|v| v.get(si)).filter(|v| !v.is_empty()).cloned().unwrap_or_else(|| vec![crate::pattern::Inst::IDENTITY]);
+                for inst in insts {
+                    if shape_n >= MAX_SHAPES {
+                        break;
+                    }
+                    let identity = inst == crate::pattern::Inst::IDENTITY;
+                    let reused = !patterned
+                        && identity
+                        && previous.is_some_and(|(old_scene, old_pack)| {
+                            old_scene.shape(gi, si).is_some_and(|old| old == s)
+                                && old_slots
+                                    .get(&(gi, si))
+                                    .is_some_and(|&slot| reuse_shape_pack(s, old_pack, slot, &vols, &mut shapes, &mut poly, &mut path))
+                        });
+                    if reused {
+                        shapes_reused += 1;
+                    } else {
+                        pack_shape(s, (!identity).then_some(&inst), &mut shapes, &mut poly, &mut path, &vols);
+                        shapes_repacked += 1;
+                    }
+                    packed_overlap |= s.op == crate::model::Op::Intersect;
+                    let mut member = s.clone();
+                    member.pos = inst.apply(s.pos);
+                    member.scale = [s.scale[0] * inst.s, s.scale[1] * inst.s, s.scale[2] * inst.s];
+                    members.push(member);
+                    slots.push((gi, si, shape_n));
+                    shape_n += 1;
                 }
-                packed_overlap |= s.op == crate::model::Op::Intersect;
-                members.push(s);
-                slots.push((gi, si, shape_n));
-                shape_n += 1;
             }
             let count = shape_n - first;
             ranges.push((gi, first, count));
@@ -239,14 +256,15 @@ impl ScenePack {
                     // never covered (or retain blocks for shapes that are no longer packed).
                     let same_admission =
                         old_pack.ranges.iter().any(|&(old_gi, old_first, old_count)| old_gi == gi && old_first == first && old_count == count);
-                    (old_group.shapes == g.shapes
+                    (!patterned
+                        && old_group.shapes == g.shapes
                         && old_scene.melt.mode == scene.melt.mode
                         && old_scene.melt.amount == scene.melt.amount
                         && same_admission)
                         .then(|| old_pack.source_infos.get(&gi).cloned())
                         .flatten()
                 })
-                .unwrap_or_else(|| Arc::new(crate::accel::group_info(&members, &scene.melt)));
+                .unwrap_or_else(|| Arc::new(crate::accel::group_info(&members.iter().collect::<Vec<_>>(), &scene.melt)));
             source_infos.insert(gi, Arc::clone(&info));
             for b in &info.blocks {
                 push(&mut blocks, [b.bound.c[0], b.bound.c[1], b.bound.c[2], b.bound.r]);
@@ -328,6 +346,14 @@ impl ScenePack {
         self.slots.iter().find(|(g, s, _)| *g == gi && *s == si).map(|(_, _, n)| *n)
     }
 
+    /// The first packed number of a shape and how many copies it has (a shape pattern packs one
+    /// payload per instance; they are next to each other).
+    fn slot_range_of(&self, gi: usize, si: usize) -> Option<(usize, usize)> {
+        let first = self.slot_of(gi, si)?;
+        let count = self.slots.iter().filter(|(g, s, _)| *g == gi && *s == si).count();
+        Some((first, count.max(1)))
+    }
+
     /// The per-frame numbers (`GLOBAL_V4` vec4): camera, light, counts, where the lists start, the
     /// selection. `scene` must be the one this pack was made from.
     pub fn globals(
@@ -352,7 +378,7 @@ impl ScenePack {
         let (mut sel_first, mut sel_count, mut hover_first, mut hover_count) = (-1.0_f32, 0.0_f32, -1.0_f32, 0.0_f32);
         let find = |p: Option<Pick>| -> Option<(f32, f32)> {
             match p? {
-                Pick::Shape(g, s) => self.slot_of(g, s).map(|n| (n as f32, 1.0)),
+                Pick::Shape(g, s) => self.slot_range_of(g, s).map(|(n, c)| (n as f32, c as f32)),
                 Pick::Group(g) => self.ranges.iter().find(|(gi, _, c)| *gi == g && *c > 0).map(|(_, f, c)| (*f as f32, *c as f32)),
             }
         };
@@ -361,9 +387,9 @@ impl ScenePack {
         }
         // (the hover names one shape only)
         if let Some(Pick::Shape(g, s)) = hover
-            && let Some(n) = self.slot_of(g, s)
+            && let Some((n, c)) = self.slot_range_of(g, s)
         {
-            (hover_first, hover_count) = (n as f32, 1.0);
+            (hover_first, hover_count) = (n as f32, c as f32);
         }
         put(&mut u, 6, [self.group_n as f32, self.shape_n as f32, sel_first, sel_count]);
         put(&mut u, V4_OFFS, self.offs);
@@ -481,8 +507,19 @@ fn reuse_shape_pack(
 
 /// One shape's 16 vec4 (a bounding sphere, then `struct Shape`); its outline points and path nodes
 /// go into the shared pools.
-fn pack_shape(s: &crate::model::Shape, out: &mut Vec<f32>, poly: &mut Vec<f32>, path: &mut Vec<f32>, vols: &VolumeSet) {
-    let p = Prepared::new(s);
+fn pack_shape(
+    s: &crate::model::Shape,
+    inst: Option<&crate::pattern::Inst>,
+    out: &mut Vec<f32>,
+    poly: &mut Vec<f32>,
+    path: &mut Vec<f32>,
+    vols: &VolumeSet,
+) {
+    let p = match inst {
+        Some(i) if *i != crate::pattern::Inst::IDENTITY => Prepared::transformed(s, i),
+        _ => Prepared::new(s),
+    };
+    let copy_scale = inst.map_or(1.0, |i| i.s);
     // outline points, two per vec4: returns (first point, count)
     let pack_outline = |pts: &[[f32; 2]], poly: &mut Vec<f32>| -> (usize, usize) {
         let used = poly.len() / 2;
@@ -508,7 +545,7 @@ fn pack_shape(s: &crate::model::Shape, out: &mut Vec<f32>, poly: &mut Vec<f32>, 
     } else {
         (0, 0)
     };
-    let radius = crate::perf::shape_radius(s);
+    let radius = crate::perf::shape_radius(s) * copy_scale;
     // a mesh: size = nodes along x, y, z (0 = nothing to draw), params = place of node 0 and the cell, ext.x = first node
     let (mut size4, mut params4, mut ext4) =
         ([s.size[0], s.size[1], s.size[2], p.round], s.params, [pstart as f32, pcount as f32, start2 as f32, count2 as f32]);
@@ -523,14 +560,14 @@ fn pack_shape(s: &crate::model::Shape, out: &mut Vec<f32>, poly: &mut Vec<f32>, 
             None => ([0.0; 4], [0.0; 4], [0.0; 4]),
         };
     }
-    push(out, [s.pos[0], s.pos[1], s.pos[2], radius]);
+    push(out, [p.pos[0], p.pos[1], p.pos[2], radius]);
     // (the free fourth numbers of the three rotation rows carry a face melt: face, amount, reach)
     let fm = p.face_melt.map_or([0.0; 3], |(ax, sg, a, r)| [(ax * 2 + usize::from(sg < 0.0) + 1) as f32, a, r]);
     push(out, [p.inv[0][0], p.inv[0][1], p.inv[0][2], fm[0]]);
     push(out, [p.inv[1][0], p.inv[1][1], p.inv[1][2], fm[1]]);
     push(out, [p.inv[2][0], p.inv[2][1], p.inv[2][2], fm[2]]);
-    push(out, [s.pos[0], s.pos[1], s.pos[2], p.min_scale()]);
-    push(out, [s.scale[0], s.scale[1], s.scale[2], s.kind.id()]);
+    push(out, [p.pos[0], p.pos[1], p.pos[2], p.min_scale()]);
+    push(out, [p.scale[0], p.scale[1], p.scale[2], s.kind.id()]);
     push(out, size4);
     push(out, [s.op.sign(), s.blend, start as f32, count as f32]);
     let m = &s.material;
@@ -602,7 +639,10 @@ fn bounds_of(scene: &Scene, selected: Option<Pick>, resolved: &[crate::pattern::
             // a lamp's glow reaches a good way out
             let halo = if s.material.glow > 0.0 { 30.0 } else { 0.0 };
             let reach = (s.blend + g.blend) * scene.melt.amount * 1.5 + scene.melt.drip + 2.0 + halo;
-            parts.push(Bound { c: s.pos, r: crate::view::radius_of(s) + reach });
+            match rg.shape_insts.get(si).filter(|v| !v.is_empty()) {
+                Some(insts) => parts.extend(insts.iter().map(|i| Bound { c: i.apply(s.pos), r: crate::view::radius_of(s) * i.s + reach })),
+                None => parts.push(Bound { c: s.pos, r: crate::view::radius_of(s) + reach }),
+            }
         }
         if parts.is_empty() {
             continue;
@@ -2077,6 +2117,41 @@ mod instance_tests {
         let plain = pack(&Scene::default(), &Camera::default(), [8.0, 6.0], None, None, true);
         assert!(instances_of(&Frame::new(&plain), 0).is_empty());
         assert!(f.list_len() < ROW * 3);
+    }
+
+    #[test]
+    fn a_single_shape_pattern_packs_its_copies_and_selects_the_source() {
+        let mut sc = Scene::default();
+        sc.groups[0].shapes[0].pos = [0.0, 0.0, 20.0];
+        sc.groups[0].shapes[0].size = [8.0; 3];
+        sc.groups[0].shapes[0].pattern = Some(Pattern::Rect { counts: [3, 1, 1], spacing: [25.0, 0.0, 0.0] });
+        let u = pack(&sc, &Camera::default(), [800.0, 600.0], Some(Pick::Shape(0, 0)), None, true);
+        let f = Frame::new(&u);
+        assert_eq!(f.counts()[1], 3.0, "one payload per copy");
+        let at: Vec<f32> = (0..3).map(|i| f.shape(i, 4)[0]).collect();
+        assert_eq!(at, [0.0, 25.0, 50.0]);
+        // selecting any copy names the source shape: the selection covers all copies
+        assert_eq!(&f.counts()[2..], &[0.0, 3.0]);
+        assert_eq!(&u[V4_HOVER * 4..V4_HOVER * 4 + 2], &[-1.0, 0.0], "nothing is hovered");
+        // picking a copy still names the source shape
+        assert!(sc.shape(0, 0).is_some());
+        // a circular pattern of the same shape, and a group pattern over it
+        sc.groups[0].shapes[0].pattern = Some(Pattern::Circular { count: 4, angle: 360.0, axis: 2, centre: [0.0, 0.0, 20.0], rotate: true });
+        sc.groups[0].pattern = Some(Pattern::Rect { counts: [1, 2, 1], spacing: [0.0, 60.0, 0.0] });
+        let u = pack(&sc, &Camera::default(), [800.0, 600.0], None, None, true);
+        let f = Frame::new(&u);
+        assert_eq!(f.counts()[1], 4.0, "4 shape copies; the group pattern repeats them");
+        assert_eq!(instances_of(&f, 0).len(), 2);
+        // removing the shape pattern leaves one shape per group copy
+        sc.groups[0].shapes[0].pattern = None;
+        let u = pack(&sc, &Camera::default(), [800.0, 600.0], None, None, true);
+        let f = Frame::new(&u);
+        assert_eq!(f.counts()[1], 1.0);
+        // hostile counts stay bounded by the shape budget
+        sc.groups[0].shapes[0].pattern = Some(Pattern::Rect { counts: [64, 64, 64], spacing: [1.0, 1.0, 1.0] });
+        let u = pack(&sc, &Camera::default(), [800.0, 600.0], None, None, true);
+        let f = Frame::new(&u);
+        assert!(f.counts()[1] <= crate::model::MAX_SHAPES as f32);
     }
 
     #[test]

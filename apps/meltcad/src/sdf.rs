@@ -161,6 +161,17 @@ impl Prepared {
             volume: if s.kind == Kind::Mesh { s.volume.clone() } else { None },
         }
     }
+    /// The same shape carried by a pattern instance: the copies of one shape are packed as shapes of
+    /// their own, so their inverse rotation, place and scale already hold the instance.
+    pub fn transformed(s: &Shape, inst: &crate::pattern::Inst) -> Prepared {
+        let mut p = Prepared::new(s);
+        p.inv = inst.combine_inverse(&p.inv);
+        p.pos = inst.apply(s.pos);
+        p.scale = [s.scale[0] * inst.s, s.scale[1] * inst.s, s.scale[2] * inst.s];
+        p.half = mul(p.half, inst.s);
+        p.grad_half *= inst.s;
+        p
+    }
     /// The point in the shape's own space.
     pub fn local(&self, p: V3) -> V3 {
         let d = sub(p, self.pos);
@@ -417,7 +428,11 @@ impl Field {
                 let older = old_sources.get(&rg.src).copied();
                 let prior_group = previous.and_then(|(_, old)| old.groups.get(rg.src));
                 let same_melt = previous.is_some_and(|(_, old)| old.melt.mode == scene.melt.mode && old.melt.amount == scene.melt.amount);
-                if let (Some(old), Some(prior)) = (older, prior_group)
+                // A shape pattern changes the number of measured shapes for the same shape list:
+                // older per-shape payloads cannot be reused by index any more.
+                let patterned = srcg.shapes.iter().any(|s| s.pattern.is_some());
+                if !patterned
+                    && let (Some(old), Some(prior)) = (older, prior_group)
                     && same_melt
                     && prior.shapes == srcg.shapes
                 {
@@ -430,25 +445,37 @@ impl Field {
                     .unwrap_or_default();
                 let mut shapes = Vec::new();
                 let mut origin = Vec::new();
-                let mut members: Vec<&Shape> = Vec::new();
+                let mut members_owned: Vec<Shape> = Vec::new();
+                let mut bounds = Vec::new();
                 for si in srcg.fold_order() {
                     let Some(s) = srcg.shapes.get(si) else { continue };
                     if !s.solid() {
                         continue;
                     }
-                    let same = prior_group.and_then(|old| old.shapes.get(si)).is_some_and(|old| old == s);
-                    let prep = if same { old_shapes.get(&si).map(|p| Arc::clone(p)) } else { None };
-                    if prep.is_some() {
-                        prepared_reused += 1;
-                    } else {
-                        prepared_built += 1;
+                    let insts: Vec<crate::pattern::Inst> =
+                        rg.shape_insts.get(si).filter(|v| !v.is_empty()).cloned().unwrap_or_else(|| vec![crate::pattern::Inst::IDENTITY]);
+                    for inst in insts {
+                        let identity = inst == crate::pattern::Inst::IDENTITY;
+                        let same = !patterned && identity && prior_group.and_then(|old| old.shapes.get(si)).is_some_and(|old| old == s);
+                        let prep = if same { old_shapes.get(&si).map(|p| Arc::clone(p)) } else { None };
+                        if prep.is_some() {
+                            prepared_reused += 1;
+                        } else {
+                            prepared_built += 1;
+                        }
+                        shapes.push(
+                            prep.unwrap_or_else(|| if identity { Arc::new(Prepared::new(s)) } else { Arc::new(Prepared::transformed(s, &inst)) }),
+                        );
+                        origin.push((rg.src, si));
+                        bounds.push(inst.bound(crate::accel::shape_bound(s)));
+                        let mut member = s.clone();
+                        member.pos = inst.apply(s.pos);
+                        member.scale = [s.scale[0] * inst.s, s.scale[1] * inst.s, s.scale[2] * inst.s];
+                        members_owned.push(member);
                     }
-                    shapes.push(prep.unwrap_or_else(|| Arc::new(Prepared::new(s))));
-                    origin.push((rg.src, si));
-                    members.push(s);
                 }
+                let members: Vec<&Shape> = members_owned.iter().collect();
                 let info = crate::accel::group_info(&members, &scene.melt);
-                let bounds = members.iter().map(|s| crate::accel::shape_bound(s)).collect();
                 sources.push(Arc::new(PreparedGroup { source_group: rg.src, shapes, origin, bounds, info }));
                 sources.len() - 1
             });
@@ -1354,6 +1381,88 @@ mod tests {
             let wr = written_out(&s);
             compare(&field, &Field::new(&wr), &centres(&wr), name, 1500);
         }
+    }
+
+    #[test]
+    fn a_single_shape_pattern_measures_like_the_copies_written_out() {
+        use crate::pattern::{Pattern, euler_of};
+        fn written(sc: &Scene) -> Scene {
+            let mut out = sc.clone();
+            out.groups.clear();
+            for (gi, g) in sc.groups.iter().enumerate() {
+                let mut plain = Group::new(format!("{} plain", g.name));
+                plain.op = g.op;
+                plain.blend = g.blend;
+                plain.depth = g.depth;
+                for (si, s) in g.shapes.iter().enumerate() {
+                    if !s.solid() {
+                        continue;
+                    }
+                    let insts = crate::pattern::shape_instances(sc, gi, si, 256);
+                    for i in &insts {
+                        let mut t = s.clone();
+                        t.pattern = None;
+                        t.uid = 0;
+                        t.pos = i.apply(s.pos);
+                        let r = rotation(s.rot);
+                        let m = i.m;
+                        let mut mr = [[0.0_f32; 3]; 3];
+                        for a in 0..3 {
+                            for b in 0..3 {
+                                mr[a][b] = (0..3).map(|k| m[a][k] * r[k][b]).sum();
+                            }
+                        }
+                        let rm: [V3; 3] = if i.flips() {
+                            let mut o = [[0.0; 3]; 3];
+                            for a in 0..3 {
+                                for b in 0..3 {
+                                    o[a][b] = (0..3).map(|k| mr[a][k] * m[k][b]).sum();
+                                }
+                            }
+                            o
+                        } else {
+                            mr
+                        };
+                        t.rot = euler_of(&rm);
+                        plain.shapes.push(t);
+                    }
+                }
+                out.groups.push(plain);
+            }
+            out
+        }
+        let mut sc = Scene::default();
+        sc.groups[0].shapes[0].kind = Kind::Box;
+        sc.groups[0].shapes[0].size = [24.0, 18.0, 12.0];
+        sc.groups[0].shapes[0].pos = [0.0, 0.0, 20.0];
+        let mut other = Shape::new(Kind::Sphere, [90.0, 0.0, 20.0], Material::default());
+        other.size = [10.0; 3];
+        sc.groups[0].shapes.push(other);
+        for (name, p, copies) in [
+            ("rect", Pattern::Rect { counts: [3, 2, 1], spacing: [35.0, 30.0, 0.0] }, 7),
+            ("mirror xyz about its middle", Pattern::Mirror { axes: [true, true, true], centre: true }, 9),
+            ("circle", Pattern::Circular { count: 5, angle: 360.0, axis: 2, centre: [0.0, 0.0, 20.0], rotate: true }, 6),
+        ] {
+            let mut s = sc.clone();
+            s.groups[0].shapes[0].pattern = Some(p);
+            let field = Field::new(&s);
+            assert_eq!(field.sources[0].shapes.len(), copies, "{name}: every copy is a measured shape");
+            let wr = written(&s);
+            assert!(wr.groups[0].shapes.len() > s.groups[0].shapes.len(), "{name}");
+            compare(&field, &Field::new(&wr), &centres(&wr), name, 1200);
+        }
+        // removing the pattern restores just the one shape
+        sc.groups[0].shapes[0].pattern = None;
+        let field = Field::new(&sc);
+        assert_eq!(field.sources[0].shapes.len(), 2);
+        // an identity-only shape pattern is the same as no pattern
+        sc.groups[0].shapes[0].pattern = Some(Pattern::Rect { counts: [1, 1, 1], spacing: [50.0, 50.0, 50.0] });
+        let identity = Field::new(&sc);
+        assert_eq!(identity.sources[0].shapes.len(), 2);
+        assert!((identity.distance([0.0, 0.0, 20.0]) - field.distance([0.0, 0.0, 20.0])).abs() < 1e-4);
+        // the instance identity still names the source shape for picking
+        let hit = identity.sample([0.0, 0.0, 20.0]);
+        assert_eq!(hit.nearest, Some((0, 0)));
     }
 
     #[test]

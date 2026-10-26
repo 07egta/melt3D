@@ -468,6 +468,10 @@ pub struct Shape {
     /// A solid made in SolidCraft carries its design, so it can be opened there again and edited.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub solid: Option<SolidLink>,
+    /// Live copies of this one shape (mirror, grid, circle, along a path, on points): the shape
+    /// itself stays the first instance, and the copies use no shape slots. Old files have none.
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "crate::pattern::lenient_pattern")]
+    pub pattern: Option<Pattern>,
 }
 
 /// The SolidCraft design behind a shape that came from SolidCraft.
@@ -580,6 +584,7 @@ impl Shape {
             mesh_source: None,
             face_melt: FaceMelt::default(),
             solid: None,
+            pattern: None,
         }
     }
 
@@ -1315,6 +1320,9 @@ impl Scene {
                     fix(v, -5000.0, 5000.0, 0.0);
                 }
                 fix(&mut s.shell, 0.0, 500.0, 0.0);
+                if let Some(p) = &mut s.pattern {
+                    p.sanitize();
+                }
                 s.outline2.truncate(MAX_OUTLINE);
                 for p in &mut s.outline2 {
                     fix(&mut p[0], -2000.0, 2000.0, 0.0);

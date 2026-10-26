@@ -392,6 +392,14 @@ Solid の命令は新しい形を追加し、参照した Sketch は残します
 数値や輪郭、参照先、容量が不正なら、これらの命令はシーンを変えずにエラーを返します。
 従来の `extrude` 命令も引き続き利用できます。
 
+### パターン（形1つ、またはグループ）
+- `pattern.set`: `{"cmd":"pattern.set","group":0,"shape":0,"pattern":{"Rect":{"counts":[3,1,1],"spacing":[40,40,40]}}}`
+  のように、選んだ形1つ（`shape` を付ける）またはグループ全体（`shape` を省く）にライブのパターンを付けます。形そのものは残り、1つ目になります。`null` で解除。
+- `pattern.clear`: `{"cmd":"pattern.clear","group":0,"shape":0}` で解除します。
+- 種類は `Mirror:{axes:[x,y,z],centre}`、`Rect:{counts,spacing}`、`Circular:{count,angle,axis,centre,rotate}`、`Path:{source,count,mode:"Even"|"Step",step,align}`、`Geometry:{source,orient}`。
+- 回数・間隔・半径・角度・道のり・ミラー軸は、画面のパターン欄のスライダーと数値欄で後から変えられます（1回の変更が Undo 1回）。`pattern.set` で作り直しても同じです。
+- 数値は安全な範囲に丸めます（1軸あたり最大64、全体で最大256コピー）。多すぎる分は「Too many pattern copies」と表示して省略します。
+
 ### 開いているアプリを動かす／MCP
 - `meltcad --control 7777` … アプリを開いたまま、127.0.0.1:7777 に JSON を1行ずつ送って操作できます。最初の1回だけ `"token"` が必要（中身は一時フォルダの `melt3d-control-7777.token`）。
 - `meltcad --mcp` … MCP サーバー（画面なし）。`meltcad --mcp --control 7777` なら開いている画面を操作します。

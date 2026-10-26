@@ -12,6 +12,7 @@
 use serde_json::{Map, Value, json};
 
 use crate::model::{Group, Kind, MAX_GROUPS, MAX_OUTLINE, MAX_PATH, MAX_SHAPES, Material, Op, Scene, Shape};
+use crate::pattern::Pattern;
 use crate::sketch::{self, Frame};
 use crate::sketch_saved;
 
@@ -29,6 +30,11 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("group.add", "{name?, op?, blend?}"),
     ("group.set", "{group, name?, op?, blend?, visible?}"),
     ("group.delete", "{group}"),
+    (
+        "pattern.set",
+        "{group, shape?, pattern: {...}|null}: live pattern on a whole group (no shape) or on one shape (shape); {Mirror:{axes,centre}} etc.",
+    ),
+    ("pattern.clear", "{group, shape?}: take the live pattern off a group or one shape"),
     ("melt.set", "{amount?, drip?, ripple?, mode?}: how shapes melt together"),
     ("extrude", "{points: [[x,y],...], height, plane?: floor|front|side, z?, name?, op?, color?}: push an outline into a solid"),
     ("sketch.create", "{points, closed?:true, holes?:[], plane?:floor|front|side|{origin,u,v}, group?, name?}: save a finished sketch"),
@@ -124,6 +130,46 @@ fn run(scene: &mut Scene, cmd: &Value) -> Result<Value, String> {
             // the groups inside it move up one step, as when the group is deleted on screen
             scene.remove_group(g);
             Ok(json!({"deleted": g}))
+        }
+        "pattern.set" => {
+            reject_unknown(obj, &["group", "shape", "pattern"], "pattern")?;
+            let (g, s) = pattern_target(obj)?;
+            let value = obj.get("pattern").ok_or("Missing \"pattern\" (a pattern or null)")?;
+            let pattern = if value.is_null() {
+                None
+            } else {
+                let mut p: Pattern = serde_json::from_value(value.clone()).map_err(|e| format!("Bad pattern: {e}"))?;
+                p.sanitize();
+                Some(p)
+            };
+            match s {
+                Some(si) => {
+                    let shape = scene.shape_mut(g, si).ok_or("No such shape")?;
+                    shape.pattern = pattern.clone();
+                }
+                None => {
+                    let group = scene.groups.get_mut(g).ok_or("No such group")?;
+                    group.pattern = pattern.clone();
+                }
+            }
+            let mut out = json!({"group": g, "pattern": pattern});
+            if let Some(si) = s {
+                out["shape"] = json!(si);
+            }
+            Ok(out)
+        }
+        "pattern.clear" => {
+            reject_unknown(obj, &["group", "shape"], "pattern")?;
+            let (g, s) = pattern_target(obj)?;
+            let had = match s {
+                Some(si) => scene.shape_mut(g, si).ok_or("No such shape")?.pattern.take().is_some(),
+                None => scene.groups.get_mut(g).ok_or("No such group")?.pattern.take().is_some(),
+            };
+            let mut out = json!({"group": g, "cleared": had});
+            if let Some(si) = s {
+                out["shape"] = json!(si);
+            }
+            Ok(out)
         }
         "melt.set" => {
             let mut v = serde_json::to_value(scene.melt).map_err(|e| e.to_string())?;
@@ -247,9 +293,11 @@ fn summary(scene: &Scene) -> Value {
                 .shapes
                 .iter()
                 .enumerate()
-                .map(|(si, s)| json!({"shape": si, "name": s.name, "kind": format!("{:?}", s.kind), "op": format!("{:?}", s.op), "pos": s.pos, "size": s.size, "sketch": s.guide}))
+                .map(|(si, s)| {
+                    json!({"shape": si, "name": s.name, "kind": format!("{:?}", s.kind), "op": format!("{:?}", s.op), "pos": s.pos, "size": s.size, "sketch": s.guide, "pattern": s.pattern.as_ref().map(|p| format!("{:?}", p.kind()))})
+                })
                 .collect();
-            json!({"group": gi, "name": g.name, "op": format!("{:?}", g.op), "blend": g.blend, "visible": g.visible, "shapes": shapes})
+            json!({"group": gi, "name": g.name, "op": format!("{:?}", g.op), "blend": g.blend, "visible": g.visible, "pattern": g.pattern.as_ref().map(|p| format!("{:?}", p.kind())), "shapes": shapes})
         })
         .collect();
     json!({"groups": groups, "shape_count": scene.shape_count(), "melt": {"amount": scene.melt.amount}})
@@ -272,6 +320,16 @@ fn index(obj: &Map<String, Value>, key: &str) -> Result<usize, String> {
     obj.get(key).and_then(Value::as_u64).and_then(|n| usize::try_from(n).ok()).ok_or_else(|| format!("Missing \"{key}\" (a nonnegative index)"))
 }
 
+/// The group, and the shape when the pattern is on one shape rather than the whole group.
+fn pattern_target(obj: &Map<String, Value>) -> Result<(usize, Option<usize>), String> {
+    let g = index(obj, "group")?;
+    let s = match obj.get("shape") {
+        Some(v) if !v.is_null() => Some(v.as_u64().and_then(|n| usize::try_from(n).ok()).ok_or("Missing \"shape\" (a nonnegative index)")?),
+        _ => None,
+    };
+    Ok((g, s))
+}
+
 fn without(obj: &Map<String, Value>, skip: &[&str]) -> Map<String, Value> {
     obj.iter().filter(|(k, _)| !skip.contains(&k.as_str())).map(|(k, v)| (k.clone(), v.clone())).collect()
 }
@@ -291,7 +349,7 @@ fn merge(base: &mut Value, patch: &Value) {
 /// The shape fields of a command (`color` is the short way to say `material.color`).
 /// What every command may carry besides its own fields.
 const META_KEYS: [&str; 3] = ["cmd", "token", "id"];
-const SHAPE_KEYS: [&str; 26] = [
+const SHAPE_KEYS: [&str; 27] = [
     "name",
     "kind",
     "size",
@@ -315,6 +373,7 @@ const SHAPE_KEYS: [&str; 26] = [
     "uid",
     "source",
     "face_melt",
+    "pattern",
     "group",
     "shape",
     "color",
@@ -1466,5 +1525,54 @@ mod tests {
         assert_eq!(run("not json"), Some(false));
         assert_eq!(run_cli(&["meltcad".into()]), None);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn pattern_commands_target_one_shape_or_a_group() {
+        let mut sc = Scene::default();
+        sc.groups[0].shapes[0].pos = [0.0, 0.0, 20.0];
+        // a pattern on one shape: the shape stays, its copies appear in the field
+        assert!(
+            execute(
+                &mut sc,
+                &json!({"cmd": "pattern.set", "group": 0, "shape": 0, "pattern": {"Rect": {"counts": [3, 1, 1], "spacing": [40.0, 40.0, 40.0]}}})
+            )
+            .is_ok()
+        );
+        assert!(sc.groups[0].shapes[0].pattern.is_some() && sc.groups[0].pattern.is_none());
+        assert!(crate::sdf::Field::new(&sc).distance([80.0, 0.0, 20.0]) < 0.0);
+        // change it in place
+        assert!(
+            execute(
+                &mut sc,
+                &json!({"cmd": "pattern.set", "group": 0, "shape": 0, "pattern": {"Rect": {"counts": [2, 1, 1], "spacing": [25.0, 25.0, 25.0]}}})
+            )
+            .is_ok()
+        );
+        let field = crate::sdf::Field::new(&sc);
+        assert!(field.distance([25.0, 0.0, 20.0]) < 0.0);
+        assert!(field.distance([80.0, 0.0, 20.0]) > 0.0, "the old copies are gone");
+        assert_eq!(crate::pattern::describe_shape(&sc, 0, 0), (2, false));
+        // save and load keep it; clear puts the one shape back
+        let back = Scene::from_json(&sc.to_json()).unwrap_or_default();
+        assert_eq!(back.groups[0].shapes[0].pattern, sc.groups[0].shapes[0].pattern);
+        assert!(execute(&mut sc, &json!({"cmd": "pattern.clear", "group": 0, "shape": 0})).is_ok());
+        assert!(sc.groups[0].shapes[0].pattern.is_none());
+        assert_eq!(crate::pattern::describe_shape(&sc, 0, 0), (1, false));
+        // a group pattern still works
+        assert!(
+            execute(&mut sc, &json!({"cmd": "pattern.set", "group": 0, "pattern": {"Mirror": {"axes": [true, false, false], "centre": true}}}))
+                .is_ok()
+        );
+        assert!(sc.groups[0].pattern.is_some());
+        // hostile numbers are clamped, null removes, a typo is an error that changes nothing
+        assert!(execute(&mut sc, &json!({"cmd": "pattern.set", "group": 0, "shape": 0, "pattern": {"Rect": {"counts": [0, 4294967295u64, 0], "spacing": [1e30, -1e30, 0.0]}}})).is_ok());
+        let Some(Pattern::Rect { counts, spacing }) = sc.groups[0].shapes[0].pattern.clone() else { panic!("a rect") };
+        assert!(counts.iter().all(|c| (1..=crate::pattern::MAX_SIDE).contains(c)));
+        assert!(spacing.iter().all(|s| s.is_finite()));
+        assert!(execute(&mut sc, &json!({"cmd": "pattern.set", "group": 0, "shape": 0, "pattern": null})).is_ok());
+        assert!(sc.groups[0].shapes[0].pattern.is_none());
+        assert!(execute(&mut sc, &json!({"cmd": "pattern.set", "group": 0, "shape": 0, "pattern": {"Spiral": {}}})).is_err());
+        assert!(execute(&mut sc, &json!({"cmd": "pattern.set", "group": 0, "shape": 0, "bogus": 1})).is_err());
     }
 }
