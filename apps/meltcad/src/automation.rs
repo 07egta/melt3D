@@ -105,7 +105,7 @@ fn run(scene: &mut Scene, cmd: &Value) -> Result<Value, String> {
             if scene.groups.len() >= MAX_GROUPS {
                 return Err(format!("Up to {MAX_GROUPS} groups"));
             }
-            let mut g = Group::new(format!("Group {}", scene.groups.len() + 1));
+            let mut g = Group::new(scene.unique_group_name(&format!("Group {}", scene.groups.len() + 1)));
             patch_group(&mut g, obj)?;
             scene.groups.push(g);
             Ok(json!({"group": scene.groups.len() - 1}))
@@ -602,7 +602,8 @@ fn append_shapes(scene: &mut Scene, target: Option<usize>, mut shapes: Vec<Shape
         scene.groups.len()
     };
     if target.is_none() {
-        let mut group = Group::new(if hole_group.is_some() { "Extrude with holes".to_owned() } else { format!("Group {}", g + 1) });
+        let base = if hole_group.is_some() { "Extrude with holes".to_owned() } else { format!("Group {}", g + 1) };
+        let mut group = Group::new(scene.unique_group_name(&base));
         if let Some(op) = hole_group {
             group.sketch_holes = true;
             group.op = op;

@@ -733,7 +733,8 @@ impl App {
             Some(g) if self.scene.groups.get(g).is_some_and(Group::is_linked) => None,
             Some(g) if g < self.scene.groups.len() => Some(g),
             _ => {
-                self.scene.groups.push(Group::new("Group 1"));
+                let name = self.scene.unique_group_name("Group 1");
+                self.scene.groups.push(Group::new(name));
                 Some(self.scene.groups.len() - 1)
             }
         }
@@ -787,7 +788,8 @@ impl App {
         }
         if self.scene.groups.len() < MAX_GROUPS {
             let n = self.scene.groups.len() + 1;
-            self.scene.groups.push(Group::new(format!("Group {n}")));
+            let name = self.scene.unique_group_name(&format!("Group {n}"));
+            self.scene.groups.push(Group::new(name));
             self.sel = Some(Pick::Group(self.scene.groups.len() - 1));
         }
     }
@@ -1019,7 +1021,8 @@ impl App {
         }
         shapes.sort();
         shapes.dedup();
-        let mut group = Group::new(format!("Group {}", self.scene.groups.len() + 1));
+        let base = format!("Group {}", self.scene.groups.len() + 1);
+        let mut group = Group::new(self.scene.unique_group_name(&base));
         let mut taken: Vec<Shape> = Vec::new();
         for (g, s) in shapes.iter().rev() {
             if let Some(sh) = self.scene.groups.get_mut(*g).filter(|gr| *s < gr.shapes.len()).map(|gr| gr.shapes.remove(*s)) {
@@ -1064,7 +1067,8 @@ impl App {
         loose.dedup();
         // a group of groups gets a name that says so, numbered among the big groups
         let bigs = (0..n).filter(|&g| self.scene.groups.get(g + 1).is_some_and(|x| x.depth > self.scene.groups[g].depth)).count();
-        let mut parent = Group::new(format!("Parent Group {}", bigs + 1));
+        let base = format!("Parent Group {}", bigs + 1);
+        let mut parent = Group::new(self.scene.unique_group_name(&base));
         let mut taken: Vec<Shape> = Vec::new();
         for (g, s) in loose.iter().rev() {
             if let Some(sh) = self.scene.groups.get_mut(*g).filter(|gr| *s < gr.shapes.len()).map(|gr| gr.shapes.remove(*s)) {
@@ -3748,6 +3752,132 @@ mod tests {
         assert_eq!((app.scene.groups[0].shapes.len(), app.scene.groups[1].shapes.len()), (2, 1));
         app.move_layer(Pick::Group(1), Pick::Group(0), false);
         assert_eq!(app.scene.groups[0].shapes.len(), 1);
+    }
+
+    #[test]
+    fn scene_rows_name_their_parent_in_the_tooltip() {
+        let empty = |name: &str, depth: u8| {
+            let mut g = Group::new(name);
+            g.depth = depth;
+            g
+        };
+        let mut scene = Scene { groups: vec![empty("Root", 0), empty("Child", 1), empty("Grandchild", 2)], ..Scene::default() };
+        assert_eq!(crate::panels::row_parent_tip(&scene, Pick::Group(0)), None, "a top-level group has no parent to name");
+        assert_eq!(crate::panels::row_parent_tip(&scene, Pick::Group(1)).as_deref(), Some("in Root"));
+        assert_eq!(crate::panels::row_parent_tip(&scene, Pick::Group(2)).as_deref(), Some("in Root › Child"));
+        // A shape names the group that holds it, with the same chain for equal names.
+        scene.groups[2].shapes.push(Shape::new(Kind::Sphere, [0.0; 3], Material::default()));
+        assert_eq!(crate::panels::row_parent_tip(&scene, Pick::Shape(2, 0)).as_deref(), Some("in Root › Child › Grandchild"));
+    }
+
+    #[test]
+    fn three_level_scene_tree_indents_and_draws_a_guide_per_level() {
+        for level in 0..8u8 {
+            assert!(crate::panels::tree_indent(level + 1) > crate::panels::tree_indent(level), "each level must move right of the one before it");
+            assert!(crate::panels::tree_guide_x(level + 1) > crate::panels::tree_guide_x(level), "each level needs its own guide column");
+            assert!(crate::panels::tree_guide_color(level).a() >= 96, "deep guides must stay readable");
+        }
+
+        let ctx = egui::Context::default();
+        crate::fonts::setup(&ctx);
+        style::apply(&ctx);
+        ctx.set_pixels_per_point(1.0);
+        let mut app = App::new(true, None);
+        let group = |name: &str, depth: u8| {
+            let mut g = Group::new(name);
+            g.depth = depth;
+            g.shapes.push(Shape::new(Kind::Sphere, [0.0; 3], Material::default()));
+            g
+        };
+        app.scene.groups = vec![group("Root", 0), group("Child", 1), group("Grandchild", 2)];
+        app.sel = None;
+        let size = egui::vec2(360.0, 240.0);
+        let mut tex = style::preview::Textures::new();
+        let mut out = None;
+        for _ in 0..3 {
+            let input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)), ..Default::default() };
+            let mut frame = ctx.run_ui(input, |ui| app.layers(ui));
+            style::preview::apply_deltas(&mut tex, &frame.textures_delta);
+            frame.textures_delta.clear();
+            out = Some(frame);
+        }
+        let Some(out) = out else { panic!("the scene list laid out") };
+        let (w, h) = (size.x as usize, size.y as usize);
+        let img = style::preview::raster(&ctx.tessellate(out.shapes, 1.0), &tex, w, h, 1.0, [0.12, 0.12, 0.13]);
+        let rect = |pick: Pick| app.row_rects.iter().find(|(p, _)| *p == pick).map(|(_, r)| *r).expect("row was laid out");
+        let (g0, g1, g2) = (rect(Pick::Group(0)), rect(Pick::Group(1)), rect(Pick::Group(2)));
+        let (x0, x1, x2) =
+            (g0.left() + crate::panels::tree_guide_x(0), g1.left() + crate::panels::tree_guide_x(1), g2.left() + crate::panels::tree_guide_x(2));
+        assert!(x0 < x1 && x1 < x2, "three levels must have three increasing guide columns");
+        let brightest = |x: f32, y: f32| {
+            let (xi, yi) = (x.round() as isize, y.round() as isize);
+            let mut best = 0.0_f32;
+            for dy in -1..=1 {
+                for dx in -1..=1 {
+                    if let Some(px) = img.get((yi + dy) as usize * w + (xi + dx) as usize) {
+                        best = best.max(px[0].max(px[1]).max(px[2]));
+                    }
+                }
+            }
+            best
+        };
+        // Sample just below each group's own row centre: every ancestor's line passes there.
+        let bg = 0.12;
+        for (x, y) in
+            [(x0, g1.center().y + 8.0), (x1, g1.center().y + 8.0), (x0, g2.center().y + 8.0), (x1, g2.center().y + 8.0), (x2, g2.center().y + 8.0)]
+        {
+            assert!(brightest(x, y) > bg + 0.08, "no tree guide at {x},{y}");
+        }
+    }
+
+    #[test]
+    fn folding_a_parent_hides_its_rows_and_unfolding_brings_them_back() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        let mut root = Group::new("Root");
+        root.shapes.push(Shape::new(Kind::Sphere, [0.0; 3], Material::default()));
+        let mut child = Group::new("Child");
+        child.depth = 1;
+        child.shapes.push(Shape::new(Kind::Box, [0.0; 3], Material::default()));
+        app.scene.groups = vec![root, child];
+        let run = |app: &mut App| {
+            let input =
+                egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(360.0, 200.0))), ..Default::default() };
+            let mut frame = ctx.run_ui(input, |ui| app.layers(ui));
+            frame.textures_delta.clear();
+        };
+        run(&mut app);
+        let shown = |app: &App| app.row_rects.iter().map(|(p, _)| *p).collect::<Vec<_>>();
+        assert!(shown(&app).contains(&Pick::Shape(0, 0)) && shown(&app).contains(&Pick::Shape(1, 0)));
+        app.folded.insert(0);
+        run(&mut app);
+        assert_eq!(shown(&app), vec![Pick::Group(0)], "a folded group hides its shapes and nested groups");
+        app.folded.remove(&0);
+        run(&mut app);
+        assert!(shown(&app).contains(&Pick::Group(1)) && shown(&app).contains(&Pick::Shape(1, 0)));
+    }
+
+    #[test]
+    fn a_new_group_beside_an_equal_name_gets_a_numbered_default() {
+        let mut app = App::new(true, None);
+        let empty = |name: &str| {
+            let mut g = Group::new(name);
+            g.shapes.clear();
+            g
+        };
+        // The next default "Group 3" already exists (a renamed or wrapped group), so the new
+        // group must not repeat it; the existing group keeps its name.
+        app.scene.groups = vec![empty("Group 1"), empty("Group 3")];
+        app.add_group();
+        let names: Vec<&str> = app.scene.groups.iter().map(|g| g.name.as_str()).collect();
+        assert_eq!(names, vec!["Group 1", "Group 3", "Group 3 (2)"]);
+        // Wrapping a group gets the same treatment through the same helper.
+        let base = format!("Group {}", app.scene.groups.len() + 1);
+        let name = app.scene.unique_group_name(&base);
+        assert_eq!(name, "Group 4");
+        app.scene.groups.push(Group::new("Group 4"));
+        assert_eq!(app.scene.unique_group_name(&base), "Group 4 (2)");
+        assert_eq!(app.scene.groups[1].name, "Group 3", "existing names are never rewritten");
     }
 
     #[test]

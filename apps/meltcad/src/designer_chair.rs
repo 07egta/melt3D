@@ -534,7 +534,7 @@ mod tests {
         let previews: Vec<Vec<u8>> = Style::ALL.iter().map(|&style| {
             let rgba = crate::cpu_render::thumb(&scene(generate(Parameters::for_style(style))), 62);
             assert_eq!(rgba.len(), 62 * 62 * 4);
-            let colours = rgba.chunks_exact(4).filter(|c| c[3] > 0 && c[0] != c[1]).count();
+            let colours = rgba.as_chunks::<4>().0.iter().filter(|c| c[3] > 0 && c[0] != c[1]).count();
             assert!(colours > 20, "{} did not render a useful thumbnail", style.label());
             rgba
         }).collect();
