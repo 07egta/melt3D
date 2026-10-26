@@ -147,6 +147,14 @@ fn revolve_dist(s: Shape, q: vec3<f32>) -> f32 {
 }
 
 
+// The factor loft_dist divides by (cad::loft_safety), also used to keep a shell's wall correct.
+fn loft_shell_safety(s: Shape, q: vec3<f32>) -> f32 {
+    let h = max(s.size.x, 1e-3);
+    let d1 = polygon_d(i32(s.misc.z + 0.5), i32(s.misc.w + 0.5), q.xy);
+    let d2 = polygon_d(i32(s.ext.z + 0.5), i32(s.ext.w + 0.5), q.xy);
+    return 1.0 / (1.0 + abs(d2 - d1) / h);
+}
+
 fn loft_dist(s: Shape, q: vec3<f32>) -> f32 {
     let h = max(s.size.x, 1e-3);
     let d1 = polygon_d(i32(s.misc.z + 0.5), i32(s.misc.w + 0.5), q.xy);

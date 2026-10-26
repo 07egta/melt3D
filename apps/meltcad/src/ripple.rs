@@ -120,9 +120,28 @@ impl Ripple {
         }
         let wave = wave / weight;
         let delta = self.height * envelope * if self.preserve_outline { (1.0 - wave) * 0.5 } else { -wave };
+        (base + delta * min_scale) / self.safety(half)
+    }
+
+    /// How much the ripple shortens the distance where it bends the surface (1 where it does
+    /// not). A shell measured on the rippled field must use the same factor, or its wall is too
+    /// thick. `base` is the distance before the ripple.
+    pub fn shell_shortening(&self, base: f32, half: [f32; 3], min_scale: f32) -> f32 {
+        if self.height <= 0.0 || base.abs() > self.height * min_scale * 2.0 {
+            return 1.0;
+        }
+        let safety = self.safety(half);
+        if safety.is_finite() && safety > 1.0 { 1.0 / safety } else { 1.0 }
+    }
+
+    /// The distance bound `adjust` divides by: the local wave, fade and edge slopes.
+    fn safety(&self, half: [f32; 3]) -> f32 {
+        let k = std::f32::consts::TAU / self.spacing;
+        let support = f32::from(self.count) * self.spacing
+            * if self.mode == RippleMode::Linear { 0.5 } else { 1.0 };
+        let fade_width = (support * self.edge_fade).max(0.001);
         let edge_slope = if self.preserve_outline { 6.0 / half[0].min(half[1]).max(0.01) } else { 0.0 };
-        let safety = 1.0 + self.height * (3.0 * k + 2.0 / fade_width + edge_slope);
-        (base + delta * min_scale) / safety
+        1.0 + self.height * (3.0 * k + 2.0 / fade_width + edge_slope)
     }
 }
 

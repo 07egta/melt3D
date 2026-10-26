@@ -195,12 +195,55 @@ impl Prepared {
             d = face_melt_distance(d, q, ax, sg, amount, reach, self.half[ax]);
         }
         let mut d = d * self.min_scale();
+        let before_ripple = d;
         if let Some(r) = self.ripple {
             d = r.adjust(d, q, self.half, self.min_scale());
         }
-        // hollow walls: the solid's skin of thickness `shell` (negative inside the wall)
-        // (a curve hollows itself: its flat ends are cut after the hollowing, see curve::distance)
-        if self.shell > 0.0 && self.kind != Kind::Curve { (d + self.shell * 0.5).abs() - self.shell * 0.5 } else { d }
+        // Hollow walls: the solid's skin of thickness `shell` (negative inside the wall). The
+        // shell is measured in the shape's own space (so it scales with `Shape::scale`, like
+        // rounding, a face melt and a ripple) and through any distance-shortening the shape maths
+        // applies, or the wall comes out too thick. (A curve hollows itself: its flat ends are cut
+        // after the hollowing, see curve::distance.)
+        if self.shell > 0.0 && self.kind != Kind::Curve {
+            let wall = self.shell * self.min_scale() * self.shell_shortening(q, before_ripple);
+            (d + wall * 0.5).abs() - wall * 0.5
+        } else {
+            d
+        }
+    }
+    /// How much shorter than a true distance the shape maths makes this point's distance (1 =
+    /// exact). Sweeps, lofts, wave-warped revolves, a face melt and a ripple all scale their
+    /// distance down so that marching cannot overshoot; a shell measured on that field must use
+    /// the same scale, or its wall is too thick. `base` is the scaled distance before the ripple.
+    fn shell_shortening(&self, q: V3, base: f32) -> f32 {
+        let mut shorten = match self.kind {
+            Kind::Sweep => crate::cad::SWEEP_SAFETY,
+            Kind::Loft => {
+                let h = self.size[0].max(1e-3);
+                crate::cad::loft_safety(polygon(&self.outline, [q[0], q[1]]), polygon(&self.outline2, [q[0], q[1]]), h)
+            }
+            Kind::Revolve => {
+                let r = q[0].hypot(q[1]);
+                crate::organic_vase::radial_warp(r, q, self.params[1], self.params[2], self.params[3]).1
+            }
+            _ => 1.0,
+        };
+        if let Some((ax, sg, amount, reach)) = self.face_melt {
+            // face_melt_distance divides by sqrt(1 + slope^2) inside the face's reach.
+            let t = sg * q[ax] - self.half[ax];
+            let k = 1.0 / reach;
+            if (1.0 - t.abs() * k).clamp(0.0, 1.0) > 0.0 {
+                // Match face_melt_distance exactly, including its 6.2832 literal.
+                #[allow(clippy::approx_constant)]
+                let f = 6.2832 / (reach * 1.6);
+                let slope = amount.abs() * (1.6 * k + 1.32 * f);
+                shorten /= (1.0 + slope * slope).sqrt();
+            }
+        }
+        if let Some(r) = &self.ripple {
+            shorten *= r.shell_shortening(base, self.half, self.min_scale());
+        }
+        shorten
     }
     #[cfg(test)]
     pub fn local_distance_for_test(&self, q: V3) -> f32 {
@@ -1157,6 +1200,94 @@ mod tests {
         assert!((f([25.0, 0.0, 0.0]) - 5.0).abs() < 1e-4);
         s.shell = f32::NAN;
         assert!((Prepared::new(&s).distance([0.0, 0.0, 0.0]) + 20.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn a_shell_scales_with_the_shape_like_round_and_face_melt() {
+        let mut s = Shape::new(Kind::Sphere, [0.0; 3], Material::default());
+        s.size[0] = 20.0;
+        s.shell = 4.0;
+        let f = |s: &Shape, p: V3| Prepared::new(s).distance(p);
+        // Half the size: a 20 mm ball with a 4 mm wall becomes a 10 mm ball with a 2 mm wall,
+        // just as its rounding, face melt and ripple grow and shrink with the shape.
+        s.scale = [0.5; 3];
+        assert!(f(&s, [7.5, 0.0, 0.0]) > 0.0, "the cavity reaches radius 8");
+        assert!(f(&s, [9.0, 0.0, 0.0]) < 0.0, "the wall is solid");
+        // Twice the size: radius 40, wall 8, cavity out to 32.
+        s.scale = [2.0; 3];
+        assert!(f(&s, [31.0, 0.0, 0.0]) > 0.0, "the cavity reaches radius 32");
+        assert!(f(&s, [34.0, 0.0, 0.0]) < 0.0, "the wall is solid");
+    }
+
+    #[test]
+    fn a_shell_on_a_rippled_shape_keeps_the_requested_wall_thickness() {
+        let mut s = Shape::new(Kind::Sphere, [0.0; 3], Material::default());
+        s.size[0] = 20.0;
+        s.shell = 1.0;
+        // Lines along Y: on the +X axis the wave value is zero, so the surface stays at radius
+        // 20 and only the ripple's conservative distance scaling is in play.
+        s.ripple = Some(crate::ripple::Ripple {
+            mode: crate::ripple::RippleMode::Linear,
+            direction: 90.0,
+            height: 3.0,
+            spacing: 12.0,
+            count: 5,
+            detail: 1,
+            ..crate::ripple::Ripple::default()
+        });
+        let f = |p: V3| Prepared::new(&s).distance(p);
+        assert!(f([19.5, 0.0, 0.0]) < 0.0, "the 1 mm wall is solid");
+        assert!(f([18.0, 0.0, 0.0]) > 0.0, "2 mm inside the skin is the cavity");
+    }
+
+    #[test]
+    fn a_shell_on_a_face_melt_keeps_the_wall_near_the_requested_thickness() {
+        let mut s = Shape::new(Kind::Box, [0.0; 3], Material::default());
+        s.size = [20.0, 20.0, 20.0];
+        s.face_melt = crate::model::FaceMelt { face: 5, amount: 6.0, reach: 8.0 };
+        s.shell = 2.0;
+        let f = |z: f32| Prepared::new(&s).distance([0.0, 0.0, z]);
+        // The +Z face swells: the outer skin is between the original top (10) and the swell.
+        let (mut lo, mut hi) = (11.5, 12.5);
+        assert!(f(lo) < 0.0 && f(hi) > 0.0);
+        for _ in 0..40 {
+            let mid = (lo + hi) * 0.5;
+            if f(mid) > 0.0 {
+                hi = mid;
+            } else {
+                lo = mid;
+            }
+        }
+        let outer = (lo + hi) * 0.5;
+        assert!(outer > 11.0, "the face swells");
+        // A face melt's field is a conservative bound, not an exact distance, so the normal
+        // wall is a little under 2 mm; it must not be the old scaled-up wall (several mm).
+        assert!(f(outer - 1.0) < 0.0, "1 mm inside the outer skin is wall");
+        assert!(f(outer - 2.0) > 0.0, "2 mm inside the outer skin is the cavity");
+    }
+
+    #[test]
+    fn a_shell_of_a_sweep_or_loft_keeps_the_requested_wall_thickness() {
+        let f = |s: &Shape, p: V3| Prepared::new(s).distance(p);
+        // A straight sweep of a 10 x 10 profile: the side is 5 from the axis, so a 2 mm wall
+        // leaves the cavity up to 3.
+        let mut sweep = Shape::new(Kind::Sweep, [0.0; 3], Material::default());
+        sweep.outline = vec![[-5.0, -5.0], [5.0, -5.0], [5.0, 5.0], [-5.0, 5.0]];
+        sweep.path = vec![[0.0, 0.0, -20.0, 1.0], [0.0, 0.0, 20.0, 1.0]];
+        sweep.shell = 2.0;
+        sweep.blend = 0.0;
+        assert!(f(&sweep, [2.8, 0.0, 0.0]) > 0.0, "2.8 is inside the 2 mm wall's hollow");
+        assert!(f(&sweep, [3.6, 0.0, 0.0]) < 0.0, "3.6 is in the wall");
+        // A loft from a 40 x 40 square up to a 20 x 20 square: at mid height the side is at 15,
+        // so a 4 mm wall leaves the cavity up to 11.
+        let mut loft = Shape::new(Kind::Loft, [0.0; 3], Material::default());
+        loft.size[0] = 40.0;
+        loft.outline = vec![[-20.0, -20.0], [20.0, -20.0], [20.0, 20.0], [-20.0, 20.0]];
+        loft.outline2 = vec![[-10.0, -10.0], [10.0, -10.0], [10.0, 10.0], [-10.0, 10.0]];
+        loft.shell = 4.0;
+        loft.blend = 0.0;
+        assert!(f(&loft, [10.5, 0.0, 0.0]) > 0.0, "10.5 is inside the 4 mm wall's hollow");
+        assert!(f(&loft, [12.0, 0.0, 0.0]) < 0.0, "12 is in the wall");
     }
 
     #[test]
