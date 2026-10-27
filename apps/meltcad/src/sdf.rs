@@ -55,12 +55,18 @@ pub struct Prepared {
     /// Rows of the rotation's transpose (the inverse rotation).
     pub inv: [V3; 3],
     pub scale: V3,
+    /// `1 / scale`, so `local` multiplies instead of dividing (division costs several times more).
+    inv_scale: V3,
     pub op: Op,
     pub blend: f32,
     pub material: Material,
     pub outline: Vec<[f32; 2]>,
     pub params: [f32; 4],
     pub path: Vec<[f32; 4]>,
+    /// A pipe's bounding spheres, one per run of spans, and its greatest joint reach: the
+    /// distance skips far runs (see `curve::smooth_tube_grouped`). Empty for other shapes.
+    pub curve_groups: Vec<[f32; 4]>,
+    pub curve_kmax: f32,
     pub outline2: Vec<[f32; 2]>,
     /// Wall thickness of the hollowed-out shape (0 = solid).
     pub shell: f32,
@@ -140,6 +146,14 @@ impl Prepared {
             _ => (1.0, 0.0),
         };
         let grad_half = if s.material.has_gradient() { gradient_half(s, &r) } else { 0.0 };
+        let path: Vec<[f32; 4]> = if s.kind == Kind::Curve { crate::curve::build_shape(s) } else { s.path.clone() };
+        let (curve_groups, curve_kmax) = if s.kind == Kind::Curve && path.len() >= 2 {
+            let squircle = s.size[2].is_finite() && s.size[2] >= 1.5;
+            let closed = crate::curve::settings(&s.params).0;
+            (crate::curve::group_spheres_profile(&path, squircle), crate::curve::max_joint_blend(&path, closed))
+        } else {
+            (Vec::new(), 0.0)
+        };
         Prepared {
             kind: s.kind,
             ripple: s.ripple,
@@ -150,12 +164,15 @@ impl Prepared {
             pos: s.pos,
             inv,
             scale: s.scale,
+            inv_scale: [1.0 / s.scale[0], 1.0 / s.scale[1], 1.0 / s.scale[2]],
             op: s.op,
             blend: s.blend,
             material: s.material,
             outline,
             params: s.params,
-            path: if s.kind == Kind::Curve { crate::curve::build_shape(s) } else { s.path.clone() },
+            path,
+            curve_groups,
+            curve_kmax,
             outline2: s.outline2.clone(),
             shell: if s.shell.is_finite() { s.shell.max(0.0) } else { 0.0 },
             face_melt: s.face_melt.parts(),
@@ -169,7 +186,7 @@ impl Prepared {
     pub fn local(&self, p: V3) -> V3 {
         let d = sub(p, self.pos);
         let q = [dot(self.inv[0], d), dot(self.inv[1], d), dot(self.inv[2], d)];
-        [q[0] / self.scale[0], q[1] / self.scale[1], q[2] / self.scale[2]]
+        [q[0] * self.inv_scale[0], q[1] * self.inv_scale[1], q[2] * self.inv_scale[2]]
     }
     /// The surface colour at `p`: the material's colour, or its gradient (see `Material::gradient_weight`).
     // max/min deliberately maps a NaN coordinate to the first colour, unlike clamp.
