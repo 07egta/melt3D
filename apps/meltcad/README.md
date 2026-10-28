@@ -421,3 +421,7 @@ Solid の命令は新しい形を追加し、参照した Sketch は残します
   - AI からは `scene.add_file {path}`、`piece.reload {group}`、`piece.save {group, path}`。
 - スケッチや立体のプレビューを編集中は再生・コマ移動・ポーズ記録を止めます。確定後の編集だけを記録し、編集と記録を同じ Undo にまとめます。
 - `anim.at` の `frame` は 0 から始まり、最後のコマを超えた場合は末尾に収めて、実際の `frame` を返します。開いている画面への変更命令は再生を止め、タイムラインの自動記録で命令の結果を上書きしません。
+
+### デザイン・紹介動画を作る
+- UIの基準とCodexツールの導入方法: [DESIGN_AND_PROMO_TOOLS.md](DESIGN_AND_PROMO_TOOLS.md)
+- 動画編集環境: [promo/](promo/)（Rustアプリから独立したRemotionプロジェクト）
