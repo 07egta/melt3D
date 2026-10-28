@@ -111,6 +111,10 @@ impl App {
                 for k in 1..=copies {
                     let mut c = base.clone();
                     place(&mut c, d, k);
+                    // An array copy is a new animation/pattern identity, not another reference to
+                    // its source: sharing the uid let the copy's placement overwrite the source's
+                    // pose at the frame the array was made in.
+                    c.uid = 0;
                     c.name = format!("{} {}", base.name, k + 1);
                     self.scene.groups[g].shapes.insert(s + k as usize, c);
                 }
@@ -286,6 +290,30 @@ mod tests {
         app.sel = None;
         assert!(app.make_array(&Dlg::default()).is_err());
         assert!(app.scene.groups.len() <= MAX_GROUPS && app.scene.shape_count() <= MAX_SHAPES);
+    }
+
+    #[test]
+    fn an_arrayed_shape_keeps_the_sources_pose_and_gives_copies_their_own_identity() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        app.scene.groups[0].shapes[0].pos = [0.0, 0.0, 20.0];
+        let mut anim = std::mem::take(&mut app.scene.anim);
+        anim.capture(&mut app.scene, 0).expect("pose 0");
+        app.scene.anim = anim;
+        let uid = app.scene.groups[0].shapes[0].uid;
+        assert_ne!(uid, 0, "the source has an animation identity");
+
+        app.sel = Some(Pick::Shape(0, 0));
+        assert_eq!(app.make_array(&Dlg { count: 4, ..Dlg::default() }), Ok(3));
+        // the next UI frame records the changed scene as a pose (before `settle` drops repeated uids)
+        app.an.open = true;
+        app.an.frame = 0;
+        app.animation_capture_finished(&ctx);
+        app.settle(&ctx);
+
+        let pose = app.scene.anim.tracks.iter().find(|t| t.uid == uid).expect("the source's track");
+        assert_eq!(pose.keys.iter().find(|k| k.0 == 0).map(|k| k.1.pos), Some([0.0, 0.0, 20.0]), "frame 0 still holds the source, not a copy");
+        assert!(app.scene.groups[0].shapes[1..].iter().all(|s| s.uid != uid), "no copy claims the source's identity");
     }
 
     #[test]
