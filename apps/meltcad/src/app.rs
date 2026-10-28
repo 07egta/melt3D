@@ -3208,10 +3208,13 @@ mod tests {
 
         let valid = dir.join("valid.yura");
         std::fs::write(&valid, Scene::default().to_json()).expect("fixture");
+        // the worker waits, so the job is still running when the test looks at it
+        let hold = crate::document_job::hold_open_workers(&ctx);
         app.open_path(valid);
         app.update_native_job(&ctx);
         let job = app.native_job.as_mut().expect("started load");
         assert!(job.cancel(), "the load is cancellable");
+        hold.store(false, std::sync::atomic::Ordering::Release);
         pump_native(&mut app, &ctx);
         assert_eq!(app.scene, before, "cancelled results must never replace a design");
         let _ = std::fs::remove_dir_all(dir);

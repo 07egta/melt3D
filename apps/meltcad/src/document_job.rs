@@ -34,6 +34,19 @@ pub struct Job {
     cancelled_at: Option<Instant>,
 }
 
+#[cfg(test)]
+const HOLD_ID: &str = "yura_test_hold_open_workers";
+
+/// Tests only: every open worker started on `ctx` waits until the returned flag is set to false
+/// (or the job is cancelled). Without it a worker that reads a tiny file can finish before the
+/// test has looked at it, and the test fails only on a fast machine.
+#[cfg(test)]
+pub fn hold_open_workers(ctx: &egui::Context) -> Arc<std::sync::atomic::AtomicBool> {
+    let flag = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    ctx.data_mut(|d| d.insert_temp(egui::Id::new(HOLD_ID), flag.clone()));
+    flag
+}
+
 fn cancelled(state: &AtomicU8) -> bool {
     state.load(Ordering::Acquire) == 1
 }
@@ -67,8 +80,18 @@ impl Job {
     }
 
     pub fn open(ctx: &egui::Context, path: PathBuf, base_revision: u64) -> Result<Self, String> {
+        #[cfg(test)]
+        let hold = ctx.data(|d| d.get_temp::<Arc<std::sync::atomic::AtomicBool>>(egui::Id::new(HOLD_ID)));
         Self::spawn(ctx, Kind::Open, base_revision, move |cancel, progress| {
             check_cancel(cancel)?;
+            // Tests only: wait here, so that a test can look at the running job (and cancel it)
+            // before a fast worker could finish it.
+            #[cfg(test)]
+            if let Some(hold) = &hold {
+                while hold.load(Ordering::Acquire) && !cancelled(cancel) {
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
+            }
             progress.store(100, Ordering::Relaxed);
             // The same size-limited read and damaged-file guard as every other open.
             let (scene, notes) = crate::recovery::read_project(&path)?;
