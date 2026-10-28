@@ -165,7 +165,9 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
                     let mut lang_changed = false;
                     ui.horizontal_wrapped(|ui| {
                         for l in LANGS {
-                            let resp = style::pill(ui, l.native, next.lang == l.id);
+                            let native = crate::i18n::language_name(l.id);
+                            let shown = if native.is_empty() { l.native } else { native };
+                            let resp = style::pill(ui, shown, next.lang == l.id);
                             record(ui.ctx(), &format!("settings.lang.{}", l.id), resp.rect);
                             if resp.clicked() && next.set_language(l.id) {
                                 lang_changed = true;

@@ -741,7 +741,7 @@ impl App {
     /// The top-bar toggle for the "せん" tool.
     pub fn curve_button(&mut self, ui: &mut Ui) {
         let on = self.ct.drawing;
-        if style::wide_button(ui, "Curve", "Curve (click to place nodes, draw a line)", on, None, glyph).clicked() {
+        if style::wide_button(ui, crate::i18n::tr("tool.curve"), crate::i18n::tr("tool.curve.tip"), on, None, glyph).clicked() {
             if on {
                 self.finish_drawing();
             }
@@ -953,8 +953,10 @@ impl App {
             });
             if sh.params[0] < 0.5 {
                 let mut roundness = 1.0 - sh.params[2].clamp(0.0, 1.0);
-                if ui.add(egui::Slider::new(&mut roundness, 0.0..=1.0).text("End roundness"))
-                    .on_hover_text("1 = round like a ball / 0 = cut flat. Values in between work too").changed()
+                if ui
+                    .add(egui::Slider::new(&mut roundness, 0.0..=1.0).text("End roundness"))
+                    .on_hover_text("1 = round like a ball / 0 = cut flat. Values in between work too")
+                    .changed()
                 {
                     sh.params[2] = 1.0 - roundness;
                 }

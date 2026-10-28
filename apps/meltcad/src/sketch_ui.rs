@@ -693,16 +693,7 @@ impl App {
     /// The button in the tool strip.
     pub fn sketch_button(&mut self, ui: &mut Ui) {
         let on = self.sk.on && self.sk.keep_sketch;
-        if style::wide_button(
-            ui,
-            "Sketch",
-            "Draw a sketch. Left-click places points; right-click finishes. Choose a solid operation afterwards",
-            on,
-            None,
-            glyph,
-        )
-        .clicked()
-        {
+        if style::wide_button(ui, crate::i18n::tr("tool.sketch"), crate::i18n::tr("tool.sketch.tip"), on, None, glyph).clicked() {
             self.set_sketch_tool(!on);
             self.sk.keep_sketch = !on;
         }
@@ -711,8 +702,8 @@ impl App {
     /// The coloured strip button that switches to the solid-making tools (and back).
     pub fn solid_mode_button(&mut self, ui: &mut Ui) {
         let on = self.solid_mode;
-        let tip = "Draw a sketch and make a solid from it (SolidCraft's sketch screen). Come back with the button at the top";
-        if style::wide_button(ui, "Solid", tip, on, Some(SOLID_COLOR), crate::sketch_icons::solid).clicked() {
+        let tip = crate::i18n::tr("tool.solid.tip");
+        if style::wide_button(ui, crate::i18n::tr("tool.solid"), tip, on, Some(SOLID_COLOR), crate::sketch_icons::solid).clicked() {
             // The sketch screen is SolidCraft's: it is open already when this button is shown again.
             let ctx = ui.ctx().clone();
             self.open_precise_sketch(&ctx);
@@ -725,15 +716,10 @@ impl App {
         let ctx = ui.ctx().clone();
         type Icon = fn(&egui::Painter, egui::Rect, Color32);
         let items: [(Make, &str, &str, Icon); 4] = [
-            (
-                Make::Revolve,
-                "Revolve",
-                "Select a finished sketch on a standing plane, then revolve it around its original axis",
-                crate::sketch_icons::revolve,
-            ),
-            (Make::Loft, "Loft", "Select a finished sketch, then blend it into a top outline", crate::sketch_icons::loft),
-            (Make::Extrude, "Extrude", "Select a finished sketch, set its depth, then right-click to confirm", crate::sketch_icons::extrude),
-            (Make::Sweep, "Sweep", "Select a saved path for a round tube, or a closed sketch for a profile sweep", crate::sketch_icons::sweep),
+            (Make::Revolve, crate::i18n::tr("tool.revolve"), crate::i18n::tr("tool.revolve.tip"), crate::sketch_icons::revolve),
+            (Make::Loft, crate::i18n::tr("tool.loft"), crate::i18n::tr("tool.loft.tip"), crate::sketch_icons::loft),
+            (Make::Extrude, crate::i18n::tr("tool.extrude"), crate::i18n::tr("tool.extrude.tip"), crate::sketch_icons::extrude),
+            (Make::Sweep, crate::i18n::tr("tool.sweep"), crate::i18n::tr("tool.sweep.tip"), crate::sketch_icons::sweep),
         ];
         for (m, name, tip, icon) in items {
             let on = self.sk.on && !self.sk.keep_sketch && self.sk.make == m;
@@ -752,7 +738,7 @@ impl App {
                 if self.make_from_selected_line(&ctx, m) {
                     continue;
                 }
-                self.say(&ctx, "Select a finished sketch first. Use Sketch to draw one; right-click to finish it".to_string());
+                self.say(&ctx, crate::i18n::tr("error.select_sketch").to_string());
             }
         }
     }

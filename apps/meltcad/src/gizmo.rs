@@ -8,6 +8,7 @@ use egui::{Color32, Painter, Pos2, Rect, Shape, Stroke, Vec2, vec2};
 
 use crate::app::App;
 use crate::camera::Camera;
+use crate::i18n;
 use crate::model::{Kind, Pick, Scene};
 use crate::sdf::{Prepared, V3, add, cross, dot, mul, sub};
 use crate::style;
@@ -727,11 +728,11 @@ impl App {
 /// The handle's direction on the floor for the status line.
 pub fn hint(tool: Tool) -> &'static str {
     match tool {
-        Tool::Select => "Click to select",
-        Tool::All => "Drag an arrow to move · a curve to turn · a box to stretch",
-        Tool::Move => "Drag arrow to move (Ctrl: 1 mm steps)",
-        Tool::Rotate => "Drag ring to rotate (Ctrl: 15 degree steps)",
-        Tool::Scale => "Drag the middle to grow all · a box to stretch one way",
+        Tool::Select => i18n::tr("status.hint.select"),
+        Tool::All => i18n::tr("status.hint.all"),
+        Tool::Move => i18n::tr("status.hint.move"),
+        Tool::Rotate => i18n::tr("status.hint.rotate"),
+        Tool::Scale => i18n::tr("status.hint.scale"),
     }
 }
 

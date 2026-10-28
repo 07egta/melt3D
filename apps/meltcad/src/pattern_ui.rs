@@ -7,7 +7,7 @@ use egui::{Color32, Painter, Rect, RichText, Stroke, Ui, pos2, vec2};
 use crate::app::App;
 use crate::model::{Group, MAX_GROUPS, Pick};
 use crate::pattern::{self, PathMode, Pattern, PatternKind, Source, Xform};
-use crate::style;
+use crate::{i18n, style};
 
 // ---------------------------------------------------------------------------------------------
 // Icons
@@ -270,12 +270,12 @@ impl App {
         if self.scene.groups.get(g).is_some_and(Group::is_linked) {
             self.link_box(ui, g);
         }
-        style::title(ui, "Pattern");
+        style::title(ui, i18n::tr("inspector.pattern.title"));
         let current = self.scene.groups.get(g).and_then(|gr| gr.pattern.clone());
         // the kind: nothing, or one of five
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
-            if style::icon_button(ui, 34.0, "No pattern", current.is_none(), |p, r, ink| {
+            if style::icon_button(ui, 34.0, i18n::tr("inspector.pattern.none"), current.is_none(), |p, r, ink| {
                 let f = frame(r);
                 p.line_segment([at(f, 0.2, 0.2), at(f, 0.8, 0.8)], Stroke::new(2.0, ink));
                 p.line_segment([at(f, 0.8, 0.2), at(f, 0.2, 0.8)], Stroke::new(2.0, ink));
@@ -298,7 +298,7 @@ impl App {
         };
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
-            style::row_label(ui, "Mirror");
+            style::row_label(ui, i18n::tr("inspector.pattern.mirror"));
             let free = current.is_none() || mirror_axes.is_some();
             for (i, name) in ["X", "Y", "Z"].iter().enumerate() {
                 let on = mirror_axes.is_some_and(|a| a[i]);
@@ -311,7 +311,7 @@ impl App {
             }
         });
         let Some(mut pat) = current.clone() else {
-            ui.label(RichText::new("Repeat a group many times, or mirror it left and right").size(12.0).color(style::DIM));
+            ui.label(RichText::new(i18n::tr("inspector.pattern.empty_hint")).size(12.0).color(style::DIM));
             return;
         };
         let centre = self.scene.groups.get(g).map(|gr| pattern::centre_of_shapes(&gr.shapes)).unwrap_or([0.0; 3]);
@@ -319,51 +319,54 @@ impl App {
         match &mut pat {
             Pattern::Mirror { centre: about, .. } => {
                 ui.horizontal(|ui| {
-                    style::row_label(ui, "Mirror plane");
-                    if style::pill(ui, "Origin", !*about).on_hover_text("The plane through the world origin").clicked() {
+                    style::row_label(ui, i18n::tr("inspector.pattern.mirror_plane"));
+                    if style::pill(ui, i18n::tr("inspector.pattern.origin"), !*about).on_hover_text("The plane through the world origin").clicked() {
                         *about = false;
                     }
-                    if style::pill(ui, "Group center", *about).on_hover_text("The plane through this group's center").clicked() {
+                    if style::pill(ui, i18n::tr("inspector.pattern.group_center"), *about)
+                        .on_hover_text("The plane through this group's center")
+                        .clicked()
+                    {
                         *about = true;
                     }
                 });
             }
             Pattern::Rect { counts, spacing } => {
                 ui.horizontal(|ui| {
-                    style::row_label(ui, "Count");
+                    style::row_label(ui, i18n::tr("inspector.pattern.count"));
                     for (i, c) in counts.iter_mut().enumerate() {
                         ui.label(RichText::new(["X", "Y", "Z"][i]).color(style::AXIS[i]).size(12.0).strong());
                         style::field_sized(ui, [44.0, 22.0], egui::DragValue::new(c).speed(0.1).range(1..=pattern::MAX_SIDE));
                     }
                 });
-                style::xyz(ui, "Spacing", spacing, 0.5, -5000.0..=5000.0, "");
+                style::xyz(ui, i18n::tr("inspector.pattern.spacing"), spacing, 0.5, -5000.0..=5000.0, "");
             }
             Pattern::Circular { count, angle, axis, centre: c, rotate } => {
                 ui.horizontal(|ui| {
-                    style::row_label(ui, "Count");
+                    style::row_label(ui, i18n::tr("inspector.pattern.count"));
                     style::field_sized(ui, [54.0, 22.0], egui::DragValue::new(count).speed(0.1).range(1..=pattern::MAX_INSTANCES as u32));
-                    ui.label(RichText::new("Angle").color(style::DIM).size(12.0));
+                    ui.label(RichText::new(i18n::tr("inspector.pattern.angle")).color(style::DIM).size(12.0));
                     style::field_sized(ui, [64.0, 22.0], egui::DragValue::new(angle).speed(1.0).range(-3600.0..=3600.0).suffix("°"));
                 });
                 ui.horizontal(|ui| {
-                    style::row_label(ui, "Rotation axis");
+                    style::row_label(ui, i18n::tr("inspector.pattern.rotation_axis"));
                     for (i, name) in ["X", "Y", "Z"].iter().enumerate() {
                         if style::pill(ui, name, usize::from(*axis) == i).clicked() {
                             *axis = i as u8;
                         }
                     }
                 });
-                style::xyz(ui, "Center", c, 0.5, -5000.0..=5000.0, "");
+                style::xyz(ui, i18n::tr("inspector.pattern.center"), c, 0.5, -5000.0..=5000.0, "");
                 ui.horizontal(|ui| {
                     ui.add_space(style::LABEL_W);
-                    if style::pill(ui, "Origin", false).clicked() {
+                    if style::pill(ui, i18n::tr("inspector.pattern.origin"), false).clicked() {
                         *c = [0.0; 3];
                     }
-                    if style::pill(ui, "Group center", false).clicked() {
+                    if style::pill(ui, i18n::tr("inspector.pattern.group_center"), false).clicked() {
                         *c = centre;
                     }
                 });
-                style::checkbox(ui, rotate, "Rotate copies too");
+                style::checkbox(ui, rotate, i18n::tr("inspector.pattern.rotate_copies"));
             }
             Pattern::Path { source, count, mode, step, align } => {
                 let label = self.source_label(Source::Shape(*source));

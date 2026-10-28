@@ -5,8 +5,6 @@
 //! Loading is deliberately forgiving: a damaged, hand-edited or old file keeps the values it
 //! can and replaces everything else with a safe default. No value is trusted as a number.
 
-use std::cell::Cell;
-
 use serde::{Deserialize, Serialize};
 
 /// The eframe storage key. This name is shared with the translation-catalog branch.
@@ -48,23 +46,20 @@ pub fn canonical_lang(lang: &str) -> Option<&'static str> {
     LANGS.iter().find(|l| l.id == lang).map(|l| l.id)
 }
 
-thread_local! {
-    // UI text is drawn on the window thread. A thread-local keeps two windows (and tests that
-    // run in parallel) from changing each other's language.
-    static CURRENT_LANG: Cell<&'static str> = const { Cell::new(DEFAULT_LANG) };
-}
-
-/// The language the translation hook uses on this thread. The other branch calls this.
+/// The language the translation hook uses on this thread. `i18n` owns the catalog and its
+/// thread-local; this hook stays for the settings branch and its tests.
+#[allow(dead_code)]
 pub fn current_lang() -> &'static str {
-    CURRENT_LANG.with(Cell::get)
+    crate::i18n::language()
 }
 
 /// Use `lang` for the translation hook. Unknown ids leave the current language alone and return
 /// false, so a hand-edited value can never select a language that has no catalog.
+#[allow(dead_code)]
 pub fn set_lang(lang: &str) -> bool {
     match canonical_lang(lang) {
         Some(id) => {
-            CURRENT_LANG.with(|current| current.set(id));
+            crate::i18n::set_language(id);
             true
         }
         None => false,
