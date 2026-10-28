@@ -1072,13 +1072,38 @@ fn paint_node(p: &Painter, n: NodeView, chosen: bool, hot: bool, big: bool) {
     p.circle_stroke(n.c, k, Stroke::new(1.2, if chosen { Color32::WHITE } else { Color32::from_black_alpha(110) }));
 }
 
-/// The icon of the "せん" tool: the family path with its three visible control nodes.
+/// The icon of the "せん" tool: a wavy line with a node at each end.
 pub fn glyph(p: &Painter, r: Rect, ink: Color32) {
-    let f = crate::glyphs::frame(r);
-    let s = crate::glyphs::pen(r, ink);
-    let path = crate::glyphs::family_path(24);
-    crate::glyphs::round_path(p, crate::glyphs::path_points(f, &path), s, false);
-    crate::glyphs::node_marks(p, f, &path, &[0.0, 0.5, 1.0], ink);
+    // What the tool does: click points, a smooth line runs through them. So: a smooth line through
+    // three dots, and the mouse pointer clicking the next one.
+    let side = r.width().min(r.height());
+    let f = Rect::from_center_size(r.center(), vec2(side, side));
+    let pt = |x: f32, y: f32| pos2(f.min.x + f.width() * x, f.min.y + f.height() * y);
+    let nodes = [(0.12, 0.70), (0.42, 0.26), (0.72, 0.58)];
+    let mut line = Vec::new();
+    for i in 0..=24 {
+        let t = i as f32 / 24.0;
+        // a quadratic-like smooth pass through the three nodes (Catmull-Rom style blend)
+        let (x, y) = if t < 0.5 {
+            let u = t * 2.0;
+            let (a, b) = (nodes[0], nodes[1]);
+            (a.0 + (b.0 - a.0) * u, a.1 + (b.1 - a.1) * (u * (2.0 - u)))
+        } else {
+            let u = (t - 0.5) * 2.0;
+            let (a, b) = (nodes[1], nodes[2]);
+            (a.0 + (b.0 - a.0) * u, a.1 + (b.1 - a.1) * (u * u))
+        };
+        line.push(pt(x, y));
+    }
+    p.add(egui::Shape::line(line, Stroke::new((side * 0.08).clamp(1.3, 2.4), ink)));
+    for (x, y) in nodes {
+        p.circle_filled(pt(x, y), side * 0.085, ink);
+    }
+    // the mouse pointer, its tip on the next point to place
+    let tip = pt(0.80, 0.64);
+    let k = side * 0.30;
+    let arrow = vec![tip, tip + vec2(0.0, k), tip + vec2(k * 0.28, k * 0.74), tip + vec2(k * 0.70, k * 0.70)];
+    p.add(egui::Shape::convex_polygon(arrow, Color32::from_rgb(40, 40, 46), Stroke::new((side * 0.05).clamp(1.0, 1.6), ink)));
 }
 
 #[cfg(test)]

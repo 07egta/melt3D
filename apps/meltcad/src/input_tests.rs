@@ -456,6 +456,97 @@ fn a_press_on_the_home_button_never_turns_the_view_and_a_click_goes_home() {
     assert_eq!((goal.yaw, goal.pitch), (first.yaw, first.pitch));
 }
 
+/// The centre of the dark disc behind the axis balls, as the viewport draws it.
+fn gnomon_disc_centre(rect: Rect) -> Pos2 {
+    pos2(rect.right() - 62.0, rect.top() + 62.0)
+}
+
+/// A point on the dark disc but on no axis ball and not the home button.
+fn gnomon_disc_background(r: &Rig) -> Pos2 {
+    let rect = r.app.view_rect;
+    let c = gnomon_disc_centre(rect);
+    for k in 0..24 {
+        let a = k as f32 * std::f32::consts::TAU / 24.0;
+        let p = c + vec2(a.cos(), a.sin()) * 22.0;
+        assert!((p - c).length() < 48.0, "the point is inside the disc");
+        if r.app.gnomon_hit(rect, p).is_none() && !App::home_hit(rect, p) {
+            return p;
+        }
+    }
+    panic!("the disc has a background between its balls")
+}
+
+/// A point just outside the disc, away from every axis ball and the home button.
+fn just_outside_gnomon_disc(r: &Rig) -> Pos2 {
+    let rect = r.app.view_rect;
+    let c = gnomon_disc_centre(rect);
+    for k in 0..24 {
+        let a = k as f32 * std::f32::consts::TAU / 24.0;
+        let p = c + vec2(a.cos(), a.sin()) * 56.0;
+        if r.app.gnomon_hit(rect, p).is_none() && !App::home_hit(rect, p) {
+            return p;
+        }
+    }
+    panic!("there is room just outside the disc")
+}
+
+#[test]
+fn a_drag_that_starts_on_the_gnomon_disc_turns_the_view_and_makes_no_box() {
+    let mut r = Rig::new();
+    r.app.cam.look(0.6, 0.42);
+    r.app.fly = None;
+    r.app.sel = None;
+    let p = gnomon_disc_background(&r);
+    let before = (r.app.cam.yaw, r.app.cam.pitch);
+    r.mv(p);
+    r.button(p, true);
+    r.mv(p + vec2(-35.0, 20.0));
+    assert!(r.app.marquee_from.is_none(), "a drag on the disc background must not start a box");
+    assert_ne!((r.app.cam.yaw, r.app.cam.pitch), before, "a drag on the disc background must turn the view");
+    r.mv(p + vec2(-70.0, 40.0));
+    r.button(p + vec2(-70.0, 40.0), false);
+    r.frame(vec![]);
+    r.frame(vec![]);
+    assert!(r.app.marquee_from.is_none(), "the box never existed, so none is left behind");
+    assert_eq!(r.app.sel, None, "a drag on the disc must not select anything");
+    assert!(r.app.fly.is_none(), "a drag is not a click: it must not snap to an axis");
+}
+
+#[test]
+fn a_click_on_the_gnomon_disc_background_selects_nothing() {
+    let mut r = Rig::new();
+    let rect = r.app.view_rect;
+    let p = gnomon_disc_background(&r);
+    // Put a sphere right behind the disc: a click there must not pick it.
+    let (o, d) = r.app.cam.ray_at(rect, p);
+    r.app.scene.groups[0].shapes[0].pos = [o[0] + d[0] * 120.0, o[1] + d[1] * 120.0, o[2] + d[2] * 120.0];
+    r.app.sel = None;
+    r.frame(vec![]);
+    r.frame(vec![]);
+    assert!(r.app.shape_at(rect, p).is_some(), "the test needs a shape behind the disc");
+    r.click(p);
+    assert_eq!(r.app.sel, None, "a click on the disc background must select nothing behind it");
+    assert!(r.app.fly.is_none(), "a click on the background is not an axis snap");
+    r.right_click(p);
+    assert_eq!(r.app.sel, None, "a right click on the disc picks nothing behind it");
+    assert!(!r.ctx.any_popup_open(), "a right click on the disc opens no context menu");
+}
+
+#[test]
+fn a_press_just_outside_the_gnomon_disc_still_starts_a_box() {
+    let mut r = Rig::new();
+    r.app.sel = None;
+    let p = just_outside_gnomon_disc(&r);
+    let before = (r.app.cam.yaw, r.app.cam.pitch);
+    r.mv(p);
+    r.button(p, true);
+    r.mv(p + vec2(-40.0, 30.0));
+    assert!(r.app.marquee_from.is_some(), "just outside the disc a box still starts");
+    assert_eq!((r.app.cam.yaw, r.app.cam.pitch), before, "the box is not an orbit");
+    r.button(p + vec2(-40.0, 30.0), false);
+    r.frame(vec![]);
+}
+
 #[test]
 fn one_drag_draws_one_pipe_then_the_tool_ends_and_its_nodes_can_be_moved() {
     let mut r = Rig::new();

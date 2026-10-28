@@ -161,6 +161,12 @@ fn run(scene: &mut Scene, cmd: &Value) -> Result<Value, String> {
         }
         "anim.key" => {
             let f = frame_arg(obj)?;
+            // A key past the end used to be moved onto the last frame without saying so: the
+            // caller then believes its pose is at the frame it named. Refuse it instead.
+            if f >= scene.anim.length {
+                let last = scene.anim.length.saturating_sub(1);
+                return Err(format!("Pose {f} is past the last frame {last}; set the length first (anim.set)"));
+            }
             let mut anim = std::mem::take(&mut scene.anim);
             let r = anim.capture(scene, f);
             scene.anim = anim;
@@ -1310,6 +1316,10 @@ mod tests {
             json!({"cmd": "anim.at", "frame": -1}),
             json!({"cmd": "anim.at", "frame": 1.5}),
             json!({"cmd": "anim.at", "frame": u64::MAX}),
+            json!({"cmd": "anim.key"}),
+            json!({"cmd": "anim.key", "frame": u64::MAX}),
+            // past the last frame of the default 48-frame animation: refused, never moved onto it
+            json!({"cmd": "anim.key", "frame": 48}),
         ] {
             assert!(run(&mut sc, bad.clone()).is_err(), "{bad}");
         }
@@ -1387,6 +1397,18 @@ mod tests {
         assert_eq!(reply["frame"], 9);
         assert_eq!(sc.groups[0].shapes[0].pos, [90.0, 0.0, 0.0]);
         assert_eq!(sc.anim, keys, "showing a pose never records another key");
+    }
+
+    #[test]
+    fn a_pose_past_the_animation_length_is_refused_not_moved() {
+        let mut sc = Scene::default();
+        run(&mut sc, json!({"cmd": "anim.set", "length": 10})).expect("animation length");
+        let before = sc.clone();
+        let error = run(&mut sc, json!({"cmd": "anim.key", "frame": 10})).expect_err("frame 10 is past the last frame (9)");
+        assert!(error.contains('9'), "the error names the last frame: {error}");
+        assert_eq!(sc, before, "a refused pose changes nothing");
+        run(&mut sc, json!({"cmd": "anim.key", "frame": 9})).expect("the last frame itself is valid");
+        assert_eq!(sc.anim.key_frames(), vec![9]);
     }
 
     #[test]

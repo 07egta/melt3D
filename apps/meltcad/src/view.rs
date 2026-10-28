@@ -13,6 +13,12 @@ use crate::style;
 /// The home button at the upper left of the axis ball.
 const HOME_RADIUS: f32 = 12.0;
 
+/// The dark disc behind the axis balls.
+const GNOMON_RADIUS: f32 = 48.0;
+
+/// A little slack around that disc, so its edge is easy to grab.
+const GNOMON_SLACK: f32 = 4.0;
+
 /// The pointing device the view controls are tuned for.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Device {
@@ -198,7 +204,7 @@ impl App {
         } else {
             gizmo::build_multi_node(&self.cam, rect, &self.scene, &self.picks(), self.picked_node(), tool)
         };
-        let over_gnomon = !clean && pos.is_some_and(|p| self.gnomon_hit(rect, p).is_some() || Self::home_hit(rect, p));
+        let over_gnomon = !clean && pos.is_some_and(|p| Self::gnomon_disc_hit(rect, p) || Self::home_hit(rect, p));
         let hover_handle = match (&geom, pos, &self.drag) {
             (Some(g), Some(p), None) if resp.hovered() && !over_gnomon && !ct.over => gizmo::hit(g, tool, p),
             _ => None,
@@ -317,25 +323,32 @@ impl App {
         }
 
         // Box selection (when one of the two box buttons is on) takes drags that start on empty space
-        // a press on a handle (or the axis ball) is never a box: judge by where the button went down
+        // a press on a handle (or the gnomon) is never a box: judge by where the button went down
         let press = ui.input(|i| i.pointer.press_origin());
         let press_on_handle = matches!((&geom, press), (Some(g), Some(o)) if gizmo::hit(g, tool, o).is_some());
-        let press_on_gnomon = press.is_some_and(|o| self.gnomon_hit(rect, o).is_some() || Self::home_hit(rect, o));
-        let marquee_free = hover_handle.is_none() && !press_on_handle && !press_on_gnomon && !ct.taken && !ct.over && !over_gnomon;
+        let press_on_gnomon = press.is_some_and(|o| Self::gnomon_disc_hit(rect, o) || Self::home_hit(rect, o));
+        let marquee_free = hover_handle.is_none() && !press_on_handle && !press_on_gnomon && !ct.taken && !ct.over;
         let marquee_taken = self.marquee_input(ui, &resp, rect, marquee_free, mods.shift);
         // A drag that starts on a handle moves the thing; a drag that starts anywhere else turns the view
         if resp.drag_started_by(PointerButton::Primary) && !mods.alt && !ct.taken && !marquee_taken && !self.sketch_active() {
             // where the button went down (the pointer has moved a little by now)
             let origin = ui.input(|i| i.pointer.press_origin()).or(pos);
+            let on_gnomon = origin.is_some_and(|o| Self::gnomon_disc_hit(rect, o));
+            // The gnomon is an overlay: a handle behind it never takes the press.
             let grabbed = match (&geom, origin) {
+                _ if on_gnomon => None,
                 (Some(g), Some(o)) => gizmo::hit(g, tool, o).map(|h| (g, o, h)),
                 _ => None,
             };
             if let Some((g, o, h)) = grabbed {
                 self.drag = Some(self.begin_drag(h, g, rect, o, tool, mods.shift));
                 self.orbiting = false;
+            } else if on_gnomon {
+                // A drag that starts anywhere on the disc (its background or an axis ball)
+                // turns the view; the box selection was already kept away from it above.
+                self.orbiting = true;
             } else {
-                // A drag that starts on the axis ball turns the view like a drag on empty space;
+                // Anywhere else that is not the home button turns the view like empty space;
                 // only the home button keeps its press for itself (a click there goes home).
                 self.orbiting = origin.is_some_and(|o| !Self::home_hit(rect, o));
             }
@@ -382,7 +395,8 @@ impl App {
                 self.go_home();
             } else if let Some(axis) = self.gnomon_hit(rect, p) {
                 self.look_along(axis);
-            } else {
+            } else if !Self::gnomon_disc_hit(rect, p) {
+                // the disc's background is not a pick surface: a drag there turns the view
                 if mods.shift {
                     self.toggle_at(rect, p);
                 } else {
@@ -395,6 +409,7 @@ impl App {
         let tool_busy = ct.taken || self.sketch_active() || self.ct.drawing || self.pt.on;
         if resp.secondary_clicked()
             && !tool_busy
+            && !over_gnomon
             && let Some(p) = pos
         {
             let under = self.guide_at(rect, p).or_else(|| self.shape_at(rect, p)).map(|(g, s)| as_pick(g, s));
@@ -402,7 +417,7 @@ impl App {
                 self.select_pick(under, false);
             }
         }
-        if !tool_busy {
+        if !tool_busy && !over_gnomon {
             resp.context_menu(|ui| self.context_menu(ui));
         }
         if resp.double_clicked_by(PointerButton::Primary)
@@ -410,7 +425,7 @@ impl App {
             && !ct.taken
             && !self.sketch_active()
             && let Some(p) = pos
-            && self.gnomon_hit(rect, p).is_none()
+            && !Self::gnomon_disc_hit(rect, p)
             && !Self::home_hit(rect, p)
         {
             match self.shape_at(rect, p) {
@@ -554,8 +569,19 @@ impl App {
         (q.moving_scale().unwrap_or_else(|| self.perf.scale.scale()), q.still_scale())
     }
 
+    /// The middle of the dark disc behind the axis balls.
+    pub(crate) fn gnomon_centre(rect: Rect) -> Pos2 {
+        pos2(rect.right() - 62.0, rect.top() + 62.0)
+    }
+
+    /// Is `p` on the dark disc (the balls' background)? A press there turns the view:
+    /// it never starts a box, picks a shape behind it or opens a menu.
+    pub(crate) fn gnomon_disc_hit(rect: Rect, p: Pos2) -> bool {
+        (Self::gnomon_centre(rect) - p).length() <= GNOMON_RADIUS + GNOMON_SLACK
+    }
+
     pub(crate) fn gnomon_items(&self, rect: Rect) -> Vec<(V3, Pos2, bool)> {
-        let origin = pos2(rect.right() - 62.0, rect.top() + 62.0);
+        let origin = Self::gnomon_centre(rect);
         let (right, up, _) = self.cam.basis();
         let mut v = Vec::new();
         for i in 0..3 {
@@ -581,7 +607,7 @@ impl App {
 
     /// The home button sits at the upper left of the axis ball.
     pub(crate) fn home_centre(rect: Rect) -> Pos2 {
-        pos2(rect.right() - 62.0 - 44.0, rect.top() + 62.0 - 44.0)
+        Self::gnomon_centre(rect) + vec2(-44.0, -44.0)
     }
 
     pub(crate) fn home_hit(rect: Rect, p: Pos2) -> bool {
@@ -615,8 +641,8 @@ impl App {
 
     fn draw_gnomon(&self, p: &egui::Painter, rect: Rect, mouse: Option<Pos2>) {
         self.draw_home(p, rect, mouse);
-        let origin = pos2(rect.right() - 62.0, rect.top() + 62.0);
-        p.circle_filled(origin, 48.0, Color32::from_black_alpha(36));
+        let origin = Self::gnomon_centre(rect);
+        p.circle_filled(origin, GNOMON_RADIUS, Color32::from_black_alpha(36));
         let mut items = self.gnomon_items(rect);
         let (_, _, fwd) = self.cam.basis();
         // far ones first

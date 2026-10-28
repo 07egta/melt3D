@@ -2906,17 +2906,24 @@ pub(crate) fn tag(p: &Painter, at: Pos2, text: &str) {
     p.galley(at + shift, g, style::TEXT);
 }
 
-/// The icon of the sketch tool: an outline with the family's control nodes, and a pen nib.
+/// The icon of the sketch tool: an outline with its corner points, and a pencil.
 pub fn glyph(p: &Painter, r: Rect, ink: Color32) {
-    let f = crate::glyphs::frame(r);
-    let s = crate::glyphs::pen(r, ink);
-    let poly = [(0.10, 0.58), (0.22, 0.14), (0.64, 0.10), (0.72, 0.44), (0.40, 0.56)];
-    crate::glyphs::round_path(p, crate::glyphs::path_points(f, &poly), s, true);
-    for &q in &poly {
-        crate::glyphs::node_mark(p, f, q, ink);
+    let s = r.width().min(r.height()) * 0.8;
+    let f = Rect::from_center_size(r.center(), vec2(s, s));
+    let at = |u: f32, v: f32| pos2(f.left() + f.width() * u, f.top() + f.height() * v);
+    let pen = Stroke::new((r.width() * 0.075).clamp(1.2, 2.6), ink);
+    let poly = [at(0.08, 0.60), at(0.20, 0.14), at(0.62, 0.10), at(0.70, 0.40), at(0.40, 0.52)];
+    p.add(Gfx::closed_line(poly.to_vec(), pen));
+    for q in poly {
+        p.circle_filled(q, (r.width() * 0.05).clamp(1.4, 2.4), ink);
     }
-    // the family pen nib, its tip on the lower edge of the outline
-    crate::glyphs::pen_nib(p, f, (0.58, 0.53), (0.50, 0.80), s);
+    // a pencil pointing to the lower left
+    let tip = at(0.42, 0.92);
+    let (a, b) = (at(0.50, 0.68), at(0.66, 0.84));
+    p.add(Gfx::closed_line(vec![tip, a, b], pen));
+    p.line_segment([a, at(0.80, 0.40)], pen);
+    p.line_segment([b, at(0.96, 0.56)], pen);
+    p.line_segment([at(0.80, 0.40), at(0.96, 0.56)], pen);
 }
 
 // ------------------------------------------------------------------ tests

@@ -483,6 +483,36 @@ mod tests {
     }
 
     #[test]
+    fn is_pick_selected_answers_exactly_what_the_pick_list_contains() {
+        // The scene list asks this once per row and frame (no allocation); it must agree with
+        // `picks().contains()` in every state of the selection.
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        app.scene.groups[0].shapes.push(Shape::new(Kind::Box, [20.0, 7.0, 9.0], Material::default()));
+        app.scene.groups[0].shapes.push(Shape::new(Kind::Box, [-14.0, 11.0, 12.0], Material::default()));
+        app.settle(&ctx);
+        let all = [Pick::Shape(0, 0), Pick::Shape(0, 1), Pick::Shape(0, 2), Pick::Group(0), Pick::Group(7)];
+        let check = |app: &App, what: &str| {
+            for p in all {
+                assert_eq!(app.is_pick_selected(p), app.picks().contains(&p), "{what}: {p:?}");
+            }
+        };
+        check(&app, "nothing picked");
+        app.select_pick(Some(Pick::Shape(0, 1)), false);
+        check(&app, "one picked");
+        app.select_pick(Some(Pick::Shape(0, 2)), true);
+        check(&app, "two picked");
+        app.toggle_pick(Pick::Shape(0, 0));
+        check(&app, "three picked");
+        app.toggle_pick(Pick::Shape(0, 2));
+        check(&app, "two picked again");
+        app.select_pick(Some(Pick::Shape(0, 1)), false);
+        check(&app, "back to one");
+        app.select_pick(None, false);
+        check(&app, "cleared");
+    }
+
+    #[test]
     fn multiselect_toggle_align_duplicate_delete_group_and_undo() {
         let ctx = egui::Context::default();
         let mut app = App::new(true, None);
