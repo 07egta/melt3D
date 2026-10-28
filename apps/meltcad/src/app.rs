@@ -497,6 +497,9 @@ impl App {
             self.prepare_outline_history(&prev);
             self.redo.push(std::mem::replace(&mut self.scene, prev.clone()));
             self.committed = prev;
+            // The document no longer matches what was last saved (an undo after a save used to
+            // stay "clean", so closing threw the undone state away without asking).
+            self.dirty = true;
             self.fix_selection();
             self.animation_at_applied(self.an.frame);
             // Invalidate both CPU field and GPU pack before any further hit test/draw.
@@ -522,6 +525,8 @@ impl App {
             self.prepare_outline_history(&next);
             self.undo.push(std::mem::replace(&mut self.scene, next.clone()));
             self.committed = next;
+            // A redo is a document change too: never leave a redone state looking saved.
+            self.dirty = true;
             self.fix_selection();
             self.animation_at_applied(self.an.frame);
             self.track_scene();
@@ -3191,6 +3196,26 @@ mod tests {
         assert_eq!(app.scene.shape_count(), 2);
         assert!(app.dirty);
         assert!(app.pending_file_action.is_some(), "failed save must not discard the pending action");
+    }
+
+    #[test]
+    fn undoing_past_a_save_keeps_the_document_marked_as_changed() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        let path = std::env::temp_dir().join(format!("meltcad_undo_after_save_{}.meltcad", std::process::id()));
+        app.path = Some(path.clone());
+        app.add_shape(&ctx, Kind::Box);
+        app.settle(&ctx);
+        assert!(app.try_save(&ctx, false), "the save starts");
+        finish_file_jobs(&mut app, &ctx);
+        assert!(!app.dirty, "a finished save starts clean");
+
+        app.undo();
+
+        assert_eq!(app.scene.shape_count(), 1, "the undo removed the saved shape");
+        assert!(app.dirty, "the file on disk still has the edit the undo took back");
+        assert!(app.has_unsaved_work(), "closing must ask before the undone state is thrown away");
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]
