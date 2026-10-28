@@ -2863,10 +2863,15 @@ impl App {
             {
                 self.notice = Some(format!("Could not save auto-recovery data: {e}"));
             }
-            let rev = self.track_scene();
-            let changed = self.has_unsaved_work();
-            if let Err(e) = self.recovery.start_checkpoint(&self.scene, self.path.as_deref(), changed, rev, std::time::Instant::now()) {
-                self.notice = Some(format!("Could not save auto-recovery data: {e}"));
+            // Finding out whether the scene changed compares all of it, so it is only done when
+            // a checkpoint is due (`start_checkpoint` would ignore the answer otherwise).
+            let now = std::time::Instant::now();
+            if self.recovery.due(now) {
+                let rev = self.track_scene();
+                let changed = self.has_unsaved_work();
+                if let Err(e) = self.recovery.start_checkpoint(&self.scene, self.path.as_deref(), changed, rev, now) {
+                    self.notice = Some(format!("Could not save auto-recovery data: {e}"));
+                }
             }
             if self.recovery.checkpoint_running() {
                 ctx.request_repaint_after(std::time::Duration::from_millis(150));

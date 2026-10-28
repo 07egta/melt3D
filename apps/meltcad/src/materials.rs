@@ -187,6 +187,8 @@ fn gradient_tint(painter: &Painter, centre: Pos2, r: f32, m: &Material, body_alp
         Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), (a * 255.0) as u8)
     };
     let mut mesh = Mesh::default();
+    mesh.reserve_vertices(STEPS + 2);
+    mesh.reserve_triangles(STEPS);
     mesh.colored_vertex(centre, tint(0.0));
     for i in 0..=STEPS {
         let a = i as f32 / STEPS as f32 * std::f32::consts::TAU;

@@ -290,19 +290,36 @@ fn read_stl_ascii(b: &[u8]) -> Result<ImportedMesh, String> {
     Ok(ImportedMesh { positions: w.positions, triangles })
 }
 
-/// Binary STL if the size fits the triangle count (a binary header may start with "solid"),
-/// otherwise ASCII when it says "solid".
+/// True when the 84-byte header plus 50 bytes a triangle add up to the whole file: a binary STL.
+fn stl_is_binary(b: &[u8]) -> bool {
+    b.get(80..84).is_some_and(|x| 84 + 50 * u64::from(u32::from_le_bytes([x[0], x[1], x[2], x[3]])) == b.len() as u64)
+}
+
+/// Does this text hold `needle`, ignoring ASCII case?
+fn contains_ascii_ci(hay: &[u8], needle: &[u8]) -> bool {
+    needle.len() <= hay.len() && hay.windows(needle.len()).any(|w| w.eq_ignore_ascii_case(needle))
+}
+
+/// An ASCII STL says "solid" and has the words "facet" and "vertex"; a binary file may also start
+/// with "solid" in its header, so the words decide (a binary header's floats almost never spell them).
+fn stl_is_ascii(b: &[u8]) -> bool {
+    let head = b.get(..b.len().min(4096)).unwrap_or(b);
+    head.iter().skip_while(|c| c.is_ascii_whitespace()).take(5).map(u8::to_ascii_lowercase).eq(b"solid".iter().copied())
+        && contains_ascii_ci(head, b"facet")
+        && contains_ascii_ci(head, b"vertex")
+}
+
+/// Binary STL when the size fits the triangle count; otherwise ASCII when the text says "solid"
+/// (a binary header may start with "solid" too, so the "facet" and "vertex" words decide), and
+/// binary as the last resort so a damaged file still reports a reason.
 fn read_stl(b: &[u8]) -> Result<ImportedMesh, String> {
-    let exact = b.get(80..84).is_some_and(|x| 84 + 50 * (u32::from_le_bytes([x[0], x[1], x[2], x[3]]) as u64) == b.len() as u64);
-    let head = b.get(..b.len().min(512)).unwrap_or(b);
-    let solid = head.iter().skip_while(|c| c.is_ascii_whitespace()).take(5).map(u8::to_ascii_lowercase).eq(b"solid".iter().copied());
-    if exact {
-        read_stl_binary(b)
-    } else if solid {
-        read_stl_ascii(b)
-    } else {
-        read_stl_binary(b)
+    if stl_is_binary(b) {
+        return read_stl_binary(b);
     }
+    if stl_is_ascii(b) {
+        return read_stl_ascii(b);
+    }
+    read_stl_binary(b)
 }
 
 // ---------------------------------------------------------------- OBJ
@@ -877,8 +894,14 @@ fn lower_ext(name: &str) -> String {
     std::path::Path::new(name).extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default()
 }
 
+/// A UTF-8 byte-order mark (as written by Windows text editors) is not part of a model's text.
+fn without_bom(b: &[u8]) -> &[u8] {
+    b.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(b)
+}
+
 /// Which format a file is, by its first bytes and then by its name.
 pub fn sniff(b: &[u8], name: &str) -> Option<MeshFormat> {
+    let b = without_bom(b);
     if b.starts_with(b"PK\x03\x04") || b.starts_with(b"PK\x05\x06") {
         return Some(MeshFormat::ThreeMf);
     }
@@ -981,6 +1004,14 @@ pub fn import_bytes(bytes: &[u8], name: &str, opts: &ImportOptions) -> Result<Im
         return Err(TOO_BIG_FILE.into());
     }
     let format = sniff(bytes, name).ok_or("Can't tell this file's format (supports STL, OBJ, PLY, 3MF, GLB)")?;
+    // Text formats may start with a byte-order mark, which is not part of the model: left in
+    // place it hid the first OBJ vertex, so every face named the wrong corner. Binary
+    // containers (3MF, GLB, a binary STL) keep every byte they have.
+    let bytes = if matches!(format, MeshFormat::ThreeMf | MeshFormat::Glb) || (format == MeshFormat::Stl && stl_is_binary(bytes)) {
+        bytes
+    } else {
+        without_bom(bytes)
+    };
     let appearance_info = match format {
         MeshFormat::ThreeMf => crate::import_3mf::appearance_3mf(bytes),
         MeshFormat::Glb => crate::import_glb::appearance_glb(bytes),
@@ -1247,6 +1278,24 @@ pub mod tests {
         assert!((r.mesh.signed_volume() - 1.0).abs() < 1e-6);
     }
 
+    /// A binary STL whose 80-byte header begins with "solid" (many writers do) and whose file has
+    /// trailing bytes is still binary: its size no longer fits the count exactly, and it used to be
+    /// parsed as text, so a valid model came in as "no shape".
+    #[test]
+    fn a_binary_stl_with_a_solid_header_and_trailing_bytes_still_reads() {
+        let b = box_mesh([0.0; 3], [1.0; 3]);
+        let mut bin = export_formats::stl_binary(&to_trimesh(&b), "box");
+        bin[..5].copy_from_slice(b"solid");
+        bin.push(b'\n');
+        let r = load(&bin, "box.stl");
+        assert_eq!(r.mesh.triangles.len(), 12);
+        assert_eq!(r.mesh.positions.len(), 8);
+        assert!((r.mesh.signed_volume() - 1.0).abs() < 1e-6, "{}", r.mesh.signed_volume());
+        // the same file without the trailing byte already worked and must keep working
+        bin.pop();
+        assert_eq!(load(&bin, "box.stl").mesh.triangles.len(), 12);
+    }
+
     #[test]
     fn hostile_stl_files() {
         // the count says a million triangles, the file has 3
@@ -1344,6 +1393,29 @@ pub mod tests {
         let ply = "ply\nformat ascii 1.0\nelement vertex 3\nproperty float x\nproperty float y\nproperty float z\nproperty uchar red\nproperty uchar green\nproperty uchar blue\nelement face 1\nproperty list uchar int vertex_indices\nend_header\n0 0 0 255 0 0\n1 0 0 255 0 0\n0 1 0 255 0 0\n3 0 1 2\n";
         let r = import_bytes(ply.as_bytes(), "a.ply", &opts()).unwrap();
         assert!(r.notes.iter().any(|n| n.contains("vertex colours")), "{:?}", r.notes);
+    }
+
+    /// A UTF-8 byte-order mark (Notepad and other Windows tools write one) must not shift the
+    /// indices of a text model or stop it from loading. A BOM-prefixed OBJ used to lose its first
+    /// vertex, so every face named the wrong corner, and BOM-prefixed STL/PLY files were refused.
+    #[test]
+    fn a_utf8_bom_does_not_shift_or_break_a_text_model() {
+        let obj = "v 0 0 0\nv 10 0 0\nv 0 10 0\nv 99 99 99\nf 1 2 3\n";
+        let plain = load(obj.as_bytes(), "t.obj");
+        let with_bom = load(format!("\u{feff}{obj}").as_bytes(), "t.obj");
+        assert_eq!(with_bom.mesh.positions, plain.mesh.positions);
+        assert_eq!(with_bom.mesh.triangles, plain.mesh.triangles);
+        assert!((with_bom.mesh.surface_area() - 50.0).abs() < 1e-4, "the wrong corners: {}", with_bom.mesh.surface_area());
+        let stl = load(format!("\u{feff}{ASCII_TETRA}").as_bytes(), "t.stl");
+        assert_eq!(stl.mesh.triangles.len(), 4);
+        assert!((stl.mesh.signed_volume() - 1.0 / 6.0).abs() < 1e-9, "{}", stl.mesh.signed_volume());
+        let ply = load(format!("\u{feff}{}", ply_ascii()).as_bytes(), "t.ply");
+        assert_eq!((ply.mesh.positions.len(), ply.mesh.triangles.len()), (4, 4));
+        // a BOM by itself is still an empty file, and a binary file is not touched
+        assert!(import_bytes(b"\xEF\xBB\xBF", "t.obj", &opts()).is_err());
+        let b = box_mesh([0.0; 3], [1.0; 3]);
+        let bin = export_formats::stl_binary(&to_trimesh(&b), "b");
+        assert_eq!(load(&bin, "b.stl").mesh.triangles.len(), 12);
     }
 
     #[test]

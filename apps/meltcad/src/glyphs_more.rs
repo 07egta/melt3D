@@ -55,6 +55,10 @@ fn polyline(p: &Painter, f: Rect, pts: &[P], s: Stroke) {
     crate::glyphs::round_path(p, px(f, pts), s, false);
 }
 
+fn segment(p: &Painter, f: Rect, a: P, b: P, s: Stroke) {
+    crate::glyphs::round_path(p, vec![at(f, a.0, a.1), at(f, b.0, b.1)], s, false);
+}
+
 /// Convex filled polygon with an outline.
 fn poly(p: &Painter, f: Rect, pts: &[P], fill: Color32, s: Stroke) {
     if fill.a() > 0 {
@@ -80,6 +84,25 @@ fn fan(p: &Painter, f: Rect, pts: &[P], c: P, fill: Color32, s: Stroke) {
         p.add(Shape::mesh(m));
     }
     crate::glyphs::round_path(p, px(f, pts), s, true);
+}
+
+/// A strip of quads between two sides of equal length (for ribbons), no outline.
+fn strip(p: &Painter, f: Rect, a: &[P], b: &[P], fill: Color32) {
+    if fill.a() == 0 {
+        return;
+    }
+    let mut m = Mesh::default();
+    for (&pa, &pb) in a.iter().zip(b.iter()) {
+        m.colored_vertex(at(f, pa.0, pa.1), fill);
+        m.colored_vertex(at(f, pb.0, pb.1), fill);
+    }
+    let n = a.len().min(b.len()) as u32;
+    for i in 0..n.saturating_sub(1) {
+        let k = 2 * i;
+        m.add_triangle(k, k + 1, k + 2);
+        m.add_triangle(k + 1, k + 3, k + 2);
+    }
+    p.add(Shape::mesh(m));
 }
 
 fn faint(c: Color32) -> Color32 {
@@ -231,32 +254,45 @@ fn loft(p: &Painter, f: Rect, fill: Color32, s: Stroke) {
     poly(p, f, &[tl, tr, tf], fill, s);
 }
 
-fn curve(p: &Painter, f: Rect, _fill: Color32, s: Stroke) {
-    // the family path, with the same visible control nodes as the tool strip
-    let path = crate::glyphs::family_path(24);
-    crate::glyphs::round_path(p, px(f, &path), s, false);
-    crate::glyphs::node_marks(p, f, &path, &[0.0, 0.5, 1.0], s.color);
+/// Points of an S shaped path from left to right.
+fn s_path(n: usize) -> Vec<P> {
+    (0..=n)
+        .map(|i| {
+            let t = i as f32 / n as f32;
+            (0.1 + 0.8 * t, 0.5 + 0.3 * (2.0 * PI * t).sin())
+        })
+        .collect()
 }
 
-/// The sweep drawing shared by the Shape grid and the Solid-mode button: a ribbon along the
-/// family path with its profile ring at the start.
-pub(crate) fn sweep(p: &Painter, f: Rect, fill: Color32, s: Stroke) {
-    let path = crate::glyphs::family_path(24);
-    let (a, b) = crate::glyphs::offset_path(&path, 0.07);
-    crate::glyphs::band(p, f, &a, &b, fill.gamma_multiply(0.8));
+fn curve(p: &Painter, f: Rect, fill: Color32, s: Stroke) {
+    // a smooth line with the nodes you drag
+    let path = s_path(24);
+    crate::glyphs::round_path(p, px(f, &path), Stroke::new(s.width * 1.25, s.color), false);
+    for i in [0, 12, 24] {
+        let q = path[i];
+        p.circle_filled(at(f, q.0, q.1), f.width() * 0.085, s.color);
+        p.circle_filled(at(f, q.0, q.1), f.width() * 0.04, fill);
+    }
+}
+
+fn sweep(p: &Painter, f: Rect, fill: Color32, s: Stroke) {
+    // a ribbon along the path: two edges and a soft fill, with the profile ring at its start
+    let path = s_path(24);
+    let half = 0.07;
+    let (mut a, mut b) = (Vec::new(), Vec::new());
+    for i in 0..path.len() {
+        let (p0, p1) = (path[i.saturating_sub(1)], path[(i + 1).min(path.len() - 1)]);
+        let (tx, ty) = (p1.0 - p0.0, p1.1 - p0.1);
+        let l = tx.hypot(ty).max(1e-6);
+        let (nx, ny) = (-ty / l, tx / l);
+        a.push((path[i].0 + nx * half, path[i].1 + ny * half));
+        b.push((path[i].0 - nx * half, path[i].1 - ny * half));
+    }
+    strip(p, f, &a, &b, fill.gamma_multiply(0.8));
     polyline(p, f, &a, s);
     polyline(p, f, &b, s);
-    // the profile that is carried along the path: a foreshortened ring, as on the pipe
-    if let Some(&c) = path.first() {
-        let ctr = at(f, c.0, c.1);
-        let pts: Vec<Pos2> = (0..=24)
-            .map(|i| {
-                let a = 2.0 * PI * i as f32 / 24.0;
-                pos2(ctr.x + f.width() * 0.045 * a.cos(), ctr.y + f.width() * 0.10 * a.sin())
-            })
-            .collect();
-        p.add(Shape::line(pts, s));
-    }
+    // the cut across the start
+    segment(p, f, a[0], b[0], s);
 }
 
 /// Draws the icon of an extra solid or a CAD feature. Other kinds draw nothing here.

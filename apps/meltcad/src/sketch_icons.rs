@@ -32,9 +32,8 @@ fn curve(p: &Painter, r: Rect, pts: [(f32, f32); 4], stroke: Stroke) {
 }
 
 fn dots(p: &Painter, r: Rect, pts: &[(f32, f32)], ink: Color32) {
-    let f = crate::glyphs::frame(r);
-    for &q in pts {
-        crate::glyphs::node_mark(p, f, q, ink);
+    for (u, v) in pts {
+        p.circle_filled(at(r, *u, *v), size(r) * 0.07, ink);
     }
 }
 
@@ -96,10 +95,9 @@ pub fn pen_tool(p: &Painter, r: Rect, t: Pen, ink: Color32) {
             dots(p, r, &[(0.5, 0.5), (0.88, 0.5)], ink);
         }
         Pen::Spline => {
-            let path = crate::glyphs::family_path(24);
-            let pts: Vec<Pos2> = path.iter().map(|&(u, v)| at(r, u, v)).collect();
-            p.add(egui::Shape::line(pts, st));
-            crate::glyphs::node_marks(p, crate::glyphs::frame(r), &path, &[0.0, 0.5, 1.0], ink);
+            curve(p, r, [(0.1, 0.5), (0.22, 0.12), (0.38, 0.12), (0.5, 0.5)], st);
+            curve(p, r, [(0.5, 0.5), (0.62, 0.88), (0.78, 0.88), (0.9, 0.5)], st);
+            dots(p, r, &[(0.1, 0.5), (0.5, 0.5), (0.9, 0.5)], ink);
         }
         Pen::Line => {
             p.line_segment([at(r, 0.14, 0.82), at(r, 0.86, 0.18)], st);
@@ -191,9 +189,13 @@ pub fn loft(p: &Painter, r: Rect, ink: Color32) {
     p.line_segment([at(r, 0.9, 0.82), at(r, 0.66, 0.1)], st);
 }
 
-/// Sweep: the same ribbon and profile ring as the Shape grid's Sweep icon.
+/// Sweep: a small outline pulled along a bending path.
 pub fn sweep(p: &Painter, r: Rect, ink: Color32) {
-    crate::glyphs_more::sweep(p, crate::glyphs::frame(r), ink.gamma_multiply(0.16), pen(r, ink));
+    let st = pen(r, ink);
+    p.circle_stroke(at(r, 0.2, 0.8), size(r) * 0.13, st);
+    curve(p, r, [(0.2, 0.8), (0.64, 0.8), (0.46, 0.18), (0.9, 0.18)], st);
+    p.line_segment([at(r, 0.76, 0.06), at(r, 0.9, 0.18)], st);
+    p.line_segment([at(r, 0.76, 0.3), at(r, 0.9, 0.18)], st);
 }
 
 /// Accept: a tick.

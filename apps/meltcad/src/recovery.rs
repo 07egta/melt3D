@@ -318,6 +318,12 @@ impl Store {
         Ok(restored)
     }
 
+    /// Is `start_checkpoint` going to do anything at `now`? Its callers do the expensive part
+    /// (finding out whether the scene changed, which compares the whole scene) only when it is.
+    pub fn due(&self, now: Instant) -> bool {
+        self.in_flight.is_none() && now >= self.next_due
+    }
+
     /// Start serializing and staging a checkpoint on a worker. The caller is never
     /// blocked and never serializes the scene. Returns true only if a worker started.
     /// The clock is injected so interval behavior can be tested without sleeps.
@@ -510,6 +516,38 @@ mod tests {
         assert!(store.checkpoint(&scene, None, true, 2, now + INTERVAL * 2).expect("modified"));
         assert!(!store.checkpoint(&scene, None, true, 2, now + INTERVAL * 3).expect("same revision"));
         assert!(store.checkpoint(&scene, None, true, 3, now + INTERVAL * 4).expect("new revision"));
+        store.normal_exit().expect("cleanup");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn due_is_true_exactly_when_a_checkpoint_would_be_written() {
+        // The window asks `due` before it compares the whole scene; if the two disagreed, an
+        // edit would never reach the recovery file (or every frame would compare the scene).
+        let root = temp_root();
+        let now = Instant::now();
+        let mut store = Store::new(root.clone(), now);
+        let scene = edited();
+        assert!(!store.due(now), "a fresh store waits one interval");
+        assert!(!store.due(now + INTERVAL - Duration::from_millis(1)));
+        assert!(store.due(now + INTERVAL));
+        assert!(store.start_checkpoint(&scene, None, true, 2, now + INTERVAL).expect("start"));
+        assert!(!store.due(now + INTERVAL), "one checkpoint at a time");
+        let mut started = None;
+        for _ in 0..1200 {
+            if let Some(result) = store.poll_checkpoint() {
+                started = Some(result);
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(started, Some(Ok(true)), "the worker wrote the checkpoint");
+        assert!(!store.due(now + INTERVAL), "the start scheduled the next one");
+        assert!(!store.due(now + INTERVAL * 2 - Duration::from_millis(1)));
+        assert!(store.due(now + INTERVAL * 2));
+        // and a scene that did not change costs nothing even when due
+        assert!(!store.checkpoint(&scene, None, false, 2, now + INTERVAL * 2).expect("clean"));
+        assert!(!store.due(now + INTERVAL * 2), "the clean look scheduled the next one");
         store.normal_exit().expect("cleanup");
         let _ = fs::remove_dir_all(root);
     }
