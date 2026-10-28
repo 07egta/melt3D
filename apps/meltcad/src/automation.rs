@@ -511,15 +511,22 @@ fn extrude(scene: &mut Scene, obj: &Map<String, Value>) -> Result<Value, String>
         }
         profile.push([x, y]);
     }
-    let height = obj.get("height").and_then(Value::as_f64).unwrap_or(20.0) as f32;
-    let frame = match obj.get("plane").and_then(Value::as_str).unwrap_or("floor") {
-        "floor" => match obj.get("z").and_then(Value::as_f64) {
-            Some(z) if z.is_finite() => Frame::horizontal(z as f32),
-            _ => Frame::floor(),
+    let height = number(obj, "height", 20.0, 0.1, 2000.0)?;
+    // An explicit but malformed value is an error; only an absent one may take the default (#265).
+    let z = match obj.get("z") {
+        None => None,
+        Some(_) => Some(number(obj, "z", 0.0, -2000.0, 2000.0)?),
+    };
+    let frame = match obj.get("plane") {
+        None => Frame::floor(),
+        Some(Value::String(s)) if s == "floor" => match z {
+            Some(z) => Frame::horizontal(z),
+            None => Frame::floor(),
         },
-        "front" => Frame::front(),
-        "side" => Frame::side(),
-        other => return Err(format!("Unknown plane \"{other}\" (floor, front, side)")),
+        Some(Value::String(s)) if s == "front" => Frame::front(),
+        Some(Value::String(s)) if s == "side" => Frame::side(),
+        Some(Value::String(s)) => return Err(format!("Unknown plane \"{s}\" (floor, front, side)")),
+        Some(_) => return Err("\"plane\" must be floor, front or side".into()),
     };
     reject_unknown(&without(obj, &["points", "height", "plane", "z"]), &SHAPE_KEYS, "shape")?;
     let built = sketch::extrude(&frame, &profile, height, false).map_err(|e| e.message())?;
@@ -1347,6 +1354,9 @@ mod tests {
             json!({"cmd": "shape.delete", "group": -1, "shape": 0}),
             json!({"cmd": "extrude", "points": [[0, 0], [1]]}),
             json!({"cmd": "extrude", "points": [[0, 0], [1, 1], [2, 0]], "plane": "moon"}),
+            json!({"cmd": "extrude", "points": [[0, 0], [10, 0], [0, 10]], "height": "oops"}),
+            json!({"cmd": "extrude", "points": [[0, 0], [10, 0], [0, 10]], "plane": 7}),
+            json!({"cmd": "extrude", "points": [[0, 0], [10, 0], [0, 10]], "z": "oops"}),
             json!({"cmd": "melt.set", "amount": "lots"}),
             json!({"cmd": "save"}),
             json!({"cmd": "sketch.create"}),

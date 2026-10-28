@@ -12,6 +12,7 @@ use egui::Context;
 use serde::Deserialize;
 
 use crate::model::{Group, MAX_GROUPS, MAX_SHAPES, Scene};
+use crate::designer_lamp::{self, LampParams, LampStyle};
 
 #[derive(Deserialize)]
 struct RawCategory {
@@ -28,6 +29,7 @@ struct RawItem {
     group: Group,
 }
 
+#[derive(Clone)]
 pub struct Item {
     pub name: String,
     /// Extra words the search matches (hiragana, English, ...).
@@ -35,6 +37,7 @@ pub struct Item {
     pub group: Group,
 }
 
+#[derive(Clone)]
 pub struct Category {
     /// Bundled category name, kept for benchmark/test callers of all().
     #[allow(dead_code)]
@@ -81,12 +84,48 @@ const LABELS: [&str; 15] = [
     "まち",
 ];
 
+/// Categories made in Rust (parametric bags, vases, lamps, chairs). They stand after the files in the tabs
+/// and need no parsing, so they are ready at once.
+const EXTRA_LABELS: [&str; 6] = ["バッグ", "花瓶・Vase", "Designer Lamp", "Designer Chair", "Fusion", "チェス"];
+
+fn extras() -> &'static [Category] {
+    static EXTRA: OnceLock<Vec<Category>> = OnceLock::new();
+    EXTRA.get_or_init(|| {
+        let bags = crate::designer_bag::library_groups().into_iter().map(|(name, tags, group)| Item { name, tags, group }).collect();
+        // Generated once from the exact same parametric state users later edit.
+        let vases = crate::organic_vase::Design::ALL
+            .into_iter()
+            .map(|design| {
+                let mut group = Group::new(design.name());
+                group.blend = 0.0;
+                group.shapes.push(crate::organic_vase::new(design));
+                Item {
+                    name: design.name().to_string(),
+                    tags: vec!["organic vase".into(), "有機 花瓶".into(), "vase".into(), "3Dプリント".into()],
+                    group,
+                }
+            })
+            .collect();
+        let lamps = LampStyle::ALL
+            .into_iter()
+            .map(|style| Item {
+                name: format!("Designer Lamp（{}）", style.label()),
+                tags: vec!["designer lamp".into(), "lamp".into(), "lighting".into(), "照明".into(), style.english().into(), style.label().into()],
+                group: designer_lamp::build(LampParams::for_style(style)),
+            })
+            .collect();
+        let chairs = crate::designer_chair::presets();
+        let items = [bags, vases, lamps, chairs, crate::fusion::library_category().items, chess_category().items];
+        EXTRA_LABELS.iter().zip(items).map(|(name, items)| Category { name: (*name).into(), items }).collect()
+    })
+}
+
 pub fn count() -> usize {
-    FILES.len()
+    FILES.len() + EXTRA_LABELS.len()
 }
 
 pub fn label(index: usize) -> Option<&'static str> {
-    LABELS.get(index).copied()
+    LABELS.get(index).copied().or_else(|| EXTRA_LABELS.get(index.checked_sub(FILES.len())?).copied())
 }
 
 /// Each category is deserialized only after its first visible card requests it.
@@ -94,6 +133,9 @@ pub fn label(index: usize) -> Option<&'static str> {
 static CATEGORIES: [OnceLock<Result<Category, String>>; 15] = [const { OnceLock::new() }; 15];
 
 pub fn loaded(index: usize) -> Option<Result<&'static Category, &'static str>> {
+    if index >= FILES.len() {
+        return extras().get(index - FILES.len()).map(Ok);
+    }
     CATEGORIES.get(index)?.get().map(|c| c.as_ref().map_err(String::as_str))
 }
 
@@ -151,6 +193,16 @@ fn build_index() -> SearchIndex {
         match index_file(json, i) {
             Ok(items) => result.entries.extend(items),
             Err(_) => result.failed_files += 1,
+        }
+    }
+    for (c, cat) in extras().iter().enumerate() {
+        for (item, it) in cat.items.iter().enumerate() {
+            result.entries.push(SearchEntry {
+                category: FILES.len() + c,
+                item,
+                key: format!("{} {}", it.name.to_lowercase(), it.tags.join(" ").to_lowercase()),
+                name: it.name.clone(),
+            });
         }
     }
     result
@@ -215,7 +267,7 @@ fn loader() -> Option<&'static Loader> {
 /// rest of the application usable and shows an explanatory placeholder.
 pub fn request_category(index: usize, ctx: &Context) -> bool {
     if index >= FILES.len() {
-        return false;
+        return index < count();
     }
     if loaded(index).is_some() {
         return true;
@@ -252,7 +304,33 @@ pub fn request_search(ctx: &Context) -> bool {
 /// All categories (parsed once). A damaged file is skipped, never a crash; a test checks they all parse.
 pub fn all() -> &'static [Category] {
     static LIB: OnceLock<Vec<Category>> = OnceLock::new();
-    LIB.get_or_init(|| FILES.iter().filter_map(|t| parse(t).ok()).filter(|c| !c.items.is_empty()).collect())
+    LIB.get_or_init(|| {
+        let mut categories: Vec<Category> =
+            FILES.iter().map(|t| parse(t).unwrap_or(Category { name: String::new(), items: Vec::new() })).collect();
+        // the built-in (Rust) categories stand after the files, in the order of the tabs
+        categories.extend(extras().iter().map(|c| Category { name: c.name.clone(), items: c.items.clone() }));
+        categories
+    })
+}
+
+/// The Chess Set category uses the same editable groups and normal model thumbnails as
+/// JSON presets, but the 18 variants are generated by one parameterized geometry source.
+fn chess_category() -> Category {
+    use crate::chess::{Design, Piece, Settings, Side};
+    let mut items = Vec::new();
+    for design in Design::ALL {
+        for piece in Piece::ALL {
+            let s = Settings { piece, design, side: Side::White, ..Settings::default() };
+            let name = format!("{} · {}",piece.name(),design.name());
+            items.push(Item {
+                name: name.clone(),
+                tags: vec!["Chess".into(),"Chess Set".into(),"チェス".into(),piece.key().into(),
+                    piece.name().into(),design.name().into()],
+                group: crate::chess::make_piece(s,[0.0,0.0],"library"),
+            });
+        }
+    }
+    Category { name: "チェス".into(), items }
 }
 
 fn parse(text: &str) -> Result<Category, String> {
@@ -314,9 +392,19 @@ impl Item {
     pub fn placed(&self, at: [f32; 2]) -> Group {
         let c = self.centre_xy();
         let mut g = self.group.clone();
+        let dx = at[0] - c[0];
+        let dy = at[1] - c[1];
         for s in &mut g.shapes {
-            s.pos[0] += at[0] - c[0];
-            s.pos[1] += at[1] - c[1];
+            s.pos[0] += dx;
+            s.pos[1] += dy;
+        }
+        if let Some(bag) = &mut g.bag {
+            bag.origin_xy[0] += dx;
+            bag.origin_xy[1] += dy;
+        }
+        if let Some(p) = &mut g.lamp {
+            p.offset[0] += dx;
+            p.offset[1] += dy;
         }
         g
     }
@@ -366,13 +454,64 @@ mod tests {
                 }
             }
         }
-        assert_eq!(count(), FILES.len());
+        assert_eq!(count(), FILES.len() + EXTRA_LABELS.len());
     }
 
     #[test]
     fn invalid_search_file_is_an_error_but_does_not_crash() {
         assert!(index_file("not-json", 0).is_err());
         assert_eq!(index_file(r#"{"items":[]}"#, 0).expect("empty").len(), 0);
+    }
+
+    #[test]
+    fn home_appliances_are_unique_searchable_and_save_round_trip() {
+        let c = parse(FILES[4]).expect("everyday library must parse");
+        assert_eq!(c.name, "くらしのもの");
+        let expected = [
+            ("冷蔵庫（観音開き）", "refrigerator"),
+            ("電子レンジ", "microwave"),
+            ("洗濯機", "washing machine"),
+            ("掃除機（スティック型）", "vacuum"),
+            ("扇風機", "fan"),
+            ("テレビ（薄型・両脚）", "television"),
+            ("炊飯器", "rice cooker"),
+            ("トースター（2枚焼き）", "toaster"),
+            ("卓上ライト（アーム式）", "desk lamp"),
+            ("エアコン（壁掛け室内機）", "air conditioner"),
+        ];
+        let mut names = std::collections::HashSet::new();
+        for item in &c.items {
+            assert!(names.insert(item.name.as_str()), "duplicate {}", item.name);
+        }
+        for (name, keyword) in expected {
+            let it = c.items.iter().find(|it| it.name == name).expect("missing home appliance");
+            assert!(it.matches(keyword), "{name}: English search tag missing");
+            assert!(it.group.shapes.len() >= 8 && it.group.shapes.len() <= 24, "{name}");
+            assert!(it.fits(0, 0));
+            let placed = it.placed([15.0, -25.0]);
+            assert_eq!(placed.shapes.len(), it.group.shapes.len());
+            let stored = it.scene().to_json();
+            let reopened = Scene::from_json(&stored).expect("library model must reopen");
+            assert_eq!(reopened.groups[0], it.group, "{name}: scene round trip changed geometry");
+        }
+    }
+
+    #[test]
+    fn procedural_chair_presets_are_registered_in_the_regular_library() {
+        let categories = all();
+        let chairs = categories.iter().filter(|c| c.name == "Designer Chair").collect::<Vec<_>>();
+        assert_eq!(chairs.len(), 1);
+        assert_eq!(chairs[0].items.len(), 3);
+        for item in &chairs[0].items {
+            assert!(item.matches("DESIGNER CHAIR") && item.matches("いす"));
+            assert!(item.fits(0, 0));
+            let g = item.placed([100.0, 50.0]);
+            assert!(g.designer_chair.is_some());
+            assert!(g.shapes.iter().any(|s| s.name == "座面"));
+            assert!(g.shapes.iter().any(|s| s.name == "背もたれ"));
+            let back = Scene::from_json(&item.scene().to_json()).unwrap();
+            assert_eq!(back.groups[0], item.group);
+        }
     }
 
     #[test]
@@ -399,6 +538,125 @@ mod tests {
         let it = Item { name: "テスト".into(), tags: vec![], group: g };
         let placed = Item { name: it.name.clone(), tags: vec![], group: it.placed([0.0, 0.0]) };
         assert!(placed.centre_xy().iter().all(|x| x.abs() < 1e-3));
+    }
+
+
+    /// Smoke-test the ten common animals through the same paths as search, placement,
+    /// scene save/load and thumbnail creation. Geometry export is checked for the two new models.
+    #[test]
+    fn familiar_animals_are_searchable_placeable_and_round_trip() {
+        let category = parse(FILES[2]).expect("animal category");
+        assert_eq!(category.name, "どうぶつ");
+        for (name, query) in [
+            ("いぬ", "dog"), ("ねこ", "cat"), ("うさぎ", "rabbit"), ("くま", "bear"),
+            ("パンダ", "panda"), ("ぞう", "elephant"), ("きりん", "giraffe"),
+            ("ペンギン", "penguin"), ("うま", "horse"), ("さかな", "fish"),
+        ] {
+            let it = category.items.iter().find(|it| it.name == name).expect("missing animal model");
+            assert!(it.matches(query), "{name} search failed");
+            assert!(it.fits(0, 0), "{name} exceeds scene limits");
+            let scene = it.scene();
+            let encoded = serde_json::to_string(&scene).expect("save scene");
+            let decoded: Scene = serde_json::from_str(&encoded).expect("reopen scene");
+            assert_eq!(decoded, scene, "{name} changed after reload");
+            let placed = it.placed([80.0, -50.0]);
+            assert_eq!(placed.shapes.len(), it.group.shapes.len());
+            assert_eq!(placed.shapes[0].pos[2], it.group.shapes[0].pos[2]);
+            assert_eq!(crate::cpu_render::thumb(&scene, 24).len(), 24 * 24 * 4);
+        }
+    }
+
+    #[test]
+    fn new_animals_can_export_obj_and_3mf() {
+        use crate::export_formats::Format;
+        use crate::export_job::{self, Lighten, Options};
+        use crate::export_mesh::Progress;
+        use std::path::Path;
+
+        let category = parse(FILES[2]).expect("animal category");
+        for name in ["パンダ", "うま"] {
+            let it = category.items.iter().find(|it| it.name == name).expect("missing new model");
+            for (format, ext, magic) in [
+                (Format::Obj, "obj", &b"# MELTCAD"[..]),
+                (Format::ThreeMf, "3mf", &b"PK"[..]),
+            ] {
+                let opts = Options {
+                    format,
+                    tolerance: 1.5,
+                    lighten: Lighten::Off,
+                    ..Options::default()
+                };
+                let built = export_job::build(&it.scene(), None, &opts, &Progress::new())
+                    .unwrap_or_else(|e| panic!("{name}: {format:?} mesh failed: {e}"));
+                assert!(built.tris > 0, "{name} has no mesh faces");
+                let path = format!("animal.{ext}");
+                let files = export_job::serialize(&built, &opts, Path::new(&path))
+                    .unwrap_or_else(|e| panic!("{name}: {format:?} writing failed: {e}"));
+                assert!(files.iter().any(|(p, bytes)| p.extension().is_some_and(|e| e == ext)
+                    && bytes.starts_with(magic)), "{name}: invalid {ext} output");
+            }
+        }
+    }
+
+    #[test]
+    fn designer_bag_variants_are_in_the_library_and_keep_placed_parameters() {
+        let category = all().iter().find(|c| c.name == "バッグ").expect("bag category");
+        assert_eq!(category.items.len(), 3);
+        for item in &category.items {
+            assert!(item.matches("designer bag"));
+            let g = item.placed([120.0, -80.0]);
+            let p = g.bag.as_ref().expect("editable bag configuration");
+            assert!((p.origin_xy[0] - 120.0).abs() < 1e-3);
+            assert!((p.origin_xy[1] + 80.0).abs() < 1e-3);
+            assert_eq!(g.shapes.len(), 5);
+        }
+    }
+
+    #[test]
+    fn parametric_organic_vases_appear_in_the_library_and_stay_editable() {
+        let cat = all().iter().find(|c| c.name == "花瓶・Vase").expect("vase category");
+        assert_eq!(cat.items.len(), 3);
+        for item in &cat.items {
+            assert!(item.matches("organic vase"));
+            assert!(item.fits(0, 0));
+            let mut scene = item.scene();
+            assert_eq!(scene.groups[0].shapes.len(), 1, "no Boolean primitive stacks");
+            assert!(scene.groups[0].shapes[0].vase.is_some(), "preset remains parametric");
+            let before = scene.clone();
+            scene.sanitize();
+            assert_eq!(scene, before);
+        }
+    }
+
+    #[test]
+    fn designer_lamps_are_library_models_with_real_thumbnail_geometry() {
+        let lamps: Vec<&Item> = all().iter().flat_map(|c| &c.items).filter(|item| item.group.lamp.is_some()).collect();
+        assert_eq!(lamps.len(), 3);
+        for item in lamps {
+            assert!(item.matches("lamp") && item.matches("照明"));
+            assert_eq!(item.group.shapes.len(), 3);
+            assert_eq!(item.group.shapes[0].kind, crate::model::Kind::Revolve);
+            let placed = item.placed([120.0, -45.0]);
+            let spec = placed.lamp.unwrap();
+            let mut refreshed = placed.clone();
+            crate::designer_lamp::regenerate(&mut refreshed, spec);
+            assert_eq!(refreshed.shapes[0].pos, placed.shapes[0].pos);
+            let pixels = crate::cpu_render::thumb(&item.scene(), 32);
+            assert_eq!(pixels.len(), 32 * 32 * 4);
+        }
+    }
+
+    #[test]
+    fn chess_library_has_all_six_pieces_in_three_editable_styles() {
+        let chess = chess_category();
+        assert_eq!(chess.items.len(),18);
+        assert_eq!(chess.name,"チェス");
+        assert!(chess.items.iter().all(|i| i.matches("Chess")));
+        for item in &chess.items {
+            assert!(item.fits(0,0));
+            assert!(crate::chess::preset_of(&item.group).is_some());
+            assert!(item.group.shapes.iter().all(|s| s.kind != crate::model::Kind::Mesh));
+        }
     }
 
     #[test]

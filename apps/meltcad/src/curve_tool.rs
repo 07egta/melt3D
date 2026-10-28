@@ -1,4 +1,4 @@
-//! Editing curves (and sweep paths) in the viewport, the way Womp3D does it: the nodes show as
+//! Editing curves (and sweep paths) in the viewport: the nodes show as
 //! small circles; drag one to move it, drag from the `+` at an end to pull out a new node, click
 //! the `+` between two nodes to add one there. Also the "せん" tool that draws a new curve by
 //! clicking, and the inspector section for curves.
@@ -334,6 +334,38 @@ impl App {
             Some((a, b, i)) if a == g && b == s && self.scene.shape(g, s).is_some_and(|x| i < x.path.len()) => Some(i),
             _ => None,
         }
+    }
+
+    /// The ball chosen in the scene list (group, shape, node), if it can be edited on its own.
+    /// A group pick is not a node: it still moves every child as before (#260).
+    pub(crate) fn picked_node(&self) -> Option<(usize, usize, usize)> {
+        let (g, s) = self.node_shape()?;
+        Some((g, s, self.chosen_node(g, s)?))
+    }
+
+    /// Where node `i` of the shape sits in the world.
+    pub(crate) fn node_world(&self, g: usize, s: usize, i: usize) -> Option<V3> {
+        let shape = self.scene.shape(g, s)?;
+        let node = shape.path.get(i)?;
+        Some(to_world(shape, [node[0], node[1], node[2]]))
+    }
+
+    /// Put node `i` at a world point, stored in the shape's own space. False for a missing or
+    /// hostile point. This moves one ball only: the other nodes keep their places.
+    pub(crate) fn set_node_world(&mut self, g: usize, s: usize, i: usize, world: V3) -> bool {
+        if !world.iter().all(|v| v.is_finite()) {
+            return false;
+        }
+        let Some(shape) = self.scene.shape_mut(g, s) else { return false };
+        let local = to_local(shape, world);
+        if !local.iter().all(|v| v.is_finite()) {
+            return false;
+        }
+        let Some(node) = shape.path.get_mut(i) else { return false };
+        node[0] = local[0].clamp(-5000.0, 5000.0);
+        node[1] = local[1].clamp(-5000.0, 5000.0);
+        node[2] = local[2].clamp(-5000.0, 5000.0);
+        true
     }
 
     /// The mouse for the curve tool. Call every frame before the gizmo is looked at.
@@ -918,11 +950,28 @@ impl App {
                 if ui.checkbox(&mut closed, "Closed loop").on_hover_text("Join the last and first node").changed() {
                     sh.params[0] = if closed { 1.0 } else { 0.0 };
                 }
-                let mut flat = sh.params[2] > 0.5;
-                if ui.checkbox(&mut flat, "Flat ends").on_hover_text("Cut both ends square instead of rounding").changed() {
-                    sh.params[2] = if flat { 1.0 } else { 0.0 };
+            });
+            if sh.params[0] < 0.5 {
+                let mut roundness = 1.0 - sh.params[2].clamp(0.0, 1.0);
+                if ui
+                    .add(egui::Slider::new(&mut roundness, 0.0..=1.0).text("End roundness"))
+                    .on_hover_text("1 = round like a ball / 0 = cut flat. Values in between work too")
+                    .changed()
+                {
+                    sh.params[2] = 1.0 - roundness;
+                }
+            }
+            // A Curve uses only size[1..=2] for the section.
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Section").color(style::DIM).size(12.0));
+                if style::pill(ui, "Round", sh.size[2] < 1.5).on_hover_text("丸いSection。幅の比率で楕円にもできます").clicked() {
+                    sh.size[2] = 1.0;
+                }
+                if style::pill(ui, "Soft square", sh.size[2] >= 1.5).on_hover_text("四隅が滑らかな角丸状のSection").clicked() {
+                    sh.size[2] = 2.0;
                 }
             });
+            style::labeled_slider(ui, "断面の幅", &mut sh.size[1], 0.45..=1.0, "1 = 円、0.45 = 細長い楕円 / 角丸断面");
             if !(sh.params[3].is_finite() && sh.params[3] > 0.0) {
                 sh.params[3] = 1.0;
             }

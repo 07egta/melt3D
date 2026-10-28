@@ -16,6 +16,9 @@ struct Shape {
     extra: vec4<f32>,   // x = shell wall thickness (0 = solid), y z = profile rounding limit, winding, w = 1: chamfer instead of round
     gcol: vec4<f32>,    // gradient: second colour rgb, strength (0 = no gradient)
     gpar: vec4<f32>,    // gradient: direction (0 x, 1 y, 2 z; +3 = along the shape's own box), softness, from, to
+    ripple: vec4<f32>,  // mode, amplitude, wavelength, number
+    ripple2: vec4<f32>, // angle, edge fade, preserve, detail
+    ripple_half: vec4<f32>, // local bounding half extents
 };
 
 // Everything per frame and small is in the uniform buffer; the scene itself (groups, blocks,
@@ -47,11 +50,11 @@ fn D(i: i32) -> vec4<f32> { return textureLoad(DT, vec2<i32>(i & 1023, i >> 10),
 //   group  (3 vec4): [first block, block count, op sign, blend] [first instance, instance count, first item (see cand), 0] [bounding sphere]
 //   block  (2 vec4): [bounding sphere] [largest blend, 1 = never skip, first shape, shape count]
 //   instance (4 vec4): three rows (x y z, offset) taking a world point back into the group's own space, then [world centre of the group's sphere, scale]
-//   shape (16 vec4): [bounding sphere = position, radius] then the 15 vec4 of struct Shape
+//   shape (19 vec4): [bounding sphere = position, radius] then the 18 vec4 of struct Shape
 fn group_at(gi: i32) -> i32 { return i32(G.offs.x + 0.5) + gi * 3; }
 fn block_at(bi: i32) -> i32 { return i32(G.offs.y + 0.5) + bi * 2; }
 fn inst_at(i: i32) -> i32 { return i32(G.offs.z + 0.5) + i * 4; }
-fn shape_rec(i: i32) -> i32 { return i32(G.offs.w + 0.5) + i * 16; }
+fn shape_rec(i: i32) -> i32 { return i32(G.offs.w + 0.5) + i * 19; }
 fn path_pt(i: i32) -> vec4<f32> { return D(i32(G.offs2.y + 0.5) + i); }
 
 fn shape_at(i: i32) -> Shape {
@@ -72,6 +75,9 @@ fn shape_at(i: i32) -> Shape {
     s.extra = D(b + 12);
     s.gcol = D(b + 13);
     s.gpar = D(b + 14);
+    s.ripple = D(b + 15);
+    s.ripple2 = D(b + 16);
+    s.ripple_half = D(b + 17);
     return s;
 }
 
@@ -168,6 +174,60 @@ fn get_pt(i: i32) -> vec2<f32> {
     return v.zw;
 }
 
+fn ripple_adjust(base: f32, q: vec3<f32>, s: Shape) -> f32 {
+    let rr = s.ripple;
+    let r2 = s.ripple2;
+    if (rr.x < 0.5 || rr.y <= 0.0) { return base; }
+    let amplitude = rr.y * s.pos.w;
+    if (abs(base) > amplitude * 2.0) {
+        if (base > 0.0 && r2.z < 0.5) { return base - amplitude; }
+        return base;
+    }
+    let angle = r2.x * 0.017453292519943295;
+    let sn = sin(angle);
+    let cs = cos(angle);
+    let u = q.x * cs + q.y * sn;
+    let v = q.y * cs - q.x * sn;
+    let radius = length(q.xy);
+    let k = 6.283185307179586 / rr.z;
+    let linear = rr.x > 1.5 && rr.x < 2.5;
+    let random = rr.x > 2.5;
+    let support = rr.w * rr.z * select(1.0, 0.5, linear);
+    let distance = select(radius, abs(u), linear);
+    let fade_width = max(support * r2.y, 0.001);
+    let t = clamp((distance - (support - fade_width)) / fade_width, 0.0, 1.0);
+    var envelope = 1.0 - t * t * (3.0 - 2.0 * t);
+    let h = s.ripple_half.xyz;
+    if (r2.z > 0.5) {
+        let edge = max(abs(q.x) / max(h.x, 0.01), abs(q.y) / max(h.y, 0.01));
+        let f = clamp((edge - 0.68) / 0.32, 0.0, 1.0);
+        envelope *= 1.0 - f * f * (3.0 - 2.0 * f);
+    }
+    let core = select(radius, u, linear);
+    var wave = sin(select(core * k, (0.84 * u + 0.34 * v) * k, random));
+    var weight = 1.0;
+    if (r2.w >= 2.0) {
+        let a = select(core * k * 2.0 + 0.3, (-0.31 * u + 1.23 * v) * k + 0.8, random);
+        wave += 0.15 * sin(a);
+        weight += 0.15;
+    }
+    if (r2.w >= 3.0) {
+        let a = select(core * k * 3.0 + 1.1, (1.37 * u - 0.71 * v) * k + 1.1, random);
+        wave += 0.07 * sin(a);
+        weight += 0.07;
+    }
+    if (r2.w >= 4.0) {
+        let a = select(core * k * 4.0 + 2.0, (-1.73 * u - 0.48 * v) * k + 2.0, random);
+        wave += 0.035 * sin(a);
+        weight += 0.035;
+    }
+    wave /= weight;
+    let delta = rr.y * envelope * select(-wave, (1.0 - wave) * 0.5, r2.z > 0.5);
+    let edge_slope = select(0.0, 6.0 / max(min(h.x, h.y), 0.01), r2.z > 0.5);
+    let safety = 1.0 + rr.y * (3.0 * k + 2.0 / fade_width + edge_slope);
+    return (base + delta * s.pos.w) / safety;
+}
+
 fn shape_dist(s: Shape, p: vec3<f32>) -> f32 {
     let d = p - s.pos.xyz;
     let q = vec3<f32>(dot(s.r0.xyz, d), dot(s.r1.xyz, d), dot(s.r2.xyz, d)) / s.scale.xyz;
@@ -251,10 +311,12 @@ fn shape_dist(s: Shape, p: vec3<f32>) -> f32 {
             let w = vec2<f32>(d2, abs(q.z) - hh + rr);
             r = min(max(w.x, w.y), 0.0) + length(max(w, vec2<f32>(0.0))) - rr;
         }
+        // Same signed inflation used by the CPU SDF and mesh export for Extrude.
+        r -= clamp(s.params.x, -40.0, 40.0);
     }
     let fc = i32(s.r0.w + 0.5);
     if (fc > 0) { r = face_melt(s, q, r, fc); }
-    r = r * s.pos.w;
+    r = ripple_adjust(r * s.pos.w, q, s);
     // hollow walls of thickness `shell`
     let sh = s.extra.x;
     if (sh > 0.0 && kind != 18) { r = abs(r + sh * 0.5) - sh * 0.5; }

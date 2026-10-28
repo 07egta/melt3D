@@ -138,18 +138,18 @@ fn slab(p: &Painter, f: Rect, top: &[P], concave_centre: Option<P>, drop: f32, f
         Some(c) => fan(p, f, top, c, fill, s),
         None => poly(p, f, top, fill, s),
     }
-    // a closed outline for the top face
-    crate::glyphs::round_path(p, px(f, top), s, true);
 }
 
 fn prism3(p: &Painter, f: Rect, fill: Color32, s: Stroke) {
-    let top = ring(3, 0.5, 0.28, 0.44, 0.22, PI * 0.5);
-    slab(p, f, &top, None, 0.45, fill, s);
+    // a point-up triangle on top, dropped straight down: a prism, not a floating triangle
+    let top = ring(3, 0.5, 0.34, 0.42, 0.22, -PI * 0.5);
+    slab(p, f, &top, None, 0.42, fill, s);
 }
 
 fn prism_n(p: &Painter, f: Rect, fill: Color32, s: Stroke) {
-    let top = ring(5, 0.5, 0.30, 0.45, 0.22, PI * 0.5);
-    slab(p, f, &top, None, 0.42, fill, s);
+    // the default six-sided profile, so it reads as a polygon prism next to the round cylinder
+    let top = ring(6, 0.5, 0.34, 0.42, 0.20, PI * 0.5);
+    slab(p, f, &top, None, 0.38, fill, s);
 }
 
 fn star(p: &Painter, f: Rect, fill: Color32, s: Stroke) {
@@ -175,17 +175,20 @@ fn octa(p: &Painter, f: Rect, fill: Color32, s: Stroke) {
 }
 
 fn tetra(p: &Painter, f: Rect, fill: Color32, s: Stroke) {
-    let (t, a, b, c) = ((0.52, 0.05), (0.06, 0.72), (0.44, 0.95), (0.94, 0.58));
-    poly(p, f, &[t, a, b], fill.gamma_multiply(0.9), s);
-    poly(p, f, &[t, b, c], fill.gamma_multiply(0.6), s);
+    // seen down the apex: a triangular base with one face per edge. Its triangular silhouette
+    // cannot be mistaken for the square-based pyramid or the cube.
+    let (t, l, r, c) = ((0.5, 0.08), (0.08, 0.84), (0.92, 0.84), (0.5, 0.60));
+    poly(p, f, &[c, l, r], fill.gamma_multiply(0.95), s);
+    poly(p, f, &[t, c, r], fill.gamma_multiply(0.7), s);
+    poly(p, f, &[t, l, c], fill.gamma_multiply(0.5), s);
 }
 
 fn pyramid(p: &Painter, f: Rect, fill: Color32, s: Stroke) {
-    let (t, l, fr, r, k) = ((0.5, 0.04), (0.05, 0.74), (0.5, 0.96), (0.95, 0.74), (0.5, 0.56));
-    // the base diamond behind
-    poly(p, f, &[l, k, r, fr], fill.gamma_multiply(0.45), Stroke::new(s.width * 0.7, faint(s.color)));
+    // a square base seen as a diamond, with four edges climbing to one apex
+    let (t, l, fr, r, k) = ((0.5, 0.05), (0.06, 0.72), (0.5, 0.95), (0.94, 0.72), (0.5, 0.53));
+    poly(p, f, &[l, k, r, fr], fill.gamma_multiply(0.35), Stroke::NONE);
     poly(p, f, &[t, l, fr], fill.gamma_multiply(0.9), s);
-    poly(p, f, &[t, fr, r], fill.gamma_multiply(0.6), s);
+    poly(p, f, &[t, fr, r], fill.gamma_multiply(0.55), s);
 }
 
 fn capsule(p: &Painter, f: Rect, fill: Color32, s: Stroke) {

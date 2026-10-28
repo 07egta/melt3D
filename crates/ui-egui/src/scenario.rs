@@ -298,14 +298,24 @@ impl Harness {
         if tx.send(req).is_err() {
             return (json!({"ok": false, "error": "the request queue is closed"}), 0);
         }
-        for n in 1..=3000 {
+        // Work behind a request may run on a worker thread (file loads, bakes). Frames alone give it
+        // no time on a loaded machine, so wait a real millisecond per frame with a wall-clock
+        // deadline instead of counting to a fixed number of frames.
+        let started = std::time::Instant::now();
+        let mut frames = 0;
+        while frames < 120_000 && started.elapsed() < std::time::Duration::from_secs(60) {
             self.frame();
-            if let Ok(v) = rx.try_recv() {
-                self.settle();
-                return (v, n);
+            frames += 1;
+            match rx.recv_timeout(std::time::Duration::from_millis(1)) {
+                Ok(v) => {
+                    self.settle();
+                    return (v, frames);
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
             }
         }
-        (json!({"ok": false, "error": "no answer in 3000 frames"}), 3000)
+        (json!({"ok": false, "error": "no answer in 60 s"}), frames)
     }
 
     pub fn call(&mut self, method: &str, params: Value) -> Value {

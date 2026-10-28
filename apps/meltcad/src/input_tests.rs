@@ -56,16 +56,38 @@ impl Rig {
     /// Use the real window-thread control queue, including commands batched in one frame.
     fn control(&mut self, commands: &[serde_json::Value]) -> Vec<Result<serde_json::Value, String>> {
         let (send, requests) = std::sync::mpsc::channel();
-        let (reply, answers) = std::sync::mpsc::channel();
         self.app.control = Some(requests);
-        for cmd in commands {
-            send.send(crate::control::Request { cmd: cmd.clone(), reply: reply.clone() }).expect("queue the control command");
-        }
+        // one answer channel per command: a picture is answered later than the others
+        let answers: Vec<_> = commands
+            .iter()
+            .map(|cmd| {
+                let (reply, answer) = std::sync::mpsc::channel();
+                send.send(crate::control::Request { cmd: cmd.clone(), reply }).expect("queue the control command");
+                answer
+            })
+            .collect();
         let full_ui = self.full_ui;
         self.full_ui = true;
         self.frame(vec![]);
         self.full_ui = full_ui;
-        commands.iter().map(|_| answers.try_recv().expect("the frame replied to every command")).collect()
+        // a picture is drawn on a worker: keep drawing frames until its answer arrives
+        answers
+            .iter()
+            .map(|answer| {
+                for _ in 0..600 {
+                    if let Ok(result) = answer.try_recv() {
+                        return result;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                    // the full frame is the one that collects a finished picture
+                    let full_ui = self.full_ui;
+                    self.full_ui = true;
+                    self.frame(vec![]);
+                    self.full_ui = full_ui;
+                }
+                Err("the frame never replied to the command".into())
+            })
+            .collect()
     }
 
     fn right_click(&mut self, p: Pos2) {
@@ -170,6 +192,30 @@ impl Rig {
     }
 }
 
+#[test]
+fn organic_tube_control_point_drags_through_real_egui_pointer_events() {
+    let mut r = Rig::new();
+    r.app.add_organic_tube(&r.ctx, crate::organic_tube::Preset::Wave);
+    // The application animates frame_view over time; the viewport-only test
+    // rig does not run frame_body/step_fly, so take the camera goal directly.
+    if let Some(goal) = r.app.fly.take() {
+        r.app.cam = goal;
+    }
+    r.frame(vec![]);
+    let Some(Pick::Shape(g, s)) = r.app.sel else { panic!("Organic Tube selected") };
+    let before = r.app.scene.shape(g, s).expect("tube").path[3];
+    let layout = layout(&r.app.cam, r.app.view_rect, r.app.scene.shape(g, s).expect("tube"));
+    let node = layout.nodes[3].expect("visible control point");
+    let before_cam = (r.app.cam.yaw, r.app.cam.pitch);
+    r.drag(node.c, node.c + vec2(45.0, -20.0));
+    let after = r.app.scene.shape(g, s).expect("tube").path[3];
+    assert_ne!(after[..3], before[..3], "node must move on the native curve");
+    assert_eq!((r.app.cam.yaw, r.app.cam.pitch), before_cam, "node drag must not orbit the camera");
+    let text = r.app.scene.to_json();
+    let saved = crate::model::Scene::from_json(&text).expect("native save");
+    assert_eq!(saved.shape(g, s).expect("tube").path[3], after);
+}
+
 fn curve_shape() -> Shape {
     let mut s = Shape::new(Kind::Curve, [0.0, 0.0, 0.0], Material::default());
     s.path = vec![[-30.0, 0.0, 10.0, 5.0], [0.0, 0.0, 30.0, 5.0], [30.0, 0.0, 10.0, 5.0]];
@@ -226,6 +272,48 @@ fn a_node_of_a_freshly_traced_pipe_can_be_dragged_too() {
 }
 
 #[test]
+fn clicking_a_ball_row_moves_that_ball_only_with_the_arrow_keys() {
+    let mut r = Rig::new();
+    r.app.scene.groups.clear();
+    let mut group = crate::model::Group::new("Pipe");
+    group.shapes.push(Shape::new(Kind::Sphere, [0.0, 0.0, 120.0], Material::default()));
+    let mut pipe = Shape::new(Kind::Curve, [0.0, 0.0, 20.0], Material::default());
+    pipe.name = "Pipe".into();
+    pipe.path = vec![[-20.0, 0.0, 0.0, 4.0], [0.0, 0.0, 0.0, 4.0], [20.0, 0.0, 0.0, 4.0], [40.0, 0.0, 0.0, 4.0], [60.0, 0.0, 0.0, 4.0]];
+    group.shapes.push(pipe);
+    r.app.scene.groups.push(group);
+    r.app.sel = Some(Pick::Shape(0, 1));
+    r.app.committed_sync();
+
+    // Draw the real scene list, then click the "Ball 4" row under the selected pipe.
+    r.full_ui = true;
+    r.frame(vec![]);
+    r.frame(vec![]);
+    let row = r.row_rect(Pick::Shape(0, 1));
+    let ball_4 = pos2(row.left() + 110.0, row.bottom() + 2.0 + 3.0 * (24.0 + 2.0) + 12.0);
+    r.click(ball_4);
+    assert_eq!(r.app.ct.node, Some((0, 1, 3)), "clicking the row chooses Ball 4");
+    assert_eq!(r.app.sel, Some(Pick::Shape(0, 1)));
+    assert_eq!(r.app.picks(), vec![Pick::Shape(0, 1)], "the ball does not turn the pick into the group");
+
+    let before = r.app.scene.groups[0].shapes[1].path.clone();
+    let pipe_pos = r.app.scene.groups[0].shapes[1].pos;
+    let sibling = r.app.scene.groups[0].shapes[0].pos;
+    r.key(egui::Key::ArrowRight);
+    let after = &r.app.scene.groups[0].shapes[1].path;
+    assert!((after[3][0] - before[3][0] - 1.0).abs() < 1e-4, "Ball 4 moved 1 mm: {:?}", after[3]);
+    for i in [0, 1, 2, 4] {
+        assert_eq!(after[i], before[i], "node {i} stays");
+    }
+    assert_eq!(r.app.scene.groups[0].shapes[1].pos, pipe_pos, "the pipe itself did not move");
+    assert_eq!(r.app.scene.groups[0].shapes[0].pos, sibling, "the sibling shape did not move");
+
+    // One arrow key is one undo step.
+    r.app.undo();
+    assert_eq!(r.app.scene.groups[0].shapes[1].path, before, "undo restores the ball");
+}
+
+#[test]
 fn a_right_click_ends_the_pipe_tool() {
     let mut r = Rig::new();
     r.app.set_pipe_tool(true);
@@ -257,6 +345,177 @@ fn a_left_drag_on_empty_space_box_selects_by_direction_and_never_turns_the_view(
     // a big box to the right takes it
     r.drag(c + vec2(-260.0, -260.0), c + vec2(260.0, 260.0));
     assert_eq!(r.app.sel, Some(Pick::Shape(0, 0)));
+}
+
+/// A screen point the viewport draws as one of the axis balls (the positive end of `axis`).
+fn gnomon_ball(r: &Rig, axis: usize) -> Pos2 {
+    let rect = r.app.view_rect;
+    let ball = r
+        .app
+        .gnomon_items(rect)
+        .into_iter()
+        .find(|(d, _, positive)| *positive && d[axis] > 0.5)
+        .map(|(_, p, _)| p)
+        .expect("the positive axis ball is drawn");
+    assert!(r.app.gnomon_hit(rect, ball).is_some(), "the test point must hit the axis ball");
+    assert!(!App::home_hit(rect, ball), "the axis ball is not the home button");
+    ball
+}
+
+#[test]
+fn a_drag_that_starts_on_the_axis_ball_turns_the_view() {
+    let mut r = Rig::new();
+    r.app.cam.look(0.6, 0.42);
+    r.app.fly = None;
+    let ball = gnomon_ball(&r, 0);
+    let before = (r.app.cam.yaw, r.app.cam.pitch);
+    r.drag(ball, ball + vec2(70.0, 45.0));
+    assert_ne!((r.app.cam.yaw, r.app.cam.pitch), before, "dragging the axis ball must turn the view");
+    assert!(r.app.fly.is_none(), "a drag is not a click: it must not snap to the axis");
+}
+
+#[test]
+fn a_shift_drag_that_starts_on_the_axis_ball_slides_the_view() {
+    let mut r = Rig::new();
+    r.app.cam.look(0.6, 0.42);
+    r.app.fly = None;
+    let ball = gnomon_ball(&r, 1);
+    let before = (r.app.cam.yaw, r.app.cam.pitch);
+    let target = r.app.cam.target;
+    r.mods = egui::Modifiers::SHIFT;
+    r.drag(ball, ball + vec2(60.0, 40.0));
+    r.mods = egui::Modifiers::NONE;
+    assert_eq!((r.app.cam.yaw, r.app.cam.pitch), before, "Shift+drag pans; it does not turn the view");
+    assert_ne!(r.app.cam.target, target, "a Shift+drag on the axis ball slides the view");
+}
+
+#[test]
+fn a_click_on_the_axis_ball_still_snaps_the_view_to_that_axis() {
+    let mut r = Rig::new();
+    r.app.cam.look(0.6, 0.42);
+    r.app.fly = None;
+    let ball = gnomon_ball(&r, 0);
+    let axis = r.app.gnomon_hit(r.app.view_rect, ball).expect("the click is on an axis");
+    let yaw = r.app.cam.yaw;
+    r.click(ball);
+    assert_eq!(r.app.cam.yaw, yaw, "a click snaps by gliding; it must not orbit");
+    let goal = r.app.fly.expect("clicking an axis glides to that view");
+    let pitch = axis[2].clamp(-1.0, 1.0).asin();
+    let want_yaw = if axis[2].abs() > 0.9 { yaw } else { axis[0].atan2(-axis[1]) };
+    assert!((goal.yaw - want_yaw).abs() < 1e-5 && (goal.pitch - pitch).abs() < 1e-5, "goal {:?}", (goal.yaw, goal.pitch));
+    for _ in 0..200 {
+        r.app.step_fly(0.016);
+    }
+    assert!(r.app.fly.is_none(), "the glide finishes");
+    assert!((r.app.cam.yaw - want_yaw).abs() < 1e-3 && (r.app.cam.pitch - pitch).abs() < 1e-3, "the view looks along the clicked axis");
+}
+
+#[test]
+fn a_press_on_the_home_button_never_turns_the_view_and_a_click_goes_home() {
+    let mut r = Rig::new();
+    r.app.cam.look(2.0, -0.4);
+    r.app.fly = None;
+    let home = App::home_centre(r.app.view_rect);
+    assert!(App::home_hit(r.app.view_rect, home));
+    let before = (r.app.cam.yaw, r.app.cam.pitch);
+    r.drag(home, home + vec2(50.0, 30.0));
+    assert_eq!((r.app.cam.yaw, r.app.cam.pitch), before, "the home button is not an orbit handle");
+    assert!(r.app.fly.is_none(), "a press that turns into a drag does not go home");
+    r.click(home);
+    let goal = r.app.fly.expect("a click on the home button glides home");
+    let first = crate::camera::Camera::default();
+    assert_eq!((goal.yaw, goal.pitch), (first.yaw, first.pitch));
+}
+
+/// The centre of the dark disc behind the axis balls, as the viewport draws it.
+fn gnomon_disc_centre(rect: Rect) -> Pos2 {
+    pos2(rect.right() - 62.0, rect.top() + 62.0)
+}
+
+/// A point on the dark disc but on no axis ball and not the home button.
+fn gnomon_disc_background(r: &Rig) -> Pos2 {
+    let rect = r.app.view_rect;
+    let c = gnomon_disc_centre(rect);
+    for k in 0..24 {
+        let a = k as f32 * std::f32::consts::TAU / 24.0;
+        let p = c + vec2(a.cos(), a.sin()) * 22.0;
+        assert!((p - c).length() < 48.0, "the point is inside the disc");
+        if r.app.gnomon_hit(rect, p).is_none() && !App::home_hit(rect, p) {
+            return p;
+        }
+    }
+    panic!("the disc has a background between its balls")
+}
+
+/// A point just outside the disc, away from every axis ball and the home button.
+fn just_outside_gnomon_disc(r: &Rig) -> Pos2 {
+    let rect = r.app.view_rect;
+    let c = gnomon_disc_centre(rect);
+    for k in 0..24 {
+        let a = k as f32 * std::f32::consts::TAU / 24.0;
+        let p = c + vec2(a.cos(), a.sin()) * 56.0;
+        if r.app.gnomon_hit(rect, p).is_none() && !App::home_hit(rect, p) {
+            return p;
+        }
+    }
+    panic!("there is room just outside the disc")
+}
+
+#[test]
+fn a_drag_that_starts_on_the_gnomon_disc_turns_the_view_and_makes_no_box() {
+    let mut r = Rig::new();
+    r.app.cam.look(0.6, 0.42);
+    r.app.fly = None;
+    r.app.sel = None;
+    let p = gnomon_disc_background(&r);
+    let before = (r.app.cam.yaw, r.app.cam.pitch);
+    r.mv(p);
+    r.button(p, true);
+    r.mv(p + vec2(-35.0, 20.0));
+    assert!(r.app.marquee_from.is_none(), "a drag on the disc background must not start a box");
+    assert_ne!((r.app.cam.yaw, r.app.cam.pitch), before, "a drag on the disc background must turn the view");
+    r.mv(p + vec2(-70.0, 40.0));
+    r.button(p + vec2(-70.0, 40.0), false);
+    r.frame(vec![]);
+    r.frame(vec![]);
+    assert!(r.app.marquee_from.is_none(), "the box never existed, so none is left behind");
+    assert_eq!(r.app.sel, None, "a drag on the disc must not select anything");
+    assert!(r.app.fly.is_none(), "a drag is not a click: it must not snap to an axis");
+}
+
+#[test]
+fn a_click_on_the_gnomon_disc_background_selects_nothing() {
+    let mut r = Rig::new();
+    let rect = r.app.view_rect;
+    let p = gnomon_disc_background(&r);
+    // Put a sphere right behind the disc: a click there must not pick it.
+    let (o, d) = r.app.cam.ray_at(rect, p);
+    r.app.scene.groups[0].shapes[0].pos = [o[0] + d[0] * 120.0, o[1] + d[1] * 120.0, o[2] + d[2] * 120.0];
+    r.app.sel = None;
+    r.frame(vec![]);
+    r.frame(vec![]);
+    assert!(r.app.shape_at(rect, p).is_some(), "the test needs a shape behind the disc");
+    r.click(p);
+    assert_eq!(r.app.sel, None, "a click on the disc background must select nothing behind it");
+    assert!(r.app.fly.is_none(), "a click on the background is not an axis snap");
+    r.right_click(p);
+    assert_eq!(r.app.sel, None, "a right click on the disc picks nothing behind it");
+    assert!(!r.ctx.any_popup_open(), "a right click on the disc opens no context menu");
+}
+
+#[test]
+fn a_press_just_outside_the_gnomon_disc_still_starts_a_box() {
+    let mut r = Rig::new();
+    r.app.sel = None;
+    let p = just_outside_gnomon_disc(&r);
+    let before = (r.app.cam.yaw, r.app.cam.pitch);
+    r.mv(p);
+    r.button(p, true);
+    r.mv(p + vec2(-40.0, 30.0));
+    assert!(r.app.marquee_from.is_some(), "just outside the disc a box still starts");
+    assert_eq!((r.app.cam.yaw, r.app.cam.pitch), before, "the box is not an orbit");
+    r.button(p + vec2(-40.0, 30.0), false);
+    r.frame(vec![]);
 }
 
 #[test]
@@ -1413,7 +1672,7 @@ fn control_preserves_an_inspector_textedit_until_its_input_is_finished() {
     r.frame(vec![]);
     r.time += 0.016;
     let input = RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, r.size)), time: Some(r.time), ..Default::default() };
-    let out = r.ctx.run_ui(input, |ui| r.app.frame_body(ui));
+    let mut out = r.ctx.run_ui(input, |ui| r.app.frame_body(ui));
     // Locate the actual inspector's name TextEdit from its painted text, so the
     // test clicks the real field without hard-coding panel or font coordinates.
     let name = &r.app.scene.shape(0, 0).expect("selected shape").name;
@@ -1425,6 +1684,7 @@ fn control_preserves_an_inspector_textedit_until_its_input_is_finished() {
             _ => None,
         })
         .expect("the selected shape's name is visible in the inspector");
+    out.textures_delta.clear();
     r.click(field.center());
     r.replace_text("Edited before control");
     assert_eq!(r.app.scene.shape(0, 0).expect("edited shape").name, "Edited before control");

@@ -564,3 +564,14 @@ A frame whose meshes the GPU refuses to stage (device lost or out of memory) is
 skipped with a warning instead of panicking (#1469).
 Paint callbacks are prepared only after a drawable is acquired, so a skipped
 surface frame cannot strand cached meshes without their GPU initialization.
+
+## Agent design and video tools
+
+| Component | Source | Licence | Changes |
+|---|---|---|---|
+| `.agents/skills/impeccable` | [pbakaus/impeccable](https://github.com/pbakaus/impeccable) v4.7.0, project Codex skill | Apache-2.0 | Upstream skill installed for design critique; automatic hooks are not enabled. |
+| `.agents/skills/ui-ux-pro-max` | [nextlevelbuilder/ui-ux-pro-max-skill](https://github.com/nextlevelbuilder/ui-ux-pro-max-skill), project Codex skill | MIT | Upstream skill and reference data copied; no runtime dependency is added to MeltCAD. |
+| Remotion Agent Skill | [remotion-dev/skills](https://github.com/remotion-dev/skills), user-level Codex install | Not redistributed | Installed outside the repository; no skill source is included here. |
+| `apps/meltcad/promo` | [Remotion](https://github.com/remotion-dev/remotion) blank starter, generated with `create-video` | Remotion licence terms apply | Isolated React video project; not linked into the Rust application. |
+| `~/.agents/skills/video-shotcraft` | [Vincentwei1021/video-shotcraft](https://github.com/Vincentwei1021/video-shotcraft), user-level Codex skill | Apache-2.0 | Installed outside this repository because its shot library and assets are large. |
+| Penpot | [penpot/penpot](https://github.com/penpot/penpot) | MPL-2.0 | External design service reference only; no Penpot code is included. |

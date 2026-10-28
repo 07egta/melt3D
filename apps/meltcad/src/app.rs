@@ -74,6 +74,10 @@ pub struct App {
     /// The revision `committed` is current for, and the one `dedupe_uids` last ran for.
     committed_rev: u64,
     deduped_rev: u64,
+    /// Which document the scene shows. A new or opened design (or a control command that
+    /// replaces the scene) starts the next one, so work started for the old document can tell
+    /// that its result must not be put into the new one.
+    document_generation: u64,
     /// The field for picking, made when picking needs it and the scene has changed since.
     field_cache: std::cell::RefCell<Option<(u64, std::rc::Rc<Field>, Scene)>>,
     /// How many times the field was built (tests and the HUD look at it).
@@ -118,6 +122,8 @@ pub struct App {
     pub(crate) precise_services: Option<solidcraft_ui_egui::Services>,
     pub(crate) precise_prefs: Option<String>,
     pub control: Option<std::sync::mpsc::Receiver<crate::control::Request>>,
+    /// A picture requested over the control channel: drawn and written on a worker.
+    render_job: Option<crate::render_job::Job>,
     /// The shape under the mouse.
     pub hover: Option<Pick>,
     /// Where the camera is gliding to.
@@ -189,6 +195,7 @@ impl App {
             scene_rev: 1,
             committed_rev: 1,
             deduped_rev: 0,
+            document_generation: 0,
             field_cache: std::cell::RefCell::new(None),
             field_builds: std::cell::Cell::new(0),
             scene,
@@ -228,6 +235,7 @@ impl App {
             view_rect: egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0)),
             capture: None,
             control: None,
+            render_job: None,
             an: Default::default(),
             precise: None,
             precise_services: None,
@@ -587,6 +595,7 @@ impl App {
             self.notice = Some(format!("Could not clean up recovery data: {e}"));
         }
         self.clear_document_gestures();
+        self.document_generation = self.document_generation.wrapping_add(1);
         self.scene = scene.clone();
         self.committed = scene;
         self.undo.clear();
@@ -637,6 +646,7 @@ impl App {
             && (self.native_job.is_some()
                 || self.queued_open.is_some()
                 || self.after_save.is_some()
+                || self.render_job.is_some()
                 || self.an.gif_running()
                 || crate::work_budget::is_busy(ctx))
         {
@@ -821,6 +831,8 @@ impl App {
                     if i == 0 {
                         c.name = format!("{} copy", c.name);
                     }
+                    // a copy of one letter is a plain solid, not a second owner of the text's identity
+                    c.puffy_text = None;
                     self.scene.groups.insert(e + i, c);
                 }
                 self.sel = Some(Pick::Group(e));
@@ -914,17 +926,19 @@ impl App {
         if shapes.is_empty() && groups.is_empty() {
             return false;
         }
+        let _ = parents;
         shapes.iter().all(|&(g, s)| self.scene.shape(g, s).is_some_and(|x| x.blend > 0.0))
-            && groups.iter().chain(parents.iter()).all(|&g| self.scene.groups.get(g).is_some_and(|x| x.blend > 0.0))
+            && groups.iter().all(|&g| self.scene.groups.get(g).is_some_and(|x| x.blend > 0.0))
     }
 
     /// One press: melt what is picked into its neighbours (the shapes AND the groups, which used to
     /// be two switches), or take the melt away again. With nothing picked, it is the whole scene.
     pub fn toggle_melt_selected(&mut self) {
-        let (mut shapes, mut groups, mut parents) = self.melt_targets();
+        let (mut shapes, groups, mut parents) = self.melt_targets();
         if shapes.is_empty() && groups.is_empty() {
-            groups = (0..self.scene.groups.len()).collect();
-            shapes = groups.iter().flat_map(|&g| (0..self.scene.groups[g].shapes.len()).map(move |s| (g, s))).collect();
+            // the whole scene: the shapes inside their groups only; different groups stay apart
+            // unless a group row is picked and melted on purpose
+            shapes = (0..self.scene.groups.len()).flat_map(|g| (0..self.scene.groups[g].shapes.len()).map(move |s| (g, s))).collect();
             parents.clear();
         }
         let on = !self.selection_melts_of(&shapes, &groups, &parents);
@@ -947,7 +961,8 @@ impl App {
                 })
                 .collect()
         };
-        for &g in groups.iter().chain(if on { parents.iter() } else { emptied.iter() }) {
+        // (turning melt on for a shape never makes its group melt into the other groups)
+        for &g in groups.iter().chain(emptied.iter()) {
             if let Some(gr) = self.scene.groups.get_mut(g) {
                 gr.blend = if on { if gr.blend > 0.0 { gr.blend } else { 12.0 } } else { 0.0 };
             }
@@ -955,9 +970,10 @@ impl App {
     }
 
     fn selection_melts_of(&self, shapes: &[(usize, usize)], groups: &[usize], parents: &[usize]) -> bool {
+        let _ = parents;
         !(shapes.is_empty() && groups.is_empty())
             && shapes.iter().all(|&(g, s)| self.scene.shape(g, s).is_some_and(|x| x.blend > 0.0))
-            && groups.iter().chain(parents.iter()).all(|&g| self.scene.groups.get(g).is_some_and(|x| x.blend > 0.0))
+            && groups.iter().all(|&g| self.scene.groups.get(g).is_some_and(|x| x.blend > 0.0))
     }
 
     /// The shapes of everything that is selected, each once.
@@ -1155,9 +1171,17 @@ impl App {
                 if self.scene.shape(g, s).is_none() || g2 >= self.scene.groups.len() {
                     return;
                 }
+                // A loose shape lives in a group. Dropped on the line above a group row it joins the
+                // group that ends there (the one above, #279); below the row it becomes that group's first shape.
                 let sh = self.scene.groups[g].shapes.remove(s);
-                self.scene.groups[g2].shapes.push(sh);
-                self.sel = Some(Pick::Shape(g2, self.scene.groups[g2].shapes.len() - 1));
+                if after {
+                    self.scene.groups[g2].shapes.insert(0, sh);
+                    self.sel = Some(Pick::Shape(g2, 0));
+                } else {
+                    let target = g2.saturating_sub(1);
+                    self.scene.groups[target].shapes.push(sh);
+                    self.sel = Some(Pick::Shape(target, self.scene.groups[target].shapes.len() - 1));
+                }
             }
             (Pick::Group(g), Pick::Group(g2) | Pick::Shape(g2, _)) => {
                 if g >= self.scene.groups.len() || g2 >= self.scene.groups.len() || g == g2 {
@@ -1192,8 +1216,13 @@ impl App {
             return Err("Finish or cancel the active command first");
         }
         match from {
-            Pick::Shape(..) => {
-                self.move_layer(from, Pick::Group(into), true);
+            Pick::Shape(g, s) => {
+                if self.scene.shape(g, s).is_none() || into >= self.scene.groups.len() {
+                    return Ok(());
+                }
+                let sh = self.scene.groups[g].shapes.remove(s);
+                self.scene.groups[into].shapes.push(sh);
+                self.sel = Some(Pick::Shape(into, self.scene.groups[into].shapes.len() - 1));
                 Ok(())
             }
             Pick::Group(g) => {
@@ -1207,27 +1236,109 @@ impl App {
         }
     }
 
+    /// Several picked rows dropped inside group `into`: the loose shapes keep their order and join it,
+    /// the picked groups (with what is nested in them) nest in it.
+    pub fn move_picks_into(&mut self, picks: &[Pick], into: usize) -> Result<(), &'static str> {
+        if !self.allow_scene_structure_change() {
+            return Err("Finish or cancel the active command first");
+        }
+        let n = self.scene.groups.len();
+        if into >= n {
+            return Ok(());
+        }
+        let mut starts: Vec<usize> = picks.iter().filter_map(|p| if let Pick::Group(g) = p { Some(*g) } else { None }).filter(|g| *g < n).collect();
+        starts.sort_unstable();
+        starts.dedup();
+        let mut ranges: Vec<(usize, usize)> = Vec::new();
+        for &g in &starts {
+            if !ranges.iter().any(|&(a, b)| g >= a && g < b) {
+                ranges.push((g, self.scene.subtree_end(g)));
+            }
+        }
+        if ranges.iter().any(|&(a, b)| (a..b).contains(&into)) {
+            return Err("A group cannot go inside itself, or more than 4 levels deep");
+        }
+        let mut shapes: Vec<(usize, usize)> = picks
+            .iter()
+            .filter_map(|p| if let Pick::Shape(g, s) = p { Some((*g, *s)) } else { None })
+            .filter(|(g, _)| *g != into && !ranges.iter().any(|&(a, b)| *g >= a && *g < b))
+            .collect();
+        shapes.sort_unstable();
+        shapes.dedup();
+        for &(g, s) in shapes.iter().rev() {
+            if self.scene.shape(g, s).is_some() {
+                let sh = self.scene.groups[g].shapes.remove(s);
+                self.scene.groups[into].shapes.insert(0, sh);
+            }
+        }
+        // one group at a time; the places of the others and of the target shift after each move
+        let mut pending: Vec<usize> = ranges.iter().map(|r| r.0).collect();
+        let mut target = into;
+        let mut result = Ok(());
+        while !pending.is_empty() {
+            let g = pending.remove(0);
+            let e = self.scene.subtree_end(g);
+            let Some(at) = self.scene.move_group_into(g, target) else {
+                result = Err("A group cannot go inside itself, or more than 4 levels deep");
+                break;
+            };
+            let remap = |i: usize| -> usize {
+                if (g..e).contains(&i) {
+                    return at + (i - g);
+                }
+                let j = if i >= e { i - (e - g) } else { i };
+                if j >= at { j + (e - g) } else { j }
+            };
+            target = remap(target);
+            for x in &mut pending {
+                *x = remap(*x);
+            }
+        }
+        self.folded.clear();
+        self.multi.clear();
+        self.sel = Some(Pick::Group(target.min(self.scene.groups.len().saturating_sub(1))));
+        self.multi_for = self.sel;
+        result
+    }
+
     /// Move the selection by `d` millimetres.
     pub fn nudge(&mut self, d: [f32; 3]) {
+        // A ball chosen in the scene list is moved on its own: its siblings, the curve through
+        // them and the group's melt all stay as they are.
+        if let Some((g, s, i)) = self.picked_node()
+            && let Some(w) = self.node_world(g, s, i)
+        {
+            self.set_node_world(g, s, i, [w[0] + d[0], w[1] + d[1], w[2] + d[2]]);
+            return;
+        }
         let mut targets = self.sel_targets();
         let mut seen: std::collections::HashSet<(usize, usize)> = targets.iter().copied().collect();
         let mut linked = std::collections::HashSet::new();
+        // Which groups are moving: a whole selected subtree and the groups of selected shapes.
+        // A linked copy whose source is among them already follows it (#261).
+        let mut selected_groups: std::collections::HashSet<usize> = std::collections::HashSet::new();
         // A group selection includes its descendants. The viewport's ordinary
         // targets helper only lists its own shapes; applying that here used to
         // leave nested children behind when nudging their parent.
         for pick in self.picks() {
-            if let Pick::Group(g) = pick {
-                for gi in g..self.scene.subtree_end(g) {
-                    if let Some(group) = self.scene.groups.get(gi) {
-                        if group.is_linked() {
-                            linked.insert(gi);
-                        }
-                        for si in 0..group.shapes.len() {
-                            if seen.insert((gi, si)) {
-                                targets.push((gi, si));
+            match pick {
+                Pick::Group(g) => {
+                    for gi in g..self.scene.subtree_end(g) {
+                        selected_groups.insert(gi);
+                        if let Some(group) = self.scene.groups.get(gi) {
+                            if group.is_linked() {
+                                linked.insert(gi);
+                            }
+                            for si in 0..group.shapes.len() {
+                                if seen.insert((gi, si)) {
+                                    targets.push((gi, si));
+                                }
                             }
                         }
                     }
+                }
+                Pick::Shape(g, _) => {
+                    selected_groups.insert(g);
                 }
             }
         }
@@ -1239,6 +1350,11 @@ impl App {
         // Linked copies have no shapes; move each transform once, including
         // links nested in selected parents or selected along with an ancestor.
         for g in linked {
+            // The source is moving too, so the copy already travels with it; adding to the
+            // link's own transform as well would move it twice.
+            if crate::pattern::link_source(&self.scene, g).is_some_and(|src| selected_groups.contains(&src)) {
+                continue;
+            }
             if let Some(gr) = self.scene.groups.get_mut(g) {
                 gr.xform.pos = [gr.xform.pos[0] + d[0], gr.xform.pos[1] + d[1], gr.xform.pos[2] + d[2]];
                 gr.xform.sanitize();
@@ -1293,6 +1409,12 @@ impl App {
     fn rename_doc(&mut self, ctx: &egui::Context, typed: &str) {
         let name = clean_title(typed);
         if name.is_empty() || name == self.doc_name() {
+            return;
+        }
+        // A save/open job was started for the old path; renaming now would let it write the old
+        // name back and restore it when it finishes (#262).
+        if self.native_job.is_some() || self.queued_open.is_some() || self.after_save.is_some() {
+            self.say(ctx, "保存が終わるのを待ってから名前を変えてください");
             return;
         }
         let Some(old) = self.path.clone() else {
@@ -1486,6 +1608,7 @@ impl App {
             || crate::svg_dialog::is_open(ctx)
             || crate::array::is_open(ctx)
             || crate::mesh_dialog::is_open(ctx)
+            || crate::melt_preset::is_open(ctx)
             || crate::export_dialog::is_open(ctx)
         {
             return;
@@ -1642,6 +1765,14 @@ impl App {
                             self.open_dialog(&ctx);
                             ui.close();
                         }
+                        if ui.button("Puffy Text…").on_hover_text("Turn Japanese or English letters into puffy solids").clicked() {
+                            crate::puffy_text_ui::open(self, &ctx);
+                            ui.close();
+                        }
+                        if ui.button("Chess Set…").on_hover_text("Chess pieces in three designs").clicked() {
+                            crate::chess_dialog::open(&ctx, self);
+                            ui.close();
+                        }
                         if ui.button(style::keys("Save  Ctrl+S")).clicked() {
                             self.save(&ctx, false);
                             ui.close();
@@ -1688,7 +1819,7 @@ impl App {
                             .on_hover_text("STL, OBJ, 3MF, PLY, GLB")
                             .clicked()
                         {
-                            crate::mesh_dialog::open(&ctx);
+                            crate::mesh_dialog::open(&ctx, self.document_generation());
                             ui.close();
                         }
                         if ui.button(style::keys("Save  Ctrl+S")).clicked() {
@@ -1979,7 +2110,7 @@ impl App {
                                 for k in Kind::MAIN {
                                     let r = ui.add_enabled(!self.scene_structure_locked(), |ui: &mut Ui| {
                                         style::wide_button(ui, k.label(), k.label(), false, None, |p, r, ink| {
-                                            glyphs::kind(p, r, k, ink, Color32::from_white_alpha(18))
+                                            glyphs::kind(p, r, k, ink, ink.gamma_multiply(0.15))
                                         })
                                     });
                                     if r.clicked() {
@@ -1996,7 +2127,8 @@ impl App {
                                     for k in Kind::MORE {
                                         let r = ui.horizontal(|ui| {
                                             let (rc, _) = ui.allocate_exact_size(egui::vec2(24.0, 24.0), egui::Sense::hover());
-                                            glyphs::kind(ui.painter(), rc, k, ui.visuals().text_color(), Color32::from_white_alpha(18));
+                                            let ink = ui.visuals().text_color();
+                                            glyphs::kind(ui.painter(), rc, k, ink, ink.gamma_multiply(0.15));
                                             ui.selectable_label(false, k.label())
                                         });
                                         if r.inner.clicked() {
@@ -2005,11 +2137,37 @@ impl App {
                                         }
                                     }
                                     ui.separator();
+                                    if ui.button("Melt (dripping shape)…").on_hover_text("A gravity drip made from a sphere or box; editable afterwards").clicked() {
+                                        crate::melt_preset::open(&ctx);
+                                        ui.close();
+                                    }
+                                    if ui.button("Organic blob…").on_hover_text("A smooth irregular shape from a seed and sliders").clicked() {
+                                        crate::organic_blob::open(&ctx);
+                                        ui.close();
+                                    }
+                                    ui.separator();
+                                    ui.label(egui::RichText::new("Organic tube").size(12.0).color(style::DIM));
+                                    for preset in crate::organic_tube::Preset::ALL {
+                                        if ui.button(preset.label()).on_hover_text("Points, thickness and section stay editable afterwards").clicked() {
+                                            self.add_organic_tube(&ctx, preset);
+                                            ui.close();
+                                        }
+                                    }
+                                    ui.separator();
+                                    ui.label(egui::RichText::new("Organic furniture").size(12.0).color(style::DIM));
+                                    for design in crate::organic_furniture::Design::ALL {
+                                        if ui.button(design.label()).on_hover_text("Width, height and legs stay editable after it is made").clicked() {
+                                            crate::organic_furniture::insert(self, &ctx, design);
+                                            ui.close();
+                                        }
+                                    }
+                                    ui.separator();
                                     ui.label(egui::RichText::new("CAD tools").size(12.0).color(style::DIM));
                                     for k in Kind::CAD {
                                         let r = ui.horizontal(|ui| {
                                             let (rc, _) = ui.allocate_exact_size(egui::vec2(24.0, 24.0), egui::Sense::hover());
-                                            glyphs::kind(ui.painter(), rc, k, ui.visuals().text_color(), Color32::from_white_alpha(18));
+                                            let ink = ui.visuals().text_color();
+                                            glyphs::kind(ui.painter(), rc, k, ink, ink.gamma_multiply(0.15));
                                             ui.selectable_label(false, k.label())
                                         });
                                         if r.inner.clicked() {
@@ -2402,6 +2560,8 @@ impl eframe::App for App {
         let _ = ctx;
     }
     fn on_exit(&mut self) {
+        // A control picture that has not been renamed yet must not be published.
+        self.render_job = None;
         if let Some(p) = self.precise.as_mut() {
             solidcraft_ui_egui::agent_chat::shutdown(&mut p.app);
             solidcraft_ui_egui::save_job::tick(&mut p.app, true);
@@ -2434,6 +2594,11 @@ impl App {
         }
     }
 
+    /// Which document the scene shows: a transfer started for another one must not land here.
+    pub(crate) fn document_generation(&self) -> u64 {
+        self.document_generation
+    }
+
     pub(crate) fn scene_edit_in_progress(&self) -> bool {
         self.scene_structure_locked()
             || self.sketch_active()
@@ -2450,7 +2615,7 @@ impl App {
     }
 
     /// Runs the commands that arrived on the control channel (at most a few per frame).
-    fn run_control(&mut self, ctx: &egui::Context) {
+    pub(crate) fn run_control(&mut self, ctx: &egui::Context) {
         let Some(rx) = self.control.take() else { return };
         let mut ran = false;
         for _ in 0..32 {
@@ -2474,6 +2639,16 @@ impl App {
                 continue;
             }
             let name = req.cmd.get("cmd").and_then(serde_json::Value::as_str);
+            if matches!(name, Some("render" | "anim.render")) {
+                // Drawing four views or a whole animation can take longer than a
+                // frame: do it on a worker and answer when the complete file exists.
+                let crate::control::Request { cmd, reply } = req;
+                if let Err(e) = self.start_control_picture(ctx, &cmd, reply) {
+                    self.say(ctx, e);
+                }
+                ran = true;
+                continue;
+            }
             let read_only = matches!(name, Some("commands" | "scene.get" | "scene.summary" | "render" | "anim.get" | "anim.render"));
             let busy = self.precise_on || self.scene_edit_in_progress() || ctx.egui_wants_keyboard_input() || ctx.input(|i| i.pointer.any_down());
             let result = if !read_only && busy {
@@ -2493,6 +2668,11 @@ impl App {
                     self.settle(ctx);
                     self.clear_document_gestures();
                     self.scene = next;
+                    // A command that replaces the whole design starts a new document, like
+                    // File > New / Open does: no transfer from the old one may land in it.
+                    if matches!(name, Some("scene.new" | "scene.set" | "load")) {
+                        self.document_generation = self.document_generation.wrapping_add(1);
+                    }
                     self.sel = if let Some(g) = value.get("group").and_then(serde_json::Value::as_u64) {
                         Some(match value.get("shape").and_then(serde_json::Value::as_u64) {
                             Some(s) => Pick::Shape(g as usize, s as usize),
@@ -2532,6 +2712,73 @@ impl App {
         }
     }
 
+    /// A `render` / `anim.render` request from `--control`: copy the scene here (cheap next
+    /// to drawing) and let a worker draw and write the file. The answer goes out when the
+    /// complete picture is on disk, so the window keeps drawing frames meanwhile.
+    fn start_control_picture(
+        &mut self,
+        ctx: &egui::Context,
+        cmd: &serde_json::Value,
+        reply: std::sync::mpsc::Sender<Result<serde_json::Value, String>>,
+    ) -> Result<(), String> {
+        if self.render_job.is_some() {
+            let e = "A picture is already being drawn; wait for it to finish".to_owned();
+            let _ = reply.send(Err(e.clone()));
+            return Err(e);
+        }
+        let parsed = (|| -> Result<(std::path::PathBuf, crate::render_job::Work), String> {
+            let kind = cmd.get("cmd").and_then(serde_json::Value::as_str).ok_or("Missing \"cmd\"")?;
+            let path = cmd.get("path").and_then(serde_json::Value::as_str).filter(|p| !p.is_empty()).ok_or("Missing \"path\"")?;
+            let size = cmd.get("size").and_then(serde_json::Value::as_u64);
+            let work = if kind == "render" {
+                crate::render_job::Work::Sheet { size: size.unwrap_or(220).clamp(40, 600) as usize }
+            } else {
+                crate::render_job::Work::Animation {
+                    size: size.unwrap_or(240).clamp(64, 640) as usize,
+                    gpu: cmd.get("gpu").and_then(serde_json::Value::as_bool).unwrap_or(false),
+                }
+            };
+            Ok((std::path::PathBuf::from(path), work))
+        })();
+        let (path, work) = match parsed {
+            Ok(parsed) => parsed,
+            Err(e) => {
+                let _ = reply.send(Err(e.clone()));
+                return Err(e);
+            }
+        };
+        // The worker owns its copy: edits made while the picture is drawn cannot mix into it.
+        let scene = self.scene.clone();
+        match crate::render_job::start(ctx, scene, path, work, reply.clone()) {
+            Ok(job) => {
+                self.render_job = Some(job);
+                ctx.request_repaint();
+                Ok(())
+            }
+            Err(e) => {
+                let _ = reply.send(Err(e.clone()));
+                Err(e)
+            }
+        }
+    }
+
+    /// Collect a finished control picture and forward its answer to the waiting client.
+    fn poll_render_job(&mut self, ctx: &egui::Context) {
+        let result = self.render_job.as_mut().and_then(crate::render_job::Job::poll);
+        if let Some(result) = result {
+            self.render_job = None;
+            match result {
+                Ok(value) => {
+                    let path = value.get("png").or_else(|| value.get("gif")).and_then(serde_json::Value::as_str).unwrap_or_default();
+                    self.say(ctx, format!("Saved {path}"));
+                }
+                Err(e) => self.say(ctx, format!("Picture not saved: {e}")),
+            }
+        } else if self.render_job.is_some() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(120));
+        }
+    }
+
     /// One frame of the window (what `eframe::App::ui` does; a method of its own so that tests can run it).
     pub(crate) fn frame_body(&mut self, ui: &mut Ui) {
         static FIRST: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -2552,6 +2799,7 @@ impl App {
         let frame_began = std::time::Instant::now();
         self.perf.stats.begin(ctx.input(|i| i.time));
         self.sync_precise_transfer(&ctx);
+        self.poll_render_job(&ctx);
         self.run_control(&ctx);
         self.update_native_job(&ctx);
         self.handle_close_request(&ctx);
@@ -2585,10 +2833,15 @@ impl App {
             self.sketch_card(&ctx);
             self.keys_card(ui);
             crate::svg_dialog::update(self, &ctx);
+            crate::precise::transfer_card(self, &ctx);
+            crate::puffy_text_ui::update(self, &ctx);
+            crate::organic_blob::update(self, &ctx);
+            crate::chess_dialog::update(self, &ctx);
             crate::mesh_dialog::update(self, &ctx);
             crate::array::update(self, &ctx);
             crate::export_dialog::update(self, &ctx);
             self.palette_ui(&ctx);
+            crate::melt_preset::update(self, &ctx);
             if std::mem::take(&mut self.perf.bench_requested) {
                 let backends = self.current_backend().map(|b| b.to_wgpu());
                 self.bench.start(&ctx, backends);
@@ -2603,10 +2856,25 @@ impl App {
         self.settle(&ctx);
         if !cfg!(test) {
             ctx.request_repaint_after(crate::recovery::INTERVAL);
-            let rev = self.track_scene();
-            let changed = self.has_unsaved_work();
-            if let Err(e) = self.recovery.checkpoint(&self.scene, self.path.as_deref(), changed, rev, std::time::Instant::now()) {
+            // Publish a checkpoint that finished on its worker, then consider a new one.
+            // Serializing the scene never happens in this frame (only the worker does it).
+            if let Some(result) = self.recovery.poll_checkpoint()
+                && let Err(e) = result
+            {
                 self.notice = Some(format!("Could not save auto-recovery data: {e}"));
+            }
+            // Finding out whether the scene changed compares all of it, so it is only done when
+            // a checkpoint is due (`start_checkpoint` would ignore the answer otherwise).
+            let now = std::time::Instant::now();
+            if self.recovery.due(now) {
+                let rev = self.track_scene();
+                let changed = self.has_unsaved_work();
+                if let Err(e) = self.recovery.start_checkpoint(&self.scene, self.path.as_deref(), changed, rev, now) {
+                    self.notice = Some(format!("Could not save auto-recovery data: {e}"));
+                }
+            }
+            if self.recovery.checkpoint_running() {
+                ctx.request_repaint_after(std::time::Duration::from_millis(150));
             }
         }
         self.test_hooks(&ctx);
@@ -3061,6 +3329,13 @@ mod tests {
         assert_eq!(answer["precise"], false);
         assert_eq!(answer["importing"], true);
         assert!(app.precise_transfer_pending());
+        // The STL is written and parsed on a worker; the bake card opens when it is ready.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(90);
+        while !crate::mesh_dialog::is_open(&ctx) {
+            app.sync_precise_transfer(&ctx);
+            assert!(std::time::Instant::now() < deadline, "the transfer did not reach the bake");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
         assert!(crate::mesh_dialog::cancel(&ctx));
         app.sync_precise_transfer(&ctx);
     }
@@ -3168,6 +3443,35 @@ mod tests {
     }
 
     #[test]
+    fn melting_shapes_never_melts_their_groups_into_each_other() {
+        let ball = |x: f32| {
+            let mut s = Shape::new(Kind::Box, [x, 0.0, 0.0], crate::model::Material::default());
+            s.blend = 0.0;
+            s
+        };
+        let mut app = App::new(true, None);
+        let mut a = Group::new("A");
+        a.shapes = vec![ball(-21.0), ball(-5.0)];
+        let mut b = Group::new("B");
+        b.shapes = vec![ball(21.0)];
+        app.scene.groups = vec![a, b];
+        // a shape picked: its own melt turns on, its group stays hard against the other groups
+        app.sel = Some(Pick::Shape(1, 0));
+        app.toggle_melt_selected();
+        assert!(app.scene.groups[1].shapes[0].blend > 0.0);
+        assert_eq!(app.scene.groups[1].blend, 0.0, "different groups do not melt unless the group itself is melted");
+        // nothing picked: the whole scene melts inside the groups only
+        app.sel = None;
+        app.multi.clear();
+        app.toggle_melt_selected();
+        assert!(app.scene.groups.iter().all(|g| g.blend == 0.0));
+        // a picked group row melts into the groups before it on purpose
+        app.sel = Some(Pick::Group(1));
+        app.toggle_melt_selected();
+        assert!(app.scene.groups[1].blend > 0.0);
+    }
+
+    #[test]
     fn a_quarter_turned_box_shows_its_sizes_along_the_world_axes() {
         let mut app = App::new(true, None);
         let mut b = Shape::new(Kind::Box, [0.0; 3], crate::model::Material::default());
@@ -3216,6 +3520,47 @@ mod tests {
         app.move_layer(Pick::Group(0), Pick::Group(3), true);
         let after: Vec<(String, u8)> = app.scene.groups.iter().map(|x| (x.name.clone(), x.depth)).collect();
         assert_eq!(after, before, "a parent group cannot land among nested groups; nothing is flattened (#203)");
+    }
+
+    #[test]
+    fn a_shape_dropped_on_the_line_above_a_group_joins_the_group_above() {
+        let mut app = App::new(true, None);
+        let sp = || Shape::new(Kind::Sphere, [0.0; 3], crate::model::Material::default());
+        let mut a = Group::new("A");
+        a.shapes = vec![sp()];
+        let mut b = Group::new("B");
+        b.shapes = vec![sp(), sp()];
+        app.scene.groups = vec![a, b];
+        let c = Group::new("C");
+        app.scene.groups.push(c);
+        // dropped on the line above C, which is the end of B
+        app.move_layer(Pick::Shape(0, 0), Pick::Group(2), false);
+        assert_eq!(app.scene.groups[1].shapes.len(), 3, "it joined B, the group above the line (#279)");
+        assert_eq!(app.scene.groups[2].shapes.len(), 0, "and did not go into C below the line");
+        assert_eq!(app.scene.groups[0].shapes.len(), 0);
+        // on the lower edge of a group row it becomes that group's first shape
+        app.move_layer(Pick::Shape(1, 2), Pick::Group(2), true);
+        assert_eq!(app.scene.groups[2].shapes.len(), 1);
+    }
+
+    #[test]
+    fn several_picked_rows_go_into_a_group_together() {
+        let mut app = App::new(true, None);
+        let sp = || Shape::new(Kind::Sphere, [0.0; 3], crate::model::Material::default());
+        let mut a = Group::new("A");
+        a.shapes = vec![sp(), sp()];
+        let mut b = Group::new("B");
+        b.shapes = vec![sp()];
+        let c = Group::new("C");
+        let d = Group::new("D");
+        app.scene.groups = vec![a, b, c, d];
+        let picks = [Pick::Shape(0, 0), Pick::Shape(0, 1), Pick::Group(1), Pick::Group(2)];
+        app.move_picks_into(&picks, 3).unwrap();
+        assert_eq!(app.scene.groups[0].shapes.len(), 0, "A lost both shapes");
+        let names: Vec<(&str, u8)> = app.scene.groups.iter().map(|g| (g.name.as_str(), g.depth)).collect();
+        assert_eq!(names, vec![("A", 0), ("D", 0), ("B", 1), ("C", 1)], "B and C are inside D");
+        assert_eq!(app.scene.groups[1].shapes.len(), 2, "the shapes joined D");
+        assert!(app.move_picks_into(&[Pick::Group(1)], 2).is_err(), "a group cannot go into what is inside it");
     }
 
     #[test]
@@ -3291,7 +3636,7 @@ mod tests {
         app.add_shape(&ctx, Kind::Box);
         let n = app.scene.shape_count();
         for open in [
-            (|c: &egui::Context| crate::mesh_dialog::open_path(c, std::env::temp_dir().join("meltcad-no-such-mesh.stl"))) as fn(&egui::Context),
+            (|c: &egui::Context| crate::mesh_dialog::open_path(c, std::env::temp_dir().join("meltcad-no-such-mesh.stl"), 0)) as fn(&egui::Context),
             |c| crate::export_dialog::open(c, None),
         ] {
             open(&ctx);
@@ -3404,7 +3749,7 @@ mod tests {
         app.move_layer(Pick::Shape(0, 0), Pick::Shape(0, 2), true);
         assert_eq!(names(&app), vec![Kind::Sphere, Kind::Box, Kind::Cone]);
         app.add_group();
-        app.move_layer(Pick::Shape(0, 1), Pick::Group(1), false);
+        app.move_layer(Pick::Shape(0, 1), Pick::Group(1), true);
         assert_eq!((app.scene.groups[0].shapes.len(), app.scene.groups[1].shapes.len()), (2, 1));
         app.move_layer(Pick::Group(1), Pick::Group(0), false);
         assert_eq!(app.scene.groups[0].shapes.len(), 1);
@@ -3583,6 +3928,68 @@ mod tests {
         app.duplicate();
         assert_eq!(app.scene.groups[1].shapes[0].pos, at);
     }
+
+    #[test]
+    fn a_chosen_ball_moves_alone_and_a_group_still_moves_every_child() {
+        use crate::model::{Group, Kind, Material, Pick, Shape};
+        let mut app = super::App::new(true, None);
+        app.scene.groups.clear();
+        let mut group = Group::new("Pipe");
+        let mut sibling = Shape::new(Kind::Sphere, [0.0, 0.0, 80.0], Material::default());
+        sibling.name = "Sibling".into();
+        group.shapes.push(sibling);
+        let mut pipe = Shape::new(Kind::Curve, [10.0, 0.0, 10.0], Material::default());
+        pipe.name = "Pipe".into();
+        pipe.path = vec![[-20.0, 0.0, 0.0, 4.0], [0.0, 0.0, 0.0, 4.0], [20.0, 0.0, 0.0, 4.0], [40.0, 0.0, 0.0, 4.0], [60.0, 0.0, 0.0, 4.0]];
+        group.shapes.push(pipe);
+        app.scene.groups.push(group);
+        app.committed_sync();
+
+        // The row of "Ball 4" picks shape 1 and node 3.
+        app.sel = Some(Pick::Shape(0, 1));
+        app.ct.node = Some((0, 1, 3));
+        assert_eq!(app.picks(), vec![Pick::Shape(0, 1)]);
+        assert_eq!(app.sel_targets(), vec![(0, 1)], "the selection is the pipe shape, not the group");
+
+        let before = app.scene.groups[0].shapes[1].path.clone();
+        let pipe_pos = app.scene.groups[0].shapes[1].pos;
+        let sibling_pos = app.scene.groups[0].shapes[0].pos;
+        app.nudge([5.0, 0.0, 0.0]);
+        let after = &app.scene.groups[0].shapes[1].path;
+        for i in 0..before.len() {
+            if i == 3 {
+                assert!((after[i][0] - before[i][0] - 5.0).abs() < 1e-4, "the chosen ball moved by 5 mm");
+                assert_eq!([after[i][1], after[i][2], after[i][3]], [before[i][1], before[i][2], before[i][3]]);
+            } else {
+                assert_eq!(after[i], before[i], "node {i} is untouched");
+            }
+        }
+        assert_eq!(app.scene.groups[0].shapes[1].pos, pipe_pos, "the pipe itself did not move");
+        assert_eq!(app.scene.groups[0].shapes[0].pos, sibling_pos, "its sibling shape did not move");
+
+        // One nudge is one undo step.
+        let ctx = egui::Context::default();
+        app.settle(&ctx);
+        assert_eq!(app.undo_depth(), 1);
+        app.undo();
+        assert_eq!(app.scene.groups[0].shapes[1].path, before, "undo puts the ball back");
+
+        // The same movement survives save and reload.
+        app.sel = Some(Pick::Shape(0, 1));
+        app.ct.node = Some((0, 1, 3));
+        app.nudge([1.0, 2.0, 3.0]);
+        let moved = app.scene.groups[0].shapes[1].path.clone();
+        let reloaded = crate::model::Scene::from_json(&app.scene.to_json()).unwrap_or_default();
+        assert_eq!(reloaded.groups[0].shapes[1].path, moved, "the ball's offset round-trips");
+
+        // A group pick still moves the pipe and every other shape in it (#260).
+        app.sel = Some(Pick::Group(0));
+        let sibling_x = app.scene.groups[0].shapes[0].pos[0];
+        let pipe_x = app.scene.groups[0].shapes[1].pos[0];
+        app.nudge([5.0, 0.0, 0.0]);
+        assert_eq!(app.scene.groups[0].shapes[0].pos[0], sibling_x + 5.0);
+        assert_eq!(app.scene.groups[0].shapes[1].pos[0], pipe_x + 5.0);
+    }
 }
 
 /// The longest title that can be typed.
@@ -3635,6 +4042,27 @@ mod title_tests {
     }
 
     #[test]
+    fn renaming_waits_for_a_running_file_job() {
+        let ctx = egui::Context::default();
+        let mut app = super::App::new(true, None);
+        let dir = std::env::temp_dir().join(format!("melt3d-rename-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let old = dir.join("Old.meltcad");
+        std::fs::write(&old, b"saved design").unwrap();
+        app.path = Some(old.clone());
+        app.queued_open = Some(super::QueuedOpen { path: dir.join("Other.meltcad"), base_revision: 0 });
+        app.rename_doc(&ctx, "New");
+        assert_eq!(app.path.as_deref(), Some(old.as_path()), "a pending file job keeps the old path");
+        assert!(old.exists(), "and the file is not moved under it");
+        app.queued_open = None;
+        app.rename_doc(&ctx, "New");
+        let stem = app.path.as_ref().and_then(|p| p.file_stem()).map(|s| s.to_string_lossy().into_owned());
+        assert_eq!(stem.as_deref(), Some("New"), "without a job the rename happens");
+        assert!(!old.exists() && app.path.as_ref().is_some_and(|p| p.exists()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn arrow_keys_move_nested_groups_exactly_once() {
         use crate::model::{Group, Kind, Material, Pick, Shape};
         let mut app = super::App::new(true, None);
@@ -3651,13 +4079,37 @@ mod title_tests {
         app.nudge([10.0, 0.0, 0.0]);
         assert_eq!(app.scene.groups[0].shapes[0].pos[0], 10.0);
         assert_eq!(app.scene.groups[1].shapes[0].pos[0], 50.0);
-        assert_eq!(app.scene.groups[2].xform.pos[0], 10.0);
+        assert_eq!(app.scene.groups[2].xform.pos[0], 0.0, "the copy follows its moving source, not twice");
         // The same child also selected on its own must not move twice.
         app.multi_for = app.sel;
         app.multi.push(Pick::Shape(1, 0));
         app.nudge([10.0, 0.0, 0.0]);
         assert_eq!(app.scene.groups[1].shapes[0].pos[0], 60.0);
-        assert_eq!(app.scene.groups[2].xform.pos[0], 20.0);
+        assert_eq!(app.scene.groups[2].xform.pos[0], 0.0);
+    }
+
+    #[test]
+    fn moving_a_parent_with_a_linked_copy_does_not_double_move_the_copy() {
+        use crate::model::{Group, Kind, Material, Pick, Shape};
+        let mut app = super::App::new(true, None);
+        app.scene.groups.clear();
+        app.scene.groups.push(Group::new("Parent"));
+        let mut source = Group::new("Source");
+        source.depth = 1;
+        source.shapes.push(Shape::new(Kind::Box, [0.0, 0.0, 10.0], Material::default()));
+        app.scene.groups.push(source);
+        let uid = app.scene.ensure_group_uid(1).expect("source uid");
+        let mut link = Group::new("Copy");
+        link.depth = 1;
+        link.instance_of = Some(uid);
+        link.xform.pos = [30.0, 0.0, 0.0];
+        app.scene.groups.push(link);
+        // The copy stands 30 mm to the right of the source; moving the parent 10 mm must take it
+        // 10 mm, not 20 (#261).
+        app.sel = Some(Pick::Group(0));
+        app.nudge([10.0, 0.0, 0.0]);
+        assert_eq!(app.scene.groups[1].shapes[0].pos[0], 10.0);
+        assert_eq!(app.scene.groups[2].xform.pos[0], 30.0, "the copy keeps its offset and follows once");
     }
 
     #[test]
@@ -3682,5 +4134,112 @@ mod title_tests {
         assert_eq!(clean_title("..."), "");
         assert_eq!(clean_title("\n\t"), "");
         assert_eq!(clean_title(&"x".repeat(500)).chars().count(), 80);
+    }
+
+    fn picture_dir(name: &str) -> std::path::PathBuf {
+        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
+        let dir = std::env::temp_dir().join(format!("meltcad_picture_{name}_{stamp}"));
+        std::fs::create_dir_all(&dir).expect("picture directory");
+        dir
+    }
+
+    fn wait_for_picture(app: &mut super::App, ctx: &egui::Context) {
+        for _ in 0..1200 {
+            app.poll_render_job(ctx);
+            if app.render_job.is_none() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        panic!("control picture worker did not finish");
+    }
+
+    #[test]
+    fn a_control_picture_is_drawn_on_a_worker_while_the_frame_loop_keeps_running() {
+        let dir = picture_dir("worker");
+        let path = dir.join("sheet.png");
+        let release = crate::render_job::test_gate::hold(&path);
+        let ctx = egui::Context::default();
+        let mut app = super::App::new(true, None);
+        let (tx, rx) = std::sync::mpsc::channel();
+        let (reply, answer) = std::sync::mpsc::channel();
+        app.control = Some(rx);
+        tx.send(crate::control::Request { cmd: serde_json::json!({"cmd": "render", "path": path.display().to_string(), "size": 64}), reply })
+            .expect("queue the request");
+
+        app.run_control(&ctx);
+        assert!(app.render_job.is_some(), "the request returned while the picture is still being made");
+        assert!(
+            matches!(answer.try_recv(), Err(std::sync::mpsc::TryRecvError::Empty)),
+            "the window thread must not answer before a complete picture exists"
+        );
+
+        // The held worker cannot draw unless another thread runs: a whole frame still advances.
+        let input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(960.0, 600.0))), ..Default::default() };
+        let mut drew = 0;
+        let mut output = ctx.run_ui(input, |ui| {
+            drew += 1;
+            app.frame_body(ui);
+        });
+        output.textures_delta.clear();
+        assert_eq!(drew, 1, "a frame was drawn");
+        assert!(app.render_job.is_some(), "the frame finished while the picture was still being drawn");
+        assert!(!path.exists(), "nothing is written before the picture is complete");
+        assert!(matches!(answer.try_recv(), Err(std::sync::mpsc::TryRecvError::Empty)), "still no answer");
+
+        release.send(()).expect("release the worker");
+        wait_for_picture(&mut app, &ctx);
+        let answer = answer.recv_timeout(std::time::Duration::from_secs(10)).expect("the request was answered").expect("picture saved");
+        assert_eq!(answer["png"], serde_json::json!(path.display().to_string()));
+        let bytes = std::fs::read(&path).expect("picture file");
+        assert!(bytes.starts_with(&[137, 80, 78, 71, 13, 10, 26, 10]), "a complete PNG is on disk");
+        assert_eq!(std::fs::read_dir(&dir).expect("list").count(), 1, "no staged file is left");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_stopped_control_picture_keeps_the_previous_file_and_leaves_no_partial_output() {
+        let dir = picture_dir("stopped");
+        let path = dir.join("sheet.png");
+        std::fs::write(&path, b"previous picture").expect("previous output");
+        let release = crate::render_job::test_gate::hold(&path);
+        let ctx = egui::Context::default();
+        let mut app = super::App::new(true, None);
+        let (tx, rx) = std::sync::mpsc::channel();
+        let (reply, answer) = std::sync::mpsc::channel();
+        app.control = Some(rx);
+        tx.send(crate::control::Request { cmd: serde_json::json!({"cmd": "render", "path": path.display().to_string(), "size": 40}), reply })
+            .expect("queue the request");
+        app.run_control(&ctx);
+        app.render_job.as_ref().expect("worker started").cancel();
+        release.send(()).expect("release the worker");
+        wait_for_picture(&mut app, &ctx);
+
+        let result = answer.recv_timeout(std::time::Duration::from_secs(10)).expect("the request was answered");
+        assert!(result.is_err(), "a stopped picture is reported as an error");
+        assert_eq!(std::fs::read(&path).expect("old output"), b"previous picture", "the previous picture is untouched");
+        assert_eq!(std::fs::read_dir(&dir).expect("list").count(), 1, "no staged partial file is left");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_failed_control_picture_writes_nothing() {
+        let dir = picture_dir("failed");
+        let path = dir.join("missing").join("sheet.png");
+        let ctx = egui::Context::default();
+        let mut app = super::App::new(true, None);
+        let (tx, rx) = std::sync::mpsc::channel();
+        let (reply, answer) = std::sync::mpsc::channel();
+        app.control = Some(rx);
+        tx.send(crate::control::Request { cmd: serde_json::json!({"cmd": "render", "path": path.display().to_string(), "size": 40}), reply })
+            .expect("queue the request");
+        app.run_control(&ctx);
+        wait_for_picture(&mut app, &ctx);
+
+        let result = answer.recv_timeout(std::time::Duration::from_secs(10)).expect("the request was answered");
+        assert!(result.is_err(), "a write failure is reported");
+        assert!(!path.exists(), "a failed picture is not published");
+        assert_eq!(std::fs::read_dir(&dir).expect("list").count(), 0, "no temporary output is left");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -4,6 +4,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::mesh::SharedVolume;
+use crate::ripple::Ripple;
 use crate::pattern::{Pattern, Xform};
 
 fn is_false(v: &bool) -> bool {
@@ -46,7 +47,7 @@ pub enum Kind {
     Revolve,
     /// `outline` at the bottom blends into `outline2` at the top over `size[0]` mm.
     Loft,
-    /// A tube through the `path` nodes (x, y, z, radius), like Womp's curve tool.
+    /// A tube through the `path` nodes (x, y, z, radius).
     Curve,
     /// `outline` pulled along `path`.
     Sweep,
@@ -195,6 +196,8 @@ impl Kind {
             Kind::Star => [24.0, 14.0, 1.0],
             Kind::Revolve => [1.0, 1.0, 1.0],
             Kind::Loft => [40.0, 1.0, 1.0],
+            // Curve uses size.y = cross-section width (0.45..1), size.z = rounded-square selector.
+            // 1,1 keeps existing circular paths bit-for-bit on the fast SDF route.
             Kind::Curve => [1.0, 1.0, 1.0],
             Kind::Sweep => [1.0, 1.0, 1.0],
             Kind::Mesh => [1.0, 1.0, 1.0],
@@ -403,6 +406,8 @@ pub struct CurveHandles {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Shape {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ripple: Option<Ripple>,
     pub name: String,
     pub kind: Kind,
     pub size: [f32; 3],
@@ -459,6 +464,9 @@ pub struct Shape {
     /// Where an imported mesh came from (its file name), shown in the inspector.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub source: String,
+    /// Parametric vase controls; ordinary Revolve sketches remain unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vase: Option<crate::organic_vase::VaseParams>,
     /// Optional source reference, absent in all legacy .meltcad files.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mesh_source: Option<MeshSource>,
@@ -558,6 +566,7 @@ impl Shape {
 
     pub fn new(kind: Kind, pos: [f32; 3], material: Material) -> Shape {
         Shape {
+            ripple: None,
             name: kind.label().to_string(),
             kind,
             size: kind.default_size(),
@@ -585,6 +594,7 @@ impl Shape {
             face_melt: FaceMelt::default(),
             solid: None,
             pattern: None,
+            vase: None,
         }
     }
 
@@ -616,7 +626,11 @@ impl Shape {
             Kind::Box | Kind::Wedge => [s[0] * 0.5, s[1] * 0.5, s[2] * 0.5],
             Kind::Cylinder | Kind::Cone => [s[0], s[0], s[1] * 0.5],
             Kind::Torus => [s[0] + s[1], s[0] + s[1], s[1]],
-            Kind::Extrude => [mx(&self.outline, 0), mx(&self.outline, 1), s[0] * 0.5],
+            Kind::Extrude => {
+                // params[0] is an optional signed puff distance. Legacy extrusions use zero.
+                let swell = if self.params[0].is_nan() { 0.0 } else { self.params[0].clamp(0.0, 40.0) };
+                [mx(&self.outline, 0) + swell, mx(&self.outline, 1) + swell, s[0] * 0.5 + swell]
+            },
             Kind::Prism3 | Kind::PrismN | Kind::Star | Kind::Pyramid => [s[0], s[0], s[1] * 0.5],
             Kind::Octa | Kind::Tetra => [s[0]; 3],
             // the dome fills z in -r/2 ..= r/2 (flat face at the bottom of its box)
@@ -624,7 +638,10 @@ impl Shape {
             Kind::Capsule => [s[0], s[0], s[1] * 0.5 + s[0]],
             Kind::Tube => [s[0], s[0], s[2] * 0.5],
             Kind::Revolve => {
-                let r = mx(&self.outline, 0);
+                // The angular waves can extend past the 2D profile: include their full
+                // amplitude in the bounds, otherwise culling could clip the petals.
+                let wave = if self.vase.is_some() { self.params[2].abs().min(6.0) } else { 0.0 };
+                let r = mx(&self.outline, 0) + wave;
                 [r, r, mx(&self.outline, 1)]
             }
             Kind::Loft => {
@@ -713,10 +730,31 @@ fn is_zero_u8(v: &u8) -> bool {
     *v == 0
 }
 
+/// A saved blend amount made safe: negative and non-finite values melt nothing.
+fn clean_blend(blend: f32) -> f32 {
+    if blend.is_finite() { blend.max(0.0) } else { 0.0 }
+}
+
 /// The deepest a group can be nested.
 /// Two levels are enough: a big group holds groups, and groups hold shapes. Groups melt into each
 /// other inside the big group, and the big group melts with the rest as one piece.
 pub const MAX_DEPTH: u8 = 1;
+
+/// Editor controls for a non-destructive Smooth Fusion preset.
+/// Actual geometry uses each editable Shape's existing SDF blend and position.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SmoothFusion {
+    /// Smooth-union transition width in millimetres (Shape::blend).
+    pub radius_mm: f32,
+    /// 0 = deep overlap, 1 = nearly touching, implemented by changing spacing.
+    pub contact: f32,
+}
+
+impl Default for SmoothFusion {
+    fn default() -> Self {
+        Self { radius_mm: 14.0, contact: 0.38 }
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Group {
@@ -732,6 +770,18 @@ pub struct Group {
     /// This group represents one extrusion with independent subtractive sketch holes.
     #[serde(default)]
     pub sketch_holes: bool,
+    /// Parametric Designer Bag settings. Stored alongside editable parts in scene files.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bag: Option<crate::designer_bag::BagConfig>,
+    /// Re-editable Designer Chair parameters; none for ordinary groups and old scenes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub designer_chair: Option<crate::designer_chair::Parameters>,
+    /// Optional Smooth Fusion editor settings (old files omit this field).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fusion: Option<SmoothFusion>,
+    /// Non-destructive Puffy Text source. Geometry remains ordinary extrusions and cuts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub puffy_text: Option<crate::puffy_text::LetterMeta>,
     /// A number linked copies and patterns find this group by (0 = none; see `Scene::ensure_group_uid`).
     #[serde(default, skip_serializing_if = "is_zero")]
     pub uid: u32,
@@ -747,6 +797,15 @@ pub struct Group {
     /// Set when the group holds a whole file that was added to this one ("Add file"): a piece of the big file.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub piece: Option<Piece>,
+    /// Editable native Designer Lamp parameters; old projects omit this optional field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lamp: Option<crate::designer_lamp::LampParams>,
+    /// Regenerable SDF furniture controls (old scene files simply omit this field).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub organic_furniture: Option<crate::organic_furniture::Settings>,
+    /// Re-editable gravity-melt preset settings; old project files omit this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub melt_preset: Option<crate::melt_preset::Settings>,
 }
 
 /// Which file a piece of the big file came from, so it can be read again or saved back.
@@ -783,11 +842,18 @@ impl Group {
             shapes: Vec::new(),
             depth: 0,
             sketch_holes: false,
+            bag: None,
             uid: 0,
             pattern: None,
             instance_of: None,
             xform: Xform::default(),
             piece: None,
+            lamp: None,
+            designer_chair: None,
+            organic_furniture: None,
+            fusion: None,
+            puffy_text: None,
+            melt_preset: None,
         }
     }
 }
@@ -1111,6 +1177,22 @@ impl Scene {
         (0..g).rev().find(|&i| self.groups[i].depth < d)
     }
 
+    /// How far a group melts into what comes before it: its own Melt amount, raised to the amount
+    /// of the group around it when that is larger. Melt on a parent therefore also melts the
+    /// groups inside it, without changing any saved amount. The scene's `Melt.amount` multiplies
+    /// this later.
+    pub fn group_melt_reach(&self, g: usize) -> f32 {
+        let Some(group) = self.groups.get(g) else { return 0.0 };
+        let mut reach = clean_blend(group.blend);
+        let mut above = self.parent_of(g);
+        while let Some(p) = above {
+            let Some(parent) = self.groups.get(p) else { break };
+            reach = reach.max(clean_blend(parent.blend));
+            above = self.parent_of(p);
+        }
+        reach
+    }
+
     /// Put `g` (with what is nested in it) into the group just above it.
     pub fn indent_group(&mut self, g: usize) -> bool {
         let e = self.subtree_end(g);
@@ -1258,6 +1340,7 @@ impl Scene {
             *v = if v.is_finite() { v.clamp(lo, hi) } else { d };
         };
         let (mut lost, mut over) = (0usize, 0usize);
+        let mut broken_furniture = 0usize;
         let mut vol_shapes = 0usize;
         let mut vol_nodes = 0usize;
         let mut vol_seen: Vec<usize> = Vec::new();
@@ -1282,16 +1365,38 @@ impl Scene {
                     path.truncate(path.char_indices().nth(MAX_PIECE_PATH).map_or(path.len(), |(i, _)| i));
                 }
             }
+            if let Some(bag) = &mut g.bag {
+                bag.sanitize();
+            }
+            if let Some(p) = &mut g.designer_chair {
+                p.sanitize();
+            }
+            if let Some(fusion) = &mut g.fusion {
+                fix(&mut fusion.radius_mm, 0.0, 80.0, 14.0);
+                fix(&mut fusion.contact, 0.0, 1.0, 0.38);
+            }
             if let Some(p) = &mut g.pattern {
                 p.sanitize();
             }
             g.xform.sanitize();
+            if let Some(params) = &mut g.organic_furniture {
+                params.sanitize();
+            }
+            if let Some(meta) = &mut g.puffy_text { meta.sanitize(); }
+            if let Some(preset) = &mut g.melt_preset {
+                preset.sanitize();
+            }
             if g.instance_of.is_some() {
+                g.organic_furniture = None;
                 // a linked copy shows its source's shapes, not its own
                 g.shapes.clear();
+                g.fusion = None;
             }
             g.shapes.truncate(left);
             left -= g.shapes.len();
+            if let Some(lamp) = &mut g.lamp {
+                lamp.sanitize();
+            }
             for s in &mut g.shapes {
                 for v in &mut s.size {
                     fix(v, 0.01, 2000.0, 10.0);
@@ -1308,6 +1413,7 @@ impl Scene {
                     fix(v, 0.01, 100.0, 1.0);
                 }
                 s.material.sanitize();
+                if let Some(r) = &mut s.ripple { r.sanitize(); }
                 s.outline.truncate(MAX_OUTLINE);
                 for p in &mut s.outline {
                     fix(&mut p[0], -2000.0, 2000.0, 0.0);
@@ -1318,6 +1424,11 @@ impl Scene {
                 }
                 for v in &mut s.params {
                     fix(v, -5000.0, 5000.0, 0.0);
+                }
+                if s.kind == Kind::Curve {
+                    fix(&mut s.size[1], 0.45, 1.0, 1.0);
+                    fix(&mut s.size[2], 1.0, 2.0, 1.0);
+                    fix(&mut s.params[2], 0.0, 1.0, 0.0);
                 }
                 fix(&mut s.shell, 0.0, 500.0, 0.0);
                 if let Some(p) = &mut s.pattern {
@@ -1376,6 +1487,13 @@ impl Scene {
                 if s.mesh_source.as_ref().is_some_and(|src| src.path.is_empty() || src.path.len() > 4096) {
                     s.mesh_source = None;
                 }
+                // Restore the derived profile after loading user-edited vase parameters.
+                // Kind changes abandon the parametric generator instead of overwriting geometry.
+                if s.kind == Kind::Revolve && s.vase.is_some() {
+                    crate::organic_vase::apply(s);
+                } else {
+                    s.vase = None;
+                }
             }
             // a mesh whose data is gone or damaged cannot be drawn: it goes, with a note; so do
             // the meshes past the limits of a scene (mesh.rs)
@@ -1399,6 +1517,12 @@ impl Scene {
                 }
                 true
             });
+            if g.organic_furniture.as_ref().is_some_and(|p| !crate::organic_furniture::is_generated_group(g, p)) {
+                // A user may have deleted or reordered the managed shapes. Keep the geometry
+                // exactly as it is, but drop metadata that could overwrite the wrong parts.
+                g.organic_furniture = None;
+                broken_furniture += 1;
+            }
         }
         let mut notes = Vec::new();
         if lost > 0 {
@@ -1409,6 +1533,9 @@ impl Scene {
                 "メッシュが多すぎるので、{over}個を取りのぞきました（{}個・データ量に上限があります）",
                 crate::mesh::MAX_VOLUME_SHAPES
             ));
+        }
+        if broken_furniture > 0 {
+            notes.push(format!("家具プリセットの部品が変わった{broken_furniture}組は、形を残して通常のグループとして開きました"));
         }
         notes
     }
@@ -1475,6 +1602,22 @@ mod tests {
         assert_eq!(sc, before, "a refused move changes nothing");
         assert!(sc.move_group_into(3, 0).is_some(), "but a group can move from one big group to another");
         assert_eq!(layout(&sc), vec![("A".into(), 0), ("a1".into(), 1), ("b1".into(), 1), ("B".into(), 0)]);
+    }
+
+    #[test]
+    fn a_parent_melt_reaches_the_groups_inside_it() {
+        let mut sc = named(&[("parent", 0), ("child a", 1), ("child b", 1), ("top", 0)]);
+        sc.groups[0].blend = 67.38;
+        assert_eq!(sc.group_melt_reach(0), 67.38);
+        assert_eq!(sc.group_melt_reach(1), 67.38, "a parent's Melt melts the groups inside it");
+        assert_eq!(sc.group_melt_reach(2), 67.38);
+        assert_eq!(sc.group_melt_reach(3), 0.0, "a group outside the parent keeps its own amount");
+        sc.groups[1].blend = 80.0;
+        assert_eq!(sc.group_melt_reach(1), 80.0, "a child may melt further than its parent");
+        sc.groups[0].blend = 0.0;
+        assert_eq!(sc.group_melt_reach(2), 0.0, "Melt off everywhere unions plainly");
+        sc.groups[0].blend = f32::NAN;
+        assert_eq!(sc.group_melt_reach(2), 0.0, "a hostile amount melts nothing");
     }
 
     #[test]

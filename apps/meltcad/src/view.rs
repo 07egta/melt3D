@@ -13,6 +13,12 @@ use crate::style;
 /// The home button at the upper left of the axis ball.
 const HOME_RADIUS: f32 = 12.0;
 
+/// The dark disc behind the axis balls.
+const GNOMON_RADIUS: f32 = 48.0;
+
+/// A little slack around that disc, so its edge is easy to grab.
+const GNOMON_SLACK: f32 = 4.0;
+
 /// The pointing device the view controls are tuned for.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Device {
@@ -55,11 +61,23 @@ pub fn device_of_scroll(unit: egui::MouseWheelUnit, delta: egui::Vec2) -> Option
     }
 }
 
-/// The shapes a pick stands for.
+/// The shapes a pick stands for. A group pick stands for its whole subtree, so moving a parent
+/// by the viewport handles takes its children with it (#260).
 pub fn targets(scene: &Scene, pick: Option<Pick>) -> Vec<(usize, usize)> {
     match pick {
         Some(Pick::Shape(g, s)) if scene.shape(g, s).is_some() => vec![(g, s)],
-        Some(Pick::Group(g)) => scene.groups.get(g).map(|gr| (0..gr.shapes.len()).map(|s| (g, s)).collect()).unwrap_or_default(),
+        Some(Pick::Group(g)) => {
+            if g >= scene.groups.len() {
+                return Vec::new();
+            }
+            let mut out = Vec::new();
+            for gi in g..scene.subtree_end(g) {
+                if let Some(group) = scene.groups.get(gi) {
+                    out.extend((0..group.shapes.len()).map(|s| (gi, s)));
+                }
+            }
+            out
+        }
         _ => Vec::new(),
     }
 }
@@ -74,18 +92,23 @@ pub fn targets_all(scene: &Scene, picks: &[Pick]) -> Vec<(usize, usize)> {
     for p in picks {
         // Visit each selected range directly: no temporary Vec for each pick, and
         // no growing linear scan of all earlier selections for every shape.
-        let (g, range) = match *p {
-            Pick::Shape(g, s) if scene.shape(g, s).is_some() => (g, s..s + 1),
-            Pick::Group(g) => {
-                let Some(group) = scene.groups.get(g) else { continue };
-                (g, 0..group.shapes.len())
+        let (first, last) = match *p {
+            Pick::Shape(g, s) if scene.shape(g, s).is_some() => {
+                if seen.insert((g, s)) {
+                    out.push((g, s));
+                }
+                continue;
             }
+            Pick::Group(g) if g < scene.groups.len() => (g, scene.subtree_end(g)),
             _ => continue,
         };
-        for s in range {
-            let t = (g, s);
-            if seen.insert(t) {
-                out.push(t);
+        for gi in first..last {
+            let Some(group) = scene.groups.get(gi) else { continue };
+            for s in 0..group.shapes.len() {
+                let t = (gi, s);
+                if seen.insert(t) {
+                    out.push(t);
+                }
             }
         }
     }
@@ -142,7 +165,8 @@ pub fn radius_of(s: &crate::model::Shape) -> f32 {
         Kind::Torus => s.size[0] + s.size[1],
         Kind::Extrude => {
             let w = s.outline.iter().map(|p| (p[0] * p[0] + p[1] * p[1]).sqrt()).fold(0.0_f32, f32::max);
-            len([w, s.size[0] * 0.5, 0.0])
+            let puff = if s.params[0].is_nan() { 0.0 } else { s.params[0].clamp(0.0, 40.0) };
+            len([w, s.size[0] * 0.5, 0.0]) + puff
         }
         _ => len(s.local_half()),
     };
@@ -178,9 +202,9 @@ impl App {
         let geom = if clean || self.ct.drawing || self.pt.on || self.sketch_active() {
             None
         } else {
-            gizmo::build_multi(&self.cam, rect, &self.scene, &self.picks(), tool)
+            gizmo::build_multi_node(&self.cam, rect, &self.scene, &self.picks(), self.picked_node(), tool)
         };
-        let over_gnomon = !clean && pos.is_some_and(|p| self.gnomon_hit(rect, p).is_some() || Self::home_hit(rect, p));
+        let over_gnomon = !clean && pos.is_some_and(|p| Self::gnomon_disc_hit(rect, p) || Self::home_hit(rect, p));
         let hover_handle = match (&geom, pos, &self.drag) {
             (Some(g), Some(p), None) if resp.hovered() && !over_gnomon && !ct.over => gizmo::hit(g, tool, p),
             _ => None,
@@ -291,25 +315,34 @@ impl App {
         }
 
         // Box selection (when one of the two box buttons is on) takes drags that start on empty space
-        // a press on a handle (or the axis ball) is never a box: judge by where the button went down
+        // a press on a handle (or the gnomon) is never a box: judge by where the button went down
         let press = ui.input(|i| i.pointer.press_origin());
         let press_on_handle = matches!((&geom, press), (Some(g), Some(o)) if gizmo::hit(g, tool, o).is_some());
-        let press_on_gnomon = press.is_some_and(|o| self.gnomon_hit(rect, o).is_some() || Self::home_hit(rect, o));
-        let marquee_free = hover_handle.is_none() && !press_on_handle && !press_on_gnomon && !ct.taken && !ct.over && !over_gnomon;
+        let press_on_gnomon = press.is_some_and(|o| Self::gnomon_disc_hit(rect, o) || Self::home_hit(rect, o));
+        let marquee_free = hover_handle.is_none() && !press_on_handle && !press_on_gnomon && !ct.taken && !ct.over;
         let marquee_taken = self.marquee_input(ui, &resp, rect, marquee_free, mods.shift);
         // A drag that starts on a handle moves the thing; a drag that starts anywhere else turns the view
         if resp.drag_started_by(PointerButton::Primary) && !mods.alt && !ct.taken && !marquee_taken && !self.sketch_active() {
             // where the button went down (the pointer has moved a little by now)
             let origin = ui.input(|i| i.pointer.press_origin()).or(pos);
+            let on_gnomon = origin.is_some_and(|o| Self::gnomon_disc_hit(rect, o));
+            // The gnomon is an overlay: a handle behind it never takes the press.
             let grabbed = match (&geom, origin) {
+                _ if on_gnomon => None,
                 (Some(g), Some(o)) => gizmo::hit(g, tool, o).map(|h| (g, o, h)),
                 _ => None,
             };
             if let Some((g, o, h)) = grabbed {
                 self.drag = Some(self.begin_drag(h, g, rect, o, tool, mods.shift));
                 self.orbiting = false;
+            } else if on_gnomon {
+                // A drag that starts anywhere on the disc (its background or an axis ball)
+                // turns the view; the box selection was already kept away from it above.
+                self.orbiting = true;
             } else {
-                self.orbiting = origin.is_some_and(|o| self.gnomon_hit(rect, o).is_none() && !Self::home_hit(rect, o));
+                // Anywhere else that is not the home button turns the view like empty space;
+                // only the home button keeps its press for itself (a click there goes home).
+                self.orbiting = origin.is_some_and(|o| !Self::home_hit(rect, o));
             }
         }
         if self.sketch_active() {
@@ -354,7 +387,8 @@ impl App {
                 self.go_home();
             } else if let Some(axis) = self.gnomon_hit(rect, p) {
                 self.look_along(axis);
-            } else {
+            } else if !Self::gnomon_disc_hit(rect, p) {
+                // the disc's background is not a pick surface: a drag there turns the view
                 if mods.shift {
                     self.toggle_at(rect, p);
                 } else {
@@ -367,6 +401,7 @@ impl App {
         let tool_busy = ct.taken || self.sketch_active() || self.ct.drawing || self.pt.on;
         if resp.secondary_clicked()
             && !tool_busy
+            && !over_gnomon
             && let Some(p) = pos
         {
             let under = self.guide_at(rect, p).or_else(|| self.shape_at(rect, p)).map(|(g, s)| as_pick(g, s));
@@ -374,7 +409,7 @@ impl App {
                 self.select_pick(under, false);
             }
         }
-        if !tool_busy {
+        if !tool_busy && !over_gnomon {
             resp.context_menu(|ui| self.context_menu(ui));
         }
         if resp.double_clicked_by(PointerButton::Primary)
@@ -382,7 +417,7 @@ impl App {
             && !ct.taken
             && !self.sketch_active()
             && let Some(p) = pos
-            && self.gnomon_hit(rect, p).is_none()
+            && !Self::gnomon_disc_hit(rect, p)
             && !Self::home_hit(rect, p)
         {
             match self.shape_at(rect, p) {
@@ -479,7 +514,7 @@ impl App {
         let draw_geom = if clean || self.ct.drawing || self.pt.on || self.sketch_active() {
             None
         } else if moved_camera || self.drag.is_some() {
-            gizmo::build_multi(&self.cam, rect, &self.scene, &self.picks(), tool)
+            gizmo::build_multi_node(&self.cam, rect, &self.scene, &self.picks(), self.picked_node(), tool)
         } else {
             geom
         };
@@ -518,8 +553,19 @@ impl App {
         (q.moving_scale().unwrap_or_else(|| self.perf.scale.scale()), q.still_scale())
     }
 
-    fn gnomon_items(&self, rect: Rect) -> Vec<(V3, Pos2, bool)> {
-        let origin = pos2(rect.right() - 62.0, rect.top() + 62.0);
+    /// The middle of the dark disc behind the axis balls.
+    pub(crate) fn gnomon_centre(rect: Rect) -> Pos2 {
+        pos2(rect.right() - 62.0, rect.top() + 62.0)
+    }
+
+    /// Is `p` on the dark disc (the balls' background)? A press there turns the view:
+    /// it never starts a box, picks a shape behind it or opens a menu.
+    pub(crate) fn gnomon_disc_hit(rect: Rect, p: Pos2) -> bool {
+        (Self::gnomon_centre(rect) - p).length() <= GNOMON_RADIUS + GNOMON_SLACK
+    }
+
+    pub(crate) fn gnomon_items(&self, rect: Rect) -> Vec<(V3, Pos2, bool)> {
+        let origin = Self::gnomon_centre(rect);
         let (right, up, _) = self.cam.basis();
         let mut v = Vec::new();
         for i in 0..3 {
@@ -534,7 +580,7 @@ impl App {
         v
     }
 
-    fn gnomon_hit(&self, rect: Rect, p: Pos2) -> Option<V3> {
+    pub(crate) fn gnomon_hit(&self, rect: Rect, p: Pos2) -> Option<V3> {
         self.gnomon_items(rect)
             .into_iter()
             .filter(|(_, c, positive)| *positive && (*c - p).length() < 10.0)
@@ -544,11 +590,11 @@ impl App {
     }
 
     /// The home button sits at the upper left of the axis ball.
-    fn home_centre(rect: Rect) -> Pos2 {
-        pos2(rect.right() - 62.0 - 44.0, rect.top() + 62.0 - 44.0)
+    pub(crate) fn home_centre(rect: Rect) -> Pos2 {
+        Self::gnomon_centre(rect) + vec2(-44.0, -44.0)
     }
 
-    fn home_hit(rect: Rect, p: Pos2) -> bool {
+    pub(crate) fn home_hit(rect: Rect, p: Pos2) -> bool {
         (Self::home_centre(rect) - p).length() < HOME_RADIUS + 2.0
     }
 
@@ -579,8 +625,8 @@ impl App {
 
     fn draw_gnomon(&self, p: &egui::Painter, rect: Rect, mouse: Option<Pos2>) {
         self.draw_home(p, rect, mouse);
-        let origin = pos2(rect.right() - 62.0, rect.top() + 62.0);
-        p.circle_filled(origin, 48.0, Color32::from_black_alpha(36));
+        let origin = Self::gnomon_centre(rect);
+        p.circle_filled(origin, GNOMON_RADIUS, Color32::from_black_alpha(36));
         let mut items = self.gnomon_items(rect);
         let (_, _, fwd) = self.cam.basis();
         // far ones first
@@ -659,7 +705,9 @@ impl App {
         let hit = self.guide_at(rect, p).or_else(|| self.shape_at(rect, p));
         match hit {
             Some((g, s)) => {
-                let want = as_pick(g, s);
+                // Treat all glyph contours as one selectable letter. The glyph's
+                // group gizmo moves/rotates every solid and subtractive counter.
+                let want = if self.scene.groups.get(g).is_some_and(|gr| gr.puffy_text.is_some()) { Pick::Group(g) } else { as_pick(g, s) };
                 let pick = if keep && !additive && self.sel == Some(want) { Pick::Group(g) } else { want };
                 self.select_pick(Some(pick), additive && pick == want);
             }
@@ -706,6 +754,26 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_parent_pick_covers_its_child_groups() {
+        use crate::model::{Group, Kind, Material, Pick, Shape};
+        let mut scene = Scene::default();
+        scene.groups.clear();
+        scene.groups.push(Group::new("Parent"));
+        let mut child = Group::new("Child");
+        child.depth = 1;
+        child.shapes.push(Shape::new(Kind::Box, [40.0, 0.0, 10.0], Material::default()));
+        scene.groups.push(child);
+        let mut grand = Group::new("Grand");
+        grand.depth = 2;
+        grand.shapes.push(Shape::new(Kind::Sphere, [0.0, 0.0, 20.0], Material::default()));
+        scene.groups.push(grand);
+        // #260: the viewport handles of a parent must act on its whole subtree.
+        assert_eq!(targets(&scene, Some(Pick::Group(0))), vec![(1, 0), (2, 0)]);
+        assert_eq!(targets_all(&scene, &[Pick::Group(0)]), vec![(1, 0), (2, 0)]);
+        assert_eq!(centre_of(&scene, Some(Pick::Group(0))), Some([20.0, 0.0, 15.0]), "the handles sit on the children when the parent has no shapes");
+    }
 
     #[test]
     fn a_group_pick_covers_all_its_shapes() {
