@@ -9,9 +9,6 @@ use egui::{Color32, Painter, Pos2, Rect, Shape, Stroke, pos2, vec2};
 const PI: f32 = std::f32::consts::PI;
 const SEG: usize = 24;
 
-/// A list of unit-coordinate points.
-pub(crate) type UnitPath = Vec<(f32, f32)>;
-
 /// Square icon area centred in `rect` with a 10% margin on each side.
 pub(crate) fn frame(rect: Rect) -> Rect {
     let s = rect.width().min(rect.height()) * 0.8;
@@ -66,7 +63,7 @@ pub(crate) fn round_path(p: &Painter, mut pts: Vec<Pos2>, s: Stroke, closed: boo
 }
 
 /// Unit coordinates to screen points.
-pub(crate) fn at(f: Rect, u: f32, v: f32) -> Pos2 {
+fn at(f: Rect, u: f32, v: f32) -> Pos2 {
     pos2(f.left() + f.width() * u, f.top() + f.height() * v)
 }
 
@@ -137,95 +134,6 @@ fn polygon(p: &Painter, f: Rect, pts: &[(f32, f32)], fill: Color32, s: Stroke) {
 
 fn segment(p: &Painter, f: Rect, a: (f32, f32), b: (f32, f32), s: Stroke) {
     round_path(p, vec![at(f, a.0, a.1), at(f, b.0, b.1)], s, false);
-}
-
-/// The one smooth path shared by the pipe, pen, curve and sweep icons, in unit coordinates.
-/// It starts low on the left, turns over in the middle and ends high on the right.
-pub(crate) fn family_path(n: usize) -> UnitPath {
-    let (a, c1, c2, b) = ((0.12, 0.62), (0.42, 0.62), (0.58, 0.38), (0.88, 0.38));
-    (0..=n)
-        .map(|i| {
-            let t = i as f32 / n.max(1) as f32;
-            let m = 1.0 - t;
-            let w = |p: f32, q: f32, r: f32, s: f32| m * m * m * p + 3.0 * m * m * t * q + 3.0 * m * t * t * r + t * t * t * s;
-            (w(a.0, c1.0, c2.0, b.0), w(a.1, c1.1, c2.1, b.1))
-        })
-        .collect()
-}
-
-/// The control-node mark shared by every member of the pipe / pen / curve / sweep family.
-pub(crate) fn node_mark(p: &Painter, f: Rect, q: (f32, f32), ink: Color32) {
-    p.circle_filled(at(f, q.0, q.1), f.width() * 0.062, ink);
-}
-
-/// Marks control nodes at fractions of `path` (0 = start, 1 = end).
-pub(crate) fn node_marks(p: &Painter, f: Rect, path: &[(f32, f32)], ts: &[f32], ink: Color32) {
-    let last = path.len().saturating_sub(1);
-    if last == 0 {
-        return;
-    }
-    for &t in ts {
-        let i = (t.clamp(0.0, 1.0) * last as f32).round() as usize;
-        if let Some(&q) = path.get(i) {
-            node_mark(p, f, q, ink);
-        }
-    }
-}
-
-/// A slim pen nib whose tip is at `tip`; `back` points from the tip along the body.
-pub(crate) fn pen_nib(p: &Painter, f: Rect, tip: (f32, f32), back: (f32, f32), s: Stroke) {
-    let t = at(f, tip.0, tip.1);
-    let d = vec2(back.0, back.1);
-    if d.length_sq() < 1e-6 {
-        return;
-    }
-    let d = d.normalized();
-    let n = vec2(-d.y, d.x);
-    let w = f.width() * 0.05;
-    let a = t + d * (f.width() * 0.10);
-    let b = t + d * (f.width() * 0.34);
-    round_path(p, vec![t, a + n * w, b + n * w * 0.8, b - n * w * 0.8, a - n * w], s, true);
-    round_path(p, vec![t, a], s, false);
-}
-
-/// Two sides of a band, offset from `path` by `half`.
-pub(crate) fn offset_path(path: &[(f32, f32)], half: f32) -> (UnitPath, UnitPath) {
-    let mut a = Vec::with_capacity(path.len());
-    let mut b = Vec::with_capacity(path.len());
-    for (i, &q) in path.iter().enumerate() {
-        let p0 = path.get(i.saturating_sub(1)).copied().unwrap_or(q);
-        let p1 = path.get(i + 1).copied().unwrap_or(q);
-        let (tx, ty) = (p1.0 - p0.0, p1.1 - p0.1);
-        let l = tx.hypot(ty).max(1e-6);
-        let (nx, ny) = (-ty / l, tx / l);
-        a.push((q.0 + nx * half, q.1 + ny * half));
-        b.push((q.0 - nx * half, q.1 - ny * half));
-    }
-    (a, b)
-}
-
-/// A filled band between two sides of equal length; no outline.
-pub(crate) fn band(p: &Painter, f: Rect, a: &[(f32, f32)], b: &[(f32, f32)], fill: Color32) {
-    if fill.a() == 0 {
-        return;
-    }
-    let mut m = egui::epaint::Mesh::default();
-    for (&pa, &pb) in a.iter().zip(b.iter()) {
-        m.colored_vertex(at(f, pa.0, pa.1), fill);
-        m.colored_vertex(at(f, pb.0, pb.1), fill);
-    }
-    let n = a.len().min(b.len()) as u32;
-    for i in 0..n.saturating_sub(1) {
-        let k = 2 * i;
-        m.add_triangle(k, k + 1, k + 2);
-        m.add_triangle(k + 1, k + 3, k + 2);
-    }
-    p.add(Shape::mesh(m));
-}
-
-/// Screen points for unit coordinates along `path`.
-pub(crate) fn path_points(f: Rect, path: &[(f32, f32)]) -> Vec<Pos2> {
-    path.iter().map(|&(u, v)| at(f, u, v)).collect()
 }
 
 /// Draws a solid model primitive icon as a flat line drawing in `ink` (a thin outline, like the other
