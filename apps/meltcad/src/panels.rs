@@ -81,9 +81,15 @@ impl App {
         self.row_rects.clear();
         ui.spacing_mut().item_spacing.y = 2.0;
         let ngroups = self.scene.groups.len();
-        // "x12" after a patterned group, "link" after a linked copy (looked up once for the whole list)
+        // "x12" after a patterned group or shape, "link" after a linked copy (looked up once for the whole list)
         let fused = self.scene.groups.iter().any(|g| g.fusion.is_some());
-        let badges: Vec<String> = if fused || self.scene.groups.iter().any(|g| g.pattern.is_some() || g.is_linked() || g.piece.is_some()) {
+        let badges: Vec<String> = if fused
+            || self
+                .scene
+                .groups
+                .iter()
+                .any(|g| g.pattern.is_some() || g.is_linked() || g.piece.is_some() || g.shapes.iter().any(|s| s.pattern.is_some()))
+        {
             let resolved = crate::pattern::resolve(&self.scene);
             (0..ngroups)
                 .map(|gi| {
@@ -157,8 +163,15 @@ impl App {
                 for si in 0..nshapes {
                     let Some(s) = self.scene.shape(gi, si) else { continue };
                     let (name, op, visible, material) = (s.name.clone(), s.op, s.visible, s.material);
-                    // a solid from SolidCraft says so (double click opens it there)
-                    let badge = if s.solid.is_some() { style::SOLID_BADGE } else { "" };
+                    // a solid from SolidCraft says so (double click opens it there); a patterned
+                    // shape shows how many copies it makes
+                    let badge: String = if s.solid.is_some() {
+                        style::SOLID_BADGE.to_string()
+                    } else if s.pattern.is_some() {
+                        format!("×{}", crate::pattern::describe_shape(&self.scene, gi, si).0)
+                    } else {
+                        String::new()
+                    };
                     let sel = self.is_pick_selected(Pick::Shape(gi, si));
                     let id = ui.id().with(("s", gi, si));
                     let row = self.row(
@@ -173,7 +186,7 @@ impl App {
                         move |p, r, _| materials::swatch(p, r.center(), 8.5, &material),
                         false,
                         false,
-                        badge,
+                        &badge,
                     );
                     if row.select {
                         let (shift, ctrl) = ui.input(|i| (i.modifiers.shift, i.modifiers.command || i.modifiers.ctrl));
@@ -934,6 +947,7 @@ impl App {
         if self.scene.shape(g, s).is_some_and(|x| x.kind.uses_path()) {
             self.curve_inspector(ui, g, s);
         }
+        self.shape_pattern_section(ui, g, s);
         ui.add_space(4.0);
         ui.horizontal(|ui| {
             if style::pill_enabled(ui, "↑", false, s > 0).on_hover_text("Move up one").clicked() {

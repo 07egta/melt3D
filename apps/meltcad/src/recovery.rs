@@ -15,7 +15,9 @@ use serde::{Deserialize, Serialize};
 use crate::model::Scene;
 
 pub const INTERVAL: Duration = Duration::from_secs(30);
-const MAX_FILE_BYTES: u64 = 128 * 1024 * 1024;
+/// The most a project file may hold when it is read *or* written. Saving must never publish a
+/// file this app refuses to open again (recovery and Open share this bound).
+pub const MAX_PROJECT_BYTES: u64 = 128 * 1024 * 1024;
 const FORMAT_VERSION: u32 = 1;
 static NEXT_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -49,12 +51,12 @@ fn size_error() -> io::Error {
 
 fn read_limited(path: &Path) -> io::Result<Vec<u8>> {
     let file = File::open(path)?;
-    if file.metadata()?.len() > MAX_FILE_BYTES {
+    if file.metadata()?.len() > MAX_PROJECT_BYTES {
         return Err(size_error());
     }
     let mut bytes = Vec::new();
-    file.take(MAX_FILE_BYTES + 1).read_to_end(&mut bytes)?;
-    if bytes.len() as u64 > MAX_FILE_BYTES {
+    file.take(MAX_PROJECT_BYTES + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_PROJECT_BYTES {
         return Err(size_error());
     }
     Ok(bytes)
@@ -81,7 +83,7 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
 /// Write a complete, synced copy beside `path` and return its temporary name.
 /// The caller publishes it (an atomic rename) only after it is still wanted.
 fn write_temp(path: &Path, bytes: &[u8]) -> io::Result<PathBuf> {
-    if bytes.is_empty() || bytes.len() as u64 > MAX_FILE_BYTES {
+    if bytes.is_empty() || bytes.len() as u64 > MAX_PROJECT_BYTES {
         return Err(size_error());
     }
     let parent = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or_else(|| Path::new("."));
@@ -288,11 +290,11 @@ impl Store {
         self.pending.first().map(PathBuf::as_path)
     }
 
-    /// Ignore for this launch but keep the only surviving copy for a later launch.
+    /// Ignore this launch but keep the only surviving copy for a later launch. Every old
+    /// snapshot is deferred together: postponing one crashed session must not pop the next
+    /// one up on the next frame.
     pub fn postpone(&mut self) {
-        if !self.pending.is_empty() {
-            self.pending.remove(0);
-        }
+        self.pending.clear();
     }
 
     /// Explicitly discard just the selected old recovery. Other sessions are untouched.
@@ -625,6 +627,31 @@ mod tests {
         assert_eq!(err.kind(), io::ErrorKind::Other);
         assert_eq!(fs::read(&original).expect("read"), b"old project");
         assert_eq!(fs::read_dir(&root).expect("list").count(), 1, "failed temp file is deleted");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn later_defers_every_crashed_snapshot_for_this_launch() {
+        let root = temp_root();
+        let now = Instant::now();
+        // two sessions crashed: each left its own snapshot with different work
+        for extra in 0..2 {
+            let mut crashed = Store::new(root.clone(), now);
+            let mut scene = edited();
+            scene.groups.push(crate::model::Group::new(format!("Crashed {extra}")));
+            assert!(crashed.checkpoint(&scene, None, true, 2, now + INTERVAL).expect("snapshot"));
+            drop(crashed);
+        }
+        let mut restarted = Store::new(root.clone(), now);
+        let offered = restarted.pending.clone();
+        assert!(offered.len() >= 2, "both crashed sessions are offered: {}", offered.len());
+        restarted.postpone();
+        assert!(restarted.pending_path().is_none(), "Later means this launch: the next crashed session must not ask again");
+        for path in &offered {
+            assert!(path.exists(), "postponing keeps the work for a later launch: {}", path.display());
+        }
+        drop(restarted);
+        assert!(Store::new(root.clone(), now).pending_path().is_some(), "a later launch is asked again");
         let _ = fs::remove_dir_all(root);
     }
 
