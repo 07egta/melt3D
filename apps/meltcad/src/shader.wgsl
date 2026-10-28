@@ -1279,8 +1279,10 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
     // shows (inside the ground branches, pixels at the edge of a shape took different ways, and
     // DirectX's compiler warns about gradients in divergent flow).
     let gp0 = ro + rd * t_ground;
-    let gw1 = max(fwidth(gp0.xy / 10.0), vec2<f32>(1e-4));
-    let gw2 = max(fwidth(gp0.xy / 100.0), vec2<f32>(1e-4));
+    // Grid spacing comes from Preferences (`env[4].w`); 10 mm is the default.
+    let gs = max(G.env[4].w, 0.1);
+    let gw1 = max(fwidth(gp0.xy / gs), vec2<f32>(1e-4));
+    let gw2 = max(fwidth(gp0.xy / (gs * 10.0)), vec2<f32>(1e-4));
     let gwy = max(fwidth(gp0.y), 1e-4);
     let gwx = max(fwidth(gp0.x), 1e-4);
 
@@ -1588,7 +1590,6 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
     // The grid is an overlay on geometry behind its plane from either side; it never occludes.
     if (grid_on && ground_in_front) {
         let gp = ro + rd * t_ground;
-        let gs = 10.0;
         let a = abs(fract(gp.xy / gs - 0.5) - 0.5) / gw1;
         let line = 1.0 - min(min(a.x, a.y), 1.0);
         if (above) {

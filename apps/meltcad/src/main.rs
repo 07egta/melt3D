@@ -45,6 +45,7 @@ mod gpu_status;
 mod gpu_timing;
 mod gpu_ui;
 mod hud;
+mod i18n;
 mod icon;
 mod import_3mf;
 mod import_glb;
@@ -82,6 +83,7 @@ mod perf;
 mod pipe_tool;
 mod png;
 mod polygon;
+mod prefs;
 mod precise;
 mod precise_services;
 mod prims;
@@ -89,6 +91,7 @@ mod recovery;
 mod render_job;
 mod sdf;
 mod sdf_volume;
+mod settings_ui;
 #[cfg(test)]
 mod shader_portability;
 mod sketch;
@@ -109,6 +112,9 @@ mod svg_dialog;
 mod view;
 mod view_mode;
 mod work_budget;
+
+/// The translation hook, also reachable as `crate::tr` for code outside the `i18n` module.
+pub use i18n::tr;
 
 /// Tell the person why the program cannot start (there is no console in a Windows release build).
 fn fatal(message: &str) {
@@ -236,6 +242,7 @@ fn main() -> eframe::Result {
             let srgb = rs.as_ref().is_none_or(|rs| rs.target_format.is_srgb());
             let all: Vec<std::ffi::OsString> = std::env::args_os().collect();
             let mut app = app::App::new(srgb, control::file_arg(&all));
+            app.load_preferences(cc.storage);
             app.attach_font_job(font_job);
             app.precise_services = Some(precise_services::services(rfd::AsyncFileDialog::new().set_parent(cc)));
             app.precise_prefs = cc.storage.and_then(|storage| storage.get_string(precise::PREFS_KEY));

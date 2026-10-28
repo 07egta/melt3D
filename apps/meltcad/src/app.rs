@@ -133,6 +133,10 @@ pub struct App {
     pub show_keys: bool,
     /// Pinned palette entries and custom shortcuts.
     pub prefs: crate::palette_prefs::Prefs,
+    /// Language, display, snapping, navigation, autosave and export defaults.
+    pub preferences: crate::prefs::Preferences,
+    /// When the next recovery checkpoint is due, from `preferences.autosave()`.
+    autosave_due: std::time::Instant,
     /// Which tab of the right panel is showing.
     pub tab: Tab,
     /// The material list's chosen category (None = the person's saved ones).
@@ -246,6 +250,8 @@ impl App {
             orbiting: false,
             show_keys: false,
             prefs: crate::palette_prefs::Prefs::load(),
+            preferences: crate::prefs::Preferences::default(),
+            autosave_due: std::time::Instant::now() + crate::prefs::Preferences::default().autosave(),
             tab: Tab::Shape,
             mat_cat: Some(crate::materials::Category::Basic),
             mat_group: false,
@@ -272,7 +278,22 @@ impl App {
         if let Some(p) = open {
             app.open_path(p);
         }
+        app.apply_preferences();
         app
+    }
+
+    /// Read the remembered preferences from eframe storage (called once, when the window opens).
+    pub fn load_preferences(&mut self, storage: Option<&dyn eframe::Storage>) {
+        self.preferences = crate::prefs::Preferences::load_storage(storage);
+        self.apply_preferences();
+    }
+
+    /// Make the live preferences safe and publish the language to the translation hook.
+    /// Settings call this after every change, so autosave and the UI follow immediately.
+    pub fn apply_preferences(&mut self) {
+        self.preferences.sanitize();
+        crate::prefs::set_lang(&self.preferences.lang);
+        self.autosave_due = std::time::Instant::now() + self.preferences.autosave();
     }
 
     pub fn attach_font_job(&mut self, job: crate::fonts::FontJob) {
@@ -1473,12 +1494,13 @@ impl App {
 
     /// Open the export card with this file type chosen.
     pub fn export_as(&mut self, ctx: &egui::Context, format: ExportFormat) {
-        crate::export_dialog::open(ctx, Some(format));
+        let defaults = crate::export_dialog::Defaults::from_preferences(&self.preferences);
+        crate::export_dialog::open_with(ctx, Some(format), defaults);
     }
 
     /// Open the export card and measure the model for printing (size, volume, holes, thin walls, overhangs).
     pub fn print_check(&mut self, ctx: &egui::Context) {
-        crate::export_dialog::open_check(ctx);
+        crate::export_dialog::open_check_with(ctx, crate::export_dialog::Defaults::from_preferences(&self.preferences));
     }
 
     /// Start and poll native file work without blocking a frame. Failed/cancelled results never
@@ -1610,6 +1632,7 @@ impl App {
             || crate::mesh_dialog::is_open(ctx)
             || crate::melt_preset::is_open(ctx)
             || crate::export_dialog::is_open(ctx)
+            || crate::settings_ui::is_open(ctx)
         {
             return;
         }
@@ -1730,6 +1753,8 @@ impl App {
 
     fn top_bar(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
+        #[cfg(test)]
+        crate::settings_ui::clear_menu(&ctx);
         egui::Panel::top("top").exact_size(46.0).frame(egui::Frame::new().fill(style::PANEL_DARK).inner_margin(egui::Margin::symmetric(12, 6))).show(
             ui,
             |ui| {
@@ -1756,6 +1781,11 @@ impl App {
                         .interact(egui::Sense::click())
                         .on_hover_cursor(egui::CursorIcon::PointingHand)
                         .on_hover_text("Menu");
+                    #[cfg(test)]
+                    {
+                        crate::settings_ui::record_menu(&ctx, "anchor", logo.rect);
+                        crate::settings_ui::record_menu_anchor(&ctx, logo.id);
+                    }
                     egui::Popup::menu(&logo).show(|ui| {
                         if ui.button("New").clicked() {
                             self.new_scene(Scene::default());
@@ -1783,12 +1813,22 @@ impl App {
                         }
                         ui.separator();
                         if ui.button("Export…").clicked() {
-                            crate::export_dialog::open(&ctx, None);
+                            crate::export_dialog::open_with(&ctx, None, crate::export_dialog::Defaults::from_preferences(&self.preferences));
                             ui.close();
                         }
                         ui.separator();
-                        if ui.button("About Melt 3D").clicked() {
+                        let about = ui.button("About Melt 3D");
+                        #[cfg(test)]
+                        crate::settings_ui::record_menu(&ctx, "about", about.rect);
+                        if about.clicked() {
                             self.say(&ctx, format!("Melt 3D {}", env!("CARGO_PKG_VERSION")));
+                            ui.close();
+                        }
+                        let settings = ui.button(crate::i18n::tr("settings.open"));
+                        #[cfg(test)]
+                        crate::settings_ui::record_menu(&ctx, "settings", settings.rect);
+                        if settings.clicked() {
+                            crate::settings_ui::open(&ctx, &self.preferences);
                             ui.close();
                         }
                     });
@@ -1832,7 +1872,7 @@ impl App {
                         }
                         ui.separator();
                         if ui.button("Export…").on_hover_text("STL, 3MF, OBJ, PLY, GLB").clicked() {
-                            crate::export_dialog::open(&ctx, None);
+                            crate::export_dialog::open_with(&ctx, None, crate::export_dialog::Defaults::from_preferences(&self.preferences));
                             ui.close();
                         }
                         if ui.button(style::keys("Export again with last settings  Ctrl+E")).clicked() {
@@ -1989,7 +2029,7 @@ impl App {
                         }
                         style::menu_button(ui, "Export", true, |ui| {
                             if ui.button("Export…").on_hover_text("STL, 3MF, OBJ, PLY, GLB. Detail, units, color").clicked() {
-                                crate::export_dialog::open(&ctx, None);
+                                crate::export_dialog::open_with(&ctx, None, crate::export_dialog::Defaults::from_preferences(&self.preferences));
                                 ui.close();
                             }
                             if ui.button("Export again").on_hover_text(style::keys("Ctrl+E")).clicked() {
@@ -2411,22 +2451,30 @@ impl App {
     /// The size of the selected shape for the status bar ("幅 30 × 奥行 30 × 高さ 30 mm", or a rough
     /// diameter when it is turned or is a group).
     fn selection_size(&self) -> Option<String> {
+        let units = self.preferences.units();
+        let decimals = self.preferences.decimals();
         match self.sel? {
             Pick::Shape(g, s) => {
                 let sh = self.scene.shape(g, s)?;
                 let h = sh.local_half();
                 let turned = sh.rot.iter().any(|r| (r % 90.0).abs() > 0.01);
                 if turned {
-                    return Some(format!("About {:.0} mm", crate::view::radius_of(sh) * 2.0));
+                    return Some(format!("About {}", units.length(crate::view::radius_of(sh) * 2.0, decimals)));
                 }
                 // turned by whole quarter turns: the sizes along the world's axes, swapped as turned (#195)
                 let r = crate::sdf::rotation(sh.rot);
                 let dim = |i: usize| (0..3).map(|j| r[i][j].abs() * h[j] * sh.scale[j]).sum::<f32>() * 2.0;
-                Some(format!("W {:.1} × D {:.1} × H {:.1} mm", dim(0), dim(1), dim(2)))
+                Some(format!(
+                    "W {} × D {} × H {} {}",
+                    units.number(dim(0), decimals),
+                    units.number(dim(1), decimals),
+                    units.number(dim(2), decimals),
+                    units.label()
+                ))
             }
             Pick::Group(g) => {
                 let (_, r) = crate::gpu::bounds(&self.scene, Some(Pick::Group(g)));
-                (r > 0.0).then(|| format!("Group about {:.0} mm", r * 2.0))
+                (r > 0.0).then(|| format!("Group about {}", units.length(r * 2.0, decimals)))
             }
         }
     }
@@ -2543,6 +2591,7 @@ impl App {
 
 impl eframe::App for App {
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        self.preferences.save_storage(storage);
         if let Some(p) = self.precise.as_ref() {
             self.precise_prefs = Some(p.app.prefs());
         }
@@ -2841,6 +2890,7 @@ impl App {
             crate::array::update(self, &ctx);
             crate::export_dialog::update(self, &ctx);
             self.palette_ui(&ctx);
+            crate::settings_ui::update(self, &ctx);
             crate::melt_preset::update(self, &ctx);
             if std::mem::take(&mut self.perf.bench_requested) {
                 let backends = self.current_backend().map(|b| b.to_wgpu());
@@ -2855,7 +2905,6 @@ impl App {
         self.animation_capture_finished(&ctx);
         self.settle(&ctx);
         if !cfg!(test) {
-            ctx.request_repaint_after(crate::recovery::INTERVAL);
             // Publish a checkpoint that finished on its worker, then consider a new one.
             // Serializing the scene never happens in this frame (only the worker does it).
             if let Some(result) = self.recovery.poll_checkpoint()
@@ -2863,11 +2912,19 @@ impl App {
             {
                 self.notice = Some(format!("Could not save auto-recovery data: {e}"));
             }
-            let rev = self.track_scene();
-            let changed = self.has_unsaved_work();
-            if let Err(e) = self.recovery.start_checkpoint(&self.scene, self.path.as_deref(), changed, rev, std::time::Instant::now()) {
-                self.notice = Some(format!("Could not save auto-recovery data: {e}"));
+            let now = std::time::Instant::now();
+            let interval = self.preferences.autosave();
+            let due = now >= self.autosave_due;
+            if due {
+                self.autosave_due = now + interval;
+                let rev = self.track_scene();
+                let changed = self.has_unsaved_work();
+                if let Err(e) = self.recovery.start_checkpoint(&self.scene, self.path.as_deref(), changed, rev, now) {
+                    self.notice = Some(format!("Could not save auto-recovery data: {e}"));
+                }
             }
+            let wait = self.autosave_due.saturating_duration_since(now).min(interval);
+            ctx.request_repaint_after(wait);
             if self.recovery.checkpoint_running() {
                 ctx.request_repaint_after(std::time::Duration::from_millis(150));
             }
@@ -3464,6 +3521,34 @@ mod tests {
         app.sel = Some(Pick::Group(1));
         app.toggle_melt_selected();
         assert!(app.scene.groups[1].blend > 0.0);
+    }
+
+    #[test]
+    fn display_units_and_decimals_shape_the_status_size() {
+        let mut app = App::new(true, None);
+        let mut b = Shape::new(Kind::Box, [0.0; 3], crate::model::Material::default());
+        b.size = [20.0, 5.0, 10.0];
+        app.scene.groups[0].shapes = vec![b];
+        app.sel = Some(Pick::Shape(0, 0));
+        app.preferences.units = "cm".into();
+        app.preferences.decimals = 2;
+        app.apply_preferences();
+        assert_eq!(app.selection_size().as_deref(), Some("W 2.00 × D 0.50 × H 1.00 cm"));
+        app.preferences.units = "in".into();
+        app.preferences.decimals = 1;
+        app.apply_preferences();
+        assert_eq!(app.selection_size().as_deref(), Some("W 0.8 × D 0.2 × H 0.4 inch"));
+    }
+
+    #[test]
+    fn autosave_preference_moves_the_next_checkpoint() {
+        let mut app = App::new(true, None);
+        let before = std::time::Instant::now();
+        app.preferences.autosave_minutes = 5.0;
+        app.apply_preferences();
+        let wait = app.autosave_due.saturating_duration_since(before);
+        assert!(wait >= std::time::Duration::from_secs(299), "5 minutes are used, not the 30 second default: {wait:?}");
+        assert!(wait <= std::time::Duration::from_secs(301), "{wait:?}");
     }
 
     #[test]

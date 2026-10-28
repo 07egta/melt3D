@@ -234,19 +234,27 @@ impl App {
 
         self.perf.activity.hover_changed(now, previous_hover, self.hover);
 
-        // Camera: middle-drag turns, right-drag slides, the wheel zooms toward the mouse
+        // Camera: middle-drag turns (or pans in the CAD preset), right-drag slides, the wheel zooms
+        // toward the mouse. The preset and the orbit speed come from Preferences.
         let mut moved_camera = false;
-        if resp.dragged_by(PointerButton::Middle) || (resp.dragged_by(PointerButton::Primary) && mods.alt && self.drag.is_none() && !ct.busy) {
+        let orbit_speed = self.preferences.orbit_sensitivity;
+        let middle = self.preferences.navigation().middle(mods.shift, mods.ctrl);
+        if resp.dragged_by(PointerButton::Middle) {
             let d = resp.drag_delta();
-            if mods.shift {
-                self.cam.pan(d.x, d.y, rect.height());
-            } else if mods.ctrl {
-                if let Some(p) = pos {
-                    self.cam.zoom_at(rect, p, -d.y * 2.0);
+            match middle {
+                crate::prefs::MiddleAction::Pan => self.cam.pan(d.x, d.y, rect.height()),
+                crate::prefs::MiddleAction::Zoom => {
+                    if let Some(p) = pos {
+                        self.cam.zoom_at(rect, p, -d.y * 2.0);
+                    }
                 }
-            } else {
-                self.cam.orbit(d.x, d.y);
+                crate::prefs::MiddleAction::Orbit => self.cam.orbit(d.x * orbit_speed, d.y * orbit_speed),
             }
+            moved_camera = true;
+        } else if resp.dragged_by(PointerButton::Primary) && mods.alt && self.drag.is_none() && !ct.busy {
+            // Alt+left is always an orbit, whichever preset is chosen.
+            let d = resp.drag_delta();
+            self.cam.orbit(d.x * orbit_speed, d.y * orbit_speed);
             moved_camera = true;
         }
         if resp.dragged_by(PointerButton::Secondary) {
@@ -292,7 +300,7 @@ impl App {
                 if mods.shift {
                     self.cam.pan(turn.x, turn.y, rect.height());
                 } else {
-                    self.cam.orbit(-turn.x, -turn.y);
+                    self.cam.orbit(-turn.x * orbit_speed, -turn.y * orbit_speed);
                 }
                 moved_camera = true;
             }
@@ -342,7 +350,7 @@ impl App {
             if mods.shift {
                 self.cam.pan(d.x, d.y, rect.height());
             } else {
-                self.cam.orbit(d.x, d.y);
+                self.cam.orbit(d.x * orbit_speed, d.y * orbit_speed);
             }
             moved_camera = true;
         }
@@ -440,7 +448,15 @@ impl App {
         let mut scale_shown = 1.0;
         if crate::gpu_ui::use_gpu(&self.gpu.status.snapshot(), self.gpu.easy) {
             let pack = self.perf.pack.get(&self.scene, render_rev);
-            let mut globals = pack.globals(&self.scene, &self.cam, [vp[0] as f32, vp[1] as f32], shown_sel, shown_hover, self.srgb);
+            let mut globals = pack.globals_with_grid(
+                &self.scene,
+                &self.cam,
+                [vp[0] as f32, vp[1] as f32],
+                shown_sel,
+                shown_hover,
+                self.srgb,
+                self.preferences.grid_view(),
+            );
             crate::gpu::set_view_flags(&mut globals, crate::perf::view_flags(self.srgb, false, pack.glow));
             crate::gpu::set_view_mode(&mut globals, self.view_mode.id());
             counts = (self.scene.shape_count(), pack.group_n, pack.instances);
@@ -465,7 +481,7 @@ impl App {
         } else {
             // the simple view: drawn on the CPU by a worker thread, never blocking the window
             self.gpu.easy_view.mode = self.view_mode.id();
-            self.gpu.easy_view.update(ui.ctx(), &self.scene, &self.cam, vp, fast);
+            self.gpu.easy_view.update_with_grid(ui.ctx(), &self.scene, &self.cam, vp, fast, self.preferences.grid_view());
             self.gpu.easy_view.paint(&ui.painter_at(rect), rect, self.scene.env.backdrop);
         }
         self.perf.last_scale = scale_moving;
