@@ -45,6 +45,7 @@ mod gpu_status;
 mod gpu_timing;
 mod gpu_ui;
 mod hud;
+mod i18n;
 mod icon;
 mod import_3mf;
 mod import_glb;

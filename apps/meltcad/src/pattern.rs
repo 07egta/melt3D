@@ -208,22 +208,22 @@ pub enum PatternKind {
 impl PatternKind {
     pub const ALL: [PatternKind; 5] = [PatternKind::Mirror, PatternKind::Rect, PatternKind::Circular, PatternKind::Path, PatternKind::Geometry];
     pub fn label(self) -> &'static str {
-        match self {
-            PatternKind::Mirror => "Mirror",
-            PatternKind::Rect => "Rectangle",
-            PatternKind::Circular => "Circular",
-            PatternKind::Path => "Along path",
-            PatternKind::Geometry => "Geometry",
-        }
+        crate::i18n::tr(match self {
+            PatternKind::Mirror => "pattern.mirror",
+            PatternKind::Rect => "pattern.rect",
+            PatternKind::Circular => "pattern.circular",
+            PatternKind::Path => "pattern.path",
+            PatternKind::Geometry => "pattern.geometry",
+        })
     }
     pub fn hint(self) -> &'static str {
-        match self {
-            PatternKind::Mirror => "Mirrors across the X, Y or Z plane",
-            PatternKind::Rect => "Repeats evenly along length, width and height",
-            PatternKind::Circular => "Repeats in a circle around an axis",
-            PatternKind::Path => "Repeats along a line (curve, sweep or shape)",
-            PatternKind::Geometry => "Puts one copy at each point (node or corner) of another shape",
-        }
+        crate::i18n::tr(match self {
+            PatternKind::Mirror => "pattern.mirror.hint",
+            PatternKind::Rect => "pattern.rect.hint",
+            PatternKind::Circular => "pattern.circular.hint",
+            PatternKind::Path => "pattern.path.hint",
+            PatternKind::Geometry => "pattern.geometry.hint",
+        })
     }
 }
 

@@ -10,7 +10,7 @@ use crate::gizmo::{Drag, Tool};
 use crate::model::{Group, Kind, MAX_GROUPS, MAX_SHAPES, Material, Op, Pick, Scene, Shape};
 use crate::sdf::Field;
 use crate::view::centre_of;
-use crate::{glyphs, style};
+use crate::{glyphs, i18n, style};
 
 #[cfg(test)]
 #[path = "app_preview.rs"]
@@ -329,26 +329,26 @@ impl App {
         let Some(path) = self.recovery.pending_path().map(std::path::Path::to_path_buf) else { return };
         let mut choice = None;
         egui::Modal::new(egui::Id::new("yuracad_recovery")).show(ctx, |ui| {
-            ui.heading("Unsaved work found");
-            ui.label(format!("Recovery data: {}", path.display()));
-            ui.label("Restoring will not overwrite the original file.");
+            ui.heading(i18n::tr("dialog.recovery.title"));
+            ui.label(format!("{}{}", i18n::tr("dialog.recovery.data"), path.display()));
+            ui.label(i18n::tr("dialog.recovery.note"));
             if self.dirty {
-                ui.label("There is unsaved work on screen. Save it first, then restore this one (or press Later).");
+                ui.label(i18n::tr("dialog.recovery.dirty"));
             }
             ui.horizontal(|ui| {
                 // restoring replaces what is on screen: never over work that is not saved yet
                 let blocked = self.dirty;
                 if ui
-                    .add_enabled(!blocked, egui::Button::new("Restore as unsaved copy"))
-                    .on_disabled_hover_text("Save the work on screen first, or press Later")
+                    .add_enabled(!blocked, egui::Button::new(i18n::tr("dialog.recovery.restore")))
+                    .on_disabled_hover_text(i18n::tr("dialog.recovery.blocked"))
                     .clicked()
                 {
                     choice = Some(0);
                 }
-                if ui.button("Later").clicked() {
+                if ui.button(i18n::tr("dialog.recovery.later")).clicked() {
                     choice = Some(1);
                 }
-                if ui.button("Delete recovery data").clicked() {
+                if ui.button(i18n::tr("dialog.recovery.delete")).clicked() {
                     choice = Some(2);
                 }
             });
@@ -369,17 +369,24 @@ impl App {
                     self.dirty = true;
                     self.sel = None;
                     self.frame_now();
-                    self.say(ctx, if notes.is_empty() { "Restored as unsaved copy".into() } else { format!("Restored: {}", notes.join(", ")) });
+                    self.say(
+                        ctx,
+                        if notes.is_empty() {
+                            i18n::tr("dialog.recovery.restored").to_string()
+                        } else {
+                            format!("{}{}", i18n::tr("dialog.recovery.restored_prefix"), notes.join(", "))
+                        },
+                    );
                 }
                 Err(e) => {
-                    self.say(ctx, format!("Recovery file is damaged or cannot be opened: {e}"));
+                    self.say(ctx, format!("{}{e}", i18n::tr("dialog.recovery.damaged")));
                     self.recovery.postpone();
                 }
             },
             Some(1) => self.recovery.postpone(),
             Some(2) => {
                 if let Err(e) = self.recovery.discard_pending() {
-                    self.say(ctx, format!("Could not delete recovery data: {e}"));
+                    self.say(ctx, format!("{}{e}", i18n::tr("dialog.recovery.delete_failed")));
                 }
             }
             _ => {}
@@ -436,7 +443,7 @@ impl App {
 
     pub(crate) fn allow_scene_structure_change(&mut self) -> bool {
         if self.scene_structure_locked() {
-            self.sk.msg = "Finish or cancel the active sketch or solid before changing the scene".into();
+            self.sk.msg = i18n::tr("error.active_sketch").into();
             false
         } else {
             if self.sk.edit.is_some() {
@@ -567,7 +574,7 @@ impl App {
 
     fn request_file_action(&mut self, action: PendingFileAction) {
         if self.pending_file_action.is_some() || self.native_job.is_some() || self.queued_open.is_some() || self.after_save.is_some() {
-            self.notice = Some("Wait for the file job to finish before the next action".into());
+            self.notice = Some(i18n::tr("error.wait_for_job").into());
             return;
         }
         if self.has_unsaved_work() {
@@ -592,7 +599,7 @@ impl App {
 
     fn install_scene(&mut self, scene: Scene, path: Option<PathBuf>, notes: Vec<String>) {
         if let Err(e) = self.recovery.clear_active() {
-            self.notice = Some(format!("Could not clean up recovery data: {e}"));
+            self.notice = Some(format!("{}{e}", i18n::tr("error.recovery_cleanup")));
         }
         self.clear_document_gestures();
         self.document_generation = self.document_generation.wrapping_add(1);
@@ -651,7 +658,7 @@ impl App {
                 || crate::work_budget::is_busy(ctx))
         {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            self.say(ctx, "A file job is still running. Wait for it or stop it before closing");
+            self.say(ctx, i18n::tr("error.close_file_job"));
             return;
         }
         if self.precise.as_ref().is_some_and(|p| p.app.quit_requested) {
@@ -671,7 +678,7 @@ impl App {
         if ctx.input(|i| i.viewport().close_requested()) && !self.close_approved {
             if self.precise_transfer_pending() {
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-                self.say(ctx, "立体の取り込みが終わるか、取り消してから閉じてください");
+                self.say(ctx, i18n::tr("error.precise_transfer"));
                 return;
             }
             if let Some(p) = self.precise.as_mut()
@@ -701,17 +708,17 @@ impl App {
         }
         let mut decision = None;
         egui::Modal::new(egui::Id::new("unsaved_file_action")).show(ctx, |ui| {
-            ui.heading("You have unsaved changes");
-            ui.label("Save current work before continuing?");
+            ui.heading(i18n::tr("dialog.unsaved.title"));
+            ui.label(i18n::tr("dialog.unsaved.body"));
             ui.add_space(8.0);
             ui.horizontal(|ui| {
-                if ui.button("Save and continue").clicked() {
+                if ui.button(i18n::tr("dialog.unsaved.save")).clicked() {
                     decision = Some(PendingFileDecision::Save);
                 }
-                if ui.button("Continue without saving").clicked() {
+                if ui.button(i18n::tr("dialog.unsaved.discard")).clicked() {
                     decision = Some(PendingFileDecision::Discard);
                 }
-                if ui.button("Cancel").clicked() {
+                if ui.button(i18n::tr("dialog.unsaved.cancel")).clicked() {
                     decision = Some(PendingFileDecision::Cancel);
                 }
             });
@@ -1414,7 +1421,7 @@ impl App {
         // A save/open job was started for the old path; renaming now would let it write the old
         // name back and restore it when it finishes (#262).
         if self.native_job.is_some() || self.queued_open.is_some() || self.after_save.is_some() {
-            self.say(ctx, "保存が終わるのを待ってから名前を変えてください");
+            self.say(ctx, i18n::tr("error.rename_saving"));
             return;
         }
         let Some(old) = self.path.clone() else {
@@ -1524,7 +1531,7 @@ impl App {
                     if same {
                         self.doc_title.clear();
                         if let Err(e) = self.recovery.document_saved(base_revision) {
-                            self.notice = Some(format!("Could not clean up recovery data: {e}"));
+                            self.notice = Some(format!("{}{e}", i18n::tr("error.recovery_cleanup")));
                         }
                     }
                     self.say(ctx, if same { "Saved" } else { "Edited while saving: the latest changes are not saved yet" });
@@ -1755,7 +1762,7 @@ impl App {
                         .response
                         .interact(egui::Sense::click())
                         .on_hover_cursor(egui::CursorIcon::PointingHand)
-                        .on_hover_text("Menu");
+                        .on_hover_text(i18n::tr("menu.menu"));
                     egui::Popup::menu(&logo).show(|ui| {
                         if ui.button("New").clicked() {
                             self.new_scene(Scene::default());
@@ -1793,7 +1800,7 @@ impl App {
                         }
                     });
                     style::vsep(ui);
-                    style::menu_button(ui, "File", false, |ui| {
+                    style::menu_button(ui, i18n::tr("menu.file"), false, |ui| {
                         if ui.button("New").clicked() {
                             self.new_scene(Scene::default());
                             ui.close();
@@ -1844,7 +1851,7 @@ impl App {
                             ui.close();
                         }
                     });
-                    style::menu_button(ui, "Edit", false, |ui| {
+                    style::menu_button(ui, i18n::tr("menu.edit"), false, |ui| {
                         if ui.button(style::keys("Copy  Ctrl+C")).clicked() {
                             self.copy(&ctx);
                             ui.close();
@@ -1909,7 +1916,7 @@ impl App {
                             ui.close();
                         }
                     });
-                    style::menu_button(ui, "View", false, |ui| {
+                    style::menu_button(ui, i18n::tr("menu.view"), false, |ui| {
                         let pi = std::f32::consts::PI;
                         for (name, yaw, pitch) in [
                             ("Front  1", 0.0, 0.0),
@@ -1970,24 +1977,16 @@ impl App {
                         self.redo();
                     }
                     style::vsep(ui);
-                    if style::pill(ui, "Find  F", false).on_hover_text("Find shapes, library, commands (F)").clicked() {
+                    if style::pill(ui, &format!("{}  F", i18n::tr("menu.find")), false).on_hover_text(i18n::tr("menu.find.tip")).clicked() {
                         palette::open(&ctx);
                     }
                     let left_end = ui.cursor().left();
                     let right_start = ui.max_rect().right();
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if style::icon_button(
-                            ui,
-                            32.0,
-                            "SolidCraft: 精密なスケッチと立体を作る。戻ると自動で Melt に取り込み、とけあう形にできます",
-                            false,
-                            |p, r, _| style::solidcraft_logo(p, r),
-                        )
-                        .clicked()
-                        {
+                        if style::icon_button(ui, 32.0, i18n::tr("tool.solidcraft.tip"), false, |p, r, _| style::solidcraft_logo(p, r)).clicked() {
                             self.open_precise(&ctx);
                         }
-                        style::menu_button(ui, "Export", true, |ui| {
+                        style::menu_button(ui, i18n::tr("menu.export"), true, |ui| {
                             if ui.button("Export…").on_hover_text("STL, 3MF, OBJ, PLY, GLB. Detail, units, color").clicked() {
                                 crate::export_dialog::open(&ctx, None);
                                 ui.close();
@@ -2052,7 +2051,9 @@ impl App {
                             commit = true;
                         }
                     } else {
-                        let label = format!("{}{}", self.doc_name(), if self.dirty { " *" } else { "" });
+                        let name =
+                            if self.path.is_none() && self.doc_title.is_empty() { i18n::tr("status.untitled").to_string() } else { self.doc_name() };
+                        let label = format!("{}{}", name, if self.dirty { " *" } else { "" });
                         let shown = ui.painter().text(
                             egui::pos2(cx, bar.center().y),
                             egui::Align2::CENTER_CENTER,
@@ -2109,7 +2110,7 @@ impl App {
                             } else {
                                 for k in Kind::MAIN {
                                     let r = ui.add_enabled(!self.scene_structure_locked(), |ui: &mut Ui| {
-                                        style::wide_button(ui, k.label(), k.label(), false, None, |p, r, ink| {
+                                        style::wide_button(ui, i18n::kind(k), i18n::kind(k), false, None, |p, r, ink| {
                                             glyphs::kind(p, r, k, ink, ink.gamma_multiply(0.15))
                                         })
                                     });
@@ -2123,13 +2124,13 @@ impl App {
                             if !self.solid_mode {
                                 style::menu_button_enabled(ui, "…", false, !self.scene_structure_locked(), |ui| {
                                     ui.set_min_width(190.0);
-                                    ui.label(egui::RichText::new("Other shapes").size(12.0).color(style::DIM));
+                                    ui.label(egui::RichText::new(i18n::tr("tool.more.title")).size(12.0).color(style::DIM));
                                     for k in Kind::MORE {
                                         let r = ui.horizontal(|ui| {
                                             let (rc, _) = ui.allocate_exact_size(egui::vec2(24.0, 24.0), egui::Sense::hover());
                                             let ink = ui.visuals().text_color();
                                             glyphs::kind(ui.painter(), rc, k, ink, ink.gamma_multiply(0.15));
-                                            ui.selectable_label(false, k.label())
+                                            ui.selectable_label(false, i18n::kind(k))
                                         });
                                         if r.inner.clicked() {
                                             self.add_shape(&ctx, k);
@@ -2137,38 +2138,38 @@ impl App {
                                         }
                                     }
                                     ui.separator();
-                                    if ui.button("Melt (dripping shape)…").on_hover_text("A gravity drip made from a sphere or box; editable afterwards").clicked() {
+                                    if ui.button(i18n::tr("tool.melt_preset")).on_hover_text(i18n::tr("tool.melt_preset.tip")).clicked() {
                                         crate::melt_preset::open(&ctx);
                                         ui.close();
                                     }
-                                    if ui.button("Organic blob…").on_hover_text("A smooth irregular shape from a seed and sliders").clicked() {
+                                    if ui.button(i18n::tr("tool.organic_blob")).on_hover_text(i18n::tr("tool.organic_blob.tip")).clicked() {
                                         crate::organic_blob::open(&ctx);
                                         ui.close();
                                     }
                                     ui.separator();
-                                    ui.label(egui::RichText::new("Organic tube").size(12.0).color(style::DIM));
+                                    ui.label(egui::RichText::new(i18n::tr("tool.organic_tube")).size(12.0).color(style::DIM));
                                     for preset in crate::organic_tube::Preset::ALL {
-                                        if ui.button(preset.label()).on_hover_text("Points, thickness and section stay editable afterwards").clicked() {
+                                        if ui.button(preset.label()).on_hover_text(i18n::tr("tool.organic_tube.tip")).clicked() {
                                             self.add_organic_tube(&ctx, preset);
                                             ui.close();
                                         }
                                     }
                                     ui.separator();
-                                    ui.label(egui::RichText::new("Organic furniture").size(12.0).color(style::DIM));
+                                    ui.label(egui::RichText::new(i18n::tr("tool.organic_furniture")).size(12.0).color(style::DIM));
                                     for design in crate::organic_furniture::Design::ALL {
-                                        if ui.button(design.label()).on_hover_text("Width, height and legs stay editable after it is made").clicked() {
+                                        if ui.button(design.label()).on_hover_text(i18n::tr("tool.organic_furniture.tip")).clicked() {
                                             crate::organic_furniture::insert(self, &ctx, design);
                                             ui.close();
                                         }
                                     }
                                     ui.separator();
-                                    ui.label(egui::RichText::new("CAD tools").size(12.0).color(style::DIM));
+                                    ui.label(egui::RichText::new(i18n::tr("tool.cad")).size(12.0).color(style::DIM));
                                     for k in Kind::CAD {
                                         let r = ui.horizontal(|ui| {
                                             let (rc, _) = ui.allocate_exact_size(egui::vec2(24.0, 24.0), egui::Sense::hover());
                                             let ink = ui.visuals().text_color();
                                             glyphs::kind(ui.painter(), rc, k, ink, ink.gamma_multiply(0.15));
-                                            ui.selectable_label(false, k.label())
+                                            ui.selectable_label(false, i18n::kind(k))
                                         });
                                         if r.inner.clicked() {
                                             self.add_shape(&ctx, k);
@@ -2185,10 +2186,10 @@ impl App {
                             for &op in ops {
                                 let on = self.new_op == op;
                                 let (name, tip) = match op {
-                                    Op::Add => ("Add", "Join: the new shape is added to the model (Tab flips Add / Cut)"),
-                                    Op::Subtract => ("Cut", "Cut: the new shape carves a hole out of the model"),
-                                    Op::Paint => ("Paint", "Paint: the new shape only changes the colour where it touches"),
-                                    Op::Intersect => ("Overlap", "Overlap: keep only the part where the new shape and the model meet"),
+                                    Op::Add => (i18n::tr("tool.op.add"), i18n::tr("tool.op.add.tip")),
+                                    Op::Subtract => (i18n::tr("tool.op.cut"), i18n::tr("tool.op.cut.tip")),
+                                    Op::Paint => (i18n::tr("tool.op.paint"), i18n::tr("tool.op.paint.tip")),
+                                    Op::Intersect => (i18n::tr("tool.op.overlap"), i18n::tr("tool.op.overlap.tip")),
                                 };
                                 if style::wide_button(ui, name, tip, on, Some(style::op_color(op)), |p, r, ink| glyphs::op(p, r, op, ink)).clicked() {
                                     self.new_op = op;
@@ -2204,34 +2205,22 @@ impl App {
                             ui.end_row();
                             if ui
                                 .add_enabled(!self.scene_structure_locked(), |ui: &mut Ui| {
-                                    style::wide_button(ui, "New group", "New group", false, None, glyphs::group)
+                                    style::wide_button(ui, i18n::tr("tool.group.new"), i18n::tr("tool.group.new.tip"), false, None, glyphs::group)
                                 })
                                 .clicked()
                             {
                                 self.add_group();
                             }
                             let melting = self.selection_melts();
-                            if style::wide_button(
-                                ui,
-                                "Melt",
-                                "Melt the selected shapes together in one click (again to un-melt). Nothing selected: the whole scene",
-                                melting,
-                                None,
-                                crate::glyphs_more::melt,
-                            )
-                            .clicked()
+                            if style::wide_button(ui, i18n::tr("tool.melt"), i18n::tr("tool.melt.tip"), melting, None, crate::glyphs_more::melt)
+                                .clicked()
                             {
                                 self.toggle_melt_selected();
                             }
                             let pr = ui.add_enabled(!self.scene_structure_locked(), |ui: &mut Ui| {
-                                style::wide_button(
-                                    ui,
-                                    "Pattern",
-                                    "Repeat the selected group: mirror, grid, circle, along a path",
-                                    false,
-                                    None,
-                                    |p, r, ink| crate::pattern_ui::icon(crate::pattern::PatternKind::Circular, p, r, ink),
-                                )
+                                style::wide_button(ui, i18n::tr("tool.pattern"), i18n::tr("tool.pattern.tip"), false, None, |p, r, ink| {
+                                    crate::pattern_ui::icon(crate::pattern::PatternKind::Circular, p, r, ink)
+                                })
                             });
                             #[cfg(test)]
                             {
@@ -2285,7 +2274,7 @@ impl App {
             .frame(egui::Frame::new().fill(style::PANEL_DARK).inner_margin(egui::Margin::symmetric(10, 10)))
             .show(ui, |ui| {
                 style::panel_sheen(ui, ui.max_rect().expand2(egui::vec2(10.0, 10.0)), style::PANEL_DARK, style::Edge::Left);
-                let tabs = [("Scene", ""), ("Library", "")];
+                let tabs = [(i18n::tr("scene.tab.scene"), ""), (i18n::tr("scene.tab.library"), "")];
                 if let Some(i) = style::segmented(ui, "dock_tabs", &tabs, Some(usize::from(self.lib_open)), true) {
                     let was_open = self.lib_open;
                     self.lib_open = i == 1;
@@ -2298,14 +2287,17 @@ impl App {
                     ui.add_enabled_ui(!self.scene_structure_locked(), |ui| crate::library_ui::panel(self, ui));
                 } else {
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new(format!("{} shapes", self.scene.shape_count())).size(12.0).color(style::DIM));
+                        ui.label(RichText::new(format!("{} {}", self.scene.shape_count(), i18n::tr("scene.shapes"))).size(12.0).color(style::DIM));
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             let several = self.picks().len() > 1;
-                            if style::pill_enabled(ui, if several { "Group them" } else { "+ Group" }, false, !self.scene_structure_locked())
-                                .on_hover_text(style::keys(
-                                    "Nothing or one picked: a new empty group.\nSeveral picked (Shift+click): put them all in one new, bigger group (Ctrl+G).\nOr drag a group onto the middle of another group to put it inside",
-                                ))
-                                .clicked()
+                            if style::pill_enabled(
+                                ui,
+                                if several { i18n::tr("scene.group_them") } else { i18n::tr("scene.group") },
+                                false,
+                                !self.scene_structure_locked(),
+                            )
+                            .on_hover_text(style::keys(i18n::tr("scene.group_tip")))
+                            .clicked()
                             {
                                 if several {
                                     self.group_selected();
@@ -2384,11 +2376,7 @@ impl App {
                     let hint = crate::gizmo::hint(self.tool);
                     ui.label(RichText::new(if note.is_empty() { hint.to_string() } else { note }).size(12.0).color(style::DIM));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui
-                            .selectable_label(self.an.open, "Animation")
-                            .on_hover_text("Timeline: pose, play, melt over time, export a GIF")
-                            .clicked()
-                        {
+                        if ui.selectable_label(self.an.open, i18n::tr("status.animation")).on_hover_text(i18n::tr("status.animation.tip")).clicked() {
                             self.an.open = !self.an.open;
                         }
                         let name = self
@@ -2396,12 +2384,19 @@ impl App {
                             .as_ref()
                             .and_then(|p| p.file_name())
                             .map(|n| n.to_string_lossy().into_owned())
-                            .unwrap_or_else(|| "Untitled".into());
+                            .unwrap_or_else(|| i18n::tr("status.untitled").into());
                         let dims = self.selection_size().map(|d| format!(" | {d}")).unwrap_or_default();
                         ui.label(
-                            RichText::new(format!("{}{} | Shapes {}{}", name, if self.dirty { " *" } else { "" }, self.scene.shape_count(), dims))
-                                .size(12.0)
-                                .color(style::DIM),
+                            RichText::new(format!(
+                                "{}{} | {} {}{}",
+                                name,
+                                if self.dirty { " *" } else { "" },
+                                i18n::tr("status.shapes"),
+                                self.scene.shape_count(),
+                                dims
+                            ))
+                            .size(12.0)
+                            .color(style::DIM),
                         );
                     });
                 });
@@ -2417,16 +2412,24 @@ impl App {
                 let h = sh.local_half();
                 let turned = sh.rot.iter().any(|r| (r % 90.0).abs() > 0.01);
                 if turned {
-                    return Some(format!("About {:.0} mm", crate::view::radius_of(sh) * 2.0));
+                    return Some(format!("{} {:.0} mm", i18n::tr("status.about"), crate::view::radius_of(sh) * 2.0));
                 }
                 // turned by whole quarter turns: the sizes along the world's axes, swapped as turned (#195)
                 let r = crate::sdf::rotation(sh.rot);
                 let dim = |i: usize| (0..3).map(|j| r[i][j].abs() * h[j] * sh.scale[j]).sum::<f32>() * 2.0;
-                Some(format!("W {:.1} × D {:.1} × H {:.1} mm", dim(0), dim(1), dim(2)))
+                Some(format!(
+                    "{} {:.1} × {} {:.1} × {} {:.1} mm",
+                    i18n::tr("status.width"),
+                    dim(0),
+                    i18n::tr("status.depth"),
+                    dim(1),
+                    i18n::tr("status.height"),
+                    dim(2)
+                ))
             }
             Pick::Group(g) => {
                 let (_, r) = crate::gpu::bounds(&self.scene, Some(Pick::Group(g)));
-                (r > 0.0).then(|| format!("Group about {:.0} mm", r * 2.0))
+                (r > 0.0).then(|| format!("{} {} {:.0} mm", i18n::tr("status.group"), i18n::tr("status.about"), r * 2.0))
             }
         }
     }
@@ -2625,11 +2628,11 @@ impl App {
                 let result = match req.cmd.get("on") {
                     None => Ok(true),
                     Some(serde_json::Value::Bool(on)) => Ok(*on),
-                    Some(_) => Err("on は true または false で指定してください".to_owned()),
+                    Some(_) => Err(i18n::tr("error.bool_param").to_owned()),
                 }
                 .and_then(|on| {
                     if ctx.egui_wants_keyboard_input() || ctx.input(|i| i.pointer.any_down()) {
-                        return Err("入力やドラッグを終えてから画面を切り替えてください".into());
+                        return Err(i18n::tr("error.scene_locked").into());
                     }
                     self.set_precise_mode(ctx, on)?;
                     Ok(serde_json::json!({"precise": self.precise_on, "importing": self.precise_transfer_pending()}))
