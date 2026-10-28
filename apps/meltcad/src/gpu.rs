@@ -345,6 +345,23 @@ impl ScenePack {
         hover: Option<Pick>,
         srgb: bool,
     ) -> [f32; GLOBAL_V4 * 4] {
+        self.globals_with_grid(scene, cam, size, selected, hover, srgb, crate::prefs::GridView::default())
+    }
+
+    /// `globals` with the floor-grid preference from the Settings window. The shader reads the
+    /// spacing from `env[4].w`; `flags` bit 0 still decides whether the grid is drawn.
+    #[allow(clippy::too_many_arguments)] // globals plus the one grid value
+    pub fn globals_with_grid(
+        &self,
+        scene: &Scene,
+        cam: &Camera,
+        size: [f32; 2],
+        selected: Option<Pick>,
+        hover: Option<Pick>,
+        srgb: bool,
+        grid: crate::prefs::GridView,
+    ) -> [f32; GLOBAL_V4 * 4] {
+        let grid = grid.sanitized();
         let mut u = [0.0_f32; GLOBAL_V4 * 4];
         let (right, up, fwd) = cam.basis();
         let eye = cam.eye();
@@ -379,12 +396,13 @@ impl ScenePack {
         put(&mut u, V4_HOVER, [hover_first, hover_count, 0.0, 0.0]);
         put(&mut u, V4_SELSPH, crate::perf::sphere_of(scene, &crate::view::targets(scene, selected)));
         let e = &scene.env;
-        let flags = (if e.grid { 1.0 } else { 0.0 }) + (if e.floor { 2.0 } else { 0.0 });
+        let flags = (if e.grid && grid.on { 1.0 } else { 0.0 }) + (if e.floor { 2.0 } else { 0.0 });
         put(&mut u, V4_ENV, [e.exposure, e.ambient, e.shadow, flags]);
         put(&mut u, V4_ENV + 1, [e.backdrop[0], e.backdrop[1], e.backdrop[2], e.lights.len() as f32]);
         put(&mut u, V4_ENV + 2, [e.sky_top[0], e.sky_top[1], e.sky_top[2], 0.0]);
         put(&mut u, V4_ENV + 3, [e.sky_horizon[0], e.sky_horizon[1], e.sky_horizon[2], 0.0]);
-        put(&mut u, V4_ENV + 4, [e.sky_bottom[0], e.sky_bottom[1], e.sky_bottom[2], 0.0]);
+        // w carries the grid spacing in mm (the shader's `gs`).
+        put(&mut u, V4_ENV + 4, [e.sky_bottom[0], e.sky_bottom[1], e.sky_bottom[2], grid.size_mm]);
         for (i, l) in e.lights.iter().enumerate().take(crate::model::MAX_LIGHTS) {
             let d = l.dir();
             put(&mut u, V4_ENV + 5 + i * 2, [d[0], d[1], d[2], l.power]);
@@ -2030,6 +2048,20 @@ mod tests {
         assert_eq!(f.shape(0, 4)[..3], [0.0, 0.0, 20.0], "the position slot of struct Shape");
         assert_eq!(f.shape(0, 5)[3], 0.0, "a sphere is kind 0");
         assert!(f.list_len() < ROW, "a tiny scene is a tiny list");
+    }
+
+    #[test]
+    fn the_grid_preference_reaches_the_shader_uniform() {
+        let sc = Scene::default();
+        let pack = ScenePack::new(&sc, VolumeSet::of(&sc));
+        let globals = |grid| pack.globals_with_grid(&sc, &Camera::default(), [800.0, 600.0], None, None, true, grid);
+        let off = globals(crate::prefs::GridView { on: false, size_mm: 25.0 });
+        assert_eq!(off[V4_ENV * 4 + 3], 2.0, "floor survives, grid flag is off");
+        assert_eq!(off[(V4_ENV + 4) * 4 + 3], 25.0, "spacing is in env[4].w");
+        let on = globals(crate::prefs::GridView { on: true, size_mm: 25.0 });
+        assert_eq!(on[V4_ENV * 4 + 3], 3.0, "floor and grid are on");
+        let clamped = globals(crate::prefs::GridView { on: true, size_mm: 500.0 });
+        assert_eq!(clamped[(V4_ENV + 4) * 4 + 3], crate::prefs::MAX_GRID_MM);
     }
 
     #[test]

@@ -1547,7 +1547,9 @@ impl App {
             let c = sdf::mul(c, 1.0 / spheres.len() as f32);
             let r = spheres.iter().map(|b| sdf::len(sdf::sub(b.c, c)) + b.r).fold(1.0_f32, f32::max);
             cam.frame(c, r);
-            let Some(rgba) = crate::easy_view::render(&scene, &cam, size, false, 2, &|| false) else { return false };
+            let Some(rgba) = crate::easy_view::render_mode_with_grid(&scene, &cam, size, false, 2, 0, self.preferences.grid_view(), &|| false) else {
+                return false;
+            };
             let image = egui::ColorImage::from_rgba_unmultiplied(size, &rgba);
             let tex = ui.ctx().load_texture("melt_preview", image, egui::TextureOptions::LINEAR);
             self.melt_preview = Some((key, tex));

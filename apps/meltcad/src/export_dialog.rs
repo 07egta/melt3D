@@ -134,8 +134,28 @@ impl Default for Dlg {
     }
 }
 
-fn new_dlg(ctx: &egui::Context, format: Option<Format>) -> Dlg {
-    let mut opts = last(ctx).unwrap_or_default();
+/// The starting options for an export with no remembered card. Settings owns them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Defaults {
+    pub format: Format,
+    pub units: Units,
+    pub up: Up,
+}
+
+impl Default for Defaults {
+    fn default() -> Defaults {
+        Defaults { format: Format::Stl, units: Units::Mm, up: Up::Z }
+    }
+}
+
+impl Defaults {
+    pub fn from_preferences(p: &crate::prefs::Preferences) -> Defaults {
+        Defaults { format: p.export_format(), units: p.export_units(), up: p.export_up() }
+    }
+}
+
+fn new_dlg(ctx: &egui::Context, format: Option<Format>, defaults: Defaults) -> Dlg {
+    let mut opts = last(ctx).unwrap_or_else(|| Options { format: defaults.format, units: defaults.units, up: defaults.up, ..Options::default() });
     if let Some(f) = format {
         opts.format = f;
         opts.up = if f.y_up_by_default() { Up::Y } else { Up::Z };
@@ -150,19 +170,29 @@ pub fn is_open(ctx: &egui::Context) -> bool {
     ctx.data(|m| m.get_temp::<Dlg>(id()).is_some_and(|d| d.open))
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn open(ctx: &egui::Context, format: Option<ExportFormat>) {
+    open_with(ctx, format, Defaults::default());
+}
+
+/// Open the card with the export defaults kept in Preferences.
+pub fn open_with(ctx: &egui::Context, format: Option<ExportFormat>, defaults: Defaults) {
     let f = format.map(|f| match f {
         ExportFormat::Stl => Format::Stl,
         ExportFormat::ThreeMf => Format::ThreeMf,
         ExportFormat::Obj => Format::Obj,
     });
-    let d = new_dlg(ctx, f);
+    let d = new_dlg(ctx, f, defaults);
     ctx.data_mut(|m| m.insert_temp(id(), d));
 }
 
 /// Open the card and measure the model for printing.
 pub fn open_check(ctx: &egui::Context) {
-    let mut d = new_dlg(ctx, None);
+    open_check_with(ctx, Defaults::default());
+}
+
+pub fn open_check_with(ctx: &egui::Context, defaults: Defaults) {
+    let mut d = new_dlg(ctx, None, defaults);
     d.run_check = true;
     ctx.data_mut(|m| m.insert_temp(id(), d));
 }
@@ -177,7 +207,7 @@ pub fn quick(app: &mut App, ctx: &egui::Context) {
         Some(o) => {
             start_with(app, ctx, o);
         }
-        None => open(ctx, None),
+        None => open_with(ctx, None, Defaults::from_preferences(&app.preferences)),
     }
 }
 
@@ -847,10 +877,26 @@ mod tests {
         let ctx = egui::Context::default();
         let o = Options { scale_pct: 125.0, ..Options::default() };
         ctx.data_mut(|m| m.insert_temp(last_id(), o));
-        let d = new_dlg(&ctx, None);
+        let d = new_dlg(&ctx, None, Defaults::default());
         assert!(d.advanced);
         assert_eq!(d.opts.scale_pct, 125.0);
-        assert!(!new_dlg(&egui::Context::default(), None).advanced);
+        assert!(!new_dlg(&egui::Context::default(), None, Defaults::default()).advanced);
+    }
+
+    #[test]
+    fn preferences_supply_the_first_export_defaults() {
+        let ctx = egui::Context::default();
+        let prefs = crate::prefs::Preferences { export_format: "obj".into(), export_units: "in".into(), export_up: "y".into(), ..Default::default() };
+        let defaults = Defaults::from_preferences(&prefs);
+        assert_eq!(defaults, Defaults { format: Format::Obj, units: Units::Inch, up: Up::Y });
+        let d = new_dlg(&ctx, None, defaults);
+        assert_eq!(d.opts.format, Format::Obj);
+        assert_eq!(d.opts.units, Units::Inch);
+        assert_eq!(d.opts.up, Up::Y);
+        // An explicit file type still chooses its usual up axis for this export.
+        let d = new_dlg(&ctx, Some(Format::Stl), defaults);
+        assert_eq!(d.opts.format, Format::Stl);
+        assert_eq!(d.opts.up, Up::Z);
     }
 
     #[test]

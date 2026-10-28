@@ -190,6 +190,35 @@ impl Rig {
         self.frame(vec![]);
         self.frame(vec![]);
     }
+
+    /// The same drag with the middle button (the camera button).
+    fn middle_drag(&mut self, from: Pos2, to: Pos2) {
+        self.mv(from);
+        self.frame(vec![Event::PointerButton { pos: from, button: PointerButton::Middle, pressed: true, modifiers: self.mods }]);
+        for k in 1..=8 {
+            let t = k as f32 / 8.0;
+            self.mv(from + (to - from) * t);
+        }
+        self.frame(vec![Event::PointerButton { pos: to, button: PointerButton::Middle, pressed: false, modifiers: self.mods }]);
+        self.frame(vec![]);
+        self.frame(vec![]);
+    }
+}
+
+#[test]
+fn settings_is_the_last_item_in_the_app_menu_and_opens_the_window() {
+    let mut r = Rig::new();
+    r.full_ui = true;
+    r.frame(vec![]);
+    assert!(crate::settings_ui::menu_hit(&r.ctx, "anchor").is_some(), "the Melt 3D menu button");
+    let id = crate::settings_ui::menu_anchor(&r.ctx).expect("the menu button's id");
+    egui::Popup::open_id(&r.ctx, id.with("popup"));
+    r.frame(vec![]);
+    let about = crate::settings_ui::menu_hit(&r.ctx, "about").expect("About Melt 3D");
+    let settings = crate::settings_ui::menu_hit(&r.ctx, "settings").expect("Settings");
+    assert!(settings.top() > about.bottom(), "Settings sits below About: {settings:?} / {about:?}");
+    r.click(settings.center());
+    assert!(crate::settings_ui::is_open(&r.ctx), "the menu item opens Preferences");
 }
 
 #[test]
@@ -813,6 +842,39 @@ fn re_pick_plane_waits_for_a_click_again() {
     assert!(r.app.picking_now());
     r.app.sketch_set_plane(crate::sketch_ui::PlaneSel::Side);
     assert!(!r.app.picking_now());
+}
+
+#[test]
+fn navigation_preset_and_orbit_speed_change_the_middle_drag() {
+    let mut r = Rig::new();
+    let c = r.app.view_rect.center();
+    let (from, to) = (c + vec2(-60.0, 0.0), c + vec2(60.0, 0.0));
+    let start = (r.app.cam.yaw, r.app.cam.pitch, r.app.cam.target);
+    r.middle_drag(from, to);
+    let melt = (r.app.cam.yaw, r.app.cam.pitch, r.app.cam.target);
+    assert_ne!(melt.0, start.0, "the Melt preset orbits with the middle button");
+    assert_eq!(melt.2, start.2, "orbiting does not slide the target");
+
+    let (yaw, pitch, target) = start;
+    r.app.preferences.nav = crate::prefs::Navigation::Cad.id().to_owned();
+    r.app.apply_preferences();
+    r.app.cam.yaw = yaw;
+    r.app.cam.pitch = pitch;
+    r.app.cam.target = target;
+    r.middle_drag(from, to);
+    assert_eq!((r.app.cam.yaw, r.app.cam.pitch), (yaw, pitch), "the CAD preset pans with the middle button");
+    assert_ne!(r.app.cam.target, target, "the CAD preset slides the view");
+
+    r.app.preferences.nav = crate::prefs::Navigation::Melt.id().to_owned();
+    r.app.preferences.orbit_sensitivity = 0.5;
+    r.app.apply_preferences();
+    r.app.cam.yaw = yaw;
+    r.app.cam.pitch = pitch;
+    r.app.cam.target = target;
+    r.middle_drag(from, to);
+    let half = r.app.cam.yaw - yaw;
+    let full = melt.0 - yaw;
+    assert!((half - full * 0.5).abs() < 1.0e-3, "half the orbit speed gives half the angle: {half} vs {full}");
 }
 
 #[test]

@@ -36,6 +36,22 @@ pub enum Up {
     Y,
 }
 
+impl Up {
+    pub fn id(self) -> &'static str {
+        match self {
+            Up::Z => "z",
+            Up::Y => "y",
+        }
+    }
+    pub fn from_id(id: &str) -> Option<Up> {
+        match id {
+            "z" => Some(Up::Z),
+            "y" => Some(Up::Y),
+            _ => None,
+        }
+    }
+}
+
 /// How to make the mesh lighter.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Lighten {
