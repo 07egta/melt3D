@@ -389,3 +389,75 @@ repeatable **verification plan**, not evidence that they passed or that the
 Windows UI meets a particular p95/peak RAM target. Do not merge until the
 new Rust tests compile and run, a Windows GUI pass is complete and memory
 consumption is acceptable.
+
+## 2026-10-25: the scene list was most of an idle frame
+
+### What was wrong
+
+A 323-shape scene (`bench::library_scene(300)` plus a 12-node pipe, 351 rows in
+the left dock) drew one idle frame in 2.18 ms of processor time, and **1.82 ms
+of it was the scene list alone**. Two causes, measured by switching parts of a
+row off one at a time in an ignored test:
+
+1. **Every row rebuilt its material swatch mesh from scratch.**
+   `materials::swatch` -> `style_gfx::ball` built a 101-vertex radial gradient
+   with 100 `sin`/`cos` calls and a `Mesh` grown one vertex at a time (about
+   eight reallocations per mesh, 300 meshes per frame). It was ~1.3 ms of the
+   1.82 ms.
+2. **Rows scrolled out of the list were painted anyway.** ~330 of the 351 rows
+   were outside the scroll area's clip rectangle, so every shape they produced
+   was thrown away by the painter.
+
+On top of that, an idle frame compared the whole scene by value about six times
+(three `track_scene`, `viewport`, `has_unsaved_work`): two of those answers fed
+the auto-recovery checkpoint, which ignored them unless a checkpoint was due.
+
+### What was done
+
+- `style_gfx::ball` keeps the unit ring (cosine/sine points and the triangle
+  list) for the current segment/ring count in a thread-local and reserves the
+  mesh before filling it. Positions, colours and triangle order are unchanged;
+  `the_ball_mesh_is_identical_to_the_straightforward_one` compares every vertex
+  and index against the old construction, across both sizes and after a size
+  change.
+- `panels::row` and `panels::curve_ball_rows` skip their paint calls when the
+  row lies outside `ui.clip_rect()`. Space, clicks, `row_rects` (drag targets,
+  Shift ranges), the context menu and the hover/selection animation stay as
+  they were, so the visible picture and every interaction are unchanged
+  (`the_scene_list_paints_only_what_can_be_seen_and_nothing_else_changes`
+  compares the painted shapes against a window tall enough for every row).
+- `panels::layers` asks `is_pick_selected` instead of allocating a `picks()`
+  vector per row.
+- `App::frame_body` asks `recovery::due(now)` before `track_scene()` /
+  `has_unsaved_work()`; a due checkpoint still compares the scene exactly as
+  before (`due_is_true_exactly_when_a_checkpoint_would_be_written`).
+- `materials::gradient_tint` reserves its mesh.
+
+### Measured
+
+Windows 11, `--release`, shared 8-core machine, 3 runs of 200 idle frames each,
+400x720 logical at 2.0 pp, back to back on the same checkout
+(`origin/integration/yuracad-20261017` with and without this change):
+
+| 323 shapes, 351 rows | base | with this change |
+|---|---:|---:|
+| idle frame, average | 2.14-2.21 ms | 0.71-0.74 ms |
+| idle frame, p95 | 2.46-2.52 ms | 0.87-0.92 ms |
+| scene list alone | 1.80-1.84 ms | 0.27-0.28 ms |
+| one-shape scene, idle frame | 0.41-0.42 ms | 0.39-0.41 ms |
+| one-shape scene, scene list | 18-19 us | 17 us |
+
+Reproduce with a temporary ignored test that runs `App::frame_body` through
+`frame_bench::Rig` for 200 frames and times `App::layers` in a bare
+`ScrollArea` (the harness was removed after measuring, as it duplicated
+`frame_cpu_bench`). The existing `frame_cpu_bench` reports the same scene
+families; `cargo test --release -p meltcad frame_cpu_bench -- --ignored
+--nocapture`.
+
+### Not measured
+
+GPU frame time / FPS (no adapter in this environment), the same table on a
+scene whose rows are mostly folded groups or curves (the cure is per row, so
+the shape is the same), and scrolling itself (a newly visible row now shapes
+its text once, like any other first paint).
+

@@ -5,8 +5,9 @@ use egui::{Align2, Color32, FontId, Pos2, Rect, RichText, Sense, Stroke, Ui, vec
 
 use crate::app::{App, Tab};
 use crate::materials::{self, Category};
-use crate::model::{BlendMode, Corner, Kind, Light, MAX_LIGHTS, MAX_OUTLINE, MAX_SAVED, Material, Melt, Op, Pick, ROUND_MAX};
+use crate::model::{BlendMode, Corner, Group, Kind, Light, MAX_LIGHTS, MAX_OUTLINE, MAX_SAVED, Material, Melt, Op, Pick, ROUND_MAX};
 use crate::sdf;
+use crate::ripple::{Ripple, RippleMode};
 use crate::{glyphs, style};
 
 /// (label, mode, amount, drip, ripple)
@@ -81,7 +82,8 @@ impl App {
         ui.spacing_mut().item_spacing.y = 2.0;
         let ngroups = self.scene.groups.len();
         // "x12" after a patterned group, "link" after a linked copy (looked up once for the whole list)
-        let badges: Vec<String> = if self.scene.groups.iter().any(|g| g.pattern.is_some() || g.is_linked() || g.piece.is_some()) {
+        let fused = self.scene.groups.iter().any(|g| g.fusion.is_some());
+        let badges: Vec<String> = if fused || self.scene.groups.iter().any(|g| g.pattern.is_some() || g.is_linked() || g.piece.is_some()) {
             let resolved = crate::pattern::resolve(&self.scene);
             (0..ngroups)
                 .map(|gi| {
@@ -91,6 +93,7 @@ impl App {
                         (true, true) => format!("Linked ×{n}"),
                         (true, false) => "Linked".to_string(),
                         (false, true) => format!("×{n}"),
+                        _ if g.fusion.is_some() => format!("Fusion · {}", g.shapes.len()),
                         _ if g.piece.is_some() => "File".to_string(),
                         _ => String::new(),
                     }
@@ -116,7 +119,7 @@ impl App {
             if folded {
                 hidden_below = Some(depth);
             }
-            let sel = self.picks().contains(&Pick::Group(gi));
+            let sel = self.is_pick_selected(Pick::Group(gi));
             let (name, op, visible, nshapes) = {
                 let g = &self.scene.groups[gi];
                 (g.name.clone(), g.op, g.visible, g.shapes.len())
@@ -156,7 +159,7 @@ impl App {
                     let (name, op, visible, material) = (s.name.clone(), s.op, s.visible, s.material);
                     // a solid from SolidCraft says so (double click opens it there)
                     let badge = if s.solid.is_some() { style::SOLID_BADGE } else { "" };
-                    let sel = self.picks().contains(&Pick::Shape(gi, si));
+                    let sel = self.is_pick_selected(Pick::Shape(gi, si));
                     let id = ui.id().with(("s", gi, si));
                     let row = self.row(
                         ui,
@@ -180,6 +183,11 @@ impl App {
                             range_to = Some(Pick::Shape(gi, si));
                         } else {
                             self.select_pick(Some(Pick::Shape(gi, si)), false);
+                        }
+                        // A plain click on the shape's own row is about the whole shape, not the
+                        // ball that happened to be chosen before.
+                        if !ctrl && !shift {
+                            self.ct.node = None;
                         }
                     }
                     if row.drag_started {
@@ -234,6 +242,13 @@ impl App {
             let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 24.0), Sense::click());
             let on = chosen == Some(i);
             style::row_bg(ui, &resp, rect, on);
+            // scrolled out of the list: nothing of it would be drawn (see `row`)
+            if !ui.is_rect_visible(rect) {
+                if resp.clicked() {
+                    self.ct.node = Some((gi, si, i));
+                }
+                continue;
+            }
             let c = egui::pos2(rect.left() + indent + 8.0, rect.center().y);
             let col = if on { style::ACCENT } else { style::DIM };
             ui.painter().circle_stroke(c, 5.0, Stroke::new(1.5, col));
@@ -246,6 +261,9 @@ impl App {
                 if on { style::TEXT } else { style::DIM },
             );
             if resp.clicked() {
+                // The ball is one node of this shape: keep the shape picked (the bend/radius
+                // controls stay available) and put the handles on that one ball.
+                self.select_pick(Some(Pick::Shape(gi, si)), false);
                 self.ct.node = Some((gi, si, i));
             }
         }
@@ -258,19 +276,34 @@ impl App {
             return;
         }
         let Some(from) = self.layer_drag else { return };
+        // dragging one of several picked rows takes all of them along
+        let picks = self.picks();
+        let dragged: Vec<Pick> = if picks.len() > 1 && picks.contains(&from) { picks } else { vec![from] };
         let (pos, down) = ui.input(|i| (i.pointer.interact_pos(), i.pointer.primary_down()));
         let target =
             pos.and_then(|p| self.row_rects.iter().find(|(_, r)| r.y_range().contains(p.y) && r.x_range().contains(p.x)).map(|(k, r)| (*k, *r, p)));
         if let Some((to, rect, p)) = target {
             let into = match to {
-                Pick::Group(g) if Pick::Group(g) != from => {
+                Pick::Group(g) if !dragged.contains(&Pick::Group(g)) => {
                     let q = rect.height() * 0.25;
-                    (rect.top() + q..=rect.bottom() - q).contains(&p.y).then_some(g)
+                    if (rect.top() + q..=rect.bottom() - q).contains(&p.y) {
+                        Some(g)
+                    } else if p.y < rect.top() + q && g > 0 && !dragged.contains(&Pick::Group(g - 1)) {
+                        // the line above a group row is the end of the group above: a shape lands in it,
+                        // a group does when the pointer sits right of this row's own indent
+                        let own_indent = rect.left() + 18.0 + f32::from(self.scene.groups.get(g).map_or(0, |x| x.depth)) * 14.0 + 28.0;
+                        let shapes_only = dragged.iter().all(|d| matches!(d, Pick::Shape(..)));
+                        (shapes_only || p.x > own_indent).then_some(g - 1)
+                    } else {
+                        None
+                    }
                 }
                 _ => None,
             };
             if let Some(g) = into {
-                let r = rect.shrink2(egui::vec2(3.0, 2.0));
+                // light up the group it lands in (for the line above a row that is the row above)
+                let header = self.row_rects.iter().find(|(k, _)| *k == Pick::Group(g)).map_or(rect, |(_, r)| *r);
+                let r = header.shrink2(egui::vec2(3.0, 2.0));
                 ui.painter().rect_filled(r, 6.0, style::ACCENT.gamma_multiply(0.18));
                 ui.painter().rect_stroke(r, 6.0, Stroke::new(2.0, style::ACCENT), egui::StrokeKind::Inside);
                 ui.painter().text(
@@ -281,7 +314,8 @@ impl App {
                     style::ACCENT,
                 );
                 if !down {
-                    if let Err(why) = self.move_layer_into(from, g) {
+                    let done = if dragged.len() > 1 { self.move_picks_into(&dragged, g) } else { self.move_layer_into(from, g) };
+                    if let Err(why) = done {
                         self.notice = Some(why.into());
                     }
                     self.layer_drag = None;
@@ -326,6 +360,11 @@ impl App {
         self.row_rects.push((pick, rect));
         let mut out = RowResult::default();
         style::row_bg(ui, &resp, rect, selected);
+        // A row that is scrolled out of the list lies outside the clip rectangle: painting it only
+        // produces shapes the painter throws away. A scene with hundreds of shapes made the list
+        // the slowest part of a frame, so the paint calls are skipped. The row keeps its space,
+        // its clicks and its `row_bg` above, so nothing it shows or does changes.
+        let seen = ui.is_rect_visible(rect);
         // the grip says "drag me"
         let grip = Color32::from_white_alpha(if locked {
             16
@@ -334,23 +373,29 @@ impl App {
         } else {
             44
         });
-        style::gfx::grip(ui.painter(), egui::pos2(rect.left() + 11.0, rect.center().y), grip);
+        if seen {
+            style::gfx::grip(ui.painter(), egui::pos2(rect.left() + 11.0, rect.center().y), grip);
+        }
         let mut x = rect.left() + 18.0 + indent;
         if has_chevron {
             let cr = Rect::from_center_size(egui::pos2(x + 6.0, rect.center().y), vec2(16.0, 20.0));
             let r = ui.interact(cr, id.with("c"), Sense::click());
-            let c = cr.center();
-            let pts = if chevron_open {
-                vec![c + vec2(-4.0, -2.0), c + vec2(4.0, -2.0), c + vec2(0.0, 3.0)]
-            } else {
-                vec![c + vec2(-2.0, -4.0), c + vec2(-2.0, 4.0), c + vec2(3.0, 0.0)]
-            };
-            ui.painter().add(egui::Shape::convex_polygon(pts, if r.hovered() { Color32::WHITE } else { style::DIM }, Stroke::NONE));
+            if seen {
+                let c = cr.center();
+                let pts = if chevron_open {
+                    vec![c + vec2(-4.0, -2.0), c + vec2(4.0, -2.0), c + vec2(0.0, 3.0)]
+                } else {
+                    vec![c + vec2(-2.0, -4.0), c + vec2(-2.0, 4.0), c + vec2(3.0, 0.0)]
+                };
+                ui.painter().add(egui::Shape::convex_polygon(pts, if r.hovered() { Color32::WHITE } else { style::DIM }, Stroke::NONE));
+            }
             out.chevron = r.clicked();
             x += 16.0;
         }
         let ir = Rect::from_min_size(egui::pos2(x, rect.center().y - 10.0), vec2(20.0, 20.0));
-        icon(ui.painter(), ir, style::TEXT);
+        if seen {
+            icon(ui.painter(), ir, style::TEXT);
+        }
         x += 26.0;
         let eye = Rect::from_center_size(egui::pos2(rect.right() - 18.0, rect.center().y), vec2(22.0, 22.0));
         let opr = Rect::from_center_size(egui::pos2(rect.right() - 44.0, rect.center().y), vec2(22.0, 22.0));
@@ -380,7 +425,7 @@ impl App {
                 self.renaming = None;
                 ui.data_mut(|d| d.remove::<bool>(started));
             }
-        } else {
+        } else if seen {
             let col = if visible { style::TEXT } else { style::DIM };
             let clipped = ui.painter().with_clip_rect(name_rect);
             let used = clipped.text(egui::pos2(name_rect.left(), rect.center().y), Align2::LEFT_CENTER, &name, FontId::proportional(13.0), col);
@@ -393,20 +438,24 @@ impl App {
         }
         let er = ui.interact(eye, id.with("e"), Sense::click());
         let orr = ui.interact(opr, id.with("o"), Sense::click());
-        for r in [&er, &orr] {
-            if r.hovered() {
-                ui.painter().rect_filled(r.rect, 7.0, Color32::from_white_alpha(22));
+        if seen {
+            for r in [&er, &orr] {
+                if r.hovered() {
+                    ui.painter().rect_filled(r.rect, 7.0, Color32::from_white_alpha(22));
+                }
             }
         }
-        // a quiet list: the eye and the join/cut mark show on the row under the mouse or the
-        // picked one, and always when they say something unusual (hidden, cut, paint, overlap)
         let near = selected || resp.hovered() || er.hovered() || orr.hovered();
-        if near || !visible {
-            glyphs::eye(ui.painter(), eye, visible, if er.hovered() { Color32::WHITE } else { style::DIM });
-        }
-        if near || op != Op::Add {
-            let opcol = style::op_color(op);
-            glyphs::op(ui.painter(), opr, op, opcol.gamma_multiply(if orr.hovered() { 1.0 } else { 0.8 }));
+        if seen {
+            // a quiet list: the eye and the join/cut mark show on the row under the mouse or the
+            // picked one, and always when they say something unusual (hidden, cut, paint, overlap)
+            if near || !visible {
+                glyphs::eye(ui.painter(), eye, visible, if er.hovered() { Color32::WHITE } else { style::DIM });
+            }
+            if near || op != Op::Add {
+                let opcol = style::op_color(op);
+                glyphs::op(ui.painter(), opr, op, opcol.gamma_multiply(if orr.hovered() { 1.0 } else { 0.8 }));
+            }
         }
         out.eye = er.clicked();
         out.op = orr.clicked();
@@ -485,9 +534,39 @@ impl App {
         }
     }
 
+    /// Group-level editor for editable Smooth Fusion primitives. The old smooth
+    /// union kernel handles rendering; only shape.blend/positions are changed here.
+    fn fusion_controls(ui: &mut Ui, group: &mut Group) {
+        let Some(settings) = group.fusion else { return };
+        style::title(ui, "Smooth Fusion（なめらか合体）");
+        ui.label(RichText::new(format!("{}個の形が別々に編集できます", group.shapes.len())).size(12.0).color(style::DIM));
+        let mut radius = settings.radius_mm;
+        if style::labeled_slider(
+            ui, "接合部の丸み", &mut radius, 0.0..=80.0,
+            "Smooth Unionの丸み（mm）。0mmは普通のBoolean Unionです",
+        ) {
+            crate::fusion::set_radius(group, radius);
+        }
+        let mut contact = settings.contact;
+        if style::labeled_slider(
+            ui, "融合範囲", &mut contact, 0.0..=1.0,
+            "0=深く重ねて完全融合、1=離して軽い接触。位置のみ更新、各形の回転とサイズは維持",
+        ) {
+            crate::fusion::set_contact(group, contact);
+        }
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("完全融合").size(11.0).color(style::DIM));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label(RichText::new("軽い接触").size(11.0).color(style::DIM));
+            });
+        });
+        ui.label(RichText::new("画面で形を直接ドラッグできます。形を個別に選ぶと位置・回転・大きさ・色を編集できます。").size(11.5).color(style::DIM));
+    }
+
     fn group_inspector(&mut self, ui: &mut Ui, g: usize) {
         style::title(ui, "Group");
         let parent = self.scene.parent_of(g).and_then(|p| self.scene.groups.get(p)).map(|p| p.name.clone());
+        crate::puffy_text_ui::inspector_button(self, ui, g);
         {
             let id = egui::Id::new(("group_melt_memory", g));
             let gr = &mut self.scene.groups[g];
@@ -521,13 +600,60 @@ impl App {
                 );
             }
         }
+        if let Some(gr) = self.scene.groups.get_mut(g) {
+            crate::designer_bag::inspector(ui, gr);
+        }
+        if let Some(gr) = self.scene.groups.get_mut(g) {
+            Self::fusion_controls(ui, gr);
+        }
+        if self.scene.groups.get(g).is_some_and(|group| group.fusion.is_some()) {
+            if self.scene.melt.mode != BlendMode::Smooth || self.scene.melt.amount != 1.0 || self.scene.melt.drip != 0.0 {
+                ui.colored_label(style::CUT, "The scene's Melt settings changed, so Smooth Fusion looks different");
+                if ui.button("Back to the Smooth Fusion melt").clicked() {
+                    self.scene.melt.mode = BlendMode::Smooth;
+                    self.scene.melt.amount = 1.0;
+                    self.scene.melt.drip = 0.0;
+                }
+            }
+            if ui.button("Edit the parts").on_hover_text("Selects the first shape; pick the others in the scene list").clicked()
+                && !self.scene.groups[g].shapes.is_empty()
+            {
+                self.sel = Some(Pick::Shape(g, 0));
+            }
+        }
+        let other_shapes = self.scene.shape_count().saturating_sub(self.scene.groups.get(g).map_or(0, |gr| gr.shapes.len()));
+        if let Some(gr) = self.scene.groups.get_mut(g)
+            && gr.designer_chair.is_some()
+            && !gr.is_linked()
+        {
+            crate::designer_chair::controls(ui, gr, other_shapes);
+        }
         self.piece_card(ui, g);
-        // what it melts with: the shapes inside it melt together, and the groups at the same level melt with each other
+        // What it melts with: groups at the same level that share the parent's Melt (or whose own
+        // Melt is on), plus the parent group's own shapes when this group melts into them. A pair
+        // melts when the group that closes later has a reach, so the list mirrors the field.
         let into = parent.clone().unwrap_or("Scene".to_string());
-        let partners: Vec<String> = (0..self.scene.groups.len())
-            .filter(|&i| i != g && self.scene.groups[i].depth == self.scene.groups[g].depth && self.scene.parent_of(i) == self.scene.parent_of(g))
-            .map(|i| self.scene.groups[i].name.clone())
+        let parent_index = self.scene.parent_of(g);
+        let depth = self.scene.groups.get(g).map(|group| group.depth);
+        let mut partners: Vec<String> = (0..self.scene.groups.len())
+            .filter(|&i| {
+                i != g
+                    && depth.is_some_and(|depth| {
+                        self.scene.groups.get(i).is_some_and(|other| other.visible && other.depth == depth) && self.scene.parent_of(i) == parent_index
+                    })
+            })
+            .filter(|&i| {
+                let later = if i < g { g } else { i };
+                self.scene.group_melt_reach(later) > 0.0
+            })
+            .filter_map(|i| self.scene.groups.get(i).map(|other| other.name.clone()))
             .collect();
+        if self.scene.group_melt_reach(g) > 0.0
+            && parent_index.is_some_and(|p| self.scene.groups.get(p).is_some_and(|p| p.shapes.iter().any(|s| s.solid())))
+            && let Some(name) = parent.as_ref()
+        {
+            partners.push(format!("the shapes of “{name}”"));
+        }
         ui.label(
             RichText::new(format!(
                 "Melts with: {} (inside {into})",
@@ -563,7 +689,16 @@ impl App {
             self.sel = Some(Pick::Group(i));
             self.folded.clear();
         }
+        if self.designer_lamp_inspector(ui, g) {
+            return;
+        }
+        crate::organic_furniture::inspector(self, ui, g);
         self.pattern_section(ui, g);
+        if let Some(settings) = self.scene.groups.get(g).and_then(|group| group.melt_preset.clone())
+            && ui.button("Meltの形を再編集…").on_hover_text("本数や垂れ方を変更。手動で動かした液だれは再生成されます").clicked()
+        {
+            crate::melt_preset::open_edit(ui.ctx(), g, settings);
+        }
         self.actions(ui);
         let linked = self.scene.groups.get(g).is_some_and(crate::model::Group::is_linked);
         let hint = if linked { "Linked copy: set position, rotation and scale above" } else { "Move, rotate and scale the whole group" };
@@ -576,6 +711,32 @@ impl App {
             return;
         }
         style::title(ui, "Shape");
+        if self.designer_lamp_inspector(ui, g) {
+            return;
+        }
+        if self.scene.groups.get(g).is_some_and(|gr| gr.designer_chair.is_some()) {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new("Designer Chair の個別パーツ").size(11.5).color(style::DIM));
+                if ui.small_button("椅子全体の設定").clicked() {
+                    self.sel = Some(Pick::Group(g));
+                }
+            });
+        }
+        // A click on any seat or leg selects one ordinary SDF shape. Give it an
+        // obvious route back to the shared parametric controls on the parent group.
+        if self.scene.groups.get(g).and_then(|gr| gr.organic_furniture).is_some() {
+            if style::pill(ui, "有機家具の設定を開く", false).clicked() {
+                self.sel = Some(Pick::Group(g));
+                return;
+            }
+            ui.label(RichText::new("このパーツは家具プリセットの一部です。設定を変更すると配置を作り直します。").size(11.0).color(style::DIM));
+        }
+        crate::puffy_text_ui::inspector_button(self, ui, g);
+        if let Some(settings) = self.scene.groups.get(g).and_then(|group| group.melt_preset.clone())
+            && ui.button("Edit this melt preset…").clicked()
+        {
+            crate::melt_preset::open_edit(ui.ctx(), g, settings);
+        }
         let ngroups = self.scene.groups.len();
         let nshapes = self.scene.groups[g].shapes.len();
         let mut move_to: Option<usize> = None;
@@ -614,14 +775,15 @@ impl App {
                     ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
                     for k in Kind::ALL {
                         let on = sh.kind == k;
-                        if style::icon_button(ui, 32.0, k.label(), on, |p, r, ink| glyphs::kind(p, r, k, ink, Color32::from_white_alpha(18)))
-                            .clicked()
+                        if style::icon_button(ui, 32.0, k.label(), on, |p, r, ink| glyphs::kind(p, r, k, ink, ink.gamma_multiply(0.15))).clicked()
                             && !on
                         {
                             if sh.name == sh.kind.label() {
                                 sh.name = k.label().to_string();
                             }
                             sh.kind = k;
+                            // A different primitive must never inherit stale vase parameters.
+                            sh.vase = None;
                             sh.size = k.default_size();
                             sh.params = k.default_params();
                             if k.uses_path() && sh.path.len() < 2 {
@@ -640,6 +802,9 @@ impl App {
             style::xyz(ui, "Position", &mut sh.pos, 0.5, -5000.0..=5000.0, "");
             style::xyz(ui, "Rotation", &mut sh.rot, 1.0, -3600.0..=3600.0, "°");
             style::xyz(ui, "Scale", &mut sh.scale, 0.01, 0.01..=100.0, "×");
+            if sh.vase.is_some() {
+                crate::organic_vase::inspector(ui, sh);
+            } else {
             let labels = sh.kind.size_labels();
             ui.horizontal_wrapped(|ui| {
                 for (i, l) in labels.iter().enumerate() {
@@ -719,7 +884,35 @@ impl App {
                     style::labeled_slider(ui, "Depth", &mut fm.reach, 2.0..=60.0, "How far the melt reaches from the face, in mm");
                 }
             }
-            if sh.kind.uses_outline() {
+            }
+            ui.collapsing("Ripple", |ui| {
+                let mut enabled = sh.ripple.is_some();
+                if ui.checkbox(&mut enabled, "Use ripple").changed() {
+                    sh.ripple = if enabled { Some(Ripple::default()) } else { None };
+                }
+                if let Some(r) = sh.ripple.as_mut() {
+                    ui.horizontal_wrapped(|ui| {
+                        if ui.selectable_label(r.mode == RippleMode::Concentric, "Rings").clicked() {
+                            r.mode = RippleMode::Concentric;
+                        }
+                        if ui.selectable_label(r.mode == RippleMode::Linear, "Lines").clicked() {
+                            r.mode = RippleMode::Linear;
+                        }
+                        if ui.selectable_label(r.mode == RippleMode::Random, "Random").clicked() {
+                            r.mode = RippleMode::Random;
+                        }
+                    });
+                    style::labeled_slider(ui, "Wave height", &mut r.height, 0.0..=20.0, "Amplitude (mm)");
+                    style::labeled_slider(ui, "Wave spacing", &mut r.spacing, 0.5..=100.0, "Wavelength (mm)");
+                    ui.add(egui::Slider::new(&mut r.count, 1..=32).text("Waves"));
+                    style::labeled_slider(ui, "Direction", &mut r.direction, 0.0..=360.0, "Direction of line and random waves (degrees)");
+                    style::labeled_slider(ui, "Edge fade", &mut r.edge_fade, 0.05..=1.0, "How smoothly the waves fade out at the edge of their range");
+                    ui.checkbox(&mut r.preserve_outline, "Keep the outline (carve the surface inward)");
+                    ui.add(egui::Slider::new(&mut r.detail, 1..=4).text("Surface detail"));
+                    ui.label(RichText::new("A light preview while you work; the export uses the chosen precision").size(11.0).color(style::DIM));
+                }
+            });
+            if sh.kind.uses_outline() && sh.vase.is_none() {
                 outline_changed = true;
                 top_changed = sh.kind.uses_outline2();
             }
@@ -1457,4 +1650,43 @@ fn gradient_controls(ui: &mut Ui, m: &mut Material) {
     style::labeled_slider(ui, "Strength", &mut m.gradient, 0.05..=1.0, "How much of the end color shows");
     style::labeled_slider(ui, "From", &mut m.grad_from, 0.0..=1.0, "Where the color starts to change (0 = edge)");
     style::labeled_slider(ui, "To", &mut m.grad_to, 0.0..=1.0, "Where the color finishes changing (1 = opposite edge)");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Draw the scene list in a `height`-tall area; returns the painted shapes and the number of
+    /// rows it laid out.
+    fn list_frame(height: f32) -> (Vec<egui::Shape>, usize) {
+        let ctx = egui::Context::default();
+        crate::style::apply(&ctx);
+        let mut app = App::new(true, None);
+        app.new_scene(crate::bench::library_scene(60));
+        let mut rows = 0;
+        let mut out = ctx.run_ui(
+            egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(400.0, height))), time: Some(1.0), ..Default::default() },
+            |ui| {
+                app.layers(ui);
+                rows = app.row_rects.len();
+            },
+        );
+        out.textures_delta.clear();
+        (out.shapes.into_iter().map(|c| c.shape).collect(), rows)
+    }
+
+    /// A row scrolled out of the list is not painted (a scene of hundreds of shapes made that the
+    /// slowest part of a frame). What is left on the screen must be exactly what the same list
+    /// shows in an area tall enough for every row.
+    #[test]
+    fn the_scene_list_paints_only_what_can_be_seen_and_nothing_else_changes() {
+        let (tall, tall_rows) = list_frame(4000.0);
+        let (short, short_rows) = list_frame(400.0);
+        assert!(tall_rows > 40, "the test scene has many rows ({tall_rows})");
+        assert_eq!(short_rows, tall_rows, "every row is still laid out (space, clicks, drag and shift ranges)");
+        assert!(short.len() < tall.len(), "the scrolled-out rows painted nothing ({} vs {})", short.len(), tall.len());
+        for shape in &short {
+            assert!(tall.contains(shape), "a row that can be seen changed what it draws: {shape:?}");
+        }
+    }
 }

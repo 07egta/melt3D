@@ -120,6 +120,11 @@ fn add_block(app: &mut App, mut block: Vec<Group>, done: &str, from_clipboard: b
     if block.is_empty() {
         return Err("It was empty".into());
     }
+    // Pasted letter contours stay usable solids but must not keep the source text identity,
+    // or editing the original text would regenerate the pasted copy as well.
+    for g in &mut block {
+        g.puffy_text = None;
+    }
     if app.scene.groups.len() + block.len() > MAX_GROUPS {
         return Err(format!("Up to {MAX_GROUPS} groups"));
     }

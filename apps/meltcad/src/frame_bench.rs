@@ -290,3 +290,72 @@ fn document_io_frame_bench() {
     assert!(avg.is_finite() && p95.is_finite() && max.is_finite());
     let _ = std::fs::remove_file(path);
 }
+
+/// The scene list scrolls with the mouse wheel when several groups are picked (it did not).
+#[test]
+fn the_scene_list_scrolls_while_several_groups_are_picked() {
+    let mut sc = Scene::default();
+    sc.groups.clear();
+    for i in 0..40 {
+        let mut g = crate::model::Group::new(format!("G{i}"));
+        g.shapes.push(crate::model::Shape::new(crate::model::Kind::Sphere, [0.0; 3], crate::model::Material::default()));
+        sc.groups.push(g);
+    }
+    let scroll_moves = |multi: bool| -> f32 {
+        let mut r = Rig::new(sc.clone());
+        r.frame(vec![]);
+        r.app.sel = Some(Pick::Group(0));
+        if multi {
+            r.app.multi = vec![Pick::Group(1), Pick::Group(2)];
+            r.app.multi_for = r.app.sel;
+        }
+        for _ in 0..3 {
+            r.frame(vec![]);
+        }
+        let Some((_, rect)) = r.app.row_rects.first().copied() else { return -1.0 };
+        let y0 = rect.top();
+        let at = rect.center();
+        r.frame(vec![Event::PointerMoved(at)]);
+        for _ in 0..6 {
+            r.frame(vec![Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: vec2(0.0, -80.0), phase: egui::TouchPhase::Move, modifiers: Modifiers::NONE }]);
+        }
+        for _ in 0..4 {
+            r.frame(vec![]);
+        }
+        let y1 = r.app.row_rects.first().map_or(y0, |(_, rc)| rc.top());
+        y0 - y1
+    };
+    let single = scroll_moves(false);
+    let several = scroll_moves(true);
+    assert!(single > 20.0, "baseline: the list scrolls ({single})");
+    assert!(several > 20.0, "with several groups picked the list must scroll too ({several})");
+}
+
+/// The wheel zooms the view while several groups are picked.
+#[test]
+fn the_wheel_zooms_while_several_groups_are_picked() {
+    let mut sc = Scene::default();
+    sc.groups.clear();
+    for i in 0..4 {
+        let mut g = crate::model::Group::new(format!("G{i}"));
+        g.shapes.push(crate::model::Shape::new(crate::model::Kind::Sphere, [i as f32 * 30.0, 0.0, 0.0], crate::model::Material::default()));
+        sc.groups.push(g);
+    }
+    let mut r = Rig::new(sc);
+    r.app.sel = Some(Pick::Group(0));
+    r.app.multi = vec![Pick::Group(1), Pick::Group(2)];
+    r.app.multi_for = r.app.sel;
+    for _ in 0..3 {
+        r.frame(vec![]);
+    }
+    let c = viewport_centre(&r);
+    r.frame(vec![Event::PointerMoved(c)]);
+    let d0 = r.app.cam.dist;
+    for _ in 0..5 {
+        r.frame(vec![Event::MouseWheel { unit: egui::MouseWheelUnit::Line, delta: vec2(0.0, 3.0), phase: egui::TouchPhase::Move, modifiers: Modifiers::NONE }]);
+    }
+    for _ in 0..5 {
+        r.frame(vec![]);
+    }
+    assert!((r.app.cam.dist - d0).abs() > 1.0, "the wheel must zoom ({d0} -> {})", r.app.cam.dist);
+}

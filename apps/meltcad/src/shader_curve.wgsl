@@ -3,7 +3,8 @@
 // and path_pt(ext.x - 1) are the low and high corners of a box around the whole tube. The low
 // corner's w is the largest local join reach, so skipped segment groups remain exact; the high
 // corner's w is the reach at the closure of a loop.
-// params.y is unused here; params.z = 1 cuts the two ends flat; params.x = 1 is a closed loop.
+// params.y is unused here; params.z = 0..1 controls rounded->flat caps; params.x = 1 is a closed loop.
+// size.y = transverse width ratio (0.45..1); size.z >= 1.5 selects rounded-square cross section.
 // extra.x (shell) hollows the tube here; a flat-ended hollow tube is open at both ends.
 
 // Distance to the round cone from a (radius ra) to b (radius rb).
@@ -34,6 +35,35 @@ fn round_cone(p: vec3<f32>, a: vec3<f32>, ra: f32, b: vec3<f32>, rb: f32) -> f32
     if (sz * a2 * z2 > k) { return sqrt(x2 + z2) * il2 - rb; }
     if (sy * a2 * y2 < k) { return sqrt(x2 + y2) * il2 - ra; }
     return (sqrt(x2 * a2 * il2) + y * rr) * il2 - ra;
+}
+
+// Exactly the Curve-only section_cone transform in curve.rs. For ordinary
+// circular tubes the original round_cone path is retained for interactive speed.
+fn curve_section_cone(width: f32, section: f32, q: vec3<f32>, a: vec3<f32>, ra: f32, b: vec3<f32>, rb: f32) -> f32 {
+    let aspect = clamp(width, 0.45, 1.0);
+    let squircle = section >= 1.5;
+    if (aspect >= 0.9999 && !squircle) {
+        return round_cone(q, a, ra, b, rb);
+    }
+    let delta = b - a;
+    if (length(delta) < 1.0e-4) {
+        return round_cone(q, a, ra, b, rb);
+    }
+    let tangent = normalize(delta);
+    let w0 = clamp((abs(tangent.z) - 0.80) / 0.18, 0.0, 1.0);
+    let w = w0 * w0 * (3.0 - 2.0 * w0);
+    let reference = vec3<f32>(0.0, w, 1.0 - w);
+    let side = normalize(cross(reference, tangent));
+    let up = cross(tangent, side);
+    let v = q - a;
+    let x = dot(v, side) / aspect;
+    let y = dot(v, up);
+    var transverse = length(vec2<f32>(x, y));
+    if (squircle) {
+        transverse = sqrt(sqrt(x*x*x*x + y*y*y*y));
+    }
+    let q2 = a + tangent * dot(v, tangent) + side * transverse;
+    return round_cone(q2, a, ra, b, rb) * aspect;
 }
 
 // Same bend-and-radius reach as curve::joint_blend on the CPU.
@@ -100,7 +130,7 @@ fn curve_dist(s: Shape, q: vec3<f32>) -> f32 {
             let i = i0 + k;
             if (i >= n) { break; }
             let b = path_pt(st + i);
-            let one = round_cone(q, a.xyz, a.w, b.xyz, b.w);
+            let one = curve_section_cone(s.size.y, s.size.z, q, a.xyz, a.w, b.xyz, b.w);
             d = min(d, one);
             if (i == 1) { first_d = one; }
             if (prev_i == i - 2) {
@@ -119,14 +149,15 @@ fn curve_dist(s: Shape, q: vec3<f32>) -> f32 {
     // a shell hollows the tube first (shape_dist leaves curves alone), then flat ends cut it open
     let wall = s.extra.x / max(s.pos.w, 1.0e-6);
     if (wall > 0.0) { d = abs(d + wall * 0.5) - wall * 0.5; }
-    if (s.params.z > 0.5 && s.params.x < 0.5) {
+    if (s.params.z > 0.0 && s.params.x < 0.5) {
         let p0 = path_pt(st);
         let p1 = path_pt(st + 1);
         let pn = path_pt(st + n - 1);
         let pm = path_pt(st + n - 2);
         let t0 = normalize(p1.xyz - p0.xyz + vec3<f32>(1.0e-6, 0.0, 0.0));
         let t1 = normalize(pn.xyz - pm.xyz + vec3<f32>(1.0e-6, 0.0, 0.0));
-        d = max(d, max(dot(q - p0.xyz, -t0), dot(q - pn.xyz, t1)));
+        let rounded = 1.0 - clamp(s.params.z, 0.0, 1.0);
+        d = max(d, max(dot(q - p0.xyz, -t0) - rounded * p0.w, dot(q - pn.xyz, t1) - rounded * pn.w));
     }
     return d;
 }

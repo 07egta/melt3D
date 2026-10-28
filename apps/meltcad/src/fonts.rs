@@ -45,6 +45,37 @@ const FONT_CANDIDATES: &[&str] = &[
 const CJK_FONT_KEYWORDS: &[&str] =
     &["cjk", "notosansjp", "bizud", "biz-ud", "yugoth", "meiryo", "msgothic", "hiragino", "ipag", "ipaexg", "takao", "vlgothic", "droidsansfallback"];
 
+/// Find a *file path* for optional outline modeling. Unlike the UI fallback,
+/// Puffy Text saves only the chosen path and baked outlines, never the font bytes.
+pub fn find_cjk_font_path() -> Option<PathBuf> {
+    for candidate in FONT_CANDIDATES {
+        let path = PathBuf::from(candidate);
+        if try_read_font(&path).is_some() { return Some(path); }
+    }
+    for root in scan_roots() {
+        if let Some(path) = scan_dir_for_font_path(&root, SCAN_DEPTH) { return Some(path); }
+    }
+    None
+}
+
+fn scan_dir_for_font_path(dir: &Path, depth: usize) -> Option<PathBuf> {
+    if depth == 0 { return None; }
+    let entries = std::fs::read_dir(dir).ok()?;
+    let mut subdirs = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_file() {
+            let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
+            if [".ttf", ".ttc", ".otf"].iter().any(|suffix| name.ends_with(suffix))
+                && is_cjk_font_name(&name) && try_read_font(&path).is_some()
+            {
+                return Some(path);
+            }
+        } else if path.is_dir() { subdirs.push(path); }
+    }
+    subdirs.iter().find_map(|p| scan_dir_for_font_path(p, depth - 1))
+}
+
 /// Install the system CJK font as the last fallback of the Proportional and Monospace families.
 /// Does nothing when no usable CJK font is found.
 #[allow(dead_code)]

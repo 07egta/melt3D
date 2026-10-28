@@ -9,7 +9,7 @@ use egui::{Align2, Color32, RichText, TextureHandle, TextureOptions, Vec2};
 
 use crate::app::App;
 use crate::library::{self, Item};
-use crate::model::{MAX_GROUPS, MAX_SHAPES, Pick};
+use crate::model::{BlendMode, MAX_GROUPS, MAX_SHAPES, Pick};
 use crate::style;
 
 const THUMB: usize = 62;
@@ -319,9 +319,30 @@ pub fn insert(app: &mut App, ctx: &egui::Context, item: &Item) -> bool {
         [0.0, 0.0]
     };
     app.scene.groups.push(item.placed(at));
-    app.sel = Some(Pick::Group(app.scene.groups.len() - 1));
+    let gi = app.scene.groups.len() - 1;
+    // A single parametric vase should open its size/wave controls immediately.
+    app.sel = if app.scene.groups[gi].shapes.len() == 1
+        && app.scene.groups[gi].shapes[0].vase.is_some()
+    {
+        Some(Pick::Shape(gi, 0))
+    } else {
+        Some(Pick::Group(gi))
+    };
+    if item.group.fusion.is_some() {
+        // The existing SDF/GPU smooth union is scene-wide (Melt.mode).
+        // Reuse it rather than introducing another Boolean implementation.
+        app.scene.melt.mode = BlendMode::Smooth;
+        app.scene.melt.amount = 1.0;
+        app.scene.melt.drip = 0.0;
+        app.tab = crate::app::Tab::Shape;
+        app.lib_open = false; // show individual editable children in the scene list
+    }
     app.frame_view(false);
-    app.say(ctx, format!("Added {}", item.name));
+    if item.group.fusion.is_some() {
+        app.say(ctx, format!("Added {}; the whole scene's Melt is now Smooth", item.name));
+    } else {
+        app.say(ctx, format!("Added {}", item.name));
+    }
     true
 }
 
@@ -474,6 +495,37 @@ mod tests {
         assert!(insert(&mut app, &ctx, &item()));
         let (a, b) = (app.scene.groups[0].shapes[0].pos, app.scene.groups[1].shapes[0].pos);
         assert!((a[0] - b[0]).hypot(a[1] - b[1]) < 300.0, "near the old model, not at the origin: {a:?} {b:?}");
+    }
+
+    #[test]
+    fn adding_an_organic_vase_opens_its_parametric_inspector() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        let category = library::all().iter().find(|c| c.name == "花瓶・Vase").expect("vases");
+        assert!(insert(&mut app, &ctx, &category.items[0]));
+        assert_eq!(app.sel, Some(Pick::Shape(1, 0)));
+        let shape = app.scene.shape(1, 0).expect("vase");
+        assert!(shape.vase.is_some());
+        assert_eq!(shape.kind, Kind::Revolve);
+    }
+
+    #[test]
+    fn fusion_uses_the_existing_library_path_and_restores_smooth_union() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        app.scene.melt.mode = BlendMode::Gooey;
+        app.scene.melt.drip = 8.0;
+        app.scene.melt.amount = 2.0;
+        app.lib_open = true;
+        let item = crate::fusion::sample(6).unwrap();
+        assert!(insert(&mut app, &ctx, &item));
+        assert_eq!(app.scene.groups.last().unwrap().shapes.len(), 6);
+        assert!(app.scene.groups.last().unwrap().fusion.is_some());
+        assert_eq!(app.scene.melt.mode, BlendMode::Smooth);
+        assert_eq!(app.scene.melt.amount, 1.0);
+        assert_eq!(app.scene.melt.drip, 0.0);
+        assert_eq!(app.tab, crate::app::Tab::Shape);
+        assert!(!app.lib_open);
     }
 
     #[test]

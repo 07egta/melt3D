@@ -72,6 +72,11 @@ pub struct State {
     pub hover: Option<V3>,
     /// The pipe made last (group, shape): the card edits it while it is selected.
     pub last: Option<(usize, usize)>,
+    /// The card of the pipe made last stays on screen until it is put away (Done, Esc, or picking
+    /// something else); this is that "still open" flag.
+    pub card_open: bool,
+    /// The card shows the extra choices (wall, ends, closed loop, plane).
+    pub more: bool,
 }
 
 impl Default for State {
@@ -87,6 +92,8 @@ impl Default for State {
             last_screen: None,
             hover: None,
             last: None,
+            card_open: false,
+            more: false,
         }
     }
 }
@@ -121,6 +128,7 @@ impl App {
             self.sketch_off();
         }
         self.pt.on = on;
+        self.pt.card_open = on;
         self.pt.stroke.clear();
         self.pt.stroke_skin.clear();
         self.pt.stroke_plane.clear();
@@ -174,7 +182,11 @@ impl App {
         stroke::bridge_surface_gaps(&mut raw, &self.pt.stroke_skin, &self.pt.stroke_plane, self.pt.cfg.radius);
         self.pt.stroke_skin.clear();
         self.pt.stroke_plane.clear();
-        self.pipe_from_stroke(&raw)
+        let made = self.pipe_from_stroke(&raw);
+        if made {
+            self.pt.card_open = true;
+        }
+        made
     }
 
     /// Throw the stroke away (Esc).
@@ -312,6 +324,10 @@ impl App {
     /// Esc: drop the stroke being traced, or else switch the tool off. Other keys stay with the node editing.
     pub fn pipe_keys(&mut self, ctx: &egui::Context) {
         if !self.pt.on {
+            // the card of a finished pipe: Esc puts it away
+            if self.pt.card_open && self.pipe_last_selected() && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+                self.pt.card_open = false;
+            }
             return;
         }
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
@@ -352,12 +368,13 @@ impl App {
 
     /// The little card under the top bar while the tool is on (and while its pipe is selected).
     pub fn pipe_card(&mut self, ctx: &egui::Context) {
-        if !(self.pt.on || self.pipe_last_selected()) {
+        if !(self.pt.on || (self.pt.card_open && self.pipe_last_selected())) {
             return;
         }
         let rect = self.view_rect;
         let before = self.pt.cfg;
         let mut off = false;
+        let mut done = false;
         egui::Area::new(egui::Id::new("pipe_card"))
             .order(egui::Order::Middle)
             .pivot(egui::Align2::CENTER_TOP)
@@ -374,9 +391,22 @@ impl App {
                             }
                         } else {
                             ui.label(egui::RichText::new("Fix the selected pipe").size(11.0).color(style::DIM));
+                            if style::pill(ui, "Done", false).on_hover_text("Put this card away (Esc)").clicked() {
+                                done = true;
+                            }
                         }
                     });
                     style::labeled_slider(ui, "Outer radius", &mut cfg.radius, 0.5..=40.0, "Outer radius of the pipe (mm)");
+                    ui.horizontal(|ui| {
+                        style::color_edit(ui, &mut cfg.color);
+                        let label = if self.pt.more { "Less" } else { "More…" };
+                        if style::pill(ui, label, self.pt.more).on_hover_text("Wall, ends, closed loop").clicked() {
+                            self.pt.more = !self.pt.more;
+                        }
+                    });
+                    if !self.pt.more {
+                        return;
+                    }
                     let max_wall = (cfg.radius - 0.1).clamp(0.0, 20.0);
                     style::labeled_slider(ui, "Wall\nthickness", &mut cfg.wall, 0.0..=max_wall.max(0.1), "0 = solid rod / larger = hollow pipe (mm)");
                     ui.horizontal(|ui| {
@@ -390,7 +420,6 @@ impl App {
                         if style::pill(ui, "Flat", cfg.open_ends).on_hover_text("Cut the ends straight (shows the hole)").clicked() {
                             cfg.open_ends = true;
                         }
-                        style::color_edit(ui, &mut cfg.color);
                     });
                     if self.pt.on {
                         ui.horizontal(|ui| {
@@ -416,6 +445,9 @@ impl App {
         }
         if off {
             self.set_pipe_tool(false);
+        }
+        if done {
+            self.pt.card_open = false;
         }
     }
 }

@@ -24,6 +24,7 @@ mod curve;
 mod curve_tool;
 mod document_job;
 mod easy_view;
+mod designer_chair;
 mod export;
 mod export_decimate;
 mod export_deflate;
@@ -51,16 +52,29 @@ mod import_inflate;
 mod import_mesh;
 #[cfg(test)]
 mod input_tests;
+mod fusion;
 mod library;
 mod library_ui;
 mod marquee;
 mod materials;
 mod mcp;
+mod melt_preset;
 mod mesh;
 mod mesh_dialog;
 mod mesh_import;
+mod designer_bag;
+mod designer_lamp;
+mod puffy_text;
+mod puffy_text_ui;
+mod chess;
+mod chess_dialog;
 mod model;
+mod organic_vase;
 mod palette_prefs;
+mod organic_furniture;
+mod organic_tube;
+mod organic_blob;
+mod ripple;
 mod panels;
 mod pattern;
 mod pattern_ui;
@@ -72,6 +86,7 @@ mod precise;
 mod precise_services;
 mod prims;
 mod recovery;
+mod render_job;
 mod sdf;
 mod sdf_volume;
 #[cfg(test)]
@@ -158,6 +173,14 @@ fn main() -> eframe::Result {
         }
         return Ok(());
     }
+    // An explicit --control must name a usable port; never start without the window it asked for (#264).
+    let control_port = match control::port_arg(&args) {
+        Ok(port) => port,
+        Err(e) => {
+            eprintln!("meltcad: {e}");
+            std::process::exit(2);
+        }
+    };
     perf::init();
     let tried = backend::tried_now();
     gpu_log::init(!tried.is_empty());
@@ -216,7 +239,7 @@ fn main() -> eframe::Result {
             app.attach_font_job(font_job);
             app.precise_services = Some(precise_services::services(rfd::AsyncFileDialog::new().set_parent(cc)));
             app.precise_prefs = cc.storage.and_then(|storage| storage.get_string(precise::PREFS_KEY));
-            if let Some(port) = control::port_arg(&all) {
+            if let Some(port) = control_port {
                 let token = control::make_token();
                 let ctx = cc.egui_ctx.clone();
                 match control::start(port, token.clone(), move || ctx.request_repaint()) {

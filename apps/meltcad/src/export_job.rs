@@ -221,12 +221,13 @@ fn reach_of(s: &Shape) -> f64 {
         Kind::Torus => sz[0] + sz[1],
         Kind::Extrude => {
             let wide = s.outline.iter().map(|p| f64::from(p[0]).hypot(f64::from(p[1]))).fold(0.0_f64, f64::max);
-            wide.hypot(sz[0] * 0.5)
+            wide.hypot(sz[0] * 0.5) + f64::from(if s.params[0].is_nan() { 0.0 } else { s.params[0].clamp(0.0, 40.0) })
         }
         _ => s.local_half().iter().map(|v| f64::from(*v) * f64::from(*v)).sum::<f64>().sqrt(),
     };
     let scale = s.scale.iter().map(|v| f64::from(*v)).fold(0.0_f64, f64::max);
-    let r = local * scale;
+    let extra = s.ripple.map_or(0.0, |p| if p.preserve_outline { 0.0 } else { f64::from(p.height) * scale });
+    let r = local * scale + extra;
     // hollow shapes and rounded corners never reach farther than the solid
     if r.is_finite() { r } else { 0.0 }
 }
@@ -250,7 +251,7 @@ pub fn bounds(scene: &Scene) -> Result<([f64; 3], [f64; 3]), String> {
         let one = [crate::pattern::Inst::IDENTITY];
         let insts: &[crate::pattern::Inst] = if rg.insts.is_empty() { &one } else { &rg.insts };
         for s in src.shapes.iter().filter(|s| s.solid() && s.op == Op::Add) {
-            let r = reach_of(s) * 1.05 + (f64::from(s.blend.max(0.0)) + f64::from(g.blend.max(0.0))) * amount * factor;
+            let r = reach_of(s) * 1.05 + (f64::from(s.blend.max(0.0)) + f64::from(scene.group_melt_reach(rg.gi))) * amount * factor;
             for inst in insts {
                 let at = inst.apply(s.pos);
                 let r = r * f64::from(inst.s);
@@ -551,10 +552,11 @@ pub fn build(scene: &Scene, sel: impl Into<Picks>, o: &Options, prog: &Progress)
     Ok(Built { surface: Surface { mesh, look }, size_mm, tris, verts, closed })
 }
 
-/// Units, scale and the up axis. glTF is always in metres.
+/// Units, scale and the up axis. glTF is always in metres: its writer turns millimetres into metres
+/// itself, so a GLB surface stays in millimetres here and only the scale is applied (applying the
+/// metre unit here too made every GLB a thousand times too small).
 fn convert(mesh: &mut TriMesh, o: &Options) -> f64 {
-    let unit = if o.format == Format::Glb { Units::M } else { o.units };
-    let k = unit.per_mm() * f64::from(o.scale_pct) / 100.0;
+    let k = if o.format == Format::Glb { f64::from(o.scale_pct) / 100.0 } else { o.units.per_mm() * f64::from(o.scale_pct) / 100.0 };
     for p in &mut mesh.positions {
         let q = [p[0] * k, p[1] * k, p[2] * k];
         *p = if o.up == Up::Y { [q[0], q[2], -q[1]] } else { q };
@@ -1111,6 +1113,40 @@ mod tests {
     }
 
     #[test]
+    fn organic_tubes_export_as_closed_meshes_in_stl_and_3mf() {
+        use crate::organic_tube::Preset;
+        for (preset, format) in [(Preset::Wave, Format::Stl), (Preset::Ring, Format::ThreeMf)] {
+            let mut shape = preset.shape();
+            if preset == Preset::Wave {
+                shape.size[1] = 0.68;
+                shape.size[2] = 2.0;
+                shape.params[2] = 0.35;
+            }
+            let scene = scene_of(vec![shape]);
+            let result = build(&scene, None, &opts(format, 0.75), &Progress::new())
+                .unwrap_or_else(|e| panic!("{preset:?} export failed: {e}"));
+            assert!(result.closed, "{preset:?} must export a closed 2-manifold surface");
+            assert!(melt::is_watertight(&result.surface.mesh), "{preset:?}: open/non-manifold boundary");
+            assert!(melt::volume(&result.surface.mesh) > 10.0, "{preset:?}: no filled solid");
+            assert!(!result.surface.mesh.triangles.is_empty());
+        }
+    }
+
+    /// Slow, high-precision reference: can run on a Windows build runner during
+    /// release qualification, without slowing the normal editing test suite.
+    #[test]
+    #[ignore]
+    fn organic_tube_high_precision_stl_is_watertight() {
+        let mut shape = crate::organic_tube::Preset::S.shape();
+        shape.size[1] = 0.55;
+        shape.size[2] = 2.0;
+        let result = build(&scene_of(vec![shape]), None, &opts(Format::Stl, 0.25), &Progress::new())
+            .expect("high-precision Organic Tube export");
+        assert!(result.closed && melt::is_watertight(&result.surface.mesh));
+        assert!(melt::volume(&result.surface.mesh) > 10.0);
+    }
+
+    #[test]
     fn the_default_sphere_is_closed_has_the_right_volume_and_few_triangles() {
         let b = build(&Scene::default(), None, &opts(Format::Stl, 0.25), &Progress::new()).unwrap();
         assert!(b.closed);
@@ -1136,12 +1172,70 @@ mod tests {
         assert!((lo[1] - 0.0).abs() < 0.01 && (hi[1] - 40.0 * k).abs() < 0.01, "{lo:?} {hi:?}");
         // still facing outwards after the turn
         assert!(melt::volume(&b.surface.mesh) > 0.0 && melt::is_watertight(&b.surface.mesh));
-        // glTF is in metres whatever the unit
-        let o = Options { units: Units::Inch, ..opts(Format::Glb, 0.5) };
+    }
+
+    /// The vertex positions of a GLB's first POSITION accessor, in the units of the file.
+    fn glb_positions(bytes: &[u8]) -> Vec<[f32; 3]> {
+        assert_eq!(bytes.get(..4), Some(b"glTF".as_slice()));
+        let json_len = u32::from_le_bytes([bytes[12], bytes[13], bytes[14], bytes[15]]) as usize;
+        let doc: serde_json::Value = serde_json::from_slice(&bytes[20..20 + json_len]).expect("GLB JSON chunk");
+        let bin = &bytes[20 + json_len + 8..];
+        let n = doc["accessors"][0]["count"].as_u64().expect("POSITION count") as usize;
+        (0..n)
+            .map(|i| {
+                let o = i * 12;
+                let f = |k: usize| f32::from_le_bytes([bin[o + k], bin[o + k + 1], bin[o + k + 2], bin[o + k + 3]]);
+                [f(0), f(4), f(8)]
+            })
+            .collect()
+    }
+
+    /// What every format writes must read back at the same physical size, facing outwards, whichever
+    /// unit and up axis the card chose for that format.
+    #[test]
+    fn every_written_file_reads_back_at_the_same_size_and_facing_out() {
+        // a 30 mm ball standing on the floor
+        let sc = scene_of(vec![sphere_at(0.0, 15.0, red())]);
+        for f in Format::ALL {
+            // the same choice the card makes when this format is picked
+            let up = if f.y_up_by_default() { Up::Y } else { Up::Z };
+            let o = Options { format: f, up, lighten: Lighten::Off, tolerance: 0.5, ..Options::default() };
+            let built = build(&sc, None, &o, &Progress::new()).unwrap();
+            let files = serialize(&built, &o, Path::new(&format!("ball.{}", f.ext()))).unwrap();
+            let bytes = &files[0].1;
+            let read = crate::import_mesh::import_bytes(bytes, &format!("ball.{}", f.ext()), &crate::import_mesh::ImportOptions::default())
+                .unwrap_or_else(|e| panic!("{f:?}: {e}"));
+            let size = read.mesh.size();
+            assert!(size.iter().all(|s| (s - 30.0).abs() < 1.5), "{f:?}: {size:?}");
+            assert!(read.mesh.signed_volume() > 0.0, "{f:?}: the triangles face inwards");
+            assert!(read.health.is_closed(), "{f:?}: {:?}", read.notes);
+        }
+    }
+
+    /// glTF is in metres: the writer turns millimetres into metres, so the job must not do it too.
+    /// (A 40 mm ball was written as 0.00004 m, a thousand times too small for every other app.)
+    #[test]
+    fn glb_files_are_written_in_metres_and_keep_the_real_size() {
+        // the card's GLB settings: Y up, and the unit choice does not matter for glTF
+        let o = Options { format: Format::Glb, up: Up::Y, units: Units::Inch, tolerance: 0.6, ..Options::default() };
         let b = build(&Scene::default(), None, &o, &Progress::new()).unwrap();
-        let m = &b.surface.mesh;
-        let hx = m.positions.iter().map(|p| p[0]).fold(f64::NEG_INFINITY, f64::max);
-        assert!((hx - 0.02).abs() < 0.001, "{hx}");
+        let files = serialize(&b, &o, Path::new("ball.glb")).unwrap();
+        let bytes = &files[0].1;
+        let pos = glb_positions(bytes);
+        let (mut lo, mut hi) = ([f32::INFINITY; 3], [f32::NEG_INFINITY; 3]);
+        for p in &pos {
+            for a in 0..3 {
+                lo[a] = lo[a].min(p[a]);
+                hi[a] = hi[a].max(p[a]);
+            }
+        }
+        for a in 0..3 {
+            assert!((hi[a] - lo[a] - 0.04).abs() < 0.002, "axis {a} is {:.6} m (40 mm is 0.04 m)", hi[a] - lo[a]);
+        }
+        // our reader turns those metres back into millimetres, so the part keeps its size
+        let back = crate::import_mesh::import_bytes(bytes, "ball.glb", &crate::import_mesh::ImportOptions { y_up: Some(true) }).unwrap();
+        let size = back.mesh.size();
+        assert!((size[0] - 40.0).abs() < 1.0 && (size[2] - 40.0).abs() < 1.0, "{size:?}");
     }
 
     #[test]

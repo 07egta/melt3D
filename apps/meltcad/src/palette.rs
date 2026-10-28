@@ -14,7 +14,10 @@ use crate::style;
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Action {
     AddShape(Kind),
+    OrganicTube(crate::organic_tube::Preset),
+    MeltPreset,
     AddGroup,
+    Ripple(crate::ripple::RippleMode),
     /// (category, item)
     Insert(usize, usize),
     Undo,
@@ -43,6 +46,7 @@ pub enum Action {
     ImportSvg,
     ImportMesh,
     OpenPrecise,
+    OrganicBlob,
     FrameAll,
     FrameSelection,
     TogglePerspective,
@@ -143,6 +147,14 @@ pub fn entries() -> Vec<Entry> {
             action: Action::AddShape(k),
         });
     }
+    for preset in crate::organic_tube::Preset::ALL {
+        v.push(Entry {
+            label: format!("Organic Tube・{}を作る", preset.label()),
+            tag: "プリセット",
+            words: preset.search_words().to_owned(),
+            action: Action::OrganicTube(preset),
+        });
+    }
     for (ci, c) in library::all().iter().enumerate() {
         for (ii, it) in c.items.iter().enumerate() {
             v.push(Entry {
@@ -154,6 +166,10 @@ pub fn entries() -> Vec<Entry> {
         }
     }
     v.extend([
+        cmd("Ripple: Concentric", "ripple 波打つ 表面 同心円 リップル concentric", Action::Ripple(crate::ripple::RippleMode::Concentric)),
+        cmd("Ripple: Linear", "ripple wave 直線 波紋 リップル linear", Action::Ripple(crate::ripple::RippleMode::Linear)),
+        cmd("Ripple: Random", "ripple random 波 ランダム リップル", Action::Ripple(crate::ripple::RippleMode::Random)),
+        cmd("Melt (dripping shape)", "melt preset syrup dripping viscous blob みずあめ とろける たれる", Action::MeltPreset),
         cmd("Group", "group new まとめる グループを作る", Action::AddGroup),
         cmd("Undo", "undo もどす 元に戻す", Action::Undo),
         cmd("Redo", "redo やり直し", Action::Redo),
@@ -183,6 +199,7 @@ pub fn entries() -> Vec<Entry> {
         cmd("Export PNG", "export png image screenshot がぞう 画像で書き出す", Action::ExportPng),
         cmd("Print Check", "print check volume size 体積 おおきさ プリントチェック", Action::PrintCheck),
         cmd("Import SVG", "svg import いんぽーと SVGを読み込む", Action::ImportSvg),
+        cmd("Organic Blob", "organic blob metaball soft smooth puffy ぷっくり ぶろぶ ぼこぼこ 有機 生成 preset プリセット", Action::OrganicBlob),
         cmd("Import Mesh", "mesh stl obj 3mf ply glb import めっしゅ よみこむ とりこむ 取り込み メッシュを読み込む", Action::ImportMesh),
         cmd("SolidCraft で精密に作る", "solid solidcraft precise cad 精密 ソリッド", Action::OpenPrecise),
         cmd("Frame All", "frame all home ぜんたい 全体を見る", Action::FrameAll),
@@ -210,6 +227,12 @@ pub fn entries() -> Vec<Entry> {
 
 /// How well `q` matches an entry: None = no match, lower is better.
 fn score(e: &Entry, q: &str) -> Option<u32> {
+    // library parts rank after commands: a growing library must not push a command (「たま」= sphere) down
+    let base = if e.tag == "Library" { 10 } else { 0 };
+    score_raw(e, q).map(|s| s + base)
+}
+
+fn score_raw(e: &Entry, q: &str) -> Option<u32> {
     let label = e.label.to_lowercase();
     if label == q {
         return Some(0);
@@ -329,7 +352,19 @@ impl App {
         let pi = std::f32::consts::PI;
         match a {
             Action::AddShape(k) => self.add_shape(ctx, k),
+            Action::OrganicTube(preset) => self.add_organic_tube(ctx, preset),
             Action::AddGroup => self.add_group(),
+            Action::Ripple(mode) => {
+                if !matches!(self.sel, Some(crate::model::Pick::Shape(..))) {
+                    self.add_shape(ctx, Kind::Box);
+                }
+                if let Some(crate::model::Pick::Shape(g, s)) = self.sel
+                    && let Some(sh) = self.scene.shape_mut(g, s)
+                {
+                    sh.ripple = Some(crate::ripple::Ripple { mode, ..Default::default() });
+                }
+                self.tab = super::Tab::Shape;
+            }
             Action::Insert(c, i) => {
                 if let Some(item) = library::all().get(c).and_then(|c| c.items.get(i)) {
                     crate::library_ui::insert(self, ctx, item);
@@ -358,7 +393,9 @@ impl App {
             Action::ExportPng => self.start_png(ctx),
             Action::PrintCheck => self.print_check(ctx),
             Action::ImportSvg => crate::svg_dialog::open(ctx),
-            Action::ImportMesh => crate::mesh_dialog::open(ctx),
+            Action::ImportMesh => crate::mesh_dialog::open(ctx, self.document_generation()),
+            Action::OrganicBlob => crate::organic_blob::open(ctx),
+            Action::MeltPreset => crate::melt_preset::open(ctx),
             Action::OpenPrecise => self.open_precise(ctx),
             Action::FrameAll => self.frame_view(false),
             Action::FrameSelection => self.frame_view(true),
@@ -616,6 +653,16 @@ mod tests {
     }
 
     #[test]
+    fn organic_blob_preset_is_discoverable_in_japanese_and_english() {
+        let e = entries();
+        let is_blob = |q: &str| search(&e, q, 10).iter()
+            .any(|i| matches!(e[*i].action, Action::OrganicBlob));
+        assert!(is_blob("Organic Blob"));
+        assert!(is_blob("ぷっくり"));
+        assert!(is_blob("メタボール") || is_blob("metaball"));
+    }
+
+    #[test]
     fn japanese_and_english_names_find_the_same_thing() {
         assert_eq!(top("sphere"), Some(Action::AddShape(Kind::Sphere)));
         assert_eq!(top("球"), Some(Action::AddShape(Kind::Sphere)));
@@ -624,6 +671,9 @@ mod tests {
         assert_eq!(top("元に戻す"), Some(Action::Undo));
         assert_eq!(top("stl"), Some(Action::Export(ExportFormat::Stl)));
         assert_eq!(top("array"), Some(Action::Array));
+        assert_eq!(top("organic tube wave"), Some(Action::OrganicTube(crate::organic_tube::Preset::Wave)));
+        assert_eq!(top("organic tube ring"), Some(Action::OrganicTube(crate::organic_tube::Preset::Ring)));
+        assert_eq!(top("organic tube s"), Some(Action::OrganicTube(crate::organic_tube::Preset::S)));
         assert_eq!(top("ならべ"), Some(Action::Array));
     }
 
@@ -641,6 +691,18 @@ mod tests {
         let first = library::all().first().and_then(|c| c.items.first()).map(|i| i.name.clone()).unwrap_or_default();
         let hits = search(&all, &first, 5);
         assert!(hits.iter().any(|i| all.get(*i).is_some_and(|e| e.label == first)));
+    }
+
+    #[test]
+    fn smooth_fusion_is_found_in_the_existing_search_without_a_second_palette() {
+        let all = entries();
+        for q in ["Smooth Fusion", "なめらか合体", "Smooth Union"] {
+            let hits = search(&all, q, 40);
+            assert!(hits.iter().any(|&i| match all[i].action {
+                Action::Insert(c, _) => library::all().get(c).is_some_and(|cat| cat.name == "Fusion"),
+                _ => false,
+            }), "{q} is not searchable");
+        }
     }
 
     #[test]
