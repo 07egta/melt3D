@@ -119,7 +119,7 @@ impl App {
             if folded {
                 hidden_below = Some(depth);
             }
-            let sel = self.picks().contains(&Pick::Group(gi));
+            let sel = self.is_pick_selected(Pick::Group(gi));
             let (name, op, visible, nshapes) = {
                 let g = &self.scene.groups[gi];
                 (g.name.clone(), g.op, g.visible, g.shapes.len())
@@ -159,7 +159,7 @@ impl App {
                     let (name, op, visible, material) = (s.name.clone(), s.op, s.visible, s.material);
                     // a solid from SolidCraft says so (double click opens it there)
                     let badge = if s.solid.is_some() { style::SOLID_BADGE } else { "" };
-                    let sel = self.picks().contains(&Pick::Shape(gi, si));
+                    let sel = self.is_pick_selected(Pick::Shape(gi, si));
                     let id = ui.id().with(("s", gi, si));
                     let row = self.row(
                         ui,
@@ -242,6 +242,13 @@ impl App {
             let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 24.0), Sense::click());
             let on = chosen == Some(i);
             style::row_bg(ui, &resp, rect, on);
+            // scrolled out of the list: nothing of it would be drawn (see `row`)
+            if !ui.is_rect_visible(rect) {
+                if resp.clicked() {
+                    self.ct.node = Some((gi, si, i));
+                }
+                continue;
+            }
             let c = egui::pos2(rect.left() + indent + 8.0, rect.center().y);
             let col = if on { style::ACCENT } else { style::DIM };
             ui.painter().circle_stroke(c, 5.0, Stroke::new(1.5, col));
@@ -353,6 +360,11 @@ impl App {
         self.row_rects.push((pick, rect));
         let mut out = RowResult::default();
         style::row_bg(ui, &resp, rect, selected);
+        // A row that is scrolled out of the list lies outside the clip rectangle: painting it only
+        // produces shapes the painter throws away. A scene with hundreds of shapes made the list
+        // the slowest part of a frame, so the paint calls are skipped. The row keeps its space,
+        // its clicks and its `row_bg` above, so nothing it shows or does changes.
+        let seen = ui.is_rect_visible(rect);
         // the grip says "drag me"
         let grip = Color32::from_white_alpha(if locked {
             16
@@ -361,23 +373,29 @@ impl App {
         } else {
             44
         });
-        style::gfx::grip(ui.painter(), egui::pos2(rect.left() + 11.0, rect.center().y), grip);
+        if seen {
+            style::gfx::grip(ui.painter(), egui::pos2(rect.left() + 11.0, rect.center().y), grip);
+        }
         let mut x = rect.left() + 18.0 + indent;
         if has_chevron {
             let cr = Rect::from_center_size(egui::pos2(x + 6.0, rect.center().y), vec2(16.0, 20.0));
             let r = ui.interact(cr, id.with("c"), Sense::click());
-            let c = cr.center();
-            let pts = if chevron_open {
-                vec![c + vec2(-4.0, -2.0), c + vec2(4.0, -2.0), c + vec2(0.0, 3.0)]
-            } else {
-                vec![c + vec2(-2.0, -4.0), c + vec2(-2.0, 4.0), c + vec2(3.0, 0.0)]
-            };
-            ui.painter().add(egui::Shape::convex_polygon(pts, if r.hovered() { Color32::WHITE } else { style::DIM }, Stroke::NONE));
+            if seen {
+                let c = cr.center();
+                let pts = if chevron_open {
+                    vec![c + vec2(-4.0, -2.0), c + vec2(4.0, -2.0), c + vec2(0.0, 3.0)]
+                } else {
+                    vec![c + vec2(-2.0, -4.0), c + vec2(-2.0, 4.0), c + vec2(3.0, 0.0)]
+                };
+                ui.painter().add(egui::Shape::convex_polygon(pts, if r.hovered() { Color32::WHITE } else { style::DIM }, Stroke::NONE));
+            }
             out.chevron = r.clicked();
             x += 16.0;
         }
         let ir = Rect::from_min_size(egui::pos2(x, rect.center().y - 10.0), vec2(20.0, 20.0));
-        icon(ui.painter(), ir, style::TEXT);
+        if seen {
+            icon(ui.painter(), ir, style::TEXT);
+        }
         x += 26.0;
         let eye = Rect::from_center_size(egui::pos2(rect.right() - 18.0, rect.center().y), vec2(22.0, 22.0));
         let opr = Rect::from_center_size(egui::pos2(rect.right() - 44.0, rect.center().y), vec2(22.0, 22.0));
@@ -407,7 +425,7 @@ impl App {
                 self.renaming = None;
                 ui.data_mut(|d| d.remove::<bool>(started));
             }
-        } else {
+        } else if seen {
             let col = if visible { style::TEXT } else { style::DIM };
             let clipped = ui.painter().with_clip_rect(name_rect);
             let used = clipped.text(egui::pos2(name_rect.left(), rect.center().y), Align2::LEFT_CENTER, &name, FontId::proportional(13.0), col);
@@ -420,20 +438,24 @@ impl App {
         }
         let er = ui.interact(eye, id.with("e"), Sense::click());
         let orr = ui.interact(opr, id.with("o"), Sense::click());
-        for r in [&er, &orr] {
-            if r.hovered() {
-                ui.painter().rect_filled(r.rect, 7.0, Color32::from_white_alpha(22));
+        if seen {
+            for r in [&er, &orr] {
+                if r.hovered() {
+                    ui.painter().rect_filled(r.rect, 7.0, Color32::from_white_alpha(22));
+                }
             }
         }
-        // a quiet list: the eye and the join/cut mark show on the row under the mouse or the
-        // picked one, and always when they say something unusual (hidden, cut, paint, overlap)
         let near = selected || resp.hovered() || er.hovered() || orr.hovered();
-        if near || !visible {
-            glyphs::eye(ui.painter(), eye, visible, if er.hovered() { Color32::WHITE } else { style::DIM });
-        }
-        if near || op != Op::Add {
-            let opcol = style::op_color(op);
-            glyphs::op(ui.painter(), opr, op, opcol.gamma_multiply(if orr.hovered() { 1.0 } else { 0.8 }));
+        if seen {
+            // a quiet list: the eye and the join/cut mark show on the row under the mouse or the
+            // picked one, and always when they say something unusual (hidden, cut, paint, overlap)
+            if near || !visible {
+                glyphs::eye(ui.painter(), eye, visible, if er.hovered() { Color32::WHITE } else { style::DIM });
+            }
+            if near || op != Op::Add {
+                let opcol = style::op_color(op);
+                glyphs::op(ui.painter(), opr, op, opcol.gamma_multiply(if orr.hovered() { 1.0 } else { 0.8 }));
+            }
         }
         out.eye = er.clicked();
         out.op = orr.clicked();
@@ -1628,4 +1650,43 @@ fn gradient_controls(ui: &mut Ui, m: &mut Material) {
     style::labeled_slider(ui, "Strength", &mut m.gradient, 0.05..=1.0, "How much of the end color shows");
     style::labeled_slider(ui, "From", &mut m.grad_from, 0.0..=1.0, "Where the color starts to change (0 = edge)");
     style::labeled_slider(ui, "To", &mut m.grad_to, 0.0..=1.0, "Where the color finishes changing (1 = opposite edge)");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Draw the scene list in a `height`-tall area; returns the painted shapes and the number of
+    /// rows it laid out.
+    fn list_frame(height: f32) -> (Vec<egui::Shape>, usize) {
+        let ctx = egui::Context::default();
+        crate::style::apply(&ctx);
+        let mut app = App::new(true, None);
+        app.new_scene(crate::bench::library_scene(60));
+        let mut rows = 0;
+        let mut out = ctx.run_ui(
+            egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(400.0, height))), time: Some(1.0), ..Default::default() },
+            |ui| {
+                app.layers(ui);
+                rows = app.row_rects.len();
+            },
+        );
+        out.textures_delta.clear();
+        (out.shapes.into_iter().map(|c| c.shape).collect(), rows)
+    }
+
+    /// A row scrolled out of the list is not painted (a scene of hundreds of shapes made that the
+    /// slowest part of a frame). What is left on the screen must be exactly what the same list
+    /// shows in an area tall enough for every row.
+    #[test]
+    fn the_scene_list_paints_only_what_can_be_seen_and_nothing_else_changes() {
+        let (tall, tall_rows) = list_frame(4000.0);
+        let (short, short_rows) = list_frame(400.0);
+        assert!(tall_rows > 40, "the test scene has many rows ({tall_rows})");
+        assert_eq!(short_rows, tall_rows, "every row is still laid out (space, clicks, drag and shift ranges)");
+        assert!(short.len() < tall.len(), "the scrolled-out rows painted nothing ({} vs {})", short.len(), tall.len());
+        for shape in &short {
+            assert!(tall.contains(shape), "a row that can be seen changed what it draws: {shape:?}");
+        }
+    }
 }

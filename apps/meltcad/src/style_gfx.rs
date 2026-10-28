@@ -198,31 +198,65 @@ pub fn ball(out: &impl Sink, centre: Pos2, radius: f32, light: Vec2, stops: &[(f
     let seg = if r < 10.0 { 20 } else { 28 };
     // keep the light spot inside the disc
     let l = if light.length() > 0.9 { light * (0.9 / light.length()) } else { light };
-    let mut mesh = Mesh::default();
-    mesh.colored_vertex(centre + l * inner_r, ramp(stops, 0.0));
-    for k in 1..=rings {
-        let s = k as f32 / rings as f32;
-        let c = centre + l * inner_r * (1.0 - s);
-        let col = ramp(stops, s);
-        for i in 0..seg {
-            let a = 2.0 * PI * i as f32 / seg as f32;
-            mesh.colored_vertex(c + vec2(a.cos(), a.sin()) * inner_r * s, col);
+    // A scene list draws hundreds of these with the same size, so the ring's cosine/sine table and
+    // its triangle list are kept instead of recomputed. One size at a time is all the callers need.
+    let mesh = RING.with_borrow_mut(|ring: &mut Ring| {
+        if ring.seg != seg || ring.rings != rings {
+            ring.seg = seg;
+            ring.rings = rings;
+            ring.points.clear();
+            ring.points.reserve(seg);
+            for i in 0..seg {
+                let a = 2.0 * PI * i as f32 / seg as f32;
+                ring.points.push(vec2(a.cos(), a.sin()));
+            }
+            ring.indices.clear();
+            ring.indices.reserve(seg * (2 * rings - 1) * 3);
+            let seg_u = seg as u32;
+            for i in 0..seg_u {
+                ring.indices.extend_from_slice(&[0, 1 + i, 1 + (i + 1) % seg_u]);
+            }
+            for k in 1..rings as u32 {
+                let a0 = 1 + (k - 1) * seg_u;
+                let a1 = 1 + k * seg_u;
+                for i in 0..seg_u {
+                    let j = (i + 1) % seg_u;
+                    ring.indices.extend_from_slice(&[a0 + i, a1 + i, a1 + j]);
+                    ring.indices.extend_from_slice(&[a0 + i, a1 + j, a0 + j]);
+                }
+            }
         }
-    }
-    let seg_u = seg as u32;
-    for i in 0..seg_u {
-        mesh.add_triangle(0, 1 + i, 1 + (i + 1) % seg_u);
-    }
-    for k in 1..rings as u32 {
-        let a0 = 1 + (k - 1) * seg_u;
-        let a1 = 1 + k * seg_u;
-        for i in 0..seg_u {
-            let j = (i + 1) % seg_u;
-            mesh.add_triangle(a0 + i, a1 + i, a1 + j);
-            mesh.add_triangle(a0 + i, a1 + j, a0 + j);
+        let mut mesh = Mesh::default();
+        // Sized once: growing vertex by vertex reallocated (and copied) the whole mesh per swatch.
+        mesh.reserve_vertices(1 + rings * seg);
+        mesh.indices.reserve(ring.indices.len());
+        mesh.colored_vertex(centre + l * inner_r, ramp(stops, 0.0));
+        for k in 1..=rings {
+            let s = k as f32 / rings as f32;
+            let c = centre + l * inner_r * (1.0 - s);
+            let col = ramp(stops, s);
+            for offset in &ring.points {
+                mesh.colored_vertex(c + *offset * inner_r * s, col);
+            }
         }
-    }
+        mesh.indices.extend_from_slice(&ring.indices);
+        mesh
+    });
     out.put(Shape::mesh(mesh));
+}
+
+/// The last ring of unit-circle points and its triangles, as used by `ball`.
+struct Ring {
+    seg: usize,
+    rings: usize,
+    points: Vec<Vec2>,
+    indices: Vec<u32>,
+}
+
+thread_local! {
+    static RING: RefCell<Ring> = const {
+        RefCell::new(Ring { seg: 0, rings: 0, points: Vec::new(), indices: Vec::new() })
+    };
 }
 
 /// Layers of soft shadow under `rect`: `(offset_y, blur, spread, alpha)` per layer.
@@ -344,6 +378,79 @@ mod tests {
             for p in pts {
                 assert!(rect.expand(0.01).contains(p), "{p:?} with radius {r}");
             }
+        }
+    }
+
+    /// The ball's mesh is exactly the one the straightforward construction makes (the ring table
+    /// and the reservations are only faster, not different), at every size and after a size change.
+    #[test]
+    fn the_ball_mesh_is_identical_to_the_straightforward_one() {
+        let stops = [(0.0, Color32::from_rgb(230, 220, 200)), (0.45, Color32::from_rgb(180, 140, 110)), (1.0, Color32::from_rgb(90, 60, 40))];
+        for (radius, light) in [
+            (8.5, vec2(-0.34, -0.38)),
+            (20.0, vec2(-0.4, -0.4)),
+            (9.99, vec2(0.8, 0.9)),
+            (8.5, vec2(-0.34, -0.38)),
+            (30.0, vec2(5.0, 5.0)),
+            (8.5, vec2(-0.34, -0.38)),
+        ] {
+            let centre = pos2(40.0, 70.0);
+            // (drawn twice: the second time the ring table is already there)
+            for _ in 0..2 {
+                let shapes = drawn(|sink| ball(sink, centre, radius, light, &stops));
+                let (rim, mesh) = match (shapes.first(), shapes.get(1)) {
+                    (Some(Shape::Circle(c)), Some(Shape::Mesh(m))) => (c.fill, m),
+                    other => panic!("a rim and a mesh expected, got {other:?}"),
+                };
+                let (want_rim, want) = reference_ball(centre, radius, light, &stops);
+                assert_eq!(rim, want_rim, "rim at {radius}");
+                assert_eq!(mesh.vertices, want.vertices, "vertices at {radius}");
+                assert_eq!(mesh.indices, want.indices, "triangles at {radius}");
+            }
+        }
+    }
+
+    /// The construction before the ring table: one cosine/sine per vertex, no reservations.
+    fn reference_ball(centre: Pos2, radius: f32, light: Vec2, stops: &[(f32, Color32)]) -> (Color32, Mesh) {
+        let r = radius.max(0.5);
+        let inner_r = r - 0.4;
+        let rings = if r < 10.0 { 5 } else { 8 };
+        let seg = if r < 10.0 { 20 } else { 28 };
+        let l = if light.length() > 0.9 { light * (0.9 / light.length()) } else { light };
+        let mut mesh = Mesh::default();
+        mesh.colored_vertex(centre + l * inner_r, ramp(stops, 0.0));
+        for k in 1..=rings {
+            let s = k as f32 / rings as f32;
+            let c = centre + l * inner_r * (1.0 - s);
+            let col = ramp(stops, s);
+            for i in 0..seg {
+                let a = 2.0 * PI * i as f32 / seg as f32;
+                mesh.colored_vertex(c + vec2(a.cos(), a.sin()) * inner_r * s, col);
+            }
+        }
+        let seg_u = seg as u32;
+        for i in 0..seg_u {
+            mesh.add_triangle(0, 1 + i, 1 + (i + 1) % seg_u);
+        }
+        for k in 1..rings as u32 {
+            let a0 = 1 + (k - 1) * seg_u;
+            let a1 = 1 + k * seg_u;
+            for i in 0..seg_u {
+                let j = (i + 1) % seg_u;
+                mesh.add_triangle(a0 + i, a1 + i, a1 + j);
+                mesh.add_triangle(a0 + i, a1 + j, a0 + j);
+            }
+        }
+        (ramp(stops, 1.0), mesh)
+    }
+
+    /// What a painter helper put into a `Buf`, flattened.
+    fn drawn(f: impl FnOnce(&Buf)) -> Vec<Shape> {
+        let buf = Buf::default();
+        f(&buf);
+        match buf.into_shape() {
+            Shape::Vec(v) => v,
+            other => vec![other],
         }
     }
 
