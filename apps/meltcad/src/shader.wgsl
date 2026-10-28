@@ -248,6 +248,7 @@ fn shape_dist(s: Shape, p: vec3<f32>) -> f32 {
     let sz = s.size.xyz;
     let rd = s.size.w;
     let chamfer = s.extra.w > 0.5 && rd > 0.0;
+    shell_k = 1.0;
     var r = 0.0;
     if (kind == 0) {
         r = length(q) - sz.x;
@@ -338,7 +339,7 @@ fn shape_dist(s: Shape, p: vec3<f32>) -> f32 {
     // Hollow walls of thickness `shell`, in the shape's own mm, through the same
     // distance-shortening the shape maths uses. (A curve hollows itself in curve_dist.)
     if (s.extra.x > 0.0 && kind != 18) {
-        let sh = s.extra.x * s.pos.w * shell_shortening(s, q, kind, fc) * ripple_shorten;
+        let sh = s.extra.x * s.pos.w * shell_shortening(s, q, fc) * ripple_shorten;
         r = abs(r + sh * 0.5) - sh * 0.5;
     }
     return r;
@@ -381,16 +382,10 @@ fn face_melt_shortening(s: Shape, q: vec3<f32>, fc: i32) -> f32 {
 
 // How much shorter than a true distance the shape maths makes this point's distance
 // (`Prepared::shell_shortening`): sweeps, lofts and wave-warped revolves scale it down so that
-// marching cannot overshoot, and a shell on that field must use the same scale.
-fn shell_shortening(s: Shape, q: vec3<f32>, kind: i32, fc: i32) -> f32 {
-    var shorten = 1.0;
-    if (kind == 19) {
-        shorten = 0.7;
-    } else if (kind == 17) {
-        shorten = loft_shell_safety(s, q);
-    } else if (kind == 16) {
-        shorten = vase_wave_radial(q, s.params.y, s.params.z, s.params.w).y;
-    }
+// marching cannot overshoot (they leave their factor in `shell_k`), and so do face melts; a shell
+// on that field must use the same scale.
+fn shell_shortening(s: Shape, q: vec3<f32>, fc: i32) -> f32 {
+    var shorten = shell_k;
     if (fc > 0) { shorten = shorten * face_melt_shortening(s, q, fc); }
     return shorten;
 }
