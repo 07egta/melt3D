@@ -204,6 +204,8 @@ pub struct Store {
     restored_from: Option<PathBuf>,
     last_snapshot_rev: Option<u64>,
     next_due: Instant,
+    /// Time between checkpoints; the setting `autosave_minutes` changes it.
+    interval: Duration,
     /// Bumped whenever the document is saved, opened or otherwise replaced. A checkpoint that
     /// was already serializing belongs to the old generation and must never be published.
     epoch: u64,
@@ -279,6 +281,7 @@ impl Store {
             restored_from: None,
             last_snapshot_rev: None,
             next_due: now + INTERVAL,
+            interval: INTERVAL,
             epoch: 0,
             in_flight: None,
             #[cfg(test)]
@@ -322,6 +325,17 @@ impl Store {
 
     /// Is `start_checkpoint` going to do anything at `now`? Its callers do the expensive part
     /// (finding out whether the scene changed, which compares the whole scene) only when it is.
+    /// Use a new time between checkpoints; the next one is due that long from `now`.
+    pub fn set_interval(&mut self, interval: Duration, now: Instant) {
+        self.interval = interval;
+        self.next_due = now + interval;
+    }
+
+    /// How long until the next checkpoint is due (zero when it is), at most one interval.
+    pub fn wait(&self, now: Instant) -> Duration {
+        self.next_due.saturating_duration_since(now).min(self.interval)
+    }
+
     pub fn due(&self, now: Instant) -> bool {
         self.in_flight.is_none() && now >= self.next_due
     }
@@ -333,7 +347,7 @@ impl Store {
         if self.in_flight.is_some() || now < self.next_due {
             return Ok(false);
         }
-        self.next_due = now + INTERVAL;
+        self.next_due = now + self.interval;
         if !changed || self.last_snapshot_rev == Some(rev) {
             return Ok(false);
         }
@@ -371,7 +385,7 @@ impl Store {
         if now < self.next_due {
             return Ok(false);
         }
-        self.next_due = now + INTERVAL;
+        self.next_due = now + self.interval;
         if !changed || self.last_snapshot_rev == Some(rev) {
             return Ok(false);
         }
@@ -461,7 +475,7 @@ impl Store {
         }
         self.restored_from = None;
         self.last_snapshot_rev = None;
-        self.next_due = Instant::now() + INTERVAL;
+        self.next_due = Instant::now() + self.interval;
         Ok(())
     }
 

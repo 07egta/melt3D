@@ -693,16 +693,7 @@ impl App {
     /// The button in the tool strip.
     pub fn sketch_button(&mut self, ui: &mut Ui) {
         let on = self.sk.on && self.sk.keep_sketch;
-        if style::wide_button(
-            ui,
-            "Sketch",
-            "Draw a sketch. Left-click places points; right-click finishes. Choose a solid operation afterwards",
-            on,
-            None,
-            glyph,
-        )
-        .clicked()
-        {
+        if style::wide_button(ui, crate::i18n::tr("tool.sketch"), crate::i18n::tr("tool.sketch.tip"), on, None, glyph).clicked() {
             self.set_sketch_tool(!on);
             self.sk.keep_sketch = !on;
         }
@@ -711,8 +702,8 @@ impl App {
     /// The coloured strip button that switches to the solid-making tools (and back).
     pub fn solid_mode_button(&mut self, ui: &mut Ui) {
         let on = self.solid_mode;
-        let tip = "Draw a sketch and make a solid from it (SolidCraft's sketch screen). Come back with the button at the top";
-        if style::wide_button(ui, "Solid", tip, on, Some(SOLID_COLOR), crate::sketch_icons::solid).clicked() {
+        let tip = crate::i18n::tr("tool.solid.tip");
+        if style::wide_button(ui, crate::i18n::tr("tool.solid"), tip, on, Some(SOLID_COLOR), crate::sketch_icons::solid).clicked() {
             // The sketch screen is SolidCraft's: it is open already when this button is shown again.
             let ctx = ui.ctx().clone();
             self.open_precise_sketch(&ctx);
@@ -725,15 +716,10 @@ impl App {
         let ctx = ui.ctx().clone();
         type Icon = fn(&egui::Painter, egui::Rect, Color32);
         let items: [(Make, &str, &str, Icon); 4] = [
-            (
-                Make::Revolve,
-                "Revolve",
-                "Select a finished sketch on a standing plane, then revolve it around its original axis",
-                crate::sketch_icons::revolve,
-            ),
-            (Make::Loft, "Loft", "Select a finished sketch, then blend it into a top outline", crate::sketch_icons::loft),
-            (Make::Extrude, "Extrude", "Select a finished sketch, set its depth, then right-click to confirm", crate::sketch_icons::extrude),
-            (Make::Sweep, "Sweep", "Select a saved path for a round tube, or a closed sketch for a profile sweep", crate::sketch_icons::sweep),
+            (Make::Revolve, crate::i18n::tr("tool.revolve"), crate::i18n::tr("tool.revolve.tip"), crate::sketch_icons::revolve),
+            (Make::Loft, crate::i18n::tr("tool.loft"), crate::i18n::tr("tool.loft.tip"), crate::sketch_icons::loft),
+            (Make::Extrude, crate::i18n::tr("tool.extrude"), crate::i18n::tr("tool.extrude.tip"), crate::sketch_icons::extrude),
+            (Make::Sweep, crate::i18n::tr("tool.sweep"), crate::i18n::tr("tool.sweep.tip"), crate::sketch_icons::sweep),
         ];
         for (m, name, tip, icon) in items {
             let on = self.sk.on && !self.sk.keep_sketch && self.sk.make == m;
@@ -752,7 +738,7 @@ impl App {
                 if self.make_from_selected_line(&ctx, m) {
                     continue;
                 }
-                self.say(&ctx, "Select a finished sketch first. Use Sketch to draw one; right-click to finish it".to_string());
+                self.say(&ctx, crate::i18n::tr("error.select_sketch").to_string());
             }
         }
     }
@@ -934,34 +920,38 @@ impl App {
                 hits.push((hit, [px.x, px.y]));
             }
         };
-        add(SnapHit { at: [0.0, 0.0], kind: SnapKind::Origin });
-        for hit in geo.points.drain(..) {
-            add(hit);
-        }
-        // Only consider edges close enough on screen; this bounds intersection work.
-        let nearby: Vec<_> = geo
-            .edges
-            .iter()
-            .copied()
-            .filter(|(a, b)| {
-                let (Some(a), Some(b)) = (self.sketch_px(rect, frame, *a), self.sketch_px(rect, frame, *b)) else { return false };
-                let ab = b - a;
-                let t = ((mouse - a).dot(ab) / ab.length_sq().max(1e-6)).clamp(0.0, 1.0);
-                (mouse - (a + ab * t)).length() <= sketch::SNAP_HOLD_PX
-            })
-            .take(64)
-            .collect();
-        for i in 0..nearby.len() {
-            for j in i + 1..nearby.len() {
-                let (a, b) = nearby[i];
-                let (c, d) = nearby[j];
-                if let Some(at) = sketch::snap_intersection(a, b, c, d) {
-                    add(SnapHit { at, kind: SnapKind::Intersection });
+        if self.preferences.snap_vertex {
+            add(SnapHit { at: [0.0, 0.0], kind: SnapKind::Origin });
+            for hit in geo.points.drain(..) {
+                add(hit);
+            }
+            // Only consider edges close enough on screen; this bounds intersection work.
+            let nearby: Vec<_> = geo
+                .edges
+                .iter()
+                .copied()
+                .filter(|(a, b)| {
+                    let (Some(a), Some(b)) = (self.sketch_px(rect, frame, *a), self.sketch_px(rect, frame, *b)) else { return false };
+                    let ab = b - a;
+                    let t = ((mouse - a).dot(ab) / ab.length_sq().max(1e-6)).clamp(0.0, 1.0);
+                    (mouse - (a + ab * t)).length() <= sketch::SNAP_HOLD_PX
+                })
+                .take(64)
+                .collect();
+            for i in 0..nearby.len() {
+                for j in i + 1..nearby.len() {
+                    let (a, b) = nearby[i];
+                    let (c, d) = nearby[j];
+                    if let Some(at) = sketch::snap_intersection(a, b, c, d) {
+                        add(SnapHit { at, kind: SnapKind::Intersection });
+                    }
                 }
             }
         }
         let grid = SnapHit { at: sketch::snap(raw, step), kind: SnapKind::Grid };
-        add(grid);
+        if self.preferences.snap_grid {
+            add(grid);
+        }
         let anchor = self.sk.pts.last().copied().or(self.sk.anchor);
         if let Some(a) = anchor {
             add(SnapHit { at: [raw[0], a[1]], kind: SnapKind::Horizontal });
@@ -975,7 +965,8 @@ impl App {
         // Keep original grid semantics when it is more than 11px away from the
         // raw cursor; the explicit geometric snaps themselves are pixel limited.
         let chosen = sketch::choose_screen_snap([mouse.x, mouse.y], &hits, old);
-        Some((chosen.map_or(grid.at, |hit| hit.at), chosen))
+        let fallback = if self.preferences.snap_grid { grid.at } else { raw };
+        Some((chosen.map_or(fallback, |hit| hit.at), chosen))
     }
 
     // ----- what a finished gesture does -----
@@ -3538,6 +3529,14 @@ mod tests {
             assert_eq!(point, [20.0, 10.0]);
             assert_eq!(hit.unwrap().kind, SnapKind::Endpoint);
         }
+        // Preferences can switch point/edge snapping off without losing the grid fallback.
+        app.preferences.snap_vertex = false;
+        app.apply_preferences();
+        let px = app.cam.project(r, f.to_world([20.0, 10.0])).unwrap();
+        let (_, hit) = app.sketch_resolve_snap(r, px + vec2(6.0, 0.0), 1.0, &f, None, None).unwrap();
+        assert!(hit.is_none_or(|h| h.kind != SnapKind::Endpoint), "point snapping is off");
+        app.preferences.snap_vertex = true;
+        app.apply_preferences();
     }
 
     #[test]
@@ -3554,6 +3553,16 @@ mod tests {
         let (at, hit) = app.sketch_resolve_snap(r, point, 1.0, &f, None, None).unwrap();
         assert!(at[0].is_finite() && at[1].is_finite());
         assert!(hit.is_none_or(|h| h.kind == SnapKind::Grid));
+        // With grid snapping off the cursor stays at the unsnapped plane point.
+        app.preferences.snap_grid = false;
+        app.apply_preferences();
+        let (raw, hit) = app.sketch_resolve_snap(r, point, 1.0, &f, None, None).unwrap();
+        assert!(hit.is_none_or(|h| h.kind != SnapKind::Grid), "grid snapping is off");
+        let (o, d) = app.cam.ray_at(r, point);
+        let expected = f.hit(o, d).expect("the ray still hits the plane");
+        assert!((raw[0] - expected[0]).abs() < 0.01 && (raw[1] - expected[1]).abs() < 0.01, "raw point {raw:?} vs {expected:?}");
+        app.preferences.snap_grid = true;
+        app.apply_preferences();
     }
 
     /// Edit the outline of a made shape point by point, with undo.

@@ -38,6 +38,20 @@ impl Format {
             Format::Glb => "GLB",
         }
     }
+    /// The stable id kept in preferences.
+    pub fn id(self) -> &'static str {
+        match self {
+            Format::Stl => "stl",
+            Format::StlAscii => "stl-ascii",
+            Format::Obj => "obj",
+            Format::ThreeMf => "3mf",
+            Format::Ply => "ply",
+            Format::Glb => "glb",
+        }
+    }
+    pub fn from_id(id: &str) -> Option<Format> {
+        Format::ALL.iter().copied().find(|f| f.id() == id)
+    }
     /// Can the file hold the colours of the model?
     pub fn has_colour(self) -> bool {
         !matches!(self, Format::Stl | Format::StlAscii)
@@ -73,6 +87,24 @@ impl Units {
             Units::Cm => "cm",
             Units::M => "m",
             Units::Inch => "inch",
+        }
+    }
+    /// The stable id kept in preferences (`in`, not `inch`).
+    pub fn id(self) -> &'static str {
+        match self {
+            Units::Mm => "mm",
+            Units::Cm => "cm",
+            Units::M => "m",
+            Units::Inch => "in",
+        }
+    }
+    pub fn from_id(id: &str) -> Option<Units> {
+        match id {
+            "mm" => Some(Units::Mm),
+            "cm" => Some(Units::Cm),
+            "m" => Some(Units::M),
+            "in" | "inch" => Some(Units::Inch),
+            _ => None,
         }
     }
     /// The 3MF `unit` attribute.

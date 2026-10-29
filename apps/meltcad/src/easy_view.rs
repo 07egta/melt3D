@@ -50,6 +50,8 @@ struct Setup<'a> {
     fine: bool,
     /// Analysis view mode (`ViewMode::id`), 0 = normal shading.
     mode: u32,
+    /// The floor-grid preference (visibility and spacing).
+    grid: crate::prefs::GridView,
 }
 
 fn lin(c: V3) -> V3 {
@@ -111,8 +113,8 @@ fn soft_shadow(f: &Field, ro: V3, rd: V3, max_t: f32, steps: usize) -> f32 {
 
 /// The grid lines at ground point `gp`, whose pixel is `footprint` mm wide: the colour changes
 /// to mix in (thin lines, every tenth line, the red x axis and the green y axis).
-fn grid(col: V3, gp: V3, footprint: f32, fade: f32, below: bool) -> V3 {
-    let gs = 10.0_f32;
+fn grid(col: V3, gp: V3, footprint: f32, fade: f32, below: bool, spacing_mm: f32) -> V3 {
+    let gs = spacing_mm.clamp(crate::prefs::MIN_GRID_MM, crate::prefs::MAX_GRID_MM);
     let w = (footprint * 1.5).max(1e-4);
     let line_of = |scale: f32| {
         let a =
@@ -205,7 +207,7 @@ fn pixel(s: &Setup, x: usize, y: usize) -> [u8; 4] {
     let (o, rd) = s.cam.ray([u * 2.0 - 1.0, 1.0 - v * 2.0], s.aspect);
     let env = s.env;
     let mut col = background(env, u, v);
-    let grid_on = env.grid;
+    let grid_on = env.grid && s.grid.on;
     let floor_on = env.floor;
 
     // the ground at z = 0
@@ -259,7 +261,7 @@ fn pixel(s: &Setup, x: usize, y: usize) -> [u8; 4] {
     // The grid is an overlay: it stays visible over geometry behind the plane without hiding it.
     if grid_on && ground_in_front {
         let gp = add(o, mul(rd, t_ground));
-        col = grid(col, gp, footprint(gp), 1.0, !above);
+        col = grid(col, gp, footprint(gp), 1.0, !above, s.grid.size_mm);
     }
     let [mut r, mut g, mut b] = encode(col, env.exposure);
     if let Some(n) = surf_n {
@@ -293,10 +295,26 @@ pub fn render_mode(
     mode: u32,
     cancel: &(dyn Fn() -> bool + Sync),
 ) -> Option<Vec<u8>> {
+    render_mode_with_grid(scene, cam, size, fine, threads, mode, crate::prefs::GridView::default(), cancel)
+}
+
+/// `render_mode` with the Settings window's grid preference.
+#[allow(clippy::too_many_arguments)] // mirrors render_mode, plus the one grid value
+pub fn render_mode_with_grid(
+    scene: &Scene,
+    cam: &Camera,
+    size: [usize; 2],
+    fine: bool,
+    threads: usize,
+    mode: u32,
+    grid: crate::prefs::GridView,
+    cancel: &(dyn Fn() -> bool + Sync),
+) -> Option<Vec<u8>> {
     let size = [size[0].clamp(1, 8192), size[1].clamp(1, 8192)];
     let field = Field::new(scene);
     let bound = crate::gpu::bounds(scene, None);
-    let setup = Setup { field: &field, env: &scene.env, cam, size, aspect: size[0] as f32 / size[1] as f32, bound, fine, mode };
+    let grid = grid.sanitized();
+    let setup = Setup { field: &field, env: &scene.env, cam, size, aspect: size[0] as f32 / size[1] as f32, bound, fine, mode, grid };
     let threads = threads.clamp(1, 64).min(size[1]);
     let rows: Vec<Option<Rows>> = std::thread::scope(|sc| {
         let handles: Vec<_> = (0..threads)
@@ -343,6 +361,7 @@ struct Job {
     sizes: Vec<[usize; 2]>,
     moving: bool,
     mode: u32,
+    grid: crate::prefs::GridView,
 }
 
 /// A finished picture.
@@ -386,7 +405,7 @@ fn spawn_worker(ctx: Option<egui::Context>) -> Option<Worker> {
                     // must not turn expensive shadows and fine normals back on.
                     let fine = !job.moving && last;
                     let done = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        render_mode(&job.scene, &job.cam, *size, fine, threads, job.mode, &cancel)
+                        render_mode_with_grid(&job.scene, &job.cam, *size, fine, threads, job.mode, job.grid, &cancel)
                     }));
                     match done {
                         Ok(Some(rgba)) => {
@@ -418,6 +437,7 @@ struct Key {
     view: [u32; 2],
     moving: bool,
     mode: u32,
+    grid: crate::prefs::GridView,
 }
 
 /// The simple view: asks the worker for pictures, keeps the latest one as a texture.
@@ -436,7 +456,21 @@ pub struct EasyView {
 
 impl EasyView {
     /// Make sure the picture shows `scene` through `cam` at `view_px`; call every frame.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn update(&mut self, ctx: &egui::Context, scene: &Scene, cam: &Camera, view_px: [u32; 2], moving: bool) {
+        self.update_with_grid(ctx, scene, cam, view_px, moving, crate::prefs::GridView::default());
+    }
+
+    /// `update` with the Settings window's grid visibility and spacing.
+    pub fn update_with_grid(
+        &mut self,
+        ctx: &egui::Context,
+        scene: &Scene,
+        cam: &Camera,
+        view_px: [u32; 2],
+        moving: bool,
+        grid: crate::prefs::GridView,
+    ) {
         if self.worker.is_none() && !self.failed {
             self.worker = spawn_worker(Some(ctx.clone()));
             self.failed = self.worker.is_none();
@@ -459,6 +493,7 @@ impl EasyView {
             view: view_px,
             moving,
             mode: self.mode,
+            grid: grid.sanitized(),
         };
         if self.requested.as_ref().is_some_and(|(_, k)| *k == key) {
             return;
@@ -466,7 +501,7 @@ impl EasyView {
         self.next_id += 1;
         let id = self.next_id;
         worker.latest.store(id, Ordering::Relaxed);
-        let job = Job { id, scene: key.scene.clone(), cam: *cam, sizes: sizes(view_px, moving), moving, mode: self.mode };
+        let job = Job { id, scene: key.scene.clone(), cam: *cam, sizes: sizes(view_px, moving), moving, mode: self.mode, grid: key.grid };
         if worker.tx.send(job).is_ok() {
             self.requested = Some((id, key));
             self.settled = false;
@@ -639,6 +674,27 @@ mod tests {
     }
 
     #[test]
+    fn the_simple_view_honours_the_grid_visibility_and_spacing_preferences() {
+        let mut sc = Scene::default();
+        sc.groups[0].shapes.clear();
+        sc.env.floor = false;
+        let mut cam = Camera::default();
+        cam.look(0.0, std::f32::consts::FRAC_PI_2 - 0.01);
+        cam.target = [0.0, 0.0, 0.0];
+        cam.dist = 120.0;
+        let (w, h) = (120, 120);
+        let render_grid = |grid| render_mode_with_grid(&sc, &cam, [w, h], true, 2, 0, grid, &never).expect("drawn");
+        let on = render_grid(crate::prefs::GridView { on: true, size_mm: 10.0 });
+        let off = render_grid(crate::prefs::GridView { on: false, size_mm: 10.0 });
+        let wide = render_grid(crate::prefs::GridView { on: true, size_mm: 40.0 });
+        assert_ne!(on, off, "turning the grid off removes its lines");
+        assert_ne!(on, wide, "a wider spacing moves the grid lines");
+        let corner = px(&off, w, 3, 3);
+        let count = |img: &[u8]| img.chunks(4).filter(|p| (p[0] as i32 - corner[0] as i32).abs() > 12).count();
+        assert!(count(&on) > count(&off) + 100, "the grid adds visible lines");
+    }
+
+    #[test]
     fn a_shape_is_drawn_solid_in_its_colour_and_the_sky_colour_follows_the_room() {
         let mut sc = Scene::default();
         sc.groups[0].shapes[0] = Shape::new(Kind::Sphere, [0.0, 0.0, 20.0], Material { color: [0.9, 0.1, 0.1], ..Material::default() });
@@ -708,14 +764,20 @@ mod tests {
         assert_ne!(coarse, fine, "the fixture must distinguish the two shading modes");
 
         worker.latest.store(1, Ordering::Relaxed);
-        worker.tx.send(Job { id: 1, scene: scene.clone(), cam, sizes: vec![size], moving: true, mode: 0 }).expect("moving request");
+        worker
+            .tx
+            .send(Job { id: 1, scene: scene.clone(), cam, sizes: vec![size], moving: true, mode: 0, grid: crate::prefs::GridView::default() })
+            .expect("moving request");
         let moving = worker.rx.recv_timeout(std::time::Duration::from_secs(10)).expect("moving frame");
         assert_eq!(moving.id, 1);
         assert!(moving.last, "a coarse moving pass still completes its request");
         assert_eq!(moving.rgba, coarse, "moving must not spend work on fine shading");
 
         worker.latest.store(2, Ordering::Relaxed);
-        worker.tx.send(Job { id: 2, scene, cam, sizes: vec![[24, 15], size], moving: false, mode: 0 }).expect("still request");
+        worker
+            .tx
+            .send(Job { id: 2, scene, cam, sizes: vec![[24, 15], size], moving: false, mode: 0, grid: crate::prefs::GridView::default() })
+            .expect("still request");
         let first = worker.rx.recv_timeout(std::time::Duration::from_secs(10)).expect("first still frame");
         let final_frame = worker.rx.recv_timeout(std::time::Duration::from_secs(10)).expect("fine still frame");
         assert!(!first.last);
