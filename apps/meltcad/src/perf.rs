@@ -68,19 +68,19 @@ impl Quality {
 
     pub fn label(self) -> &'static str {
         match self {
-            Quality::Light => "かるい",
-            Quality::Normal => "ふつう",
-            Quality::Fine => "きれい",
-            Quality::Auto => "じどう",
+            Quality::Light => "Light",
+            Quality::Normal => "Normal",
+            Quality::Fine => "Sharp",
+            Quality::Auto => "Auto",
         }
     }
 
     pub fn hint(self) -> &'static str {
         match self {
-            Quality::Light => "いちばん軽い (画面の半分の細かさ)",
-            Quality::Normal => "ほどほど (4分の3の細かさ)",
-            Quality::Fine => "いつもフルの細かさ",
-            Quality::Auto => "止まっているときはきれい、動かすときは速さに合わせて軽くする",
+            Quality::Light => "Lightest (half the screen detail)",
+            Quality::Normal => "Medium (three-quarters detail)",
+            Quality::Fine => "Always full detail",
+            Quality::Auto => "Sharp when still; lighter while moving to keep up the speed",
         }
     }
 
@@ -148,6 +148,14 @@ impl Activity {
     /// Something is moving right now.
     pub fn touch(&mut self, now: f64) {
         self.last = now;
+    }
+
+    /// Use the existing cheap interactive pass only when the hovered *object* changes.
+    /// Mere pointer movement over the same object must not keep full quality deferred.
+    pub fn hover_changed(&mut self, now: f64, before: Option<crate::model::Pick>, after: Option<crate::model::Pick>) {
+        if before != after {
+            self.touch(now);
+        }
     }
 
     /// Draw the cheap picture? True while moving and for `SETTLE_SECS` after.
@@ -244,11 +252,17 @@ pub fn view_flags(srgb: bool, fast: bool, glow: bool) -> f32 {
     v as f32
 }
 
-/// Does any visible shape glow (so the shader must march with materials and draw halos)?
+/// Does any *rendered* source contain a visible lamp? A visible linked copy can draw a
+/// hidden source, but an unrelated hidden lamp must not force the expensive halo march.
+#[cfg(test)]
 pub fn scene_has_glow(scene: &Scene) -> bool {
-    // a linked copy shows its source's shapes (even a hidden source's)
-    let linked = scene.groups.iter().any(|g| g.visible && g.is_linked());
-    scene.groups.iter().filter(|g| g.visible || linked).any(|g| g.shapes.iter().any(|s| s.visible && s.material.glow > 0.0))
+    let resolved = crate::pattern::resolve(scene);
+    scene_has_glow_resolved(scene, &resolved)
+}
+
+/// The same test with the already-resolved groups (packing must not resolve instances twice).
+pub fn scene_has_glow_resolved(scene: &Scene, resolved: &[crate::pattern::RGroup]) -> bool {
+    resolved.iter().any(|rg| scene.groups.get(rg.src).is_some_and(|source| source.shapes.iter().any(|s| s.visible && s.material.glow > 0.0)))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -260,7 +274,17 @@ pub fn shape_radius(s: &Shape) -> f32 {
     let h = s.local_half();
     let sc = s.scale;
     let v = [h[0] * sc[0].abs(), h[1] * sc[1].abs(), h[2] * sc[2].abs()];
-    let r = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt() * 1.08 + 1.0;
+    let top = sc[0].abs().max(sc[1].abs()).max(sc[2].abs());
+    let low = sc[0].abs().min(sc[1].abs()).min(sc[2].abs());
+    // a stretched shape's distance is only a lower bound (it is scaled by the smallest factor), so
+    // it can read near where a sphere says "far": such a shape is never skipped (#97)
+    if top.is_finite() && low.is_finite() && top > low * 1.0001 + 1e-6 {
+        return 1.0e4;
+    }
+    // the swell is made in the shape's own units and grows with its scale (#96)
+    let swell = s.face_melt.parts().map_or(0.0, |m| m.2.abs() * top);
+    let ripple = s.ripple.map_or(0.0, |r| if r.preserve_outline { 0.0 } else { r.height * top });
+    let r = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt() * 1.08 + 1.0 + swell + ripple;
     if r.is_finite() { r.min(1.0e4) } else { 1.0e4 }
 }
 
@@ -326,7 +350,14 @@ impl Drawn {
 
     /// Does the picture differ from what is now on the screen's model? Asks for another frame at
     /// most `MAX_STALE_RUN` times in a row.
-    pub fn wants_another_frame(&mut self, rev: u64, sel: Option<crate::model::Pick>, hover: Option<crate::model::Pick>, cam: &Camera, clean: bool) -> bool {
+    pub fn wants_another_frame(
+        &mut self,
+        rev: u64,
+        sel: Option<crate::model::Pick>,
+        hover: Option<crate::model::Pick>,
+        cam: &Camera,
+        clean: bool,
+    ) -> bool {
         let shown_sel = if clean { None } else { sel };
         let shown_hover = if clean { None } else { hover };
         let stale = self.rev != rev || self.sel != shown_sel || self.hover != shown_hover || self.cam != cam_key(cam) || self.clean != clean;
@@ -345,16 +376,19 @@ impl Drawn {
 pub struct PackCache {
     rev: Option<u64>,
     pack: Option<std::sync::Arc<crate::gpu::ScenePack>>,
+    /// One previous scene snapshot only; the cache cannot grow with the undo history.
+    snapshot: Option<Scene>,
     /// How many times the scene was packed (for tests and the HUD).
     pub packs: u64,
 }
 
 impl PackCache {
-    /// Drop the scene-specific CPU pack as soon as the document changes.
-    /// Existing in-flight GPU callbacks keep their own Arc until they finish.
+    /// Drop the scene-specific CPU pack and its reuse snapshot as soon as the document is
+    /// replaced. Existing in-flight GPU callbacks keep their own Arc until they finish.
     pub fn clear(&mut self) {
         self.rev = None;
         self.pack = None;
+        self.snapshot = None;
     }
 
     /// The pack of `scene` (revision `rev`): the cached one, or a new one.
@@ -364,9 +398,14 @@ impl PackCache {
         {
             return p.clone();
         }
-        let p = std::sync::Arc::new(crate::gpu::ScenePack::new(scene, crate::gpu::VolumeSet::of(scene)));
+        let p = std::sync::Arc::new(crate::gpu::ScenePack::reusing(
+            scene,
+            crate::gpu::VolumeSet::of(scene),
+            self.snapshot.as_ref().zip(self.pack.as_deref()),
+        ));
         self.rev = Some(rev);
         self.pack = Some(p.clone());
+        self.snapshot = Some(scene.clone());
         self.packs += 1;
         p
     }
@@ -410,20 +449,21 @@ pub struct Perf {
 pub struct MenuState {
     pub quality: Quality,
     pub hud: bool,
-    /// Set when "速さをはかる" was clicked.
+    /// Set when "Speed test" was clicked.
     pub bench: bool,
 }
 
 /// The 'がしつ' menu of the top bar.
 /// `extra` adds entries below the quality choices (the graphics path's: simple view, backend, log).
 pub fn quality_menu(ui: &mut egui::Ui, menu: &mut MenuState, extra: impl FnOnce(&mut egui::Ui)) {
-    ui.menu_button(egui::RichText::new(format!("がしつ　{}", menu.quality.label())).size(13.0), |ui| {
+    ui.menu_button(egui::RichText::new(format!("Quality: {}", menu.quality.label())).size(13.0), |ui| {
         for q in Quality::ALL {
             ui.selectable_value(&mut menu.quality, q, q.label()).on_hover_text(q.hint());
         }
         ui.separator();
-        ui.checkbox(&mut menu.hud, "フレーム時間を表示　F3").on_hover_text("1秒あたりの枚数・CPU と GPU の時間・描画の倍率を絵の上に出します");
-        if ui.button("速さをはかる…").on_hover_text("いくつかのシーンを描いて、この機械での速さを表にします").clicked() {
+        ui.checkbox(&mut menu.hud, "Show frame time (F3)")
+            .on_hover_text("Shows frames per second, CPU and GPU time, and the draw scale over the view");
+        if ui.button("Speed test…").on_hover_text("Draws a few scenes and shows this machine's speed in a table").clicked() {
             menu.bench = true;
             ui.close();
         }
@@ -451,6 +491,25 @@ mod tests {
         assert_eq!(a.settle_in(10.2), None);
         a.touch(10.15);
         assert!(a.is_fast(10.2), "a new move starts the wait again");
+    }
+
+    #[test]
+    fn hover_only_enters_fast_mode_when_the_target_changes() {
+        use crate::model::Pick;
+        let a = Some(Pick::Shape(0, 0));
+        let b = Some(Pick::Shape(0, 1));
+        let mut activity = Activity::default();
+        activity.hover_changed(1.0, None, None);
+        assert!(!activity.is_fast(1.0));
+        activity.hover_changed(2.0, None, a);
+        assert!(activity.is_fast(2.0));
+        activity.hover_changed(2.20, a, a);
+        assert!(!activity.is_fast(2.20), "moving inside a shape must let the sharp image settle");
+        activity.hover_changed(3.0, a, b);
+        assert!(activity.is_fast(3.0));
+        assert!(!activity.is_fast(3.0 + SETTLE_SECS + 0.01));
+        activity.hover_changed(4.0, b, None);
+        assert!(activity.is_fast(4.0), "leaving a shape also uses the cheap pass briefly");
     }
 
     #[test]
@@ -624,6 +683,31 @@ mod tests {
         s.groups.push(copy);
         s.groups[0].visible = false;
         assert!(scene_has_glow(&s));
+        assert_eq!(scene_has_glow(&s), scene_has_glow_resolved(&s, &crate::pattern::resolve(&s)));
+
+        // An unrelated hidden lamp must not turn on the 200-step material march
+        // just because a different visible group happens to be a linked copy.
+        let mut unrelated = Scene::default();
+        let uid = unrelated.ensure_group_uid(0).unwrap_or(0);
+        let mut lit = crate::model::Group::new("hidden, unused lamp");
+        lit.visible = false;
+        lit.shapes.push(Shape::new(Kind::Sphere, [300.0, 0.0, 20.0], Material { glow: 3.0, ..Material::default() }));
+        unrelated.groups.push(lit);
+        let mut linked = crate::model::Group::new("visible ordinary copy");
+        linked.instance_of = Some(uid);
+        unrelated.groups.push(linked);
+        assert!(!scene_has_glow(&unrelated));
+        assert!(!crate::gpu::ScenePack::new(&unrelated, crate::gpu::VolumeSet::of(&unrelated)).glow);
+
+        // Broken links have no rendered source, and non-visible shapes cannot emit.
+        unrelated.groups[2].instance_of = Some(999_999);
+        assert!(!scene_has_glow(&unrelated));
+        unrelated.groups[1].visible = true;
+        assert!(scene_has_glow(&unrelated), "a directly visible lamp must still emit");
+        unrelated.groups[1].visible = false;
+        unrelated.groups[2].instance_of = Some(uid);
+        unrelated.groups[0].shapes[0].material.glow = 2.0;
+        assert!(scene_has_glow(&unrelated));
     }
 
     /// Outside the bounding sphere, a basic solid is never reached (so the shader may skip it).

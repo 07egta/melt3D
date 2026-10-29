@@ -10,7 +10,7 @@
 use std::f64::consts::TAU;
 
 use serde::{Deserialize, Serialize};
-use solidcraft_geom::{Loop2, Region2, Seg2, Vec2};
+use solidcraft_geom::{Loop2, Region2, Ring, Seg2, Vec2};
 
 use crate::model::{CurveKind, Sketch};
 use crate::shape::{Shape, intersections_within};
@@ -423,12 +423,9 @@ struct Grid {
 }
 
 impl Grid {
-    fn new(boxes: &[(Vec2, Vec2)]) -> Grid {
-        let (mut lo, mut hi) = (Vec2::new(f64::INFINITY, f64::INFINITY), Vec2::new(f64::NEG_INFINITY, f64::NEG_INFINITY));
-        for (a, b) in boxes {
-            lo = Vec2::new(lo.x.min(a.x), lo.y.min(a.y));
-            hi = Vec2::new(hi.x.max(b.x), hi.y.max(b.y));
-        }
+    fn new(boxes: &[solidcraft_geom::Aabb2]) -> Grid {
+        let all = boxes.iter().fold(solidcraft_geom::Aabb2::EMPTY, |a, b| a.union(b));
+        let (lo, hi) = (all.min, all.max);
         if !(lo.is_finite() && hi.is_finite()) {
             return Grid { lo: Vec2::ZERO, size: 1.0 };
         }
@@ -440,8 +437,8 @@ impl Grid {
         (((p.x - self.lo.x) / self.size).floor() as i64, ((p.y - self.lo.y) / self.size).floor() as i64)
     }
     /// Cells a box covers; None for boxes spanning too many (they are checked against all).
-    fn cells(&self, b: &(Vec2, Vec2)) -> Option<Vec<(i64, i64)>> {
-        let (c0, c1) = (self.cell(b.0), self.cell(b.1));
+    fn cells(&self, b: &solidcraft_geom::Aabb2) -> Option<Vec<(i64, i64)>> {
+        let (c0, c1) = (self.cell(b.min), self.cell(b.max));
         if (c1.0 - c0.0 + 1).saturating_mul(c1.1 - c0.1 + 1) > 2048 {
             return None;
         }
@@ -497,27 +494,9 @@ pub fn without_text_counters(sk: &Sketch, profiles: Vec<Profile>) -> Vec<Profile
         return profiles;
     }
     // Outer polylines and their boxes, once.
-    let polys: Vec<Vec<Vec2>> = profiles.iter().map(|p| p.region.outer.polyline(1e-3)).collect();
-    let boxes: Vec<(Vec2, Vec2)> = polys
-        .iter()
-        .map(|pl| {
-            pl.iter().fold((Vec2::new(f64::INFINITY, f64::INFINITY), Vec2::new(f64::NEG_INFINITY, f64::NEG_INFINITY)), |(lo, hi), p| {
-                (Vec2::new(lo.x.min(p.x), lo.y.min(p.y)), Vec2::new(hi.x.max(p.x), hi.y.max(p.y)))
-            })
-        })
-        .collect();
+    let polys: Vec<Ring<Vec2>> = profiles.iter().map(|p| p.region.outer.polyline(1e-3)).collect();
+    let boxes: Vec<solidcraft_geom::Aabb2> = polys.iter().map(|pl| pl.bounds()).collect();
     let areas: Vec<f64> = profiles.iter().map(|p| p.region.outer.signed_area().abs()).collect();
-    let inside = |pl: &[Vec2], p: Vec2| {
-        let n = pl.len();
-        let mut odd = false;
-        for i in 0..n {
-            let (Some(a), Some(b)) = (pl.get(i), pl.get((i + 1) % n)) else { continue };
-            if (a.y > p.y) != (b.y > p.y) && p.x < a.x + (p.y - a.y) / (b.y - a.y) * (b.x - a.x) {
-                odd = !odd;
-            }
-        }
-        odd
-    };
     let keep: Vec<bool> = (0..profiles.len())
         .map(|i| {
             if !text_only.get(i).copied().unwrap_or(false) {
@@ -530,8 +509,8 @@ pub fn without_text_counters(sk: &Sketch, profiles: Vec<Profile>) -> Vec<Profile
                     j != i
                         && text_only.get(j).copied().unwrap_or(false)
                         && areas.get(j).copied().unwrap_or(0.0) > ai
-                        && boxes.get(j).is_some_and(|(lo, hi)| probe.x >= lo.x && probe.x <= hi.x && probe.y >= lo.y && probe.y <= hi.y)
-                        && polys.get(j).is_some_and(|pl| inside(pl, probe))
+                        && boxes.get(j).is_some_and(|b| b.contains(probe))
+                        && polys.get(j).is_some_and(|pl| pl.contains(probe))
                 })
                 .count();
             depth % 2 == 0
@@ -558,7 +537,7 @@ fn find_profiles_bounded(sk: &Sketch, max_edges: usize) -> Vec<Profile> {
     let mut whole_graph_complete = true;
     let mut expected = std::collections::HashMap::<usize, Vec<usize>>::new();
     for (ci, c) in sk.curves.iter().enumerate() {
-        if c.construction || c.centerline {
+        if c.construction || c.centerline || c.infinite {
             continue;
         }
         if matches!(c.kind, CurveKind::Line { .. } | CurveKind::Arc { .. } | CurveKind::Circle { .. }) {
@@ -627,19 +606,25 @@ fn find_profiles_bounded(sk: &Sketch, max_edges: usize) -> Vec<Profile> {
         }
     }
     // Bounding boxes, and a uniform grid over them: only shapes sharing a cell can meet.
-    let boxes: Vec<(Vec2, Vec2)> = shapes
+    let boxes: Vec<solidcraft_geom::Aabb2> = shapes
         .iter()
         .map(|(_, sh)| match *sh {
-            Shape::Line { a, b } => (Vec2::new(a.x.min(b.x) - tol, a.y.min(b.y) - tol), Vec2::new(a.x.max(b.x) + tol, a.y.max(b.y) + tol)),
-            Shape::Round { c, r, .. } => (Vec2::new(c.x - r - tol, c.y - r - tol), Vec2::new(c.x + r + tol, c.y + r + tol)),
+            Shape::Line { a, b } => {
+                solidcraft_geom::Aabb2 { min: Vec2::new(a.x.min(b.x), a.y.min(b.y)), max: Vec2::new(a.x.max(b.x), a.y.max(b.y)) }.inflated(tol)
+            }
+            Shape::Round { c, r, .. } => {
+                solidcraft_geom::Aabb2 { min: Vec2::new(c.x - r - tol, c.y - r - tol), max: Vec2::new(c.x + r + tol, c.y + r + tol) }
+            }
         })
         .collect();
     let overlap = |i: usize, j: usize| match (boxes.get(i), boxes.get(j)) {
-        (Some((a0, a1)), Some((b0, b1))) => a0.x <= b1.x && b0.x <= a1.x && a0.y <= b1.y && b0.y <= a1.y,
+        (Some(a), Some(b)) => a.meets(b),
         _ => false,
     };
     let grid = Grid::new(&boxes);
-    let mut cuts: Vec<Vec<f64>> = vec![Vec::new(); shapes.len()];
+    // Each cut's parameter, and whether it is weak: a crossing next to an end that misses one of
+    // the two curves (below), which gives way to any other cut it is merged with.
+    let mut cuts: Vec<Vec<(f64, bool)>> = vec![Vec::new(); shapes.len()];
     // End points of other curves lying on each shape.
     let mut end_cells: std::collections::HashMap<(i64, i64), Vec<usize>> = std::collections::HashMap::new();
     for (k, p) in ends.iter().enumerate() {
@@ -657,7 +642,7 @@ fn find_profiles_bounded(sk: &Sketch, max_edges: usize) -> Vec<Profile> {
                 && let Some(t) = sh.param_on(*p, tol)
                 && let Some(cu) = cuts.get_mut(i)
             {
-                cu.push(t);
+                cu.push((t, false));
             }
         }
     }
@@ -709,8 +694,7 @@ fn find_profiles_bounded(sk: &Sketch, max_edges: usize) -> Vec<Profile> {
     let mut anchors: Vec<Vec2> = Vec::new();
     if shapes.len() <= 50_000 {
         let mut whole: Vec<bool> = shapes.iter().map(|(_, s)| s.is_full()).collect();
-        for i in 0..shapes.len() {
-            let Some((ci, x)) = shapes.get(i) else { continue };
+        for (i, (ci, x)) in shapes.iter().enumerate() {
             if carrier.get(i) != Some(&i) || !analytic(*ci) {
                 continue;
             }
@@ -752,30 +736,35 @@ fn find_profiles_bounded(sk: &Sketch, max_edges: usize) -> Vec<Profile> {
                 for p in pts {
                     let on_x = x.param_on(p, tol).or_else(|| end_param(x, p, tol));
                     let on_y = y.param_on(p, tol).or_else(|| end_param(y, p, tol));
-                    // Crossings at (or next to) curve ends are already cuts.
-                    let near_end = || {
+                    // Crossings at (or next to) curve ends are already cuts. Not next to an end of
+                    // one of the two curves that misses the other: nothing cut the other curve
+                    // there, and it would cross without meeting it (a line 3e-5 from the
+                    // junction of two curves of a loop, #755). Such a crossing is a weak cut.
+                    let on = |sh: &Shape, e: Vec2| sh.param_on(e, tol).is_some() || end_param(sh, e, tol).is_some();
+                    let misses = |e: Vec2| (end_param(x, e, tol).is_some() && !on(y, e)) || (end_param(y, e, tol).is_some() && !on(x, e));
+                    let near_ends = || {
                         let (cx, cy) = grid.cell(p);
-                        (-1..=1).any(|dx| {
-                            (-1..=1).any(|dy| {
-                                end_cells
-                                    .get(&(cx + dx, cy + dy))
-                                    .is_some_and(|v| v.iter().any(|k| ends.get(*k).is_some_and(|e| e.dist(p) < tol * 100.0)))
-                            })
-                        })
+                        (-1..=1)
+                            .flat_map(|dx| (-1..=1).map(move |dy| (cx + dx, cy + dy)))
+                            .flat_map(|c| end_cells.get(&c).map(Vec::as_slice).unwrap_or(&[]))
+                            .filter_map(|k| ends.get(*k).copied())
+                            .filter(|e| e.dist(p) < tol * 100.0)
+                            .fold((false, false), |(cut, weak), e| if misses(e) { (cut, true) } else { (true, weak) })
                     };
-                    if on_x.is_none() || on_y.is_none() || near_end() {
+                    let (already, weak) = near_ends();
+                    if on_x.is_none() || on_y.is_none() || already {
                         continue;
                     }
                     if let (Some(tx), Some(ty)) = (on_x, on_y) {
                         if x.param_on(p, tol).is_some()
                             && let Some(c) = cuts.get_mut(i)
                         {
-                            c.push(tx);
+                            c.push((tx, weak));
                         }
                         if y.param_on(p, tol).is_some()
                             && let Some(c) = cuts.get_mut(j)
                         {
-                            c.push(ty);
+                            c.push((ty, weak));
                         }
                         if (gi, gj) != (i, j) {
                             anchors.push(p);
@@ -815,21 +804,33 @@ fn find_profiles_bounded(sk: &Sketch, max_edges: usize) -> Vec<Profile> {
     let mut edges: Vec<Edge> = Vec::new();
     for (k, (ci, sh)) in shapes.iter().enumerate() {
         let mut ts = cuts.get(k).cloned().unwrap_or_default();
-        ts.sort_by(f64::total_cmp);
+        ts.sort_by(|a, b| a.0.total_cmp(&b.0));
         // Cuts closer than a few tolerances are one cut (tangent touches give near-double roots).
+        // A weak cut gives way to the other: it only adds a cut where there was none.
         let scale = match *sh {
             Shape::Line { a, b } => a.dist(b),
             Shape::Round { r, .. } => r,
         };
         let close = (tol * 100.0 / scale.max(1e-12)).max(1e-9);
-        ts.dedup_by(|a, b| (*a - *b).abs() < close);
+        ts.dedup_by(|a, b| {
+            let same = (a.0 - b.0).abs() < close;
+            if same && b.1 && !a.1 {
+                *b = *a;
+            }
+            same
+        });
         if let (Shape::Round { sweep, .. }, Some(&first), Some(&last)) = (*sh, ts.first(), ts.last())
             && sweep >= TAU - 1e-12
             && ts.len() > 1
-            && (first + TAU - last).abs() < close
+            && (first.0 + TAU - last.0).abs() < close
         {
-            ts.pop();
+            if first.1 && !last.1 {
+                ts.remove(0);
+            } else {
+                ts.pop();
+            }
         }
+        let ts: Vec<f64> = ts.into_iter().map(|(t, _)| t).collect();
         let id = sk.curves.get(*ci).map(|c| c.id.clone()).unwrap_or_default();
         let analytic = analytic(*ci);
         let coverage = tags.get(k).copied().flatten().or_else(|| {
@@ -1010,15 +1011,8 @@ fn find_profiles_bounded(sk: &Sketch, max_edges: usize) -> Vec<Profile> {
     // Nesting: parent = smallest containing loop from another component. Bounding boxes rule
     // out most pairs before the point-in-loop test.
     let areas: Vec<f64> = loops.iter().map(|(l, _, _, _)| l.signed_area().abs()).collect();
-    let boxes: Vec<(Vec2, Vec2)> = loops
-        .iter()
-        .map(|(l, _, _, _)| {
-            l.polyline(1e-3).iter().fold((Vec2::new(f64::INFINITY, f64::INFINITY), Vec2::new(f64::NEG_INFINITY, f64::NEG_INFINITY)), |(lo, hi), p| {
-                (Vec2::new(lo.x.min(p.x), lo.y.min(p.y)), Vec2::new(hi.x.max(p.x), hi.y.max(p.y)))
-            })
-        })
-        .collect();
-    let inside_box = |j: usize, p: Vec2| boxes.get(j).is_some_and(|(lo, hi)| p.x >= lo.x && p.x <= hi.x && p.y >= lo.y && p.y <= hi.y);
+    let boxes: Vec<solidcraft_geom::Aabb2> = loops.iter().map(|(l, _, _, _)| l.polyline(1e-3).bounds()).collect();
+    let inside_box = |j: usize, p: Vec2| boxes.get(j).is_some_and(|b| b.contains(p));
     let mut parent_of: Vec<Option<usize>> = vec![None; loops.len()];
     for (i, (li, _, ci, _)) in loops.iter().enumerate() {
         let probe = li.segs.first().map(Seg2::mid).unwrap_or_default();

@@ -15,6 +15,94 @@ const MAX_LEN: usize = 4096;
 const MAX_DEPTH: usize = 64;
 const MAX_ARGS: usize = 64;
 
+/// An expression a feature holds, as the user wrote it (`2 * width + 5 mm`): kept as text and
+/// evaluated with the design's parameters. It is saved as a plain string, and reads as one
+/// (`&expr` is a `&str`); it changes only as a whole (`*expr = new.into()`).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
+#[serde(transparent)]
+pub struct Expr(String);
+
+impl Expr {
+    pub fn new(s: impl Into<String>) -> Self {
+        Expr(s.into())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub fn into_string(self) -> String {
+        self.0
+    }
+}
+
+impl std::ops::Deref for Expr {
+    type Target = str;
+    fn deref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl AsRef<str> for Expr {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<String> for Expr {
+    fn from(s: String) -> Self {
+        Expr(s)
+    }
+}
+
+impl From<&str> for Expr {
+    fn from(s: &str) -> Self {
+        Expr(s.to_string())
+    }
+}
+
+impl From<&String> for Expr {
+    fn from(s: &String) -> Self {
+        Expr(s.clone())
+    }
+}
+
+impl From<Expr> for String {
+    fn from(e: Expr) -> Self {
+        e.0
+    }
+}
+
+impl std::fmt::Display for Expr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl PartialEq<str> for Expr {
+    fn eq(&self, other: &str) -> bool {
+        self.0 == other
+    }
+}
+
+impl PartialEq<&str> for Expr {
+    fn eq(&self, other: &&str) -> bool {
+        self.0 == *other
+    }
+}
+
+impl PartialEq<Expr> for String {
+    fn eq(&self, other: &Expr) -> bool {
+        *self == other.0
+    }
+}
+
+impl PartialEq<String> for Expr {
+    fn eq(&self, other: &String) -> bool {
+        &self.0 == other
+    }
+}
+
 /// What an expression must evaluate to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -216,9 +304,23 @@ fn is_constant(id: &str) -> bool {
     CONSTANTS.contains(&id)
 }
 
+/// What kind of word the expression language reserves `name` as: `unit`, `constant` or
+/// `function` (None: free for a parameter).
+pub fn reserved_kind(name: &str) -> Option<&'static str> {
+    if unit(name).is_some() {
+        Some("unit")
+    } else if is_constant(name) {
+        Some("constant")
+    } else if FUNCTIONS.iter().any(|(f, _)| *f == name) {
+        Some("function")
+    } else {
+        None
+    }
+}
+
 /// Is this a name the expression language reserves (unit, constant or function)?
 pub fn is_reserved(name: &str) -> bool {
-    unit(name).is_some() || is_constant(name) || FUNCTIONS.iter().any(|(f, _)| *f == name)
+    reserved_kind(name).is_some()
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -237,13 +339,31 @@ fn lex_spans(s: &str) -> Result<Vec<(Tok, usize, usize)>, DocError> {
     let at = |i: usize| cs.get(i).map(|x| x.0).unwrap_or(s.len());
     let mut i = 0;
     let mut out = Vec::new();
+    // Parentheses open at this point: a comma outside them can only be a decimal comma.
+    let mut depth = 0usize;
     while let Some(&(_, c)) = cs.get(i) {
         if c.is_whitespace() {
             i += 1;
-        } else if c.is_ascii_digit() || c == '.' {
+        } else if c.is_ascii_digit() || c == '.' || leading_decimal_comma(&cs, i, depth, out.last()) {
             let st = i;
+            // A leading decimal comma (`,5` for 0,5, #2966) starts the number as `.5` would.
+            let leading_comma = c == ',';
+            if leading_comma {
+                i += 1;
+            }
             while cs.get(i).is_some_and(|(_, c)| c.is_ascii_digit() || *c == '.') {
                 i += 1;
+            }
+            // A decimal comma (`2,5 mm`, as typed with a numeric keypad in many locales, #1347):
+            // a comma between digits, in a number with no point, outside any parentheses (inside
+            // them a comma separates a function's arguments: `max(1,2)`).
+            let digit = |k: usize| cs.get(k).is_some_and(|(_, c)| c.is_ascii_digit());
+            let has_point = cs.get(st..i).is_some_and(|ds| ds.iter().any(|(_, c)| *c == '.'));
+            if depth == 0 && !leading_comma && !has_point && digit(i.wrapping_sub(1)) && cs.get(i).is_some_and(|(_, c)| *c == ',') && digit(i + 1) {
+                i += 1;
+                while digit(i) {
+                    i += 1;
+                }
             }
             // Exponent: 1e-3 (but not `2em`).
             if cs.get(i).is_some_and(|(_, c)| *c == 'e' || *c == 'E') {
@@ -257,7 +377,16 @@ fn lex_spans(s: &str) -> Result<Vec<(Tok, usize, usize)>, DocError> {
                 }
             }
             let t = s.get(at(st)..at(i)).unwrap_or_default();
-            let v: f64 = t.parse().map_err(|_| DocError::Expr(format!("bad number `{t}`")))?;
+            let v: f64 = t.replace(',', ".").parse().map_err(|_| DocError::Expr(format!("bad number `{t}`")))?;
+            // A mixed number, as imperial sizes are written (`2 1/8"` is 2.125 in, #1802): a whole
+            // number, then a proper fraction of whole numbers, is one value, not `2 × 1/8`.
+            if t.chars().all(|c| c.is_ascii_digit())
+                && let Some((fraction, end)) = mixed_fraction(&cs, i, depth)
+            {
+                out.push((Tok::Num(v + fraction), at(st), at(end)));
+                i = end;
+                continue;
+            }
             out.push((Tok::Num(v), at(st), at(i)));
         } else if c.is_alphabetic() || c == '_' || c == 'µ' {
             let st = i;
@@ -267,6 +396,13 @@ fn lex_spans(s: &str) -> Result<Vec<(Tok, usize, usize)>, DocError> {
             out.push((Tok::Id(s.get(at(st)..at(i)).unwrap_or_default().to_string()), at(st), at(i)));
         } else if c == '°' {
             out.push((Tok::Id("deg".into()), at(i), at(i + 1)));
+            i += 1;
+        } else if c == '"' || c == '″' {
+            // Inch and foot marks (`1"`, `2'`, #1502), straight or as primes.
+            out.push((Tok::Id("in".into()), at(i), at(i + 1)));
+            i += 1;
+        } else if c == '\'' || c == '′' {
+            out.push((Tok::Id("ft".into()), at(i), at(i + 1)));
             i += 1;
         } else if c == '×' || c == '·' {
             out.push((Tok::Op('*'), at(i), at(i + 1)));
@@ -278,10 +414,15 @@ fn lex_spans(s: &str) -> Result<Vec<(Tok, usize, usize)>, DocError> {
             out.push((Tok::Op('-'), at(i), at(i + 1)));
             i += 1;
         } else if c == ';' {
-            // Fusion separates function arguments with `;` in some locales.
+            // Some CAD tools separate function arguments with `;` in some locales.
             out.push((Tok::Op(','), at(i), at(i + 1)));
             i += 1;
         } else if "+-*/^(),%".contains(c) {
+            match c {
+                '(' => depth += 1,
+                ')' => depth = depth.saturating_sub(1),
+                _ => {}
+            }
             out.push((Tok::Op(c), at(i), at(i + 1)));
             i += 1;
         } else {
@@ -289,6 +430,59 @@ fn lex_spans(s: &str) -> Result<Vec<(Tok, usize, usize)>, DocError> {
         }
     }
     Ok(out)
+}
+
+/// Whether the comma at `i` starts a number, as a leading decimal comma (`,5` for 0,5, #2966).
+/// It must be outside parentheses (inside them a comma separates arguments, as for any decimal
+/// comma), be followed by a digit, and stand where an operand is expected: at the start or right
+/// after `+ - * / ^`. A comma after a number, name, `)` or `%` keeps its meaning (`2 ,5` and
+/// `1,5,3` stay errors).
+fn leading_decimal_comma(cs: &[(usize, char)], i: usize, depth: usize, prev: Option<&(Tok, usize, usize)>) -> bool {
+    depth == 0
+        && cs.get(i).is_some_and(|(_, c)| *c == ',')
+        && cs.get(i + 1).is_some_and(|(_, c)| c.is_ascii_digit())
+        && match prev {
+            None => true,
+            Some((Tok::Op(op), _, _)) => "+-*/^".contains(*op),
+            Some(_) => false,
+        }
+}
+
+/// The proper fraction of a mixed number whose whole part ends at `i`: spaces, digits, `/`,
+/// digits, with nothing after them that would continue the number (`2 1/8.5`, `2 1/8e3`, a
+/// decimal comma outside parentheses: `2 1/8,5`). Its value and where it ends. `depth`: the
+/// parentheses open there (inside them a comma separates arguments: `max(2 1/8,1)`).
+fn mixed_fraction(cs: &[(usize, char)], mut i: usize, depth: usize) -> Option<(f64, usize)> {
+    let digits = |from: usize| cs.get(from..).map_or(0, |rest| rest.iter().take_while(|(_, c)| c.is_ascii_digit()).count());
+    let space = i;
+    while cs.get(i).is_some_and(|(_, c)| *c == ' ' || *c == '\t') {
+        i += 1;
+    }
+    let numerator = digits(i);
+    if i == space || numerator == 0 || !cs.get(i + numerator).is_some_and(|(_, c)| *c == '/') {
+        return None;
+    }
+    let denominator = digits(i + numerator + 1);
+    let end = i + numerator + 1 + denominator;
+    let next = |k: usize| cs.get(end + k).map(|(_, c)| *c);
+    let continues = matches!(next(0), Some('.'))
+        || (depth == 0 && matches!(next(0), Some(',')) && next(1).is_some_and(|c| c.is_ascii_digit()))
+        || (matches!(next(0), Some('e' | 'E')) && next(1).is_some_and(|c| c.is_ascii_digit() || c == '-' || c == '+'));
+    if denominator == 0 || continues {
+        return None;
+    }
+    // Compared as digits, not as floats: long ones round to the same float (#1802 review).
+    let digits_of = |from: usize, len: usize| -> Option<String> {
+        let s: String = cs.get(from..from + len)?.iter().map(|(_, c)| *c).collect();
+        Some(s.trim_start_matches('0').to_string())
+    };
+    let (n, d) = (digits_of(i, numerator)?, digits_of(i + numerator + 1, denominator)?);
+    let proper = !d.is_empty() && (n.len(), n.as_str()) < (d.len(), d.as_str());
+    let value = |t: &str| if t.is_empty() { Some(0.0) } else { t.parse::<f64>().ok() };
+    if !proper {
+        return None;
+    }
+    Some((value(&n)? / value(&d)?, end))
 }
 
 fn lex(s: &str) -> Result<Vec<Tok>, DocError> {
@@ -353,6 +547,24 @@ pub fn is_literal(s: &str) -> bool {
 /// Is the expression a bare number without a unit, like `20` or `-1.5`?
 pub fn is_bare_number(s: &str) -> bool {
     is_literal(s) && s.trim().trim_start_matches(['-', '+']).trim().parse::<f64>().is_ok()
+}
+
+/// Is `s` shaped like a parameter name: a letter or `_`, then letters, digits and `_`? The shape
+/// only; whether the name is free or reserved is `Document::param_name_problem`'s business.
+fn is_name_shaped(s: &str) -> bool {
+    let mut cs = s.chars();
+    matches!(cs.next(), Some(c) if c.is_alphabetic() || c == '_') && cs.all(|c| c.is_alphanumeric() || c == '_')
+}
+
+/// A value typed as a definition, `name = expression`: the name and the text after the first
+/// `=`, both trimmed (the text may be empty). `None` for anything else, including text whose
+/// left side is not shaped like a name (`2 = 3`), which stays an ordinary expression and fails
+/// to parse as before. The dimension input defines a user parameter this way (#2916); other
+/// value inputs can take the same form later.
+pub fn definition(s: &str) -> Option<(&str, &str)> {
+    let (name, rhs) = s.split_once('=')?;
+    let name = name.trim();
+    is_name_shaped(name).then(|| (name, rhs.trim()))
 }
 
 /// The length unit of a design with these units: `mm` unless they name another length unit.
@@ -738,10 +950,6 @@ pub fn eval_params(params: &[ParamDef], doc_len: f64) -> (BTreeMap<String, Value
         if cx.stack.len() > 512 {
             return Err(DocError::Expr("parameters nested too deeply".into()));
         }
-        let Some((kind, _)) = unit_info(&p.unit).or(Some((Kind::Length, 1.0))) else {
-            return Err(DocError::Expr(format!("unknown unit `{}`", p.unit)));
-        };
-        let defaults = Defaults::for_unit(&p.unit, cx.doc_len);
         cx.stack.push(name.to_string());
         let mut vals: BTreeMap<String, Value> = BTreeMap::new();
         let mut err = None;
@@ -759,17 +967,7 @@ pub fn eval_params(params: &[ParamDef], doc_len: f64) -> (BTreeMap<String, Value
         cx.stack.pop();
         let r = match err {
             Some(e) => Err(e),
-            None => {
-                eval_with_defaults(&p.expr, &|n| vals.get(n).copied().ok_or_else(|| DocError::Expr(format!("unknown parameter `{n}`"))), defaults)
-                    .and_then(|v| {
-                        let x = v.to_kind_in(kind, defaults)?;
-                        Ok(match kind {
-                            Kind::Length => Value::length(x),
-                            Kind::Angle => Value::angle(x),
-                            Kind::Unitless => Value::num(x),
-                        })
-                    })
-            }
+            None => eval_def(p, &|n| vals.get(n).copied().ok_or_else(|| DocError::Expr(format!("unknown parameter `{n}`"))), cx.doc_len),
         };
         match &r {
             Ok(v) => {
@@ -788,6 +986,19 @@ pub fn eval_params(params: &[ParamDef], doc_len: f64) -> (BTreeMap<String, Value
         let _ = visit(&p.name, &mut cx);
     }
     (cx.done, cx.errors)
+}
+
+/// One parameter's value: its expression in its unit, with the values of the parameters it
+/// refers to from `lookup`.
+pub fn eval_def(p: &ParamDef, lookup: &dyn Fn(&str) -> Result<Value, DocError>, doc_len: f64) -> Result<Value, DocError> {
+    let (kind, _) = unit_info(&p.unit).unwrap_or((Kind::Length, 1.0));
+    let defaults = Defaults::for_unit(&p.unit, doc_len);
+    let x = eval_with_defaults(&p.expr, lookup, defaults)?.to_kind_in(kind, defaults)?;
+    Ok(match kind {
+        Kind::Length => Value::length(x),
+        Kind::Angle => Value::angle(x),
+        Kind::Unitless => Value::num(x),
+    })
 }
 
 /// Dependency edges between parameters: (parameter, parameter it references).
@@ -817,6 +1028,75 @@ mod tests {
 
     fn def(n: &str, e: &str, u: &str) -> ParamDef {
         ParamDef { name: n.into(), expr: e.into(), unit: u.into() }
+    }
+
+    #[test]
+    fn a_decimal_comma_outside_parentheses() {
+        // #1347: a comma between digits is a decimal comma where it cannot separate arguments.
+        assert_eq!(ev("2,5", Kind::Unitless).unwrap(), 2.5);
+        assert_eq!(ev("2,5 mm", Kind::Length).unwrap(), 2.5);
+        assert_eq!(ev("12,75mm + 0,25", Kind::Length).unwrap(), 13.0);
+        assert_eq!(ev("width / 2,5", Kind::Length).unwrap(), 16.0);
+        assert!((ev("1,5e3 mm", Kind::Length).unwrap() - 1500.0).abs() < 1e-9);
+        assert!((ev("22,5 deg", Kind::Angle).unwrap() - 22.5f64.to_radians()).abs() < 1e-12);
+        // Inside parentheses a comma still separates a function's arguments.
+        assert_eq!(ev("max(1,2)", Kind::Unitless).unwrap(), 2.0);
+        assert_eq!(ev("max(1 mm, 3, 2)", Kind::Length).unwrap(), 3.0);
+        assert_eq!(ev("(2,5)", Kind::Unitless).ok(), None, "a comma inside parentheses is not a decimal comma");
+        // Not between two digits, or a second comma: still an error.
+        for bad in ["2,", "2 ,5", "2, 5", "1,5,3", "1.5,3", ",5,3", ",5.3", "width ,5", "(1) ,5"] {
+            assert!(ev(bad, Kind::Unitless).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_leading_decimal_comma_is_a_number() {
+        // #2966: `,5` is 0,5 where `.5` would be a number: at the start or after an operator.
+        assert_eq!(ev(",5", Kind::Unitless).unwrap(), 0.5);
+        assert_eq!(ev(",5 mm", Kind::Length).unwrap(), 0.5);
+        assert_eq!(ev("-,5", Kind::Unitless).unwrap(), -0.5);
+        assert_eq!(ev("2*,5", Kind::Unitless).unwrap(), 1.0);
+        assert_eq!(ev("width - ,25", Kind::Length).unwrap(), 39.75);
+        // Function arguments are still separated by commas.
+        assert_eq!(ev("max(1,5)", Kind::Unitless).unwrap(), 5.0);
+        assert_eq!(ev("max(,5; 2)", Kind::Unitless).ok(), None, "inside parentheses a comma is a separator");
+    }
+
+    #[test]
+    fn inch_and_foot_marks() {
+        // #1502: `1"` in a millimetre design is an inch, `2'` two feet, straight or as primes.
+        assert_eq!(ev("1\"", Kind::Length).unwrap(), 25.4);
+        assert_eq!(ev("1″", Kind::Length).unwrap(), 25.4);
+        assert_eq!(ev("2'", Kind::Length).unwrap(), 609.6);
+        assert_eq!(ev("2′", Kind::Length).unwrap(), 609.6);
+        assert_eq!(ev("1/2\"", Kind::Length).unwrap(), 12.7);
+        assert_eq!(ev("width + 1\"", Kind::Length).unwrap(), 65.4);
+        assert_eq!(ev("2' + 3\"", Kind::Length).unwrap(), 685.8);
+        // A mark alone is its unit alone, as `in` is.
+        assert_eq!(ev("\"", Kind::Length).ok(), ev("in", Kind::Length).ok());
+    }
+
+    #[test]
+    fn mixed_numbers() {
+        // #1802: `2 1/8"` is 2.125 in, as imperial sizes are written, not 2 × 1/8 in.
+        assert_eq!(ev("2 1/8\"", Kind::Length).unwrap(), 2.125 * 25.4);
+        assert_eq!(ev("2 1/8 in", Kind::Length).unwrap(), 2.125 * 25.4);
+        assert_eq!(ev("3 7/16\"", Kind::Length).unwrap(), 3.4375 * 25.4);
+        assert_eq!(ev("10 1/2mm", Kind::Length).unwrap(), 10.5);
+        assert_eq!(ev("width + 1 1/2", Kind::Length).unwrap(), 41.5);
+        assert_eq!(ev("max(2 1/8, 3)", Kind::Unitless).unwrap(), 3.0);
+        // Inside parentheses a comma after the fraction separates arguments; outside, a comma
+        // between digits is a decimal comma, which continues the number (as before).
+        assert_eq!(ev("max(2 1/8,1)", Kind::Unitless).unwrap(), 2.125);
+        assert_eq!(ev("2 1/8,5", Kind::Unitless).unwrap(), 2.0 / 8.5);
+        // Long numerators and denominators are compared as digits, not as rounded floats.
+        assert!((ev("2 9007199254740992/9007199254740993", Kind::Unitless).unwrap() - 3.0).abs() < 1e-12);
+        assert_eq!(ev("2 007/8", Kind::Unitless).unwrap(), 2.875);
+        assert_eq!(ev("-2 1/4", Kind::Unitless).unwrap(), -2.25);
+        // Not a proper fraction of whole numbers after a whole number: as before.
+        for (s, v) in [("2 3/2", 3.0), ("2.5 1/2", 1.25), ("2 1/8.5", 2.0 / 8.5), ("2 1 / 8", 0.25), ("2 1/0", f64::INFINITY), ("1/8", 0.125)] {
+            assert_eq!(ev(s, Kind::Unitless).ok(), Some(v).filter(|v| v.is_finite()), "{s}");
+        }
     }
 
     #[test]
@@ -955,5 +1235,50 @@ mod tests {
         assert!(!is_literal("d1") && !is_literal("2 * 3") && !is_literal("2 width"));
         assert!(is_bare_number(" -1.5 ") && is_bare_number("+2") && !is_bare_number("20 mm") && !is_bare_number("(2)"));
         assert_eq!((length_unit_or_mm(" in "), length_unit_or_mm("deg"), length_unit_or_mm("")), ("in", "mm", "mm"));
+    }
+
+    /// `name = expression` splits at the first `=` when the left side is shaped like a name; the
+    /// right side is any text, checked by whoever evaluates it.
+    #[test]
+    fn definitions_split_on_a_name_and_an_equals_sign() {
+        let splits = [
+            ("w = 20", "w", "20"),
+            ("w=20", "w", "20"),
+            ("  w  =  20 mm ", "w", "20 mm"),
+            ("w = (a + b) / 2", "w", "(a + b) / 2"),
+            ("w = 2 * (3 + sin(45 deg))", "w", "2 * (3 + sin(45 deg))"),
+            ("w = 1 in - 5.4 mm", "w", "1 in - 5.4 mm"),
+            ("_w1 = 1", "_w1", "1"),
+            ("szerokość = 20", "szerokość", "20"),
+            // Reserved names split too: the parameter check names the reason.
+            ("mm = 5", "mm", "5"),
+            // A second `=` stays in the expression, which then fails to evaluate.
+            ("w == 3", "w", "= 3"),
+            ("w = a = 3", "w", "a = 3"),
+            // An empty expression is the caller's error to report.
+            ("w =", "w", ""),
+            ("w = ", "w", ""),
+        ];
+        for (text, name, rhs) in splits {
+            assert_eq!(definition(text), Some((name, rhs)), "{text:?}");
+        }
+        for text in ["20", "20 mm", "width / 2", "= 20", "=", "", "2w = 3", "a b = 3", "a-b = 3", "w.x = 3", "(w) = 3", "-w = 3"] {
+            assert_eq!(definition(text), None, "{text:?}");
+        }
+    }
+
+    /// A reserved name is refused by saying what kind of word it is.
+    #[test]
+    fn a_reserved_name_is_refused_by_its_kind() {
+        assert_eq!(
+            (reserved_kind("mm"), reserved_kind("deg"), reserved_kind("pi"), reserved_kind("sin"), reserved_kind("width")),
+            (Some("unit"), Some("unit"), Some("constant"), Some("function"), None)
+        );
+        let problem = |n: &str| crate::Document::param_name_problem(n).unwrap_or_default();
+        assert_eq!(problem("mm"), "`mm` is a unit name, so it cannot be a parameter name");
+        assert_eq!(problem("sin"), "`sin` is a function name, so it cannot be a parameter name");
+        assert_eq!(problem("pi"), "`pi` is a constant, so it cannot be a parameter name");
+        assert_eq!(crate::Document::param_name_problem("width"), None);
+        assert!(problem("2w").contains("not a valid parameter name"));
     }
 }

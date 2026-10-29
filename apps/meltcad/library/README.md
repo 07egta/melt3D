@@ -1,8 +1,33 @@
 # MELTCAD model library
 
-Each `*.json` here is one category of ready-made models, compiled into the app (`src/library.rs`).
-The files are **generated** by Python scripts in `gen/` (one script per file) so a model is a few
-lines of readable code.
+Most categories here are `*.json` ready-made models compiled into the app (`src/library.rs`).
+These files are **generated** by Python scripts in `gen/` (one script per file).
+
+## Parametric Designer Bag
+
+The **バッグ** category is built in Rust (`src/designer_bag.rs`), not in a generated JSON file.
+Choose **デザイナーバッグ・トート**, **デザイナーバッグ・半円** or **デザイナーバッグ・折り紙**.
+The library inserts an editable group of five real SDF parts (hollow body, floor, Boolean
+opening, front handle and rear handle). Select the group to edit width, height, depth,
+wall thickness, handle rise/diameter/curvature and the variant. Use the left scene tree
+to modify individual shapes and their materials; regenerating group dimensions updates
+the parametric parts. The settings are saved in the scene's `Group.bag` field with the
+ordinary shapes, so old scene files still load and editing survives save/reopen.
+
+A rectangular Boolean opening removes the cap of the shell; two spline handles merge into
+the rim with a small Smooth Union. The existing print-check dialog evaluates the generated
+geometry, and the standard OBJ/3MF exporters operate on it without special-case writers.
+**Physical load-bearing strength and minimum printable feature size depend on the printer
+and material and are not guaranteed.**
+
+The three procedural **Designer Lamp** models are registered in the existing furniture category by
+`src/library.rs` from `src/designer_lamp.rs` (not duplicated in generated JSON). Their real
+Revolve/Curve/Cylinder geometry shares the normal library thumbnails, 3D selection, editable
+parameters, scene saves and STL/3MF/OBJ export. The inspector can separate three parts onto the
+build plate as independent groups; export each group with **Selected** scope. Real-world electrical
+safety, supports and mechanical joint fits are not automatically guaranteed.
+
+**Designer Chair** is an intentional exception: its three parametric presets are built in `src/designer_chair.rs` and listed as the last library tab.
 
 ## File format
 
@@ -53,3 +78,16 @@ Only edit your own `gen/<file>.py` and `<file>.json`.
 - A small part melted into a neighbour of a different colour takes a mixed colour: keep details
   (hair, eyes, buttons) at blend 0.5-1.5.
 - The headless preview ignores `Paint`, the app does not. Colour with real shapes when in doubt.
+
+## 家電10種類（2026-10-17）
+
+`gen/appliances.json` is the authoritative compact catalogue for the ten common appliances.
+`gen/tools_b.py` appends these originals to the existing 17 everyday items when regenerating
+`tools_b.json`. Never edit only the generated JSON or regeneration will lose appliances.
+They are fixed SDF groups (no special editor); the existing library code handles thumbnail,
+insertion and save/OBJ/3MF export. The new names distinguish TV/fridge/lamp from older furniture.
+
+Validation: `python3 tools_b.py` (rendering requires MELTCAD_BIN), then
+`cargo test -p meltcad home_appliances_are_unique_searchable_and_save_round_trip`.
+Export and visual rendering must also be tested with a runnable MeltCAD binary; static validation
+alone does not establish actual OBJ/3MF or thumbnail success.

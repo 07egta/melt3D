@@ -7,6 +7,15 @@ use egui::{
     Align2, Color32, CornerRadius, FontId, Margin, Painter, Rect, Response, Sense, Shape, Stroke, StrokeKind, TextStyle, Ui, Vec2, pos2, vec2,
 };
 
+/// A shortcut as the person should read it: the main key is Command on a Mac, Ctrl elsewhere.
+pub fn keys(text: &str) -> String {
+    keys_for(text, cfg!(target_os = "macos"))
+}
+
+fn keys_for(text: &str, mac: bool) -> String {
+    if mac { text.replace("Ctrl", "Cmd") } else { text.to_owned() }
+}
+
 #[path = "style_gfx.rs"]
 pub mod gfx;
 
@@ -19,12 +28,12 @@ use gfx::{Buf, Sink, lerp, lit, mix};
 // ----- colours -----
 
 /// Bars, the outliner and the deepest wells.
-pub const PANEL_DARK: Color32 = Color32::from_rgb(30, 30, 30);
+pub const PANEL_DARK: Color32 = Color32::from_rgb(24, 24, 25);
 /// Side panel.
-pub const PANEL: Color32 = Color32::from_rgb(38, 38, 38);
+pub const PANEL: Color32 = Color32::from_rgb(31, 31, 32);
 /// Plates and buttons at rest.
-pub const CARD: Color32 = Color32::from_rgb(52, 52, 52);
-pub const HOVER: Color32 = Color32::from_rgb(68, 68, 68);
+pub const CARD: Color32 = Color32::from_rgb(44, 44, 46);
+pub const HOVER: Color32 = Color32::from_rgb(62, 62, 65);
 #[allow(dead_code)]
 pub const BORDER: Color32 = Color32::from_rgb(72, 72, 72);
 pub const TEXT: Color32 = Color32::from_rgb(230, 230, 230);
@@ -50,19 +59,19 @@ pub fn op_color(op: crate::model::Op) -> Color32 {
 pub const AXIS: [Color32; 3] = [Color32::from_rgb(232, 84, 84), Color32::from_rgb(110, 200, 100), Color32::from_rgb(80, 140, 240)];
 
 /// Sunken wells (text fields, slider rails, segmented tracks).
-pub const INSET_TOP: Color32 = Color32::from_rgb(26, 26, 26);
-pub const INSET_BOTTOM: Color32 = Color32::from_rgb(26, 26, 26);
+pub const INSET_TOP: Color32 = Color32::from_rgb(20, 20, 21);
+pub const INSET_BOTTOM: Color32 = Color32::from_rgb(20, 20, 21);
 
-const BTN_TOP: Color32 = Color32::from_rgb(56, 56, 56);
-const BTN_BOTTOM: Color32 = Color32::from_rgb(56, 56, 56);
-const BTN_EDGE: Color32 = Color32::from_rgb(74, 74, 74);
-const BTN_HOT_TOP: Color32 = Color32::from_rgb(72, 72, 72);
-const BTN_HOT_BOTTOM: Color32 = Color32::from_rgb(72, 72, 72);
+const BTN_TOP: Color32 = Color32::from_rgb(42, 42, 44);
+const BTN_BOTTOM: Color32 = Color32::from_rgb(42, 42, 44);
+const BTN_EDGE: Color32 = Color32::from_rgb(48, 48, 50);
+const BTN_HOT_TOP: Color32 = Color32::from_rgb(62, 62, 65);
+const BTN_HOT_BOTTOM: Color32 = Color32::from_rgb(62, 62, 65);
 const BTN_ON_TOP: Color32 = Color32::from_rgb(36, 132, 90);
 const BTN_ON_BOTTOM: Color32 = Color32::from_rgb(36, 132, 90);
 const BTN_ON_EDGE: Color32 = Color32::from_rgb(70, 190, 134);
-const BTN_DOWN_TOP: Color32 = Color32::from_rgb(44, 44, 44);
-const BTN_DOWN_BOTTOM: Color32 = Color32::from_rgb(44, 44, 44);
+const BTN_DOWN_TOP: Color32 = Color32::from_rgb(36, 36, 38);
+const BTN_DOWN_BOTTOM: Color32 = Color32::from_rgb(36, 36, 38);
 
 /// Fastest animation we use (seconds).
 const FAST: f32 = 0.10;
@@ -71,7 +80,7 @@ const MEDIUM: f32 = 0.12;
 pub fn apply(ctx: &egui::Context) {
     let mut v = egui::Visuals::dark();
     v.panel_fill = PANEL;
-    v.window_fill = Color32::from_rgb(40, 40, 40);
+    v.window_fill = Color32::from_rgb(34, 34, 36);
     v.extreme_bg_color = INSET_TOP;
     v.faint_bg_color = CARD;
     v.override_text_color = Some(TEXT);
@@ -129,7 +138,7 @@ pub fn button_look(hot: f32, on: f32, pressed: bool) -> (Color32, Color32, Color
     }
     let top = mix(mix(BTN_TOP, BTN_HOT_TOP, hot), BTN_ON_TOP, on);
     let bottom = mix(mix(BTN_BOTTOM, BTN_HOT_BOTTOM, hot), BTN_ON_BOTTOM, on);
-    let edge = mix(mix(BTN_EDGE, Color32::from_rgb(70, 74, 104), hot * 0.6), BTN_ON_EDGE, on);
+    let edge = mix(mix(BTN_EDGE, Color32::from_rgb(92, 92, 98), hot * 0.6), BTN_ON_EDGE, on);
     (top, bottom, edge)
 }
 
@@ -163,6 +172,24 @@ pub fn icon_button(ui: &mut Ui, size: f32, tip: &str, on: bool, paint: impl FnOn
     resp.on_hover_text(tip)
 }
 
+/// A strip button: just the picture, 34 px square; the name is in the hover tip (the left tool strip).
+pub fn wide_button(ui: &mut Ui, label: &str, tip: &str, on: bool, color: Option<Color32>, paint: impl FnOnce(&Painter, Rect, Color32)) -> Response {
+    let size = Vec2::splat(STRIP_BTN);
+    let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
+    let shift = paint_button(ui, &resp, rect, 9.0, on);
+    let hot = ui.ctx().animate_value_with_time(resp.id.with("hot"), if resp.hovered() { 1.0 } else { 0.0 }, FAST);
+    let ink = if on { Color32::WHITE } else { mix(TEXT, Color32::WHITE, hot) };
+    let icon = Rect::from_center_size(rect.center(), Vec2::splat(26.0)).translate(shift);
+    paint(ui.painter(), icon, color.map_or(ink, |c| if on { Color32::WHITE } else { c }));
+    let tip = if tip == label || tip.is_empty() { label.to_string() } else { format!("{label} - {tip}") };
+    resp.on_hover_text(tip)
+}
+
+/// Strip button size, and the strip's width (two columns).
+pub const STRIP_BTN: f32 = 34.0;
+/// The width of the buttons in the left tool strip.
+pub const STRIP_W: f32 = STRIP_BTN * 2.0 + 4.0;
+
 /// A button with text. `on` highlights it as the chosen one.
 pub fn pill(ui: &mut Ui, text: &str, on: bool) -> Response {
     text_button(ui, text, on, true, None)
@@ -174,10 +201,16 @@ pub fn pill_enabled(ui: &mut Ui, text: &str, on: bool, enabled: bool) -> Respons
 }
 
 fn text_button(ui: &mut Ui, text: &str, on: bool, enabled: bool, color: Option<Color32>) -> Response {
+    let enabled = enabled && ui.is_enabled();
     let galley = ui.painter().layout_no_wrap(text.to_string(), FontId::proportional(13.5), Color32::PLACEHOLDER);
     let size = vec2((galley.size().x + 24.0).max(30.0), 30.0);
     let (rect, resp) = ui.allocate_exact_size(size, if enabled { Sense::click() } else { Sense::hover() });
-    let shift = paint_button(ui, &resp, rect, 9.0, on);
+    let shift = if enabled {
+        paint_button(ui, &resp, rect, 9.0, on)
+    } else {
+        raised(ui.painter(), rect, 9.0, 0.0, if on { 1.0 } else { 0.0 }, false);
+        Vec2::ZERO
+    };
     let hot = ui.ctx().animate_value_with_time(resp.id.with("hot"), if resp.hovered() && enabled { 1.0 } else { 0.0 }, FAST);
     let base = color.unwrap_or(TEXT);
     let col = if !enabled {
@@ -194,8 +227,19 @@ fn text_button(ui: &mut Ui, text: &str, on: bool, enabled: bool, color: Option<C
 
 /// A menu button that looks like the other buttons. `accent` colours its text; the menu opens below it.
 pub fn menu_button<R>(ui: &mut Ui, text: &str, accent: bool, add_contents: impl FnOnce(&mut Ui) -> R) -> Option<egui::InnerResponse<R>> {
+    menu_button_enabled(ui, text, accent, true, add_contents)
+}
+
+/// Disable a menu anchor without adding a layout scope around its button.
+pub fn menu_button_enabled<R>(
+    ui: &mut Ui,
+    text: &str,
+    accent: bool,
+    enabled: bool,
+    add_contents: impl FnOnce(&mut Ui) -> R,
+) -> Option<egui::InnerResponse<R>> {
     use egui::containers::menu::MenuConfig;
-    let resp = text_button(ui, text, false, true, if accent { Some(ACCENT) } else { None });
+    let resp = text_button(ui, text, false, enabled, if accent { Some(ACCENT) } else { None });
     let config = MenuConfig::find(ui);
     egui::Popup::menu(&resp)
         .close_behavior(config.close_behavior)
@@ -220,10 +264,12 @@ pub fn segmented(ui: &mut Ui, salt: &str, items: &[(&str, &str)], selected: Opti
     let mut widths: Vec<f32> = galleys.iter().map(|g| g.size().x + pad * 2.0).collect();
     if stretch && !widths.is_empty() {
         let total: f32 = widths.iter().sum();
-        let avail = ui.available_width() - gap * 2.0;
+        let avail = (ui.available_width() - gap * 2.0).max(0.0);
         if avail > total {
             let extra = (avail - total) / widths.len() as f32;
             widths.iter_mut().for_each(|w| *w += extra);
+        } else if total > avail && total > 0.0 {
+            widths.iter_mut().for_each(|w| *w *= avail / total);
         }
     }
     let total = widths.iter().sum::<f32>() + gap * 2.0;
@@ -255,16 +301,28 @@ pub fn segmented(ui: &mut Ui, salt: &str, items: &[(&str, &str)], selected: Opti
         ctx.animate_value_with_time(id.with("vis"), 0.0, MEDIUM);
     }
     let mut clicked = None;
-    for (i, ((label_galley, rect), (_, tip))) in galleys.into_iter().zip(&rects).zip(items).enumerate() {
+    for (i, ((mut label_galley, rect), (label, tip))) in galleys.into_iter().zip(&rects).zip(items).enumerate() {
         let resp = ui.interact(*rect, id.with(("item", i)), Sense::click());
         let hot = ctx.animate_value_with_time(id.with(("hot", i)), if resp.hovered() { 1.0 } else { 0.0 }, FAST);
         let col = if selected == Some(i) { Color32::WHITE } else { mix(DIM, TEXT, 0.35 + 0.65 * hot) };
+        let text_width = (rect.width() - 8.0).max(0.0);
+        let truncated = label_galley.size().x > text_width;
+        if truncated {
+            label_galley = egui::WidgetText::from(egui::RichText::new(*label).color(Color32::PLACEHOLDER)).into_galley(
+                ui,
+                Some(egui::TextWrapMode::Truncate),
+                text_width,
+                font.clone(),
+            );
+        }
         let pos = rect.center() - label_galley.size() * 0.5;
-        ui.painter().galley(pos, label_galley, col);
+        ui.painter().with_clip_rect(rect.intersect(ui.clip_rect())).galley(pos, label_galley, col);
         if resp.clicked() {
             clicked = Some(i);
         }
-        if !tip.is_empty() {
+        if truncated {
+            resp.on_hover_text(if tip.is_empty() { (*label).to_owned() } else { format!("{label}\n{tip}") });
+        } else if !tip.is_empty() {
             resp.on_hover_text(*tip);
         }
     }
@@ -310,14 +368,14 @@ pub fn xyz(ui: &mut Ui, label: &str, v: &mut [f32; 3], speed: f64, range: std::o
         let fw = ((avail - LABEL_W - 5.0 - 3.0 * (10.0 + 5.0) - 2.0 * 5.0) / 3.0).max(44.0);
         for (i, c) in v.iter_mut().enumerate() {
             ui.add_sized([10.0, 22.0], egui::Label::new(egui::RichText::new(["X", "Y", "Z"][i]).color(AXIS[i]).size(12.0).strong()));
-            changed |= field_sized(ui, [fw, 22.0], egui::DragValue::new(c).speed(speed).range(range.clone()).suffix(suffix).max_decimals(2)).changed();
+            changed |=
+                field_sized(ui, [fw, 22.0], egui::DragValue::new(c).speed(speed).range(range.clone()).suffix(suffix).max_decimals(2)).changed();
         }
     });
     changed
 }
 
 /// A triangle that turns from pointing right to pointing down when `open`.
-#[allow(dead_code)]
 #[allow(dead_code)]
 pub fn chevron(ui: &mut Ui, open: bool) -> Response {
     let (rect, resp) = ui.allocate_exact_size(Vec2::splat(22.0), Sense::click());
@@ -355,8 +413,8 @@ pub fn strip() -> egui::Frame {
 }
 
 /// A thin horizontal divider between groups of buttons in a column.
-pub fn hsep(ui: &mut Ui) {
-    let (rect, _) = ui.allocate_exact_size(vec2(26.0, 9.0), Sense::hover());
+pub fn hsep_w(ui: &mut Ui, w: f32) {
+    let (rect, _) = ui.allocate_exact_size(vec2(w, 9.0), Sense::hover());
     let y = rect.center().y;
     ui.painter().line_segment([pos2(rect.left(), y), pos2(rect.right(), y)], Stroke::new(1.0, Color32::from_white_alpha(34)));
 }
@@ -394,12 +452,10 @@ fn paint_card(out: &Buf, rect: Rect) {
 
 /// A recessed tray for a group of buttons.
 #[allow(dead_code)]
-#[allow(dead_code)]
 pub fn tray<R>(ui: &mut Ui, add_contents: impl FnOnce(&mut Ui) -> R) -> egui::InnerResponse<R> {
     plated(ui, Margin::same(3), paint_tray, add_contents)
 }
 
-#[allow(dead_code)]
 #[allow(dead_code)]
 fn paint_tray(out: &Buf, rect: Rect) {
     out.put(Shape::rect_filled(rect, 9.0, Color32::from_rgb(32, 32, 32)));
@@ -451,7 +507,11 @@ pub fn row_bg(ui: &Ui, resp: &Response, rect: Rect, selected: bool) {
     }
     if sel > 0.01 {
         p.rect_filled(rect, 6.0, Color32::from_rgba_unmultiplied(52, 178, 120, (78.0 * sel) as u8));
-        p.rect_filled(Rect::from_min_max(pos2(rect.left(), rect.top() + 4.0), pos2(rect.left() + 3.0, rect.bottom() - 4.0)), 1.5, Color32::from_rgba_unmultiplied(52, 178, 120, (255.0 * sel) as u8));
+        p.rect_filled(
+            Rect::from_min_max(pos2(rect.left(), rect.top() + 4.0), pos2(rect.left() + 3.0, rect.bottom() - 4.0)),
+            1.5,
+            Color32::from_rgba_unmultiplied(52, 178, 120, (255.0 * sel) as u8),
+        );
     }
 }
 
@@ -691,6 +751,18 @@ mod tests {
     }
 
     #[test]
+    fn long_segment_labels_fit_a_narrow_inspector() {
+        let ctx = egui::Context::default();
+        apply(&ctx);
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            ui.set_width(160.0);
+            segmented(ui, "narrow", &[("Shape settings", ""), ("Surface material", ""), ("Light and background", "")], Some(2), true);
+            assert!(ui.min_rect().width() <= 160.1, "the inspector must not expand into the canvas: {:?}", ui.min_rect());
+        });
+        out.textures_delta.clear();
+    }
+
+    #[test]
     fn widgets_draw_and_toggle_without_panicking() {
         let ctx = egui::Context::default();
         apply(&ctx);
@@ -703,13 +775,13 @@ mod tests {
         for _ in 0..3 {
             let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
                 icon_button(ui, 34.0, "tip", on, |_, _, _| {});
-                pill(ui, "あいう", on);
+                pill(ui, "Pill", on);
                 pill_enabled(ui, "off", false, false);
-                segmented(ui, "seg", &[("形", "a"), ("ざいしつ", ""), ("メルト", "c")], Some(1), true);
+                segmented(ui, "seg", &[("Shape", "a"), ("Material", ""), ("Melt", "c")], Some(1), true);
                 segmented(ui, "seg2", &[("a", ""), ("b", "")], None, false);
                 segmented(ui, "seg3", &[], None, false);
                 title(ui, "Title");
-                xyz(ui, "位置", &mut xyz3, 0.5, -10.0..=10.0, "");
+                xyz(ui, "Position", &mut xyz3, 0.5, -10.0..=10.0, "");
                 chevron(ui, on);
                 vsep(ui);
                 checkbox(ui, &mut check, "check");
@@ -717,7 +789,7 @@ mod tests {
                 slider(ui, &mut v, 0.0..=1.0, 120.0);
                 slider(ui, &mut bad, 0.0..=1.0, 120.0);
                 slider(ui, &mut v, 1.0..=1.0, 120.0);
-                labeled_slider(ui, "前の組と\nとけあう", &mut v, 0.0..=1.0, "tip");
+                labeled_slider(ui, "Melt with\nprevious group", &mut v, 0.0..=1.0, "tip");
                 color_edit(ui, &mut rgb);
                 card().show(ui, |ui| {
                     ui.label("hello");
@@ -743,11 +815,7 @@ mod tests {
         apply(&ctx);
         let mut v = 0.0_f32;
         let frame = |ctx: &egui::Context, events: Vec<egui::Event>, v: &mut f32| {
-            let input = egui::RawInput {
-                screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(400.0, 200.0))),
-                events,
-                ..Default::default()
-            };
+            let input = egui::RawInput { screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(400.0, 200.0))), events, ..Default::default() };
             let mut rect = Rect::NOTHING;
             let mut out = ctx.run_ui(input, |ui| {
                 rect = slider(ui, v, 0.0..=10.0, 200.0).rect;
@@ -765,4 +833,24 @@ mod tests {
         );
         assert!((v - 5.0).abs() < 0.5, "pressing in the middle sets about half: {v}");
     }
+}
+
+#[cfg(test)]
+mod keys_tests {
+    use super::keys_for;
+
+    #[test]
+    fn a_mac_reads_command_where_others_read_ctrl() {
+        assert_eq!(keys_for("Save  Ctrl+S", true), "Save  Cmd+S");
+        assert_eq!(keys_for("Redo (Ctrl+Shift+Z)", true), "Redo (Cmd+Shift+Z)");
+        assert_eq!(keys_for("Save  Ctrl+S", false), "Save  Ctrl+S");
+    }
+}
+
+/// The marker for "made in SolidCraft": SolidCraft's own logo, so no long word is needed.
+pub const SOLID_BADGE: &str = "\u{1}solidcraft";
+
+/// SolidCraft's logo in `rect` (its height sets the size).
+pub fn solidcraft_logo(p: &Painter, rect: Rect) {
+    solidcraft_ui_egui::icons::brand_logo(p, rect.center(), rect.height().min(rect.width() * 1.15));
 }

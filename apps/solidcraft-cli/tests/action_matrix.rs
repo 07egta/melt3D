@@ -350,7 +350,7 @@ fn actions(s: &Session) -> Vec<Action> {
         // The surface's normal at `p` (either way round): exact on analytic faces.
         let normal_at = |f: u32, p: Vec3| -> Option<Vec3> {
             match face_surface(&b.body, f as usize) {
-                Some(FaceSurface::Plane { normal, .. }) => Some(normal),
+                Some(FaceSurface::Plane { normal, .. }) => Some(*normal),
                 Some(FaceSurface::Cylinder { origin, axis, .. }) => {
                     let v = p - origin;
                     (v - axis * v.dot(axis)).normalized()
@@ -1519,7 +1519,6 @@ fn sketches_on_loft_and_sweep_faces() {
 }
 
 #[test]
-#[ignore = "fails until #562 is fixed"]
 fn press_pull_on_the_pi_case_floor() {
     reproduces(
         Some("tests/action_matrix/designs/pi-case.solidcraft"),
@@ -1560,7 +1559,6 @@ fn a_sketch_on_the_rim_a_shell_leaves() {
 }
 
 #[test]
-#[ignore = "fails until #565 is fixed"]
 fn sketches_after_split_body_and_intersect() {
     reproduces(
         None,
@@ -1667,7 +1665,6 @@ fn a_tangent_plane_on_a_drill_tip() {
 }
 
 #[test]
-#[ignore = "fails until #568 is fixed"]
 fn a_plane_on_a_patterned_counterbore_after_a_thickness_change() {
     let mut c = vec![json!({"command": "parameters.change", "params": {"name": "thick", "expression": "10 mm"}})];
     c.extend(rectangle(json!("XY"), [0., 0.], [80., 30.]));

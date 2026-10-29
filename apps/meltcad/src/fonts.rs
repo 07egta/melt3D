@@ -45,6 +45,37 @@ const FONT_CANDIDATES: &[&str] = &[
 const CJK_FONT_KEYWORDS: &[&str] =
     &["cjk", "notosansjp", "bizud", "biz-ud", "yugoth", "meiryo", "msgothic", "hiragino", "ipag", "ipaexg", "takao", "vlgothic", "droidsansfallback"];
 
+/// Find a *file path* for optional outline modeling. Unlike the UI fallback,
+/// Puffy Text saves only the chosen path and baked outlines, never the font bytes.
+pub fn find_cjk_font_path() -> Option<PathBuf> {
+    for candidate in FONT_CANDIDATES {
+        let path = PathBuf::from(candidate);
+        if try_read_font(&path).is_some() { return Some(path); }
+    }
+    for root in scan_roots() {
+        if let Some(path) = scan_dir_for_font_path(&root, SCAN_DEPTH) { return Some(path); }
+    }
+    None
+}
+
+fn scan_dir_for_font_path(dir: &Path, depth: usize) -> Option<PathBuf> {
+    if depth == 0 { return None; }
+    let entries = std::fs::read_dir(dir).ok()?;
+    let mut subdirs = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_file() {
+            let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
+            if [".ttf", ".ttc", ".otf"].iter().any(|suffix| name.ends_with(suffix))
+                && is_cjk_font_name(&name) && try_read_font(&path).is_some()
+            {
+                return Some(path);
+            }
+        } else if path.is_dir() { subdirs.push(path); }
+    }
+    subdirs.iter().find_map(|p| scan_dir_for_font_path(p, depth - 1))
+}
+
 /// Install the system CJK font as the last fallback of the Proportional and Monospace families.
 /// Does nothing when no usable CJK font is found.
 #[allow(dead_code)]
@@ -53,34 +84,67 @@ pub fn setup(ctx: &egui::Context) {
 }
 
 /// Install font bytes found earlier (see [`FontJob`]); `None` changes nothing.
+/// SolidCraft's own families (its medium, semibold and bold faces) are always installed: its screen
+/// asks for them, and a missing font family stops the whole app.
 pub fn install(ctx: &egui::Context, bytes: Option<Vec<u8>>) {
-    if let Some(bytes) = bytes {
-        ctx.set_fonts(with_cjk_fallback(egui::FontDefinitions::default(), bytes));
+    let base = solidcraft_ui_egui::fonts::base_font_definitions();
+    ctx.set_fonts(match bytes {
+        Some(bytes) => with_cjk_fallback(base, bytes),
+        None => base,
+    });
+    ctx.data_mut(|d| d.insert_temp(egui::Id::new(INSTALLED), true));
+}
+
+const INSTALLED: &str = "meltcad_fonts_installed";
+
+/// Make sure SolidCraft's font families exist before its screen draws (a context nobody set fonts on,
+/// as in tests, would otherwise stop at the first bold label).
+pub fn ensure(ctx: &egui::Context) {
+    if !ctx.data(|d| d.get_temp::<bool>(egui::Id::new(INSTALLED)).unwrap_or(false)) {
+        install(ctx, None);
     }
 }
 
 /// Looking for and reading the CJK font (a file of several MB) can take a while on a cold disk,
 /// so it runs on its own thread from the first moment of start-up, while the window opens.
-pub struct FontJob(Option<std::thread::JoinHandle<Option<Vec<u8>>>>);
+pub struct FontJob(Option<std::sync::mpsc::Receiver<Option<Vec<u8>>>>);
 
 impl FontJob {
     pub fn start() -> FontJob {
-        FontJob(std::thread::Builder::new().name("meltcad-font".into()).spawn(find_cjk_font).ok())
+        let (tx, rx) = std::sync::mpsc::channel();
+        let started = std::thread::Builder::new().name("meltcad-font".into()).spawn(move || {
+            let _ = tx.send(find_cjk_font());
+        });
+        FontJob(started.ok().map(|_| rx))
     }
 
-    /// The font bytes (waits for the thread if it is still busy). Without a thread, searches now.
-    pub fn finish(self) -> Option<Vec<u8>> {
-        match self.0 {
-            Some(handle) => handle.join().ok().flatten(),
-            None => find_cjk_font(),
+    /// Poll without ever blocking the UI while a cold disk is searching for CJK fonts.
+    /// Some(None) means search failed, and None means it is still running.
+    pub fn poll(&mut self) -> Option<Option<Vec<u8>>> {
+        let result = self.0.as_ref()?.try_recv();
+        match result {
+            Ok(bytes) => {
+                self.0 = None;
+                Some(bytes)
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => None,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.0 = None;
+                Some(None)
+            }
         }
+    }
+
+    pub fn pending(&self) -> bool {
+        self.0.is_some()
     }
 }
 
 /// `fonts` with `bytes` appended as the last fallback of the Proportional and Monospace families.
 fn with_cjk_fallback(mut fonts: egui::FontDefinitions, bytes: Vec<u8>) -> egui::FontDefinitions {
     fonts.font_data.insert(CJK_FALLBACK.to_owned(), Arc::new(egui::FontData::from_owned(bytes)));
-    for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+    let families: Vec<egui::FontFamily> = fonts.families.keys().cloned().collect();
+    for family in families {
         let list = fonts.families.entry(family).or_default();
         list.retain(|entry| entry != CJK_FALLBACK);
         list.push(CJK_FALLBACK.to_owned());
@@ -164,4 +228,21 @@ fn scan_dir_for_font(dir: &Path, depth: usize, is_wanted: fn(&str) -> bool) -> O
 /// Whether a lower-case font file name looks like a CJK font.
 fn is_cjk_font_name(file_name: &str) -> bool {
     CJK_FONT_KEYWORDS.iter().any(|keyword| file_name.contains(keyword))
+}
+
+#[cfg(test)]
+mod job_tests {
+    use super::*;
+
+    #[test]
+    fn polling_never_waits_and_consumes_exactly_one_result() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut job = FontJob(Some(rx));
+        assert!(job.poll().is_none(), "no result yet");
+        assert!(job.pending());
+        tx.send(None).expect("send");
+        assert!(matches!(job.poll(), Some(None)));
+        assert!(!job.pending());
+        assert!(job.poll().is_none());
+    }
 }

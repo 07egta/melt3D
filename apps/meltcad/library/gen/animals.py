@@ -1,4 +1,4 @@
-"""Category どうぶつ: 14 cute toy-like animals, 30-70 mm, standing on z = 0 and facing -Y.
+"""Category どうぶつ: 16 cute toy-like animals, 30-70 mm, standing on z = 0 and facing -Y.
 
 Run from this folder:  python3 animals.py   (writes ../animals.json, renders previews)
 """
@@ -312,6 +312,54 @@ def sheep():
     return s
 
 
+
+def panda():
+    """Giant panda: compact white body, black limbs/ears and raised eye patches."""
+    white, ink = (0.97, 0.96, 0.92), (0.10, 0.12, 0.14)
+    s = [ball("からだ", (0, 6, 23), 13, white, blend=6, scale=(0.96, 1.24, 1.09))]
+    s += both(lambda sx, side: stick("まえあし" + side, 7.5 * sx, -6, 0, 22, 4.1, ink, blend=4))
+    s += both(lambda sx, side: stick("うしろあし" + side, 7.5 * sx, 15, 0, 22, 4.1, ink, blend=4))
+    s += both(lambda sx, side: ball("かた" + side, (10.5 * sx, -4, 25), 5.0, ink,
+                                    blend=3, scale=(0.72, 1, 1.25)))
+    s += [ball("あたま", (0, -14, 40), 10.5, white, blend=6)]
+    s += both(lambda sx, side: ball("みみ" + side, (8 * sx, -11, 49), 4.2, ink, blend=2))
+    s += both(lambda sx, side: ball("めのまわり" + side, (4.5 * sx, -22.8, 42.4), 3.7, ink,
+                                    blend=1.0, scale=(0.82, 0.49, 1.1)))
+    s += both(lambda sx, side: ball("めのひかり" + side, (4.35 * sx, -24.25, 43), 0.92, white, blend=0.5))
+    s += [ball("くちもと", (0, -23.4, 35), 4.7, white, blend=1.5, scale=(1.05, 0.95, 0.74)),
+          ball("はな", (0, -27.7, 36.3), 1.6, ink, blend=0.6),
+          ball("しっぽ", (0, 21, 22), 3.2, ink, blend=1)]
+    return s
+
+
+def horse():
+    """Standing horse with slender legs, a sloped neck, upright ears and a flowing tail."""
+    brown = (0.67, 0.43, 0.25)
+    mane, muzzle, hoof = (0.27, 0.20, 0.16), (0.82, 0.67, 0.50), (0.23, 0.19, 0.16)
+    s = [ball("からだ", (0, 5, 27), 12, brown, blend=6, scale=(0.90, 1.75, 0.93))]
+    s += both(lambda sx, side: stick("まえあし" + side, 6.4 * sx, -9, 0, 23, 2.8, brown, blend=3.3))
+    s += both(lambda sx, side: stick("うしろあし" + side, 6.4 * sx, 17, 0, 23, 2.8, brown, blend=3.3))
+    s += both(lambda sx, side: ball("まえひづめ" + side, (6.4 * sx, -10, 2), 3.7, hoof,
+                                    blend=0.9, scale=(0.9, 1.25, 0.52)))
+    s += both(lambda sx, side: ball("うしろひづめ" + side, (6.4 * sx, 17, 2), 3.7, hoof,
+                                    blend=0.9, scale=(0.9, 1.25, 0.52)))
+    s += [tube("くび", [(0, -10, 31, 6.0), (0, -15, 41, 5.3), (0, -22, 49, 4.8)],
+               brown, blend=5),
+          ball("あたま", (0, -26, 50), 7.1, brown, blend=3.5, scale=(0.82, 1.25, 0.90)),
+          ball("くちもと", (0, -34.5, 45.5), 4.5, muzzle, blend=2,
+               scale=(0.90, 1.15, 0.70))]
+    s += both(lambda sx, side: tube("みみ" + side, [(3.3 * sx, -26, 55, 1.8),
+                                                     (4 * sx, -25.8, 62, 1.1)], brown, blend=1.5))
+    s += both(lambda sx, side: eye("め" + side, (5.3 * sx, -31.2, 51.5), 1.4))
+    s += both(lambda sx, side: ball("はなあな" + side, (2.3 * sx, -38.8, 46.0),
+                                    1.1, hoof, blend=0.6))
+    s += [tube("たてがみ", [(0, -6, 33, 2.6), (0, -12, 42, 2.6), (0, -19.5, 52, 2.3)],
+               mane, blend=2),
+          tube("しっぽ", [(0, 22, 30, 2.0), (0, 29, 26, 1.9), (0, 34, 17, 1.3)],
+               mane, blend=2)]
+    return s
+
+
 ANIMALS = [
     ("いぬ", ["dog", "犬", "イヌ", "pet", "animal"], dog),
     ("ねこ", ["cat", "猫", "ネコ", "pet", "animal"], cat),
@@ -327,6 +375,8 @@ ANIMALS = [
     ("カエル", ["frog", "蛙", "animal"], frog),
     ("ライオン", ["lion", "獅子", "ライオン", "animal"], lion),
     ("ひつじ", ["sheep", "羊", "ヒツジ", "animal"], sheep),
+    ("パンダ", ["panda", "熊猫", "ジャイアントパンダ", "animal"], panda),
+    ("うま", ["horse", "馬", "ウマ", "equine", "animal"], horse),
 ]
 
 items = [item(name, tags, group(name, make())) for name, tags, make in ANIMALS]

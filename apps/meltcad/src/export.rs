@@ -20,7 +20,7 @@ mod tests {
     fn scene_of(shapes: Vec<Shape>) -> Scene {
         let mut g = Group::new("g");
         g.shapes = shapes;
-        Scene { groups: vec![g], melt: Default::default(), env: Default::default(), saved: Vec::new() }
+        Scene { groups: vec![g], melt: Default::default(), env: Default::default(), saved: Vec::new(), anim: Default::default() }
     }
 
     fn slab(x: f32) -> Shape {

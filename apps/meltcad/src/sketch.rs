@@ -14,6 +14,10 @@ pub const CIRCLE_POINTS: usize = 32;
 pub const MIN_SIDE: f32 = 0.5;
 /// The smallest area a profile may have (mm²).
 pub const MIN_AREA: f32 = 0.5;
+/// Maximum number of independent through-holes in one sketch extrusion.
+pub const MAX_HOLES: usize = 12;
+/// Reject near-contact contours rather than generating zero-thickness walls (mm).
+const MIN_CONTOUR_GAP: f32 = 0.05;
 /// Samples per spline segment, at most.
 const MAX_PER_SEGMENT: usize = 16;
 
@@ -27,6 +31,11 @@ pub enum SketchError {
     TooManyPoints,
     TooSmall,
     SelfIntersect,
+    HoleOutside,
+    HoleOverlap,
+    ContoursTouch,
+    TooManyHoles,
+    HoleMisaligned,
     /// A revolve profile reaches to the left of the axis.
     LeftOfAxis,
     /// A revolve needs a standing (vertical) plane.
@@ -38,14 +47,21 @@ pub enum SketchError {
 impl SketchError {
     pub fn message(self) -> String {
         match self {
-            SketchError::TooFewPoints => "点が3つ以上いります".to_string(),
-            SketchError::BadNumber => "数がおかしいので、かきなおしてください".to_string(),
-            SketchError::TooManyPoints => format!("点が多すぎます（{MAX_OUTLINE}こまで）"),
-            SketchError::TooSmall => "せますぎます（ほぼ線です）。もっと広くかいてください".to_string(),
-            SketchError::SelfIntersect => "線が交差しています。交わらないように かきなおしてください".to_string(),
-            SketchError::LeftOfAxis => "中心の線（じく）より左にはみ出しています。右がわにかいてください".to_string(),
-            SketchError::NeedsVerticalPlane => "回転体は「正面」か「横」の面でかいてください".to_string(),
-            SketchError::PathTooShort => "線が短すぎます。2点以上、はなしてうってください".to_string(),
+            SketchError::TooFewPoints => "Needs at least 3 points".to_string(),
+            SketchError::BadNumber => "Invalid number. Please redraw".to_string(),
+            SketchError::TooManyPoints => format!("Too many points (up to {MAX_OUTLINE})"),
+            SketchError::TooSmall => "Too small (almost a line). Draw a larger shape".to_string(),
+            SketchError::SelfIntersect => "Lines cross. Redraw without crossings".to_string(),
+            SketchError::HoleOutside => "Hole outlines must be inside the outer outline".to_string(),
+            SketchError::HoleOverlap => "Holes overlap. Separate them (holes cannot contain holes)".to_string(),
+            SketchError::ContoursTouch => "Outlines cross or touch. Keep the outer edge and holes at least 0.05 mm apart".to_string(),
+            SketchError::TooManyHoles => format!("Up to {MAX_HOLES} holes"),
+            SketchError::HoleMisaligned => {
+                "Hole and outer outline don't match in height or orientation. Use the same plane and extrude height".to_string()
+            }
+            SketchError::LeftOfAxis => "Extends past the center axis on the left. Draw on the right side".to_string(),
+            SketchError::NeedsVerticalPlane => "Revolve needs a sketch on the Front or Side plane".to_string(),
+            SketchError::PathTooShort => "Path too short. Place at least 2 points, spaced apart".to_string(),
         }
     }
 }
@@ -81,6 +97,77 @@ impl Frame {
     pub fn side() -> Frame {
         Frame { origin: [0.0; 3], u: [0.0, 1.0, 0.0], v: [0.0, 0.0, 1.0] }
     }
+    /// Build a stable, right-handed drawing frame from two directions. The second
+    /// axis is orthogonalized against the first; invalid/parallel axes are rejected
+    /// instead of producing a broken sketch plane.
+    pub fn from_axes(origin: V3, u: V3, v: V3) -> Option<Frame> {
+        if !origin.iter().chain(u.iter()).chain(v.iter()).all(|x| x.is_finite() && x.abs() <= 1.0e6) {
+            return None;
+        }
+        let lu = len(u);
+        if lu < 1e-6 {
+            return None;
+        }
+        let u = mul(u, 1.0 / lu);
+        let v = sub(v, mul(u, dot(u, v)));
+        let lv = len(v);
+        if !lv.is_finite() || lv < 1e-6 {
+            return None;
+        }
+        Some(Frame { origin, u, v: mul(v, 1.0 / lv) })
+    }
+    /// The plane that touches a surface at `point` whose outward direction is `normal`. The
+    /// in-plane axes follow the nearest world axes: on a level face `u` is X (or Y when that fits
+    /// better); on a standing face `u` is the level axis most along it and `v` points up. Normal +Z
+    /// gives the floor's axes, +X the side's. A normal or point that is not finite (or a normal of
+    /// no length) falls back to the floor.
+    pub fn from_hit(point: V3, normal: V3) -> Frame {
+        Self::try_from_hit(point, normal).unwrap_or_else(Frame::floor)
+    }
+
+    fn try_from_hit(point: V3, normal: V3) -> Option<Frame> {
+        if !point.iter().chain(normal.iter()).all(|x| x.is_finite() && x.abs() <= 1.0e6) {
+            return None;
+        }
+        let l = len(normal);
+        if l < 1e-6 {
+            return None;
+        }
+        let n = mul(normal, 1.0 / l);
+        let level = n[2].abs() >= 0.7;
+        let axes: [V3; 3] = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+        let mut best: Option<(f32, V3)> = None;
+        // (only the level axes lead: a face is never turned about the vertical)
+        for a in axes.iter().take(2) {
+            let pr = sub(*a, mul(n, dot(*a, n)));
+            let pl = len(pr);
+            if pl.is_finite() && best.is_none_or(|b| pl > b.0 + 1e-6) {
+                best = Some((pl, pr));
+            }
+        }
+        let (pl, pr) = best?;
+        if pl < 1e-6 {
+            return None;
+        }
+        let mut u = mul(pr, 1.0 / pl);
+        let mut v = cross(n, u);
+        if !level && v[2] < 0.0 {
+            u = mul(u, -1.0);
+            v = mul(v, -1.0);
+        }
+        let origin = [point[0], point[1], point[2]];
+        Frame::from_axes(origin, u, v)
+    }
+
+    /// Place a plane through a world point with X/Y/Z Euler rotation (degrees).
+    /// The same rotation convention is used by saved sketch-generated shapes.
+    pub fn oriented(origin: V3, degrees: V3) -> Option<Frame> {
+        if !degrees.iter().all(|a| a.is_finite() && a.abs() <= 36000.0) {
+            return None;
+        }
+        let r = rotation(degrees);
+        Self::from_axes(origin, [r[0][0], r[1][0], r[2][0]], [r[0][1], r[1][1], r[2][1]])
+    }
     /// The unit normal (`u x v`).
     pub fn normal(&self) -> V3 {
         norm(cross(self.u, self.v))
@@ -89,13 +176,30 @@ impl Frame {
     pub fn is_vertical(&self) -> bool {
         self.normal()[2].abs() < 0.02
     }
-    pub fn to_world(&self, p: [f32; 2]) -> V3 {
+    pub fn to_world(self, p: [f32; 2]) -> V3 {
         add(self.origin, add(mul(self.u, p[0]), mul(self.v, p[1])))
     }
-    /// The sketch coordinates of a world point (its distance from the plane is dropped).
+    /// The sketch coordinates of a world point (its distance from the plane is dropped). `u` and `v`
+    /// need not be perpendicular or unit (a stretched or slanted shape): this is the exact inverse of
+    /// `to_world` for points in the plane (#101).
+    #[allow(clippy::wrong_self_convention)] // Paired forward/inverse frame transforms share one receiver.
     pub fn from_world(&self, w: V3) -> [f32; 2] {
         let d = sub(w, self.origin);
-        [dot(d, self.u) / dot(self.u, self.u).max(1e-12), dot(d, self.v) / dot(self.v, self.v).max(1e-12)]
+        let (uu, vv, uv) = (dot(self.u, self.u), dot(self.v, self.v), dot(self.u, self.v));
+        let (du, dv) = (dot(d, self.u), dot(d, self.v));
+        let det = uu * vv - uv * uv;
+        if det.abs() > 1e-9 * (uu * vv).max(1e-12) {
+            [(du * vv - dv * uv) / det, (dv * uu - du * uv) / det]
+        } else {
+            [du / uu.max(1e-12), dv / vv.max(1e-12)]
+        }
+    }
+    /// The same plane with unit, perpendicular axes, and `pts` re-expressed in it so they keep their
+    /// world positions. A shape's scale is baked into the points this way (#100).
+    pub fn bake_scale(&self, pts: &[[f32; 2]]) -> Option<(Frame, Vec<[f32; 2]>)> {
+        let unit = Frame::from_axes(self.origin, self.u, self.v)?;
+        let out: Vec<[f32; 2]> = pts.iter().map(|&p| unit.from_world(self.to_world(p))).collect();
+        out.iter().all(|p| p[0].is_finite() && p[1].is_finite()).then_some((unit, out))
     }
     /// Where a ray (origin `o`, direction `d`) meets the plane, in sketch coordinates. None when the
     /// ray runs along the plane, the plane is behind it, or the hit is absurdly far.
@@ -152,6 +256,189 @@ pub fn snap(p: [f32; 2], step: f32) -> [f32; 2] {
     // rounding a multiple of 0.1 leaves tiny float noise: tidy it
     let t = |v: f32| (r(v) * 1000.0).round() / 1000.0;
     [t(p[0]), t(p[1])]
+}
+
+// ------------------------------------------------------------------ screen-space snapping
+
+/// Snap priorities (most intentional first). Distance is measured in SCREEN pixels, never in mm.
+/// The weights are small enough that a much closer target wins over a distant high-priority one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SnapKind {
+    Origin,
+    Endpoint,
+    Intersection,
+    Center,
+    Midpoint,
+    Horizontal,
+    Vertical,
+    Angle,
+    Grid,
+}
+
+impl SnapKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Origin => "Origin",
+            Self::Endpoint => "Endpoint",
+            Self::Intersection => "Intersection",
+            Self::Center => "Center",
+            Self::Midpoint => "Midpoint",
+            Self::Horizontal => "Horizontal",
+            Self::Vertical => "Vertical",
+            Self::Angle => "15°",
+            Self::Grid => "Grid",
+        }
+    }
+
+    fn penalty(self) -> f32 {
+        match self {
+            Self::Origin => 0.0,
+            Self::Endpoint => 1.0,
+            Self::Intersection => 2.0,
+            Self::Center => 3.0,
+            Self::Midpoint => 4.0,
+            // alignment guides lose to a real point that is a few pixels away
+            Self::Horizontal | Self::Vertical => 8.0,
+            Self::Angle => 8.5,
+            Self::Grid => 9.0,
+        }
+    }
+}
+
+/// Acquiring a target is deliberately narrower than keeping one already selected.
+pub const SNAP_RADIUS_PX: f32 = 11.0;
+pub const SNAP_HOLD_PX: f32 = 17.0;
+/// A competing target must be noticeably closer before replacing the current target.
+const SNAP_SWITCH_PX: f32 = 5.0;
+const MAX_SNAP_POINTS: usize = 768;
+const MAX_SNAP_EDGES: usize = 384;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SnapHit {
+    pub at: [f32; 2],
+    pub kind: SnapKind,
+}
+
+/// The current sketch and coplanar saved outlines. Omitted points cannot attract their own drag.
+#[derive(Default, Debug)]
+pub struct SnapGeometry {
+    pub points: Vec<SnapHit>,
+    pub edges: Vec<([f32; 2], [f32; 2])>,
+}
+
+impl SnapGeometry {
+    pub fn add_outline(&mut self, pts: &[[f32; 2]], closed: bool, omit: Option<usize>) {
+        let n = pts.len();
+        if n == 0 || !pts.iter().all(finite) {
+            return;
+        }
+        let edges = if closed && n > 2 { n } else { n.saturating_sub(1) };
+        if n > MAX_SNAP_POINTS || self.points.len().saturating_add(n + 1) > MAX_SNAP_POINTS || self.edges.len().saturating_add(edges) > MAX_SNAP_EDGES
+        {
+            return;
+        }
+        for (i, &at) in pts.iter().enumerate() {
+            if Some(i) != omit {
+                self.points.push(SnapHit { at, kind: SnapKind::Endpoint });
+            }
+        }
+        for i in 0..edges {
+            let next = (i + 1) % n;
+            if Some(i) == omit || Some(next) == omit || pts[i] == pts[next] {
+                continue;
+            }
+            let (a, b) = (pts[i], pts[next]);
+            self.edges.push((a, b));
+            self.points.push(SnapHit { at: [(a[0] + b[0]) * 0.5, (a[1] + b[1]) * 0.5], kind: SnapKind::Midpoint });
+        }
+        if closed
+            && n > 2
+            && omit.is_none()
+            && let Some((lo, hi)) = bbox(pts)
+        {
+            self.points.push(SnapHit { at: [(lo[0] + hi[0]) * 0.5, (lo[1] + hi[1]) * 0.5], kind: SnapKind::Center });
+        }
+    }
+}
+
+/// Only a proper intersection of two finite segments is an intersection snap.
+/// Endpoint contacts have their own (higher-priority) snap type; overlaps are excluded.
+pub fn snap_intersection(a: [f32; 2], b: [f32; 2], c: [f32; 2], d: [f32; 2]) -> Option<[f32; 2]> {
+    if ![a, b, c, d].iter().all(finite) {
+        return None;
+    }
+    let (rx, ry) = ((b[0] - a[0]) as f64, (b[1] - a[1]) as f64);
+    let (sx, sy) = ((d[0] - c[0]) as f64, (d[1] - c[1]) as f64);
+    let (qx, qy) = ((c[0] - a[0]) as f64, (c[1] - a[1]) as f64);
+    let den = rx * sy - ry * sx;
+    let scale = rx.hypot(ry) * sx.hypot(sy);
+    if scale < 1e-12 || den.abs() <= scale * 1e-10 {
+        return None;
+    }
+    let t = (qx * sy - qy * sx) / den;
+    let u = (qx * ry - qy * rx) / den;
+    if !(1e-6..=1.0 - 1e-6).contains(&t) || !(1e-6..=1.0 - 1e-6).contains(&u) {
+        return None;
+    }
+    let p = [(a[0] as f64 + t * rx) as f32, (a[1] as f64 + t * ry) as f32];
+    finite(&p).then_some(p)
+}
+
+/// Project the cursor onto the closest angle multiple, keeping the point on the ray
+/// from the previous vertex. Used only when the optional angle mode is enabled.
+pub fn snap_angle(anchor: [f32; 2], raw: [f32; 2], increment_deg: f32) -> Option<[f32; 2]> {
+    if !finite(&anchor) || !finite(&raw) || !increment_deg.is_finite() || !(0.1..=90.0).contains(&increment_deg) {
+        return None;
+    }
+    let (dx, dy) = (raw[0] - anchor[0], raw[1] - anchor[1]);
+    if dx.hypot(dy) < 1e-3 {
+        return None;
+    }
+    let step = increment_deg.to_radians();
+    let angle = (dy.atan2(dx) / step).round() * step;
+    let (x, y) = (angle.cos(), angle.sin());
+    let distance = dx * x + dy * y;
+    let q = [anchor[0] + distance * x, anchor[1] + distance * y];
+    (distance > 0.0 && finite(&q)).then_some(q)
+}
+
+/// Pick with distance in logical screen pixels (egui points). A stable lock/hysteresis avoids
+/// flickering between nearly coincident candidates when the mouse moves by one pixel.
+pub fn choose_screen_snap(pointer: [f32; 2], candidates: &[(SnapHit, [f32; 2])], previous: Option<SnapHit>) -> Option<SnapHit> {
+    if !pointer[0].is_finite() || !pointer[1].is_finite() {
+        return None;
+    }
+    let distance = |px: [f32; 2]| (px[0] - pointer[0]).hypot(px[1] - pointer[1]);
+    let best = candidates
+        .iter()
+        .filter_map(|(hit, px)| {
+            let d = distance(*px);
+            (d.is_finite() && d <= SNAP_RADIUS_PX).then_some((*hit, d))
+        })
+        .min_by(|(a, da), (b, db)| {
+            (da + a.kind.penalty())
+                .total_cmp(&(db + b.kind.penalty()))
+                .then_with(|| a.kind.penalty().total_cmp(&b.kind.penalty()))
+                .then_with(|| da.total_cmp(db))
+        });
+    let held = previous.and_then(|old| {
+        candidates
+            .iter()
+            .filter(|(hit, _)| hit.kind == old.kind && dist(hit.at, old.at) < 1e-3)
+            .map(|(hit, px)| (*hit, distance(*px)))
+            .filter(|(_, d)| d.is_finite() && *d <= SNAP_HOLD_PX)
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+    });
+    match (held, best) {
+        (Some((locked, old_d)), Some((new, new_d))) if locked != new => {
+            // Priority influences initial selection, but may not make a held snap jump.
+            let old_score = old_d + locked.kind.penalty();
+            let new_score = new_d + new.kind.penalty();
+            if new_d + SNAP_SWITCH_PX < old_d && new_score + 2.0 < old_score { Some(new) } else { Some(locked) }
+        }
+        (Some((locked, _)), _) => Some(locked),
+        (None, best) => best.map(|(hit, _)| hit),
+    }
 }
 
 // ------------------------------------------------------------------ small 2D helpers
@@ -257,7 +544,10 @@ pub fn segments_meet(p1: [f32; 2], p2: [f32; 2], p3: [f32; 2], p4: [f32; 2]) -> 
     if ((d1 > EPS && d2 < -EPS) || (d1 < -EPS && d2 > EPS)) && ((d3 > EPS && d4 < -EPS) || (d3 < -EPS && d4 > EPS)) {
         return true;
     }
-    (d1.abs() <= EPS && within(p3, p4, p1)) || (d2.abs() <= EPS && within(p3, p4, p2)) || (d3.abs() <= EPS && within(p1, p2, p3)) || (d4.abs() <= EPS && within(p1, p2, p4))
+    (d1.abs() <= EPS && within(p3, p4, p1))
+        || (d2.abs() <= EPS && within(p3, p4, p2))
+        || (d3.abs() <= EPS && within(p1, p2, p3))
+        || (d4.abs() <= EPS && within(p1, p2, p4))
 }
 
 /// Is the closed outline free of crossings, touching edges and sharp fold-backs?
@@ -270,7 +560,9 @@ pub fn is_simple(pts: &[[f32; 2]]) -> bool {
         let (a, b) = (pts[i], pts[(i + 1) % n]);
         // two neighbouring edges that run back over each other
         let c = pts[(i + 2) % n];
-        if orient(a, b, c).abs() <= 1e-5 * dist(a, b).max(1.0) * dist(b, c).max(1.0) && (b[0] - a[0]) * (c[0] - b[0]) + (b[1] - a[1]) * (c[1] - b[1]) < 0.0 {
+        if orient(a, b, c).abs() <= 1e-5 * dist(a, b).max(1.0) * dist(b, c).max(1.0)
+            && (b[0] - a[0]) * (c[0] - b[0]) + (b[1] - a[1]) * (c[1] - b[1]) < 0.0
+        {
             return false;
         }
         for j in i + 2..n {
@@ -308,7 +600,9 @@ pub fn crosses_polyline(pts: &[[f32; 2]], a: [f32; 2], b: [f32; 2], closing: boo
     // folding straight back over the last segment
     if let Some(prev) = pts.get(n - 2) {
         let o = orient(*prev, a, b);
-        if o.abs() <= 1e-5 * dist(*prev, a).max(1.0) * dist(a, b).max(1.0) && (a[0] - prev[0]) * (b[0] - a[0]) + (a[1] - prev[1]) * (b[1] - a[1]) < 0.0 {
+        if o.abs() <= 1e-5 * dist(*prev, a).max(1.0) * dist(a, b).max(1.0)
+            && (a[0] - prev[0]) * (b[0] - a[0]) + (a[1] - prev[1]) * (b[1] - a[1]) < 0.0
+        {
             return true;
         }
     }
@@ -413,9 +707,9 @@ pub fn spline_open(ctrl: &[[f32; 2]], max_points: usize) -> Vec<[f32; 2]> {
         }
     };
     let mut out = Vec::with_capacity((n - 1) * k + 1);
-    for i in 0..n - 1 {
+    for (i, point) in c.iter().enumerate().take(n - 1) {
         let ii = i as isize;
-        out.push(c[i]);
+        out.push(*point);
         for j in 1..k {
             out.push(catmull(at(ii - 1), at(ii), at(ii + 1), at(ii + 2), j as f32 / k as f32));
         }
@@ -450,6 +744,67 @@ pub fn validate_profile(pts: &[[f32; 2]]) -> Result<Vec<[f32; 2]>, SketchError> 
     }
     ensure_ccw(&mut p);
     Ok(p)
+}
+
+/// Square of the distance from a point to a finite line segment.
+fn point_segment_dist2(p: [f32; 2], a: [f32; 2], b: [f32; 2]) -> f32 {
+    let dx = b[0] - a[0];
+    let dy = b[1] - a[1];
+    let len2 = dx * dx + dy * dy;
+    let t = (((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / len2.max(1e-12)).clamp(0.0, 1.0);
+    let x = p[0] - (a[0] + t * dx);
+    let y = p[1] - (a[1] + t * dy);
+    x * x + y * y
+}
+
+/// Do two closed loops cross, touch, or come dangerously close to one another?
+fn contours_touch(a: &[[f32; 2]], b: &[[f32; 2]]) -> bool {
+    let gap2 = MIN_CONTOUR_GAP * MIN_CONTOUR_GAP;
+    for i in 0..a.len() {
+        let (a0, a1) = (a[i], a[(i + 1) % a.len()]);
+        for j in 0..b.len() {
+            let (b0, b1) = (b[j], b[(j + 1) % b.len()]);
+            if segments_meet(a0, a1, b0, b1)
+                || point_segment_dist2(a0, b0, b1) < gap2
+                || point_segment_dist2(a1, b0, b1) < gap2
+                || point_segment_dist2(b0, a0, a1) < gap2
+                || point_segment_dist2(b1, a0, a1) < gap2
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Validate an outer profile plus zero or more independent holes. Every hole must be strictly
+/// inside the outer loop; overlaps, nested holes and tangent edges are rejected. Unlike a
+/// triangulator this only validates 2D topology: existing SDF Boolean subtraction makes the solid.
+pub fn validate_holes(outer: &[[f32; 2]], holes: &[Vec<[f32; 2]>]) -> Result<Vec<Vec<[f32; 2]>>, SketchError> {
+    let outer = validate_profile(outer)?;
+    if holes.len() > MAX_HOLES {
+        return Err(SketchError::TooManyHoles);
+    }
+    let mut accepted: Vec<Vec<[f32; 2]>> = Vec::with_capacity(holes.len());
+    for hole in holes {
+        let h = validate_profile(hole)?;
+        if contours_touch(&outer, &h) {
+            return Err(SketchError::ContoursTouch);
+        }
+        if crate::sdf::polygon(&outer, h[0]) >= -MIN_CONTOUR_GAP {
+            return Err(SketchError::HoleOutside);
+        }
+        for prev in &accepted {
+            if contours_touch(prev, &h) {
+                return Err(SketchError::ContoursTouch);
+            }
+            if crate::sdf::polygon(prev, h[0]) < 0.0 || crate::sdf::polygon(&h, prev[0]) < 0.0 {
+                return Err(SketchError::HoleOverlap);
+            }
+        }
+        accepted.push(h);
+    }
+    Ok(accepted)
 }
 
 /// Do all the points lie (almost) on one straight line?
@@ -513,6 +868,135 @@ pub fn scaled(pts: &[[f32; 2]], s: f32) -> Vec<[f32; 2]> {
     pts.iter().map(|p| [c[0] + (p[0] - c[0]) * s, c[1] + (p[1] - c[1]) * s]).collect()
 }
 
+// ------------------------------------------------------------------ precise edits (keep the existing outline format)
+
+// These edits operate on the polygon already stored in Shape::outline / outline2.
+// There is deliberately no constraint graph or new serialized metadata.
+
+/// Validate a proposed edit without silently removing or reordering any vertices.
+/// Reversing the winding would reverse the solid's face normals, so reject it too.
+pub fn validate_edit(before: &[[f32; 2]], after: &[[f32; 2]], revolve: bool) -> Result<(), SketchError> {
+    if before.len() != after.len() || after.len() < 3 {
+        return Err(SketchError::TooFewPoints);
+    }
+    if revolve && after.iter().any(|p| p[0] < 0.0) {
+        return Err(SketchError::LeftOfAxis);
+    }
+    let checked = validate_profile(after)?;
+    if checked.len() != after.len() {
+        return Err(SketchError::TooSmall); // a duplicate endpoint would disappear
+    }
+    if signed_area(before) * signed_area(after) <= 0.0 {
+        return Err(SketchError::TooSmall);
+    }
+    Ok(())
+}
+
+/// Move one vertex while its two neighbouring edges remain connected.
+pub fn move_vertex(pts: &[[f32; 2]], i: usize, at: [f32; 2], revolve: bool) -> Result<Vec<[f32; 2]>, SketchError> {
+    if i >= pts.len() {
+        return Err(SketchError::TooFewPoints);
+    }
+    let mut out = pts.to_vec();
+    out[i] = at;
+    validate_edit(pts, &out, revolve)?;
+    Ok(out)
+}
+
+/// Change the length of edge i -> i+1, keeping the first endpoint fixed.
+/// Other edges still share the moved endpoint, so the polygon cannot open.
+pub fn set_edge_length(pts: &[[f32; 2]], i: usize, length: f32, revolve: bool) -> Result<Vec<[f32; 2]>, SketchError> {
+    if i >= pts.len() || pts.len() < 3 {
+        return Err(SketchError::TooFewPoints);
+    }
+    if !length.is_finite() {
+        return Err(SketchError::BadNumber);
+    }
+    if length < MIN_SIDE {
+        return Err(SketchError::TooSmall);
+    }
+    let next = (i + 1) % pts.len();
+    let old = dist(pts[i], pts[next]);
+    if old <= 1e-3 {
+        return Err(SketchError::TooSmall);
+    }
+    let factor = length / old;
+    let at = [pts[i][0] + (pts[next][0] - pts[i][0]) * factor, pts[i][1] + (pts[next][1] - pts[i][1]) * factor];
+    move_vertex(pts, next, at, revolve)
+}
+
+/// Recognise the exact axis-aligned rectangle form without changing user-drawn polygons.
+pub fn rectangle_size(pts: &[[f32; 2]]) -> Option<[f32; 2]> {
+    if pts.len() != 4 || validate_profile(pts).is_err() {
+        return None;
+    }
+    let (lo, hi) = bbox(pts)?;
+    let w = hi[0] - lo[0];
+    let h = hi[1] - lo[1];
+    if w < MIN_SIDE || h < MIN_SIDE {
+        return None;
+    }
+    let corners = rect(lo, hi);
+    if pts.iter().all(|p| corners.iter().any(|q| dist(*p, *q) < 1e-3)) { Some([w, h]) } else { None }
+}
+
+/// Resize a rectangle about its current centre (no translation of the solid).
+pub fn set_rectangle_size(pts: &[[f32; 2]], width: f32, height: f32, revolve: bool) -> Result<Vec<[f32; 2]>, SketchError> {
+    let Some(_) = rectangle_size(pts) else { return Err(SketchError::SelfIntersect) };
+    if !width.is_finite() || !height.is_finite() {
+        return Err(SketchError::BadNumber);
+    }
+    if width < MIN_SIDE || height < MIN_SIDE {
+        return Err(SketchError::TooSmall);
+    }
+    let (lo, hi) = bbox(pts).ok_or(SketchError::TooFewPoints)?;
+    let c = [(lo[0] + hi[0]) * 0.5, (lo[1] + hi[1]) * 0.5];
+    let out: Vec<_> = pts
+        .iter()
+        .map(|p| [c[0] + if p[0] < c[0] { -width * 0.5 } else { width * 0.5 }, c[1] + if p[1] < c[1] { -height * 0.5 } else { height * 0.5 }])
+        .collect();
+    validate_edit(pts, &out, revolve)?;
+    Ok(out)
+}
+
+/// Diameter of a regular 32-segment circle. Once a vertex is freely moved,
+/// it is no longer treated as a circle and generic point/edge editing applies.
+pub fn circle_diameter(pts: &[[f32; 2]]) -> Option<f32> {
+    if pts.len() != CIRCLE_POINTS {
+        return None;
+    }
+    let n = pts.len() as f32;
+    let center = [pts.iter().map(|p| p[0]).sum::<f32>() / n, pts.iter().map(|p| p[1]).sum::<f32>() / n];
+    let r = pts.iter().map(|p| dist(*p, center)).sum::<f32>() / n;
+    if !r.is_finite() || r < MIN_SIDE {
+        return None;
+    }
+    let expected_chord = 2.0 * r * (std::f32::consts::PI / n).sin();
+    if pts.iter().enumerate().any(|(i, p)| {
+        (dist(*p, center) - r).abs() > r * 0.003 + 1e-4 || (dist(*p, pts[(i + 1) % pts.len()]) - expected_chord).abs() > r * 0.003 + 1e-4
+    }) {
+        return None;
+    }
+    Some(2.0 * r)
+}
+
+/// Scale a recognised circle about its centre, retaining its 32 vertices.
+pub fn set_circle_diameter(pts: &[[f32; 2]], diameter: f32, revolve: bool) -> Result<Vec<[f32; 2]>, SketchError> {
+    let Some(old) = circle_diameter(pts) else { return Err(SketchError::SelfIntersect) };
+    if !diameter.is_finite() {
+        return Err(SketchError::BadNumber);
+    }
+    if diameter < MIN_SIDE * 2.0 {
+        return Err(SketchError::TooSmall);
+    }
+    let n = pts.len() as f32;
+    let center = [pts.iter().map(|p| p[0]).sum::<f32>() / n, pts.iter().map(|p| p[1]).sum::<f32>() / n];
+    let factor = diameter / old;
+    let out: Vec<_> = pts.iter().map(|p| [center[0] + (p[0] - center[0]) * factor, center[1] + (p[1] - center[1]) * factor]).collect();
+    validate_edit(pts, &out, revolve)?;
+    Ok(out)
+}
+
 // ------------------------------------------------------------------ editing an outline
 
 /// Insert `at` after corner `after` (between it and the next one). False when the outline is full.
@@ -542,6 +1026,7 @@ pub fn remove_point(pts: &mut Vec<[f32; 2]>, i: usize) -> Result<(), SketchError
 }
 
 /// The nearest point on the closed outline to `p`: (edge index, point on it, distance).
+#[cfg(test)]
 pub fn nearest_on_edges(pts: &[[f32; 2]], p: [f32; 2]) -> Option<(usize, [f32; 2], f32)> {
     let n = pts.len();
     if n < 2 {
@@ -646,8 +1131,8 @@ pub fn revolve(frame: &Frame, profile: &[[f32; 2]]) -> Result<Built, SketchError
     let outline = p.iter().map(|q| [q[0], q[1] - zc]).collect();
     Ok(Built {
         kind: Kind::Revolve,
-        pos: [0.0, 0.0, zc],
-        rot: [0.0; 3],
+        pos: frame.to_world([0.0, zc]),
+        rot: euler_from_columns(frame.u, mul(frame.normal(), -1.0), frame.v),
         size: Kind::Revolve.default_size(),
         outline,
         outline2: Vec::new(),
@@ -798,6 +1283,68 @@ mod tests {
     }
 
     #[test]
+    fn a_slanted_stretched_sweep_frame_round_trips_points() {
+        let mut s = Shape::new(Kind::Sweep, [0.0; 3], Material::default());
+        s.path = vec![[0.0, 0.0, 0.0, 1.0], [20.0, 20.0, 20.0, 1.0]];
+        s.scale = [2.0, 1.0, 1.0];
+        let f = edit_frame(&s, Which::Main).expect("frame");
+        assert!(dot(f.u, f.v).abs() > 0.1, "the axes are not perpendicular");
+        let back = f.from_world(f.to_world([5.0, 5.0]));
+        assert!(near(back[0], 5.0) && near(back[1], 5.0), "{back:?} (#101)");
+    }
+
+    #[test]
+    fn baking_a_stretched_frame_keeps_world_positions() {
+        let f = Frame { origin: [1.0, 2.0, 3.0], u: [2.0, 0.0, 0.0], v: [0.0, 1.0, 0.0] };
+        let pts = rect([-15.0, -15.0], [15.0, 15.0]);
+        let (unit, baked) = f.bake_scale(&pts).expect("bake");
+        assert!(near(len(unit.u), 1.0) && near(len(unit.v), 1.0));
+        let (lo, hi) = bbox(&baked).expect("box");
+        assert!(near(hi[0] - lo[0], 60.0) && near(hi[1] - lo[1], 30.0), "world width is kept (#100)");
+        for (a, b) in pts.iter().zip(&baked) {
+            let (wa, wb) = (f.to_world(*a), unit.to_world(*b));
+            assert!((0..3).all(|i| near(wa[i], wb[i])));
+        }
+    }
+
+    #[test]
+    fn precise_rectangle_and_circle_dimensions_keep_closed_profiles() {
+        let square = rect([-10.0, -5.0], [10.0, 5.0]);
+        assert_eq!(rectangle_size(&square), Some([20.0, 10.0]));
+        let r = set_rectangle_size(&square, 30.0, 12.0, false).unwrap();
+        assert_eq!(rectangle_size(&r), Some([30.0, 12.0]));
+        assert_eq!(centre(&r), centre(&square));
+        assert_eq!(r.len(), 4);
+        assert!(validate_profile(&r).is_ok());
+        assert_eq!(set_rectangle_size(&square, 0.01, 10.0, false), Err(SketchError::TooSmall));
+        assert_eq!(set_rectangle_size(&square, f32::NAN, 10.0, false), Err(SketchError::BadNumber));
+
+        let ring = circle([3.0, 4.0], 10.0, CIRCLE_POINTS);
+        assert!((circle_diameter(&ring).unwrap() - 20.0).abs() < 1e-3);
+        let enlarged = set_circle_diameter(&ring, 40.0, false).unwrap();
+        assert!((circle_diameter(&enlarged).unwrap() - 40.0).abs() < 1e-3);
+        assert_eq!(enlarged.len(), CIRCLE_POINTS);
+        assert!(validate_profile(&enlarged).is_ok());
+        assert_eq!(set_circle_diameter(&ring, 0.2, false), Err(SketchError::TooSmall));
+    }
+
+    #[test]
+    fn precise_vertex_and_edge_edits_cannot_break_topology() {
+        let square = rect([0.0, 0.0], [20.0, 20.0]);
+        let changed = move_vertex(&square, 2, [25.0, 25.0], false).unwrap();
+        assert_eq!(changed[2], [25.0, 25.0]);
+        assert_eq!(changed.len(), square.len());
+        let longer = set_edge_length(&square, 0, 25.0, false).unwrap();
+        assert!((dist(longer[0], longer[1]) - 25.0).abs() < 1e-4);
+        assert!(validate_profile(&longer).is_ok());
+        assert!(move_vertex(&square, 2, [0.0, 0.0], false).is_err());
+        assert!(move_vertex(&square, 2, [20.0, -10.0], false).is_err());
+        assert_eq!(move_vertex(&square, 0, [f32::NAN, 0.0], false), Err(SketchError::BadNumber));
+        assert_eq!(move_vertex(&square, 0, [-1.0, 0.0], true), Err(SketchError::LeftOfAxis));
+        assert_eq!(set_edge_length(&square, 0, 0.0, false), Err(SketchError::TooSmall));
+    }
+
+    #[test]
     fn frames_map_points_both_ways_and_face_the_viewer() {
         for f in [Frame::floor(), Frame::front(), Frame::side(), Frame::horizontal(12.0)] {
             let p = [7.0, -3.5];
@@ -847,6 +1394,93 @@ mod tests {
     }
 
     #[test]
+    fn arbitrary_workplanes_have_stable_inverse_transforms() {
+        let tilted = Frame::from_axes([32.0, -18.0, 70.0], [0.5, 0.4, 0.8], [-0.6, 0.8, 0.3]).expect("tilt");
+        let frames = [
+            Frame::floor(),
+            Frame::front(),
+            Frame::side(),
+            Frame::horizontal(-83.25),
+            tilted,
+            Frame::oriented([3.0, 8.0, -42.0], [17.0, -31.0, 73.0]).expect("rotated"),
+            Frame::oriented([-20.0, 14.0, 60.0], [85.0, 89.9, -130.0]).expect("near gimbal lock"),
+        ];
+        for frame in frames {
+            assert!((len(frame.u) - 1.0).abs() < 1e-5);
+            assert!((len(frame.v) - 1.0).abs() < 1e-5);
+            assert!(dot(frame.u, frame.v).abs() < 1e-5);
+            for local in [[0.0, 0.0], [15.25, -48.5], [-97.0, 32.125]] {
+                let world = frame.to_world(local);
+                let recovered = frame.from_world(world);
+                assert!((recovered[0] - local[0]).abs() < 0.002 && (recovered[1] - local[1]).abs() < 0.002, "{frame:?}: {local:?} -> {recovered:?}");
+                let normal = frame.normal();
+                let ray_origin = add(world, mul(normal, 200.0));
+                let hit = frame.hit(ray_origin, mul(normal, -1.0)).expect("ray hit");
+                assert!((hit[0] - local[0]).abs() < 0.002 && (hit[1] - local[1]).abs() < 0.002);
+            }
+            let reloaded = Frame::oriented(frame.origin, frame.euler()).expect("saved rotation");
+            assert!(len(sub(frame.u, reloaded.u)) < 0.002 && len(sub(frame.v, reloaded.v)) < 0.002, "rotation roundtrip: {frame:?} -> {reloaded:?}");
+        }
+    }
+
+    #[test]
+    fn invalid_workplanes_are_rejected_without_nan_coordinates() {
+        assert!(Frame::from_axes([0.0; 3], [0.0; 3], [0.0, 1.0, 0.0]).is_none());
+        assert!(Frame::from_axes([0.0; 3], [1.0, 0.0, 0.0], [2.0, 0.0, 0.0]).is_none());
+        assert!(Frame::from_axes([f32::NAN, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]).is_none());
+        assert!(Frame::oriented([0.0; 3], [f32::INFINITY, 0.0, 0.0]).is_none());
+        assert!(Frame::oriented([1.0e9, 0.0, 0.0], [0.0; 3]).is_none());
+    }
+
+    #[test]
+    fn segment_snap_intersections_are_finite_and_reject_parallel_overlaps() {
+        let cross = snap_intersection([0.0, 0.0], [10.0, 10.0], [0.0, 10.0], [10.0, 0.0]);
+        assert_eq!(cross, Some([5.0, 5.0]));
+        assert_eq!(snap_intersection([0.0, 0.0], [10.0, 0.0], [5.0, 0.0], [15.0, 0.0]), None);
+        assert_eq!(snap_intersection([0.0, 0.0], [10.0, 0.0], [10.0, 0.0], [10.0, 8.0]), None);
+        assert_eq!(snap_intersection([f32::NAN, 0.0], [10.0, 0.0], [5.0, -5.0], [5.0, 5.0]), None);
+    }
+
+    #[test]
+    fn snap_geometry_collects_endpoints_midpoints_and_centers_without_dragged_vertex() {
+        let mut geo = SnapGeometry::default();
+        geo.add_outline(&[[0.0, 0.0], [20.0, 0.0], [20.0, 10.0], [0.0, 10.0]], true, None);
+        assert_eq!(geo.edges.len(), 4);
+        assert!(geo.points.iter().any(|h| h.kind == SnapKind::Center && h.at == [10.0, 5.0]));
+        assert!(geo.points.iter().any(|h| h.kind == SnapKind::Midpoint && h.at == [10.0, 0.0]));
+        let mut edit = SnapGeometry::default();
+        edit.add_outline(&[[0.0, 0.0], [20.0, 0.0], [20.0, 10.0], [0.0, 10.0]], true, Some(0));
+        assert!(!edit.points.iter().any(|h| h.at == [0.0, 0.0]));
+        assert_eq!(edit.edges.len(), 2);
+    }
+
+    #[test]
+    fn screen_snap_priorities_zoom_and_hysteresis_are_stable() {
+        let a = SnapHit { at: [0.0, 0.0], kind: SnapKind::Origin };
+        let b = SnapHit { at: [1.0, 1.0], kind: SnapKind::Grid };
+        let hits = vec![(a, [104.0, 100.0]), (b, [100.0, 100.0])];
+        assert_eq!(choose_screen_snap([100.0, 100.0], &hits, None), Some(a));
+        assert_eq!(choose_screen_snap([100.0, 100.0], &[(b, [100.0, 100.0])], Some(a)), Some(b));
+        // Held target stays while inside release radius, unless the alternative is clearly closer.
+        let swapped = vec![(a, [112.0, 100.0]), (b, [108.0, 100.0])];
+        assert_eq!(choose_screen_snap([100.0, 100.0], &swapped, Some(a)), Some(a));
+        assert_eq!(choose_screen_snap([90.0, 100.0], &hits, Some(a)), Some(a));
+        assert_eq!(choose_screen_snap([200.0, 100.0], &hits, Some(a)), None);
+        // Equal pixel locations behave identically irrespective of underlying millimetres.
+        let far = SnapHit { at: [1000.0, 800.0], kind: SnapKind::Endpoint };
+        assert_eq!(choose_screen_snap([0.0, 0.0], &[(far, [8.0, 0.0])], None), Some(far));
+        assert_eq!(choose_screen_snap([0.0, 0.0], &[(far, [12.0, 0.0])], None), None);
+    }
+
+    #[test]
+    fn angle_snap_follows_the_nearest_fifteen_degree_ray() {
+        let p = snap_angle([3.0, 4.0], [13.0, 6.0], 15.0).unwrap();
+        assert!((p[1] - 4.0 - (p[0] - 3.0) * 15f32.to_radians().tan()).abs() < 1e-3);
+        assert_eq!(snap_angle([0.0, 0.0], [0.0, 0.0], 15.0), None);
+        assert_eq!(snap_angle([0.0, 0.0], [5.0, 3.0], f32::NAN), None);
+    }
+
+    #[test]
     fn snapping_rounds_to_the_grid_and_ignores_bad_steps() {
         assert_eq!(snap([1.4, -2.6], 1.0), [1.0, -3.0]);
         assert_eq!(snap([12.4, 7.6], 10.0), [10.0, 10.0]);
@@ -869,8 +1503,7 @@ mod tests {
         assert_eq!(rect_profile([0.0, 0.0], [10.0, 10.0]).map(|p| p.len()), Ok(4));
         assert_eq!(circle_profile([0.0; 2], [0.1, 0.0]), Err(SketchError::TooSmall));
         assert_eq!(circle_profile([0.0; 2], [4.0, 0.0]).map(|p| p.len()), Ok(32));
-        assert_eq!(circle(
-            [0.0; 2], 1.0, 10_000).len(), MAX_OUTLINE, "a circle never exceeds the outline limit");
+        assert_eq!(circle([0.0; 2], 1.0, 10_000).len(), MAX_OUTLINE, "a circle never exceeds the outline limit");
     }
 
     #[test]
@@ -894,6 +1527,31 @@ mod tests {
             .collect();
         assert_eq!(validate_profile(&many), Err(SketchError::TooManyPoints));
         assert!(!SketchError::SelfIntersect.message().is_empty());
+    }
+
+    #[test]
+    fn holes_accept_concentric_eccentric_rectangular_and_separate_profiles() {
+        let outer = rect([-30.0, -30.0], [30.0, 30.0]);
+        let centre = circle([0.0, 0.0], 6.0, CIRCLE_POINTS);
+        let offset = circle([16.0, 0.0], 3.0, CIRCLE_POINTS);
+        let rectangular = rect([-25.0, -4.0], [-16.0, 4.0]);
+        assert_eq!(validate_holes(&outer, std::slice::from_ref(&centre)).unwrap().len(), 1);
+        assert_eq!(validate_holes(&outer, std::slice::from_ref(&offset)).unwrap().len(), 1);
+        assert_eq!(validate_holes(&outer, std::slice::from_ref(&rectangular)).unwrap().len(), 1);
+        assert_eq!(validate_holes(&outer, &[centre, offset, rectangular]).unwrap().len(), 3);
+    }
+
+    #[test]
+    fn holes_reject_contact_crossing_nesting_overlap_and_outside() {
+        let outer = rect([-20.0, -20.0], [20.0, 20.0]);
+        assert_eq!(validate_holes(&outer, &[rect([20.0, -2.0], [24.0, 2.0])]), Err(SketchError::ContoursTouch));
+        assert_eq!(validate_holes(&outer, &[rect([19.0, -2.0], [24.0, 2.0])]), Err(SketchError::ContoursTouch));
+        assert_eq!(validate_holes(&outer, &[rect([25.0, -2.0], [30.0, 2.0])]), Err(SketchError::HoleOutside));
+        assert_eq!(validate_holes(&outer, &[rect([-10.0, -10.0], [10.0, 10.0]), rect([-2.0, -2.0], [2.0, 2.0])]), Err(SketchError::HoleOverlap),);
+        assert_eq!(validate_holes(&outer, &[rect([-8.0, -8.0], [2.0, 2.0]), rect([2.0, -5.0], [8.0, 5.0])]), Err(SketchError::ContoursTouch),);
+        assert_eq!(validate_holes(&outer, &[rect([-8.0, -8.0], [2.0, 2.0]), rect([0.0, -5.0], [8.0, 5.0])]), Err(SketchError::ContoursTouch),);
+        assert_eq!(validate_holes(&outer, &[rect([-10.0, -3.0], [-9.98, 3.0])]), Err(SketchError::TooSmall));
+        assert_eq!(validate_holes(&outer, &vec![rect([-1.0, -1.0], [1.0, 1.0]); MAX_HOLES + 1]), Err(SketchError::TooManyHoles),);
     }
 
     #[test]
@@ -1162,7 +1820,8 @@ mod tests {
         let q = ef.hit(ray_o, mul(f.normal(), -1.0)).expect("hit");
         assert!(near(q[0], 5.0) && near(q[1], 2.0), "{q:?}");
         // a loft's top frame is one height higher
-        let l = shape_from(&loft(&Frame::floor(), &rect([-10.0, -10.0], [10.0, 10.0]), &rect([-5.0, -5.0], [5.0, 5.0]), 20.0, false).expect("builds"));
+        let l =
+            shape_from(&loft(&Frame::floor(), &rect([-10.0, -10.0], [10.0, 10.0]), &rect([-5.0, -5.0], [5.0, 5.0]), 20.0, false).expect("builds"));
         let (lo, hi) = (edit_frame(&l, Which::Main).expect("f"), edit_frame(&l, Which::Top).expect("f"));
         assert!(near(lo.origin[2], 0.0) && near(hi.origin[2], 20.0));
         // a revolve's outline stands on the XZ plane, x = distance from the axis

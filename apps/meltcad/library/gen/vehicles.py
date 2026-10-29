@@ -4,6 +4,8 @@ Conventions: mm, Z up, nose towards -Y, wheels touch z=0. Wheels are a Torus tyr
 hub, both with their axle along X (rot 0,90,0). Revolve and Loft profiles are centred on `pos` in Z.
 """
 from lib import *
+import json
+import os
 
 TYRE = (0.08, 0.08, 0.09)
 CHROME = (0.80, 0.82, 0.86)
@@ -331,26 +333,41 @@ def make_bike():
     return s
 
 
+with open(os.path.join(HERE, "everyday_vehicle_parts.json"), encoding="utf-8") as stream:
+    EXTRA_VEHICLES = json.load(stream)
+
+
+def make_kei():
+    return [shape(**p) for p in EXTRA_VEHICLES["軽自動車"]]
+
+
+def make_suv():
+    return [shape(**p) for p in EXTRA_VEHICLES["SUV"]]
+
+
+def make_motorcycle():
+    return [shape(**p) for p in EXTRA_VEHICLES["バイク"]]
+
+
 def make_items():
     specs = [
-        ("くるま", ["car", "自動車", "クルマ", "vehicle"], make_car),
-        ("スポーツカー", ["sports car", "race car", "スポーツ"], make_sports),
-        ("バス", ["bus", "バス", "vehicle"], make_bus),
-        ("トラック", ["truck", "lorry", "トラック"], make_truck),
-        ("パトカー", ["police car", "patrol", "パトロール"], make_police),
-        ("ひこうき", ["airplane", "plane", "飛行機", "aircraft"], make_plane),
-        ("ヘリコプター", ["helicopter", "heli", "ヘリ"], make_heli),
-        ("ふね", ["boat", "ship", "船"], make_boat),
-        ("ヨット", ["yacht", "sailboat", "sail", "帆船"], make_yacht),
-        ("ロケット", ["rocket", "spaceship", "ロケット"], make_rocket),
-        ("でんしゃ", ["train", "electric train", "電車"], make_train),
-        ("じてんしゃ", ["bicycle", "bike", "自転車"], make_bike),
+        ("セダン", ["sedan","car","くるま","自動車"], make_car),
+        ("軽自動車", ["kei car","kei","軽"], make_kei),
+        ("SUV", ["suv","クロスオーバー"], make_suv),
+        ("バス", ["bus","乗合バス"], make_bus),
+        ("トラック", ["truck","lorry"], make_truck),
+        ("自転車", ["bicycle","bike","じてんしゃ"], make_bike),
+        ("バイク", ["motorcycle","motorbike","オートバイ"], make_motorcycle),
+        ("電車", ["train","でんしゃ"], make_train),
+        ("飛行機", ["airplane","ひこうき"], make_plane),
+        ("船", ["boat","ship","ふね"], make_boat),
+        ("スポーツカー", ["sports car"], make_sports),
+        ("パトカー", ["police car"], make_police),
+        ("ヘリコプター", ["helicopter"], make_heli),
+        ("ヨット", ["yacht"], make_yacht),
+        ("ロケット", ["rocket"], make_rocket),
     ]
-    items = []
-    for name, tags, make in specs:
-        items.append(item(name, tags, group(name, make())))
-    return items
-
+    return [item(name, tags, group(name, make())) for name, tags, make in specs]
 
 items = make_items()
 

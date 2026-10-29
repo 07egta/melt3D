@@ -1,4 +1,4 @@
-//! The handles on the selected thing. The default gizmo is one tool that does it all, like Womp3D:
+//! The handles on the selected thing. The default gizmo is one tool that does it all:
 //! arrows to move along an axis, small squares to move in a plane, curved arrows to rotate, the
 //! middle dot to resize everything at once, and six small cubes on the faces of the box that stretch
 //! the thing along that one direction only (the opposite face stays put). The single tools
@@ -8,10 +8,10 @@ use egui::{Color32, Painter, Pos2, Rect, Shape, Stroke, Vec2, vec2};
 
 use crate::app::App;
 use crate::camera::Camera;
+use crate::i18n;
 use crate::model::{Kind, Pick, Scene};
 use crate::sdf::{Prepared, V3, add, cross, dot, mul, sub};
 use crate::style;
-use crate::view::targets;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Tool {
@@ -84,6 +84,8 @@ pub struct Drag {
     ext: V3,
     /// (group, shape, position, rotation, scale) when the drag began.
     from: Vec<(usize, usize, V3, V3, V3)>,
+    /// A ball chosen in the scene list: (group, shape, node, its world point, its radius).
+    node: Option<(usize, usize, usize, V3, f32)>,
     /// A linked copy being moved: its group and where it stood when the drag began.
     link: Option<(usize, crate::pattern::Xform)>,
 }
@@ -95,7 +97,9 @@ impl Drag {
 }
 
 const RING_SEGS: usize = 56;
-const ARROW_PX: f32 = 78.0;
+pub(crate) const ARROW_PX: f32 = 78.0;
+// Hit distances are egui logical points, so physical click targets grow on high-DPI screens.
+const HANDLE_HIT_PX: f32 = 11.0;
 
 pub struct Geom {
     centre: Pos2,
@@ -149,11 +153,32 @@ fn arc_points(cam: &Camera, rect: Rect, c: V3, axis: usize, r: f32, span: (f32, 
 }
 
 /// The handles for the current selection, placed on screen.
+#[cfg(test)]
 pub fn build(cam: &Camera, rect: Rect, scene: &Scene, sel: Option<Pick>, tool: Tool) -> Option<Geom> {
+    build_multi_node(cam, rect, scene, sel.as_slice(), None, tool)
+}
+
+/// `node` is a ball chosen in the scene list. Its handles sit on that one point and its move
+/// handles act on that node alone; a group pick still covers its whole subtree (#260).
+pub fn build_multi_node(cam: &Camera, rect: Rect, scene: &Scene, picks: &[Pick], node: Option<(usize, usize, usize)>, tool: Tool) -> Option<Geom> {
     if tool == Tool::Select {
         return None;
     }
-    let centre_w = crate::view::centre_of(scene, sel)?;
+    let sel = if let [one] = picks { Some(*one) } else { None };
+    let node_shape = node.and_then(|(g, s, i)| {
+        let shape = scene.shape(g, s)?;
+        let n = shape.path.get(i)?;
+        Some((shape, n[3]))
+    });
+    let is_node = node_shape.is_some();
+    let centre_w = match node_shape {
+        Some((shape, _)) => {
+            let i = node?.2;
+            let n = shape.path.get(i)?;
+            crate::curve_tool::to_world(shape, [n[0], n[1], n[2]])
+        }
+        None => crate::view::centre_of_picks(scene, picks)?,
+    };
     let c = cam.project(rect, centre_w)?;
     let len_w = ARROW_PX * cam.mm_per_px(centre_w, rect.height());
     let shape = match sel {
@@ -161,7 +186,13 @@ pub fn build(cam: &Camera, rect: Rect, scene: &Scene, sel: Option<Pick>, tool: T
         _ => None,
     };
     let local = shape.map(|s| Prepared::new(s).inv).unwrap_or(WORLD);
-    let ext = shape.map(half_extents).unwrap_or([0.0; 3]);
+    let ext = match (node_shape, shape) {
+        (Some((_, r)), Some(s)) => {
+            let m = s.scale[0].max(s.scale[1]).max(s.scale[2]);
+            [r * m, r * m, r * m]
+        }
+        _ => shape.map(half_extents).unwrap_or([0.0; 3]),
+    };
     // arrows follow the world; in the scale tool they follow the shape
     let axes = if tool == Tool::Scale { local } else { WORLD };
     let ends = [0, 1, 2].map(|i| cam.project(rect, add(centre_w, mul(axes[i], len_w))));
@@ -174,7 +205,10 @@ pub fn build(cam: &Camera, rect: Rect, scene: &Scene, sel: Option<Pick>, tool: T
         Some([corner(0.28, 0.28)?, corner(0.56, 0.28)?, corner(0.56, 0.56)?, corner(0.28, 0.56)?])
     });
     let arcs = [0, 1, 2].map(|i| {
-        if tool == Tool::Rotate {
+        // a ball is round: turning it in place changes nothing, so only move/scale handles show
+        if is_node {
+            Vec::new()
+        } else if tool == Tool::Rotate {
             arc_points(cam, rect, centre_w, i, len_w * 0.9, (0.0, std::f32::consts::TAU, RING_SEGS))
         } else if tool == Tool::All {
             arc_points(cam, rect, centre_w, i, len_w * 1.16, (0.22, 1.36, 20))
@@ -182,7 +216,7 @@ pub fn build(cam: &Camera, rect: Rect, scene: &Scene, sel: Option<Pick>, tool: T
             Vec::new()
         }
     });
-    let corners = if tool.scales() && shape.is_some() {
+    let corners = if tool.scales() && shape.is_some() && !is_node {
         Some(std::array::from_fn(|k| {
             let s = |bit: usize| if (k >> bit) & 1 == 1 { 1.0 } else { -1.0 };
             let off = add(add(mul(local[0], s(0) * ext[0]), mul(local[1], s(1) * ext[1])), mul(local[2], s(2) * ext[2]));
@@ -191,7 +225,7 @@ pub fn build(cam: &Camera, rect: Rect, scene: &Scene, sel: Option<Pick>, tool: T
     } else {
         None
     };
-    let faces = if tool.scales() && shape.is_some() {
+    let faces = if tool.scales() && shape.is_some() && !is_node {
         Some(std::array::from_fn(|k| {
             let sign = if k % 2 == 1 { 1.0 } else { -1.0 };
             let i = k / 2;
@@ -233,13 +267,13 @@ fn poly_dist(p: Pos2, pts: &[Pos2]) -> f32 {
 /// Which handle is under `p`. Nearer, smaller things win over big ones.
 pub fn hit(g: &Geom, tool: Tool, p: Pos2) -> Option<Handle> {
     let near = |d: f32, r: f32| d < r;
-    if tool != Tool::Rotate && near((p - g.centre).length(), 9.0) {
+    if tool != Tool::Rotate && near((p - g.centre).length(), HANDLE_HIT_PX) {
         return Some(Handle::Centre);
     }
     if let Some(faces) = &g.faces {
         for (k, c) in faces.iter().enumerate() {
             if let Some(c) = c
-                && near((p - *c).length(), 9.0)
+                && near((p - *c).length(), HANDLE_HIT_PX)
             {
                 return Some(Handle::Face(k));
             }
@@ -260,15 +294,15 @@ pub fn hit(g: &Geom, tool: Tool, p: Pos2) -> Option<Handle> {
     };
     for i in 0..3 {
         if tool == Tool::Rotate {
-            consider(poly_dist(p, &g.arcs[i]), Handle::Axis(i), 8.0);
+            consider(poly_dist(p, &g.arcs[i]), Handle::Axis(i), HANDLE_HIT_PX);
         } else {
             if tool != Tool::Rotate
                 && let Some(e) = g.ends[i]
             {
-                consider(seg_dist(p, g.centre, e), Handle::Axis(i), 8.0);
+                consider(seg_dist(p, g.centre, e), Handle::Axis(i), HANDLE_HIT_PX);
             }
             if tool == Tool::All {
-                consider(poly_dist(p, &g.arcs[i]), Handle::Arc(i), 9.0);
+                consider(poly_dist(p, &g.arcs[i]), Handle::Arc(i), HANDLE_HIT_PX);
             }
         }
     }
@@ -396,7 +430,7 @@ fn angle_in_plane(v: V3, axis: usize) -> f32 {
 
 impl App {
     fn action_for(&self, handle: Handle, tool: Tool, shift: bool) -> Act {
-        let group = matches!(self.sel, Some(Pick::Group(_)));
+        let group = matches!(self.sel, Some(Pick::Group(_))) || self.picks().len() > 1;
         match (tool, handle) {
             (_, Handle::Plane(i)) => Act::MovePlane(i),
             (_, Handle::Arc(i)) | (Tool::Rotate, Handle::Axis(i)) => Act::Rotate(i),
@@ -459,11 +493,20 @@ impl App {
             (Act::StretchFace(k), Some(fs)) => fs.get(k).copied().flatten().map(|p| (p - g.centre).length()).unwrap_or(60.0),
             _ => 60.0,
         };
-        let from = targets(&self.scene, self.sel)
-            .into_iter()
-            .filter_map(|(gi, si)| self.scene.shape(gi, si).map(|s| (gi, si, s.pos, s.rot, s.scale)))
-            .collect();
-        let link = match self.sel {
+        let node = self.picked_node().and_then(|(gi, si, ni)| {
+            let shape = self.scene.shape(gi, si)?;
+            let p = shape.path.get(ni)?;
+            Some((gi, si, ni, crate::curve_tool::to_world(shape, [p[0], p[1], p[2]]), p[3]))
+        });
+        let from = if node.is_some() {
+            Vec::new()
+        } else {
+            crate::view::targets_all(&self.scene, &self.picks())
+                .into_iter()
+                .filter_map(|(gi, si)| self.scene.shape(gi, si).map(|s| (gi, si, s.pos, s.rot, s.scale)))
+                .collect()
+        };
+        let link = match self.sel.filter(|_| self.picks().len() == 1) {
             Some(Pick::Group(gi)) => self.scene.groups.get(gi).filter(|gr| gr.is_linked()).map(|gr| (gi, gr.xform)),
             _ => None,
         };
@@ -487,13 +530,39 @@ impl App {
             local: g.local,
             ext: g.ext,
             from,
+            node,
             link,
         }
     }
 
+    /// Cancel a gizmo gesture without generating an undo step.
+    pub(crate) fn cancel_gizmo_drag(&mut self) -> bool {
+        let Some(d) = self.drag.take() else { return false };
+        if let Some((gi, xform)) = d.link
+            && let Some(group) = self.scene.groups.get_mut(gi)
+        {
+            group.xform = xform;
+        }
+        if let Some((gi, si, ni, world, radius)) = d.node {
+            self.set_node_world(gi, si, ni, world);
+            if let Some(node) = self.scene.shape_mut(gi, si).and_then(|s| s.path.get_mut(ni)) {
+                node[3] = radius;
+            }
+        }
+        for (gi, si, pos, rot, scale) in d.from {
+            if let Some(shape) = self.scene.shape_mut(gi, si) {
+                shape.pos = pos;
+                shape.rot = rot;
+                shape.scale = scale;
+            }
+        }
+        self.orbiting = false;
+        true
+    }
+
     pub fn apply_drag(&mut self, d: &mut Drag, mouse: Pos2, snap: bool) {
         let delta = mouse - d.start;
-        let group = matches!(self.sel, Some(Pick::Group(_)));
+        let group = matches!(self.sel, Some(Pick::Group(_))) || self.picks().len() > 1;
         let (right, up, _) = self.cam.basis();
         let (o, rd) = self.cam.ray_at(d.rect, mouse);
         let round = |v: f32, step: f32| if snap { (v / step).round() * step } else { v };
@@ -517,6 +586,44 @@ impl App {
                 None => delta.dot(d.screen_dir) / d.ring_px * 57.2958,
             };
             turn_deg = round(turn_deg, 15.0);
+        }
+        // A ball chosen in the scene list: the handles move that node, and its radius follows the
+        // scale handles. Every other node, the curve and the group's melt stay untouched.
+        if let Some((gi, si, ni, world0, radius0)) = d.node {
+            let mut world = world0;
+            match d.act {
+                Act::MoveAxis(_) => {
+                    let amt = match closest_on_axis(o, rd, d.centre, d.axis) {
+                        Some(t) => t - d.t0,
+                        None => delta.dot(d.screen_dir) * d.mm_px * (ARROW_PX / d.len_px),
+                    };
+                    world = add(world0, mul(d.axis, round(amt, 1.0)));
+                }
+                Act::MovePlane(i) => {
+                    if let Some(p) = ray_plane(o, rd, d.centre, WORLD[i]) {
+                        world = add(world0, sub(p, d.p0));
+                    }
+                }
+                Act::MoveView => world = add(world0, add(mul(right, delta.x * d.mm_px), mul(up, -delta.y * d.mm_px))),
+                Act::ScaleAxis(_) | Act::ScaleAll => {
+                    let f = if matches!(d.handle, Handle::Axis(_)) {
+                        (1.0 + delta.dot(d.screen_dir) / d.len_px).max(0.05)
+                    } else {
+                        ((delta.x - delta.y) / 160.0).exp()
+                    };
+                    if let Some(node) = self.scene.shape_mut(gi, si).and_then(|s| s.path.get_mut(ni)) {
+                        node[3] = round(radius0 * f, 0.05).clamp(0.1, 500.0);
+                    }
+                    return;
+                }
+                // a ball is round: turning it in place and stretching its box do nothing
+                Act::Rotate(_) | Act::StretchFace(_) => return,
+            }
+            if snap {
+                world = [round(world[0], 1.0), round(world[1], 1.0), round(world[2], 1.0)];
+            }
+            self.set_node_world(gi, si, ni, world);
+            return;
         }
         // a linked copy moves, turns or grows as a whole (about the middle of its source)
         if let Some((gi, x0)) = d.link
@@ -576,7 +683,10 @@ impl App {
                     }
                 }
                 Act::Rotate(i) => {
-                    s.rot[i] = (rot[i] + turn_deg).rem_euclid(360.0);
+                    // The ring is aligned to the *world* axis. Euler addition
+                    // turns around a shape-local axis after previous rotations,
+                    // so compose the world rotation as a matrix instead.
+                    s.rot = crate::pattern::turn_euler(rot, i as u8, turn_deg);
                     if group {
                         s.pos = add(d.centre, rotate_about(sub(pos, d.centre), WORLD[i], turn_deg));
                     }
@@ -586,7 +696,12 @@ impl App {
                     s.scale[i] = round(scale[i] * f, 0.05).clamp(0.01, 100.0);
                 }
                 Act::ScaleAll => {
-                    let f = ((delta.x - delta.y) / 160.0).exp();
+                    let f = if matches!(d.handle, Handle::Axis(_)) {
+                        // an arrow of several shapes: pull it out to grow, push it in to shrink
+                        (1.0 + delta.dot(d.screen_dir) / d.len_px).max(0.05)
+                    } else {
+                        ((delta.x - delta.y) / 160.0).exp()
+                    };
                     for (dst, src) in s.scale.iter_mut().zip(scale) {
                         *dst = round(src * f, 0.05).clamp(0.01, 100.0);
                     }
@@ -613,11 +728,11 @@ impl App {
 /// The handle's direction on the floor for the status line.
 pub fn hint(tool: Tool) -> &'static str {
     match tool {
-        Tool::Select => "クリックで選ぶ",
-        Tool::All => "矢印=動かす　四角=平面で動かす　曲がった矢印=回す　真ん中=ぜんぶ拡大　面の四角=その向きにのばす",
-        Tool::Move => "矢印で動かす (Ctrlで1mmずつ)",
-        Tool::Rotate => "輪っかで回す (Ctrlで15度ずつ)",
-        Tool::Scale => "真ん中=ぜんぶ拡大　面の四角=その向きだけのばす　軸の四角=その軸の大きさ",
+        Tool::Select => i18n::tr("status.hint.select"),
+        Tool::All => i18n::tr("status.hint.all"),
+        Tool::Move => i18n::tr("status.hint.move"),
+        Tool::Rotate => i18n::tr("status.hint.rotate"),
+        Tool::Scale => i18n::tr("status.hint.scale"),
     }
 }
 
@@ -630,6 +745,31 @@ mod tests {
     fn rotating_about_z_turns_x_into_y() {
         let q = rotate_about([1.0, 0.0, 0.0], [0.0, 0.0, 1.0], 90.0);
         assert!(q[0].abs() < 1e-5 && (q[1] - 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn x_ring_rotates_a_previously_rotated_box_about_world_x_not_local_x() {
+        let mut app = App::new(true, None);
+        let sh = app.scene.shape_mut(0, 0).expect("initial shape");
+        sh.kind = Kind::Box;
+        sh.size = [30.0, 10.0, 5.0];
+        sh.pos = [0.0; 3];
+        sh.rot = [0.0, 0.0, 90.0];
+        app.sel = Some(Pick::Shape(0, 0));
+        app.cam.look(std::f32::consts::FRAC_PI_2, 0.0);
+        app.cam.frame([0.0; 3], 60.0);
+        let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0));
+        let geom = build(&app.cam, rect, &app.scene, app.sel, Tool::Rotate).unwrap();
+        let start = app.cam.project(rect, [0.0, 20.0, 0.0]).unwrap();
+        let finish = app.cam.project(rect, [0.0, 0.0, 20.0]).unwrap();
+        let mut drag = app.begin_drag(Handle::Axis(0), &geom, rect, start, Tool::Rotate, false);
+        app.apply_drag(&mut drag, finish, false);
+        let rotated = app.scene.shape(0, 0).unwrap();
+        let r = crate::sdf::rotation(rotated.rot);
+        // The original 30 mm local-X axis points along +Y; rotating around
+        // WORLD X must carry it into Z. Euler addition wrongly leaves it on Y.
+        let axis = [r[0][0], r[1][0], r[2][0]];
+        assert!(axis[2].abs() > 0.98 && axis[1].abs() < 0.05, "{axis:?} {:?}", rotated.rot);
     }
 
     #[test]
@@ -646,6 +786,15 @@ mod tests {
         let p = ray_plane([0.0, 0.0, 10.0], [0.0, 0.0, -1.0], [0.0; 3], [0.0, 0.0, 1.0]);
         assert!(p.is_some_and(|p| p[2].abs() < 1e-5));
         assert!(ray_plane([0.0, 0.0, 10.0], [0.0, 0.0, 1.0], [0.0; 3], [0.0, 0.0, 1.0]).is_none());
+    }
+
+    #[test]
+    fn small_handles_have_a_logical_point_hit_margin() {
+        let app = App::new(true, None);
+        let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0));
+        let Some(g) = build(&app.cam, rect, &app.scene, Some(Pick::Shape(0, 0)), Tool::All) else { panic!("gizmo") };
+        assert_eq!(hit(&g, Tool::All, g.centre + vec2(9.5, 0.0)), Some(Handle::Centre));
+        assert_eq!(hit(&g, Tool::All, g.centre), Some(Handle::Centre));
     }
 
     #[test]
@@ -719,6 +868,41 @@ mod tests {
         assert!(app.scene.groups[c].xform.rot[2].abs() > 1.0, "{:?}", app.scene.groups[c].xform.rot);
         // the source group did not move at all
         assert_eq!(app.scene.groups[0].shapes[0].pos, [0.0, 0.0, 20.0]);
+    }
+
+    #[test]
+    fn a_chosen_ball_is_moved_by_its_own_handles() {
+        let mut app = App::new(true, None);
+        app.scene.groups.clear();
+        let mut group = crate::model::Group::new("Pipe");
+        let mut pipe = crate::model::Shape::new(Kind::Curve, [10.0, 0.0, 10.0], Default::default());
+        pipe.path = vec![[-20.0, 0.0, 0.0, 4.0], [0.0, 0.0, 0.0, 4.0], [20.0, 0.0, 0.0, 4.0], [40.0, 0.0, 0.0, 4.0]];
+        group.shapes.push(pipe);
+        app.scene.groups.push(group);
+        app.sel = Some(Pick::Shape(0, 0));
+        app.ct.node = Some((0, 0, 2));
+        app.cam.look(0.0, std::f32::consts::FRAC_PI_2);
+        app.cam.frame([10.0, 0.0, 10.0], 80.0);
+        let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0));
+        let node = app.picked_node().expect("the chosen ball");
+        let Some(g) = build_multi_node(&app.cam, rect, &app.scene, &app.picks(), Some(node), Tool::All) else { panic!("gizmo") };
+        assert!((g.centre_w[0] - 30.0).abs() < 1e-3 && (g.centre_w[2] - 10.0).abs() < 1e-3, "handles sit on the ball: {:?}", g.centre_w);
+        let before = app.scene.groups[0].shapes[0].path.clone();
+        let pos = app.scene.groups[0].shapes[0].pos;
+        let tip = g.ends[0].unwrap_or(g.centre);
+        let mid = g.centre + (tip - g.centre) * 0.5;
+        let mut d = app.begin_drag(Handle::Axis(0), &g, rect, mid, Tool::All, false);
+        app.drag = Some(d.clone());
+        app.apply_drag(&mut d, mid + (tip - g.centre).normalized() * 30.0, false);
+        let after = &app.scene.groups[0].shapes[0].path;
+        assert!(after[2][0] > before[2][0] + 1.0, "the chosen ball moved: {:?}", after[2]);
+        for i in [0, 1, 3] {
+            assert_eq!(after[i], before[i], "node {i} stays");
+        }
+        assert_eq!(app.scene.groups[0].shapes[0].pos, pos, "the pipe itself did not move");
+        // Esc drops this gesture and puts the ball back.
+        assert!(app.cancel_gizmo_drag());
+        assert_eq!(app.scene.groups[0].shapes[0].path, before, "cancel restores the ball");
     }
 
     #[test]

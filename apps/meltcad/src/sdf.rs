@@ -2,6 +2,8 @@
 //! shader (`shader.wgsl`) implements the same formulas; this copy picks shapes with the mouse and
 //! builds the mesh for export.
 
+use std::sync::Arc;
+
 use crate::corner;
 use crate::model::{BlendMode, Kind, Material, Op, Scene, Shape};
 
@@ -45,21 +47,30 @@ pub fn rotation(rot: V3) -> [V3; 3] {
 #[derive(Clone, Debug)]
 pub struct Prepared {
     pub kind: Kind,
+    pub ripple: Option<crate::ripple::Ripple>,
+    pub half: V3,
     pub size: V3,
     pub round: f32,
     pub pos: V3,
     /// Rows of the rotation's transpose (the inverse rotation).
     pub inv: [V3; 3],
     pub scale: V3,
+    /// `1 / scale`, so `local` multiplies instead of dividing (division costs several times more).
+    inv_scale: V3,
     pub op: Op,
     pub blend: f32,
     pub material: Material,
     pub outline: Vec<[f32; 2]>,
     pub params: [f32; 4],
     pub path: Vec<[f32; 4]>,
+    /// A pipe's bounding spheres, one per run of spans, and its greatest joint reach: the
+    /// distance skips far runs (see `curve::smooth_tube_grouped`). Empty for other shapes.
+    pub curve_groups: Vec<[f32; 4]>,
+    pub curve_kmax: f32,
     pub outline2: Vec<[f32; 2]>,
     /// Wall thickness of the hollowed-out shape (0 = solid).
     pub shell: f32,
+    pub face_melt: Option<(usize, f32, f32, f32)>,
     /// The corners are cut flat (a chamfer) instead of rounded.
     pub chamfer: bool,
     /// Winding (+1 / -1) and the largest safe rounding of the profile (revolve, sweep, extrude).
@@ -75,7 +86,10 @@ pub struct Prepared {
 /// linked copies, is prepared once).
 #[derive(Clone, Debug)]
 pub struct PreparedGroup {
-    pub shapes: Vec<Prepared>,
+    /// Prepared objects are shared across unchanged revisions; no outline/path copies per drag.
+    pub shapes: Vec<Arc<Prepared>>,
+    /// Source group index, including when the group has no visible shapes.
+    pub source_group: usize,
     /// The scene (group, shape) of each prepared shape.
     pub origin: Vec<(usize, usize)>,
     /// A bounding sphere of each shape, and the blocks and sphere of the whole group (accel.rs):
@@ -91,17 +105,28 @@ pub struct FieldGroup {
     /// The scene group this stands for.
     pub gi: usize,
     pub op: Op,
+    /// The reach it melts by: its own amount, raised to the parent group's when that is larger
+    /// (see `Scene::group_melt_reach`).
     pub blend: f32,
     pub src: usize,
     pub insts: Vec<crate::pattern::Inst>,
     /// A linked copy: what is hit counts as the copy (its group), not as the source's shapes.
     pub linked: bool,
+    /// Nesting level (0 = top): a group melts into its parent group, and that into the scene.
+    pub depth: usize,
+    /// Nothing is nested below this group.
+    pub leaf: bool,
 }
 
 #[derive(Clone, Debug)]
 pub struct Field {
     pub groups: Vec<FieldGroup>,
-    pub sources: Vec<PreparedGroup>,
+    pub sources: Vec<Arc<PreparedGroup>>,
+    /// Work counters for deterministic incremental-update tests and the profiler.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub prepared_built: usize,
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub prepared_reused: usize,
     pub mode: BlendMode,
     pub amount: f32,
     pub drip: f32,
@@ -121,35 +146,62 @@ impl Prepared {
             _ => (1.0, 0.0),
         };
         let grad_half = if s.material.has_gradient() { gradient_half(s, &r) } else { 0.0 };
+        let path: Vec<[f32; 4]> = if s.kind == Kind::Curve { crate::curve::build_shape(s) } else { s.path.clone() };
+        let (curve_groups, curve_kmax) = if s.kind == Kind::Curve && path.len() >= 2 {
+            let squircle = s.size[2].is_finite() && s.size[2] >= 1.5;
+            let closed = crate::curve::settings(&s.params).0;
+            (crate::curve::group_spheres_profile(&path, squircle), crate::curve::max_joint_blend(&path, closed))
+        } else {
+            (Vec::new(), 0.0)
+        };
         Prepared {
             kind: s.kind,
+            ripple: s.ripple,
+            half: s.local_half(),
             size: s.size,
             round,
             chamfer: s.corner == crate::model::Corner::Chamfer,
             pos: s.pos,
             inv,
             scale: s.scale,
+            inv_scale: [1.0 / s.scale[0], 1.0 / s.scale[1], 1.0 / s.scale[2]],
             op: s.op,
             blend: s.blend,
             material: s.material,
             outline,
             params: s.params,
-            path: if s.kind == Kind::Curve { crate::curve::build(&s.path, &s.params) } else { s.path.clone() },
+            path,
+            curve_groups,
+            curve_kmax,
             outline2: s.outline2.clone(),
             shell: if s.shell.is_finite() { s.shell.max(0.0) } else { 0.0 },
+            face_melt: s.face_melt.parts(),
             poly_orient,
             poly_limit,
             grad_half,
             volume: if s.kind == Kind::Mesh { s.volume.clone() } else { None },
         }
     }
+    /// The same shape carried by a pattern instance: the copies of one shape are packed as shapes of
+    /// their own, so their inverse rotation, place and scale already hold the instance.
+    pub fn transformed(s: &Shape, inst: &crate::pattern::Inst) -> Prepared {
+        let mut p = Prepared::new(s);
+        p.inv = inst.combine_inverse(&p.inv);
+        p.pos = inst.apply(s.pos);
+        p.scale = [s.scale[0] * inst.s, s.scale[1] * inst.s, s.scale[2] * inst.s];
+        p.half = mul(p.half, inst.s);
+        p.grad_half *= inst.s;
+        p
+    }
     /// The point in the shape's own space.
     pub fn local(&self, p: V3) -> V3 {
         let d = sub(p, self.pos);
         let q = [dot(self.inv[0], d), dot(self.inv[1], d), dot(self.inv[2], d)];
-        [q[0] / self.scale[0], q[1] / self.scale[1], q[2] / self.scale[2]]
+        [q[0] * self.inv_scale[0], q[1] * self.inv_scale[1], q[2] * self.inv_scale[2]]
     }
     /// The surface colour at `p`: the material's colour, or its gradient (see `Material::gradient_weight`).
+    // max/min deliberately maps a NaN coordinate to the first colour, unlike clamp.
+    #[allow(clippy::manual_clamp)]
     pub fn color_at(&self, p: V3) -> V3 {
         let m = &self.material;
         if !m.has_gradient() {
@@ -165,10 +217,61 @@ impl Prepared {
     }
     /// The distance to this one shape (negative inside).
     pub fn distance(&self, p: V3) -> f32 {
-        let d = self.local_distance(self.local(p)) * self.min_scale();
-        // hollow walls: the solid's skin of thickness `shell` (negative inside the wall)
-        // (a curve hollows itself: its flat ends are cut after the hollowing, see curve::distance)
-        if self.shell > 0.0 && self.kind != Kind::Curve { (d + self.shell * 0.5).abs() - self.shell * 0.5 } else { d }
+        let q = self.local(p);
+        let mut d = self.local_distance(q);
+        if let Some((ax, sg, amount, reach)) = self.face_melt {
+            d = face_melt_distance(d, q, ax, sg, amount, reach, self.half[ax]);
+        }
+        let mut d = d * self.min_scale();
+        let before_ripple = d;
+        if let Some(r) = self.ripple {
+            d = r.adjust(d, q, self.half, self.min_scale());
+        }
+        // Hollow walls: the solid's skin of thickness `shell` (negative inside the wall). The
+        // shell is measured in the shape's own space (so it scales with `Shape::scale`, like
+        // rounding, a face melt and a ripple) and through any distance-shortening the shape maths
+        // applies, or the wall comes out too thick. (A curve hollows itself: its flat ends are cut
+        // after the hollowing, see curve::distance.)
+        if self.shell > 0.0 && self.kind != Kind::Curve {
+            let wall = self.shell * self.min_scale() * self.shell_shortening(q, before_ripple);
+            (d + wall * 0.5).abs() - wall * 0.5
+        } else {
+            d
+        }
+    }
+    /// How much shorter than a true distance the shape maths makes this point's distance (1 =
+    /// exact). Sweeps, lofts, wave-warped revolves, a face melt and a ripple all scale their
+    /// distance down so that marching cannot overshoot; a shell measured on that field must use
+    /// the same scale, or its wall is too thick. `base` is the scaled distance before the ripple.
+    fn shell_shortening(&self, q: V3, base: f32) -> f32 {
+        let mut shorten = match self.kind {
+            Kind::Sweep => crate::cad::SWEEP_SAFETY,
+            Kind::Loft => {
+                let h = self.size[0].max(1e-3);
+                crate::cad::loft_safety(polygon(&self.outline, [q[0], q[1]]), polygon(&self.outline2, [q[0], q[1]]), h)
+            }
+            Kind::Revolve => {
+                let r = q[0].hypot(q[1]);
+                crate::organic_vase::radial_warp(r, q, self.params[1], self.params[2], self.params[3]).1
+            }
+            _ => 1.0,
+        };
+        if let Some((ax, sg, amount, reach)) = self.face_melt {
+            // face_melt_distance divides by sqrt(1 + slope^2) inside the face's reach.
+            let t = sg * q[ax] - self.half[ax];
+            let k = 1.0 / reach;
+            if (1.0 - t.abs() * k).clamp(0.0, 1.0) > 0.0 {
+                // Match face_melt_distance exactly, including its 6.2832 literal.
+                #[allow(clippy::approx_constant)]
+                let f = 6.2832 / (reach * 1.6);
+                let slope = amount.abs() * (1.6 * k + 1.32 * f);
+                shorten /= (1.0 + slope * slope).sqrt();
+            }
+        }
+        if let Some(r) = &self.ripple {
+            shorten *= r.shell_shortening(base, self.half, self.min_scale());
+        }
+        shorten
     }
     #[cfg(test)]
     pub fn local_distance_for_test(&self, q: V3) -> f32 {
@@ -226,7 +329,10 @@ impl Prepared {
                 let r = if self.round > 0.0 { self.round.min(hh).min(self.poly_limit) } else { 0.0 };
                 let d2 = if r > 0.0 { crate::cad::polygon_inset(&self.outline, xy, r, self.poly_orient, false) } else { polygon(&self.outline, xy) };
                 let w = [d2, q[2].abs() - hh + r];
+                // A signed outward offset creates the inflated text surface. Negative
+                // offsets on subtractive contours shrink the cutter so counters stay open.
                 w[0].max(w[1]).min(0.0) + w[0].max(0.0).hypot(w[1].max(0.0)) - r
+                    - self.params[0].clamp(-40.0, 40.0)
             }
             Kind::Curve => crate::curve::distance(self, q),
             // (the volume is in the mesh's own units, so a scaled shape is handled by `distance`)
@@ -242,11 +348,7 @@ impl Prepared {
 fn gradient_half(s: &Shape, rot: &[V3; 3]) -> f32 {
     let ax = usize::from(s.material.grad_axis).min(2);
     let half = s.local_half();
-    let h = if s.material.grad_local {
-        half[ax]
-    } else {
-        (0..3).map(|j| rot[ax][j].abs() * s.scale[j].abs() * half[j]).sum()
-    };
+    let h = if s.material.grad_local { half[ax] } else { (0..3).map(|j| rot[ax][j].abs() * s.scale[j].abs() * half[j]).sum() };
     if h.is_finite() { h.max(1e-3) } else { 1.0 }
 }
 
@@ -317,6 +419,25 @@ pub fn drip_safety(drip: f32, ripple: f32) -> f32 {
     1.0 / (1.0 + slope * slope).sqrt()
 }
 
+/// A melt on one face: the surface swells or sinks in a drippy pattern close to that face and is
+/// untouched away from it. (Mirrored in shader.wgsl `face_melt`.)
+pub fn face_melt_distance(d: f32, q: V3, ax: usize, sg: f32, amount: f32, reach: f32, half: f32) -> f32 {
+    let t = sg * q[ax] - half;
+    let k = 1.0 / reach;
+    let w = (1.0 - t.abs() * k).clamp(0.0, 1.0);
+    if w <= 0.0 {
+        return d;
+    }
+    let w = w * w * (3.0 - 2.0 * w);
+    let (u, v) = (q[(ax + 1) % 3], q[(ax + 2) % 3]);
+    // Match shader.wgsl exactly; replacing this literal with TAU changes the field.
+    #[allow(clippy::approx_constant)]
+    let f = 6.2832 / (reach * 1.6);
+    let wave = 0.5 + 0.5 * (u * f + (v * f * 1.3).sin()).sin() * (v * f * 0.8 + (u * f * 0.6).cos()).cos();
+    let slope = amount.abs() * (1.6 * k + 1.32 * f);
+    (d - amount * w * wave) / (1.0 + slope * slope).sqrt()
+}
+
 pub fn warp(p: V3, drip: f32, ripple: f32) -> V3 {
     if drip <= 0.0 {
         return p;
@@ -327,7 +448,19 @@ pub fn warp(p: V3, drip: f32, ripple: f32) -> V3 {
 }
 
 fn mix3(a: V3, b: V3, t: f32) -> V3 {
-    [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t]
+    if t <= 0.0 {
+        return a;
+    }
+    if t >= 1.0 {
+        return b;
+    }
+    // Materials store display-space colours. Blend in linear light so two bright colours do not
+    // form an unexpectedly dark seam.
+    std::array::from_fn(|i| {
+        let a = a[i].max(0.0).powf(2.2);
+        let b = b[i].max(0.0).powf(2.2);
+        (a + (b - a) * t).max(0.0).powf(1.0 / 2.2)
+    })
 }
 
 /// What a point measures: the distance to the scene, the material there, and the (group, shape)
@@ -343,37 +476,93 @@ pub struct Sample {
 
 impl Field {
     pub fn new(scene: &Scene) -> Field {
+        Self::reusing(scene, None)
+    }
+
+    /// Rebuild the Boolean/pattern dependency graph, retaining expensive prepared shapes and
+    /// acceleration data only when the source inputs are EXACTLY unchanged. The previous scene
+    /// is compared by value: unlike a hash, this cannot accidentally reuse a stale result.
+    /// Group operations/linked transforms are always resolved anew; only their source geometry
+    /// can be shared. At most one previous scene and field are retained by the caller.
+    pub fn reusing(scene: &Scene, previous: Option<(&Field, &Scene)>) -> Field {
         let mut groups = Vec::new();
-        let mut sources: Vec<PreparedGroup> = Vec::new();
+        let mut sources: Vec<Arc<PreparedGroup>> = Vec::new();
         let mut made: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+        let old_sources: std::collections::HashMap<usize, &Arc<PreparedGroup>> =
+            previous.map(|(field, _)| field.sources.iter().map(|p| (p.source_group, p)).collect()).unwrap_or_default();
+        let mut prepared_built = 0;
+        let mut prepared_reused = 0;
         for rg in crate::pattern::resolve(scene) {
             let (Some(g), Some(srcg)) = (scene.groups.get(rg.gi), scene.groups.get(rg.src)) else { continue };
             let src = *made.entry(rg.src).or_insert_with(|| {
+                let older = old_sources.get(&rg.src).copied();
+                let prior_group = previous.and_then(|(_, old)| old.groups.get(rg.src));
+                let same_melt = previous.is_some_and(|(_, old)| old.melt.mode == scene.melt.mode && old.melt.amount == scene.melt.amount);
+                // A shape pattern changes the number of measured shapes for the same shape list:
+                // older per-shape payloads cannot be reused by index any more.
+                let patterned = srcg.shapes.iter().any(|s| s.pattern.is_some());
+                if !patterned
+                    && let (Some(old), Some(prior)) = (older, prior_group)
+                    && same_melt
+                    && prior.shapes == srcg.shapes
+                {
+                    prepared_reused += old.shapes.len();
+                    sources.push(Arc::clone(old));
+                    return sources.len() - 1;
+                }
+                let old_shapes: std::collections::HashMap<usize, &Arc<Prepared>> = older
+                    .map(|old| old.origin.iter().enumerate().filter_map(|(i, &(_, si))| old.shapes.get(i).map(|p| (si, p))).collect())
+                    .unwrap_or_default();
                 let mut shapes = Vec::new();
                 let mut origin = Vec::new();
-                let mut members: Vec<&Shape> = Vec::new();
-                for (si, s) in srcg.shapes.iter().enumerate() {
-                    if s.visible {
-                        shapes.push(Prepared::new(s));
+                let mut members_owned: Vec<Shape> = Vec::new();
+                let mut bounds = Vec::new();
+                for si in srcg.fold_order() {
+                    let Some(s) = srcg.shapes.get(si) else { continue };
+                    if !s.solid() {
+                        continue;
+                    }
+                    let insts: Vec<crate::pattern::Inst> =
+                        rg.shape_insts.get(si).filter(|v| !v.is_empty()).cloned().unwrap_or_else(|| vec![crate::pattern::Inst::IDENTITY]);
+                    for inst in insts {
+                        let identity = inst == crate::pattern::Inst::IDENTITY;
+                        let same = !patterned && identity && prior_group.and_then(|old| old.shapes.get(si)).is_some_and(|old| old == s);
+                        let prep = if same { old_shapes.get(&si).map(|p| Arc::clone(p)) } else { None };
+                        if prep.is_some() {
+                            prepared_reused += 1;
+                        } else {
+                            prepared_built += 1;
+                        }
+                        shapes.push(
+                            prep.unwrap_or_else(|| if identity { Arc::new(Prepared::new(s)) } else { Arc::new(Prepared::transformed(s, &inst)) }),
+                        );
                         origin.push((rg.src, si));
-                        members.push(s);
+                        bounds.push(inst.bound(crate::accel::shape_bound(s)));
+                        let mut member = s.clone();
+                        member.pos = inst.apply(s.pos);
+                        member.scale = [s.scale[0] * inst.s, s.scale[1] * inst.s, s.scale[2] * inst.s];
+                        members_owned.push(member);
                     }
                 }
+                let members: Vec<&Shape> = members_owned.iter().collect();
                 let info = crate::accel::group_info(&members, &scene.melt);
-                let bounds = members.iter().map(|s| crate::accel::shape_bound(s)).collect();
-                sources.push(PreparedGroup { shapes, origin, bounds, info });
+                sources.push(Arc::new(PreparedGroup { source_group: rg.src, shapes, origin, bounds, info }));
                 sources.len() - 1
             });
-            groups.push(FieldGroup { gi: rg.gi, op: g.op, blend: g.blend, src, insts: rg.insts, linked: rg.linked });
+            let depth = usize::from(g.depth);
+            let leaf = scene.groups.get(rg.gi + 1).is_none_or(|n| usize::from(n.depth) <= depth);
+            let blend = scene.group_melt_reach(rg.gi);
+            groups.push(FieldGroup { gi: rg.gi, op: g.op, blend, src, insts: rg.insts, linked: rg.linked, depth, leaf });
         }
         let m = scene.melt;
-        Field { groups, sources, mode: m.mode, amount: m.amount, drip: m.drip, ripple: m.ripple }
+        Field { groups, sources, mode: m.mode, amount: m.amount, drip: m.drip, ripple: m.ripple, prepared_built, prepared_reused }
     }
 
     /// The same field with every skip switched off (for the tests that prove the skips are exact).
     #[cfg(test)]
     pub fn without_culling(mut self) -> Field {
         for g in &mut self.sources {
+            let g = Arc::make_mut(g);
             g.bounds = vec![crate::accel::Bound { c: [0.0; 3], r: 1.0e9 }; g.shapes.len()];
             g.info.bound = crate::accel::Bound { c: [0.0; 3], r: 1.0e9 };
             g.info.blocks = vec![crate::accel::Block { bound: g.info.bound, kmax: 0.0, skippable: false, first: 0, count: g.shapes.len() }];
@@ -383,16 +572,25 @@ impl Field {
 
     /// The shapes of one group melted together at `p`. A shape or a whole block that is far from
     /// `p` (see accel.rs) is left out: that changes nothing, it only saves the measuring.
-    fn group(&self, g: &PreparedGroup, p: V3) -> Option<Sample> {
+    fn group<const MATERIAL: bool>(&self, g: &PreparedGroup, p: V3) -> Option<Sample> {
         use crate::accel::{block_far, far_enough, paint_far};
         let mut acc: Option<Sample> = None;
         let multi = g.info.blocks.len() > 1;
         for blk in &g.info.blocks {
-            if multi && blk.skippable && let Some(a) = &acc && blk.bound.lower(p) >= block_far(a.dist, blk.kmax * self.amount, self.mode) {
+            if multi
+                && blk.skippable
+                && let Some(a) = &acc
+                && blk.bound.lower(p) >= block_far(a.dist, blk.kmax * self.amount, self.mode)
+            {
                 continue;
             }
             for i in blk.first..blk.first + blk.count {
                 let Some(s) = g.shapes.get(i) else { continue };
+                // Stains have no geometry. Normals, shadows and export samples do not
+                // need their distance, gradient or material at all.
+                if !MATERIAL && s.op == Op::Paint {
+                    continue;
+                }
                 let k = s.blend * self.amount;
                 if let Some(a) = &acc {
                     let lb = g.bounds.get(i).map_or(f32::NEG_INFINITY, |b| b.lower(p));
@@ -408,10 +606,10 @@ impl Field {
                 }
                 let me = Sample {
                     dist: s.distance(p),
-                    color: s.color_at(p),
-                    roughness: s.material.roughness,
-                    metallic: s.material.metallic,
-                    nearest: g.origin.get(i).copied(),
+                    color: if MATERIAL { s.color_at(p) } else { [0.0; 3] },
+                    roughness: if MATERIAL { s.material.roughness } else { 0.0 },
+                    metallic: if MATERIAL { s.material.metallic } else { 0.0 },
+                    nearest: if MATERIAL { g.origin.get(i).copied() } else { None },
                 };
                 acc = Some(match acc {
                     None => {
@@ -420,7 +618,7 @@ impl Field {
                         }
                         me
                     }
-                    Some(a) => combine(a, me, s.op, k, self.mode),
+                    Some(a) => combine_field::<MATERIAL>(a, me, s.op, k, self.mode),
                 });
             }
         }
@@ -430,15 +628,62 @@ impl Field {
     /// Measure the scene at `p`. Every instance of a group melts into the groups before it, one
     /// after the other, as if it were a group of its own.
     pub fn sample(&self, p: V3) -> Sample {
+        self.sample_field::<true>(p)
+    }
+
+    /// The same ordered field evaluation for both geometry and surface materials. The
+    /// distance-only specialization leaves out colour/gradient work without changing
+    /// transforms, blending, nesting, culling or the order of floating-point operations.
+    fn sample_field<const MATERIAL: bool>(&self, p: V3) -> Sample {
         use crate::accel::{far_enough, paint_far};
         let p = warp(p, self.drip, self.ripple);
-        let mut acc: Option<Sample> = None;
-        for fg in &self.groups {
+        // groups nest: a group melts into the group it sits in, and that group (with all it holds)
+        // melts into the scene. `stack` holds the groups that are still open.
+        struct Open {
+            depth: usize,
+            op: Op,
+            k: f32,
+            acc: Option<Sample>,
+        }
+        fn fold<const MATERIAL: bool>(target: &mut Option<Sample>, gs: Sample, op: Op, k: f32, mode: BlendMode) {
+            *target = match target.take() {
+                None => {
+                    if op != Op::Add {
+                        return;
+                    }
+                    Some(gs)
+                }
+                Some(a) => Some(combine_field::<MATERIAL>(a, gs, op, k, mode)),
+            };
+        }
+        fn close<const MATERIAL: bool>(stack: &mut Vec<Open>, root: &mut Option<Sample>, mode: BlendMode) {
+            if let Some(done) = stack.pop()
+                && let Some(gs) = done.acc
+            {
+                let parent = match stack.last_mut() {
+                    Some(o) => &mut o.acc,
+                    None => root,
+                };
+                fold::<MATERIAL>(parent, gs, done.op, done.k, mode);
+            }
+        }
+        let mut root: Option<Sample> = None;
+        let mut stack: Vec<Open> = Vec::new();
+        for (group_index, fg) in self.groups.iter().enumerate() {
             let Some(src) = self.sources.get(fg.src) else { continue };
             let k = fg.blend * self.amount;
             for j in 0..fg.insts.len().max(1) {
                 let inst = fg.insts.get(j);
-                if let Some(a) = &acc {
+                while stack.last().is_some_and(|o| o.depth >= fg.depth) {
+                    close::<MATERIAL>(&mut stack, &mut root, self.mode);
+                }
+                let parent_acc = match stack.last() {
+                    Some(o) => o.acc.as_ref(),
+                    None => root.as_ref(),
+                };
+                if let Some(a) = parent_acc
+                    && fg.leaf
+                {
                     let lb = match inst {
                         Some(i) => i.bound(src.info.bound).lower(p),
                         None => src.info.bound.lower(p),
@@ -457,22 +702,35 @@ impl Field {
                     Some(i) => (i.back(p), i.s),
                     None => (p, 1.0),
                 };
-                let Some(mut gs) = self.group(src, q) else { continue };
-                gs.dist *= scale;
-                if fg.linked && gs.nearest.is_some() {
-                    gs.nearest = Some((fg.gi, LINKED));
-                }
-                acc = Some(match acc {
-                    None => {
-                        if fg.op != Op::Add {
-                            continue;
-                        }
-                        gs
+                let mut own = self.group::<MATERIAL>(src, q);
+                if let Some(gs) = own.as_mut() {
+                    gs.dist *= scale;
+                    if MATERIAL && fg.linked && gs.nearest.is_some() {
+                        gs.nearest = Some((fg.gi, LINKED));
                     }
-                    Some(a) => combine(a, gs, fg.op, k, self.mode),
-                });
+                }
+                if fg.leaf && self.groups.get(group_index + 1).is_none_or(|next| next.depth <= fg.depth) {
+                    // A leaf has no children to collect. Fold it immediately instead of
+                    // pushing and popping it on the next iteration. Flat scenes thus
+                    // allocate no nesting stack for each ray step or mesh sample.
+                    // Check the resolved order too: a missing linked group can
+                    // leave a deeper visible group after a nominal scene leaf.
+                    if let Some(gs) = own {
+                        let parent = match stack.last_mut() {
+                            Some(o) => &mut o.acc,
+                            None => &mut root,
+                        };
+                        fold::<MATERIAL>(parent, gs, fg.op, k, self.mode);
+                    }
+                } else {
+                    stack.push(Open { depth: fg.depth, op: fg.op, k, acc: own });
+                }
             }
         }
+        while !stack.is_empty() {
+            close::<MATERIAL>(&mut stack, &mut root, self.mode);
+        }
+        let acc = root;
         let mut out = acc.unwrap_or(Sample { dist: 1e6, color: [0.8; 3], roughness: 0.5, metallic: 0.0, nearest: None });
         if self.drip > 0.0 {
             out.dist *= drip_safety(self.drip, self.ripple);
@@ -481,24 +739,41 @@ impl Field {
     }
 
     pub fn distance(&self, p: V3) -> f32 {
-        self.sample(p).dist
+        self.sample_field::<false>(p).dist
     }
 
     /// The first hit along a ray, if any (sphere tracing), for picking.
     pub fn ray(&self, origin: V3, dir: V3, max: f32) -> Option<(f32, Sample)> {
         let mut t = 0.0;
         for _ in 0..256 {
-            let s = self.sample(add(origin, mul(dir, t)));
-            if s.dist < 0.02 * (1.0 + t * 0.002) {
-                return Some((t, s));
+            let p = add(origin, mul(dir, t));
+            let d = self.distance(p);
+            if d < 0.02 * (1.0 + t * 0.002) {
+                // Only a visible hit needs its colour and the identity used for picking.
+                return Some((t, self.sample(p)));
             }
-            t += s.dist.max(0.01);
+            t += d.max(0.01);
             if t > max {
                 return None;
             }
         }
         None
     }
+}
+
+/// Blend geometry with the same signed-distance arithmetic as the material evaluator.
+/// Keeping this choice static removes unused colour work from the inner distance loop.
+fn combine_field<const MATERIAL: bool>(a: Sample, b: Sample, op: Op, k: f32, mode: BlendMode) -> Sample {
+    if MATERIAL {
+        return combine(a, b, op, k, mode);
+    }
+    let dist = match op {
+        Op::Add => smin(a.dist, b.dist, k, mode).0,
+        Op::Subtract => -smin(-a.dist, b.dist, k, mode).0,
+        Op::Intersect => -smin(-a.dist, -b.dist, k, mode).0,
+        Op::Paint => a.dist,
+    };
+    Sample { dist, ..a }
 }
 
 /// Add `b` to `a`, or carve `b` out of it.
@@ -554,14 +829,169 @@ fn combine(a: Sample, b: Sample, op: Op, k: f32, mode: BlendMode) -> Sample {
 }
 
 #[cfg(test)]
+#[path = "sdf_sampling_tests.rs"]
+mod sampling_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::model::{Group, Material, Scene};
 
+    #[test]
+    fn blended_colours_preserve_light_in_the_middle_and_stay_continuous() {
+        let red = [1.0, 0.0, 0.0];
+        let blue = [0.0, 0.0, 1.0];
+        let mid = mix3(red, blue, 0.5);
+        assert!(mid[0] > 0.72 && mid[2] > 0.72, "red and blue must not form a dark seam: {mid:?}");
+        assert_eq!(mix3(red, blue, 0.0), red);
+        assert_eq!(mix3(red, blue, 1.0), blue);
+        let mut prev = red;
+        for i in 1..=100 {
+            let c = mix3(red, blue, i as f32 / 100.0);
+            assert!(c[0] <= prev[0] && c[2] >= prev[2]);
+            prev = c;
+        }
+    }
+
     fn scene_of(shapes: Vec<Shape>) -> Scene {
         let mut g = Group::new("g");
         g.shapes = shapes;
-        Scene { groups: vec![g], melt: Default::default(), env: Default::default(), saved: Vec::new() }
+        Scene { groups: vec![g], melt: Default::default(), env: Default::default(), saved: Vec::new(), anim: Default::default() }
+    }
+
+    /// Exact 10/100/300-shape scenes with group Boolean dependencies and some thin shells.
+    fn cache_test_scene(count: usize) -> Scene {
+        let mut scene = Scene::default();
+        scene.groups.clear();
+        for gi in 0..count.div_ceil(10) {
+            let mut group = Group::new(format!("cache {gi}"));
+            group.op = if gi > 0 && gi % 4 == 0 { Op::Subtract } else { Op::Add };
+            group.blend = 1.0;
+            for si in 0..10 {
+                let i = gi * 10 + si;
+                if i >= count {
+                    break;
+                }
+                let kind = match i % 5 {
+                    0 => Kind::Sphere,
+                    1 => Kind::Box,
+                    2 => Kind::Extrude,
+                    3 => Kind::Curve,
+                    _ => Kind::Cylinder,
+                };
+                let mut sh = Shape::new(kind, [(i % 20) as f32 * 24.0, (i / 20) as f32 * 24.0, 10.0], Material::default());
+                if i % 3 == 0 {
+                    sh.shell = 0.8;
+                }
+                if i % 7 == 0 && si != 0 {
+                    sh.op = Op::Subtract;
+                }
+                if kind == Kind::Curve {
+                    sh.path = vec![[0.0, 0.0, 0.0, 2.0], [8.0, 0.0, 0.0, 2.0], [15.0, 8.0, 0.0, 2.0]];
+                }
+                group.shapes.push(sh);
+            }
+            scene.groups.push(group);
+        }
+        scene
+    }
+
+    fn same_field_samples(a: &Field, b: &Field) {
+        for x in [-15.0, 0.0, 12.0, 45.0, 96.0, 230.0] {
+            for z in [0.0, 9.6, 10.0, 14.0, 22.0] {
+                let p = [x, 0.0, z];
+                let left = a.sample(p);
+                let right = b.sample(p);
+                assert_eq!(left.dist.to_bits(), right.dist.to_bits(), "distance at {p:?}");
+                assert_eq!(left.color, right.color, "material at {p:?}");
+                assert_eq!(left.nearest, right.nearest, "pick at {p:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn incremental_field_rebuilds_only_changed_geometry_and_never_stales_on_undo() {
+        for n in [10, 100, 300] {
+            let original = cache_test_scene(n);
+            let before = Field::new(&original);
+            assert_eq!(before.prepared_built, n);
+            let mut changed = original.clone();
+            changed.groups[0].shapes[0].pos[0] += 1.75;
+            let after = Field::reusing(&changed, Some((&before, &original)));
+            assert_eq!(after.prepared_built, 1, "{n} shapes");
+            assert_eq!(after.prepared_reused, n - 1, "{n} shapes");
+            if n > 10 {
+                assert!(Arc::ptr_eq(&before.sources[1], &after.sources[1]), "unchanged source group must be shared");
+            }
+            assert!(Arc::ptr_eq(&before.sources[0].shapes[1], &after.sources[0].shapes[1]));
+            same_field_samples(&after, &Field::new(&changed));
+
+            // Undo returns exactly to the old SDF, not the modified prepared shape.
+            let undone = Field::reusing(&original, Some((&after, &changed)));
+            assert_eq!(undone.prepared_built, 1);
+            same_field_samples(&undone, &before);
+        }
+    }
+
+    #[test]
+    fn melt_material_visibility_and_group_link_dependencies_invalidate_safely() {
+        let original = cache_test_scene(20);
+        let old = Field::new(&original);
+        let mut changed = original.clone();
+        changed.melt.amount = 0.25;
+        changed.melt.mode = BlendMode::Gooey;
+        let melt = Field::reusing(&changed, Some((&old, &original)));
+        assert_eq!(melt.prepared_built, 0, "melt does not alter individual shape preparation");
+        assert!(!Arc::ptr_eq(&old.sources[0], &melt.sources[0]), "blend-dependent acceleration bounds must be rebuilt");
+        same_field_samples(&melt, &Field::new(&changed));
+
+        let prev = changed.clone();
+        changed.groups[0].shapes[1].material.color = [0.1, 0.9, 0.4];
+        changed.groups[1].shapes[2].visible = false;
+        changed.groups[1].op = Op::Intersect;
+        let edited = Field::reusing(&changed, Some((&melt, &prev)));
+        assert_eq!(edited.prepared_built, 1);
+        same_field_samples(&edited, &Field::new(&changed));
+    }
+
+    /// Run explicitly with: cargo test -p meltcad incremental_field_timing_10_100_300 -- --ignored --nocapture
+    /// Both versions rebuild the Boolean graph on each edit; only the incremental one keeps
+    /// unchanged prepared geometry. Never interpret these as GPU frame timings.
+    #[test]
+    #[ignore]
+    fn incremental_field_timing_10_100_300() {
+        use std::time::{Duration, Instant};
+        for n in [10, 100, 300] {
+            let mut scene = cache_test_scene(n);
+            let mut previous = Field::new(&scene);
+            let mut old_ms = Duration::ZERO;
+            let mut new_ms = Duration::ZERO;
+            const REPEATS: usize = 30;
+            for k in 0..REPEATS {
+                let mut edited = scene.clone();
+                let si = k % n;
+                edited.groups[si / 10].shapes[si % 10].pos[0] += 0.4;
+                let started = Instant::now();
+                let cold = Field::new(&edited);
+                old_ms += started.elapsed();
+                let started = Instant::now();
+                let incremental = Field::reusing(&edited, Some((&previous, &scene)));
+                new_ms += started.elapsed();
+                assert_eq!(incremental.prepared_built, 1);
+                same_field_samples(&cold, &incremental);
+                std::hint::black_box(&cold);
+                scene = edited;
+                previous = incremental;
+            }
+            eprintln!(
+                "SDF field {:>3} shapes: cold {:.3}ms/edit, incremental {:.3}ms/edit, speedup {:.2}x ({} edits)",
+                n,
+                old_ms.as_secs_f64() * 1000.0 / REPEATS as f64,
+                new_ms.as_secs_f64() * 1000.0 / REPEATS as f64,
+                old_ms.as_secs_f64() / new_ms.as_secs_f64().max(1e-12),
+                REPEATS
+            );
+        }
     }
 
     #[test]
@@ -582,6 +1012,225 @@ mod tests {
         assert!(f(Kind::Extrude, [0.0, 0.0, 0.0]) < 0.0);
     }
 
+    /// #96: an enlarged shape's face melt swells with its scale, so culling must not cut it off.
+    /// #97: a stretched shape is never culled, so the order of two blended shapes does not matter.
+    #[test]
+    fn culling_keeps_scaled_face_melts_and_stretched_shapes() {
+        let mut far = ball(0.0, 1.0);
+        far.pos = [2.0, 0.0, 100.0];
+        let mut big = ball(0.0, 1.0);
+        big.scale = [20.0; 3];
+        big.face_melt = crate::model::FaceMelt { face: 5, amount: 30.0, reach: 60.0 };
+        let sc = scene_of(vec![far, big]);
+        let (fast, slow) = (Field::new(&sc), Field::new(&sc).without_culling());
+        for z in [60.0, 100.0, 140.0] {
+            let p = [0.0, 0.0, z];
+            assert!((fast.distance(p) - slow.distance(p)).abs() < 1e-3, "{z}: {} against {}", fast.distance(p), slow.distance(p));
+        }
+        let small = || {
+            let mut s = ball(10.0, 1.0);
+            s.blend = 4.0;
+            s
+        };
+        let stretched = || {
+            let mut s = ball(0.0, 1.0);
+            s.scale = [4.0, 1.0, 1.0];
+            s.blend = 4.0;
+            s
+        };
+        let (mut a, mut b) = (scene_of(vec![small(), stretched()]), scene_of(vec![stretched(), small()]));
+        a.melt.amount = 1.0;
+        b.melt.amount = 1.0;
+        let (fa, fb) = (Field::new(&a), Field::new(&b));
+        let p = [10.0, 1.2, 0.0];
+        assert!((fa.distance(p) - fb.distance(p)).abs() < 1e-3, "{} against {}", fa.distance(p), fb.distance(p));
+        assert!((fa.distance(p) - Field::new(&a).without_culling().distance(p)).abs() < 1e-3);
+    }
+
+    fn ball(x: f32, r: f32) -> Shape {
+        let mut s = Shape::new(Kind::Sphere, [x, 0.0, 0.0], Material::default());
+        s.size[0] = r;
+        s.blend = 0.0;
+        s
+    }
+
+    fn group_of(name: &str, depth: u8, shapes: Vec<Shape>) -> crate::model::Group {
+        let mut g = crate::model::Group::new(name);
+        g.depth = depth;
+        g.shapes = shapes;
+        g
+    }
+
+    #[test]
+    fn a_face_melt_changes_only_the_chosen_face() {
+        let mut s = Shape::new(Kind::Box, [0.0; 3], Material::default());
+        s.size = [20.0, 20.0, 20.0];
+        let plain = Prepared::new(&s);
+        s.face_melt = crate::model::FaceMelt { face: 5, amount: 6.0, reach: 8.0 };
+        let melted = Prepared::new(&s);
+        // far from the +z face (the bottom, and the middle of the side) nothing moves
+        for p in [[0.0, 0.0, -10.0], [10.0, 0.0, -4.0], [0.0, 25.0, -9.0]] {
+            assert!((plain.distance(p) - melted.distance(p)).abs() < 1e-4, "{p:?}");
+        }
+        // on the +z face the surface swells somewhere
+        let mut moved = false;
+        for i in 0..40 {
+            let p = [-9.0 + i as f32 * 0.45, -9.0 + i as f32 * 0.31, 12.0];
+            moved |= (plain.distance(p) - melted.distance(p)).abs() > 0.5;
+        }
+        assert!(moved, "the melted face looks the same");
+        // switched off: the same as plain
+        s.face_melt.amount = 0.0;
+        assert!((Prepared::new(&s).distance([3.0, 4.0, 10.0]) - plain.distance([3.0, 4.0, 10.0])).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_minus_cuts_its_group_wherever_it_sits_in_the_list() {
+        let mut hole = ball(0.0, 5.0);
+        hole.op = Op::Subtract;
+        for cut_first in [true, false] {
+            let shapes = if cut_first { vec![hole.clone(), ball(0.0, 10.0)] } else { vec![ball(0.0, 10.0), hole.clone()] };
+            let mut sc = Scene { groups: vec![], melt: Default::default(), env: Default::default(), saved: Vec::new(), anim: Default::default() };
+            sc.groups.push(group_of("g", 0, shapes));
+            let f = Field::new(&sc);
+            assert!(f.distance([0.0, 0.0, 0.0]) > 0.0, "the hole is empty (minus first: {cut_first})");
+            assert!(f.distance([7.5, 0.0, 0.0]) < 0.0, "the wall is still there (minus first: {cut_first})");
+        }
+    }
+
+    #[test]
+    fn a_subtract_inside_a_group_only_cuts_that_group() {
+        // top: two balls apart; the second ball's group holds a hole at the first ball's place
+        let cut = ball(-30.0, 8.0);
+        let mut sc = Scene { groups: vec![], melt: Default::default(), env: Default::default(), saved: Vec::new(), anim: Default::default() };
+        sc.groups.clear();
+        sc.groups.push(group_of("a", 0, vec![ball(-30.0, 10.0)]));
+        sc.groups.push(group_of("b", 0, vec![ball(30.0, 10.0)]));
+        // nested in b: a subtract at x = 30 cuts b only, never a (a is not in b)
+        let mut hole = ball(30.0, 5.0);
+        hole.op = Op::Subtract;
+        sc.groups[1].shapes.push(hole);
+        sc.normalize_depths();
+        let f = Field::new(&sc);
+        assert!(f.distance([-30.0, 0.0, 0.0]) < -5.0, "a is whole");
+        assert!(f.distance([30.0, 0.0, 0.0]) > 0.0, "b has its hole");
+        // a group nested in a: its subtract cuts a (its parent), and b stays whole
+        let mut sc = Scene { groups: vec![], melt: Default::default(), env: Default::default(), saved: Vec::new(), anim: Default::default() };
+        sc.groups.clear();
+        sc.groups.push(group_of("a", 0, vec![ball(-30.0, 10.0)]));
+        let mut inner = group_of("a-cut", 1, vec![cut]);
+        inner.op = Op::Subtract;
+        sc.groups.push(inner);
+        sc.groups.push(group_of("b", 0, vec![ball(-30.0, 10.0)]));
+        // b sits on top of a at the same place: the cut inside a must not touch it
+        sc.normalize_depths();
+        let f = Field::new(&sc);
+        assert!(f.distance([-30.0, 0.0, 0.0]) < -5.0, "b fills the hole a-cut made in a");
+        sc.groups.remove(2);
+        let f = Field::new(&sc);
+        assert!(f.distance([-30.0, 0.0, 0.0]) > 0.0, "without b the cut shows");
+    }
+
+    #[test]
+    fn nested_groups_melt_inside_before_they_melt_outside() {
+        // two balls 18 apart melt in one group; a third group far away stays separate
+        let mut sc = Scene { groups: vec![], melt: Default::default(), env: Default::default(), saved: Vec::new(), anim: Default::default() };
+        sc.groups.clear();
+        let mut parent = group_of("parent", 0, vec![]);
+        parent.blend = 0.0;
+        sc.groups.push(parent);
+        let mut c1 = group_of("c1", 1, vec![ball(-9.0, 10.0)]);
+        let mut c2 = group_of("c2", 1, vec![ball(9.0, 10.0)]);
+        c1.blend = 0.0;
+        c2.blend = 14.0;
+        sc.groups.push(c1);
+        sc.groups.push(c2);
+        sc.normalize_depths();
+        let melted = Field::new(&sc).distance([0.0, 0.0, 0.0]);
+        sc.groups[2].blend = 0.0;
+        let hard = Field::new(&sc).distance([0.0, 0.0, 0.0]);
+        assert!(melted < hard, "the children melt together inside the parent ({melted} vs {hard})");
+        // the empty parent is only a container: it adds nothing of its own
+        assert!(Field::new(&sc).distance([0.0, 40.0, 0.0]) > 25.0);
+    }
+
+    fn with_blend(mut s: Shape, blend: f32) -> Shape {
+        s.blend = blend;
+        s
+    }
+
+    fn child_group_scene(parent_blend: f32, parent_shapes: Vec<Shape>) -> Scene {
+        let mut sc = Scene { groups: vec![], melt: Default::default(), env: Default::default(), saved: Vec::new(), anim: Default::default() };
+        let mut parent = group_of("parent", 0, parent_shapes);
+        parent.blend = parent_blend;
+        sc.groups.push(parent);
+        sc.groups.push(group_of("c1", 1, vec![ball(-9.0, 10.0)]));
+        sc.groups.push(group_of("c2", 1, vec![ball(9.0, 10.0)]));
+        sc.normalize_depths();
+        sc
+    }
+
+    /// The user's report: two groups inside a parent did not melt although the parent's Melt was on.
+    #[test]
+    fn sibling_groups_melt_by_the_parent_amount() {
+        let nested = Field::new(&child_group_scene(67.38, vec![]));
+        // the same two shapes in one group, melting with the parent's amount
+        let single = Field::new(&scene_of(vec![with_blend(ball(-9.0, 10.0), 67.38), with_blend(ball(9.0, 10.0), 67.38)]));
+        let p = [0.0, 0.0, 0.0];
+        let (groups, one_group) = (nested.distance(p), single.distance(p));
+        assert!((groups - one_group).abs() < 1e-3, "two child groups must melt like one group: {groups} vs {one_group}");
+        assert!(groups < -2.0, "the parent's melt must pull the midpoint in, not union it: {groups}");
+    }
+
+    #[test]
+    fn a_child_group_melts_with_the_parents_own_shapes() {
+        let nested = Field::new(&child_group_scene(67.38, vec![ball(0.0, 5.0)]));
+        let single = Field::new(&scene_of(vec![ball(0.0, 5.0), with_blend(ball(-9.0, 10.0), 67.38), with_blend(ball(9.0, 10.0), 67.38)]));
+        for p in [[0.0, 0.0, 0.0], [0.0, 0.0, 4.0], [-14.0, 0.0, 0.0]] {
+            let (groups, one_group) = (nested.distance(p), single.distance(p));
+            assert!((groups - one_group).abs() < 1e-3, "at {p:?}: {groups} vs {one_group}");
+        }
+        assert!(nested.distance([0.0, 0.0, 0.0]) < -2.0, "the child groups melt into the parent's own shape");
+    }
+
+    #[test]
+    fn child_groups_with_melt_off_still_union_plainly() {
+        let hard = Field::new(&child_group_scene(0.0, vec![])).distance([0.0, 0.0, 0.0]);
+        let plain = Field::new(&scene_of(vec![ball(-9.0, 10.0), ball(9.0, 10.0)])).distance([0.0, 0.0, 0.0]);
+        assert!((hard - plain).abs() < 1e-6, "Melt off must be a hard union: {hard} vs {plain}");
+        assert!((hard + 1.0).abs() < 1e-4, "the midpoint stays at min(-1, -1) = -1: {hard}");
+    }
+
+    #[test]
+    fn the_outline_helpers_keep_it_valid() {
+        let mut sc = Scene { groups: vec![], melt: Default::default(), env: Default::default(), saved: Vec::new(), anim: Default::default() };
+        sc.groups.clear();
+        for (n, d) in [("a", 0), ("b", 1), ("c", 1), ("d", 0)] {
+            sc.groups.push(group_of(n, d, vec![]));
+        }
+        assert_eq!(sc.subtree_end(0), 3);
+        assert_eq!(sc.parent_of(2), Some(0));
+        assert!(sc.indent_group(3), "d goes into the big group above it");
+        sc.normalize_depths();
+        let depths: Vec<u8> = sc.groups.iter().map(|g| g.depth).collect();
+        assert_eq!(depths, vec![0, 1, 1, 1]);
+        assert!(!sc.indent_group(3), "two levels at most: d cannot go one deeper");
+        let at = sc.outdent_group(3);
+        assert_eq!(at, Some(3));
+        assert_eq!(sc.groups[3].depth, 0);
+        sc.remove_group(0);
+        let names: Vec<&str> = sc.groups.iter().map(|g| g.name.as_str()).collect();
+        assert_eq!(names, vec!["b", "c", "d"]);
+        assert_eq!(sc.groups.iter().map(|g| g.depth).collect::<Vec<_>>(), vec![0, 0, 0], "with the big group gone its groups move up");
+        let mut bad = Scene { groups: vec![], melt: Default::default(), env: Default::default(), saved: Vec::new(), anim: Default::default() };
+        bad.groups.clear();
+        for d in [3, 3, 0, 2] {
+            bad.groups.push(group_of("x", d, vec![]));
+        }
+        bad.normalize_depths();
+        assert_eq!(bad.groups.iter().map(|g| g.depth).collect::<Vec<_>>(), vec![0, 1, 0, 1]);
+    }
+
     #[test]
     fn a_shell_hollows_any_shape_into_a_wall() {
         let m = Material::default();
@@ -595,6 +1244,94 @@ mod tests {
         assert!((f([25.0, 0.0, 0.0]) - 5.0).abs() < 1e-4);
         s.shell = f32::NAN;
         assert!((Prepared::new(&s).distance([0.0, 0.0, 0.0]) + 20.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn a_shell_scales_with_the_shape_like_round_and_face_melt() {
+        let mut s = Shape::new(Kind::Sphere, [0.0; 3], Material::default());
+        s.size[0] = 20.0;
+        s.shell = 4.0;
+        let f = |s: &Shape, p: V3| Prepared::new(s).distance(p);
+        // Half the size: a 20 mm ball with a 4 mm wall becomes a 10 mm ball with a 2 mm wall,
+        // just as its rounding, face melt and ripple grow and shrink with the shape.
+        s.scale = [0.5; 3];
+        assert!(f(&s, [7.5, 0.0, 0.0]) > 0.0, "the cavity reaches radius 8");
+        assert!(f(&s, [9.0, 0.0, 0.0]) < 0.0, "the wall is solid");
+        // Twice the size: radius 40, wall 8, cavity out to 32.
+        s.scale = [2.0; 3];
+        assert!(f(&s, [31.0, 0.0, 0.0]) > 0.0, "the cavity reaches radius 32");
+        assert!(f(&s, [34.0, 0.0, 0.0]) < 0.0, "the wall is solid");
+    }
+
+    #[test]
+    fn a_shell_on_a_rippled_shape_keeps_the_requested_wall_thickness() {
+        let mut s = Shape::new(Kind::Sphere, [0.0; 3], Material::default());
+        s.size[0] = 20.0;
+        s.shell = 1.0;
+        // Lines along Y: on the +X axis the wave value is zero, so the surface stays at radius
+        // 20 and only the ripple's conservative distance scaling is in play.
+        s.ripple = Some(crate::ripple::Ripple {
+            mode: crate::ripple::RippleMode::Linear,
+            direction: 90.0,
+            height: 3.0,
+            spacing: 12.0,
+            count: 5,
+            detail: 1,
+            ..crate::ripple::Ripple::default()
+        });
+        let f = |p: V3| Prepared::new(&s).distance(p);
+        assert!(f([19.5, 0.0, 0.0]) < 0.0, "the 1 mm wall is solid");
+        assert!(f([18.0, 0.0, 0.0]) > 0.0, "2 mm inside the skin is the cavity");
+    }
+
+    #[test]
+    fn a_shell_on_a_face_melt_keeps_the_wall_near_the_requested_thickness() {
+        let mut s = Shape::new(Kind::Box, [0.0; 3], Material::default());
+        s.size = [20.0, 20.0, 20.0];
+        s.face_melt = crate::model::FaceMelt { face: 5, amount: 6.0, reach: 8.0 };
+        s.shell = 2.0;
+        let f = |z: f32| Prepared::new(&s).distance([0.0, 0.0, z]);
+        // The +Z face swells: the outer skin is between the original top (10) and the swell.
+        let (mut lo, mut hi) = (11.5, 12.5);
+        assert!(f(lo) < 0.0 && f(hi) > 0.0);
+        for _ in 0..40 {
+            let mid = (lo + hi) * 0.5;
+            if f(mid) > 0.0 {
+                hi = mid;
+            } else {
+                lo = mid;
+            }
+        }
+        let outer = (lo + hi) * 0.5;
+        assert!(outer > 11.0, "the face swells");
+        // A face melt's field is a conservative bound, not an exact distance, so the normal
+        // wall is a little under 2 mm; it must not be the old scaled-up wall (several mm).
+        assert!(f(outer - 1.0) < 0.0, "1 mm inside the outer skin is wall");
+        assert!(f(outer - 2.0) > 0.0, "2 mm inside the outer skin is the cavity");
+    }
+
+    #[test]
+    fn a_shell_of_a_sweep_or_loft_keeps_the_requested_wall_thickness() {
+        let f = |s: &Shape, p: V3| Prepared::new(s).distance(p);
+        // A straight sweep of a 10 x 10 profile: the side is 5 from the axis, so a 2 mm wall
+        // leaves the cavity up to 3.
+        let mut sweep = Shape::new(Kind::Sweep, [0.0; 3], Material::default());
+        sweep.outline = vec![[-5.0, -5.0], [5.0, -5.0], [5.0, 5.0], [-5.0, 5.0]];
+        sweep.path = vec![[0.0, 0.0, -20.0, 1.0], [0.0, 0.0, 20.0, 1.0]];
+        sweep.shell = 2.0;
+        sweep.blend = 0.0;
+        assert!(f(&sweep, [2.8, 0.0, 0.0]) > 0.0, "2.8 is inside the 2 mm wall's hollow");
+        assert!(f(&sweep, [3.6, 0.0, 0.0]) < 0.0, "3.6 is in the wall");
+        // A loft from a 40 x 40 square up to a 20 x 20 square: at mid height the side is at 15,
+        // so a 4 mm wall leaves the cavity up to 11.
+        let mut loft = Shape::new(Kind::Loft, [0.0; 3], Material::default());
+        loft.size[0] = 40.0;
+        loft.outline = vec![[-20.0, -20.0], [20.0, -20.0], [20.0, 20.0], [-20.0, 20.0]];
+        loft.outline2 = vec![[-10.0, -10.0], [10.0, -10.0], [10.0, 10.0], [-10.0, 10.0]];
+        loft.shell = 4.0;
+        loft.blend = 0.0;
+        assert!(f(&loft, [10.5, 0.0, 0.0]) > 0.0, "10.5 is inside the 4 mm wall's hollow");
+        assert!(f(&loft, [12.0, 0.0, 0.0]) < 0.0, "12 is in the wall");
     }
 
     #[test]
@@ -679,7 +1416,15 @@ mod tests {
                 s.size = [4.0 + rnd() * 12.0, 4.0 + rnd() * 12.0, 4.0 + rnd() * 12.0];
                 s.rot = [rnd() * 90.0, rnd() * 90.0, rnd() * 90.0];
                 s.blend = rnd() * 12.0;
-                s.op = if si > 0 && rnd() < 0.2 { Op::Subtract } else if si > 0 && rnd() < 0.08 { Op::Intersect } else if si > 0 && rnd() < 0.08 { Op::Paint } else { Op::Add };
+                s.op = if si > 0 && rnd() < 0.2 {
+                    Op::Subtract
+                } else if si > 0 && rnd() < 0.08 {
+                    Op::Intersect
+                } else if si > 0 && rnd() < 0.08 {
+                    Op::Paint
+                } else {
+                    Op::Add
+                };
                 g.shapes.push(s);
             }
             sc.groups.push(g);
@@ -731,7 +1476,7 @@ mod tests {
             for (n, i) in insts.iter().enumerate() {
                 let mut c = plain.clone();
                 c.name = format!("{} {n}", g.name);
-                for s in src.shapes.iter().filter(|s| s.visible) {
+                for s in src.shapes.iter().filter(|s| s.solid()) {
                     let mut t = s.clone();
                     t.uid = 0;
                     t.pos = i.apply(s.pos);
@@ -845,6 +1590,88 @@ mod tests {
     }
 
     #[test]
+    fn a_single_shape_pattern_measures_like_the_copies_written_out() {
+        use crate::pattern::{Pattern, euler_of};
+        fn written(sc: &Scene) -> Scene {
+            let mut out = sc.clone();
+            out.groups.clear();
+            for (gi, g) in sc.groups.iter().enumerate() {
+                let mut plain = Group::new(format!("{} plain", g.name));
+                plain.op = g.op;
+                plain.blend = g.blend;
+                plain.depth = g.depth;
+                for (si, s) in g.shapes.iter().enumerate() {
+                    if !s.solid() {
+                        continue;
+                    }
+                    let insts = crate::pattern::shape_instances(sc, gi, si, 256);
+                    for i in &insts {
+                        let mut t = s.clone();
+                        t.pattern = None;
+                        t.uid = 0;
+                        t.pos = i.apply(s.pos);
+                        let r = rotation(s.rot);
+                        let m = i.m;
+                        let mut mr = [[0.0_f32; 3]; 3];
+                        for a in 0..3 {
+                            for b in 0..3 {
+                                mr[a][b] = (0..3).map(|k| m[a][k] * r[k][b]).sum();
+                            }
+                        }
+                        let rm: [V3; 3] = if i.flips() {
+                            let mut o = [[0.0; 3]; 3];
+                            for a in 0..3 {
+                                for b in 0..3 {
+                                    o[a][b] = (0..3).map(|k| mr[a][k] * m[k][b]).sum();
+                                }
+                            }
+                            o
+                        } else {
+                            mr
+                        };
+                        t.rot = euler_of(&rm);
+                        plain.shapes.push(t);
+                    }
+                }
+                out.groups.push(plain);
+            }
+            out
+        }
+        let mut sc = Scene::default();
+        sc.groups[0].shapes[0].kind = Kind::Box;
+        sc.groups[0].shapes[0].size = [24.0, 18.0, 12.0];
+        sc.groups[0].shapes[0].pos = [0.0, 0.0, 20.0];
+        let mut other = Shape::new(Kind::Sphere, [90.0, 0.0, 20.0], Material::default());
+        other.size = [10.0; 3];
+        sc.groups[0].shapes.push(other);
+        for (name, p, copies) in [
+            ("rect", Pattern::Rect { counts: [3, 2, 1], spacing: [35.0, 30.0, 0.0] }, 7),
+            ("mirror xyz about its middle", Pattern::Mirror { axes: [true, true, true], centre: true }, 9),
+            ("circle", Pattern::Circular { count: 5, angle: 360.0, axis: 2, centre: [0.0, 0.0, 20.0], rotate: true }, 6),
+        ] {
+            let mut s = sc.clone();
+            s.groups[0].shapes[0].pattern = Some(p);
+            let field = Field::new(&s);
+            assert_eq!(field.sources[0].shapes.len(), copies, "{name}: every copy is a measured shape");
+            let wr = written(&s);
+            assert!(wr.groups[0].shapes.len() > s.groups[0].shapes.len(), "{name}");
+            compare(&field, &Field::new(&wr), &centres(&wr), name, 1200);
+        }
+        // removing the pattern restores just the one shape
+        sc.groups[0].shapes[0].pattern = None;
+        let field = Field::new(&sc);
+        assert_eq!(field.sources[0].shapes.len(), 2);
+        // an identity-only shape pattern is the same as no pattern
+        sc.groups[0].shapes[0].pattern = Some(Pattern::Rect { counts: [1, 1, 1], spacing: [50.0, 50.0, 50.0] });
+        let identity = Field::new(&sc);
+        assert_eq!(identity.sources[0].shapes.len(), 2);
+        assert!((identity.distance([0.0, 0.0, 20.0]) - field.distance([0.0, 0.0, 20.0])).abs() < 1e-4);
+        // the instance identity still names the source shape for picking
+        let hit = identity.sample([0.0, 0.0, 20.0]);
+        assert_eq!(hit.nearest, Some((0, 0)));
+    }
+
+    #[test]
     fn a_linked_copy_measures_like_a_moved_copy_of_the_source() {
         use crate::pattern::Xform;
         let mut sc = symmetric_scene();
@@ -950,11 +1777,24 @@ mod tests {
                     let b = crate::accel::shape_bound(s);
                     let p = Prepared::new(s);
                     for _ in 0..200 {
-                        let q = [s.pos[0] + (rnd() - 0.5) * 2.0 * b.r * 1.5, s.pos[1] + (rnd() - 0.5) * 2.0 * b.r * 1.5, s.pos[2] + (rnd() - 0.5) * 2.0 * b.r * 1.5];
+                        let q = [
+                            s.pos[0] + (rnd() - 0.5) * 2.0 * b.r * 1.5,
+                            s.pos[1] + (rnd() - 0.5) * 2.0 * b.r * 1.5,
+                            s.pos[2] + (rnd() - 0.5) * 2.0 * b.r * 1.5,
+                        ];
                         let d = p.distance(q);
                         let lb = b.lower(q);
                         if d < lb - 1e-3 {
-                            let e = kinds.entry(format!("{:?} round {} shell {} chamfer {:?} scale {:?}", s.kind, s.round > 0.0, s.shell > 0.0, s.corner, s.scale)).or_insert((0, 0.0));
+                            let e = kinds
+                                .entry(format!(
+                                    "{:?} round {} shell {} chamfer {:?} scale {:?}",
+                                    s.kind,
+                                    s.round > 0.0,
+                                    s.shell > 0.0,
+                                    s.corner,
+                                    s.scale
+                                ))
+                                .or_insert((0, 0.0));
                             e.0 += 1;
                             e.1 = e.1.max(lb - d);
                         }
@@ -982,7 +1822,8 @@ mod tests {
             state = state.wrapping_mul(1664525).wrapping_add(1013904223);
             (state >> 8) as f32 / (1u32 << 24) as f32
         };
-        let pts: Vec<V3> = (0..20000).map(|_| [c[0] + (rnd() - 0.5) * 2.0 * r, c[1] + (rnd() - 0.5) * 2.0 * r, c[2] + (rnd() - 0.5) * 2.0 * r * 0.4]).collect();
+        let pts: Vec<V3> =
+            (0..20000).map(|_| [c[0] + (rnd() - 0.5) * 2.0 * r, c[1] + (rnd() - 0.5) * 2.0 * r, c[2] + (rnd() - 0.5) * 2.0 * r * 0.4]).collect();
         let time = |f: &Field| {
             let t = std::time::Instant::now();
             let mut acc = 0.0;
@@ -993,7 +1834,12 @@ mod tests {
         };
         let (a, sa) = time(&fast);
         let (b, sb) = time(&slow);
-        eprintln!("{} shapes: Field::new {:.1} ms; 20000 distances: {a:.0} ms with skips, {b:.0} ms without ({:.1}x); sums {sa:.1} {sb:.1}", sc.shape_count(), prep.as_secs_f64() * 1000.0, b / a);
+        eprintln!(
+            "{} shapes: Field::new {:.1} ms; 20000 distances: {a:.0} ms with skips, {b:.0} ms without ({:.1}x); sums {sa:.1} {sb:.1}",
+            sc.shape_count(),
+            prep.as_secs_f64() * 1000.0,
+            b / a
+        );
     }
 
     fn graded(kind: Kind, mat: Material) -> Shape {
@@ -1015,7 +1861,7 @@ mod tests {
         let p = Prepared::new(&s);
         close(p.color_at([0.0, 0.0, -20.0]), red); // the bottom
         close(p.color_at([0.0, 0.0, 20.0]), blue); // the top
-        close(p.color_at([0.0, 0.0, 0.0]), [0.5, 0.0, 0.5]); // halfway
+        close(p.color_at([0.0, 0.0, 0.0]), [0.7297401, 0.0, 0.7297401]); // halfway in linear light
         close(p.color_at([0.0, 0.0, 500.0]), blue); // clamped beyond the ends
         close(p.color_at([0.0, 0.0, -500.0]), red);
         // no gradient: always the plain colour
@@ -1030,14 +1876,14 @@ mod tests {
         // a weaker gradient reaches only part of the way
         let mut w = s.clone();
         w.material.gradient = 0.5;
-        close(Prepared::new(&w).color_at([0.0, 0.0, 20.0]), [0.5, 0.0, 0.5]);
+        close(Prepared::new(&w).color_at([0.0, 0.0, 20.0]), [0.7297401, 0.0, 0.7297401]);
         // the X axis
         let mut x = s.clone();
         x.material.grad_axis = 0;
         let p = Prepared::new(&x);
         close(p.color_at([-10.0, 0.0, 0.0]), red);
         close(p.color_at([10.0, 0.0, 0.0]), blue);
-        close(p.color_at([0.0, 0.0, 15.0]), [0.5, 0.0, 0.5]);
+        close(p.color_at([0.0, 0.0, 15.0]), [0.7297401, 0.0, 0.7297401]);
         // a range: all red up to a quarter of the height, all blue from three quarters
         let mut r = s.clone();
         r.material.grad_from = 0.25;
@@ -1064,8 +1910,8 @@ mod tests {
         close(world.color_at([0.0, 0.0, 20.0]), blue); // the world top is the end of the long box
         close(world.color_at([0.0, 0.0, -20.0]), red);
         // in the world the two ends of the local Z axis (world X here) are at the same height: purple
-        close(world.color_at([5.0, 0.0, 0.0]), [0.5, 0.0, 0.5]);
-        close(world.color_at([-5.0, 0.0, 0.0]), [0.5, 0.0, 0.5]);
+        close(world.color_at([5.0, 0.0, 0.0]), [0.7297401, 0.0, 0.7297401]);
+        close(world.color_at([-5.0, 0.0, 0.0]), [0.7297401, 0.0, 0.7297401]);
         // following the shape the colour runs along the local Z axis, which is only 10 long
         s.material.grad_local = true;
         let local = Prepared::new(&s);

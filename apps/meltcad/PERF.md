@@ -237,3 +237,227 @@ remained was the thumbnails (now off the main thread).
   give ms per row) is below about 5 ms, draw it in one pass instead of the cheap picture. Not done: it needs a real GPU to tune.
 * Testing the window: `MELTCAD_HUD=1` starts with the HUD on; with `MELTCAD_TEST_DIR=dir` the files `dir/hud` (toggle the HUD)
   and `dir/bench` (open the speed test window) are taken like `snap` and `png`; `dir/where` writes where the HUD is to `dir/where.txt`.
+
+## 2026-10-17: hover/transient and emissive-scene CPU/GPU optimization
+
+Base revision: `fff80f282891593ecb4523442e0a0aa31725eb29` on `easy-layout-and-melt`.
+This patch preserves the offscreen frame cache, 30 Hz hover picking gate, adaptive
+scale, 150 ms full-quality settle, bounding-sphere acceleration, 48/128/200 shader
+march caps, and F3 timestamp HUD. No WGSL distance, light or shading math changed.
+
+* `perf::scene_has_glow_resolved` checks only group sources actually returned by
+  `pattern::resolve`. An unrelated hidden emissive source no longer activates
+  the expensive full-material 200-iteration shader path merely because another
+  visible group happens to be linked. Hidden sources of visible linked copies
+  **do** activate it. `ScenePack::new` reuses its resolved list.
+* Hover transitions temporarily invoke the already-existing fast/low-resolution
+  frame. Moving the pointer within the same shape does not postpone refinement;
+  after 150 ms of no changes the normal full-resolution picture is restored.
+  The cache still prevents re-marching on egui-only repaints. This improves
+  transition responsiveness; it does **not** eliminate re-marching for changed
+  hover ID, which still participates in the scene shader's colour.
+* `--bench` now includes paired `shapes100`/`shapes100_unlit` and
+  `shapes300`/`shapes300_unlit` cases, using the same geometry with
+  emission zeroed in the matching unlit scene. Existing pipe, 20-shape and
+  complex material benchmarks are retained. Their reported actual shape counts
+  may be greater than the nominal target since library groups are indivisible.
+
+### Verification protocol
+
+```powershell
+git checkout easy-layout-and-melt
+cargo build --release --locked -p meltcad
+target\release\meltcad.exe --bench perf-before.txt --frames 12
+# Switch to the performance branch (keep same driver, power mode, viewport, backend).
+git checkout perf/hover-glow-budget-20261017
+cargo build --release --locked -p meltcad
+target\release\meltcad.exe --bench perf-after.txt --frames 12
+cargo test --release -p meltcad
+cargo test --release -p meltcad -- frame_cpu_bench --ignored --nocapture
+# Full shader golden image comparison on a machine with a working wgpu adapter:
+$env:MELTCAD_GOLDEN_DIR="golden-after"
+cargo test --release -p meltcad -- gpu_headless_golden --ignored --nocapture
+# Collect golden-before from the base commit with the same adapter before comparing.
+# Run gpu_headless_matches_cpu and gpu_headless_mesh_matches_cpu on the same host.
+```
+
+The pre-change CLI does not have `shapes100_unlit` and
+`shapes300_unlit`, so generate paired source cases with the new CLI when
+comparing the two GPU configurations; do **not** treat unmatched rows as
+before/after data. For like-for-like measurements, compare the five pre-existing
+scene rows first, then separately compare emissive/unlit pairs on the new build.
+F3 reports CPU frame time, GPU scene-pass timestamp when supported, and actual
+moving render scale. `frame_cpu_bench` measures CPU app work, *not* GPU frames.
+Use 100/300-shape scenes, with glow and without glow, at equal dimensions and
+normal/full vs fast/moving. Also inspect 300+ shapes including linked copies and
+intersections, check idle GPU/CPU activity and visually compare GPU goldens and
+CPU --render output at fixed camera positions. The CPU simple view intentionally
+omits advanced glass/glow appearance; compare shape silhouettes, not pixels.
+
+### Measurement status (this change)
+
+**Not measured:** This environment cannot run Rust/cargo, an interactive
+Windows viewport, or the Intel Arc 140V GPU. No validated before/after timings,
+F3 readings, GPU/CPU screenshots, power readings, or image-diff results are
+claimed for this patch. Previous llvmpipe measurements elsewhere in this file
+are historical baseline data only, not new results. In particular any Arc 140V
+performance expectation remains a **hypothesis, not a measurement**.
+
+Acceptance: no missing geometry/silhouette regressions in GPU/CPU comparisons;
+equal idle render/cache behaviour; lower GPU scene-pass ms in the relevant
+unlit/hover-interaction cases without worsening interactive p95 CPU frame
+times. Revert hover-fast transitions if pointer motion visibly causes repeated
+resolution changes or the elapsed hover-to-sharp time is unacceptable.
+
+## 2026-10-17: non-blocking long-running work (PR #29)
+
+This patch addresses **actual long-running UI calls** discovered by inspecting the
+`meltcad` application code:
+
+| Operation | Before | After this change |
+|---|---|---|
+| Native YURA/MELTCAD open | UI thread: `read_to_string` + `Scene::from_json_notes` | Worker: chunked read and JSON parse, progress, cooperative cancel; the old scene remains visible until an entire valid scene is ready |
+| Native save | UI thread: scene-to-JSON plus direct `fs::write` | Worker: serialization, staged write, completed-file commit; protects existing file on failure |
+| STL/OBJ/3MF/PLY/GLB mesh read | Already on worker but read-to-end had no cancel/progress | Worker with per-256 KiB cancellation checkpoints and progress; parser still may take time to reach its final cancel check |
+| SDF volume bake / high-resolution Boolean mesh export | Already worker-based via `BakeControl` / `export_job::Job` | Preserve existing threaded mesher and cancel; only one high-memory import/bake/export/print-check/native-file worker per window until the actual worker exits |
+| Export destination write | Worker but wrote final file(s) directly; abort could leave truncation/partial OBJ+MTL | Stage every file in same directory first; commit complete outputs and roll back an I/O failure |
+| Export estimate dialog | UI thread cloned and compared entire scene per repaint | Cache key now uses `App::track_scene` revision, selection and options |
+| Live Boolean editing / camera + GPU preview | Already computed by existing GPU render cache and CPU field on demand | Not changed: the interactive renderer keeps its existing adaptive quality and 30 Hz hover picking gate |
+
+The application also waits for a native save before continuing a pending
+Open/New/Close action. Any edit arriving after a save snapshot leaves the
+project dirty and requires another unsaved-work confirmation. A cancelled or
+failed load never replaces the previous scene. The worker's memory permit is
+released **on thread exit**, not when a dialog is hidden, to prevent
+multiple giant SDF jobs from running at once. The in-app GPU benchmark also holds this budget to avoid large concurrent texture allocations.
+
+The final file replacement is a very short **non-cancellable** stage.
+There is a reason printed on the progress card, and `Job::cancel` uses an
+atomic state transition so a late cancel cannot produce a half-installed
+file. An existing destination remains present while a sibling backup is
+copied, then the staged file replaces it with one rename. A later output
+failure restores earlier files from those backups without first removing their
+destination paths. Each replacement is failure-recoverable, but this is not a
+true multi-file filesystem transaction: unexpected process termination during
+an OBJ+MTL commit can leave one new file and one old file, along with a backup.
+No automatic recovery after a hard crash is claimed.
+
+### Reproduction and benchmarks
+
+Use the same Windows PC, plugged-in power mode, graphics backend, build profile,
+project files, and viewport for both the original base
+`fff80f282891593ecb4523442e0a0aa31725eb29` and the PR branch
+`fix/background-jobs-20261017`.
+
+```powershell
+cargo build --locked --release -p meltcad
+cargo test --release -p meltcad
+cargo test --release -p meltcad frame_cpu_bench -- --ignored --nocapture
+cargo test --release -p meltcad gpu_headless_matches_cpu -- --ignored --nocapture
+cargo test --release -p meltcad gpu_headless_mesh_matches_cpu -- --ignored --nocapture
+target\release\meltcad.exe --bench bench-jobs-gpu.txt --frames 12
+# In the desktop window, press F3 to see actual CPU/GPU frame timings.
+# In a second terminal during a 200 MB document load or an SDF bake:
+Get-Process meltcad | Select-Object CPU,WorkingSet64,PeakWorkingSet64
+```
+
+For interaction responsiveness, use the existing `frame_cpu_bench` (idle,
+hover, orbit, dragging; p95 from the measured frame times) and the new
+`document_io_frame_bench` test (document loading while the mouse moves).
+For cancellation latency, measure elapsed time from pressing Stop to the
+job status returning idle; native-file jobs also log this actual interval
+to the GPU/application log. Record memory as **peak process working set**
+from the OS, not the size of the mesh or scene vector, and state whether it
+includes the initial scene. Confirm no more than one high-memory permit per
+document window, though a single worker may use parallel CPU threads.
+
+Acceptance checks: ordinary success, invalid/missing source, cancelled load,
+cancelled SDF bake, repeated open attempts while a bake winds down, successful
+STL/3MF/OBJ+MTL export, cancelled export without overwriting old files, failed
+multi-file export rollback, save-before-open and save-before-close, Undo/Redo,
+and unchanged GPU/CPU silhouettes. Also try opening the same file being
+saved, and editing during a background save; the older result must not make
+those new edits appear saved.
+
+### Measurement status
+
+**No numbers measured for this change in this environment.** Rust/cargo,
+a running Windows UI, Windows process memory counters and the Intel Arc 140V
+are unavailable here. Do not use historical llvmpipe measurements as a
+before/after comparison for PR #29. The added tests and commands are a
+repeatable **verification plan**, not evidence that they passed or that the
+Windows UI meets a particular p95/peak RAM target. Do not merge until the
+new Rust tests compile and run, a Windows GUI pass is complete and memory
+consumption is acceptable.
+
+## 2026-10-25: the scene list was most of an idle frame
+
+### What was wrong
+
+A 323-shape scene (`bench::library_scene(300)` plus a 12-node pipe, 351 rows in
+the left dock) drew one idle frame in 2.18 ms of processor time, and **1.82 ms
+of it was the scene list alone**. Two causes, measured by switching parts of a
+row off one at a time in an ignored test:
+
+1. **Every row rebuilt its material swatch mesh from scratch.**
+   `materials::swatch` -> `style_gfx::ball` built a 101-vertex radial gradient
+   with 100 `sin`/`cos` calls and a `Mesh` grown one vertex at a time (about
+   eight reallocations per mesh, 300 meshes per frame). It was ~1.3 ms of the
+   1.82 ms.
+2. **Rows scrolled out of the list were painted anyway.** ~330 of the 351 rows
+   were outside the scroll area's clip rectangle, so every shape they produced
+   was thrown away by the painter.
+
+On top of that, an idle frame compared the whole scene by value about six times
+(three `track_scene`, `viewport`, `has_unsaved_work`): two of those answers fed
+the auto-recovery checkpoint, which ignored them unless a checkpoint was due.
+
+### What was done
+
+- `style_gfx::ball` keeps the unit ring (cosine/sine points and the triangle
+  list) for the current segment/ring count in a thread-local and reserves the
+  mesh before filling it. Positions, colours and triangle order are unchanged;
+  `the_ball_mesh_is_identical_to_the_straightforward_one` compares every vertex
+  and index against the old construction, across both sizes and after a size
+  change.
+- `panels::row` and `panels::curve_ball_rows` skip their paint calls when the
+  row lies outside `ui.clip_rect()`. Space, clicks, `row_rects` (drag targets,
+  Shift ranges), the context menu and the hover/selection animation stay as
+  they were, so the visible picture and every interaction are unchanged
+  (`the_scene_list_paints_only_what_can_be_seen_and_nothing_else_changes`
+  compares the painted shapes against a window tall enough for every row).
+- `panels::layers` asks `is_pick_selected` instead of allocating a `picks()`
+  vector per row.
+- `App::frame_body` asks `recovery::due(now)` before `track_scene()` /
+  `has_unsaved_work()`; a due checkpoint still compares the scene exactly as
+  before (`due_is_true_exactly_when_a_checkpoint_would_be_written`).
+- `materials::gradient_tint` reserves its mesh.
+
+### Measured
+
+Windows 11, `--release`, shared 8-core machine, 3 runs of 200 idle frames each,
+400x720 logical at 2.0 pp, back to back on the same checkout
+(`origin/integration/yuracad-20261017` with and without this change):
+
+| 323 shapes, 351 rows | base | with this change |
+|---|---:|---:|
+| idle frame, average | 2.14-2.21 ms | 0.71-0.74 ms |
+| idle frame, p95 | 2.46-2.52 ms | 0.87-0.92 ms |
+| scene list alone | 1.80-1.84 ms | 0.27-0.28 ms |
+| one-shape scene, idle frame | 0.41-0.42 ms | 0.39-0.41 ms |
+| one-shape scene, scene list | 18-19 us | 17 us |
+
+Reproduce with a temporary ignored test that runs `App::frame_body` through
+`frame_bench::Rig` for 200 frames and times `App::layers` in a bare
+`ScrollArea` (the harness was removed after measuring, as it duplicated
+`frame_cpu_bench`). The existing `frame_cpu_bench` reports the same scene
+families; `cargo test --release -p meltcad frame_cpu_bench -- --ignored
+--nocapture`.
+
+### Not measured
+
+GPU frame time / FPS (no adapter in this environment), the same table on a
+scene whose rows are mostly folded groups or curves (the cure is per row, so
+the shape is the same), and scrolling itself (a newly visible row now shapes
+its text once, like any other first paint).
+

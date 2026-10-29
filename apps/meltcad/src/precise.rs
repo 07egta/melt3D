@@ -1,0 +1,805 @@
+//! The precise solid view: SolidCraft's own solid modeller (exact sketches, features, STEP export)
+//! shown inside Melt 3D instead of the melt view. A thin bar on top leads back.
+
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Instant;
+
+use egui::{RichText, Ui};
+use solidcraft_engine::Session;
+use solidcraft_ui_egui::theme;
+use solidcraft_ui_egui::{Services, SolveApp};
+
+use crate::app::App;
+use crate::mesh_dialog::Job;
+use crate::model::{Pick, SolidLink};
+use crate::style;
+
+pub struct Precise {
+    pub app: SolveApp,
+    /// Only a mesh that actually reached the Melt scene is acknowledged.
+    sent: Option<u64>,
+    pending: Option<(u64, crate::mesh_dialog::SolidImport)>,
+    /// Writing the solid's STL, reading it back and parsing it, off the UI thread.
+    export: Option<ExportJob>,
+    message: Option<String>,
+    /// The design of the solid being sent, kept on the Melt shape so it can be edited again.
+    design: Option<String>,
+    /// Editing the solid of this Melt shape (its uid): coming back replaces that shape.
+    edit: Option<u32>,
+    /// The design file opened for an edit (removed when this workspace goes).
+    opened: Option<ExportFile>,
+}
+
+/// The steps of a transfer that used to freeze the window: the exact solid is written to STL,
+/// read back and parsed into a Melt mesh. The distance bake that follows is the mesh card's.
+struct Prepared {
+    hash: u64,
+    loaded: crate::mesh_import::Loaded,
+    design: Option<String>,
+}
+
+/// What the window thread hands the worker: copies only, so SolidCraft's session is never
+/// touched from two threads.
+struct Snapshot {
+    design: solidcraft_engine::doc::Document,
+    painted: solidcraft_engine::doc::ModelState,
+    metadata: solidcraft_engine::doc::Metadata,
+    name: String,
+}
+
+struct ExportJob {
+    job: Arc<Job<Prepared>>,
+    /// The document it belongs to (see `App::document_generation`).
+    generation: u64,
+    started: Instant,
+}
+
+const DEPTH_BITS: u8 = 24;
+const STENCIL_BITS: u8 = 8;
+/// The same cap the file reader uses: an STL bigger than this is not a solid from here.
+const MAX_STL_BYTES: u64 = 256 * 1024 * 1024 + 1;
+
+#[cfg(test)]
+static EXPORT_THREAD: std::sync::Mutex<Option<std::thread::ThreadId>> = std::sync::Mutex::new(None);
+
+pub(crate) const PREFS_KEY: &str = "melt3d.solidcraft.preferences.v1";
+
+impl Precise {
+    fn new(rs: Option<&egui_wgpu::RenderState>, services: Option<Services>, prefs: Option<&str>) -> Precise {
+        let mut app = SolveApp::new(Session::default(), services.unwrap_or_else(|| crate::precise_services::services(rfd::AsyncFileDialog::new())));
+        app.apply_off_thread = Some(solidcraft_ui_egui::dialogs::APPLY_AT_ONCE);
+        app.preferences.language = "ja".into();
+        app.autosave_minutes = 0.5;
+        if let Some(prefs) = prefs {
+            app.load_prefs(prefs);
+        }
+        // turn, slide and zoom the view the same way as the Melt view (after the saved settings,
+        // so both views always work alike)
+        app.preferences.nav = solidcraft_ui_egui::prefs::MELT_NAV.into();
+        if !cfg!(test) {
+            solidcraft_ui_egui::recovery_ui::start(
+                &mut app,
+                &crate::recovery::default_directory().join("solidcraft"),
+                std::time::Duration::from_secs(30),
+            );
+            solidcraft_ui_egui::prefs::set_autosave(&mut app);
+        }
+        if let Some(rs) = rs {
+            app.set_wgpu(rs, DEPTH_BITS, STENCIL_BITS, rs.msaa_samples);
+            solidcraft_ui_egui::gpu::install_picture_renderer(rs);
+            solidcraft_ui_egui::prefs::check_msaa(&mut app, u32::from(crate::precise_services::msaa()));
+        }
+        Precise { app, sent: None, pending: None, export: None, message: None, design: None, edit: None, opened: None }
+    }
+
+    fn editing(&self) -> bool {
+        self.app.session.active_sketch.is_some()
+            || self.app.tool.is_some()
+            || self.app.dialog.is_some()
+            || self.app.applying.is_some()
+            || self.app.file_picker_busy()
+    }
+}
+
+impl App {
+    pub(crate) fn precise_transfer_pending(&self) -> bool {
+        self.precise.as_ref().is_some_and(|p| p.pending.is_some() || p.export.is_some())
+    }
+
+    /// Switch to SolidCraft's solid modeller (made on first use, kept while Melt 3D runs).
+    pub(crate) fn open_precise(&mut self, ctx: &egui::Context) {
+        if let Err(e) = self.set_precise_mode(ctx, true) {
+            self.say(ctx, e);
+        }
+    }
+
+    /// The "Solid" and "Sketch" buttons: SolidCraft's sketch screen, drawing starts at once (it asks
+    /// for the plane first). When it is done, "Melt 3D に戻る" brings the solid back as a shape.
+    pub(crate) fn open_precise_sketch(&mut self, ctx: &egui::Context) {
+        if let Err(e) = self.set_precise_mode(ctx, true) {
+            self.say(ctx, e);
+            return;
+        }
+        if let Some(p) = self.precise.as_mut()
+            && !p.editing()
+        {
+            p.app.start("sketch.create");
+        }
+    }
+
+    /// Both visible navigation and external commands use the same protected transition.
+    pub(crate) fn set_precise_mode(&mut self, ctx: &egui::Context, on: bool) -> Result<(), String> {
+        self.sync_precise_transfer(ctx);
+        if self.precise_on == on {
+            return Ok(());
+        }
+        if self.precise.as_ref().is_some_and(|p| p.export.is_some()) {
+            return Err("立体の取り込みが終わるか、取り消してから画面を切り替えてください".into());
+        }
+        if crate::mesh_dialog::is_open(ctx) {
+            return Err("取り込みが終わるか、取り消してから画面を切り替えてください".into());
+        }
+        if on {
+            if self.scene_edit_in_progress() {
+                return Err("今の操作を確定するか、取り消してから精密ソリッドを開いてください".into());
+            }
+            self.settle(ctx);
+            crate::fonts::ensure(ctx);
+            if self.precise.is_none() {
+                self.precise = Some(Precise::new(self.gpu.rs.as_ref(), self.precise_services.take(), self.precise_prefs.as_deref()));
+            }
+            if let Some(p) = self.precise.as_ref() {
+                solidcraft_ui_egui::fonts::setup_fonts_without_waiting(ctx, &p.app.preferences.language, &p.app.preferences.ui_font);
+            }
+            theme::apply(ctx);
+        } else {
+            if self.precise.as_ref().is_some_and(Precise::editing) {
+                return Err("スケッチや立体の操作を完了するか、取り消してから戻ってください".into());
+            }
+            self.send_precise_solid(ctx)?;
+            if self.gpu.rs.is_some() && !self.gpu.easy && matches!(self.gpu.status.snapshot().state, crate::gpu_status::State::Off) {
+                self.attach_gpu(self.gpu.rs.clone(), ctx, false);
+            }
+            crate::fonts::setup(ctx);
+            style::apply(ctx);
+        }
+        self.precise_on = on;
+        ctx.request_repaint();
+        Ok(())
+    }
+
+    pub(crate) fn sync_precise_transfer(&mut self, ctx: &egui::Context) {
+        self.finish_precise_export(ctx);
+        let Some(p) = self.precise.as_mut() else { return };
+        let Some((hash, job)) = p.pending.as_ref() else { return };
+        let Some(result) = job.take_result() else { return };
+        let hash = *hash;
+        p.pending = None;
+        match result {
+            Ok(()) => {
+                p.sent = Some(hash);
+                p.message = None;
+                let (design, edit) = (p.design.take(), p.edit);
+                self.link_precise_solid(design, edit);
+                // the next visit starts on a clean, new design; this one lives on in the shape.
+                // Its settings carry over to the next one.
+                if let Some(p) = self.precise.take() {
+                    self.precise_prefs = Some(p.app.prefs());
+                }
+            }
+            Err(e) => {
+                let message = format!("{e} 精密ソリッドの形は残っています。戻り直すと再び取り込めます");
+                p.message = Some(message.clone());
+                self.say(ctx, message);
+            }
+        }
+    }
+
+    /// The export/read/parse half of a transfer: it opens the bake card once the snapshot is
+    /// ready, or leaves the design in SolidCraft when it was stopped, failed, or its document
+    /// was replaced meanwhile. Nothing is ever added to the scene here.
+    fn finish_precise_export(&mut self, ctx: &egui::Context) {
+        let generation = self.document_generation();
+        let mut say = None;
+        {
+            let Some(p) = self.precise.as_mut() else { return };
+            let Some(job) = p.export.as_ref() else { return };
+            let Some(result) = job.job.take() else {
+                ctx.request_repaint_after(std::time::Duration::from_millis(60));
+                return;
+            };
+            let stopped = job.job.cancelled();
+            let replaced = job.generation != generation;
+            if p.export.take().is_none() {
+                return;
+            }
+            // Stopping always wins, even when the worker finished first (as for a re-bake).
+            let result = if stopped {
+                Err("取り込みを取り消しました".to_string())
+            } else if replaced {
+                Err(crate::mesh_dialog::DOCUMENT_REPLACED.to_string())
+            } else {
+                result
+            };
+            match result {
+                Ok(prepared) => {
+                    if p.sent == Some(prepared.hash) {
+                        return;
+                    }
+                    p.design = prepared.design;
+                    match crate::mesh_dialog::open_solid(ctx, prepared.loaded, generation) {
+                        Ok(completion) => {
+                            p.pending = Some((prepared.hash, completion));
+                            p.message = None;
+                        }
+                        Err(e) => p.message = Some(format!("{e} 精密ソリッドの形は残っています。戻り直すと再び取り込めます")),
+                    }
+                }
+                Err(e) => {
+                    let message = format!("{e} 精密ソリッドの形は残っています。戻り直すと再び取り込めます");
+                    p.message = Some(message.clone());
+                    say = Some(message);
+                }
+            }
+        }
+        if let Some(message) = say {
+            self.say(ctx, message);
+        }
+    }
+
+    /// Draws the precise view when it is on; true when it took the whole frame.
+    pub(crate) fn precise_frame(&mut self, ui: &mut Ui) -> bool {
+        let ctx = ui.ctx().clone();
+        if !self.precise_on {
+            return false;
+        }
+        let Some(p) = self.precise.as_mut() else {
+            self.precise_on = false;
+            return false;
+        };
+        let mut back = false;
+        egui::Panel::top("precise_back").frame(egui::Frame::new().fill(style::PANEL_DARK).inner_margin(egui::Margin::symmetric(10, 4))).show(
+            ui,
+            |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    if ui
+                        .add_enabled(!p.editing(), egui::Button::new(RichText::new("Melt 3D に戻る").color(style::ACCENT)))
+                        .on_hover_text("作った立体を寸法・位置を保って自動で取り込みます。スケッチや操作は先に完了してください")
+                        .clicked()
+                    {
+                        back = true;
+                    }
+                });
+                if let Some(message) = &p.message {
+                    ui.label(RichText::new(message).size(11.5).color(style::CUT));
+                }
+            },
+        );
+        p.app.logic(&ctx);
+        p.app.ui(ui);
+        if back
+            && let Err(e) = self.set_precise_mode(&ctx, false)
+            && let Some(p) = self.precise.as_mut()
+        {
+            p.message = Some(e);
+        }
+        true
+    }
+}
+
+impl App {
+    /// Leaving the precise view puts the solid there into the melt view (as a mesh that melts like
+    /// any shape). It does nothing when there is no solid or it was sent already. The STL export,
+    /// read and parse run on a worker (see [`Prepared`]); only taking the snapshot is done here.
+    fn send_precise_solid(&mut self, ctx: &egui::Context) -> Result<(), String> {
+        let generation = self.document_generation();
+        let Some(p) = self.precise.as_mut() else { return Ok(()) };
+        if let Some(a) = p.app.autosave.as_mut() {
+            a.save(&p.app.session).map_err(|e| format!("精密データの自動保存に失敗しました: {e}"))?;
+        }
+        if p.app.session.model.state().bodies.is_empty() {
+            return Ok(());
+        }
+        if p.pending.is_some() || p.export.is_some() {
+            return Err("前の立体を取り込み中です".into());
+        }
+        let file = ExportFile::new()?;
+        // the export's name only reaches the STEP header; an STL ignores it
+        let name = file.path().file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let state = p.app.session.world_state();
+        let snapshot = Snapshot {
+            design: p.app.session.design().into_owned(),
+            painted: p.app.session.doc.painted(&state),
+            metadata: p.app.session.doc.metadata.clone(),
+            name,
+        };
+        let job = Job::spawn("meltcad-solid-export", ctx, move |cancel, progress| prepare_work(file, &snapshot, cancel, progress));
+        p.export = Some(ExportJob { job, generation, started: Instant::now() });
+        p.message = None;
+        Ok(())
+    }
+}
+
+/// Writes the snapshot to STL, reads it back and parses it. Every step can be stopped; a stopped
+/// or failed transfer leaves both the design and the Melt scene alone.
+fn prepare_work(
+    file: ExportFile,
+    snapshot: &Snapshot,
+    cancel: &std::sync::atomic::AtomicBool,
+    progress: &std::sync::atomic::AtomicU32,
+) -> Result<Prepared, String> {
+    #[cfg(test)]
+    if let Ok(mut slot) = EXPORT_THREAD.lock() {
+        *slot = Some(std::thread::current().id());
+    }
+    let stopped = || cancel.load(Ordering::Relaxed);
+    let cancelled = || crate::import_mesh::IMPORT_CANCELLED.to_string();
+    if stopped() {
+        return Err(cancelled());
+    }
+    let bytes = solidcraft_engine::io::export_with_metadata(
+        &snapshot.painted,
+        &[],
+        solidcraft_engine::io::Format::StlBinary,
+        &snapshot.name,
+        &snapshot.metadata,
+    )
+    .map_err(|e| format!("立体を書き出せませんでした: {e}"))?;
+    progress.store(500, Ordering::Relaxed);
+    if stopped() {
+        return Err(cancelled());
+    }
+    solidcraft_engine::io::vfs::write(&file.path().to_string_lossy(), &bytes).map_err(|e| format!("立体を書き出せませんでした: {e}"))?;
+    progress.store(700, Ordering::Relaxed);
+    if stopped() {
+        return Err(cancelled());
+    }
+    use std::io::Read;
+    let mut read = Vec::new();
+    std::fs::File::open(file.path())
+        .and_then(|f| f.take(MAX_STL_BYTES).read_to_end(&mut read))
+        .map_err(|e| format!("立体を読み取れませんでした: {e}"))?;
+    progress.store(850, Ordering::Relaxed);
+    if stopped() {
+        return Err(cancelled());
+    }
+    let hash = fingerprint(&read);
+    let imported = crate::import_mesh::import_bytes(&read, "SolidCraft.stl", &crate::import_mesh::ImportOptions { y_up: Some(false) })?;
+    let size = imported.mesh.size();
+    let loaded = crate::mesh_import::Loaded { file_name: "SolidCraft".into(), stem: snapshot.design.name.clone(), imported, size };
+    let design = String::from_utf8(solidcraft_engine::io::write_design(&snapshot.design)).ok().filter(|d| d.len() <= crate::model::MAX_SOLID_DESIGN);
+    progress.store(1000, Ordering::Relaxed);
+    Ok(Prepared { hash, loaded, design })
+}
+
+/// The card for the export/read/parse half: a heavy solid must not look like a frozen window,
+/// and it can be stopped before the bake card even opens.
+pub(crate) fn transfer_card(app: &mut App, ctx: &egui::Context) {
+    let Some(p) = app.precise.as_mut() else { return };
+    let Some(job) = p.export.as_ref() else { return };
+    let (fraction, stopped) = (job.job.fraction(), job.job.cancelled());
+    let elapsed = job.started.elapsed().as_secs_f64();
+    let mut stop = false;
+    egui::Area::new(egui::Id::new("precise_transfer_area")).order(egui::Order::Foreground).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(
+        ctx,
+        |ui| {
+            style::card().show(ui, |ui| {
+                ui.set_width(360.0);
+                ui.label(RichText::new("SolidCraft の立体を Melt に取り込み中").strong().size(15.0));
+                ui.label(RichText::new("形を書き出して読み込んでいます。大きさと位置はそのままです").size(11.5).color(style::DIM));
+                ui.add_space(4.0);
+                ui.add(egui::ProgressBar::new(fraction).show_percentage());
+                if stopped {
+                    ui.label(RichText::new("取り消しています。書き出しが終わるまでお待ちください…").size(11.5).color(style::DIM));
+                } else {
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(format!("{elapsed:.0} 秒")).size(11.5).color(style::DIM));
+                        if style::pill(ui, "中止", false).clicked() {
+                            stop = true;
+                        }
+                    });
+                }
+            });
+        },
+    );
+    if stop {
+        job.job.cancel();
+    }
+    if !stopped {
+        ctx.request_repaint_after(std::time::Duration::from_millis(60));
+    }
+}
+
+impl App {
+    /// The solid that just came in (the selected shape) keeps its design. When it was an edit of an
+    /// existing shape, that shape takes the new solid (where the person had moved it) instead.
+    fn link_precise_solid(&mut self, design: Option<String>, edit: Option<u32>) {
+        // the import puts the new solid alone in a new last group
+        let Some(gi) = self.scene.groups.len().checked_sub(1) else { return };
+        let si = 0;
+        let Some(new) = self.scene.shape(gi, si).filter(|s| s.kind == crate::model::Kind::Mesh && s.solid.is_none()).cloned() else { return };
+        let link = design.map(|design| SolidLink { design, placed_at: new.pos });
+        let target = edit.and_then(|uid| self.scene.shape_by_uid(uid)).filter(|&t| t != (gi, si));
+        if let Some((tg, ts)) = target
+            && self.scene.groups.get(gi).is_some_and(|g| g.shapes.len() == 1)
+        {
+            let Some(old) = self.scene.shape_mut(tg, ts) else { return };
+            // keep how far the person moved it since it came in
+            let placed = old.solid.as_ref().map_or(old.pos, |l| l.placed_at);
+            let moved = [old.pos[0] - placed[0], old.pos[1] - placed[1], old.pos[2] - placed[2]];
+            old.volume = new.volume.clone();
+            old.size = new.size;
+            old.pos = [new.pos[0] + moved[0], new.pos[1] + moved[1], new.pos[2] + moved[2]];
+            old.solid = link;
+            self.scene.remove_group(gi);
+            self.sel = self.scene.shape_by_uid(edit.unwrap_or(0)).map(|(g, s)| Pick::Shape(g, s));
+            self.multi.clear();
+            return;
+        }
+        if let Some(sh) = self.scene.shape_mut(gi, si) {
+            sh.solid = link;
+        }
+        let _ = self.scene.ensure_shape_uid(gi, si);
+    }
+
+    /// "Edit in SolidCraft": open the design behind this shape in SolidCraft; coming back puts the
+    /// changed solid in its place.
+    pub(crate) fn edit_in_solidcraft(&mut self, ctx: &egui::Context, g: usize, s: usize) -> Result<(), String> {
+        let design =
+            self.scene.shape(g, s).and_then(|sh| sh.solid.as_ref()).map(|l| l.design.clone()).ok_or("この形には SolidCraft のデータがありません")?;
+        if self.precise.as_ref().is_some_and(|p| p.pending.is_some() || p.export.is_some() || p.editing()) {
+            return Err("SolidCraft の作業を先に終えてください".into());
+        }
+        let uid = self.scene.ensure_shape_uid(g, s).ok_or("この形を編集できません")?;
+        // a fresh workspace: whatever was there was sent already or is put aside
+        if let Some(p) = self.precise.take() {
+            self.precise_prefs = Some(p.app.prefs());
+        }
+        self.set_precise_mode(ctx, true)?;
+        let file = ExportFile::named("design.solidcraft")?;
+        std::fs::write(file.path(), design.as_bytes()).map_err(|e| format!("データを用意できません: {e}"))?;
+        let Some(p) = self.precise.as_mut() else { return Err("SolidCraft を開けませんでした".into()) };
+        let path = file.path().to_str().ok_or("一時ファイルの場所を読み取れません")?.to_owned();
+        p.app.open_path(&path);
+        p.edit = Some(uid);
+        p.opened = Some(file);
+        // the design itself is unchanged until something is edited: coming back without changes
+        // does not bring a second copy in
+        p.sent = None;
+        Ok(())
+    }
+}
+
+/// Each export owns a fresh directory; the in-memory importer never depends on a stale STL.
+struct ExportFile(PathBuf);
+
+impl ExportFile {
+    fn new() -> Result<Self, String> {
+        Self::named("solid.stl")
+    }
+
+    fn named(name: &str) -> Result<Self, String> {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        for _ in 0..16 {
+            let dir = std::env::temp_dir().join(format!("melt3d-solid-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+            match std::fs::create_dir(&dir) {
+                Ok(()) => return Ok(Self(dir.join(name))),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(e) => return Err(format!("一時ファイルを用意できません: {e}")),
+            }
+        }
+        Err("一時ファイルを用意できませんでした".into())
+    }
+
+    fn path(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+
+impl Drop for ExportFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+        if let Some(dir) = self.0.parent() {
+            let _ = std::fs::remove_dir(dir);
+        }
+    }
+}
+
+fn fingerprint(bytes: &[u8]) -> u64 {
+    use std::hash::Hasher;
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    h.write(bytes);
+    h.finish()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn exact_box(app: &mut App, ctx: &egui::Context) {
+        app.set_precise_mode(ctx, true).unwrap();
+        let p = app.precise.as_mut().unwrap();
+        p.app.run("sketch.create", json!({"plane":"XY","name":"Base"})).unwrap();
+        p.app.run("sketch.rectangle.two_point", json!({"p0":[0,0],"p1":[240,24]})).unwrap();
+        p.app.run("sketch.finish", json!({})).unwrap();
+        p.app.run("solid.extrude", json!({"sketch":"Base","distance":12,"operation":"new"})).unwrap();
+    }
+
+    /// Wait (bounded) until the STL is written, read and parsed and the bake card is open.
+    fn wait_for_card(app: &mut App, ctx: &egui::Context) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(90);
+        while !crate::mesh_dialog::is_open(ctx) {
+            app.sync_precise_transfer(ctx);
+            assert!(std::time::Instant::now() < deadline, "the transfer did not reach the bake");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
+    /// Run frames until the transfer has neither a worker nor a card left.
+    fn finish_import(app: &mut App, ctx: &egui::Context) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(90);
+        while app.precise_transfer_pending() || crate::mesh_dialog::is_open(ctx) {
+            app.sync_precise_transfer(ctx);
+            let mut out = ctx.run_ui(egui::RawInput::default(), |_ui| crate::mesh_dialog::update(app, ctx));
+            out.textures_delta.clear();
+            assert!(std::time::Instant::now() < deadline, "automatic import did not complete");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        app.sync_precise_transfer(ctx);
+    }
+
+    #[test]
+    fn the_embedded_workspace_keeps_upstream_default_layout_and_panels() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        app.set_precise_mode(&ctx, true).unwrap();
+        let embedded = &app.precise.as_ref().unwrap().app;
+        let standard = solidcraft_ui_egui::UiState::default();
+        assert_eq!(embedded.ui.layout, standard.layout);
+        assert_eq!(embedded.ui.tab, standard.tab);
+        assert_eq!(embedded.ui.show_browser, standard.show_browser);
+        assert_eq!(embedded.ui.show_timeline, standard.show_timeline);
+        assert_eq!(embedded.preferences.language, "ja");
+        assert!(embedded.services.pick_open.is_some());
+        assert!(embedded.services.pick_save.is_some());
+    }
+
+    #[test]
+    fn embedded_preferences_survive_a_new_host_session() {
+        let ctx = egui::Context::default();
+        let mut first = App::new(true, None);
+        first.set_precise_mode(&ctx, true).unwrap();
+        let p = &mut first.precise.as_mut().unwrap().app;
+        p.preferences.language = "en".into();
+        p.autosave_minutes = 7.0;
+        p.preferences.layout = solidcraft_ui_egui::shell::LayoutMode::Docked;
+        let mut stored = std::collections::HashMap::default();
+        struct Memory(std::collections::HashMap<String, String>);
+        impl eframe::Storage for Memory {
+            fn get_string(&self, key: &str) -> Option<String> {
+                self.0.get(key).cloned()
+            }
+            fn set_string(&mut self, key: &str, value: String) {
+                self.0.insert(key.to_owned(), value);
+            }
+            fn remove_string(&mut self, key: &str) {
+                self.0.remove(key);
+            }
+            fn flush(&mut self) {}
+        }
+        let mut memory = Memory(std::mem::take(&mut stored));
+        eframe::App::save(&mut first, &mut memory);
+        let mut second = App::new(true, None);
+        second.precise_prefs = eframe::Storage::get_string(&memory, PREFS_KEY);
+        second.set_precise_mode(&ctx, true).unwrap();
+        let p = &second.precise.as_ref().unwrap().app;
+        assert_eq!(p.preferences.language, "en");
+        assert_eq!(p.autosave_minutes, 7.0);
+        assert_eq!(p.preferences.layout, solidcraft_ui_egui::shell::LayoutMode::Docked);
+    }
+
+    #[test]
+    fn returning_imports_the_solid_once_then_solidcraft_starts_fresh_and_the_shape_stays_editable() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        exact_box(&mut app, &ctx);
+        let features = app.precise.as_ref().unwrap().app.session.doc.features.len();
+        let count = app.scene.shape_count();
+        let undo = app.undo_depth();
+        app.set_precise_mode(&ctx, false).unwrap();
+        assert!(!app.precise_on && app.precise_transfer_pending());
+        assert!(app.precise.as_ref().unwrap().sent.is_none(), "starting a bake is not successful import");
+        finish_import(&mut app, &ctx);
+        assert_eq!(app.scene.shape_count(), count + 1);
+        assert_eq!(app.undo_depth(), undo + 1, "the imported solid has its own undo step");
+        let (g, s) = (app.scene.groups.len() - 1, 0);
+        let shape = app.scene.shape(g, s).unwrap().clone();
+        assert_eq!(shape.kind, crate::model::Kind::Mesh);
+        assert_eq!(shape.size, [240.0, 24.0, 12.0], "no manual import size cap");
+        assert_eq!(shape.pos, [120.0, 12.0, 6.0], "keep the exact source placement");
+        assert!(shape.volume.as_ref().unwrap().distance([0.0; 3]) < 0.0, "the solid is a meltable distance volume");
+        assert!(shape.solid.as_ref().is_some_and(|l| l.design.contains("Base")), "the shape keeps its SolidCraft design");
+        assert!(app.precise.is_none(), "the sent design is not left behind in SolidCraft");
+
+        // the next visit is a clean new design, and coming back adds nothing
+        app.set_precise_mode(&ctx, true).unwrap();
+        assert!(app.precise.as_ref().unwrap().app.session.doc.features.len() < features, "SolidCraft opens fresh");
+        app.set_precise_mode(&ctx, false).unwrap();
+        finish_import(&mut app, &ctx);
+        assert!(!crate::mesh_dialog::is_open(&ctx));
+        assert_eq!(app.scene.shape_count(), count + 1);
+
+        // later: Edit in SolidCraft opens the same design; coming back replaces the shape where it was moved to
+        let uid = app.scene.shape(g, s).unwrap().uid;
+        app.scene.shape_mut(g, s).unwrap().pos[0] += 10.0;
+        app.edit_in_solidcraft(&ctx, g, s).unwrap();
+        assert!(app.precise_on);
+        assert_eq!(app.precise.as_ref().unwrap().app.session.doc.features.len(), features, "the design is back, history and all");
+        app.set_precise_mode(&ctx, false).unwrap();
+        finish_import(&mut app, &ctx);
+        assert_eq!(app.scene.shape_count(), count + 1, "the edit replaces the shape, not a second copy");
+        let (g2, s2) = app.scene.shape_by_uid(uid).expect("same shape");
+        let again = app.scene.shape(g2, s2).unwrap();
+        assert_eq!(again.pos, [130.0, 12.0, 6.0], "it stays where it was moved");
+        assert_eq!(app.sel, Some(Pick::Shape(g2, s2)));
+    }
+
+    /// #263: a transfer started for one document must never add its shape to another one.
+    #[test]
+    fn replacing_the_document_discards_a_running_transfer() {
+        use crate::control::Request;
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        exact_box(&mut app, &ctx);
+        let (sender, receiver) = std::sync::mpsc::channel();
+        app.control = Some(receiver);
+        let replace = |app: &mut App, cmd: serde_json::Value| {
+            let (reply, results) = std::sync::mpsc::channel();
+            sender.send(Request { cmd, reply }).unwrap();
+            app.run_control(&ctx);
+            results.recv().unwrap().expect("control command");
+        };
+
+        // the document changes while the solid is still being written and read
+        app.set_precise_mode(&ctx, false).unwrap();
+        replace(&mut app, json!({"cmd":"scene.new"}));
+        assert_eq!(app.scene.shape_count(), 0, "the new document is empty");
+        finish_import(&mut app, &ctx);
+        assert_eq!(app.scene.shape_count(), 0, "the old transfer did not land in the new document");
+        assert!(!crate::mesh_dialog::is_open(&ctx), "the card is gone");
+        assert!(app.precise.as_ref().is_some_and(|p| p.message.is_some()), "the transfer said why it stopped");
+
+        // and it changes while the bake itself is running
+        app.set_precise_mode(&ctx, true).unwrap();
+        app.set_precise_mode(&ctx, false).unwrap();
+        assert!(app.precise_transfer_pending());
+        wait_for_card(&mut app, &ctx);
+        replace(&mut app, json!({"cmd":"scene.new","sphere":true}));
+        assert_eq!(app.scene.shape_count(), 1, "the new document keeps its own shape");
+        finish_import(&mut app, &ctx);
+        assert_eq!(app.scene.shape_count(), 1, "the bake did not land in the new document");
+        assert!(!crate::mesh_dialog::is_open(&ctx), "the card is gone");
+        assert!(app.precise.as_ref().is_some_and(|p| p.message.is_some()));
+    }
+
+    #[test]
+    fn a_cancelled_conversion_can_retry_the_same_exact_solid() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        exact_box(&mut app, &ctx);
+        app.set_precise_mode(&ctx, false).unwrap();
+        // the solid is written and parsed on a worker; the bake card opens when it is ready
+        wait_for_card(&mut app, &ctx);
+        assert!(crate::mesh_dialog::cancel(&ctx));
+        app.sync_precise_transfer(&ctx);
+        assert!(!app.precise_transfer_pending());
+        assert!(app.precise.as_ref().unwrap().sent.is_none());
+        // the cancelled worker keeps its memory permit until its thread has really exited; a retry
+        // before that is refused as busy (a slow machine hits this window)
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(90);
+        while crate::work_budget::is_busy(&ctx) && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        app.set_precise_mode(&ctx, true).unwrap();
+        app.set_precise_mode(&ctx, false).unwrap();
+        assert!(app.precise_transfer_pending(), "retry unchanged geometry after cancellation");
+        let count = app.scene.shape_count();
+        finish_import(&mut app, &ctx);
+        assert_eq!(app.scene.shape_count(), count + 1, "the retry brings it in");
+        assert!(app.precise.is_none(), "and SolidCraft starts fresh next time");
+    }
+
+    /// #193: leaving the precise view returns at once; the STL export, read and parse are on a
+    /// worker, and the finished transfer inserts exactly one shape where it always did.
+    #[test]
+    fn returning_writes_and_parses_the_stl_on_a_worker_and_inserts_one_shape() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        exact_box(&mut app, &ctx);
+        let before = app.scene.shape_count();
+        let ui_thread = std::thread::current().id();
+        app.set_precise_mode(&ctx, false).unwrap();
+        assert!(!app.precise_on);
+        assert!(app.precise_transfer_pending(), "the transfer keeps running after the call");
+        assert!(app.precise.as_ref().is_some_and(|p| p.export.is_some()), "the STL work was handed to a worker");
+        assert!(!crate::mesh_dialog::is_open(&ctx), "the call did not wait for the STL");
+        finish_import(&mut app, &ctx);
+        let worker = EXPORT_THREAD.lock().ok().and_then(|slot| *slot);
+        assert!(worker.is_some(), "the export ran");
+        assert_ne!(worker, Some(ui_thread), "the export/read/parse did not run on the calling thread");
+        assert_eq!(app.scene.shape_count(), before + 1, "exactly one shape");
+        let sh = app.scene.groups.last().and_then(|g| g.shapes.first()).cloned().expect("imported solid");
+        assert_eq!(sh.size, [240.0, 24.0, 12.0], "the same exact size");
+        assert_eq!(sh.pos, [120.0, 12.0, 6.0], "the same exact placement");
+        assert!(!crate::mesh_dialog::is_open(&ctx));
+    }
+
+    /// #193: a transfer stopped during the export/read/parse leaves both sides alone and can be
+    /// sent again, once.
+    #[test]
+    fn a_stopped_export_keeps_the_design_and_the_scene_and_retries_once() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        exact_box(&mut app, &ctx);
+        let count = app.scene.shape_count();
+        app.set_precise_mode(&ctx, false).unwrap();
+        // stopping wins even when the worker has finished first: nothing is taken yet
+        let job = app.precise.as_ref().and_then(|p| p.export.as_ref()).map(|j| j.job.clone());
+        assert!(job.is_some(), "the transfer is on a worker");
+        if let Some(job) = job {
+            job.cancel();
+        }
+        finish_import(&mut app, &ctx);
+        assert!(!crate::mesh_dialog::is_open(&ctx), "no card is left behind");
+        assert_eq!(app.scene.shape_count(), count, "a stopped transfer adds nothing");
+        assert!(app.precise.as_ref().is_some_and(|p| p.message.is_some()), "the design stays in SolidCraft");
+        // the same design can be sent again, and only then does one shape come in
+        app.set_precise_mode(&ctx, true).unwrap();
+        app.set_precise_mode(&ctx, false).unwrap();
+        finish_import(&mut app, &ctx);
+        assert_eq!(app.scene.shape_count(), count + 1, "the retry brings it in once");
+        assert!(app.precise.is_none(), "and the next visit starts fresh");
+    }
+
+    #[test]
+    fn mode_changes_protect_melt_drafts_and_unfinished_exact_sketches() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        app.set_sketch_tool(true);
+        app.sk.click([2.0, 3.0], false);
+        let scene = app.scene.clone();
+        assert!(app.set_precise_mode(&ctx, true).is_err());
+        assert!(!app.precise_on && app.sk.on && app.scene == scene);
+        app.set_sketch_tool(false);
+        app.set_precise_mode(&ctx, true).unwrap();
+        app.precise.as_mut().unwrap().app.run("sketch.create", json!({"plane":"XY"})).unwrap();
+        assert!(app.set_precise_mode(&ctx, false).is_err());
+        assert!(app.precise_on && app.precise.as_ref().unwrap().app.session.active_sketch.is_some());
+    }
+
+    #[test]
+    fn the_sketch_button_opens_solidcrafts_sketch_screen_and_starts_drawing() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        app.open_precise_sketch(&ctx);
+        assert!(app.precise_on, "the sketch screen is SolidCraft's");
+        let p = app.precise.as_ref().unwrap();
+        assert!(p.editing(), "asking for the plane has started");
+        assert!(!app.sk.on, "Melt 3D's own sketch tool stays off");
+    }
+
+    #[test]
+    fn exports_have_private_paths_and_clean_up_their_files() {
+        let first = ExportFile::new().unwrap();
+        let second = ExportFile::new().unwrap();
+        let dir = first.path().parent().unwrap().to_path_buf();
+        assert_ne!(first.path(), second.path());
+        std::fs::write(first.path(), b"owned export").unwrap();
+        drop(first);
+        assert!(!dir.exists());
+        assert!(second.path().parent().unwrap().is_dir());
+    }
+}

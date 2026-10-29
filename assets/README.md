@@ -13,7 +13,9 @@ assets/
       macos/exports/                 # paired Assets.car and icon.icns
       windows/exports/               # executable DIB ICO and installer PNG ICO
       linux/exports/hicolor/         # Linux/FreeBSD package images, 16–512 px
-    ui/source/                       # original drawing library and other UI glyphs
+    ui/design/svg/                   # authoritative original UI icon masters
+    ui/design/tools/                 # authoring bases, checks and included review app
+    ui/source/                       # Rust viewport glyphs, markers and navigation
   branding/web/source/og.png          # shared social preview card
   styles/ui/palettes.rs               # light/dark defaults
   styles/web/loading.css             # web loading/canvas styles
@@ -25,14 +27,15 @@ assets/
   platforms/{macos,linux,windows}/    # bundle, freedesktop and WiX templates
   archive/icons/macos-v1/
     source/icon.vectorcraft          # earlier editable work, retained
-    exports/                         # all historical SVG, PNG and iconset exports
+                                     # redundant historical exports are retired
 ```
 
 ## Editing and regeneration
 
 [UI artwork](icons/ui/README.md) identifies the drawing masters and their consumers.
-Edit geometry and IDs together in the original Rust source and review changes in
-both application themes. Palettes and model presets are also editable Rust data.
+Read the mandatory [UI style guide](icons/ui/STYLE_GUIDE.md) before editing an icon.
+Edit SVG geometry and its command/UI assignments together; inspect both themes
+and small sizes. Temporary media and generated reports belong in ignored target/. Palettes and model presets are also editable Rust data.
 
 The current macOS master is `icons/app/macos/source/SolidCraft.icon/`, including
 its linked SVG layers and appearance settings. The earlier VectorCraft document
@@ -75,13 +78,13 @@ The CLI still supports arbitrary PNG/ICO exports with `solidcraft-cli icon`.
 | Linux, Nix, deb/rpm, tar, Flatpak, Snap | Copy canonical hicolor images; icon name stays `ai.storyteller.solidcraft` |
 | AppImage | Uses the Linux 256 px image and `.DirIcon` alias |
 | FreeBSD | Shares Linux hicolor images and freedesktop metadata |
-| Web | HTML/Trunk stays in `apps/solidcraft-web/`; copies Japanese font/licence to `fonts/` and uses the collected CSS; no favicon/PWA icon currently exists |
+| Web | HTML/Trunk and `manifest.webmanifest` stay in `apps/solidcraft-web/`; copies Japanese font/licence to `fonts/`, uses the collected CSS, and copies the Linux 32/256/512 px images to `icons/` for the favicon and installed app |
 | Docs and link previews | `xtask book` copies the shared card to the existing `/solidcraft/og.png` public path |
 
 ## Code and provenance
 
 Resources remain compiled by their owning layer through existing APIs:
-`ui-egui::icons::paint` and `Tokens` at L5, model presets in L2 `doc`, and sketch
+`ui-egui::icons::paint_icon` and `Tokens` at L5, model presets in L2 `doc`, and sketch
 fonts at L1. State, projection, interaction, commands and GPU bindings stay in
 their current modules. Embedded data uses `CARGO_MANIFEST_DIR`; application code
 needs no runtime resource registry or repository lookup.

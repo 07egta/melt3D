@@ -1,4 +1,4 @@
-//! "かんたん表示": the viewport drawn on the CPU, for when the graphics path is not ready (the
+//! "Simple view": the viewport drawn on the CPU, for when the graphics path is not ready (the
 //! shader is still compiling, or the driver refused it) or the person chose not to use it.
 //!
 //! The picture is small (a third of the viewport, a sixth while the view moves), drawn by a worker
@@ -7,13 +7,13 @@
 //! simple lighting (the lights of the room, a rough soft shadow, a little shine). The window never
 //! waits for it: a newer request makes the worker drop the older one.
 
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
-use std::sync::Arc;
 
 use crate::camera::Camera;
 use crate::model::{Environment, Scene};
-use crate::sdf::{Field, V3, add, dot, len, mul, norm, sub};
+use crate::sdf::{Field, V3, add, dot, mul, norm, sub};
 
 /// The viewport is drawn at 1/FINE_DIV of its size when still...
 pub const FINE_DIV: usize = 3;
@@ -48,6 +48,10 @@ struct Setup<'a> {
     bound: ([f32; 3], f32),
     /// Soft shadows and the finer normals (off for the quick pass).
     fine: bool,
+    /// Analysis view mode (`ViewMode::id`), 0 = normal shading.
+    mode: u32,
+    /// The floor-grid preference (visibility and spacing).
+    grid: crate::prefs::GridView,
 }
 
 fn lin(c: V3) -> V3 {
@@ -109,14 +113,20 @@ fn soft_shadow(f: &Field, ro: V3, rd: V3, max_t: f32, steps: usize) -> f32 {
 
 /// The grid lines at ground point `gp`, whose pixel is `footprint` mm wide: the colour changes
 /// to mix in (thin lines, every tenth line, the red x axis and the green y axis).
-fn grid(col: V3, gp: V3, footprint: f32, fade: f32, below: bool) -> V3 {
-    let gs = 10.0_f32;
+fn grid(col: V3, gp: V3, footprint: f32, fade: f32, below: bool, spacing_mm: f32) -> V3 {
+    let gs = spacing_mm.clamp(crate::prefs::MIN_GRID_MM, crate::prefs::MAX_GRID_MM);
     let w = (footprint * 1.5).max(1e-4);
     let line_of = |scale: f32| {
-        let a = [((gp[0] / scale - 0.5).rem_euclid(1.0) - 0.5).abs() / (w / scale), ((gp[1] / scale - 0.5).rem_euclid(1.0) - 0.5).abs() / (w / scale)];
+        let a =
+            [((gp[0] / scale - 0.5).rem_euclid(1.0) - 0.5).abs() / (w / scale), ((gp[1] / scale - 0.5).rem_euclid(1.0) - 0.5).abs() / (w / scale)];
         1.0 - a[0].min(a[1]).min(1.0)
     };
-    let line = line_of(gs);
+    // endless plane: a level of lines fades only when it gets too dense to tell apart
+    let dense = |spacing: f32| {
+        let t = ((footprint / spacing - 0.12) / (0.45 - 0.12)).clamp(0.0, 1.0);
+        1.0 - t * t * (3.0 - 2.0 * t)
+    };
+    let line = line_of(gs) * dense(gs);
     let axis_x = 1.0 - (gp[1].abs() / w).min(1.0);
     let axis_y = 1.0 - (gp[0].abs() / w).min(1.0);
     let mut c = col;
@@ -124,7 +134,7 @@ fn grid(col: V3, gp: V3, footprint: f32, fade: f32, below: bool) -> V3 {
         let fade = fade * 0.6;
         c = mix(c, add(c, [0.04; 3]), line * 0.5 * fade);
     } else {
-        let major = line_of(gs * 10.0);
+        let major = line_of(gs * 10.0) * dense(gs * 10.0);
         c = mix(c, add(c, [0.03; 3]), line * 0.5 * fade);
         c = mix(c, add(c, [0.05; 3]), major * 0.6 * fade);
     }
@@ -133,7 +143,7 @@ fn grid(col: V3, gp: V3, footprint: f32, fade: f32, below: bool) -> V3 {
 }
 
 /// The colour (linear) of a surface point seen along `rd`.
-fn shade_point(s: &Setup, o: V3, rd: V3, t: f32, hit: &crate::sdf::Sample) -> V3 {
+fn shade_point(s: &Setup, o: V3, rd: V3, t: f32, hit: &crate::sdf::Sample) -> (V3, V3) {
     let f = s.field;
     let p = add(o, mul(rd, t));
     let n = if s.fine {
@@ -187,7 +197,7 @@ fn shade_point(s: &Setup, o: V3, rd: V3, t: f32, hit: &crate::sdf::Sample) -> V3
     for k in 0..3 {
         c[k] = diff[k] * (amb[k] + lit[k]) + spec[k] + refl[k] * refl_k * tint[k] + 0.05 * fres;
     }
-    c
+    (c, n)
 }
 
 /// One pixel of the picture, as sRGB bytes.
@@ -197,7 +207,7 @@ fn pixel(s: &Setup, x: usize, y: usize) -> [u8; 4] {
     let (o, rd) = s.cam.ray([u * 2.0 - 1.0, 1.0 - v * 2.0], s.aspect);
     let env = s.env;
     let mut col = background(env, u, v);
-    let grid_on = env.grid;
+    let grid_on = env.grid && s.grid.on;
     let floor_on = env.floor;
 
     // the ground at z = 0
@@ -225,14 +235,13 @@ fn pixel(s: &Setup, x: usize, y: usize) -> [u8; 4] {
         }
     }
 
+    let mut surf_n: Option<V3> = None;
     let above = o[2] >= 0.0;
     let footprint = |gp: V3| s.cam.mm_per_px(gp, h);
-    if above && t_ground < 1e8 && hit.as_ref().is_none_or(|(t, _)| t_ground < *t) && (grid_on || floor_on) {
+    let ground_in_front = t_ground < 1e8 && hit.as_ref().is_none_or(|(t, _)| t_ground < *t);
+    let floor_vis = above && t_ground < 1e8 && hit.is_none() && floor_on;
+    if floor_vis {
         let gp = add(o, mul(rd, t_ground));
-        let fade = (1.0 - len([gp[0], gp[1], 0.0]) / 600.0).clamp(0.0, 1.0);
-        if grid_on {
-            col = grid(col, gp, footprint(gp), fade, false);
-        }
         if floor_on && env.shadow > 0.0 {
             // the blob's shadow on the ground
             if s.fine {
@@ -244,18 +253,24 @@ fn pixel(s: &Setup, x: usize, y: usize) -> [u8; 4] {
             col = mul(col, 1.0 + (0.6 + 0.4 * ao - 1.0) * env.shadow);
         }
     }
-    if let Some((t, smp)) = &hit
-        && (t_ground > *t || !(grid_on || floor_on))
-    {
-        col = shade_point(s, o, rd, *t, smp);
+    if let Some((t, smp)) = &hit {
+        let (c, n) = shade_point(s, o, rd, *t, smp);
+        col = c;
+        surf_n = Some(n);
     }
-    // seen from below the ground is see-through: only its lines are drawn
-    if !above && t_ground < 1e8 && hit.as_ref().is_none_or(|(t, _)| t_ground < *t) && grid_on {
+    // The grid is an overlay: it stays visible over geometry behind the plane without hiding it.
+    if grid_on && ground_in_front {
         let gp = add(o, mul(rd, t_ground));
-        let fade = (1.0 - len([gp[0], gp[1], 0.0]) / 600.0).clamp(0.0, 1.0);
-        col = grid(col, gp, footprint(gp), fade, true);
+        col = grid(col, gp, footprint(gp), 1.0, !above, s.grid.size_mm);
     }
-    let [r, g, b] = encode(col, env.exposure);
+    let [mut r, mut g, mut b] = encode(col, env.exposure);
+    if let Some(n) = surf_n {
+        let (right, up, _) = s.cam.basis();
+        if let Some(c) = crate::view_mode::color(s.mode, n, rd, right, up) {
+            let to = |x: f32| (x.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+            [r, g, b] = [to(c[0]), to(c[1]), to(c[2])];
+        }
+    }
     [r, g, b, 255]
 }
 
@@ -265,11 +280,41 @@ type Rows = Vec<(usize, Vec<u8>)>;
 /// Draw the scene as RGBA bytes (`size[0] * size[1] * 4`, rows from the top), using `threads`
 /// threads. The same input always gives the same bytes, whatever the thread count. `cancel` is
 /// asked once per row; when it says yes the drawing stops and the result is `None`.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn render(scene: &Scene, cam: &Camera, size: [usize; 2], fine: bool, threads: usize, cancel: &(dyn Fn() -> bool + Sync)) -> Option<Vec<u8>> {
+    render_mode(scene, cam, size, fine, threads, 0, cancel)
+}
+
+/// `render` with an analysis view mode (`ViewMode::id`; 0 = the usual shading).
+pub fn render_mode(
+    scene: &Scene,
+    cam: &Camera,
+    size: [usize; 2],
+    fine: bool,
+    threads: usize,
+    mode: u32,
+    cancel: &(dyn Fn() -> bool + Sync),
+) -> Option<Vec<u8>> {
+    render_mode_with_grid(scene, cam, size, fine, threads, mode, crate::prefs::GridView::default(), cancel)
+}
+
+/// `render_mode` with the Settings window's grid preference.
+#[allow(clippy::too_many_arguments)] // mirrors render_mode, plus the one grid value
+pub fn render_mode_with_grid(
+    scene: &Scene,
+    cam: &Camera,
+    size: [usize; 2],
+    fine: bool,
+    threads: usize,
+    mode: u32,
+    grid: crate::prefs::GridView,
+    cancel: &(dyn Fn() -> bool + Sync),
+) -> Option<Vec<u8>> {
     let size = [size[0].clamp(1, 8192), size[1].clamp(1, 8192)];
     let field = Field::new(scene);
     let bound = crate::gpu::bounds(scene, None);
-    let setup = Setup { field: &field, env: &scene.env, cam, size, aspect: size[0] as f32 / size[1] as f32, bound, fine };
+    let grid = grid.sanitized();
+    let setup = Setup { field: &field, env: &scene.env, cam, size, aspect: size[0] as f32 / size[1] as f32, bound, fine, mode, grid };
     let threads = threads.clamp(1, 64).min(size[1]);
     let rows: Vec<Option<Rows>> = std::thread::scope(|sc| {
         let handles: Vec<_> = (0..threads)
@@ -314,6 +359,9 @@ struct Job {
     scene: Scene,
     cam: Camera,
     sizes: Vec<[usize; 2]>,
+    moving: bool,
+    mode: u32,
+    grid: crate::prefs::GridView,
 }
 
 /// A finished picture.
@@ -321,7 +369,7 @@ pub struct Frame {
     pub id: u64,
     pub size: [usize; 2],
     pub rgba: Vec<u8>,
-    /// The last (finest) picture of its request.
+    /// The last pass of its request (a moving request has only a coarse pass).
     pub last: bool,
 }
 
@@ -352,11 +400,16 @@ fn spawn_worker(ctx: Option<egui::Context>) -> Option<Worker> {
                     if cancel() {
                         break;
                     }
-                    let fine = i + 1 == n;
-                    let done = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| render(&job.scene, &job.cam, *size, fine, threads, &cancel)));
+                    let last = i + 1 == n;
+                    // A moving request has one coarse pass: being the last pass
+                    // must not turn expensive shadows and fine normals back on.
+                    let fine = !job.moving && last;
+                    let done = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        render_mode_with_grid(&job.scene, &job.cam, *size, fine, threads, job.mode, job.grid, &cancel)
+                    }));
                     match done {
                         Ok(Some(rgba)) => {
-                            if frames_tx.send(Frame { id, size: *size, rgba, last: fine }).is_err() {
+                            if frames_tx.send(Frame { id, size: *size, rgba, last }).is_err() {
                                 return;
                             }
                             if let Some(c) = &ctx {
@@ -365,7 +418,7 @@ fn spawn_worker(ctx: Option<egui::Context>) -> Option<Worker> {
                         }
                         Ok(None) => break,
                         Err(p) => {
-                            crate::gpu_log::log(&format!("かんたん表示: the drawing panicked: {}", crate::gpu_status::panic_text(&*p)));
+                            crate::gpu_log::log(&format!("Simple view: the drawing panicked: {}", crate::gpu_status::panic_text(&*p)));
                             break;
                         }
                     }
@@ -383,6 +436,8 @@ struct Key {
     cam: [f32; 7],
     view: [u32; 2],
     moving: bool,
+    mode: u32,
+    grid: crate::prefs::GridView,
 }
 
 /// The simple view: asks the worker for pictures, keeps the latest one as a texture.
@@ -393,8 +448,10 @@ pub struct EasyView {
     texture: Option<egui::TextureHandle>,
     requested: Option<(u64, Key)>,
     next_id: u64,
-    /// Is the finest picture of the last request on screen?
+    /// Is the final pass of the last request on screen?
     pub settled: bool,
+    /// The analysis view mode to draw (`ViewMode::id`).
+    pub mode: u32,
 }
 
 impl EasyView {
@@ -411,7 +468,21 @@ impl EasyView {
     }
 
     /// Make sure the picture shows `scene` through `cam` at `view_px`; call every frame.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn update(&mut self, ctx: &egui::Context, scene: &Scene, cam: &Camera, view_px: [u32; 2], moving: bool) {
+        self.update_with_grid(ctx, scene, cam, view_px, moving, crate::prefs::GridView::default());
+    }
+
+    /// `update` with the Settings window's grid visibility and spacing.
+    pub fn update_with_grid(
+        &mut self,
+        ctx: &egui::Context,
+        scene: &Scene,
+        cam: &Camera,
+        view_px: [u32; 2],
+        moving: bool,
+        grid: crate::prefs::GridView,
+    ) {
         if self.worker.is_none() && !self.failed {
             self.worker = spawn_worker(Some(ctx.clone()));
             self.failed = self.worker.is_none();
@@ -428,14 +499,21 @@ impl EasyView {
                 self.settled = frame.last;
             }
         }
-        let key = Key { scene: scene.clone_if_changed(self.requested.as_ref().map(|(_, k)| &k.scene)), cam: crate::perf::cam_key(cam), view: view_px, moving };
+        let key = Key {
+            scene: scene.clone_if_changed(self.requested.as_ref().map(|(_, k)| &k.scene)),
+            cam: crate::perf::cam_key(cam),
+            view: view_px,
+            moving,
+            mode: self.mode,
+            grid: grid.sanitized(),
+        };
         if self.requested.as_ref().is_some_and(|(_, k)| *k == key) {
             return;
         }
         self.next_id += 1;
         let id = self.next_id;
         worker.latest.store(id, Ordering::Relaxed);
-        let job = Job { id, scene: key.scene.clone(), cam: *cam, sizes: sizes(view_px, moving) };
+        let job = Job { id, scene: key.scene.clone(), cam: *cam, sizes: sizes(view_px, moving), moving, mode: self.mode, grid: key.grid };
         if worker.tx.send(job).is_ok() {
             self.requested = Some((id, key));
             self.settled = false;
@@ -495,6 +573,35 @@ mod tests {
     }
 
     #[test]
+    fn the_ground_plane_never_hides_objects_on_either_side() {
+        let mut sc = Scene::default();
+        sc.groups[0].shapes.clear();
+        sc.groups[0].shapes.push(Shape::new(Kind::Sphere, [0.0, 0.0, -20.0], Material { color: [0.95, 0.08, 0.04], ..Material::default() }));
+        sc.env.grid = true;
+        sc.env.floor = false;
+        let (w, h) = (80, 80);
+        let mut cam = Camera::default();
+        cam.look(0.0, std::f32::consts::FRAC_PI_2 - 0.002);
+        cam.target = [0.0, 0.0, 0.0];
+        cam.dist = 120.0;
+        let grid_only = render(&sc, &cam, [w, h], true, 2, &never).expect("grid only");
+        let below_grid = px(&grid_only, w, w / 2, h / 2);
+        assert!(below_grid[0] > below_grid[1] + 35, "grid alone must not hide the red object below it: {below_grid:?}");
+
+        sc.env.floor = true;
+        let with_floor = render(&sc, &cam, [w, h], true, 2, &never).expect("floor from above");
+        let visible_above = px(&with_floor, w, w / 2, h / 2);
+        assert!(visible_above[0] > visible_above[1] + 35, "the shadow floor must not hide the red object: {visible_above:?}");
+
+        sc.groups[0].shapes[0].pos[2] = 20.0;
+        sc.env.grid = false;
+        cam.look(0.0, -std::f32::consts::FRAC_PI_2 + 0.002);
+        let from_below = render(&sc, &cam, [w, h], true, 2, &never).expect("view from below");
+        let visible = px(&from_below, w, w / 2, h / 2);
+        assert!(visible[0] > visible[1] + 35, "floor must not hide geometry across the plane from below: {visible:?}");
+    }
+
+    #[test]
     fn the_picture_has_the_asked_size_and_is_not_one_flat_colour() {
         let sc = Scene::default();
         let img = render(&sc, &Camera::default(), [64, 40], true, 2, &never).expect("drawn");
@@ -502,6 +609,21 @@ mod tests {
         assert!(img.chunks(4).all(|p| p[3] == 255));
         let first = [img[0], img[1], img[2]];
         assert!(img.chunks(4).any(|p| [p[0], p[1], p[2]] != first));
+    }
+
+    #[test]
+    fn view_modes_change_only_the_surface_and_normal_is_unchanged() {
+        let sc = Scene::default();
+        let mut cam = Camera::default();
+        cam.frame([0.0, 0.0, 20.0], 40.0);
+        let normal = render(&sc, &cam, [64, 40], true, 2, &never).expect("normal");
+        assert_eq!(normal, render_mode(&sc, &cam, [64, 40], true, 2, 0, &never).expect("mode 0"));
+        for mode in 1..=4u32 {
+            let img = render_mode(&sc, &cam, [64, 40], true, 2, mode, &never).expect("mode");
+            assert_eq!(img.len(), normal.len());
+            assert!(img.chunks(4).all(|p| p[3] == 255));
+            assert_ne!(img, normal, "mode {mode} draws something different");
+        }
     }
 
     #[test]
@@ -564,11 +686,31 @@ mod tests {
     }
 
     #[test]
+    fn the_simple_view_honours_the_grid_visibility_and_spacing_preferences() {
+        let mut sc = Scene::default();
+        sc.groups[0].shapes.clear();
+        sc.env.floor = false;
+        let mut cam = Camera::default();
+        cam.look(0.0, std::f32::consts::FRAC_PI_2 - 0.01);
+        cam.target = [0.0, 0.0, 0.0];
+        cam.dist = 120.0;
+        let (w, h) = (120, 120);
+        let render_grid = |grid| render_mode_with_grid(&sc, &cam, [w, h], true, 2, 0, grid, &never).expect("drawn");
+        let on = render_grid(crate::prefs::GridView { on: true, size_mm: 10.0 });
+        let off = render_grid(crate::prefs::GridView { on: false, size_mm: 10.0 });
+        let wide = render_grid(crate::prefs::GridView { on: true, size_mm: 40.0 });
+        assert_ne!(on, off, "turning the grid off removes its lines");
+        assert_ne!(on, wide, "a wider spacing moves the grid lines");
+        let corner = px(&off, w, 3, 3);
+        let count = |img: &[u8]| img.chunks(4).filter(|p| (p[0] as i32 - corner[0] as i32).abs() > 12).count();
+        assert!(count(&on) > count(&off) + 100, "the grid adds visible lines");
+    }
+
+    #[test]
     fn a_shape_is_drawn_solid_in_its_colour_and_the_sky_colour_follows_the_room() {
         let mut sc = Scene::default();
         sc.groups[0].shapes[0] = Shape::new(Kind::Sphere, [0.0, 0.0, 20.0], Material { color: [0.9, 0.1, 0.1], ..Material::default() });
-        let mut cam = Camera::default();
-        cam.target = [0.0, 0.0, 20.0];
+        let cam = Camera { target: [0.0, 0.0, 20.0], ..Camera::default() };
         let (w, h) = (80, 60);
         let img = render(&sc, &cam, [w, h], true, 2, &never).expect("drawn");
         let mid = px(&img, w, w / 2, h / 2);
@@ -586,8 +728,7 @@ mod tests {
         sc.groups[0].shapes[0].pos = [f32::NAN, f32::INFINITY, 1e30];
         sc.groups[0].shapes[0].size = [f32::NAN; 3];
         sc.env.exposure = f32::NAN;
-        let mut cam = Camera::default();
-        cam.dist = f32::NAN;
+        let cam = Camera { dist: f32::NAN, ..Camera::default() };
         let img = render(&sc, &cam, [16, 16], true, 2, &never);
         assert_eq!(img.map(|i| i.len()), Some(16 * 16 * 4));
         let img = render(&Scene::default(), &Camera::default(), [100000, 0], false, 0, &never);
@@ -630,6 +771,39 @@ mod tests {
         // The same worker may be reused for the next document.
         v.update(&ctx, &sc, &cam, [120, 90], false);
         assert!(v.requested.is_some());
+    }
+
+    #[test]
+    fn the_moving_worker_finishes_a_coarse_pass_then_restores_full_quality_when_still() {
+        let worker = spawn_worker(None).expect("worker starts");
+        let scene = Scene::default();
+        let cam = Camera::default();
+        let size = [48, 30];
+        let coarse = render(&scene, &cam, size, false, 1, &never).expect("coarse reference");
+        let fine = render(&scene, &cam, size, true, 1, &never).expect("fine reference");
+        assert_ne!(coarse, fine, "the fixture must distinguish the two shading modes");
+
+        worker.latest.store(1, Ordering::Relaxed);
+        worker
+            .tx
+            .send(Job { id: 1, scene: scene.clone(), cam, sizes: vec![size], moving: true, mode: 0, grid: crate::prefs::GridView::default() })
+            .expect("moving request");
+        let moving = worker.rx.recv_timeout(std::time::Duration::from_secs(10)).expect("moving frame");
+        assert_eq!(moving.id, 1);
+        assert!(moving.last, "a coarse moving pass still completes its request");
+        assert_eq!(moving.rgba, coarse, "moving must not spend work on fine shading");
+
+        worker.latest.store(2, Ordering::Relaxed);
+        worker
+            .tx
+            .send(Job { id: 2, scene, cam, sizes: vec![[24, 15], size], moving: false, mode: 0, grid: crate::prefs::GridView::default() })
+            .expect("still request");
+        let first = worker.rx.recv_timeout(std::time::Duration::from_secs(10)).expect("first still frame");
+        let final_frame = worker.rx.recv_timeout(std::time::Duration::from_secs(10)).expect("fine still frame");
+        assert!(!first.last);
+        assert!(final_frame.last);
+        assert_eq!(final_frame.id, 2);
+        assert_eq!(final_frame.rgba, fine, "settling restores the original full-quality pixels");
     }
 
     #[test]
