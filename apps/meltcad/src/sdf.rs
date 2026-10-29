@@ -1236,7 +1236,7 @@ mod tests {
         let mut shelled = ball(0.0, 20.0);
         shelled.shell = 3.0;
         let mut cutter = Shape::new(Kind::Box, [0.0, 0.0, 20.0], Material::default());
-        cutter.size = [60.0, 60.0, 20.0, 0.0];
+        cutter.size = [60.0, 60.0, 20.0];
         cutter.blend = 0.0;
         cutter.op = Op::Subtract;
         let mut sc = Scene { groups: vec![], melt: Default::default(), env: Default::default(), saved: Vec::new(), anim: Default::default() };
