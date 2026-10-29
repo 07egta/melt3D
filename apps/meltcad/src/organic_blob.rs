@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use egui::{Align2, Color32, RichText, TextureHandle, TextureOptions, Vec2};
 
 use crate::app::App;
-use crate::model::{Group, Kind, Material, Pick, Scene, Shape, MAX_GROUPS, MAX_SHAPES};
+use crate::model::{Group, Kind, MAX_GROUPS, MAX_SHAPES, Material, Pick, Scene, Shape};
 use crate::style;
 
 const PREVIEW_SIZE: usize = 96;
@@ -94,23 +94,16 @@ pub fn generate(settings: Settings) -> Group {
     // A near-uniform Fibonacci distribution avoids unnatural polar clustering. Seeded
     // jitter and unequal radii give an organic silhouette without high-frequency noise.
     for i in 0..n {
-        let lat = (1.0 - 2.0 * (i as f32 + 0.5) / n as f32
-            + (rng.next() - 0.5) * p.detail * 0.17).clamp(-0.98, 0.98);
-        let angle = (i as f32 + rng.next() * p.detail * 0.5) * GOLDEN_ANGLE
-            + rng.next() * p.detail * 0.30;
+        let lat = (1.0 - 2.0 * (i as f32 + 0.5) / n as f32 + (rng.next() - 0.5) * p.detail * 0.17).clamp(-0.98, 0.98);
+        let angle = (i as f32 + rng.next() * p.detail * 0.5) * GOLDEN_ANGLE + rng.next() * p.detail * 0.30;
         let ring = (1.0 - lat * lat).max(0.0).sqrt();
         let (sn, cs) = angle.sin_cos();
         let dir = [ring * cs, ring * sn, lat];
 
-        let distance = BASE_RADIUS
-            * (0.61 + p.bulge * 0.49 + (rng.next() - 0.5) * p.detail * 0.12);
-        let radius = BASE_RADIUS
-            * (0.32 + p.detail * 0.11 + (rng.next() - 0.5) * p.detail * 0.14);
-        let mut lobe = Shape::new(Kind::Sphere, [
-            centre[0] + dir[0] * distance,
-            centre[1] + dir[1] * distance,
-            centre[2] + dir[2] * distance * p.aspect,
-        ], mat);
+        let distance = BASE_RADIUS * (0.61 + p.bulge * 0.49 + (rng.next() - 0.5) * p.detail * 0.12);
+        let radius = BASE_RADIUS * (0.32 + p.detail * 0.11 + (rng.next() - 0.5) * p.detail * 0.14);
+        let mut lobe =
+            Shape::new(Kind::Sphere, [centre[0] + dir[0] * distance, centre[1] + dir[1] * distance, centre[2] + dir[2] * distance * p.aspect], mat);
         lobe.name = format!("ふくらみ {:02}", i + 1);
         lobe.size = [radius.max(3.0); 3];
         lobe.scale = [1.0, 1.0, p.aspect];
@@ -122,10 +115,11 @@ pub fn generate(settings: Settings) -> Group {
     // Place near the floor at every aspect ratio; account for the smooth union
     // extending beyond the individual sphere surfaces. Do not change any mesh
     // resolution or compute a distance volume just to position the preset.
-    let bottom = group.shapes.iter().map(|s| s.pos[2] - s.size[0] * s.scale[2])
-        .fold(f32::INFINITY, f32::min);
+    let bottom = group.shapes.iter().map(|s| s.pos[2] - s.size[0] * s.scale[2]).fold(f32::INFINITY, f32::min);
     let lift = 4.0 + (7.0 + 30.0 * p.roundness) * 0.27 * p.aspect - bottom;
-    for shape in &mut group.shapes { shape.pos[2] += lift; }
+    for shape in &mut group.shapes {
+        shape.pos[2] += lift;
+    }
     group
 }
 
@@ -193,7 +187,9 @@ impl Default for Dialog {
     }
 }
 
-fn id() -> egui::Id { egui::Id::new("organic_blob_card") }
+fn id() -> egui::Id {
+    egui::Id::new("organic_blob_card")
+}
 
 /// Called from the library, the shape menu and the command palette.
 pub fn open(ctx: &egui::Context) {
@@ -205,16 +201,18 @@ fn start_preview(ctx: &egui::Context, settings: Settings) -> Result<PreviewTask,
     let done = Arc::new(Mutex::new(None));
     let out = done.clone();
     let ctx2 = ctx.clone();
-    std::thread::Builder::new().name("meltcad-organic-preview".into()).spawn(move || {
-        // Reuse the existing, low-resolution CPU library thumbnail pipeline,
-        // away from the UI thread. There is at most one outstanding preview task.
-        let pixels = std::panic::catch_unwind(|| crate::cpu_render::thumb(&preview_scene(settings), PREVIEW_SIZE))
-            .unwrap_or_default();
-        if let Ok(mut d) = out.lock() {
-            *d = Some((settings, pixels));
-        }
-        ctx2.request_repaint();
-    }).map_err(|e| format!("プレビューを開始できません: {e}"))?;
+    std::thread::Builder::new()
+        .name("meltcad-organic-preview".into())
+        .spawn(move || {
+            // Reuse the existing, low-resolution CPU library thumbnail pipeline,
+            // away from the UI thread. There is at most one outstanding preview task.
+            let pixels = std::panic::catch_unwind(|| crate::cpu_render::thumb(&preview_scene(settings), PREVIEW_SIZE)).unwrap_or_default();
+            if let Ok(mut d) = out.lock() {
+                *d = Some((settings, pixels));
+            }
+            ctx2.request_repaint();
+        })
+        .map_err(|e| format!("プレビューを開始できません: {e}"))?;
     Ok(PreviewTask { done })
 }
 
@@ -235,7 +233,9 @@ fn refresh_preview(ctx: &egui::Context, d: &mut Dialog) {
             }
         }
     }
-    if d.preview_for == Some(d.settings) { return; }
+    if d.preview_for == Some(d.settings) {
+        return;
+    }
     if d.working.is_none() && d.changed_at.elapsed() >= PREVIEW_SETTLE {
         match start_preview(ctx, d.settings) {
             Ok(task) => d.working = Some(task),
@@ -256,61 +256,75 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
     let before = d.settings;
     let mut apply = false;
     let mut close = false;
-    egui::Area::new(egui::Id::new("organic_blob_area")).order(egui::Order::Foreground)
-        .anchor(Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
-            style::card().show(ui, |ui| {
-                ui.set_width(372.0);
-                ui.label(RichText::new("Organic Blob · ぷっくりブロブ").strong().size(15.0));
-                ui.label(RichText::new("やわらかい球のふくらみを、滑らかにつなげます").color(style::DIM).size(11.5));
-                ui.vertical_centered(|ui| {
-                    let (rect, _) = ui.allocate_exact_size(Vec2::splat(160.0), egui::Sense::hover());
-                    ui.painter().rect_filled(rect, 12.0, style::PANEL_DARK);
-                    if let Some(tex) = &d.preview {
-                        ui.painter().image(tex.id(), rect.shrink(6.0),
-                            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
-                    } else {
-                        ui.painter().text(rect.center(), Align2::CENTER_CENTER, "プレビューを計算中…",
-                            egui::FontId::proportional(12.0), style::DIM);
-                    }
-                    if d.preview_for != Some(d.settings) {
-                        ui.label(RichText::new("小さなプレビューを更新中…").size(10.5).color(style::DIM));
-                    } else {
-                        ui.label(RichText::new("SDFの簡易陰影プレビュー").size(10.5).color(style::DIM));
-                    }
-                });
-                ui.add_space(4.0);
-                ui.add(egui::Slider::new(&mut d.settings.bulge, 0.0..=1.0).text("ふくらみ").fixed_decimals(2))
-                    .on_hover_text("大きくするほど、ふくらみが外側へ飛び出します");
-                ui.add(egui::Slider::new(&mut d.settings.detail, 0.0..=1.0).text("凹凸・ばらつき").fixed_decimals(2))
-                    .on_hover_text("ふくらみの数と大小のばらつきを変えます");
-                ui.add(egui::Slider::new(&mut d.settings.roundness, 0.0..=1.0).text("丸み・なめらかさ").fixed_decimals(2))
-                    .on_hover_text("球同士のなめらかな接合幅を変えます（既存のSDFメルト）");
-                ui.add(egui::Slider::new(&mut d.settings.aspect, 0.60..=1.75).text("縦横比（高さ／幅）").fixed_decimals(2))
-                    .on_hover_text("1.0は球形、1より大きいと縦長、小さいと平たい形");
-                ui.horizontal(|ui| {
-                    ui.label("シード");
-                    ui.add(egui::DragValue::new(&mut d.settings.seed).range(0..=u32::MAX).speed(1.0));
-                    if ui.button("別の形 ↻").clicked() {
-                        d.settings.seed = d.settings.seed.wrapping_add(1);
-                    }
-                });
-                ui.label(RichText::new(format!("編集できる球 {}個で生成（高解像度メッシュ化はしません）", d.settings.lobe_count() + 1))
-                    .size(11.0).color(style::DIM));
-                if app.scene.melt.amount <= 0.0 {
-                    ui.label(RichText::new("メルト量が0です。滑らかな融合にはメルト量を上げてください")
-                        .size(11.0).color(style::CUT));
+    egui::Area::new(egui::Id::new("organic_blob_area")).order(egui::Order::Foreground).anchor(Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
+        style::card().show(ui, |ui| {
+            ui.set_width(372.0);
+            ui.label(RichText::new("Organic Blob · ぷっくりブロブ").strong().size(15.0));
+            ui.label(RichText::new("やわらかい球のふくらみを、滑らかにつなげます").color(style::DIM).size(11.5));
+            ui.vertical_centered(|ui| {
+                let (rect, _) = ui.allocate_exact_size(Vec2::splat(160.0), egui::Sense::hover());
+                ui.painter().rect_filled(rect, 12.0, style::PANEL_DARK);
+                if let Some(tex) = &d.preview {
+                    ui.painter().image(
+                        tex.id(),
+                        rect.shrink(6.0),
+                        egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                        Color32::WHITE,
+                    );
+                } else {
+                    ui.painter().text(rect.center(), Align2::CENTER_CENTER, "プレビューを計算中…", egui::FontId::proportional(12.0), style::DIM);
                 }
-                if !d.error.is_empty() { ui.label(RichText::new(&d.error).color(style::CUT)); }
-                ui.horizontal(|ui| {
-                    if ui.add(egui::Button::new(RichText::new("ブロブを追加").strong().color(Color32::WHITE))
-                        .fill(style::ACCENT_SOFT).stroke(egui::Stroke::new(1.0, style::ACCENT))).clicked() {
-                        apply = true;
-                    }
-                    if ui.button("やめる").clicked() { close = true; }
-                });
-                ui.label(RichText::new("追加後は通常の形として、移動・変形・複製・削除できます").size(10.5).color(style::DIM));
+                if d.preview_for != Some(d.settings) {
+                    ui.label(RichText::new("小さなプレビューを更新中…").size(10.5).color(style::DIM));
+                } else {
+                    ui.label(RichText::new("SDFの簡易陰影プレビュー").size(10.5).color(style::DIM));
+                }
             });
+            ui.add_space(4.0);
+            ui.add(egui::Slider::new(&mut d.settings.bulge, 0.0..=1.0).text("ふくらみ").fixed_decimals(2))
+                .on_hover_text("大きくするほど、ふくらみが外側へ飛び出します");
+            ui.add(egui::Slider::new(&mut d.settings.detail, 0.0..=1.0).text("凹凸・ばらつき").fixed_decimals(2))
+                .on_hover_text("ふくらみの数と大小のばらつきを変えます");
+            ui.add(egui::Slider::new(&mut d.settings.roundness, 0.0..=1.0).text("丸み・なめらかさ").fixed_decimals(2))
+                .on_hover_text("球同士のなめらかな接合幅を変えます（既存のSDFメルト）");
+            ui.add(egui::Slider::new(&mut d.settings.aspect, 0.60..=1.75).text("縦横比（高さ／幅）").fixed_decimals(2))
+                .on_hover_text("1.0は球形、1より大きいと縦長、小さいと平たい形");
+            ui.horizontal(|ui| {
+                ui.label("シード");
+                ui.add(egui::DragValue::new(&mut d.settings.seed).range(0..=u32::MAX).speed(1.0));
+                if ui.button("別の形 ↻").clicked() {
+                    d.settings.seed = d.settings.seed.wrapping_add(1);
+                }
+            });
+            ui.label(
+                RichText::new(format!("編集できる球 {}個で生成（高解像度メッシュ化はしません）", d.settings.lobe_count() + 1))
+                    .size(11.0)
+                    .color(style::DIM),
+            );
+            if app.scene.melt.amount <= 0.0 {
+                ui.label(RichText::new("メルト量が0です。滑らかな融合にはメルト量を上げてください").size(11.0).color(style::CUT));
+            }
+            if !d.error.is_empty() {
+                ui.label(RichText::new(&d.error).color(style::CUT));
+            }
+            ui.horizontal(|ui| {
+                if ui
+                    .add(
+                        egui::Button::new(RichText::new("ブロブを追加").strong().color(Color32::WHITE))
+                            .fill(style::ACCENT_SOFT)
+                            .stroke(egui::Stroke::new(1.0, style::ACCENT)),
+                    )
+                    .clicked()
+                {
+                    apply = true;
+                }
+                if ui.button("やめる").clicked() {
+                    close = true;
+                }
+            });
+            ui.label(RichText::new("追加後は通常の形として、移動・変形・複製・削除できます").size(10.5).color(style::DIM));
         });
+    });
 
     if d.settings != before {
         d.settings = d.settings.sanitized();
@@ -419,8 +433,7 @@ mod tests {
     fn a_full_scene_rejects_insertion_without_partial_edits() {
         let ctx = egui::Context::default();
         let mut app = App::new(true, None);
-        app.scene.groups[0].shapes.resize(MAX_SHAPES,
-            Shape::new(Kind::Sphere, [0.0, 0.0, 20.0], Material::default()));
+        app.scene.groups[0].shapes.resize(MAX_SHAPES, Shape::new(Kind::Sphere, [0.0, 0.0, 20.0], Material::default()));
         let before = app.scene.clone();
         assert!(insert(&mut app, &ctx, Settings::default()).is_err());
         assert_eq!(app.scene, before, "failure must not leave a half-generated blob");
@@ -443,8 +456,9 @@ mod tests {
             assert_eq!(files.len(), 1);
             std::fs::write(&path, &files[0].1).expect("write completed output");
             let bytes = std::fs::read(&path).expect("reload exported file");
-            let reloaded = crate::import_mesh::import_bytes(&bytes, &format!("organic_blob.{extension}"),
-                &crate::import_mesh::ImportOptions::default()).expect("parse exported mesh");
+            let reloaded =
+                crate::import_mesh::import_bytes(&bytes, &format!("organic_blob.{extension}"), &crate::import_mesh::ImportOptions::default())
+                    .expect("parse exported mesh");
             assert!(!reloaded.mesh.triangles.is_empty(), "empty {extension}");
             let _ = std::fs::remove_file(path);
         }

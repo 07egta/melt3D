@@ -556,7 +556,14 @@ mod tests {
 
     #[test]
     fn bad_values_clamp_before_geometry_and_scene_sanitization() {
-        let p = BagConfig { width: f32::NAN, depth: 0.0, wall: f32::INFINITY, handle_curve: -50.0, origin_xy: [f32::INFINITY, -999999.0], ..Default::default() };
+        let p = BagConfig {
+            width: f32::NAN,
+            depth: 0.0,
+            wall: f32::INFINITY,
+            handle_curve: -50.0,
+            origin_xy: [f32::INFINITY, -999999.0],
+            ..Default::default()
+        };
         let mut g = make_group(p);
         assert!(g.bag.as_ref().is_some_and(|p| p.width.is_finite() && p.wall > 1.0));
         let before = g.clone();

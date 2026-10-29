@@ -7,7 +7,7 @@ use egui::{Color32, RichText, TextureHandle, TextureOptions};
 use serde::{Deserialize, Serialize};
 
 use crate::app::App;
-use crate::model::{Group, Kind, Material, Melt, Op, Pick, Scene, Shape, MAX_GROUPS, MAX_SHAPES};
+use crate::model::{Group, Kind, MAX_GROUPS, MAX_SHAPES, Material, Melt, Op, Pick, Scene, Shape};
 
 const MAX_DRIPS: u32 = 12;
 const MIN_DIAMETER: f32 = 1.6;
@@ -119,7 +119,14 @@ impl Settings {
         let mut group = Group::new("Melt（とろける形状）");
         group.melt_preset = Some(cfg.clone());
         let dims = cfg.body_dims();
-        let mut body = Shape::new(match cfg.base { Base::Sphere => Kind::Sphere, Base::Box => Kind::Box }, centre, material);
+        let mut body = Shape::new(
+            match cfg.base {
+                Base::Sphere => Kind::Sphere,
+                Base::Box => Kind::Box,
+            },
+            centre,
+            material,
+        );
         body.name = "元の形状".into();
         match cfg.base {
             Base::Sphere => {
@@ -259,15 +266,7 @@ struct Editor {
 
 impl Editor {
     fn new(settings: Settings, editing: Option<usize>) -> Editor {
-        Editor {
-            settings,
-            editing,
-            preview: None,
-            preview_key: None,
-            running: None,
-            error: None,
-            failed_preview: None,
-        }
+        Editor { settings, editing, preview: None, preview_key: None, running: None, error: None, failed_preview: None }
     }
 }
 
@@ -373,92 +372,89 @@ fn apply(app: &mut App, settings: &Settings, editing: Option<usize>) -> Result<(
 pub fn update(app: &mut App, ctx: &egui::Context) {
     let Some(mut editor) = ctx.data(|d| d.get_temp::<Editor>(id())) else { return };
     editor.settings.sanitize();
-    let material = editor.editing
-        .and_then(|g| app.scene.groups.get(g))
-        .and_then(|g| g.shapes.first())
-        .map(|sh| sh.material)
-        .unwrap_or_else(syrup_material);
+    let material =
+        editor.editing.and_then(|g| app.scene.groups.get(g)).and_then(|g| g.shapes.first()).map(|sh| sh.material).unwrap_or_else(syrup_material);
     let key = PreviewKey { settings: editor.settings.clone(), melt: app.scene.melt, material };
     preview_progress(ctx, &mut editor, key.clone());
     let mut confirm = false;
     let mut cancel = false;
     egui::Modal::new(id()).show(ctx, |ui| {
-            ui.set_min_width(350.0);
-            ui.heading("Melt — とろける形状");
-            ui.label(RichText::new("球・箱から、重力で垂れる水飴のような形を作ります").small());
-            ui.horizontal(|ui| {
-                ui.label("元の形");
-                for kind in [Base::Sphere, Base::Box] {
-                    ui.selectable_value(&mut editor.settings.base, kind, kind.label());
-                }
-            });
-            if editor.settings.base == Base::Sphere {
-                ui.add(egui::Slider::new(&mut editor.settings.dimensions[0], 24.0..=180.0).text("球の直径 (mm)"));
-            } else {
-                for (i, name) in ["幅", "奥行", "高さ"].iter().enumerate() {
-                    ui.add(egui::Slider::new(&mut editor.settings.dimensions[i], 24.0..=180.0).text(format!("{name} (mm)")));
-                }
+        ui.set_min_width(350.0);
+        ui.heading("Melt — とろける形状");
+        ui.label(RichText::new("球・箱から、重力で垂れる水飴のような形を作ります").small());
+        ui.horizontal(|ui| {
+            ui.label("元の形");
+            for kind in [Base::Sphere, Base::Box] {
+                ui.selectable_value(&mut editor.settings.base, kind, kind.label());
             }
-            ui.checkbox(&mut editor.settings.keep_base_size, "元形状の大きさを維持");
-            ui.add(egui::Slider::new(&mut editor.settings.length, 6.0..=120.0).text("垂れの長さ (mm)"));
-            ui.add(egui::Slider::new(&mut editor.settings.diameter, MIN_DIAMETER..=20.0).text("太さ (mm)"));
-            ui.add(egui::Slider::new(&mut editor.settings.count, 1..=MAX_DRIPS).text("本数"));
-            ui.add(egui::Slider::new(&mut editor.settings.tilt_deg, 0.0..=55.0).text("下向きからの傾き (°)"));
-            ui.add(egui::Slider::new(&mut editor.settings.azimuth_deg, 0.0..=360.0).text("方向 (°)"));
-            ui.add(egui::Slider::new(&mut editor.settings.viscosity, 0.0..=1.0).text("粘り・ふくらみ"));
-            ui.horizontal(|ui| {
-                ui.label("ランダムシード");
-                ui.add(egui::DragValue::new(&mut editor.settings.seed).speed(1.0));
-                if ui.button("違う垂れ方").clicked() {
-                    editor.settings.seed = editor.settings.seed.wrapping_add(1);
-                }
-            });
-            editor.settings.sanitize();
-            let actual = editor.settings.effective_diameter();
-            if actual + 0.01 < editor.settings.diameter {
-                ui.label(RichText::new(format!("重なり防止のため太さを {:.1} mm に制限しています", actual)).color(Color32::YELLOW).small());
+        });
+        if editor.settings.base == Base::Sphere {
+            ui.add(egui::Slider::new(&mut editor.settings.dimensions[0], 24.0..=180.0).text("球の直径 (mm)"));
+        } else {
+            for (i, name) in ["幅", "奥行", "高さ"].iter().enumerate() {
+                ui.add(egui::Slider::new(&mut editor.settings.dimensions[i], 24.0..=180.0).text(format!("{name} (mm)")));
             }
-            ui.separator();
-            ui.horizontal(|ui| {
-                if editor.preview_key.as_ref() == Some(&key) {
-                    if let Some(tex) = &editor.preview {
-                        ui.image((tex.id(), egui::vec2(148.0, 148.0)));
-                    }
-                } else if let Some(tex) = &editor.preview {
-                    ui.vertical(|ui| {
-                        ui.image((tex.id(), egui::vec2(148.0, 148.0)));
-                        ui.label("更新中…");
-                    });
-                } else {
-                    ui.add(egui::Spinner::new());
-                    ui.label("形のプレビューを準備中…");
+        }
+        ui.checkbox(&mut editor.settings.keep_base_size, "元形状の大きさを維持");
+        ui.add(egui::Slider::new(&mut editor.settings.length, 6.0..=120.0).text("垂れの長さ (mm)"));
+        ui.add(egui::Slider::new(&mut editor.settings.diameter, MIN_DIAMETER..=20.0).text("太さ (mm)"));
+        ui.add(egui::Slider::new(&mut editor.settings.count, 1..=MAX_DRIPS).text("本数"));
+        ui.add(egui::Slider::new(&mut editor.settings.tilt_deg, 0.0..=55.0).text("下向きからの傾き (°)"));
+        ui.add(egui::Slider::new(&mut editor.settings.azimuth_deg, 0.0..=360.0).text("方向 (°)"));
+        ui.add(egui::Slider::new(&mut editor.settings.viscosity, 0.0..=1.0).text("粘り・ふくらみ"));
+        ui.horizontal(|ui| {
+            ui.label("ランダムシード");
+            ui.add(egui::DragValue::new(&mut editor.settings.seed).speed(1.0));
+            if ui.button("違う垂れ方").clicked() {
+                editor.settings.seed = editor.settings.seed.wrapping_add(1);
+            }
+        });
+        editor.settings.sanitize();
+        let actual = editor.settings.effective_diameter();
+        if actual + 0.01 < editor.settings.diameter {
+            ui.label(RichText::new(format!("重なり防止のため太さを {:.1} mm に制限しています", actual)).color(Color32::YELLOW).small());
+        }
+        ui.separator();
+        ui.horizontal(|ui| {
+            if editor.preview_key.as_ref() == Some(&key) {
+                if let Some(tex) = &editor.preview {
+                    ui.image((tex.id(), egui::vec2(148.0, 148.0)));
                 }
+            } else if let Some(tex) = &editor.preview {
                 ui.vertical(|ui| {
-                    ui.label("実際のSDFを使ったプレビュー");
-                    ui.label(RichText::new("端は丸く、元の形へ滑らかにつながります").small());
-                    ui.label(RichText::new("各垂れは通常のCurveとして編集できます").small());
-                    if app.scene.melt.amount <= 0.0 {
-                        ui.label(RichText::new("シーン全体の「とけぐあい」が0です。接合をなめらかにするにはメルト設定を上げてください").small());
-                    }
+                    ui.image((tex.id(), egui::vec2(148.0, 148.0)));
+                    ui.label("更新中…");
                 });
-            });
-            ui.label(RichText::new("細い先端を出力する場合はメッシュ精度0.4mm以下を推奨します。").small());
-            if editor.editing.is_some() {
-                ui.label(RichText::new("再適用すると、このグループの手動変更や追加形状が置き換わります。").color(Color32::YELLOW).small());
+            } else {
+                ui.add(egui::Spinner::new());
+                ui.label("形のプレビューを準備中…");
             }
-            if let Some(message) = &editor.error {
-                ui.label(RichText::new(message).color(Color32::RED));
-            }
-            ui.separator();
-            ui.horizontal(|ui| {
-                if ui.button(if editor.editing.is_some() { "設定を再適用" } else { "シーンに追加" }).clicked() {
-                    confirm = true;
-                }
-                if ui.button("キャンセル").clicked() {
-                    cancel = true;
+            ui.vertical(|ui| {
+                ui.label("実際のSDFを使ったプレビュー");
+                ui.label(RichText::new("端は丸く、元の形へ滑らかにつながります").small());
+                ui.label(RichText::new("各垂れは通常のCurveとして編集できます").small());
+                if app.scene.melt.amount <= 0.0 {
+                    ui.label(RichText::new("シーン全体の「とけぐあい」が0です。接合をなめらかにするにはメルト設定を上げてください").small());
                 }
             });
         });
+        ui.label(RichText::new("細い先端を出力する場合はメッシュ精度0.4mm以下を推奨します。").small());
+        if editor.editing.is_some() {
+            ui.label(RichText::new("再適用すると、このグループの手動変更や追加形状が置き換わります。").color(Color32::YELLOW).small());
+        }
+        if let Some(message) = &editor.error {
+            ui.label(RichText::new(message).color(Color32::RED));
+        }
+        ui.separator();
+        ui.horizontal(|ui| {
+            if ui.button(if editor.editing.is_some() { "設定を再適用" } else { "シーンに追加" }).clicked() {
+                confirm = true;
+            }
+            if ui.button("キャンセル").clicked() {
+                cancel = true;
+            }
+        });
+    });
     if confirm {
         match apply(app, &editor.settings, editor.editing) {
             Ok(()) => {
@@ -557,24 +553,15 @@ mod tests {
     fn dense_drips_do_not_cross_outside_the_body() {
         for base in [Base::Sphere, Base::Box] {
             for seed in [0, 1, 9, 42, 512, 16801] {
-                let cfg = Settings {
-                    base,
-                    dimensions: [24.0, 24.0, 24.0],
-                    count: MAX_DRIPS,
-                    diameter: 24.0,
-                    seed,
-                    tilt_deg: 50.0,
-                    ..Settings::default()
-                };
+                let cfg =
+                    Settings { base, dimensions: [24.0, 24.0, 24.0], count: MAX_DRIPS, diameter: 24.0, seed, tilt_deg: 50.0, ..Settings::default() };
                 let group = cfg.generate([0.0, 0.0, 80.0], syrup_material());
                 for (i, a) in group.shapes.iter().enumerate().skip(1) {
                     for b in group.shapes.iter().skip(i + 1) {
                         // The first path point is purposefully embedded in the
                         // body; compare outside points, where separate drips
                         // must not cross or merge accidentally.
-                        let (Some(a0), Some(a1), Some(b0), Some(b1)) =
-                            (a.path.get(2), a.path.get(3), b.path.get(2), b.path.get(3))
-                        else {
+                        let (Some(a0), Some(a1), Some(b0), Some(b1)) = (a.path.get(2), a.path.get(3), b.path.get(2), b.path.get(3)) else {
                             continue;
                         };
                         for step_a in 0..=8 {
@@ -583,12 +570,12 @@ mod tests {
                             for step_b in 0..=8 {
                                 let tb = step_b as f32 / 8.0;
                                 let pb = [0, 1, 2, 3].map(|k| b0[k] * (1.0 - tb) + b1[k] * tb);
-                                let d = ((pa[0] - pb[0]).powi(2) + (pa[1] - pb[1]).powi(2)
-                                    + (pa[2] - pb[2]).powi(2)).sqrt();
+                                let d = ((pa[0] - pb[0]).powi(2) + (pa[1] - pb[1]).powi(2) + (pa[2] - pb[2]).powi(2)).sqrt();
                                 assert!(
                                     d > (pa[3] + pb[3]) * 0.96,
                                     "{base:?}, seed {seed}, drips {i}, ta={ta}, tb={tb}: {d} vs radii {} + {}",
-                                    pa[3], pb[3]
+                                    pa[3],
+                                    pb[3]
                                 );
                             }
                         }

@@ -352,8 +352,7 @@ impl Prepared {
                 let w = [d2, q[2].abs() - hh + r];
                 // A signed outward offset creates the inflated text surface. Negative
                 // offsets on subtractive contours shrink the cutter so counters stay open.
-                w[0].max(w[1]).min(0.0) + w[0].max(0.0).hypot(w[1].max(0.0)) - r
-                    - self.params[0].clamp(-40.0, 40.0)
+                w[0].max(w[1]).min(0.0) + w[0].max(0.0).hypot(w[1].max(0.0)) - r - self.params[0].clamp(-40.0, 40.0)
             }
             Kind::Curve => crate::curve::distance(self, q),
             // (the volume is in the mesh's own units, so a scaled shape is handled by `distance`)
@@ -1337,6 +1336,29 @@ mod tests {
         }
         bad.normalize_depths();
         assert_eq!(bad.groups.iter().map(|g| g.depth).collect::<Vec<_>>(), vec![0, 1, 0, 1]);
+    }
+
+    #[test]
+    fn a_shelled_shape_cut_by_a_minus_opens_into_a_cup() {
+        let mut shelled = ball(0.0, 20.0);
+        shelled.shell = 3.0;
+        let mut cutter = Shape::new(Kind::Box, [0.0, 0.0, 20.0], Material::default());
+        cutter.size = [60.0, 60.0, 20.0];
+        cutter.blend = 0.0;
+        cutter.op = Op::Subtract;
+        let mut sc = Scene { groups: vec![], melt: Default::default(), env: Default::default(), saved: Vec::new(), anim: Default::default() };
+        sc.groups.push(group_of("cup", 0, vec![shelled.clone(), cutter.clone()]));
+        let f = Field::new(&sc);
+        assert!(f.distance([0.0, 0.0, 0.0]) > 0.0, "the middle is hollow");
+        assert!(f.distance([0.0, 0.0, 12.0]) > 0.0, "the cavity is open at the top");
+        assert!(f.distance([0.0, 0.0, 19.0]) > 0.0, "the cap is cut away");
+        assert!(f.distance([0.0, 0.0, -18.5]) < 0.0, "the floor stays");
+        assert!(f.distance([18.5, 0.0, 0.0]) < 0.0, "so do the side walls");
+        // without the cutter the cavity stays closed: no hole by itself
+        let mut closed = Scene { groups: vec![], melt: Default::default(), env: Default::default(), saved: Vec::new(), anim: Default::default() };
+        closed.groups.push(group_of("ball", 0, vec![shelled]));
+        let g = Field::new(&closed);
+        assert!(g.distance([0.0, 0.0, 18.5]) < 0.0, "the shell alone keeps its lid");
     }
 
     #[test]

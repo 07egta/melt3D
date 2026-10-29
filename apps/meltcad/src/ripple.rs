@@ -15,7 +15,11 @@ pub enum RippleMode {
 
 impl RippleMode {
     pub fn id(self) -> f32 {
-        match self { Self::Concentric => 1.0, Self::Linear => 2.0, Self::Random => 3.0 }
+        match self {
+            Self::Concentric => 1.0,
+            Self::Linear => 2.0,
+            Self::Random => 3.0,
+        }
     }
 }
 
@@ -41,8 +45,14 @@ pub struct Ripple {
 impl Default for Ripple {
     fn default() -> Self {
         Self {
-            mode: RippleMode::Concentric, height: 2.0, spacing: 12.0, count: 5,
-            direction: 0.0, edge_fade: 0.35, preserve_outline: false, detail: 2,
+            mode: RippleMode::Concentric,
+            height: 2.0,
+            spacing: 12.0,
+            count: 5,
+            direction: 0.0,
+            edge_fade: 0.35,
+            preserve_outline: false,
+            detail: 2,
         }
     }
 }
@@ -54,9 +64,15 @@ fn smooth01(t: f32) -> f32 {
 
 #[allow(dead_code)]
 impl Ripple {
-    pub fn concentric() -> Self { Self::default() }
-    pub fn linear() -> Self { Self { mode: RippleMode::Linear, count: 6, ..Self::default() } }
-    pub fn random() -> Self { Self { mode: RippleMode::Random, detail: 4, ..Self::default() } }
+    pub fn concentric() -> Self {
+        Self::default()
+    }
+    pub fn linear() -> Self {
+        Self { mode: RippleMode::Linear, count: 6, ..Self::default() }
+    }
+    pub fn random() -> Self {
+        Self { mode: RippleMode::Random, detail: 4, ..Self::default() }
+    }
 
     /// Prevent malformed scenes from introducing NaNs or extreme work on the GPU.
     pub fn sanitize(&mut self) {
@@ -72,7 +88,9 @@ impl Ripple {
     /// The larger Lipschitz bound accounts for the maximum local wave and edge-fade slopes.
     /// The same displacement is evaluated for CPU selection and GPU ray tracing.
     pub fn adjust(&self, base: f32, q: [f32; 3], half: [f32; 3], min_scale: f32) -> f32 {
-        if self.height <= 0.0 { return base; }
+        if self.height <= 0.0 {
+            return base;
+        }
         let amplitude = self.height * min_scale;
         if base.abs() > amplitude * 2.0 {
             // For exterior points the surface cannot be closer than the original minus
@@ -84,8 +102,7 @@ impl Ripple {
         let v = q[1] * cs - q[0] * sn;
         let radius = q[0].hypot(q[1]);
         let k = std::f32::consts::TAU / self.spacing;
-        let support = f32::from(self.count) * self.spacing
-            * if self.mode == RippleMode::Linear { 0.5 } else { 1.0 };
+        let support = f32::from(self.count) * self.spacing * if self.mode == RippleMode::Linear { 0.5 } else { 1.0 };
         let distance = if self.mode == RippleMode::Linear { u.abs() } else { radius };
         let fade_width = (support * self.edge_fade).max(0.001);
         let mut envelope = 1.0 - smooth01((distance - (support - fade_width)) / fade_width);
@@ -101,20 +118,29 @@ impl Ripple {
             RippleMode::Random => (((0.84 * u + 0.34 * v) * k).sin(), 1.0),
         };
         if self.detail >= 2 {
-            let a = if self.mode == RippleMode::Random { (-0.31 * u + 1.23 * v) * k + 0.8 }
-                else { (if self.mode == RippleMode::Linear { u } else { radius }) * k * 2.0 + 0.3 };
+            let a = if self.mode == RippleMode::Random {
+                (-0.31 * u + 1.23 * v) * k + 0.8
+            } else {
+                (if self.mode == RippleMode::Linear { u } else { radius }) * k * 2.0 + 0.3
+            };
             wave += 0.15 * a.sin();
             weight += 0.15;
         }
         if self.detail >= 3 {
-            let a = if self.mode == RippleMode::Random { (1.37 * u - 0.71 * v) * k + 1.1 }
-                else { (if self.mode == RippleMode::Linear { u } else { radius }) * k * 3.0 + 1.1 };
+            let a = if self.mode == RippleMode::Random {
+                (1.37 * u - 0.71 * v) * k + 1.1
+            } else {
+                (if self.mode == RippleMode::Linear { u } else { radius }) * k * 3.0 + 1.1
+            };
             wave += 0.07 * a.sin();
             weight += 0.07;
         }
         if self.detail >= 4 {
-            let a = if self.mode == RippleMode::Random { (-1.73 * u - 0.48 * v) * k + 2.0 }
-                else { (if self.mode == RippleMode::Linear { u } else { radius }) * k * 4.0 + 2.0 };
+            let a = if self.mode == RippleMode::Random {
+                (-1.73 * u - 0.48 * v) * k + 2.0
+            } else {
+                (if self.mode == RippleMode::Linear { u } else { radius }) * k * 4.0 + 2.0
+            };
             wave += 0.035 * a.sin();
             weight += 0.035;
         }
@@ -137,8 +163,7 @@ impl Ripple {
     /// The distance bound `adjust` divides by: the local wave, fade and edge slopes.
     fn safety(&self, half: [f32; 3]) -> f32 {
         let k = std::f32::consts::TAU / self.spacing;
-        let support = f32::from(self.count) * self.spacing
-            * if self.mode == RippleMode::Linear { 0.5 } else { 1.0 };
+        let support = f32::from(self.count) * self.spacing * if self.mode == RippleMode::Linear { 0.5 } else { 1.0 };
         let fade_width = (support * self.edge_fade).max(0.001);
         let edge_slope = if self.preserve_outline { 6.0 / half[0].min(half[1]).max(0.01) } else { 0.0 };
         1.0 + self.height * (3.0 * k + 2.0 / fade_width + edge_slope)
@@ -176,8 +201,8 @@ mod tests {
 
     #[test]
     fn zero_height_is_identity_and_invalid_values_are_clamped() {
-        let mut r = Ripple { height: f32::INFINITY, spacing: -10.0, count: 0,
-            direction: f32::NAN, edge_fade: -10.0, detail: 255, ..Ripple::default() };
+        let mut r =
+            Ripple { height: f32::INFINITY, spacing: -10.0, count: 0, direction: f32::NAN, edge_fade: -10.0, detail: 255, ..Ripple::default() };
         r.sanitize();
         assert_eq!(r.height, 2.0);
         assert_eq!(r.spacing, 0.5);
