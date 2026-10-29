@@ -5,6 +5,7 @@ use egui::{Align2, Color32, FontId, Pos2, Rect, RichText, Sense, Stroke, Ui, vec
 
 use crate::app::{App, Tab};
 use crate::camera::Camera;
+use crate::deform::{Axis, Deformation};
 use crate::materials::{self, Category};
 use crate::model::{BlendMode, Corner, Group, Kind, Light, MAX_LIGHTS, MAX_OUTLINE, MAX_SAVED, Material, Melt, Op, Pick, ROUND_MAX, Scene};
 use crate::ripple::{Ripple, RippleMode};
@@ -20,6 +21,60 @@ const MELT_PRESETS: [(&str, BlendMode, f32, f32, f32); 6] = [
     ("Honey", BlendMode::Gooey, 1.5, 16.0, 0.7),
     ("Runny", BlendMode::Gooey, 2.4, 28.0, 1.0),
 ];
+
+/// A non-destructive Twist preset applied to the selected existing primitive.
+/// The source kind, outline and imported mesh remain editable underneath it.
+fn twist_section(ui: &mut Ui, shape: &mut crate::model::Shape) {
+    ui.add_space(6.0);
+    ui.separator();
+    style::title(ui, i18n::tr("inspector.twist.title"));
+    ui.label(RichText::new(i18n::tr("inspector.twist.hint")).color(style::DIM).size(12.0));
+    let mut twist = match shape.deformation {
+        Some(Deformation::Twist(t)) => Some(t),
+        None => None,
+    };
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = vec2(5.0, 4.0);
+        for degrees in [90.0_f32, 180.0, 360.0] {
+            let chosen = twist.is_some_and(|t| (t.degrees - degrees).abs() < 0.01);
+            if style::pill_enabled(ui, &format!("{degrees:.0}°"), chosen, true).clicked() {
+                let mut t = twist.unwrap_or_default();
+                t.degrees = degrees;
+                twist = Some(t);
+            }
+        }
+        if style::pill_enabled(ui, i18n::tr("inspector.twist.off"), twist.is_none(), true).clicked() {
+            twist = None;
+        }
+    });
+    if let Some(mut t) = twist {
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(i18n::tr("inspector.twist.axis")).color(style::DIM).size(12.0));
+            for axis in Axis::ALL {
+                ui.selectable_value(&mut t.axis, axis, axis.label());
+            }
+        });
+        ui.horizontal_wrapped(|ui| {
+            ui.label(RichText::new(i18n::tr("inspector.twist.direction")).color(style::DIM).size(12.0));
+            ui.selectable_value(&mut t.reverse, false, i18n::tr("inspector.twist.forward"));
+            ui.selectable_value(&mut t.reverse, true, i18n::tr("inspector.twist.reverse"));
+        });
+        style::labeled_slider(ui, i18n::tr("inspector.twist.angle"), &mut t.degrees, 0.0..=720.0, i18n::tr("inspector.twist.angle.tip"));
+        style::labeled_slider(ui, i18n::tr("inspector.twist.begin"), &mut t.begin, 0.0..=0.98, i18n::tr("inspector.twist.begin.tip"));
+        t.end = t.end.max(t.begin + 0.02);
+        style::labeled_slider(ui, i18n::tr("inspector.twist.end"), &mut t.end, (t.begin + 0.02)..=1.0, i18n::tr("inspector.twist.end.tip"));
+        style::labeled_slider(ui, i18n::tr("inspector.twist.lower"), &mut t.lower, 0.0..=2.0, i18n::tr("inspector.twist.lower.tip"));
+        style::labeled_slider(ui, i18n::tr("inspector.twist.upper"), &mut t.upper, 0.0..=2.0, i18n::tr("inspector.twist.upper.tip"));
+        t.sanitize();
+        if shape.kind == Kind::Cylinder && t.axis == Axis::Z && (shape.scale[0] - shape.scale[1]).abs() < 0.01 {
+            ui.label(RichText::new(i18n::tr("inspector.twist.round_note")).color(style::DIM).size(11.0));
+        }
+        ui.label(RichText::new(i18n::tr("inspector.twist.preview_note")).color(style::DIM).size(11.0));
+        shape.deformation = Some(Deformation::Twist(t));
+    } else {
+        shape.deformation = None;
+    }
+}
 
 /// The two colours of the Melt card's shape preview: neighbouring shapes take turns, so the
 /// melt between them reads at card size. Only the picture changes; the viewport, the materials
@@ -82,7 +137,7 @@ fn melt_preview_key(scene: &Scene, keep: &[(usize, usize)], cam: &Camera, size: 
     for &(g, s) in keep {
         if let (Some(sh), Some(gr)) = (scene.shape(g, s), scene.groups.get(g)) {
             format!(
-                "{g} {:?} {:?} {:?} {:?} {:?} {} {:?} {} {:?} {} {} {}",
+                "{g} {:?} {:?} {:?} {:?} {:?} {} {:?} {} {:?} {} {} {} {:?}",
                 sh.kind,
                 sh.size,
                 sh.pos,
@@ -94,7 +149,8 @@ fn melt_preview_key(scene: &Scene, keep: &[(usize, usize)], cam: &Camera, size: 
                 sh.material.color,
                 gr.blend,
                 gr.depth,
-                sh.volume.as_ref().map_or(0, |v| v.key())
+                sh.volume.as_ref().map_or(0, |v| v.key()),
+                sh.deformation
             )
             .hash(&mut h);
         }
@@ -1107,6 +1163,7 @@ impl App {
                     }
                 }
             }
+            twist_section(ui, sh);
             ui.collapsing("Ripple", |ui| {
                 let mut enabled = sh.ripple.is_some();
                 if ui.checkbox(&mut enabled, "Use ripple").changed() {

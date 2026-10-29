@@ -323,6 +323,33 @@ const TABLE: &[Entry] = &[
     ),
     e!("inspector.face.none", "なし", "None", "无", "없음", "Keine", "Aucune", "Ninguna"),
     e!("inspector.face.none.tip", "形全体の大きさは変えません", "Whole shape keeps its exact size"),
+    e!("inspector.twist.title", "Twist（ひねり）", "Twist"),
+    e!("inspector.twist.hint", "元の形を残したまま、断面を滑らかに回転", "Turns each cross-section smoothly; the original shape stays editable"),
+    e!("inspector.twist.off", "解除", "Off"),
+    e!("inspector.twist.axis", "中心軸", "Axis"),
+    e!("inspector.twist.direction", "方向", "Direction"),
+    e!("inspector.twist.forward", "＋方向", "Forward"),
+    e!("inspector.twist.reverse", "逆方向", "Reverse"),
+    e!("inspector.twist.angle", "角度", "Angle"),
+    e!("inspector.twist.angle.tip", "元の形の軸に沿った回転量 (°)", "How far the shape turns along its own axis (degrees)"),
+    e!("inspector.twist.begin", "開始位置", "Start"),
+    e!("inspector.twist.begin.tip", "元形状の軸の下端=0、上端=1", "Along the original axis: bottom = 0, top = 1"),
+    e!("inspector.twist.end", "終了位置", "End"),
+    e!("inspector.twist.end.tip", "この位置でねじり角度の変化が終了", "Where the turning stops changing"),
+    e!("inspector.twist.lower", "下側の量", "Bottom amount"),
+    e!("inspector.twist.lower.tip", "角度に対する下側の倍率 (0 は回転なし)", "Share of the angle at the bottom (0 = no turn)"),
+    e!("inspector.twist.upper", "上側の量", "Top amount"),
+    e!("inspector.twist.upper.tip", "角度に対する上側の倍率 (1 は指定角度)", "Share of the angle at the top (1 = the full angle)"),
+    e!(
+        "inspector.twist.round_note",
+        "真円柱を中心軸でねじっても外形は同じです。角柱や箱で効果を確認できます。",
+        "A round cylinder twisted about its own axis looks the same; try a box or a prism"
+    ),
+    e!(
+        "inspector.twist.preview_note",
+        "ドラッグ中は軽量表示、停止後は高品質表示。保存や3D書き出しは元データから計算します。",
+        "A light preview while you drag; saving and 3D export are computed from the original shape"
+    ),
     e!("inspector.swell", "ふくらみ", "Swell", "鼓起", "부풀림", "Wölbung", "Renflement", "Hinchazón"),
     e!(
         "inspector.swell.tip",

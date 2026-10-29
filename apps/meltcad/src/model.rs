@@ -3,6 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::deform::Deformation;
 use crate::mesh::SharedVolume;
 use crate::pattern::{Pattern, Xform};
 use crate::ripple::Ripple;
@@ -436,6 +437,9 @@ pub struct Shape {
     /// Kind-specific extra numbers (`Kind::param_labels`).
     #[serde(default)]
     pub params: [f32; 4],
+    /// Non-destructive shape-local deformation (underlying primitive remains editable).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deformation: Option<Deformation>,
     /// Nodes (x, y, z, radius) of a `Curve` or `Sweep`, in the shape's own space.
     #[serde(default)]
     pub path: Vec<[f32; 4]>,
@@ -583,6 +587,7 @@ impl Shape {
             guide_plane: None,
             outline: kind.default_outline(),
             params: kind.default_params(),
+            deformation: None,
             path: kind.default_path(),
             curve_handles: Vec::new(),
             outline2: kind.default_outline2(),
@@ -620,6 +625,13 @@ impl Shape {
     /// Half the size of the shape's box in its own axes, before scaling. Rough for the fancy kinds
     /// (used for framing, picking and the gizmo).
     pub fn local_half(&self) -> [f32; 3] {
+        let original = self.base_local_half();
+        self.deformation.map_or(original, |d| d.expanded_half(original))
+    }
+
+    /// Original (pre-deformation) bounds; this is what local Twist's fraction
+    /// and distance safety refer to, independent of the edited result.
+    pub fn base_local_half(&self) -> [f32; 3] {
         let s = self.size;
         let mx = |v: &[[f32; 2]], i: usize| v.iter().map(|p| p[i].abs()).fold(1.0_f32, f32::max);
         match self.kind {
@@ -1463,6 +1475,9 @@ impl Scene {
                     fix(v, 0.01, 100.0, 1.0);
                 }
                 s.material.sanitize();
+                if let Some(d) = &mut s.deformation {
+                    d.sanitize();
+                }
                 if let Some(r) = &mut s.ripple {
                     r.sanitize();
                 }
@@ -1715,6 +1730,46 @@ mod tests {
         let mut primitive = Shape::new(Kind::Box, [0.0; 3], Material::default());
         assert!(primitive.set_sketch_outline(false, enlarged).is_err());
         assert!(shape.set_sketch_outline(true, shape.outline.clone()).is_err(), "only lofts have a top outline");
+    }
+
+    #[test]
+    fn twist_preserves_the_original_shape_and_old_json_can_be_loaded() {
+        use crate::deform::{Axis, Deformation, Twist};
+        let mut sc = Scene::default();
+        sc.groups[0].shapes[0] = Shape::new(Kind::Box, [0.0, 0.0, 15.0], Material::default());
+        let original = sc.groups[0].shapes[0].clone();
+        let unmodified_json = sc.to_json();
+        assert!(!unmodified_json.contains("deformation"), "no needless legacy file diff");
+        let twist = Twist { axis: Axis::Z, degrees: 180.0, ..Twist::default() };
+        sc.groups[0].shapes[0].deformation = Some(Deformation::Twist(twist));
+        let sh = &sc.groups[0].shapes[0];
+        assert_eq!(sh.kind, original.kind);
+        assert_eq!(sh.size, original.size);
+        assert_eq!(sh.params, original.params);
+        assert_eq!(sh.outline, original.outline);
+        assert!(sh.local_half()[0] > original.local_half()[0]);
+        let saved = sc.to_json();
+        assert_eq!(Scene::from_json(&saved).unwrap(), sc, "modifier survives scene round trip");
+        assert_eq!(Scene::from_json(&unmodified_json).unwrap().groups[0].shapes[0].deformation, None);
+        sc.groups[0].shapes[0].deformation = None;
+        assert_eq!(sc.groups[0].shapes[0], original, "undoing modifier restores exact primitive data");
+    }
+
+    #[test]
+    fn twisted_input_is_sanitized_without_changing_primitive() {
+        use crate::deform::{Deformation, Twist};
+        let mut sc = Scene::default();
+        let shape = &mut sc.groups[0].shapes[0];
+        let kind = shape.kind;
+        shape.deformation =
+            Some(Deformation::Twist(Twist { degrees: f32::INFINITY, begin: -12.0, end: -5.0, lower: -2.0, upper: 99.0, ..Twist::default() }));
+        sc.sanitize();
+        let shape = &sc.groups[0].shapes[0];
+        assert_eq!(shape.kind, kind);
+        let Some(Deformation::Twist(t)) = shape.deformation else { panic!("twist retained") };
+        assert!(t.degrees.is_finite() && t.degrees <= 1440.0);
+        assert!((0.0..=0.98).contains(&t.begin) && t.end - t.begin >= 0.02);
+        assert_eq!((t.lower, t.upper), (0.0, 2.0));
     }
 
     #[test]

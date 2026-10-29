@@ -24,6 +24,7 @@ mod corner;
 mod cpu_render;
 mod curve;
 mod curve_tool;
+mod deform;
 mod designer_bag;
 mod designer_chair;
 mod designer_lamp;
