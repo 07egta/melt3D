@@ -1,0 +1,36 @@
+name: Video native capture
+on:
+  push:
+    branches: [video/source-rebuild-20261029]
+    paths:
+      - '.github/workflows/video-native-capture.yml'
+      - 'docs/promo-video/rebuild_20261029/capture_native.py'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          ref: 85d821532928e0efa8f19503da564bf3e5719468
+          path: native-app
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native-app
+          shared-key: melt3d-video-native
+      - name: Graphics dependencies
+        run: sudo apt-get update -qq && sudo apt-get install -y libxkbcommon-dev libwayland-dev libx11-dev mesa-vulkan-drivers
+      - name: Capture actual application frames
+        run: python3 docs/promo-video/rebuild_20261029/capture_native.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: melt3d-native-source-frames
+          path: native-frames/
+          if-no-files-found: warn
+          retention-days: 7
