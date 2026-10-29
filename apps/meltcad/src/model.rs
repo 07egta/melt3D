@@ -4,8 +4,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::mesh::SharedVolume;
-use crate::ripple::Ripple;
 use crate::pattern::{Pattern, Xform};
+use crate::ripple::Ripple;
 
 fn is_false(v: &bool) -> bool {
     !*v
@@ -631,7 +631,7 @@ impl Shape {
                 // params[0] is an optional signed puff distance. Legacy extrusions use zero.
                 let swell = if self.params[0].is_nan() { 0.0 } else { self.params[0].clamp(0.0, 40.0) };
                 [mx(&self.outline, 0) + swell, mx(&self.outline, 1) + swell, s[0] * 0.5 + swell]
-            },
+            }
             Kind::Prism3 | Kind::PrismN | Kind::Star | Kind::Pyramid => [s[0], s[0], s[1] * 0.5],
             Kind::Octa | Kind::Tetra => [s[0]; 3],
             // the dome fills z in -r/2 ..= r/2 (flat face at the bottom of its box)
@@ -1430,7 +1430,9 @@ impl Scene {
             if let Some(params) = &mut g.organic_furniture {
                 params.sanitize();
             }
-            if let Some(meta) = &mut g.puffy_text { meta.sanitize(); }
+            if let Some(meta) = &mut g.puffy_text {
+                meta.sanitize();
+            }
             if let Some(preset) = &mut g.melt_preset {
                 preset.sanitize();
             }
@@ -1461,7 +1463,9 @@ impl Scene {
                     fix(v, 0.01, 100.0, 1.0);
                 }
                 s.material.sanitize();
-                if let Some(r) = &mut s.ripple { r.sanitize(); }
+                if let Some(r) = &mut s.ripple {
+                    r.sanitize();
+                }
                 s.outline.truncate(MAX_OUTLINE);
                 for p in &mut s.outline {
                     fix(&mut p[0], -2000.0, 2000.0, 0.0);

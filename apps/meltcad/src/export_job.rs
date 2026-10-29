@@ -1139,8 +1139,7 @@ mod tests {
                 shape.params[2] = 0.35;
             }
             let scene = scene_of(vec![shape]);
-            let result = build(&scene, None, &opts(format, 0.75), &Progress::new())
-                .unwrap_or_else(|e| panic!("{preset:?} export failed: {e}"));
+            let result = build(&scene, None, &opts(format, 0.75), &Progress::new()).unwrap_or_else(|e| panic!("{preset:?} export failed: {e}"));
             assert!(result.closed, "{preset:?} must export a closed 2-manifold surface");
             assert!(melt::is_watertight(&result.surface.mesh), "{preset:?}: open/non-manifold boundary");
             assert!(melt::volume(&result.surface.mesh) > 10.0, "{preset:?}: no filled solid");
@@ -1156,8 +1155,7 @@ mod tests {
         let mut shape = crate::organic_tube::Preset::S.shape();
         shape.size[1] = 0.55;
         shape.size[2] = 2.0;
-        let result = build(&scene_of(vec![shape]), None, &opts(Format::Stl, 0.25), &Progress::new())
-            .expect("high-precision Organic Tube export");
+        let result = build(&scene_of(vec![shape]), None, &opts(Format::Stl, 0.25), &Progress::new()).expect("high-precision Organic Tube export");
         assert!(result.closed && melt::is_watertight(&result.surface.mesh));
         assert!(melt::volume(&result.surface.mesh) > 10.0);
     }

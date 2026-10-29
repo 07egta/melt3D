@@ -11,8 +11,8 @@ use egui::Context;
 
 use serde::Deserialize;
 
-use crate::model::{Group, MAX_GROUPS, MAX_SHAPES, Scene};
 use crate::designer_lamp::{self, LampParams, LampStyle};
+use crate::model::{Group, MAX_GROUPS, MAX_SHAPES, Scene};
 
 #[derive(Deserialize)]
 struct RawCategory {
@@ -305,8 +305,7 @@ pub fn request_search(ctx: &Context) -> bool {
 pub fn all() -> &'static [Category] {
     static LIB: OnceLock<Vec<Category>> = OnceLock::new();
     LIB.get_or_init(|| {
-        let mut categories: Vec<Category> =
-            FILES.iter().map(|t| parse(t).unwrap_or(Category { name: String::new(), items: Vec::new() })).collect();
+        let mut categories: Vec<Category> = FILES.iter().map(|t| parse(t).unwrap_or(Category { name: String::new(), items: Vec::new() })).collect();
         // the built-in (Rust) categories stand after the files, in the order of the tabs
         categories.extend(extras().iter().map(|c| Category { name: c.name.clone(), items: c.items.clone() }));
         categories
@@ -321,12 +320,11 @@ fn chess_category() -> Category {
     for design in Design::ALL {
         for piece in Piece::ALL {
             let s = Settings { piece, design, side: Side::White, ..Settings::default() };
-            let name = format!("{} · {}",piece.name(),design.name());
+            let name = format!("{} · {}", piece.name(), design.name());
             items.push(Item {
                 name: name.clone(),
-                tags: vec!["Chess".into(),"Chess Set".into(),"チェス".into(),piece.key().into(),
-                    piece.name().into(),design.name().into()],
-                group: crate::chess::make_piece(s,[0.0,0.0],"library"),
+                tags: vec!["Chess".into(), "Chess Set".into(), "チェス".into(), piece.key().into(), piece.name().into(), design.name().into()],
+                group: crate::chess::make_piece(s, [0.0, 0.0], "library"),
             });
         }
     }
@@ -569,7 +567,6 @@ mod tests {
         assert!(placed.centre_xy().iter().all(|x| x.abs() < 1e-3));
     }
 
-
     /// Smoke-test the ten common animals through the same paths as search, placement,
     /// scene save/load and thumbnail creation. Geometry export is checked for the two new models.
     #[test]
@@ -577,9 +574,16 @@ mod tests {
         let category = parse(FILES[2]).expect("animal category");
         assert_eq!(category.name, "どうぶつ");
         for (name, query) in [
-            ("いぬ", "dog"), ("ねこ", "cat"), ("うさぎ", "rabbit"), ("くま", "bear"),
-            ("パンダ", "panda"), ("ぞう", "elephant"), ("きりん", "giraffe"),
-            ("ペンギン", "penguin"), ("うま", "horse"), ("さかな", "fish"),
+            ("いぬ", "dog"),
+            ("ねこ", "cat"),
+            ("うさぎ", "rabbit"),
+            ("くま", "bear"),
+            ("パンダ", "panda"),
+            ("ぞう", "elephant"),
+            ("きりん", "giraffe"),
+            ("ペンギン", "penguin"),
+            ("うま", "horse"),
+            ("さかな", "fish"),
         ] {
             let it = category.items.iter().find(|it| it.name == name).expect("missing animal model");
             assert!(it.matches(query), "{name} search failed");
@@ -605,24 +609,18 @@ mod tests {
         let category = parse(FILES[2]).expect("animal category");
         for name in ["パンダ", "うま"] {
             let it = category.items.iter().find(|it| it.name == name).expect("missing new model");
-            for (format, ext, magic) in [
-                (Format::Obj, "obj", &b"# MELTCAD"[..]),
-                (Format::ThreeMf, "3mf", &b"PK"[..]),
-            ] {
-                let opts = Options {
-                    format,
-                    tolerance: 1.5,
-                    lighten: Lighten::Off,
-                    ..Options::default()
-                };
-                let built = export_job::build(&it.scene(), None, &opts, &Progress::new())
-                    .unwrap_or_else(|e| panic!("{name}: {format:?} mesh failed: {e}"));
+            for (format, ext, magic) in [(Format::Obj, "obj", &b"# MELTCAD"[..]), (Format::ThreeMf, "3mf", &b"PK"[..])] {
+                let opts = Options { format, tolerance: 1.5, lighten: Lighten::Off, ..Options::default() };
+                let built =
+                    export_job::build(&it.scene(), None, &opts, &Progress::new()).unwrap_or_else(|e| panic!("{name}: {format:?} mesh failed: {e}"));
                 assert!(built.tris > 0, "{name} has no mesh faces");
                 let path = format!("animal.{ext}");
-                let files = export_job::serialize(&built, &opts, Path::new(&path))
-                    .unwrap_or_else(|e| panic!("{name}: {format:?} writing failed: {e}"));
-                assert!(files.iter().any(|(p, bytes)| p.extension().is_some_and(|e| e == ext)
-                    && bytes.starts_with(magic)), "{name}: invalid {ext} output");
+                let files =
+                    export_job::serialize(&built, &opts, Path::new(&path)).unwrap_or_else(|e| panic!("{name}: {format:?} writing failed: {e}"));
+                assert!(
+                    files.iter().any(|(p, bytes)| p.extension().is_some_and(|e| e == ext) && bytes.starts_with(magic)),
+                    "{name}: invalid {ext} output"
+                );
             }
         }
     }
@@ -678,11 +676,11 @@ mod tests {
     #[test]
     fn chess_library_has_all_six_pieces_in_three_editable_styles() {
         let chess = chess_category();
-        assert_eq!(chess.items.len(),18);
-        assert_eq!(chess.name,"チェス");
+        assert_eq!(chess.items.len(), 18);
+        assert_eq!(chess.name, "チェス");
         assert!(chess.items.iter().all(|i| i.matches("Chess")));
         for item in &chess.items {
-            assert!(item.fits(0,0));
+            assert!(item.fits(0, 0));
             assert!(crate::chess::preset_of(&item.group).is_some());
             assert!(item.group.shapes.iter().all(|s| s.kind != crate::model::Kind::Mesh));
         }
