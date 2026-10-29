@@ -3,9 +3,10 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::deform::Deformation;
 use crate::mesh::SharedVolume;
-use crate::ripple::Ripple;
 use crate::pattern::{Pattern, Xform};
+use crate::ripple::Ripple;
 
 fn is_false(v: &bool) -> bool {
     !*v
@@ -436,6 +437,9 @@ pub struct Shape {
     /// Kind-specific extra numbers (`Kind::param_labels`).
     #[serde(default)]
     pub params: [f32; 4],
+    /// Non-destructive shape-local deformation (underlying primitive remains editable).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deformation: Option<Deformation>,
     /// Nodes (x, y, z, radius) of a `Curve` or `Sweep`, in the shape's own space.
     #[serde(default)]
     pub path: Vec<[f32; 4]>,
@@ -583,6 +587,7 @@ impl Shape {
             guide_plane: None,
             outline: kind.default_outline(),
             params: kind.default_params(),
+            deformation: None,
             path: kind.default_path(),
             curve_handles: Vec::new(),
             outline2: kind.default_outline2(),
@@ -620,6 +625,13 @@ impl Shape {
     /// Half the size of the shape's box in its own axes, before scaling. Rough for the fancy kinds
     /// (used for framing, picking and the gizmo).
     pub fn local_half(&self) -> [f32; 3] {
+        let original = self.base_local_half();
+        self.deformation.map_or(original, |d| d.expanded_half(original))
+    }
+
+    /// Original (pre-deformation) bounds; this is what local Twist's fraction
+    /// and distance safety refer to, independent of the edited result.
+    pub fn base_local_half(&self) -> [f32; 3] {
         let s = self.size;
         let mx = |v: &[[f32; 2]], i: usize| v.iter().map(|p| p[i].abs()).fold(1.0_f32, f32::max);
         match self.kind {
@@ -631,7 +643,7 @@ impl Shape {
                 // params[0] is an optional signed puff distance. Legacy extrusions use zero.
                 let swell = if self.params[0].is_nan() { 0.0 } else { self.params[0].clamp(0.0, 40.0) };
                 [mx(&self.outline, 0) + swell, mx(&self.outline, 1) + swell, s[0] * 0.5 + swell]
-            },
+            }
             Kind::Prism3 | Kind::PrismN | Kind::Star | Kind::Pyramid => [s[0], s[0], s[1] * 0.5],
             Kind::Octa | Kind::Tetra => [s[0]; 3],
             // the dome fills z in -r/2 ..= r/2 (flat face at the bottom of its box)
@@ -1212,6 +1224,35 @@ impl Scene {
         reach
     }
 
+    /// One melt amount for a whole tree: every group and every shape that melts (amount above 0)
+    /// under the same top group as `g` takes `amount`, so changing the amount on any of them,
+    /// the top group included, changes them all. Things with melt off stay off; 0 or a number
+    /// that is not finite changes nothing. Returns whether anything changed.
+    pub fn share_melt_amount(&mut self, g: usize, amount: f32) -> bool {
+        if !amount.is_finite() || amount <= 0.0 || g >= self.groups.len() {
+            return false;
+        }
+        let mut top = g;
+        while let Some(p) = self.parent_of(top) {
+            top = p;
+        }
+        let end = self.subtree_end(top).min(self.groups.len());
+        let mut changed = false;
+        for group in self.groups.get_mut(top..end).unwrap_or_default() {
+            if group.blend > 0.0 && group.blend != amount {
+                group.blend = amount;
+                changed = true;
+            }
+            for shape in &mut group.shapes {
+                if shape.blend > 0.0 && shape.blend != amount {
+                    shape.blend = amount;
+                    changed = true;
+                }
+            }
+        }
+        changed
+    }
+
     /// Put `g` (with what is nested in it) into the group just above it.
     pub fn indent_group(&mut self, g: usize) -> bool {
         let e = self.subtree_end(g);
@@ -1401,7 +1442,9 @@ impl Scene {
             if let Some(params) = &mut g.organic_furniture {
                 params.sanitize();
             }
-            if let Some(meta) = &mut g.puffy_text { meta.sanitize(); }
+            if let Some(meta) = &mut g.puffy_text {
+                meta.sanitize();
+            }
             if let Some(preset) = &mut g.melt_preset {
                 preset.sanitize();
             }
@@ -1432,7 +1475,12 @@ impl Scene {
                     fix(v, 0.01, 100.0, 1.0);
                 }
                 s.material.sanitize();
-                if let Some(r) = &mut s.ripple { r.sanitize(); }
+                if let Some(d) = &mut s.deformation {
+                    d.sanitize();
+                }
+                if let Some(r) = &mut s.ripple {
+                    r.sanitize();
+                }
                 s.outline.truncate(MAX_OUTLINE);
                 for p in &mut s.outline {
                     fix(&mut p[0], -2000.0, 2000.0, 0.0);
@@ -1685,6 +1733,46 @@ mod tests {
     }
 
     #[test]
+    fn twist_preserves_the_original_shape_and_old_json_can_be_loaded() {
+        use crate::deform::{Axis, Deformation, Twist};
+        let mut sc = Scene::default();
+        sc.groups[0].shapes[0] = Shape::new(Kind::Box, [0.0, 0.0, 15.0], Material::default());
+        let original = sc.groups[0].shapes[0].clone();
+        let unmodified_json = sc.to_json();
+        assert!(!unmodified_json.contains("deformation"), "no needless legacy file diff");
+        let twist = Twist { axis: Axis::Z, degrees: 180.0, ..Twist::default() };
+        sc.groups[0].shapes[0].deformation = Some(Deformation::Twist(twist));
+        let sh = &sc.groups[0].shapes[0];
+        assert_eq!(sh.kind, original.kind);
+        assert_eq!(sh.size, original.size);
+        assert_eq!(sh.params, original.params);
+        assert_eq!(sh.outline, original.outline);
+        assert!(sh.local_half()[0] > original.local_half()[0]);
+        let saved = sc.to_json();
+        assert_eq!(Scene::from_json(&saved).unwrap(), sc, "modifier survives scene round trip");
+        assert_eq!(Scene::from_json(&unmodified_json).unwrap().groups[0].shapes[0].deformation, None);
+        sc.groups[0].shapes[0].deformation = None;
+        assert_eq!(sc.groups[0].shapes[0], original, "undoing modifier restores exact primitive data");
+    }
+
+    #[test]
+    fn twisted_input_is_sanitized_without_changing_primitive() {
+        use crate::deform::{Deformation, Twist};
+        let mut sc = Scene::default();
+        let shape = &mut sc.groups[0].shapes[0];
+        let kind = shape.kind;
+        shape.deformation =
+            Some(Deformation::Twist(Twist { degrees: f32::INFINITY, begin: -12.0, end: -5.0, lower: -2.0, upper: 99.0, ..Twist::default() }));
+        sc.sanitize();
+        let shape = &sc.groups[0].shapes[0];
+        assert_eq!(shape.kind, kind);
+        let Some(Deformation::Twist(t)) = shape.deformation else { panic!("twist retained") };
+        assert!(t.degrees.is_finite() && t.degrees <= 1440.0);
+        assert!((0.0..=0.98).contains(&t.begin) && t.end - t.begin >= 0.02);
+        assert_eq!((t.lower, t.upper), (0.0, 2.0));
+    }
+
+    #[test]
     fn a_scene_round_trips_and_hostile_numbers_are_made_safe() {
         let s = Scene::default();
         assert_eq!(Scene::from_json(&s.to_json()).unwrap(), s);
@@ -1907,5 +1995,40 @@ mod tests {
         sh.scale = [2.0, 3.0, 4.0];
         sh.volume = Some(crate::mesh::SharedVolume::new(crate::mesh::tests::ball_volume(8)));
         assert_eq!(sh.mesh_cell_mm(), Some([2.0, 3.0, 4.0]));
+    }
+
+    #[test]
+    fn one_melt_amount_is_shared_by_the_whole_group_tree() {
+        let mut sc = Scene::default();
+        let mut top = Group::new("top");
+        top.blend = 6.0;
+        let mut child = Group::new("child");
+        child.depth = 1;
+        child.blend = 20.0;
+        let mut off = Group::new("off");
+        off.depth = 1;
+        off.blend = 0.0;
+        let mut other = Group::new("other tree");
+        other.blend = 9.0;
+        let mut ball = Shape::new(Kind::Sphere, [0.0; 3], Material::default());
+        ball.blend = 4.0;
+        child.shapes.push(ball.clone());
+        let mut hard = ball;
+        hard.blend = 0.0;
+        child.shapes.push(hard);
+        sc.groups = vec![top, child, off, other];
+        // the top group's own slider reaches the group inside it, even though that one was higher
+        assert!(sc.share_melt_amount(0, 12.0));
+        assert_eq!((sc.groups[0].blend, sc.groups[1].blend), (12.0, 12.0));
+        assert_eq!(sc.groups[1].shapes[0].blend, 12.0);
+        assert_eq!(sc.groups[1].shapes[1].blend, 0.0, "a shape with melt off stays hard");
+        assert_eq!(sc.groups[2].blend, 0.0, "a group with melt off stays off");
+        assert_eq!(sc.groups[3].blend, 9.0, "another tree is not touched");
+        // and a slider deep inside reaches the top
+        assert!(sc.share_melt_amount(1, 30.0));
+        assert_eq!((sc.groups[0].blend, sc.groups[1].blend), (30.0, 30.0));
+        assert_eq!(sc.group_melt_reach(1), 30.0);
+        // nothing to do for 0, NaN or a group that is not there
+        assert!(!sc.share_melt_amount(0, 0.0) && !sc.share_melt_amount(0, f32::NAN) && !sc.share_melt_amount(99, 5.0));
     }
 }

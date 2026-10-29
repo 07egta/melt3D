@@ -112,7 +112,9 @@ jobs:
         shell: bash
         run: |
           set +e
-          cargo test --profile ci --locked -p solidcraft-geom -p solidcraft-doc -p solidcraft-ui-egui --lib 2>&1 | tee test1.log
+          # The shared-state UI tests in this group (theme and GPU/CPU image comparisons) run one
+          # at a time; their assertions and image tolerances stay unchanged.
+          RUST_TEST_THREADS=1 cargo test --profile ci --locked -p solidcraft-geom -p solidcraft-doc -p solidcraft-ui-egui --lib 2>&1 | tee test1.log
           s1=${PIPESTATUS[0]}
           cargo test --profile ci --locked -p solidcraft-engine --lib -- --skip robustness --skip hostile_params 2>&1 | tee test2.log
           s2=${PIPESTATUS[0]}
@@ -121,7 +123,19 @@ jobs:
           # Show what failed as annotations, so the result can be read without the full log.
           grep -hE "^test .* FAILED|panicked at|^error(\[|:)" test1.log test2.log test3.log | head -30 | while read -r line; do echo "::error::$line"; done
           grep -hE "test result" test1.log test2.log test3.log | while read -r line; do echo "::notice::$line"; done
-          exit $((s1 + s2 + s3))
+          # Combine failures as a boolean: exit codes are eight-bit values, so adding several
+          # failures can wrap around to a successful zero.
+          if ((s1 != 0 || s2 != 0 || s3 != 0)); then
+            exit 1
+          fi
+      - name: Retain test logs
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: regression-test-logs
+          path: test*.log
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Render Melt3D workflow screenshots
         # Keep review evidence available after a test failure; the job still fails.

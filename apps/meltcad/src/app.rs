@@ -95,6 +95,10 @@ pub struct App {
     queued_open: Option<QueuedOpen>,
     /// A Save-and-continue decision only runs after a complete successful save.
     after_save: Option<PendingFileAction>,
+    /// A save that finished during an unfinished edit (the mouse still down, or before the frame
+    /// settled it): its revision. Kept until the edit's Undo step is made, so the save neither
+    /// splits that step nor leaves the saved state looking changed.
+    saved_pending_revision: Option<u64>,
     close_approved: bool,
     status: (String, f64),
     pub renaming: Option<Pick>,
@@ -131,6 +135,12 @@ pub struct App {
     /// A left-drag that began on empty space is turning the view.
     pub orbiting: bool,
     pub show_keys: bool,
+    /// The docks the person wants open. A window narrower than `ui_layout::COMPACT_WINDOW`
+    /// shows only one of them (see `ui_layout::visible_docks`); closed docks leave the view wider.
+    pub show_scene_dock: bool,
+    pub show_properties: bool,
+    /// Simple view: the inspector folds its less used settings away. Nothing is removed.
+    pub simple_ui: bool,
     /// Pinned palette entries and custom shortcuts.
     pub prefs: crate::palette_prefs::Prefs,
     /// Language, display, snapping, navigation, autosave and export defaults.
@@ -151,6 +161,8 @@ pub struct App {
     pub pt: crate::pipe_tool::State,
     /// The sketch tool (plane, pen, finished profile) and the outline editing.
     pub sk: crate::sketch_ui::State,
+    /// Per-user opt-out, non-modal first-run guide and contextual operation hints.
+    pub guide: crate::guide::Guide,
     /// Frame cache, fast mode, quality and other speed-ups (see `perf.rs`).
     pub perf: crate::perf::Perf,
     /// The last copy (text), so the Edit menu can paste without asking the system.
@@ -222,6 +234,7 @@ impl App {
             native_job: None,
             queued_open: None,
             after_save: None,
+            saved_pending_revision: None,
             close_approved: false,
             status: (String::new(), 0.0),
             renaming: None,
@@ -247,6 +260,9 @@ impl App {
             fly: None,
             orbiting: false,
             show_keys: false,
+            show_scene_dock: true,
+            show_properties: true,
+            simple_ui: false,
             prefs: crate::palette_prefs::Prefs::load(),
             preferences: crate::prefs::Preferences::default(),
             tab: Tab::Shape,
@@ -256,6 +272,7 @@ impl App {
             ct: Default::default(),
             pt: Default::default(),
             sk: Default::default(),
+            guide: crate::guide::Guide::load(open.is_some()),
             perf: crate::perf::Perf {
                 sharpen: crate::perf::DEFAULT_SHARPEN,
                 hud: std::env::var_os("MELTCAD_HUD").is_some_and(|v| v != "0"),
@@ -387,6 +404,7 @@ impl App {
                     self.redo.clear();
                     self.path = None;
                     self.dirty = true;
+                    self.saved_pending_revision = None;
                     self.sel = None;
                     self.frame_now();
                     self.say(
@@ -438,6 +456,11 @@ impl App {
                 }
                 self.redo.clear();
                 self.dirty = true;
+            }
+            if let Some(saved) = self.saved_pending_revision.take() {
+                // Saving midway through an edit does not split its Undo step. A return to the
+                // old committed scene can still differ from what that save wrote.
+                self.dirty = saved != rev;
             }
             self.committed_rev = rev;
         }
@@ -532,6 +555,7 @@ impl App {
             // Invalidate both CPU field and GPU pack before any further hit test/draw.
             self.track_scene();
             self.committed_rev = self.scene_rev;
+            self.saved_pending_revision = None;
         }
     }
 
@@ -558,6 +582,7 @@ impl App {
             self.animation_at_applied(self.an.frame);
             self.track_scene();
             self.committed_rev = self.scene_rev;
+            self.saved_pending_revision = None;
         }
     }
 
@@ -566,7 +591,12 @@ impl App {
     }
 
     fn has_unsaved_work(&self) -> bool {
-        self.dirty || self.scene != self.committed || self.sketch_has_draft() || (self.sk.on && self.sk.separate)
+        let edited = match self.saved_pending_revision {
+            // The file holds the scene of that revision, not the committed one.
+            Some(saved) => saved != self.scene_rev || self.scene != self.tracked,
+            None => self.scene != self.committed,
+        };
+        self.dirty || edited || self.sketch_has_draft() || (self.sk.on && self.sk.separate)
     }
 
     fn sketch_has_draft(&self) -> bool {
@@ -612,7 +642,10 @@ impl App {
 
     fn apply_file_action(&mut self, action: PendingFileAction) {
         match action {
-            PendingFileAction::New(scene) => self.install_scene(scene, None, Vec::new()),
+            PendingFileAction::New(scene) => {
+                self.install_scene(scene, None, Vec::new());
+                self.guide.new_scene_applied();
+            }
             PendingFileAction::Open(path) => {
                 // No file I/O or JSON parsing on the UI thread. The current design stays
                 // visible until the worker reports a fully validated new Scene.
@@ -628,8 +661,18 @@ impl App {
         }
         self.clear_document_gestures();
         self.document_generation = self.document_generation.wrapping_add(1);
+        // A document can hold large prepared SDF data, packed GPU records and a
+        // software-render worker snapshot. Release them *before* replacing it.
+        self.field_cache.get_mut().take();
+        self.perf.pack.clear();
+        self.gpu.easy_view.invalidate();
         self.scene = scene.clone();
         self.committed = scene;
+        // A different document must release the old one's prepared geometry, packed GPU data
+        // and fallback picture instead of keeping them as reuse candidates.
+        self.field_cache.get_mut().take();
+        self.perf.pack.clear();
+        self.gpu.easy_view.invalidate();
         self.undo.clear();
         self.redo.clear();
         self.sel = if self.scene.shape(0, 0).is_some() { Some(Pick::Shape(0, 0)) } else { None };
@@ -638,6 +681,7 @@ impl App {
         self.doc_title.clear();
         self.title_edit = None;
         self.dirty = false;
+        self.saved_pending_revision = None;
         // A different document must never inherit the old timeline's frame,
         // playback state or edit revision. Otherwise the next UI frame can
         // auto-record the new scene over one of its saved animation keys.
@@ -1558,6 +1602,9 @@ impl App {
                     self.path = Some(path);
                     let same = self.track_scene() == base_revision;
                     self.dirty = !same;
+                    // Saved before the frame made the edit's Undo step (or during a drag):
+                    // remember what is on disk until that step is made.
+                    self.saved_pending_revision = (same && self.scene != self.committed).then_some(base_revision);
                     if same {
                         self.doc_title.clear();
                         if let Err(e) = self.recovery.document_saved(base_revision) {
@@ -1711,6 +1758,9 @@ impl App {
         }
         if hit(plain, Key::Questionmark) || hit(plain, Key::F1) {
             self.show_keys = !self.show_keys;
+            if self.show_keys {
+                self.guide.panel_open = false;
+            }
         }
         for (m, step) in [(Modifiers::NONE, 1.0), (Modifiers::SHIFT, 10.0)] {
             for (k, d) in [
@@ -2006,6 +2056,8 @@ impl App {
                             self.frame_view(true);
                             ui.close();
                         }
+                        ui.separator();
+                        self.layout_menu_items(ui);
                     });
                     style::vsep(ui);
                     if ui
@@ -2054,7 +2106,8 @@ impl App {
                             }
                         });
                         // Mouse or trackpad: Auto follows what the last scroll looked like
-                        {
+                        // (a narrow bar keeps it in the View menu instead)
+                        if bar.width() >= crate::ui_layout::NARROW_HEADER {
                             let eff = self.input_dev.device(self.input_seen);
                             let items = [
                                 ("Mouse", "Wheel zooms, middle-drag turns, right-drag slides"),
@@ -2317,7 +2370,7 @@ impl App {
         // drag its right edge to make it wider or narrower
         egui::Panel::left("dock")
             .default_size(272.0)
-            .size_range(220.0..=560.0)
+            .size_range(crate::ui_layout::dock_range(ui.available_width(), 220.0, 560.0))
             .resizable(true)
             .frame(egui::Frame::new().fill(style::PANEL_DARK).inner_margin(egui::Margin::symmetric(10, 10)))
             .show(ui, |ui| {
@@ -2376,56 +2429,105 @@ impl App {
             .fixed_pos(rect.right_bottom() - egui::vec2(16.0, 16.0))
             .show(&ctx, |ui| {
                 style::card().show(ui, |ui| {
-                    ui.set_width(300.0);
+                    // a narrow view gets a narrower card that scrolls instead of running off it
+                    let narrow = rect.width() < 260.0;
+                    ui.set_width((rect.width() - 56.0).clamp(94.0, 300.0));
                     ui.label(RichText::new("Controls").strong().size(14.0));
+                    // the first-use box practice and the hidden status hints come back from here
+                    ui.horizontal_wrapped(|ui| {
+                        if ui.button(i18n::tr("guide.open")).on_hover_text(i18n::tr("guide.open.tip")).clicked() {
+                            self.guide.open();
+                            self.show_keys = false;
+                        }
+                        if !self.guide.prefs.hidden.is_empty() && ui.button(i18n::tr("guide.reset_hints")).clicked() {
+                            self.guide.reset_hints();
+                        }
+                    });
                     ui.separator();
-                    for (k, v) in [
-                        ("Middle drag", "Orbit"),
-                        ("Right drag", "Pan"),
-                        ("Wheel", "Zoom to cursor"),
-                        ("Left drag (empty)", "Orbit"),
-                        ("Click", "Select  Ctrl: add/remove  Shift: add/remove"),
-                        ("Double click", "Focus on shape"),
-                        ("Drawing: left click → right click", "Place point → finish (all draw tools)"),
-                        ("F", "Find shapes, library, commands"),
-                        ("Shift+F / Home", "Frame selection / Frame all"),
-                        ("1 3 7 (Ctrl: opposite)", "Front / Right / Top"),
-                        ("5", "Perspective ⇄ Ortho"),
-                        ("Tab", "Add ⇄ Subtract"),
-                        ("Ctrl + drag", "1 mm / 15° steps"),
-                        ("Arrow keys", "Move 1 mm (Shift: 10 mm)"),
-                        ("Ctrl+C / X / V", "Copy / Cut / Paste"),
-                        ("Ctrl+D / Delete", "Duplicate / Delete"),
-                        ("Ctrl+G", "Group the selected shapes"),
-                        ("Ctrl+Z / Ctrl+Shift+Z", "Undo / Redo"),
-                    ] {
-                        ui.horizontal(|ui| {
-                            ui.add_sized([150.0, 18.0], egui::Label::new(RichText::new(style::keys(k)).size(12.0).color(style::ACCENT)));
-                            ui.label(RichText::new(v).size(12.0).color(style::TEXT));
-                        });
-                    }
+                    egui::ScrollArea::vertical().max_height((rect.height() - 96.0).max(64.0)).show(ui, |ui| {
+                        for (k, v) in [
+                            ("Middle drag", "Orbit"),
+                            ("Right drag", "Pan"),
+                            ("Wheel", "Zoom to cursor"),
+                            ("Left drag (empty)", "Orbit"),
+                            ("Click", "Select  Ctrl: add/remove  Shift: add/remove"),
+                            ("Double click", "Focus on shape"),
+                            ("Drawing: left click → right click", "Place point → finish (all draw tools)"),
+                            ("F", "Find shapes, library, commands"),
+                            ("Shift+F / Home", "Frame selection / Frame all"),
+                            ("1 3 7 (Ctrl: opposite)", "Front / Right / Top"),
+                            ("5", "Perspective ⇄ Ortho"),
+                            ("Tab", "Add ⇄ Subtract"),
+                            ("Ctrl + drag", "1 mm / 15° steps"),
+                            ("Arrow keys", "Move 1 mm (Shift: 10 mm)"),
+                            ("Ctrl+C / X / V", "Copy / Cut / Paste"),
+                            ("Ctrl+D / Delete", "Duplicate / Delete"),
+                            ("Ctrl+G", "Group the selected shapes"),
+                            ("Ctrl+Z / Ctrl+Shift+Z", "Undo / Redo"),
+                        ] {
+                            if narrow {
+                                ui.label(RichText::new(style::keys(k)).size(12.0).color(style::ACCENT));
+                                ui.label(RichText::new(v).size(11.0).color(style::TEXT));
+                            } else {
+                                ui.horizontal(|ui| {
+                                    ui.add_sized([150.0, 18.0], egui::Label::new(RichText::new(style::keys(k)).size(12.0).color(style::ACCENT)));
+                                    ui.label(RichText::new(v).size(12.0).color(style::TEXT));
+                                });
+                            }
+                        }
+                    });
                 });
             });
     }
 
+    /// A single quiet status strip instead of a stack of interrupting tooltips/popups.
     fn status_bar(&mut self, ui: &mut Ui) {
         let now = ui.input(|i| i.time);
+        let info = crate::guide::hint(&self.sk, self.tool, self.sel.is_some(), self.scene.shape_count(), self.new_op, self.ct.drawing, self.pt.on);
         egui::Panel::bottom("status")
-            .exact_size(28.0)
-            .frame(egui::Frame::new().fill(style::PANEL_DARK).inner_margin(egui::Margin::symmetric(14, 3)))
+            .exact_size(32.0)
+            .frame(egui::Frame::new().fill(style::PANEL_DARK).inner_margin(egui::Margin::symmetric(12, 5)))
             .show(ui, |ui| {
-                style::panel_sheen(ui, ui.max_rect().expand2(egui::vec2(14.0, 3.0)), style::PANEL_DARK, style::Edge::Top);
+                style::panel_sheen(ui, ui.max_rect().expand2(egui::vec2(12.0, 5.0)), style::PANEL_DARK, style::Edge::Top);
                 ui.horizontal_centered(|ui| {
-                    let note = if now - self.status.1 < 5.0 { self.status.0.clone() } else { String::new() };
+                    let note = if now - self.status.1 < 5.0 { self.status.0.as_str() } else { "" };
                     if !note.is_empty() {
-                        // the message goes away by itself: wake up when it is due
                         ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64((5.0 - (now - self.status.1)).max(0.0) + 0.05));
                     }
-                    let hint = crate::gizmo::hint(self.tool);
-                    ui.label(RichText::new(if note.is_empty() { hint.to_string() } else { note }).size(12.0).color(style::DIM));
+                    let error = self.sketch_active() && !self.sk.msg.is_empty();
+                    let hidden = info.id.is_some_and(|id| self.guide.prefs.is_hidden(id));
+                    let message = if error {
+                        format!("{}: {}  {}", i18n::tr("guide.status.fix"), self.sk.msg, i18n::tr("guide.status.fix.where"))
+                    } else if !note.is_empty() {
+                        note.to_string()
+                    } else if hidden {
+                        // this kind of hint was hidden with ×: the plain tool hint stays
+                        if self.simple_ui { i18n::tr("status.hint.simple").to_string() } else { crate::gizmo::hint(self.tool).to_string() }
+                    } else {
+                        format!("{}: {}  |  {}", i18n::tr("guide.status.next"), info.action, info.controls)
+                    };
+                    let severity = error || (note.is_empty() && info.warning);
+                    let ink = if severity { style::CUT } else { style::DIM };
+                    let text = egui::RichText::new(message).size(12.0).color(ink);
+                    let room = (ui.available_width() - if ui.available_width() < 740.0 { 170.0 } else { 330.0 }).max(100.0);
+                    ui.add_sized([room, 18.0], egui::Label::new(text).truncate()).on_hover_text(format!("{}  |  {}", info.action, info.controls));
+                    if !error
+                        && note.is_empty()
+                        && !info.warning
+                        && !hidden
+                        && let Some(id) = info.id
+                        && ui.small_button("×").on_hover_text(i18n::tr("guide.status.dismiss.tip")).clicked()
+                    {
+                        self.guide.dismiss(id);
+                    }
+                    let roomy = ui.available_width() >= crate::ui_layout::NARROW_STATUS;
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui.selectable_label(self.an.open, i18n::tr("status.animation")).on_hover_text(i18n::tr("status.animation.tip")).clicked() {
                             self.an.open = !self.an.open;
+                        }
+                        // a narrow bar keeps the hint readable instead of overlapping it
+                        if !roomy {
+                            return;
                         }
                         let name = self
                             .path
@@ -2573,6 +2675,13 @@ impl App {
             }
             self.lib_open = false;
         }
+        // Memory QA: close the currently loaded model without terminating the
+        // process, so the same PID can be measured before and after release.
+        if dir.join("reset_scene").exists() && std::fs::remove_file(dir.join("reset_scene")).is_ok() {
+            self.new_scene(Scene::default());
+            let _ = std::fs::write(dir.join("reset_scene.done"), format!("{}\n", self.scene.shape_count()));
+            ctx.request_repaint();
+        }
         if dir.join("quit").exists() {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
@@ -2636,7 +2745,9 @@ impl App {
         }
         let rev = self.track_scene();
         let now = std::time::Instant::now();
-        if let Err(e) = self.recovery.checkpoint(&self.scene, self.path.as_deref(), true, rev, now + crate::recovery::INTERVAL.max(self.preferences.autosave())) {
+        if let Err(e) =
+            self.recovery.checkpoint(&self.scene, self.path.as_deref(), true, rev, now + crate::recovery::INTERVAL.max(self.preferences.autosave()))
+        {
             crate::gpu_log::log(&format!("could not save recovery data after graphics device loss: {e}"));
         }
     }
@@ -2875,8 +2986,13 @@ impl App {
         self.top_bar(ui);
         self.status_bar(ui);
         self.anim_bar(ui);
-        self.left_dock(ui);
-        self.side(ui);
+        let (scene_dock, inspector) = crate::ui_layout::visible_docks(ui.available_width(), self.show_scene_dock, self.show_properties);
+        if scene_dock {
+            self.left_dock(ui);
+        }
+        if inspector {
+            self.side(ui);
+        }
         egui::CentralPanel::default().frame(egui::Frame::new().fill(Color32::from_rgb(52, 52, 56))).show(ui, |ui| {
             self.last_view_height = ui.available_height();
             self.viewport(ui);
@@ -2886,7 +3002,10 @@ impl App {
             self.draw_card(&ctx);
             self.pipe_card(&ctx);
             self.sketch_card(&ctx);
-            self.keys_card(ui);
+            if !self.guide.panel_open {
+                self.keys_card(ui);
+            }
+            self.guide_card(&ctx);
             crate::svg_dialog::update(self, &ctx);
             crate::precise::transfer_card(self, &ctx);
             crate::puffy_text_ui::update(self, &ctx);
@@ -3051,6 +3170,27 @@ mod tests {
     }
 
     #[test]
+    fn twist_preset_is_one_undo_step_and_redoes_after_saving() {
+        use crate::deform::{Deformation, Twist};
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        let original = app.scene.clone();
+        app.scene.groups[0].shapes[0].deformation = Some(Deformation::Twist(Twist::preset(90.0)));
+        app.scene.groups[0].shapes[0].deformation = Some(Deformation::Twist(Twist::preset(180.0)));
+        app.scene.groups[0].shapes[0].deformation = Some(Deformation::Twist(Twist::preset(360.0)));
+        app.settle(&ctx);
+        assert_eq!(app.undo.len(), 1);
+        let twisted = app.scene.clone();
+        assert_ne!(twisted, original);
+        app.undo();
+        assert_eq!(app.scene, original, "undo restores source with no modifier");
+        app.redo();
+        assert_eq!(app.scene, twisted, "redo restores twist and its angle");
+        let json = app.scene.to_json();
+        assert_eq!(crate::model::Scene::from_json(&json).unwrap(), twisted);
+    }
+
+    #[test]
     fn adding_undoing_and_deleting_shapes() {
         let ctx = egui::Context::default();
         let mut app = App::new(true, None);
@@ -3193,6 +3333,30 @@ mod tests {
     }
 
     #[test]
+    fn switching_documents_drops_old_scene_specific_memory_immediately() {
+        let mut app = App::new(true, None);
+        let rev = app.track_scene();
+        let field = app.field();
+        let old_field = std::rc::Rc::downgrade(&field);
+        drop(field);
+        let pack = app.perf.pack.get(&app.scene, rev);
+        let old_pack = std::sync::Arc::downgrade(&pack);
+        drop(pack);
+        assert!(old_field.upgrade().is_some());
+        assert!(old_pack.upgrade().is_some());
+
+        app.apply_file_action(PendingFileAction::New(Scene::default()));
+        assert!(old_field.upgrade().is_none(), "old picking SDF should not pin deleted meshes");
+        assert!(old_pack.upgrade().is_none(), "old shader pack should not pin deleted meshes");
+
+        let field = app.field();
+        assert_eq!(field.groups.len(), 1, "the new document is still pickable");
+        let rev = app.track_scene();
+        let pack = app.perf.pack.get(&app.scene, rev);
+        assert!(!pack.list.is_empty(), "the new document can still be rendered");
+    }
+
+    #[test]
     fn new_scene_waits_for_unsaved_work_to_be_resolved() {
         let ctx = egui::Context::default();
         let mut app = App::new(true, None);
@@ -3247,6 +3411,116 @@ mod tests {
         assert_eq!(app.scene.shape_count(), 2);
         assert!(app.dirty);
         assert!(app.pending_file_action.is_some(), "failed save must not discard the pending action");
+    }
+
+    #[test]
+    fn undo_and_redo_with_no_history_keep_a_clean_scene_clean() {
+        let mut app = App::new(true, None);
+        let before = app.scene.clone();
+        app.undo();
+        app.redo();
+        assert_eq!(app.scene, before);
+        assert!(!app.has_unsaved_work());
+    }
+
+    #[test]
+    fn saved_pending_edit_stays_clean_after_settle_and_retains_undo() {
+        let path = std::env::temp_dir().join(format!("meltcad_save_boundary_guard_{}.meltcad", std::process::id()));
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        app.add_shape(&ctx, Kind::Box);
+        app.path = Some(path.clone());
+        assert!(app.try_save(&ctx, false), "Save may run before the frame settles its edit");
+        finish_file_jobs(&mut app, &ctx);
+        assert!(!app.has_unsaved_work(), "the exact scene on disk is already saved");
+        app.settle(&ctx);
+        assert!(!app.has_unsaved_work(), "settling the already-saved edit must not mark it changed again");
+        assert_eq!(app.undo_depth(), 1, "saving must not discard the pending Undo step");
+        app.undo();
+        assert_eq!(app.scene.shape_count(), 1);
+        assert!(app.has_unsaved_work(), "the following Undo differs from the saved document");
+        let (disk, _) = crate::recovery::read_project(&path).expect("reopen saved document");
+        assert_eq!(disk.shape_count(), 2);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn saving_during_a_drag_keeps_one_undo_and_protects_later_movement() {
+        let path = std::env::temp_dir().join(format!("meltcad_save_drag_guard_{}.meltcad", std::process::id()));
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        let before = app.scene.clone();
+        app.path = Some(path.clone());
+        let pointer = |pressed| egui::Event::PointerButton {
+            pos: egui::pos2(300.0, 200.0),
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let mut down = ctx.run_ui(egui::RawInput { events: vec![pointer(true)], ..Default::default() }, |_ui| {
+            app.scene.shape_mut(0, 0).expect("shape to drag").pos[0] += 8.0;
+            assert!(app.try_save(&ctx, false));
+            finish_file_jobs(&mut app, &ctx);
+            app.settle(&ctx);
+            assert_eq!(app.undo_depth(), 0, "Save must not split a drag into several Undo steps");
+            assert!(!app.has_unsaved_work());
+            app.scene.shape_mut(0, 0).expect("shape to drag").pos[0] += 5.0;
+            assert!(app.has_unsaved_work(), "movement after Save is still unsaved");
+        });
+        down.textures_delta.clear();
+        let mut up = ctx.run_ui(egui::RawInput { events: vec![pointer(false)], ..Default::default() }, |_ui| app.settle(&ctx));
+        up.textures_delta.clear();
+        assert_eq!(app.undo_depth(), 1);
+        assert!(app.has_unsaved_work() && app.dirty);
+        app.undo();
+        assert_eq!(app.scene, before, "one Undo restores the whole drag");
+        let (disk, _) = crate::recovery::read_project(&path).expect("reopen saved document");
+        assert_eq!(disk.shape(0, 0).expect("saved shape").pos[0], before.shape(0, 0).expect("original shape").pos[0] + 8.0);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn saving_mid_drag_then_returning_to_the_start_keeps_work_unsaved() {
+        let path = std::env::temp_dir().join(format!("meltcad_saved_drag_return_{}.meltcad", std::process::id()));
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        let before = app.scene.clone();
+        app.path = Some(path.clone());
+        let pointer = |pressed| egui::Event::PointerButton {
+            pos: egui::pos2(300.0, 200.0),
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let mut down = ctx.run_ui(egui::RawInput { events: vec![pointer(true)], ..Default::default() }, |_ui| {
+            app.scene.shape_mut(0, 0).expect("shape to drag").pos[0] += 8.0;
+            assert!(app.try_save(&ctx, false));
+            finish_file_jobs(&mut app, &ctx);
+            app.scene = before.clone();
+            assert!(app.has_unsaved_work(), "returning to the drag origin differs from the intermediate save");
+        });
+        down.textures_delta.clear();
+        let mut up = ctx.run_ui(egui::RawInput { events: vec![pointer(false)], ..Default::default() }, |_ui| app.settle(&ctx));
+        up.textures_delta.clear();
+        assert_eq!(app.scene, before);
+        assert_eq!(app.undo_depth(), 0, "the gesture still makes no net edit for Undo");
+        assert!(app.dirty, "the title must show that the saved intermediate position differs");
+        app.new_scene(Scene::default());
+        assert!(matches!(app.pending_file_action, Some(PendingFileAction::New(_))), "a new document asks first");
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn installing_another_document_releases_the_old_caches() {
+        let mut app = App::new(true, None);
+        let rev = app.track_scene();
+        let weak_field = std::rc::Rc::downgrade(&app.field());
+        let weak_pack = std::sync::Arc::downgrade(&app.perf.pack.get(&app.scene, rev));
+        assert!(weak_field.upgrade().is_some() && weak_pack.upgrade().is_some(), "both caches hold the first document");
+        app.install_scene(Scene::default(), None, Vec::new());
+        assert!(app.field_cache.borrow().is_none());
+        assert!(weak_field.upgrade().is_none(), "the old prepared field is released");
+        assert!(weak_pack.upgrade().is_none(), "the old GPU pack is released");
     }
 
     #[test]

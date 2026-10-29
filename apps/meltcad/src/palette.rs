@@ -59,6 +59,10 @@ pub enum Action {
     ShowAssets,
     ShowOutliner,
     Help,
+    /// The first-use box practice card.
+    Guide,
+    /// Show the status hints hidden with their ×.
+    GuideResetHints,
 }
 
 impl Action {
@@ -221,6 +225,8 @@ pub fn entries() -> Vec<Entry> {
         cmd("Show Library", "library assets らいぶらり あせっと ライブラリを開く", Action::ShowAssets),
         cmd("Show Outliner", "outliner scene しーん あうとらいなー シーン一覧を開く", Action::ShowOutliner),
         cmd("Keyboard Shortcuts", "help keys keyboard へるぷ ? 操作のしかた", Action::Help),
+        cmd("First Box Guide", "guide tutorial first box onboarding がいど ガイド はじめて 箱づくり 練習", Action::Guide),
+        cmd("Restore Hidden Hints", "hints restore reset tips ひんと ヒント 隠したヒントを戻す", Action::GuideResetHints),
     ]);
     v
 }
@@ -368,6 +374,8 @@ impl App {
             Action::Insert(c, i) => {
                 if let Some(item) = library::all().get(c).and_then(|c| c.items.get(i)) {
                     crate::library_ui::insert(self, ctx, item);
+                } else {
+                    self.say(ctx, "This model could not be loaded");
                 }
             }
             Action::Undo => self.undo(),
@@ -411,7 +419,17 @@ impl App {
             Action::ViewTop => self.fly_look(self.cam.yaw, pi / 2.0),
             Action::ShowAssets => self.lib_open = true,
             Action::ShowOutliner => self.lib_open = false,
-            Action::Help => self.show_keys = !self.show_keys,
+            Action::Help => {
+                self.show_keys = !self.show_keys;
+                if self.show_keys {
+                    self.guide.panel_open = false;
+                }
+            }
+            Action::Guide => {
+                self.guide.open();
+                self.show_keys = false;
+            }
+            Action::GuideResetHints => self.guide.reset_hints(),
         }
     }
 
@@ -647,6 +665,16 @@ static ENTRIES: std::sync::OnceLock<Vec<Entry>> = std::sync::OnceLock::new();
 mod tests {
     use super::*;
 
+    #[test]
+    fn a_library_entry_that_cannot_be_loaded_says_so_and_changes_nothing() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        let before = app.scene.clone();
+        app.run_action(&ctx, Action::Insert(usize::MAX, 0));
+        assert_eq!(app.scene, before);
+        assert!(app.status.0.contains("could not be loaded"), "{:?}", app.status.0);
+    }
+
     fn top(q: &str) -> Option<Action> {
         let all = entries();
         search(&all, q, 5).first().and_then(|i| all.get(*i)).map(|e| e.action)
@@ -655,8 +683,7 @@ mod tests {
     #[test]
     fn organic_blob_preset_is_discoverable_in_japanese_and_english() {
         let e = entries();
-        let is_blob = |q: &str| search(&e, q, 10).iter()
-            .any(|i| matches!(e[*i].action, Action::OrganicBlob));
+        let is_blob = |q: &str| search(&e, q, 10).iter().any(|i| matches!(e[*i].action, Action::OrganicBlob));
         assert!(is_blob("Organic Blob"));
         assert!(is_blob("ぷっくり"));
         assert!(is_blob("メタボール") || is_blob("metaball"));
@@ -698,10 +725,13 @@ mod tests {
         let all = entries();
         for q in ["Smooth Fusion", "なめらか合体", "Smooth Union"] {
             let hits = search(&all, q, 40);
-            assert!(hits.iter().any(|&i| match all[i].action {
-                Action::Insert(c, _) => library::all().get(c).is_some_and(|cat| cat.name == "Fusion"),
-                _ => false,
-            }), "{q} is not searchable");
+            assert!(
+                hits.iter().any(|&i| match all[i].action {
+                    Action::Insert(c, _) => library::all().get(c).is_some_and(|cat| cat.name == "Fusion"),
+                    _ => false,
+                }),
+                "{q} is not searchable"
+            );
         }
     }
 

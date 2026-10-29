@@ -1,0 +1,37 @@
+name: YuraCAD Guide Checks
+
+# Targeted PR validation; no EXE publishing, releases, or heavyweight web builds.
+on:
+  pull_request:
+    branches: [easy-layout-and-melt]
+    paths:
+      - "apps/meltcad/src/guide.rs"
+      - "apps/meltcad/src/app.rs"
+      - "apps/meltcad/src/sketch_ui.rs"
+      - "apps/meltcad/src/main.rs"
+      - "apps/meltcad/README.md"
+      - ".github/workflows/yuracad-guide.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tutorial:
+    name: First-run guide and CPU-drawing smoke tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: System libraries for egui
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libx11-dev mesa-vulkan-drivers
+      - name: Compile all YuraCAD code
+        run: cargo check --locked -p meltcad
+      - name: First-use guide tests (operations, restart, hints, CPU tessellation)
+        run: cargo test --profile ci --locked -p meltcad guide::tests -- --nocapture
+      - name: Existing sketch regression
+        run: cargo test --profile ci --locked -p meltcad sketch_ui::tests::a_profile_becomes_each_kind_of_solid_in_the_right_group -- --nocapture

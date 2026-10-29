@@ -5,11 +5,12 @@ use egui::{Align2, Color32, FontId, Pos2, Rect, RichText, Sense, Stroke, Ui, vec
 
 use crate::app::{App, Tab};
 use crate::camera::Camera;
+use crate::deform::{Axis, Deformation};
 use crate::materials::{self, Category};
 use crate::model::{BlendMode, Corner, Group, Kind, Light, MAX_LIGHTS, MAX_OUTLINE, MAX_SAVED, Material, Melt, Op, Pick, ROUND_MAX, Scene};
-use crate::sdf;
 use crate::ripple::{Ripple, RippleMode};
-use crate::{glyphs, i18n, style};
+use crate::sdf;
+use crate::{glyphs, i18n, style, ui_layout};
 
 /// (label, mode, amount, drip, ripple)
 const MELT_PRESETS: [(&str, BlendMode, f32, f32, f32); 6] = [
@@ -20,6 +21,60 @@ const MELT_PRESETS: [(&str, BlendMode, f32, f32, f32); 6] = [
     ("Honey", BlendMode::Gooey, 1.5, 16.0, 0.7),
     ("Runny", BlendMode::Gooey, 2.4, 28.0, 1.0),
 ];
+
+/// A non-destructive Twist preset applied to the selected existing primitive.
+/// The source kind, outline and imported mesh remain editable underneath it.
+fn twist_section(ui: &mut Ui, shape: &mut crate::model::Shape) {
+    ui.add_space(6.0);
+    ui.separator();
+    style::title(ui, i18n::tr("inspector.twist.title"));
+    ui.label(RichText::new(i18n::tr("inspector.twist.hint")).color(style::DIM).size(12.0));
+    let mut twist = match shape.deformation {
+        Some(Deformation::Twist(t)) => Some(t),
+        None => None,
+    };
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = vec2(5.0, 4.0);
+        for degrees in [90.0_f32, 180.0, 360.0] {
+            let chosen = twist.is_some_and(|t| (t.degrees - degrees).abs() < 0.01);
+            if style::pill_enabled(ui, &format!("{degrees:.0}°"), chosen, true).clicked() {
+                let mut t = twist.unwrap_or_default();
+                t.degrees = degrees;
+                twist = Some(t);
+            }
+        }
+        if style::pill_enabled(ui, i18n::tr("inspector.twist.off"), twist.is_none(), true).clicked() {
+            twist = None;
+        }
+    });
+    if let Some(mut t) = twist {
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(i18n::tr("inspector.twist.axis")).color(style::DIM).size(12.0));
+            for axis in Axis::ALL {
+                ui.selectable_value(&mut t.axis, axis, axis.label());
+            }
+        });
+        ui.horizontal_wrapped(|ui| {
+            ui.label(RichText::new(i18n::tr("inspector.twist.direction")).color(style::DIM).size(12.0));
+            ui.selectable_value(&mut t.reverse, false, i18n::tr("inspector.twist.forward"));
+            ui.selectable_value(&mut t.reverse, true, i18n::tr("inspector.twist.reverse"));
+        });
+        style::labeled_slider(ui, i18n::tr("inspector.twist.angle"), &mut t.degrees, 0.0..=720.0, i18n::tr("inspector.twist.angle.tip"));
+        style::labeled_slider(ui, i18n::tr("inspector.twist.begin"), &mut t.begin, 0.0..=0.98, i18n::tr("inspector.twist.begin.tip"));
+        t.end = t.end.max(t.begin + 0.02);
+        style::labeled_slider(ui, i18n::tr("inspector.twist.end"), &mut t.end, (t.begin + 0.02)..=1.0, i18n::tr("inspector.twist.end.tip"));
+        style::labeled_slider(ui, i18n::tr("inspector.twist.lower"), &mut t.lower, 0.0..=2.0, i18n::tr("inspector.twist.lower.tip"));
+        style::labeled_slider(ui, i18n::tr("inspector.twist.upper"), &mut t.upper, 0.0..=2.0, i18n::tr("inspector.twist.upper.tip"));
+        t.sanitize();
+        if shape.kind == Kind::Cylinder && t.axis == Axis::Z && (shape.scale[0] - shape.scale[1]).abs() < 0.01 {
+            ui.label(RichText::new(i18n::tr("inspector.twist.round_note")).color(style::DIM).size(11.0));
+        }
+        ui.label(RichText::new(i18n::tr("inspector.twist.preview_note")).color(style::DIM).size(11.0));
+        shape.deformation = Some(Deformation::Twist(t));
+    } else {
+        shape.deformation = None;
+    }
+}
 
 /// The two colours of the Melt card's shape preview: neighbouring shapes take turns, so the
 /// melt between them reads at card size. Only the picture changes; the viewport, the materials
@@ -82,7 +137,7 @@ fn melt_preview_key(scene: &Scene, keep: &[(usize, usize)], cam: &Camera, size: 
     for &(g, s) in keep {
         if let (Some(sh), Some(gr)) = (scene.shape(g, s), scene.groups.get(g)) {
             format!(
-                "{g} {:?} {:?} {:?} {:?} {:?} {} {:?} {} {:?} {} {} {}",
+                "{g} {:?} {:?} {:?} {:?} {:?} {} {:?} {} {:?} {} {} {} {:?}",
                 sh.kind,
                 sh.size,
                 sh.pos,
@@ -94,7 +149,8 @@ fn melt_preview_key(scene: &Scene, keep: &[(usize, usize)], cam: &Camera, size: 
                 sh.material.color,
                 gr.blend,
                 gr.depth,
-                sh.volume.as_ref().map_or(0, |v| v.key())
+                sh.volume.as_ref().map_or(0, |v| v.key()),
+                sh.deformation
             )
             .hash(&mut h);
         }
@@ -175,7 +231,7 @@ impl App {
         // drag its left edge to make it wider or narrower
         egui::Panel::right("side")
             .default_size(312.0)
-            .size_range(280.0..=600.0)
+            .size_range(ui_layout::dock_range(ui.available_width(), 280.0, 600.0))
             .resizable(true)
             .frame(egui::Frame::new().fill(style::PANEL).inner_margin(egui::Margin::symmetric(14, 12)))
             .show(ui, |ui| {
@@ -208,6 +264,34 @@ impl App {
                     Tab::Room => self.room_panel(ui),
                 });
             });
+    }
+
+    /// The View menu's layout entries: which docks are open, the simple view, and (when the top
+    /// bar is too narrow to show its switch) mouse or trackpad.
+    pub fn layout_menu_items(&mut self, ui: &mut Ui) {
+        let width = ui.ctx().content_rect().width();
+        let (scene, inspector) = ui_layout::visible_docks(width, self.show_scene_dock, self.show_properties);
+        for (which_scene, on, key, tip) in
+            [(true, scene, "menu.view.scene_dock", "menu.view.scene_dock.tip"), (false, inspector, "menu.view.inspector", "menu.view.inspector.tip")]
+        {
+            if ui.selectable_label(on, i18n::tr(key)).on_hover_text(i18n::tr(tip)).clicked() {
+                (self.show_scene_dock, self.show_properties) = ui_layout::toggle_dock(width, scene, inspector, which_scene);
+                ui.close();
+            }
+        }
+        if ui.selectable_label(self.simple_ui, i18n::tr("menu.view.simple")).on_hover_text(i18n::tr("menu.view.simple.tip")).clicked() {
+            self.simple_ui = !self.simple_ui;
+            ui.close();
+        }
+        if width < ui_layout::NARROW_HEADER {
+            ui.separator();
+            for (dev, key) in [(crate::view::InputDev::Mouse, "menu.view.mouse"), (crate::view::InputDev::Trackpad, "menu.view.trackpad")] {
+                if ui.selectable_label(self.input_dev == dev, i18n::tr(key)).clicked() {
+                    self.input_dev = dev;
+                    ui.close();
+                }
+            }
+        }
     }
 
     /// The menu on a right click in the viewport.
@@ -688,7 +772,17 @@ impl App {
 
     // ----- inspector -----
 
+    /// The melt amount is one shared setting for a whole tree of groups: when a slider moved,
+    /// every melting group and shape under the same top group takes the same value (see
+    /// `Scene::share_melt_amount`).
+    fn apply_melt_link(&mut self, ui: &Ui) {
+        let id = egui::Id::new("melt_amount_link");
+        let Some((g, v)) = ui.ctx().data_mut(|d| d.remove_temp::<(usize, f32)>(id)) else { return };
+        self.scene.share_melt_amount(g, v);
+    }
+
     fn inspector(&mut self, ui: &mut Ui) {
+        self.apply_melt_link(ui);
         match self.sel {
             Some(Pick::Shape(g, s)) if self.scene.shape(g, s).is_some() => self.shape_inspector(ui, g, s),
             Some(Pick::Group(g)) if g < self.scene.groups.len() => self.group_inspector(ui, g),
@@ -705,6 +799,23 @@ impl App {
             if style::pill(ui, &style::keys(i18n::tr("inspector.group_them")), false).on_hover_text(i18n::tr("inspector.group_tip")).clicked() {
                 self.group_selected();
             }
+        }
+        if self.simple_ui {
+            // simple view: the same actions as buttons with their names written on them
+            ui.horizontal_wrapped(|ui| {
+                if ui.button(style::keys(i18n::tr("inspector.duplicate"))).clicked() {
+                    self.duplicate();
+                }
+                if ui.button(i18n::tr("inspector.delete")).clicked() {
+                    self.delete_selected();
+                }
+                if matches!(self.sel, Some(Pick::Shape(..)))
+                    && ui.button(i18n::tr("inspector.mirror")).on_hover_text(i18n::tr("inspector.mirror.tip")).clicked()
+                {
+                    self.mirror_copy();
+                }
+            });
+            return;
         }
         ui.horizontal(|ui| {
             if style::icon_button(ui, 34.0, &style::keys(i18n::tr("inspector.duplicate")), false, glyphs::dup).clicked() {
@@ -790,13 +901,15 @@ impl App {
                 let into = parent
                     .as_deref()
                     .map_or_else(|| i18n::tr("inspector.group.the_scene").to_string(), |p| format!("{} “{p}”", i18n::tr("inspector.group.label")));
-                style::labeled_slider(
+                if style::labeled_slider(
                     ui,
                     i18n::tr("inspector.melt_amount"),
                     &mut gr.blend,
                     0.0..=80.0,
                     &format!("{} ({into})", i18n::tr("inspector.melt.amount.group.tip")),
-                );
+                ) {
+                    ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("melt_amount_link"), (g, gr.blend)));
+                }
             }
         }
         if let Some(gr) = self.scene.groups.get_mut(g) {
@@ -947,6 +1060,7 @@ impl App {
         {
             crate::melt_preset::open_edit(ui.ctx(), g, settings);
         }
+        let simple = self.simple_ui;
         let ngroups = self.scene.groups.len();
         let nshapes = self.scene.groups[g].shapes.len();
         let mut move_to: Option<usize> = None;
@@ -980,33 +1094,36 @@ impl App {
                 crate::mesh_dialog::inspector(ui, sh);
             } else {
                 // change what kind of shape this is, keeping where it sits
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(RichText::new(i18n::tr("inspector.kind")).color(style::DIM).size(12.0));
-                    ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
-                    for k in Kind::ALL {
-                        let on = sh.kind == k;
-                        if style::icon_button(ui, 32.0, i18n::kind(k), on, |p, r, ink| glyphs::kind(p, r, k, ink, ink.gamma_multiply(0.15))).clicked()
-                            && !on
-                        {
-                            if sh.name == sh.kind.label() {
-                                sh.name = k.label().to_string();
-                            }
-                            sh.kind = k;
-                            // A different primitive must never inherit stale vase parameters.
-                            sh.vase = None;
-                            sh.size = k.default_size();
-                            sh.params = k.default_params();
-                            if k.uses_path() && sh.path.len() < 2 {
-                                sh.path = k.default_path();
-                            }
-                            if k.uses_outline2() && sh.outline2.len() < 3 {
-                                sh.outline2 = k.default_outline2();
-                            }
-                            if matches!(k, Kind::Revolve | Kind::Sweep) {
-                                sh.outline = k.default_outline();
+                fold(ui, simple, i18n::tr("inspector.more.kind"), |ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(RichText::new(i18n::tr("inspector.kind")).color(style::DIM).size(12.0));
+                        ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
+                        for k in Kind::ALL {
+                            let on = sh.kind == k;
+                            if style::icon_button(ui, 32.0, i18n::kind(k), on, |p, r, ink| glyphs::kind(p, r, k, ink, ink.gamma_multiply(0.15)))
+                                .clicked()
+                                && !on
+                            {
+                                if sh.name == sh.kind.label() {
+                                    sh.name = k.label().to_string();
+                                }
+                                sh.kind = k;
+                                // A different primitive must never inherit stale vase parameters.
+                                sh.vase = None;
+                                sh.size = k.default_size();
+                                sh.params = k.default_params();
+                                if k.uses_path() && sh.path.len() < 2 {
+                                    sh.path = k.default_path();
+                                }
+                                if k.uses_outline2() && sh.outline2.len() < 3 {
+                                    sh.outline2 = k.default_outline2();
+                                }
+                                if matches!(k, Kind::Revolve | Kind::Sweep) {
+                                    sh.outline = k.default_outline();
+                                }
                             }
                         }
-                    }
+                    });
                 });
             }
             style::xyz(ui, i18n::tr("inspector.position"), &mut sh.pos, 0.5, -5000.0..=5000.0, "");
@@ -1024,74 +1141,80 @@ impl App {
                         }
                     }
                 });
-                ui.horizontal_wrapped(|ui| {
-                    for (i, l) in sh.kind.param_labels().iter().enumerate() {
-                        if !l.is_empty() {
-                            ui.label(RichText::new(*l).color(style::DIM).size(12.0));
-                            style::field(ui, egui::DragValue::new(&mut sh.params[i]).speed(0.1).max_decimals(2));
+                fold(ui, simple, i18n::tr("inspector.more.details"), |ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        for (i, l) in sh.kind.param_labels().iter().enumerate() {
+                            if !l.is_empty() {
+                                ui.label(RichText::new(*l).color(style::DIM).size(12.0));
+                                style::field(ui, egui::DragValue::new(&mut sh.params[i]).speed(0.1).max_decimals(2));
+                            }
+                        }
+                    });
+                    if sh.kind.can_round() {
+                        style::labeled_slider(ui, i18n::tr("inspector.round"), &mut sh.round, 0.0..=ROUND_MAX, i18n::tr("inspector.round.tip"));
+                        let styles = [
+                            (i18n::tr("inspector.fillet"), i18n::tr("inspector.fillet.tip")),
+                            (i18n::tr("inspector.chamfer"), i18n::tr("inspector.chamfer.tip")),
+                        ];
+                        let now = Corner::ALL.iter().position(|c| *c == sh.corner);
+                        if let Some(i) = style::segmented(ui, "corner_style", &styles, now, true) {
+                            sh.corner = Corner::ALL.get(i).copied().unwrap_or_default();
+                        }
+                    }
+                    {
+                        let on = sh.blend > 0.0;
+                        let id = egui::Id::new(("shape_melt_memory", g, s));
+                        if style::pill(ui, if on { i18n::tr("inspector.melt_on") } else { i18n::tr("inspector.melt_off") }, on)
+                            .on_hover_text(i18n::tr("inspector.melt.shape.tip"))
+                            .clicked()
+                        {
+                            if on {
+                                ui.ctx().data_mut(|d| d.insert_temp(id, sh.blend));
+                                sh.blend = 0.0;
+                            } else {
+                                sh.blend = ui.ctx().data(|d| d.get_temp::<f32>(id)).unwrap_or(6.0).max(1.0);
+                            }
+                        }
+                        if sh.blend > 0.0
+                            && style::labeled_slider(
+                                ui,
+                                i18n::tr("inspector.melt_amount"),
+                                &mut sh.blend,
+                                0.0..=80.0,
+                                i18n::tr("inspector.melt.amount.shape.tip"),
+                            )
+                        {
+                            ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("melt_amount_link"), (g, sh.blend)));
+                        }
+                    }
+                    style::labeled_slider(ui, i18n::tr("inspector.shell"), &mut sh.shell, 0.0..=40.0, i18n::tr("inspector.shell.tip"));
+                    // melt just one face: no longer offered for new work, but a design that already
+                    // uses it keeps the control so it can be changed or switched off
+                    if sh.face_melt.face > 0 {
+                        let fm = &mut sh.face_melt;
+                        ui.label(RichText::new(i18n::tr("inspector.melt_face")).color(style::DIM).size(12.0));
+                        let mut items: Vec<(&str, &str)> = vec![(i18n::tr("inspector.face.none"), i18n::tr("inspector.face.none.tip"))];
+                        items.extend(crate::model::FaceMelt::FACES.iter().copied());
+                        let now = Some(usize::from(fm.face.min(6)));
+                        if let Some(i) = style::segmented(ui, "face_melt_face", &items, now, true) {
+                            fm.face = i.min(6) as u8;
+                            if fm.face > 0 {
+                                if fm.amount == 0.0 {
+                                    fm.amount = 4.0;
+                                }
+                                if fm.reach < 1.0 {
+                                    fm.reach = 12.0;
+                                }
+                            }
+                        }
+                        if fm.face > 0 {
+                            style::labeled_slider(ui, i18n::tr("inspector.swell"), &mut fm.amount, -30.0..=30.0, i18n::tr("inspector.swell.tip"));
+                            style::labeled_slider(ui, i18n::tr("inspector.depth"), &mut fm.reach, 2.0..=60.0, i18n::tr("inspector.depth.tip"));
                         }
                     }
                 });
-                if sh.kind.can_round() {
-                    style::labeled_slider(ui, i18n::tr("inspector.round"), &mut sh.round, 0.0..=ROUND_MAX, i18n::tr("inspector.round.tip"));
-                    let styles = [
-                        (i18n::tr("inspector.fillet"), i18n::tr("inspector.fillet.tip")),
-                        (i18n::tr("inspector.chamfer"), i18n::tr("inspector.chamfer.tip")),
-                    ];
-                    let now = Corner::ALL.iter().position(|c| *c == sh.corner);
-                    if let Some(i) = style::segmented(ui, "corner_style", &styles, now, true) {
-                        sh.corner = Corner::ALL.get(i).copied().unwrap_or_default();
-                    }
-                }
-                {
-                    let on = sh.blend > 0.0;
-                    let id = egui::Id::new(("shape_melt_memory", g, s));
-                    if style::pill(ui, if on { i18n::tr("inspector.melt_on") } else { i18n::tr("inspector.melt_off") }, on)
-                        .on_hover_text(i18n::tr("inspector.melt.shape.tip"))
-                        .clicked()
-                    {
-                        if on {
-                            ui.ctx().data_mut(|d| d.insert_temp(id, sh.blend));
-                            sh.blend = 0.0;
-                        } else {
-                            sh.blend = ui.ctx().data(|d| d.get_temp::<f32>(id)).unwrap_or(6.0).max(1.0);
-                        }
-                    }
-                    if sh.blend > 0.0 {
-                        style::labeled_slider(
-                            ui,
-                            i18n::tr("inspector.melt_amount"),
-                            &mut sh.blend,
-                            0.0..=80.0,
-                            i18n::tr("inspector.melt.amount.shape.tip"),
-                        );
-                    }
-                }
-                style::labeled_slider(ui, i18n::tr("inspector.shell"), &mut sh.shell, 0.0..=40.0, i18n::tr("inspector.shell.tip"));
-                // melt just one face: the rest keeps its exact size
-                {
-                    let fm = &mut sh.face_melt;
-                    ui.label(RichText::new(i18n::tr("inspector.melt_face")).color(style::DIM).size(12.0));
-                    let mut items: Vec<(&str, &str)> = vec![(i18n::tr("inspector.face.none"), i18n::tr("inspector.face.none.tip"))];
-                    items.extend(crate::model::FaceMelt::FACES.iter().copied());
-                    let now = Some(usize::from(fm.face.min(6)));
-                    if let Some(i) = style::segmented(ui, "face_melt_face", &items, now, true) {
-                        fm.face = i.min(6) as u8;
-                        if fm.face > 0 {
-                            if fm.amount == 0.0 {
-                                fm.amount = 4.0;
-                            }
-                            if fm.reach < 1.0 {
-                                fm.reach = 12.0;
-                            }
-                        }
-                    }
-                    if fm.face > 0 {
-                        style::labeled_slider(ui, i18n::tr("inspector.swell"), &mut fm.amount, -30.0..=30.0, i18n::tr("inspector.swell.tip"));
-                        style::labeled_slider(ui, i18n::tr("inspector.depth"), &mut fm.reach, 2.0..=60.0, i18n::tr("inspector.depth.tip"));
-                    }
-                }
             }
+            twist_section(ui, sh);
             ui.collapsing("Ripple", |ui| {
                 let mut enabled = sh.ripple.is_some();
                 if ui.checkbox(&mut enabled, "Use ripple").changed() {
@@ -1149,22 +1272,24 @@ impl App {
         }
         self.shape_pattern_section(ui, g, s);
         ui.add_space(4.0);
-        ui.horizontal(|ui| {
-            if style::pill_enabled(ui, "↑", false, s > 0).on_hover_text(i18n::tr("inspector.move_up")).clicked() {
-                reorder = Some(s - 1);
-            }
-            if style::pill_enabled(ui, "↓", false, s + 1 < nshapes).on_hover_text(i18n::tr("inspector.move_down")).clicked() {
-                reorder = Some(s + 1);
-            }
-            if ngroups > 1 {
-                egui::ComboBox::from_id_salt("move_to").selected_text(i18n::tr("inspector.move_to_group")).show_ui(ui, |ui| {
-                    for (i, gr) in self.scene.groups.iter().enumerate() {
-                        if i != g && ui.selectable_label(false, &gr.name).clicked() {
-                            move_to = Some(i);
+        fold(ui, simple, i18n::tr("inspector.more.order"), |ui| {
+            ui.horizontal(|ui| {
+                if style::pill_enabled(ui, "↑", false, s > 0).on_hover_text(i18n::tr("inspector.move_up")).clicked() {
+                    reorder = Some(s - 1);
+                }
+                if style::pill_enabled(ui, "↓", false, s + 1 < nshapes).on_hover_text(i18n::tr("inspector.move_down")).clicked() {
+                    reorder = Some(s + 1);
+                }
+                if ngroups > 1 {
+                    egui::ComboBox::from_id_salt("move_to").selected_text(i18n::tr("inspector.move_to_group")).show_ui(ui, |ui| {
+                        for (i, gr) in self.scene.groups.iter().enumerate() {
+                            if i != g && ui.selectable_label(false, &gr.name).clicked() {
+                                move_to = Some(i);
+                            }
                         }
-                    }
-                });
-            }
+                    });
+                }
+            });
         });
         if let Some(t) = reorder {
             self.move_layer(Pick::Shape(g, s), Pick::Shape(g, t), t > s);
@@ -1397,13 +1522,21 @@ impl App {
         if style::labeled_slider(ui, "Gloss", &mut gloss, 0.0..=1.0, "Smooth ⇄ Rough") {
             m.roughness = 1.0 - gloss;
         }
-        style::labeled_slider(ui, "Metallic", &mut m.metallic, 0.0..=1.0, "Plastic ⇄ Metal");
-        style::labeled_slider(ui, "Transparent", &mut m.glass, 0.0..=1.0, "Bends light like glass and lets you see through");
-        style::labeled_slider(ui, "Glow", &mut m.glow, 0.0..=4.0, "Emits its own light (lamp, neon)");
-        style::labeled_slider(ui, "Iridescent", &mut m.iridescence, 0.0..=1.0, "Shifts rainbow colors with the viewing angle (soap bubble, beetle)");
-        style::labeled_slider(ui, "Coat", &mut m.coat, 0.0..=1.0, "Glossy clear layer (car paint, candy)");
-        style::labeled_slider(ui, "Translucency", &mut m.translucency, 0.0..=1.0, "Light soaks in (wax, jelly, ice)");
-        gradient_controls(ui, &mut m);
+        fold(ui, self.simple_ui, i18n::tr("inspector.more.material"), |ui| {
+            style::labeled_slider(ui, "Metallic", &mut m.metallic, 0.0..=1.0, "Plastic ⇄ Metal");
+            style::labeled_slider(ui, "Transparent", &mut m.glass, 0.0..=1.0, "Bends light like glass and lets you see through");
+            style::labeled_slider(ui, "Glow", &mut m.glow, 0.0..=4.0, "Emits its own light (lamp, neon)");
+            style::labeled_slider(
+                ui,
+                "Iridescent",
+                &mut m.iridescence,
+                0.0..=1.0,
+                "Shifts rainbow colors with the viewing angle (soap bubble, beetle)",
+            );
+            style::labeled_slider(ui, "Coat", &mut m.coat, 0.0..=1.0, "Glossy clear layer (car paint, candy)");
+            style::labeled_slider(ui, "Translucency", &mut m.translucency, 0.0..=1.0, "Light soaks in (wax, jelly, ice)");
+            gradient_controls(ui, &mut m);
+        });
 
         if m != first {
             m.sanitize();
@@ -1418,6 +1551,7 @@ impl App {
     // ----- the room: lights and backdrop -----
 
     fn room_panel(&mut self, ui: &mut Ui) {
+        let simple = self.simple_ui;
         style::title(ui, "Look");
         let looks = crate::model::Environment::looks();
         ui.horizontal_wrapped(|ui| {
@@ -1461,40 +1595,42 @@ impl App {
             style::switch(ui, &mut e.floor, "Floor shadow");
         });
         style::labeled_slider(ui, "Exposure", &mut e.exposure, 0.3..=3.0, "Brightness, like camera exposure");
-        style::labeled_slider(ui, "Shadow strength", &mut e.shadow, 0.0..=1.0, "");
-        style::labeled_slider(ui, "Ambient", &mut e.ambient, 0.0..=2.0, "Brightness of shadows and sky reflections");
-        style::title(ui, "Sky (reflected in metal and glass)");
-        ui.horizontal(|ui| {
-            for (label, c) in [("Top", &mut e.sky_top), ("Horizon", &mut e.sky_horizon), ("Bottom", &mut e.sky_bottom)] {
-                ui.label(RichText::new(label).size(12.0).color(style::DIM));
-                style::color_edit(ui, c);
-            }
-        });
-        style::title(ui, "Light");
-        let mut remove = None;
-        let n = e.lights.len();
-        for (i, l) in e.lights.iter_mut().enumerate() {
+        fold(ui, simple, i18n::tr("inspector.more.room"), |ui| {
+            style::labeled_slider(ui, "Shadow strength", &mut e.shadow, 0.0..=1.0, "");
+            style::labeled_slider(ui, "Ambient", &mut e.ambient, 0.0..=2.0, "Brightness of shadows and sky reflections");
+            style::title(ui, "Sky (reflected in metal and glass)");
             ui.horizontal(|ui| {
-                ui.label(RichText::new(format!("Light {}", i + 1)).size(12.5).strong());
-                style::color_edit(ui, &mut l.color);
-                if n > 1 && ui.small_button("Remove").on_hover_text("Remove this light").clicked() {
-                    remove = Some(i);
+                for (label, c) in [("Top", &mut e.sky_top), ("Horizon", &mut e.sky_horizon), ("Bottom", &mut e.sky_bottom)] {
+                    ui.label(RichText::new(label).size(12.0).color(style::DIM));
+                    style::color_edit(ui, c);
                 }
             });
-            style::labeled_slider(ui, "Direction", &mut l.yaw, -180.0..=180.0, "Turn around (degrees)");
-            style::labeled_slider(ui, "Elevation", &mut l.pitch, 0.0..=89.0, "Low ⇄ Overhead (degrees)");
-            style::labeled_slider(ui, "Power", &mut l.power, 0.0..=3.0, "");
-            if i == 0 {
-                ui.label(RichText::new("Only Light 1 casts shadows").size(12.0).color(style::DIM));
+            style::title(ui, "Light");
+            let mut remove = None;
+            let n = e.lights.len();
+            for (i, l) in e.lights.iter_mut().enumerate() {
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(format!("Light {}", i + 1)).size(12.5).strong());
+                    style::color_edit(ui, &mut l.color);
+                    if n > 1 && ui.small_button("Remove").on_hover_text("Remove this light").clicked() {
+                        remove = Some(i);
+                    }
+                });
+                style::labeled_slider(ui, "Direction", &mut l.yaw, -180.0..=180.0, "Turn around (degrees)");
+                style::labeled_slider(ui, "Elevation", &mut l.pitch, 0.0..=89.0, "Low ⇄ Overhead (degrees)");
+                style::labeled_slider(ui, "Power", &mut l.power, 0.0..=3.0, "");
+                if i == 0 {
+                    ui.label(RichText::new("Only Light 1 casts shadows").size(12.0).color(style::DIM));
+                }
+                ui.add_space(2.0);
             }
-            ui.add_space(2.0);
-        }
-        if let Some(i) = remove {
-            e.lights.remove(i);
-        }
-        if e.lights.len() < MAX_LIGHTS && style::pill(ui, "+ Add light", false).clicked() {
-            e.lights.push(Light { yaw: -60.0, pitch: 35.0, power: 0.6, color: [1.0, 1.0, 1.0] });
-        }
+            if let Some(i) = remove {
+                e.lights.remove(i);
+            }
+            if e.lights.len() < MAX_LIGHTS && style::pill(ui, "+ Add light", false).clicked() {
+                e.lights.push(Light { yaw: -60.0, pitch: 35.0, power: 0.6, color: [1.0, 1.0, 1.0] });
+            }
+        });
     }
 
     // ----- sketch to extrude -----
@@ -1809,6 +1945,16 @@ fn melt_preview(ui: &mut Ui, m: &Melt) {
         }
     }
     p.text(rect.left_bottom() + vec2(8.0, -6.0), Align2::LEFT_BOTTOM, "Preview", FontId::proportional(10.0), Color32::from_white_alpha(70));
+}
+
+/// Simple view folds a block of less used settings under a heading; the detailed view shows it
+/// as it is. Nothing is removed either way.
+fn fold(ui: &mut Ui, folded: bool, title: &str, add: impl FnOnce(&mut Ui)) {
+    if folded {
+        ui.collapsing(title, add);
+    } else {
+        add(ui);
+    }
 }
 
 /// The gradient part of the material tab: a switch, the second colour, the direction and the blend.

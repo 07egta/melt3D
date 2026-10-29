@@ -57,6 +57,10 @@ pub struct Prepared {
     pub scale: V3,
     /// `1 / scale`, so `local` multiplies instead of dividing (division costs several times more).
     inv_scale: V3,
+    /// Shape-local modifier, independent of source primitive data.
+    pub deformation: Option<crate::deform::Deformation>,
+    /// Original (unwarped, unscaled) half extent for the modifier's axis and safety.
+    pub base_half: V3,
     pub op: Op,
     pub blend: f32,
     pub material: Material,
@@ -131,6 +135,9 @@ pub struct Field {
     pub amount: f32,
     pub drip: f32,
     pub ripple: f32,
+    /// Conservative ray step factor for non-isometric shape modifiers.
+    /// SDF evaluation itself is unscaled to preserve Boolean and mesh accuracy.
+    pub ray_step: f32,
 }
 
 impl Prepared {
@@ -157,7 +164,9 @@ impl Prepared {
         Prepared {
             kind: s.kind,
             ripple: s.ripple,
-            half: s.local_half(),
+            // Face melts and ripples act on the source shape before a Twist, so they use its
+            // unwarped box (the same as `local_half` without a modifier).
+            half: s.base_local_half(),
             size: s.size,
             round,
             chamfer: s.corner == crate::model::Corner::Chamfer,
@@ -165,6 +174,8 @@ impl Prepared {
             inv,
             scale: s.scale,
             inv_scale: [1.0 / s.scale[0], 1.0 / s.scale[1], 1.0 / s.scale[2]],
+            deformation: s.deformation,
+            base_half: s.base_local_half(),
             op: s.op,
             blend: s.blend,
             material: s.material,
@@ -208,7 +219,13 @@ impl Prepared {
             return m.color;
         }
         let ax = usize::from(m.grad_axis).min(2);
-        let c = if m.grad_local { self.local(p)[ax] } else { p[ax] - self.pos[ax] };
+        let c = if m.grad_local {
+            let q = self.local(p);
+            let original = self.deformation.map_or(q, |d| d.inverse(q, self.base_half));
+            original[ax]
+        } else {
+            p[ax] - self.pos[ax]
+        };
         let t = c * (if m.grad_flip { -0.5 } else { 0.5 }) / self.grad_half.max(1e-3) + 0.5;
         mix3(m.color, m.color2, m.gradient_weight(t.max(0.0).min(1.0)))
     }
@@ -218,6 +235,10 @@ impl Prepared {
     /// The distance to this one shape (negative inside).
     pub fn distance(&self, p: V3) -> f32 {
         let q = self.local(p);
+        // A Twist maps the sample point back into the source shape once; everything below
+        // (face melt, ripple, shell) is measured on the source. The field is not shortened:
+        // Twist only asks for smaller ray steps (`Field::ray_step`), see deform.rs.
+        let q = self.deformation.map_or(q, |d| d.inverse(q, self.base_half));
         let mut d = self.local_distance(q);
         if let Some((ax, sg, amount, reach)) = self.face_melt {
             d = face_melt_distance(d, q, ax, sg, amount, reach, self.half[ax]);
@@ -331,8 +352,7 @@ impl Prepared {
                 let w = [d2, q[2].abs() - hh + r];
                 // A signed outward offset creates the inflated text surface. Negative
                 // offsets on subtractive contours shrink the cutter so counters stay open.
-                w[0].max(w[1]).min(0.0) + w[0].max(0.0).hypot(w[1].max(0.0)) - r
-                    - self.params[0].clamp(-40.0, 40.0)
+                w[0].max(w[1]).min(0.0) + w[0].max(0.0).hypot(w[1].max(0.0)) - r - self.params[0].clamp(-40.0, 40.0)
             }
             Kind::Curve => crate::curve::distance(self, q),
             // (the volume is in the mesh's own units, so a scaled shape is handled by `distance`)
@@ -497,14 +517,15 @@ impl Field {
             let src = *made.entry(rg.src).or_insert_with(|| {
                 let older = old_sources.get(&rg.src).copied();
                 let prior_group = previous.and_then(|(_, old)| old.groups.get(rg.src));
-                let same_melt = previous.is_some_and(|(_, old)| old.melt.mode == scene.melt.mode && old.melt.amount == scene.melt.amount);
+                let same_melt =
+                    previous.is_some_and(|(_, old)| old.melt.mode == scene.melt.mode && old.melt.amount.to_bits() == scene.melt.amount.to_bits());
                 // A shape pattern changes the number of measured shapes for the same shape list:
                 // older per-shape payloads cannot be reused by index any more.
                 let patterned = srcg.shapes.iter().any(|s| s.pattern.is_some());
                 if !patterned
                     && let (Some(old), Some(prior)) = (older, prior_group)
                     && same_melt
-                    && prior.shapes == srcg.shapes
+                    && crate::perf::same_shapes_for_cache(&prior.shapes, &srcg.shapes)
                 {
                     prepared_reused += old.shapes.len();
                     sources.push(Arc::clone(old));
@@ -526,7 +547,9 @@ impl Field {
                         rg.shape_insts.get(si).filter(|v| !v.is_empty()).cloned().unwrap_or_else(|| vec![crate::pattern::Inst::IDENTITY]);
                     for inst in insts {
                         let identity = inst == crate::pattern::Inst::IDENTITY;
-                        let same = !patterned && identity && prior_group.and_then(|old| old.shapes.get(si)).is_some_and(|old| old == s);
+                        let same = !patterned
+                            && identity
+                            && prior_group.and_then(|old| old.shapes.get(si)).is_some_and(|old| crate::perf::same_shape_for_cache(old, s));
                         let prep = if same { old_shapes.get(&si).map(|p| Arc::clone(p)) } else { None };
                         if prep.is_some() {
                             prepared_reused += 1;
@@ -545,7 +568,10 @@ impl Field {
                     }
                 }
                 let members: Vec<&Shape> = members_owned.iter().collect();
-                let info = crate::accel::group_info(&members, &scene.melt);
+                // Measure each member once (a curve's bound resamples its path) and build the
+                // same block and group records from that list.
+                let member_bounds: Vec<crate::accel::Bound> = members.iter().map(|s| crate::accel::shape_bound(s)).collect();
+                let info = crate::accel::group_info_with_bounds(&members, &member_bounds, &scene.melt);
                 sources.push(Arc::new(PreparedGroup { source_group: rg.src, shapes, origin, bounds, info }));
                 sources.len() - 1
             });
@@ -555,7 +581,14 @@ impl Field {
             groups.push(FieldGroup { gi: rg.gi, op: g.op, blend, src, insts: rg.insts, linked: rg.linked, depth, leaf });
         }
         let m = scene.melt;
-        Field { groups, sources, mode: m.mode, amount: m.amount, drip: m.drip, ripple: m.ripple, prepared_built, prepared_reused }
+        let ray_step = scene
+            .groups
+            .iter()
+            .flat_map(|g| &g.shapes)
+            .filter(|s| s.visible)
+            .filter_map(|s| s.deformation.map(|d| d.ray_step_safety(s.base_local_half())))
+            .fold(1.0_f32, f32::min);
+        Field { groups, sources, mode: m.mode, amount: m.amount, drip: m.drip, ripple: m.ripple, ray_step, prepared_built, prepared_reused }
     }
 
     /// The same field with every skip switched off (for the tests that prove the skips are exact).
@@ -745,14 +778,19 @@ impl Field {
     /// The first hit along a ray, if any (sphere tracing), for picking.
     pub fn ray(&self, origin: V3, dir: V3, max: f32) -> Option<(f32, Sample)> {
         let mut t = 0.0;
-        for _ in 0..256 {
+        // A Twist is not an isometry: its field may overstate the distance, so the steps shrink
+        // by `ray_step` (1 without modifiers, which keeps the old march exactly).
+        let twisted = self.ray_step < 0.999;
+        let max_steps = if twisted { 512 } else { 256 };
+        let min_step = if twisted { 0.005 } else { 0.01 };
+        for _ in 0..max_steps {
             let p = add(origin, mul(dir, t));
             let d = self.distance(p);
             if d < 0.02 * (1.0 + t * 0.002) {
                 // Only a visible hit needs its colour and the identity used for picking.
                 return Some((t, self.sample(p)));
             }
-            t += d.max(0.01);
+            t += (d * self.ray_step).max(min_step);
             if t > max {
                 return None;
             }
@@ -995,6 +1033,81 @@ mod tests {
     }
 
     #[test]
+    fn twist_inverse_has_the_same_zero_surface_on_cpu_for_each_axis() {
+        use crate::deform::{Axis, Deformation, Twist};
+        for axis in Axis::ALL {
+            let mut sh = Shape::new(Kind::Box, [3.0, 5.0, 12.0], Material::default());
+            sh.size = [30.0, 18.0, 40.0];
+            sh.blend = 0.0;
+            let half = sh.base_local_half();
+            let mut q = [4.0, 3.0, 6.0];
+            // Put the test point on the original box's positive axial face
+            // or positive side, depending on the twist axis.
+            q[axis.transverse().0] = half[axis.transverse().0];
+            let twist = Twist { axis, degrees: 180.0, ..Twist::default() };
+            let new_local = twist.forward(q, half);
+            let xyz = [0, 1, 2].map(|k| sh.pos[k] + new_local[k]);
+            sh.deformation = Some(Deformation::Twist(twist));
+            let sdf = Prepared::new(&sh);
+            assert!(sdf.distance(xyz).abs() < 1e-3, "{axis:?}: warped boundary {xyz:?} at {}", sdf.distance(xyz));
+            assert!(sdf.distance(sh.pos) < 0.0, "centre remains inside");
+            assert!(sdf.distance([sh.pos[0] + 200.0, sh.pos[1], sh.pos[2]]) > 0.0, "far away remains outside");
+        }
+    }
+
+    #[test]
+    fn picking_ray_hits_twist_and_boolean_field_is_unscaled() {
+        use crate::deform::{Deformation, Twist};
+        let mut sh = Shape::new(Kind::Box, [0.0; 3], Material::default());
+        sh.size = [30.0, 12.0, 40.0];
+        sh.blend = 0.0;
+        let source = sh.clone();
+        sh.deformation = Some(Deformation::Twist(Twist::preset(180.0)));
+        let field = Field::new(&scene_of(vec![sh]));
+        assert!(field.ray_step < 1.0 && field.ray_step > 0.0);
+        let hit = field.ray([0.0, 0.0, 80.0], [0.0, 0.0, -1.0], 150.0);
+        assert!(hit.is_some(), "ray must hit the top of the twisted solid");
+        let (travel, _) = hit.unwrap();
+        assert!((travel - 60.0).abs() < 1.0, "top cap still at Z=20: ray travelled {travel}");
+        // A rotationally symmetric source produces an identical scalar field
+        // after a Z-axis Twist (zero-isosurface AND values).
+        let mut round = Shape::new(Kind::Cylinder, [0.0; 3], Material::default());
+        let circle = Prepared::new(&round);
+        round.deformation = Some(Deformation::Twist(Twist::preset(360.0)));
+        let turned = Prepared::new(&round);
+        for q in [[0.0, 0.0, 0.0], [10.0, 6.0, 2.0], [25.0, 5.0, 3.0]] {
+            assert!((turned.distance(q) - circle.distance(q)).abs() < 1e-4, "twisting a circular cross section does not alter its SDF");
+        }
+        assert!(Prepared::new(&source).distance([0.0, 0.0, 0.0]) < 0.0);
+    }
+
+    #[test]
+    fn twist_is_non_destructive_and_closed_at_both_ends() {
+        use crate::deform::{Deformation, Twist};
+        let mut sh = Shape::new(Kind::Box, [0.0; 3], Material::default());
+        sh.size = [24.0, 14.0, 30.0];
+        let original = Prepared::new(&sh);
+        let twist = Twist::preset(360.0);
+        let half = sh.base_local_half();
+        sh.deformation = Some(Deformation::Twist(twist));
+        let changed = Prepared::new(&sh);
+        for (p, expected_inside) in [([0.0, 0.0, -14.0], true), ([0.0, 0.0, 14.0], true), ([0.0, 0.0, -16.0], false), ([0.0, 0.0, 16.0], false)] {
+            assert_eq!(changed.distance(p) < 0.0, expected_inside, "{p:?}");
+        }
+        for z in [-15.0, -9.0, 0.0, 9.0, 15.0] {
+            let source_corner = [12.0, 7.0, z];
+            let warped = twist.forward(source_corner, half);
+            assert!(changed.distance(warped).abs() < 0.001, "{z}: {:?}", warped);
+        }
+        // Resetting the modifier yields *exactly* the original field.
+        sh.deformation = None;
+        let restored = Prepared::new(&sh);
+        for p in [[0.0, 0.0, 0.0], [16.0, 0.0, 0.0], [4.0, -10.0, 13.0]] {
+            assert!((original.distance(p) - restored.distance(p)).abs() < 1e-6);
+        }
+    }
+
+    #[test]
     fn the_primitives_measure_their_exact_surfaces() {
         let m = Material::default();
         let f = |k: Kind, p: V3| {
@@ -1229,6 +1342,29 @@ mod tests {
         }
         bad.normalize_depths();
         assert_eq!(bad.groups.iter().map(|g| g.depth).collect::<Vec<_>>(), vec![0, 1, 0, 1]);
+    }
+
+    #[test]
+    fn a_shelled_shape_cut_by_a_minus_opens_into_a_cup() {
+        let mut shelled = ball(0.0, 20.0);
+        shelled.shell = 3.0;
+        let mut cutter = Shape::new(Kind::Box, [0.0, 0.0, 20.0], Material::default());
+        cutter.size = [60.0, 60.0, 20.0];
+        cutter.blend = 0.0;
+        cutter.op = Op::Subtract;
+        let mut sc = Scene { groups: vec![], melt: Default::default(), env: Default::default(), saved: Vec::new(), anim: Default::default() };
+        sc.groups.push(group_of("cup", 0, vec![shelled.clone(), cutter.clone()]));
+        let f = Field::new(&sc);
+        assert!(f.distance([0.0, 0.0, 0.0]) > 0.0, "the middle is hollow");
+        assert!(f.distance([0.0, 0.0, 12.0]) > 0.0, "the cavity is open at the top");
+        assert!(f.distance([0.0, 0.0, 19.0]) > 0.0, "the cap is cut away");
+        assert!(f.distance([0.0, 0.0, -18.5]) < 0.0, "the floor stays");
+        assert!(f.distance([18.5, 0.0, 0.0]) < 0.0, "so do the side walls");
+        // without the cutter the cavity stays closed: no hole by itself
+        let mut closed = Scene { groups: vec![], melt: Default::default(), env: Default::default(), saved: Vec::new(), anim: Default::default() };
+        closed.groups.push(group_of("ball", 0, vec![shelled]));
+        let g = Field::new(&closed);
+        assert!(g.distance([0.0, 0.0, 18.5]) < 0.0, "the shell alone keeps its lid");
     }
 
     #[test]

@@ -164,6 +164,18 @@ fn new_dlg(ctx: &egui::Context, format: Option<Format>, defaults: Defaults) -> D
     Dlg { opts, advanced, open: true, ..Dlg::default() }
 }
 
+/// A replacement card must not leave its old estimate or check running in the background
+/// (they would also keep holding the shared heavy-work permit).
+fn replace_dlg(ctx: &egui::Context, next: Dlg) {
+    ctx.data_mut(|m| {
+        if let Some(previous) = m.remove_temp::<Dlg>(id()) {
+            previous.est.prog.cancel();
+            previous.check.prog.cancel();
+        }
+        m.insert_temp(id(), next);
+    });
+}
+
 /// Open the card (optionally with a file type chosen).
 /// The export card is showing (keys must not edit the scene behind it).
 pub fn is_open(ctx: &egui::Context) -> bool {
@@ -183,7 +195,7 @@ pub fn open_with(ctx: &egui::Context, format: Option<ExportFormat>, defaults: De
         ExportFormat::Obj => Format::Obj,
     });
     let d = new_dlg(ctx, f, defaults);
-    ctx.data_mut(|m| m.insert_temp(id(), d));
+    replace_dlg(ctx, d);
 }
 
 /// Open the card and measure the model for printing.
@@ -194,7 +206,7 @@ pub fn open_check(ctx: &egui::Context) {
 pub fn open_check_with(ctx: &egui::Context, defaults: Defaults) {
     let mut d = new_dlg(ctx, None, defaults);
     d.run_check = true;
-    ctx.data_mut(|m| m.insert_temp(id(), d));
+    replace_dlg(ctx, d);
 }
 
 /// Ctrl+E: export again with the last settings (the card opens the first time).
@@ -464,241 +476,249 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
     let mut check = false;
     egui::Area::new(egui::Id::new("export_area")).order(egui::Order::Foreground).anchor(Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
         style::card().show(ui, |ui| {
-            ui.set_width(440.0);
+            ui.set_width(440.0_f32.min((ctx.content_rect().width() - 32.0).max(200.0)));
             ui.label(RichText::new("Export").strong().size(15.0));
-            ui.label(RichText::new("Makes a file for 3D printers and other software").size(11.5).color(style::DIM));
-            ui.add_space(4.0);
-            let o = &mut d.opts;
+            // Keep the action buttons on screen at the smallest supported window, also when a
+            // print check, advanced settings or a long message add rows: the rest scrolls.
+            egui::ScrollArea::vertical().id_salt("ex_card_scroll").max_height((ctx.content_rect().height() - 132.0).max(120.0)).show(ui, |ui| {
+                ui.label(RichText::new("Makes a file for 3D printers and other software").size(11.5).color(style::DIM));
+                ui.add_space(4.0);
+                let o = &mut d.opts;
 
-            // Most people only need a purpose, a quality preset and the output scope.
-            ui.label(RichText::new("① What is it for?").strong().size(12.5));
-            ui.horizontal_wrapped(|ui| {
-                for (format, label, hint) in [
-                    (Format::Stl, "3D print", "STL: no colour. Works with most 3D printers"),
-                    (Format::ThreeMf, "Colour print", "3MF: keeps colour and size"),
-                    (Format::Glb, "Other apps", "GLB: for web and CG apps"),
-                ] {
-                    if style::pill(ui, label, o.format == format).on_hover_text(hint).clicked() {
-                        choose_format(o, format);
-                    }
-                }
-            });
-            let explanation = match o.format {
-                Format::Stl | Format::StlAscii => "STL is saved without colour",
-                Format::ThreeMf => "3MF also keeps colour and size",
-                Format::Glb => "GLB also keeps colour and material",
-                _ => "Another file type is selected (you can change it in advanced settings)",
-            };
-            ui.label(RichText::new(explanation).size(11.5).color(style::DIM));
-            ui.add_space(8.0);
-
-            ui.label(RichText::new("② Finish detail").strong().size(12.5));
-            ui.horizontal(|ui| {
-                for (label, tol, hint) in [
-                    ("Standard (recommended)", 0.2_f32, "Balance of quality and time"),
-                    ("Fine", 0.1, "For fine shapes. Takes longer"),
-                    ("Fast / light", 0.5, "For checking. Thin parts may disappear"),
-                ] {
-                    if style::pill(ui, label, (o.tolerance - tol).abs() < 1e-4).on_hover_text(hint).clicked() {
-                        o.tolerance = tol;
-                    }
-                }
-            });
-            if quality_preset(o.tolerance).is_none() {
-                ui.label(RichText::new(format!("Detail {:.3} mm (change in advanced settings)", o.tolerance)).size(11.5).color(style::KEEP));
-            }
-            ui.add_space(8.0);
-
-            ui.label(RichText::new("③ What to export?").strong().size(12.5));
-            ui.horizontal(|ui| {
-                if style::pill(ui, "Visible shapes", o.scope == Scope::Visible).clicked() {
-                    o.scope = Scope::Visible;
-                }
-                if style::pill_enabled(ui, "Selected only", o.scope == Scope::Selected, app.sel.is_some()).clicked() {
-                    o.scope = Scope::Selected;
-                }
-                if style::pill(ui, "All", o.scope == Scope::All).on_hover_text("Includes hidden shapes").clicked() {
-                    o.scope = Scope::All;
-                }
-            });
-            if o.scope == Scope::Selected && app.sel.is_none() {
-                ui.label(RichText::new("Select a shape first, or switch to 'Visible shapes'").size(11.5).color(style::KEEP));
-            }
-            ui.add_space(6.0);
-
-            if let Some(result) = d.est.result() {
-                match result {
-                    Ok(e) => {
-                        let tol = f64::from(o.tolerance.clamp(MIN_TOLERANCE, MAX_TOLERANCE));
-                        let raw = e.raw_tris(tol);
-                        let secs = e.secs(tol, o.lighten != Lighten::Off);
-                        if raw > (MAX_VERTS as f64) * 1.8 {
-                            ui.label(RichText::new("Too fine. Try 'Fast / light'").size(11.5).color(style::CUT));
-                        } else {
-                            let col = if raw > 4.0e6 || secs > 60.0 { style::KEEP } else { style::DIM };
-                            ui.label(
-                                RichText::new(format!("About {} · max about {}", time_text(secs), bytes_text(raw * bytes_per_tri(o.format))))
-                                    .size(11.5)
-                                    .color(col),
-                            );
+                // Most people only need a purpose, a quality preset and the output scope.
+                ui.label(RichText::new("① What is it for?").strong().size(12.5));
+                ui.horizontal_wrapped(|ui| {
+                    for (format, label, hint) in [
+                        (Format::Stl, "3D print", "STL: no colour. Works with most 3D printers"),
+                        (Format::ThreeMf, "Colour print", "3MF: keeps colour and size"),
+                        (Format::Glb, "Other apps", "GLB: for web and CG apps"),
+                    ] {
+                        if style::pill(ui, label, o.format == format).on_hover_text(hint).clicked() {
+                            choose_format(o, format);
                         }
-                        ui.label(RichText::new(format!("Size: {}", size_text(e.size))).size(11.5).color(style::DIM));
-                    }
-                    Err(_) => {
-                        ui.label(RichText::new("Couldn't check the size. Check the shape").size(11.5).color(style::KEEP));
-                    }
-                }
-            } else if d.est.running() {
-                ui.label(RichText::new("Checking size…").size(11.5).color(style::DIM));
-            }
-
-            ui.add_space(6.0);
-            if style::pill(ui, if d.advanced { "Hide advanced ▲" } else { "Show advanced ▼" }, d.advanced).clicked() {
-                d.advanced = !d.advanced;
-            }
-            if d.advanced {
-                egui::ScrollArea::vertical().id_salt("ex_advanced_scroll").max_height(200.0).show(ui, |ui| {
-                    // file type
-                    row(ui, "File type", |ui| {
-                        let items: Vec<(&str, &str)> = Format::ALL
-                            .iter()
-                            .map(|f| {
-                                (
-                                    f.label(),
-                                    match f {
-                                        Format::Stl => "For 3D printing (no colour, small)",
-                                        Format::ThreeMf => "For slicers (colour and units)",
-                                        Format::Obj => "Coloured (also makes an MTL file)",
-                                        Format::Ply => "Coloured (vertex colour)",
-                                        Format::Glb => "glTF 2.0 (for apps and web; colour and gloss)",
-                                        Format::StlAscii => "Text STL (bigger file)",
-                                    },
-                                )
-                            })
-                            .collect();
-                        let cur = Format::ALL.iter().position(|f| *f == o.format);
-                        if let Some(i) = style::segmented(ui, "ex_format", &items, cur, false)
-                            && let Some(f) = Format::ALL.get(i)
-                        {
-                            choose_format(o, *f);
-                        }
-                    });
-
-                    // precision
-                    row(ui, "Detail by number", |ui| {
-                        for t in [0.05f32, 0.1, 0.2, 0.5] {
-                            let on = (o.tolerance - t).abs() < 1e-4;
-                            if style::pill(ui, &format!("{t}"), on).on_hover_text("Cell size (mm). Smaller is finer but heavier").clicked() {
-                                o.tolerance = t;
-                            }
-                        }
-                        style::field_sized(
-                            ui,
-                            [74.0, 22.0],
-                            egui::DragValue::new(&mut o.tolerance).speed(0.005).range(MIN_TOLERANCE..=MAX_TOLERANCE).suffix(" mm").max_decimals(3),
-                        );
-                    });
-                    row(ui, "Units", |ui| {
-                        let items: Vec<(&str, &str)> =
-                            Units::ALL.iter().map(|u| (u.label(), if o.format == Format::Glb { "GLB is always in m" } else { "" })).collect();
-                        let cur = Units::ALL.iter().position(|u| *u == o.units);
-                        if let Some(i) = style::segmented(ui, "ex_units", &items, cur, false)
-                            && let Some(u) = Units::ALL.get(i)
-                        {
-                            o.units = *u;
-                        }
-                        ui.label(RichText::new("Size").color(style::DIM).size(12.0));
-                        style::field_sized(
-                            ui,
-                            [68.0, 22.0],
-                            egui::DragValue::new(&mut o.scale_pct).speed(1.0).range(1.0..=10000.0).suffix(" %").max_decimals(1),
-                        );
-                    });
-                    row(ui, "Up direction", |ui| {
-                        let items = [("Z (as is)", "3D printer style"), ("Y (OBJ / GLB style)", "Turns Z-up into Y-up")];
-                        if let Some(i) = style::segmented(ui, "ex_up", &items, Some(usize::from(o.up == Up::Y)), false) {
-                            o.up = if i == 1 { Up::Y } else { Up::Z };
-                        }
-                    });
-                    row(ui, "Smooth", |ui| {
-                        let items = [("None", ""), ("A little", ""), ("Normal", ""), ("Strong", "")];
-                        if let Some(i) = style::segmented(ui, "ex_smooth", &items, Some(usize::from(o.smooth.min(3))), false) {
-                            o.smooth = i as u8;
-                        }
-                        ui.label(RichText::new("Corners stay as they are").size(11.0).color(style::DIM));
-                    });
-                    row(ui, "Triangles", |ui| {
-                        let items = [
-                            ("As is", "All cells as triangles"),
-                            ("Merge flat areas", "Flat faces into big triangles (shape stays the same)"),
-                            ("Reduce count", "Set a triangle count to make it lighter"),
-                        ];
-                        let cur = match o.lighten {
-                            Lighten::Off => 0,
-                            Lighten::Flat => 1,
-                            Lighten::Target(_) => 2,
-                        };
-                        if let Some(i) = style::segmented(ui, "ex_lighten", &items, Some(cur), false) {
-                            o.lighten = match i {
-                                0 => Lighten::Off,
-                                1 => Lighten::Flat,
-                                _ => Lighten::Target(match o.lighten {
-                                    Lighten::Target(n) => n,
-                                    _ => 100_000,
-                                }),
-                            };
-                        }
-                    });
-                    if let Lighten::Target(n) = &mut o.lighten {
-                        row(ui, "Guide", |ui| {
-                            style::field_sized(ui, [110.0, 22.0], egui::DragValue::new(n).speed(500.0).range(100..=50_000_000).suffix(" pcs"));
-                        });
-                    }
-                    ui.horizontal(|ui| {
-                        ui.add_enabled_ui(o.format.has_colour(), |ui| {
-                            style::switch(ui, &mut o.colour, "Include colour");
-                        });
-                        style::switch(ui, &mut o.ignore_paint, "Ignore painted colours");
-                    });
-                    if !o.format.has_colour() {
-                        ui.label(RichText::new("STL can't include colour").size(11.0).color(style::DIM));
-                    }
-
-                    if let Some(Ok(e)) = d.est.result() {
-                        let tris = e.raw_tris(f64::from(o.tolerance.clamp(MIN_TOLERANCE, MAX_TOLERANCE)));
-                        ui.label(RichText::new(format!("Triangles, about {}", count_text(tris))).size(11.5).color(style::DIM));
                     }
                 });
-            }
+                let explanation = match o.format {
+                    Format::Stl | Format::StlAscii => "STL is saved without colour",
+                    Format::ThreeMf => "3MF also keeps colour and size",
+                    Format::Glb => "GLB also keeps colour and material",
+                    _ => "Another file type is selected (you can change it in advanced settings)",
+                };
+                ui.label(RichText::new(explanation).size(11.5).color(style::DIM));
+                ui.add_space(8.0);
 
-            // the print check
-            ui.add_space(4.0);
-            ui.horizontal(|ui| {
-                if style::pill_enabled(ui, "Print check", false, !d.check.running())
-                    .on_hover_text("size, volume, holes, thin spots, overhangs")
-                    .clicked()
-                {
-                    check = true;
+                ui.label(RichText::new("② Finish detail").strong().size(12.5));
+                ui.horizontal(|ui| {
+                    for (label, tol, hint) in [
+                        ("Standard (recommended)", 0.2_f32, "Balance of quality and time"),
+                        ("Fine", 0.1, "For fine shapes. Takes longer"),
+                        ("Fast / light", 0.5, "For checking. Thin parts may disappear"),
+                    ] {
+                        if style::pill(ui, label, (o.tolerance - tol).abs() < 1e-4).on_hover_text(hint).clicked() {
+                            o.tolerance = tol;
+                        }
+                    }
+                });
+                if quality_preset(o.tolerance).is_none() {
+                    ui.label(RichText::new(format!("Detail {:.3} mm (change in advanced settings)", o.tolerance)).size(11.5).color(style::KEEP));
                 }
-                if d.check.running() {
-                    ui.label(RichText::new("Checking…").size(11.5).color(style::DIM));
+                ui.add_space(8.0);
+
+                ui.label(RichText::new("③ What to export?").strong().size(12.5));
+                ui.horizontal(|ui| {
+                    if style::pill(ui, "Visible shapes", o.scope == Scope::Visible).clicked() {
+                        o.scope = Scope::Visible;
+                    }
+                    if style::pill_enabled(ui, "Selected only", o.scope == Scope::Selected, app.sel.is_some()).clicked() {
+                        o.scope = Scope::Selected;
+                    }
+                    if style::pill(ui, "All", o.scope == Scope::All).on_hover_text("Includes hidden shapes").clicked() {
+                        o.scope = Scope::All;
+                    }
+                });
+                if o.scope == Scope::Selected && app.sel.is_none() {
+                    ui.label(RichText::new("Select a shape first, or switch to 'Visible shapes'").size(11.5).color(style::KEEP));
+                }
+                ui.add_space(6.0);
+
+                if let Some(result) = d.est.result() {
+                    match result {
+                        Ok(e) => {
+                            let tol = f64::from(o.tolerance.clamp(MIN_TOLERANCE, MAX_TOLERANCE));
+                            let raw = e.raw_tris(tol);
+                            let secs = e.secs(tol, o.lighten != Lighten::Off);
+                            if raw > (MAX_VERTS as f64) * 1.8 {
+                                ui.label(RichText::new("Too fine. Try 'Fast / light'").size(11.5).color(style::CUT));
+                            } else {
+                                let col = if raw > 4.0e6 || secs > 60.0 { style::KEEP } else { style::DIM };
+                                ui.label(
+                                    RichText::new(format!("About {} · max about {}", time_text(secs), bytes_text(raw * bytes_per_tri(o.format))))
+                                        .size(11.5)
+                                        .color(col),
+                                );
+                            }
+                            ui.label(RichText::new(format!("Size: {}", size_text(e.size))).size(11.5).color(style::DIM));
+                        }
+                        Err(_) => {
+                            ui.label(RichText::new("Couldn't check the size. Check the shape").size(11.5).color(style::KEEP));
+                        }
+                    }
+                } else if d.est.running() {
+                    ui.label(RichText::new("Checking size…").size(11.5).color(style::DIM));
+                }
+
+                ui.add_space(6.0);
+                if style::pill(ui, if d.advanced { "Hide advanced ▲" } else { "Show advanced ▼" }, d.advanced).clicked() {
+                    d.advanced = !d.advanced;
+                }
+                if d.advanced {
+                    egui::ScrollArea::vertical().id_salt("ex_advanced_scroll").max_height(200.0).show(ui, |ui| {
+                        // file type
+                        row(ui, "File type", |ui| {
+                            let items: Vec<(&str, &str)> = Format::ALL
+                                .iter()
+                                .map(|f| {
+                                    (
+                                        f.label(),
+                                        match f {
+                                            Format::Stl => "For 3D printing (no colour, small)",
+                                            Format::ThreeMf => "For slicers (colour and units)",
+                                            Format::Obj => "Coloured (also makes an MTL file)",
+                                            Format::Ply => "Coloured (vertex colour)",
+                                            Format::Glb => "glTF 2.0 (for apps and web; colour and gloss)",
+                                            Format::StlAscii => "Text STL (bigger file)",
+                                        },
+                                    )
+                                })
+                                .collect();
+                            let cur = Format::ALL.iter().position(|f| *f == o.format);
+                            if let Some(i) = style::segmented(ui, "ex_format", &items, cur, false)
+                                && let Some(f) = Format::ALL.get(i)
+                            {
+                                choose_format(o, *f);
+                            }
+                        });
+
+                        // precision
+                        row(ui, "Detail by number", |ui| {
+                            for t in [0.05f32, 0.1, 0.2, 0.5] {
+                                let on = (o.tolerance - t).abs() < 1e-4;
+                                if style::pill(ui, &format!("{t}"), on).on_hover_text("Cell size (mm). Smaller is finer but heavier").clicked() {
+                                    o.tolerance = t;
+                                }
+                            }
+                            style::field_sized(
+                                ui,
+                                [74.0, 22.0],
+                                egui::DragValue::new(&mut o.tolerance)
+                                    .speed(0.005)
+                                    .range(MIN_TOLERANCE..=MAX_TOLERANCE)
+                                    .suffix(" mm")
+                                    .max_decimals(3),
+                            );
+                        });
+                        row(ui, "Units", |ui| {
+                            let items: Vec<(&str, &str)> =
+                                Units::ALL.iter().map(|u| (u.label(), if o.format == Format::Glb { "GLB is always in m" } else { "" })).collect();
+                            let cur = Units::ALL.iter().position(|u| *u == o.units);
+                            if let Some(i) = style::segmented(ui, "ex_units", &items, cur, false)
+                                && let Some(u) = Units::ALL.get(i)
+                            {
+                                o.units = *u;
+                            }
+                            ui.label(RichText::new("Size").color(style::DIM).size(12.0));
+                            style::field_sized(
+                                ui,
+                                [68.0, 22.0],
+                                egui::DragValue::new(&mut o.scale_pct).speed(1.0).range(1.0..=10000.0).suffix(" %").max_decimals(1),
+                            );
+                        });
+                        row(ui, "Up direction", |ui| {
+                            let items = [("Z (as is)", "3D printer style"), ("Y (OBJ / GLB style)", "Turns Z-up into Y-up")];
+                            if let Some(i) = style::segmented(ui, "ex_up", &items, Some(usize::from(o.up == Up::Y)), false) {
+                                o.up = if i == 1 { Up::Y } else { Up::Z };
+                            }
+                        });
+                        row(ui, "Smooth", |ui| {
+                            let items = [("None", ""), ("A little", ""), ("Normal", ""), ("Strong", "")];
+                            if let Some(i) = style::segmented(ui, "ex_smooth", &items, Some(usize::from(o.smooth.min(3))), false) {
+                                o.smooth = i as u8;
+                            }
+                            ui.label(RichText::new("Corners stay as they are").size(11.0).color(style::DIM));
+                        });
+                        row(ui, "Triangles", |ui| {
+                            let items = [
+                                ("As is", "All cells as triangles"),
+                                ("Merge flat areas", "Flat faces into big triangles (shape stays the same)"),
+                                ("Reduce count", "Set a triangle count to make it lighter"),
+                            ];
+                            let cur = match o.lighten {
+                                Lighten::Off => 0,
+                                Lighten::Flat => 1,
+                                Lighten::Target(_) => 2,
+                            };
+                            if let Some(i) = style::segmented(ui, "ex_lighten", &items, Some(cur), false) {
+                                o.lighten = match i {
+                                    0 => Lighten::Off,
+                                    1 => Lighten::Flat,
+                                    _ => Lighten::Target(match o.lighten {
+                                        Lighten::Target(n) => n,
+                                        _ => 100_000,
+                                    }),
+                                };
+                            }
+                        });
+                        if let Lighten::Target(n) = &mut o.lighten {
+                            row(ui, "Guide", |ui| {
+                                style::field_sized(ui, [110.0, 22.0], egui::DragValue::new(n).speed(500.0).range(100..=50_000_000).suffix(" pcs"));
+                            });
+                        }
+                        ui.horizontal(|ui| {
+                            ui.add_enabled_ui(o.format.has_colour(), |ui| {
+                                style::switch(ui, &mut o.colour, "Include colour");
+                            });
+                            style::switch(ui, &mut o.ignore_paint, "Ignore painted colours");
+                        });
+                        if !o.format.has_colour() {
+                            ui.label(RichText::new("STL can't include colour").size(11.0).color(style::DIM));
+                        }
+
+                        if let Some(Ok(e)) = d.est.result() {
+                            let tris = e.raw_tris(f64::from(o.tolerance.clamp(MIN_TOLERANCE, MAX_TOLERANCE)));
+                            ui.label(RichText::new(format!("Triangles, about {}", count_text(tris))).size(11.5).color(style::DIM));
+                        }
+                    });
+                }
+
+                // the print check
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    if style::pill_enabled(ui, "Print check", false, !d.check.running())
+                        .on_hover_text("size, volume, holes, thin spots, overhangs")
+                        .clicked()
+                    {
+                        check = true;
+                    }
+                    if d.check.running() {
+                        ui.label(RichText::new("Checking…").size(11.5).color(style::DIM));
+                    }
+                });
+                match d.check.result() {
+                    Some(Ok(c)) => print_check_lines(ui, &c),
+                    Some(Err(e)) => {
+                        ui.label(RichText::new(jp_error(&e)).size(11.5).color(style::CUT));
+                    }
+                    None => {}
+                }
+
+                if !d.msg.is_empty() {
+                    ui.label(RichText::new(&d.msg).size(11.5).color(style::CUT));
                 }
             });
-            match d.check.result() {
-                Some(Ok(c)) => print_check_lines(ui, &c),
-                Some(Err(e)) => {
-                    ui.label(RichText::new(jp_error(&e)).size(11.5).color(style::CUT));
-                }
-                None => {}
-            }
-
-            if !d.msg.is_empty() {
-                ui.label(RichText::new(&d.msg).size(11.5).color(style::CUT));
-            }
             ui.add_space(4.0);
             ui.horizontal(|ui| {
                 ui.add_enabled_ui(!busy, |ui| {
-                    let b = egui::Button::new(RichText::new(format!("Export ({})…", o.format.label())).strong().color(Color32::WHITE))
+                    let b = egui::Button::new(RichText::new(format!("Export ({})…", d.opts.format.label())).strong().color(Color32::WHITE))
                         .fill(style::ACCENT_SOFT)
                         .stroke(Stroke::new(1.0, style::ACCENT));
                     if ui.add(b).clicked() {
@@ -724,7 +744,11 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
         close = start_with(app, ctx, o);
     }
     // a changed estimate setting starts a new estimate
-    if !close {
+    if close {
+        // A closed card's estimate and check have no reader any more.
+        d.est.prog.cancel();
+        d.check.prog.cancel();
+    } else {
         ctx.data_mut(|m| m.insert_temp(id(), d));
     }
 }
@@ -778,6 +802,54 @@ mod tests {
 
     fn frame(app: &mut App, ctx: &egui::Context) {
         ctx.run_ui(egui::RawInput::default(), |ui| update(app, ui.ctx())).textures_delta.clear();
+    }
+
+    #[test]
+    fn reopening_the_card_cancels_only_its_superseded_background_work() {
+        let ctx = egui::Context::default();
+        open(&ctx, None);
+        let first = ctx.data(|m| m.get_temp::<Dlg>(id())).expect("first card");
+        assert!(!first.est.prog.cancelled());
+        assert!(!first.check.prog.cancelled());
+        open_check(&ctx);
+        assert!(first.est.prog.cancelled());
+        assert!(first.check.prog.cancelled());
+        let second = ctx.data(|m| m.get_temp::<Dlg>(id())).expect("second card");
+        assert!(second.run_check);
+        assert!(!second.check.prog.cancelled());
+        open(&ctx, Some(ExportFormat::ThreeMf));
+        assert!(second.est.prog.cancelled());
+        assert!(second.check.prog.cancelled());
+        let third = ctx.data(|m| m.get_temp::<Dlg>(id())).expect("third card");
+        assert_eq!(third.opts.format, Format::ThreeMf);
+        assert!(!third.run_check);
+        assert!(!third.est.prog.cancelled());
+        assert!(!third.check.prog.cancelled());
+    }
+
+    #[test]
+    fn export_card_stays_on_screen_with_advanced_options_and_long_messages() {
+        for size in [egui::vec2(960.0, 600.0), egui::vec2(1280.0, 720.0)] {
+            let ctx = egui::Context::default();
+            let mut app = App::new(true, None);
+            let mut d = new_dlg(&ctx, None, Defaults::default());
+            d.advanced = true;
+            d.msg = "Check the export settings before saving. ".repeat(20);
+            ctx.data_mut(|m| m.insert_temp(id(), d));
+            let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
+            for _ in 0..3 {
+                ctx.run_ui(egui::RawInput { screen_rect: Some(screen), ..Default::default() }, |ui| update(&mut app, ui.ctx()))
+                    .textures_delta
+                    .clear();
+            }
+            let card = ctx.memory(|m| m.area_rect(egui::Id::new("export_area"))).expect("export card");
+            assert!(card.min.y >= screen.min.y - 1.0 && card.max.y <= screen.max.y + 1.0, "card {card:?}, screen {screen:?}");
+            assert!(card.min.x >= screen.min.x - 1.0 && card.max.x <= screen.max.x + 1.0, "card {card:?}, screen {screen:?}");
+            if let Some(d) = ctx.data(|m| m.get_temp::<Dlg>(id())) {
+                d.est.prog.cancel();
+                d.check.prog.cancel();
+            }
+        }
     }
 
     #[test]
