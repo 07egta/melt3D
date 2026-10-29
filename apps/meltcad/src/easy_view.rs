@@ -754,7 +754,7 @@ mod tests {
     #[test]
     fn the_moving_worker_finishes_a_coarse_pass_then_restores_full_quality_when_still() {
         let worker = spawn_worker(None).expect("worker starts");
-        let scene = Scene::default();
+        let scene = Arc::new(Scene::default());
         let cam = Camera::default();
         let size = [48, 30];
         let coarse = render(&scene, &cam, size, false, 1, &never).expect("coarse reference");
