@@ -1355,6 +1355,9 @@ fn walk_part<'a>(
             if !st.hidden && !st.fill_none && !st.fill_hidden && xf.ok() {
                 budget.elements += 1;
                 let sf = xf.scale().max(1e-12);
+                // `limited` is sticky for the whole walk (e.g. the reference byte budget); only an
+                // overflow inside this shape may discard its outlines.
+                let limited_before = std::mem::replace(&mut budget.limited, false);
                 let mut pen = Pen { xf, tol: tol.map(|t| t / sf), out: Vec::new(), sub: Vec::new(), budget };
                 let n = |k: &str| tag.len(k);
                 match name {
@@ -1382,7 +1385,9 @@ fn walk_part<'a>(
                     }
                 }
                 // Do not retain only the beginning of a compound path: later subpaths may be holes.
-                let polys = if pen.budget.limited {
+                let shape_overflow = pen.budget.limited;
+                pen.budget.limited |= limited_before;
+                let polys = if shape_overflow {
                     Vec::new()
                 } else {
                     let drawn = std::mem::take(&mut pen.out);
