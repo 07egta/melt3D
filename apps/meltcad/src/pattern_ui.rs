@@ -7,7 +7,7 @@ use egui::{Color32, Painter, Rect, RichText, Stroke, Ui, pos2, vec2};
 use crate::app::App;
 use crate::model::{Group, MAX_GROUPS, Pick};
 use crate::pattern::{self, PathMode, Pattern, PatternKind, Source, Xform};
-use crate::{i18n, style};
+use crate::style;
 
 // ---------------------------------------------------------------------------------------------
 // Icons
@@ -19,6 +19,40 @@ fn frame(rect: Rect) -> Rect {
 
 fn at(f: Rect, u: f32, v: f32) -> egui::Pos2 {
     pos2(f.left() + f.width() * u, f.top() + f.height() * v)
+}
+
+/// A slider with its name in front and the value in a field after it: drag it, or type the number.
+fn slider_row_f32(ui: &mut Ui, label: &str, value: &mut f32, range: std::ops::RangeInclusive<f32>, tip: &str) -> bool {
+    ui.horizontal(|ui| {
+        ui.set_min_height(28.0);
+        let avail = ui.available_width();
+        style::row_label(ui, label);
+        let spacing = ui.spacing().item_spacing.x;
+        let sw = (avail - style::LABEL_W - 56.0 - 2.0 * spacing).clamp(70.0, 170.0);
+        let r = style::slider(ui, value, range.clone(), sw);
+        let slid = r.changed();
+        if !tip.is_empty() {
+            r.on_hover_text(tip);
+        }
+        let lo = *range.start();
+        let hi = *range.end();
+        let speed = f64::from(hi - lo) / 200.0;
+        slid | style::field_sized(ui, [56.0, 22.0], egui::DragValue::new(value).range(range).speed(speed).max_decimals(2)).changed()
+    })
+    .inner
+}
+
+/// The same for a whole number (counts): the slider moves in whole steps and the field takes a typed one.
+fn slider_row_u32(ui: &mut Ui, label: &str, value: &mut u32, range: std::ops::RangeInclusive<u32>, tip: &str) -> bool {
+    let (lo, hi) = (*range.start(), *range.end());
+    let mut f = *value as f32;
+    let mut changed = slider_row_f32(ui, label, &mut f, lo as f32..=hi as f32, tip);
+    let n = f.round().clamp(lo as f32, hi as f32) as u32;
+    if n != *value {
+        *value = n;
+        changed = true;
+    }
+    changed
 }
 
 /// A small line icon for a kind of pattern (drawn in code, like the other icons).
@@ -89,6 +123,28 @@ enum Chosen {
     Group(usize),
 }
 
+/// What a pattern belongs to: a whole group, or one shape inside a group.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PatternTarget {
+    Group(usize),
+    Shape(usize, usize),
+}
+
+impl PatternTarget {
+    fn exists(self, scene: &crate::model::Scene) -> bool {
+        match self {
+            PatternTarget::Group(g) => g < scene.groups.len(),
+            PatternTarget::Shape(g, s) => scene.shape(g, s).is_some(),
+        }
+    }
+    fn anchor(self, scene: &crate::model::Scene) -> [f32; 3] {
+        match self {
+            PatternTarget::Group(g) => scene.groups.get(g).map_or([0.0; 3], |gr| pattern::centre_of_shapes(&gr.shapes)),
+            PatternTarget::Shape(g, s) => scene.shape(g, s).map_or([0.0; 3], |sh| sh.pos),
+        }
+    }
+}
+
 impl App {
     /// The group the selection is in (a picked shape's group, or the picked group).
     pub fn selected_group(&self) -> Option<usize> {
@@ -98,25 +154,72 @@ impl App {
         }
     }
 
-    /// A new pattern of `kind` on the selected group (Path and Geometry start on the first shape
-    /// that has something to follow).
+    /// What a new pattern would go on: the selected shape, or the selected group.
+    pub fn pattern_target(&self) -> Option<PatternTarget> {
+        let t = match self.sel? {
+            Pick::Shape(g, s) => PatternTarget::Shape(g, s),
+            Pick::Group(g) => PatternTarget::Group(g),
+        };
+        t.exists(&self.scene).then_some(t)
+    }
+
+    fn pattern_of(&self, t: PatternTarget) -> Option<Pattern> {
+        match t {
+            PatternTarget::Group(g) => self.scene.groups.get(g).and_then(|gr| gr.pattern.clone()),
+            PatternTarget::Shape(g, s) => self.scene.shape(g, s).and_then(|sh| sh.pattern.clone()),
+        }
+    }
+
+    /// Put a pattern there (or take it off), with every number made safe. Returns whether the
+    /// scene changed, so a slider that ends where it began makes no undo step.
+    pub(crate) fn write_pattern(&mut self, t: PatternTarget, mut pat: Option<Pattern>) -> bool {
+        if let Some(p) = &mut pat {
+            p.sanitize();
+        }
+        if self.pattern_of(t) == pat {
+            return false;
+        }
+        match t {
+            PatternTarget::Group(g) => {
+                let Some(gr) = self.scene.groups.get_mut(g) else { return false };
+                gr.pattern = pat;
+            }
+            PatternTarget::Shape(g, s) => {
+                let Some(sh) = self.scene.shape_mut(g, s) else { return false };
+                sh.pattern = pat;
+            }
+        }
+        true
+    }
+
+    /// A new pattern of `kind` on the selected shape or group (Path and Geometry start on the
+    /// first other shape that has something to follow).
     pub fn set_pattern_kind(&mut self, ctx: &egui::Context, kind: PatternKind) {
         if !self.allow_scene_structure_change() {
             return;
         }
-        let Some(g) = self.selected_group() else {
+        let Some(target) = self.pattern_target() else {
             self.say(ctx, "Select a group or shape first");
             return;
         };
+        self.set_pattern_kind_on(ctx, target, kind);
+    }
+
+    /// The same for a card that edits one known shape or group.
+    fn set_pattern_kind_on(&mut self, ctx: &egui::Context, target: PatternTarget, kind: PatternKind) {
+        if !self.allow_scene_structure_change() {
+            return;
+        }
         let mut p = Pattern::starting(kind);
         match &mut p {
             Pattern::Path { source, .. } => {
-                let found = self
-                    .scene
-                    .groups
-                    .iter()
-                    .enumerate()
-                    .find_map(|(gi, gr)| gr.shapes.iter().position(|s| pattern::shape_polyline(s).is_some()).map(|si| (gi, si)));
+                let found = self.scene.groups.iter().enumerate().find_map(|(gi, gr)| {
+                    gr.shapes
+                        .iter()
+                        .enumerate()
+                        .find(|(si, s)| pattern::shape_polyline(s).is_some() && target != PatternTarget::Shape(gi, *si))
+                        .map(|(si, _)| (gi, si))
+                });
                 match found.and_then(|(gi, si)| self.scene.ensure_shape_uid(gi, si)) {
                     Some(uid) => *source = uid,
                     None => {
@@ -129,9 +232,10 @@ impl App {
                 let found = self.scene.groups.iter().enumerate().find_map(|(gi, gr)| {
                     gr.shapes
                         .iter()
-                        .position(|s| pattern::shape_polyline(s).is_some())
-                        .or_else(|| (gi != g).then_some(0).filter(|_| !gr.shapes.is_empty()))
-                        .map(|si| (gi, si))
+                        .enumerate()
+                        .find(|(si, s)| pattern::shape_polyline(s).is_some() && target != PatternTarget::Shape(gi, *si))
+                        .map(|(si, _)| (gi, si))
+                        .or_else(|| gr.shapes.iter().enumerate().find(|(si, _)| target != PatternTarget::Shape(gi, *si)).map(|(si, _)| (gi, si)))
                 });
                 match found.and_then(|(gi, si)| self.scene.ensure_shape_uid(gi, si)) {
                     Some(uid) => *source = Source::Shape(uid),
@@ -143,55 +247,57 @@ impl App {
             }
             _ => {}
         }
-        if let Some(gr) = self.scene.groups.get_mut(g) {
-            gr.pattern = Some(p);
+        self.write_pattern(target, Some(p));
+        if let PatternTarget::Group(g) = target {
+            self.sel = Some(Pick::Group(g));
         }
-        self.sel = Some(Pick::Group(g));
     }
 
-    /// Turn the mirror about world axis `axis` (0 X, 1 Y, 2 Z) on or off for the selected group.
+    /// Turn the mirror about world axis `axis` (0 X, 1 Y, 2 Z) on or off for the selected shape or
+    /// group.
     pub fn toggle_mirror(&mut self, ctx: &egui::Context, axis: usize) {
         if !self.allow_scene_structure_change() {
             return;
         }
-        let Some(g) = self.selected_group() else {
+        let Some(target) = self.pattern_target() else {
             self.say(ctx, "Select a group or shape first");
             return;
         };
-        let Some(gr) = self.scene.groups.get_mut(g) else { return };
-        match &mut gr.pattern {
+        self.toggle_mirror_on(ctx, target, axis);
+    }
+
+    fn toggle_mirror_on(&mut self, ctx: &egui::Context, target: PatternTarget, axis: usize) {
+        if !self.allow_scene_structure_change() {
+            return;
+        }
+        match self.pattern_of(target) {
             None => {
                 let mut axes = [false; 3];
                 if let Some(a) = axes.get_mut(axis) {
                     *a = true;
                 }
-                gr.pattern = Some(Pattern::Mirror { axes, centre: false });
+                self.write_pattern(target, Some(Pattern::Mirror { axes, centre: false }));
             }
-            Some(Pattern::Mirror { axes, .. }) => {
+            Some(Pattern::Mirror { mut axes, centre }) => {
                 if let Some(a) = axes.get_mut(axis) {
                     *a = !*a;
                 }
-                if !axes.iter().any(|a| *a) {
-                    gr.pattern = None;
-                }
+                let next = axes.iter().any(|a| *a).then_some(Pattern::Mirror { axes, centre });
+                self.write_pattern(target, next);
             }
             Some(_) => {
                 self.say(ctx, "Another pattern is already on. Turn it off first");
-                return;
             }
         }
-        self.sel = Some(Pick::Group(g));
     }
 
-    /// Take the pattern off the selected group.
+    /// Take the pattern off the selected shape or group.
     pub fn clear_pattern(&mut self) {
         if !self.allow_scene_structure_change() {
             return;
         }
-        if let Some(g) = self.selected_group()
-            && let Some(gr) = self.scene.groups.get_mut(g)
-        {
-            gr.pattern = None;
+        if let Some(t) = self.pattern_target() {
+            self.write_pattern(t, None);
         }
     }
 
@@ -266,28 +372,41 @@ impl App {
 
     /// The pattern part of the group inspector (and the linked copy's placement).
     pub fn pattern_section(&mut self, ui: &mut Ui, g: usize) {
+        self.pattern_card(ui, PatternTarget::Group(g));
+    }
+
+    /// The pattern card for one shape (opened in the shape inspector).
+    pub fn shape_pattern_section(&mut self, ui: &mut Ui, g: usize, s: usize) {
+        self.pattern_card(ui, PatternTarget::Shape(g, s));
+    }
+
+    fn pattern_card(&mut self, ui: &mut Ui, target: PatternTarget) {
         let ctx = ui.ctx().clone();
-        if self.scene.groups.get(g).is_some_and(Group::is_linked) {
+        if let PatternTarget::Group(g) = target
+            && self.scene.groups.get(g).is_some_and(Group::is_linked)
+        {
             self.link_box(ui, g);
         }
-        style::title(ui, i18n::tr("inspector.pattern.title"));
-        let current = self.scene.groups.get(g).and_then(|gr| gr.pattern.clone());
+        style::title(ui, "Pattern");
+        let current = self.pattern_of(target);
+        let anchor = target.anchor(&self.scene);
         // the kind: nothing, or one of five
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
-            if style::icon_button(ui, 34.0, i18n::tr("inspector.pattern.none"), current.is_none(), |p, r, ink| {
+            if style::icon_button(ui, 34.0, "No pattern", current.is_none(), |p, r, ink| {
                 let f = frame(r);
                 p.line_segment([at(f, 0.2, 0.2), at(f, 0.8, 0.8)], Stroke::new(2.0, ink));
                 p.line_segment([at(f, 0.8, 0.2), at(f, 0.2, 0.8)], Stroke::new(2.0, ink));
             })
             .clicked()
+                && self.allow_scene_structure_change()
             {
-                self.clear_pattern();
+                self.write_pattern(target, None);
             }
             for k in PatternKind::ALL {
                 let on = current.as_ref().is_some_and(|p| p.kind() == k);
                 if style::icon_button(ui, 34.0, &format!("{}　{}", k.label(), k.hint()), on, |p, r, ink| icon(k, p, r, ink)).clicked() && !on {
-                    self.set_pattern_kind(&ctx, k);
+                    self.set_pattern_kind_on(&ctx, target, k);
                 }
             }
         });
@@ -298,7 +417,7 @@ impl App {
         };
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
-            style::row_label(ui, i18n::tr("inspector.pattern.mirror"));
+            style::row_label(ui, "Mirror");
             let free = current.is_none() || mirror_axes.is_some();
             for (i, name) in ["X", "Y", "Z"].iter().enumerate() {
                 let on = mirror_axes.is_some_and(|a| a[i]);
@@ -306,67 +425,77 @@ impl App {
                     .on_hover_text(["Mirror across X (left/right)", "Mirror across Y (front/back)", "Mirror across Z (up/down)"][i])
                     .clicked()
                 {
-                    self.toggle_mirror(&ctx, i);
+                    self.toggle_mirror_on(&ctx, target, i);
                 }
             }
         });
         let Some(mut pat) = current.clone() else {
-            ui.label(RichText::new(i18n::tr("inspector.pattern.empty_hint")).size(12.0).color(style::DIM));
+            let what = match target {
+                PatternTarget::Group(_) => "group",
+                PatternTarget::Shape(_, _) => "shape",
+            };
+            ui.label(RichText::new(format!("Repeat this {what} many times, or mirror it left and right")).size(12.0).color(style::DIM));
             return;
         };
-        let centre = self.scene.groups.get(g).map(|gr| pattern::centre_of_shapes(&gr.shapes)).unwrap_or([0.0; 3]);
         let mut chosen: Option<Chosen> = None;
         match &mut pat {
             Pattern::Mirror { centre: about, .. } => {
                 ui.horizontal(|ui| {
-                    style::row_label(ui, i18n::tr("inspector.pattern.mirror_plane"));
-                    if style::pill(ui, i18n::tr("inspector.pattern.origin"), !*about).on_hover_text("The plane through the world origin").clicked() {
+                    style::row_label(ui, "Mirror plane");
+                    if style::pill(ui, "Origin", !*about).on_hover_text("The plane through the world origin").clicked() {
                         *about = false;
                     }
-                    if style::pill(ui, i18n::tr("inspector.pattern.group_center"), *about)
-                        .on_hover_text("The plane through this group's center")
-                        .clicked()
-                    {
+                    if style::pill(ui, "Own center", *about).on_hover_text("The plane through this group's or shape's own center").clicked() {
                         *about = true;
                     }
                 });
             }
             Pattern::Rect { counts, spacing } => {
-                ui.horizontal(|ui| {
-                    style::row_label(ui, i18n::tr("inspector.pattern.count"));
-                    for (i, c) in counts.iter_mut().enumerate() {
-                        ui.label(RichText::new(["X", "Y", "Z"][i]).color(style::AXIS[i]).size(12.0).strong());
-                        style::field_sized(ui, [44.0, 22.0], egui::DragValue::new(c).speed(0.1).range(1..=pattern::MAX_SIDE));
-                    }
-                });
-                style::xyz(ui, i18n::tr("inspector.pattern.spacing"), spacing, 0.5, -5000.0..=5000.0, "");
+                for (i, c) in counts.iter_mut().enumerate() {
+                    slider_row_u32(
+                        ui,
+                        &format!("Count {}", ["X", "Y", "Z"][i]),
+                        c,
+                        1..=pattern::MAX_SIDE,
+                        "Copies along this axis (1 = just this one)",
+                    );
+                }
+                for (i, s) in spacing.iter_mut().enumerate() {
+                    slider_row_f32(
+                        ui,
+                        &format!("Spacing {}", ["X", "Y", "Z"][i]),
+                        s,
+                        -1000.0..=1000.0,
+                        "Distance between copies along this axis (mm; a minus goes the other way)",
+                    );
+                }
             }
             Pattern::Circular { count, angle, axis, centre: c, rotate } => {
+                slider_row_u32(ui, "Count", count, 1..=pattern::MAX_INSTANCES as u32, "Copies around the circle");
+                slider_row_f32(ui, "Angle", angle, -360.0..=360.0, "How much of a turn the copies cover (degrees)");
                 ui.horizontal(|ui| {
-                    style::row_label(ui, i18n::tr("inspector.pattern.count"));
-                    style::field_sized(ui, [54.0, 22.0], egui::DragValue::new(count).speed(0.1).range(1..=pattern::MAX_INSTANCES as u32));
-                    ui.label(RichText::new(i18n::tr("inspector.pattern.angle")).color(style::DIM).size(12.0));
-                    style::field_sized(ui, [64.0, 22.0], egui::DragValue::new(angle).speed(1.0).range(-3600.0..=3600.0).suffix("°"));
-                });
-                ui.horizontal(|ui| {
-                    style::row_label(ui, i18n::tr("inspector.pattern.rotation_axis"));
+                    style::row_label(ui, "Rotation axis");
                     for (i, name) in ["X", "Y", "Z"].iter().enumerate() {
                         if style::pill(ui, name, usize::from(*axis) == i).clicked() {
                             *axis = i as u8;
                         }
                     }
                 });
-                style::xyz(ui, i18n::tr("inspector.pattern.center"), c, 0.5, -5000.0..=5000.0, "");
+                let mut radius = pattern::circular_radius(anchor, *c, *axis);
+                if slider_row_f32(ui, "Radius", &mut radius, 0.0..=1000.0, "How far from the middle the copies go (mm)") {
+                    pattern::set_circular_radius(anchor, c, *axis, radius);
+                }
+                style::xyz(ui, "Center", c, 0.5, -5000.0..=5000.0, "");
                 ui.horizontal(|ui| {
                     ui.add_space(style::LABEL_W);
-                    if style::pill(ui, i18n::tr("inspector.pattern.origin"), false).clicked() {
+                    if style::pill(ui, "Origin", false).clicked() {
                         *c = [0.0; 3];
                     }
-                    if style::pill(ui, i18n::tr("inspector.pattern.group_center"), false).clicked() {
-                        *c = centre;
+                    if style::pill(ui, "Own center", false).clicked() {
+                        *c = anchor;
                     }
                 });
-                style::checkbox(ui, rotate, i18n::tr("inspector.pattern.rotate_copies"));
+                style::checkbox(ui, rotate, "Rotate copies too");
             }
             Pattern::Path { source, count, mode, step, align } => {
                 let label = self.source_label(Source::Shape(*source));
@@ -393,14 +522,16 @@ impl App {
                         *mode = PathMode::Step;
                     }
                 });
-                ui.horizontal(|ui| {
-                    style::row_label(ui, if *mode == PathMode::Even { "Count" } else { "At most" });
-                    style::field_sized(ui, [54.0, 22.0], egui::DragValue::new(count).speed(0.1).range(1..=pattern::MAX_INSTANCES as u32));
-                    if *mode == PathMode::Step {
-                        ui.label(RichText::new("Gap").color(style::DIM).size(12.0));
-                        style::field_sized(ui, [70.0, 22.0], egui::DragValue::new(step).speed(0.5).range(0.1..=5000.0).suffix(" mm"));
-                    }
-                });
+                slider_row_u32(
+                    ui,
+                    if *mode == PathMode::Even { "Count" } else { "At most" },
+                    count,
+                    1..=pattern::MAX_INSTANCES as u32,
+                    "Most copies to put along the path",
+                );
+                if *mode == PathMode::Step {
+                    slider_row_f32(ui, "Gap", step, 0.1..=500.0, "Distance from one copy to the next along the path (mm)");
+                }
                 style::checkbox(ui, align, "Align to the line's direction");
             }
             Pattern::Geometry { source, orient } => {
@@ -462,11 +593,14 @@ impl App {
             None => {}
         }
         // how many it makes
-        let (n, capped) = pattern::describe(&self.scene, g);
+        let (n, capped) = match target {
+            PatternTarget::Group(g) => pattern::describe(&self.scene, g),
+            PatternTarget::Shape(g, s) => pattern::describe_shape(&self.scene, g, s),
+        };
         let missing = pat.follows().is_some() && pattern::natural_count(&pat, &self.scene) == 0;
         ui.horizontal(|ui| {
             style::row_label(ui, "Current count");
-            ui.label(RichText::new(format!("{n} copies")).strong().size(13.0));
+            ui.label(RichText::new(format!("{n} copies (up to {})", pattern::MAX_INSTANCES)).strong().size(13.0));
         });
         if capped {
             ui.label(RichText::new(pattern::TOO_MANY).size(12.0).color(style::CUT));
@@ -474,12 +608,12 @@ impl App {
         if missing {
             ui.label(RichText::new("No path found (line or shape)").size(12.0).color(style::CUT));
         }
-        if let Some(gr) = self.scene.groups.get_mut(g)
-            && gr.pattern.as_ref() != Some(&pat)
-        {
-            gr.pattern = Some(pat);
-        }
-        ui.label(RichText::new("The shape frame is not used. Choosing a copy selects its original group").size(11.5).color(style::DIM));
+        self.write_pattern(target, Some(pat));
+        ui.label(
+            RichText::new("The shape frame is not used. Choosing a copy selects the shape or group the pattern was made from")
+                .size(11.5)
+                .color(style::DIM),
+        );
     }
 
     fn source_label(&self, s: Source) -> String {
@@ -553,7 +687,20 @@ mod tests {
     fn the_mirror_toggles_make_and_remove_the_pattern() {
         let ctx = egui::Context::default();
         let mut app = App::new(true, None);
+        // a selected shape gets a pattern of its own; the group keeps none
         app.sel = Some(Pick::Shape(0, 0));
+        app.toggle_mirror(&ctx, 0);
+        assert!(matches!(app.scene.groups[0].shapes[0].pattern, Some(Pattern::Mirror { axes: [true, false, false], .. })));
+        assert!(app.scene.groups[0].pattern.is_none(), "the group is not patterned");
+        assert_eq!(app.sel, Some(Pick::Shape(0, 0)), "the shape stays selected");
+        app.toggle_mirror(&ctx, 2);
+        assert!(matches!(app.scene.groups[0].shapes[0].pattern, Some(Pattern::Mirror { axes: [true, false, true], .. })));
+        assert_eq!(pattern::describe_shape(&app.scene, 0, 0), (4, false));
+        app.toggle_mirror(&ctx, 0);
+        app.toggle_mirror(&ctx, 2);
+        assert!(app.scene.groups[0].shapes[0].pattern.is_none(), "no axis left: no pattern");
+        // a selected group still gets the group pattern as before
+        app.sel = Some(Pick::Group(0));
         app.toggle_mirror(&ctx, 0);
         assert!(matches!(app.scene.groups[0].pattern, Some(Pattern::Mirror { axes: [true, false, false], .. })));
         assert_eq!(app.sel, Some(Pick::Group(0)));
@@ -574,6 +721,112 @@ mod tests {
         app.toggle_mirror(&ctx, 0);
         app.set_pattern_kind(&ctx, PatternKind::Circular);
         assert!(app.scene.groups[0].pattern.is_none());
+    }
+
+    #[test]
+    fn a_single_shape_pattern_is_created_edited_and_undone_as_one_step() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        app.scene.groups[0].shapes[0].pos = [0.0, 0.0, 20.0];
+        app.scene.groups[0].shapes[0].size = [8.0; 3];
+        app.sel = Some(Pick::Shape(0, 0));
+        app.settle(&ctx);
+        let steps = app.undo_depth();
+        // the card starts a rectangular pattern of the selected shape
+        app.set_pattern_kind(&ctx, PatternKind::Rect);
+        app.settle(&ctx);
+        assert_eq!(app.undo_depth(), steps + 1, "making a pattern is one undo step");
+        let Some(Pattern::Rect { counts, spacing }) = app.scene.groups[0].shapes[0].pattern.clone() else { panic!("a shape pattern") };
+        assert_eq!(counts, [3, 1, 1]);
+        assert!(app.scene.groups[0].pattern.is_none(), "the group is not patterned");
+        assert_eq!(pattern::describe_shape(&app.scene, 0, 0), (3, false));
+        let source = crate::sdf::Field::new(&app.scene);
+        assert!(source.distance([0.0, 0.0, 20.0]) < 0.0, "the source shape stays");
+        assert!(source.distance([spacing[0] * 2.0, 0.0, 20.0]) < 0.0, "the last copy is there");
+        // the card's controls write through the same path: count 2, spacing 25
+        let before = app.scene.clone();
+        assert!(app.write_pattern(PatternTarget::Shape(0, 0), Some(Pattern::Rect { counts: [2, 1, 1], spacing: [25.0, 25.0, 25.0] })));
+        app.settle(&ctx);
+        assert_eq!(app.undo_depth(), steps + 2, "an edit is one undo step");
+        assert_eq!(app.sel, Some(Pick::Shape(0, 0)), "the shape is still selected");
+        assert_eq!(pattern::describe_shape(&app.scene, 0, 0), (2, false), "old copies are gone, none doubled");
+        let edited = crate::sdf::Field::new(&app.scene);
+        assert!(edited.distance([25.0, 0.0, 20.0]) < 0.0);
+        assert!(edited.distance([50.0, 0.0, 20.0]) > 0.0, "the old second copy at 50 mm is gone");
+        // save and load keep the edited numbers
+        let back = crate::model::Scene::from_json(&app.scene.to_json()).unwrap_or_default();
+        assert_eq!(back.groups[0].shapes[0].pattern, app.scene.groups[0].shapes[0].pattern);
+        // one undo returns the pattern as it was, copies and all
+        app.undo();
+        assert_eq!(app.scene, before);
+        assert_eq!(pattern::describe_shape(&app.scene, 0, 0), (3, false));
+        let undone = crate::sdf::Field::new(&app.scene);
+        assert!(undone.distance([80.0, 0.0, 20.0]) < 0.0, "the old copies are back");
+        assert!(undone.distance([25.0, 0.0, 20.0]) > 0.0);
+        // no pattern = just the source shape again
+        assert!(app.write_pattern(PatternTarget::Shape(0, 0), None));
+        assert_eq!(pattern::describe_shape(&app.scene, 0, 0), (1, false));
+        assert_eq!(crate::sdf::Field::new(&app.scene).sources[0].shapes.len(), 1);
+    }
+
+    #[test]
+    fn hostile_card_values_are_clamped_to_the_same_visible_limits_as_the_sliders() {
+        let mut app = App::new(true, None);
+        app.sel = Some(Pick::Shape(0, 0));
+        // count 0 (typed) is the slider's minimum 1; a huge count is the slider's maximum
+        app.write_pattern(PatternTarget::Shape(0, 0), Some(Pattern::Rect { counts: [0, u32::MAX, 0], spacing: [f32::NAN, f32::INFINITY, 1e30] }));
+        let Some(Pattern::Rect { counts, spacing }) = app.scene.groups[0].shapes[0].pattern.clone() else { panic!("a shape pattern") };
+        assert_eq!(counts, [1, pattern::MAX_SIDE, 1]);
+        assert!(spacing.iter().all(|v| v.is_finite()), "{spacing:?}");
+        assert_eq!(pattern::describe_shape(&app.scene, 0, 0), (pattern::MAX_SIDE as usize, false));
+        // a typed value in range and the slider at the same place make the same pattern
+        let typed = Pattern::Rect { counts: [4, 2, 1], spacing: [30.0, 30.0, 30.0] };
+        let mut other = App::new(true, None);
+        other.sel = Some(Pick::Shape(0, 0));
+        other.write_pattern(PatternTarget::Shape(0, 0), Some(typed.clone()));
+        app.write_pattern(PatternTarget::Shape(0, 0), Some(typed.clone()));
+        assert_eq!(app.scene.groups[0].shapes[0].pattern, other.scene.groups[0].shapes[0].pattern);
+        // the visible limit is written out, not a silent huge pattern
+        assert!(pattern::describe_shape(&other.scene, 0, 0).0 <= pattern::MAX_SIDE as usize);
+    }
+
+    #[test]
+    fn the_card_edits_a_pattern_the_group_already_has() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        app.sel = Some(Pick::Group(0));
+        app.write_pattern(PatternTarget::Group(0), Some(Pattern::Rect { counts: [2, 2, 1], spacing: [20.0, 20.0, 0.0] }));
+        // selecting the group again opens the card with these numbers already in it
+        assert!(matches!(app.scene.groups[0].pattern, Some(Pattern::Rect { counts: [2, 2, 1], .. })));
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            egui::CentralPanel::default().show(ui, |ui| app.pattern_section(ui, 0));
+        });
+        out.textures_delta.clear();
+        assert_eq!(
+            app.scene.groups[0].pattern,
+            Some(Pattern::Rect { counts: [2, 2, 1], spacing: [20.0, 20.0, 0.0] }),
+            "drawing the card changes nothing"
+        );
+        assert!(app.write_pattern(PatternTarget::Group(0), Some(Pattern::Rect { counts: [4, 1, 1], spacing: [12.0, 12.0, 12.0] })));
+        assert_eq!(pattern::describe(&app.scene, 0), (4, false));
+        // editing the existing group pattern is one undo step, and undo puts the old copies back
+        app.settle(&ctx);
+        let steps = app.undo_depth();
+        let before = app.scene.clone();
+        app.write_pattern(PatternTarget::Group(0), Some(Pattern::Rect { counts: [2, 2, 1], spacing: [30.0, 30.0, 30.0] }));
+        app.settle(&ctx);
+        assert_eq!(app.undo_depth(), steps + 1);
+        assert_eq!(pattern::describe(&app.scene, 0), (4, false));
+        app.undo();
+        assert_eq!(app.scene, before);
+        assert!(matches!(app.scene.groups[0].pattern, Some(Pattern::Rect { counts: [4, 1, 1], .. })));
+        // a shape card draws too
+        app.write_pattern(PatternTarget::Shape(0, 0), Some(Pattern::Circular { count: 3, angle: 180.0, axis: 2, centre: [0.0; 3], rotate: false }));
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            egui::CentralPanel::default().show(ui, |ui| app.shape_pattern_section(ui, 0, 0));
+        });
+        out.textures_delta.clear();
+        assert!(matches!(app.scene.groups[0].shapes[0].pattern, Some(Pattern::Circular { count: 3, .. })));
     }
 
     #[test]
