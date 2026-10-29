@@ -17,6 +17,17 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Preserve query alignment alongside each voice
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('docs/promo-video/rebuild_20261029/prepare_assets.py')
+          s=p.read_text()
+          old="data=syn.synthesis(q,3);path=voice/(ident+'.wav');path.write_bytes(data)"
+          new=old+"; (voice/(ident+'.query.json')).write_text(json.dumps(q,default=lambda o: dataclasses.asdict(o) if dataclasses.is_dataclass(o) else vars(o),ensure_ascii=False,indent=2))"
+          assert old in s
+          p.write_text(s.replace(old,new))
+          PY
       - name: Prepare official narration and source assets
         env:
           GH_TOKEN: ${{ github.token }}
