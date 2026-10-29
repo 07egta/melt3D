@@ -4,19 +4,18 @@
 
 use crate::model::Kind;
 use egui::epaint::Mesh;
-use egui::{Color32, Painter, Pos2, Rect, Shape, Stroke, pos2, vec2};
+use egui::{Color32, Painter, Pos2, Rect, Shape, Stroke, pos2};
 
 type P = (f32, f32);
 
 const PI: f32 = std::f32::consts::PI;
 
 fn frame(rect: Rect) -> Rect {
-    let s = rect.width().min(rect.height()) * 0.8;
-    Rect::from_center_size(rect.center(), vec2(s, s))
+    crate::glyphs::frame(rect)
 }
 
 fn pen(rect: Rect, ink: Color32) -> Stroke {
-    Stroke::new((rect.width() * 0.07).clamp(1.0, 2.5), ink)
+    crate::glyphs::pen(rect, ink)
 }
 
 fn at(f: Rect, u: f32, v: f32) -> Pos2 {
@@ -53,39 +52,45 @@ fn quad(a: P, c: P, b: P, n: usize) -> Vec<P> {
 }
 
 fn polyline(p: &Painter, f: Rect, pts: &[P], s: Stroke) {
-    p.add(Shape::line(px(f, pts), s));
+    crate::glyphs::round_path(p, px(f, pts), s, false);
 }
 
 fn segment(p: &Painter, f: Rect, a: P, b: P, s: Stroke) {
-    p.line_segment([at(f, a.0, a.1), at(f, b.0, b.1)], s);
+    crate::glyphs::round_path(p, vec![at(f, a.0, a.1), at(f, b.0, b.1)], s, false);
 }
 
 /// Convex filled polygon with an outline.
 fn poly(p: &Painter, f: Rect, pts: &[P], fill: Color32, s: Stroke) {
-    p.add(Shape::convex_polygon(px(f, pts), fill, s));
+    if fill.a() > 0 {
+        p.add(Shape::convex_polygon(px(f, pts), fill, Stroke::NONE));
+    }
+    if s.width > 0.0 {
+        crate::glyphs::round_path(p, px(f, pts), s, true);
+    }
 }
 
 /// Fill of any star-shaped polygon (seen from `c`) as a triangle fan, then its outline.
 fn fan(p: &Painter, f: Rect, pts: &[P], c: P, fill: Color32, s: Stroke) {
-    let mut m = Mesh::default();
-    m.colored_vertex(at(f, c.0, c.1), fill);
-    for &(u, v) in pts {
-        m.colored_vertex(at(f, u, v), fill);
+    if fill.a() > 0 {
+        let mut m = Mesh::default();
+        m.colored_vertex(at(f, c.0, c.1), fill);
+        for &(u, v) in pts {
+            m.colored_vertex(at(f, u, v), fill);
+        }
+        let n = pts.len() as u32;
+        for i in 0..n {
+            m.add_triangle(0, 1 + i, 1 + (i + 1) % n);
+        }
+        p.add(Shape::mesh(m));
     }
-    let n = pts.len() as u32;
-    for i in 0..n {
-        m.add_triangle(0, 1 + i, 1 + (i + 1) % n);
-    }
-    p.add(Shape::mesh(m));
-    let mut ring = px(f, pts);
-    if let Some(&first) = ring.first() {
-        ring.push(first);
-    }
-    p.add(Shape::line(ring, s));
+    crate::glyphs::round_path(p, px(f, pts), s, true);
 }
 
 /// A strip of quads between two sides of equal length (for ribbons), no outline.
 fn strip(p: &Painter, f: Rect, a: &[P], b: &[P], fill: Color32) {
+    if fill.a() == 0 {
+        return;
+    }
     let mut m = Mesh::default();
     for (&pa, &pb) in a.iter().zip(b.iter()) {
         m.colored_vertex(at(f, pa.0, pa.1), fill);
@@ -133,34 +138,32 @@ fn slab(p: &Painter, f: Rect, top: &[P], concave_centre: Option<P>, drop: f32, f
         Some(c) => fan(p, f, top, c, fill, s),
         None => poly(p, f, top, fill, s),
     }
-    // a closed outline for the top face
-    let mut o = px(f, top);
-    if let Some(&first) = o.first() {
-        o.push(first);
-    }
-    p.add(Shape::line(o, s));
 }
 
 fn prism3(p: &Painter, f: Rect, fill: Color32, s: Stroke) {
-    let top = ring(3, 0.5, 0.28, 0.44, 0.22, PI * 0.5);
-    slab(p, f, &top, None, 0.45, fill, s);
-}
-
-fn prism_n(p: &Painter, f: Rect, fill: Color32, s: Stroke) {
-    let top = ring(5, 0.5, 0.30, 0.45, 0.22, PI * 0.5);
+    // a point-up triangle on top, dropped straight down: a prism, not a floating triangle
+    let top = ring(3, 0.5, 0.34, 0.42, 0.22, -PI * 0.5);
     slab(p, f, &top, None, 0.42, fill, s);
 }
 
+fn prism_n(p: &Painter, f: Rect, fill: Color32, s: Stroke) {
+    // the default six-sided profile, so it reads as a polygon prism next to the round cylinder
+    let top = ring(6, 0.5, 0.34, 0.42, 0.20, PI * 0.5);
+    slab(p, f, &top, None, 0.38, fill, s);
+}
+
 fn star(p: &Painter, f: Rect, fill: Color32, s: Stroke) {
-    let (cu, cv, ru, rv) = (0.5, 0.38, 0.47, 0.27);
-    let top: Vec<P> = (0..10)
-        .map(|k| {
-            let a = -PI * 0.5 + PI * k as f32 / 5.0;
-            let r = if k % 2 == 0 { 1.0 } else { 0.45 };
-            (cu + ru * r * a.cos(), cv + rv * r * a.sin())
-        })
-        .collect();
-    slab(p, f, &top, Some((cu, cv)), 0.3, fill, s);
+    // a plain five-point star, drawn flat with a little thickness underneath
+    let pts = |dv: f32| -> Vec<P> {
+        (0..10)
+            .map(|k| {
+                let a = -PI * 0.5 + PI * k as f32 / 5.0;
+                let r = if k % 2 == 0 { 0.46 } else { 0.2 };
+                (0.5 + r * a.cos(), 0.52 + dv + r * a.sin())
+            })
+            .collect()
+    };
+    fan(p, f, &pts(0.0), (0.5, 0.52), fill, s);
 }
 
 fn octa(p: &Painter, f: Rect, fill: Color32, s: Stroke) {
@@ -172,17 +175,20 @@ fn octa(p: &Painter, f: Rect, fill: Color32, s: Stroke) {
 }
 
 fn tetra(p: &Painter, f: Rect, fill: Color32, s: Stroke) {
-    let (t, a, b, c) = ((0.52, 0.05), (0.06, 0.72), (0.44, 0.95), (0.94, 0.58));
-    poly(p, f, &[t, a, b], fill.gamma_multiply(0.9), s);
-    poly(p, f, &[t, b, c], fill.gamma_multiply(0.6), s);
+    // seen down the apex: a triangular base with one face per edge. Its triangular silhouette
+    // cannot be mistaken for the square-based pyramid or the cube.
+    let (t, l, r, c) = ((0.5, 0.08), (0.08, 0.84), (0.92, 0.84), (0.5, 0.60));
+    poly(p, f, &[c, l, r], fill.gamma_multiply(0.95), s);
+    poly(p, f, &[t, c, r], fill.gamma_multiply(0.7), s);
+    poly(p, f, &[t, l, c], fill.gamma_multiply(0.5), s);
 }
 
 fn pyramid(p: &Painter, f: Rect, fill: Color32, s: Stroke) {
-    let (t, l, fr, r, k) = ((0.5, 0.04), (0.05, 0.74), (0.5, 0.96), (0.95, 0.74), (0.5, 0.56));
-    // the base diamond behind
-    poly(p, f, &[l, k, r, fr], fill.gamma_multiply(0.45), Stroke::new(s.width * 0.7, faint(s.color)));
+    // a square base seen as a diamond, with four edges climbing to one apex
+    let (t, l, fr, r, k) = ((0.5, 0.05), (0.06, 0.72), (0.5, 0.95), (0.94, 0.72), (0.5, 0.53));
+    poly(p, f, &[l, k, r, fr], fill.gamma_multiply(0.35), Stroke::NONE);
     poly(p, f, &[t, l, fr], fill.gamma_multiply(0.9), s);
-    poly(p, f, &[t, fr, r], fill.gamma_multiply(0.6), s);
+    poly(p, f, &[t, fr, r], fill.gamma_multiply(0.55), s);
 }
 
 fn capsule(p: &Painter, f: Rect, fill: Color32, s: Stroke) {
@@ -259,27 +265,20 @@ fn s_path(n: usize) -> Vec<P> {
 }
 
 fn curve(p: &Painter, f: Rect, fill: Color32, s: Stroke) {
+    // a smooth line with the nodes you drag
     let path = s_path(24);
-    let w = f.width() * 0.17;
-    let line = |width: f32, c: Color32| {
-        p.add(Shape::line(px(f, &path), Stroke::new(width, c)));
-        for q in [path[0], path[path.len() - 1]] {
-            p.circle_filled(at(f, q.0, q.1), width * 0.5, c);
-        }
-    };
-    line(w + s.width * 2.0, s.color);
-    line(w, fill);
-    // the nodes you drag
+    crate::glyphs::round_path(p, px(f, &path), Stroke::new(s.width * 1.25, s.color), false);
     for i in [0, 12, 24] {
         let q = path[i];
-        p.circle_filled(at(f, q.0, q.1), f.width() * 0.07, s.color);
-        p.circle_filled(at(f, q.0, q.1), f.width() * 0.035, fill);
+        p.circle_filled(at(f, q.0, q.1), f.width() * 0.085, s.color);
+        p.circle_filled(at(f, q.0, q.1), f.width() * 0.04, fill);
     }
 }
 
 fn sweep(p: &Painter, f: Rect, fill: Color32, s: Stroke) {
+    // a ribbon along the path: two edges and a soft fill, with the profile ring at its start
     let path = s_path(24);
-    let half = 0.085;
+    let half = 0.07;
     let (mut a, mut b) = (Vec::new(), Vec::new());
     for i in 0..path.len() {
         let (p0, p1) = (path[i.saturating_sub(1)], path[(i + 1).min(path.len() - 1)]);
@@ -292,15 +291,8 @@ fn sweep(p: &Painter, f: Rect, fill: Color32, s: Stroke) {
     strip(p, f, &a, &b, fill.gamma_multiply(0.8));
     polyline(p, f, &a, s);
     polyline(p, f, &b, s);
-    // the profile at the start, standing across the path
-    let (a0, b0) = (a[0], b[0]);
-    let off = (0.0, -0.10);
-    poly(p, f, &[a0, b0, (b0.0 + off.0, b0.1 + off.1), (a0.0 + off.0, a0.1 + off.1)], fill, s);
-    // and the guide line down the middle
-    let mid: Vec<P> = path.iter().step_by(2).copied().collect();
-    for w in mid.windows(2).step_by(2) {
-        segment(p, f, w[0], w[1], Stroke::new(s.width * 0.7, faint(s.color)));
-    }
+    // the cut across the start
+    segment(p, f, a[0], b[0], s);
 }
 
 /// Draws the icon of an extra solid or a CAD feature. Other kinds draw nothing here.
@@ -326,9 +318,53 @@ pub fn kind_more(p: &Painter, rect: Rect, k: Kind, ink: Color32, fill: Color32) 
     }
 }
 
+/// Melt: two round blobs joined by a smooth neck.
+pub fn melt(p: &Painter, rect: Rect, ink: Color32) {
+    // What it does: the picked shapes flow into one smooth piece. So: two balls with a soft neck
+    // between them, the outline of two blobs melting together.
+    let side = rect.width().min(rect.height()) * 0.92;
+    let c = rect.center();
+    let (a, b) = (c + egui::vec2(-side * 0.2, side * 0.04), c + egui::vec2(side * 0.22, -side * 0.04));
+    let (ra, rb) = (side * 0.23, side * 0.19);
+    let field = |q: Pos2| ra * ra / (q - a).length_sq().max(1e-4) + rb * rb / (q - b).length_sq().max(1e-4);
+    let mid = Pos2::new((a.x + b.x) * 0.5, (a.y + b.y) * 0.5);
+    let outline: Vec<Pos2> = (0..72)
+        .map(|i| {
+            let ang = std::f32::consts::TAU * i as f32 / 72.0;
+            let dir = egui::vec2(ang.cos(), ang.sin());
+            // the edge is where the field drops to 1: step out, then halve the step back and forth
+            let (mut lo, mut hi) = (0.0_f32, side);
+            for _ in 0..18 {
+                let m = (lo + hi) * 0.5;
+                if field(mid + dir * m) > 1.0 { lo = m } else { hi = m }
+            }
+            mid + dir * lo
+        })
+        .collect();
+    let mut mesh = Mesh::default();
+    mesh.colored_vertex(mid, ink.gamma_multiply(0.35));
+    for q in &outline {
+        mesh.colored_vertex(*q, ink.gamma_multiply(0.35));
+    }
+    let n = outline.len() as u32;
+    for i in 0..n {
+        mesh.add_triangle(0, 1 + i, 1 + (i + 1) % n);
+    }
+    p.add(Shape::mesh(mesh));
+    let mut closed = outline.clone();
+    if let Some(first) = outline.first() {
+        closed.push(*first);
+    }
+    p.add(Shape::line(closed, Stroke::new((side * 0.075).clamp(1.2, 2.2), ink)));
+    // a highlight on each ball: two round shapes, now one piece
+    p.circle_filled(a + egui::vec2(-ra * 0.35, -ra * 0.35), ra * 0.2, ink);
+    p.circle_filled(b + egui::vec2(-rb * 0.35, -rb * 0.35), rb * 0.2, ink);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use egui::vec2;
 
     /// Runs `kind_more` for every kind and returns the shapes it produced.
     fn shapes_of(k: Kind) -> Vec<egui::epaint::ClippedShape> {

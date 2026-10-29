@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::app::App;
 use crate::gizmo::Tool;
+use crate::i18n::tr;
 use crate::model::{Op, Scene};
 use crate::sketch_ui::{Make, Pen, Stage, State};
 use crate::style;
@@ -30,6 +31,9 @@ pub enum HintId {
     SketchEdit,
     SketchLoft,
     SketchSweep,
+    SketchHole,
+    SketchPick,
+    SketchLive,
     Curve,
     Pipe,
 }
@@ -107,22 +111,19 @@ impl Guide {
         if first {
             prefs.intro_seen = true;
         }
-        (Self {
-            prefs,
-            panel_open: first,
-            practice: Practice::Off,
-            actions: 0,
-            started: None,
-            elapsed_seconds: None,
-        }, first)
+        (Self { prefs, panel_open: first, practice: Practice::Off, actions: 0, started: None, elapsed_seconds: None }, first)
     }
 
     pub fn load(opening_file: bool) -> Self {
         // Unit tests must not write to a real user's per-machine settings.
         if cfg!(test) {
             return Self {
-                prefs: Preferences::default(), panel_open: false, practice: Practice::Off,
-                actions: 0, started: None, elapsed_seconds: None,
+                prefs: Preferences::default(),
+                panel_open: false,
+                practice: Practice::Off,
+                actions: 0,
+                started: None,
+                elapsed_seconds: None,
             };
         }
         let prefs = preferences_path().map_or_else(Preferences::default, |path| Preferences::read(&path));
@@ -231,69 +232,80 @@ pub struct Hint {
 
 impl Hint {
     fn normal(id: HintId, action: &'static str, controls: &'static str) -> Self {
-        Self { id: Some(id), action, controls, warning: false }
+        Self { id: Some(id), action: tr(action), controls: tr(controls), warning: false }
     }
 
     fn warn(action: &'static str, controls: &'static str) -> Self {
         // Warnings are not hideable: people need to know why an action is unavailable.
-        Self { id: None, action, controls, warning: true }
+        Self { id: None, action: tr(action), controls: tr(controls), warning: true }
     }
 }
 
+/// The next step for the tool in use. `action` and `controls` are catalog keys here; the
+/// returned [`Hint`] carries the translated text.
 pub fn hint(sk: &State, tool: Tool, selected: bool, shapes: usize, op: Op, curve_drawing: bool, pipe_on: bool) -> Hint {
     if sk.edit.is_some() {
-        return Hint::normal(HintId::SketchEdit, "輪かくの点をドラッグして編集", "線をクリック: 点追加 / Delete: 点削除 / Esc: 終了");
+        return Hint::normal(HintId::SketchEdit, "guide.hint.edit", "guide.hint.edit.keys");
     }
     if sk.on {
         match sk.stage {
             Stage::Ready => {
                 if sk.make == Make::Revolve && !sk.pframe.is_vertical() {
-                    return Hint::warn("回転体はこの面では作れません", "「かきなおす」→「正面」か「横」の面で描く");
+                    return Hint::warn("guide.warn.revolve_plane", "guide.warn.revolve_plane.fix");
                 }
                 if sk.make == Make::Sweep && sk.path.len() < 2 {
-                    return Hint::warn("スイープの通り道がありません", "「線をかく」→ 2点以上 → Enter");
+                    return Hint::warn("guide.warn.sweep_path", "guide.warn.sweep_path.fix");
                 }
                 if sk.make == Make::Loft && sk.loft_top == crate::sketch_ui::LoftTop::Drawn && sk.profile2.len() < 3 {
-                    return Hint::warn("ロフトの上の輪かくがありません", "「上の輪かくをかく」で閉じた形を描く");
+                    return Hint::warn("guide.warn.loft_top", "guide.warn.loft_top.fix");
                 }
-                return match sk.make {
-                    Make::Extrude => Hint::normal(HintId::SketchReady, "輪かくができました。高さを決めて押し出す", "「押し出しを作る」クリック / Esc: 描き直す"),
-                    Make::Revolve => Hint::normal(HintId::SketchReady, "輪かくを回転体にする", "「回転体を作る」クリック / Esc: 描き直す"),
-                    Make::Loft => Hint::normal(HintId::SketchReady, "上下の輪かくをつなぐ", "「ロフトを作る」クリック / Esc: 描き直す"),
-                    Make::Sweep => Hint::normal(HintId::SketchReady, "線に沿ってスイープする", "「スイープを作る」クリック / Esc: 描き直す"),
+                if sk.keep_sketch {
+                    return Hint::normal(HintId::SketchReady, "guide.hint.ready.keep", "guide.hint.ready.keep.keys");
+                }
+                let action = match sk.make {
+                    Make::Extrude => "guide.hint.ready.extrude",
+                    Make::Revolve => "guide.hint.ready.revolve",
+                    Make::Loft => "guide.hint.ready.loft",
+                    Make::Sweep => "guide.hint.ready.sweep",
                 };
+                return Hint::normal(HintId::SketchReady, action, "guide.hint.ready.keys");
             }
-            Stage::LoftTop => return Hint::normal(HintId::SketchLoft, "ロフトの上側の輪かくを描く", "左ドラッグまたはクリック / Enter: 確定 / Esc: 戻る"),
-            Stage::SweepPath => return Hint::normal(HintId::SketchSweep, "スイープの線を2点以上描く", "左クリック: 点 / Enter: 確定 / Esc: 戻る"),
+            Stage::Shape => return Hint::normal(HintId::SketchLive, "guide.hint.live", "guide.hint.live.keys"),
+            Stage::LoftTop => return Hint::normal(HintId::SketchLoft, "guide.hint.loft", "guide.hint.loft.keys"),
+            Stage::SweepPath => return Hint::normal(HintId::SketchSweep, "guide.hint.sweep", "guide.hint.sweep.keys"),
+            Stage::Hole => return Hint::normal(HintId::SketchHole, "guide.hint.hole", "guide.hint.hole.keys"),
             Stage::Draw => {}
         }
+        if sk.picking {
+            return Hint::normal(HintId::SketchPick, "guide.hint.pick", "guide.hint.pick.keys");
+        }
         return match sk.active_pen() {
-            Pen::Polygon => Hint::normal(HintId::SketchPolygon, "輪かくの角を順番にクリック", "最初の点かEnter: 閉じる / Backspace: 1点戻す"),
-            Pen::Rect => Hint::normal(HintId::SketchRectangle, "作業面でドラッグして四角を描く", "左ドラッグ または2回クリック / Esc: 取消"),
-            Pen::Circle => Hint::normal(HintId::SketchCircle, "中心からドラッグして円を描く", "左ドラッグ または2回クリック / Esc: 取消"),
-            Pen::Spline => Hint::normal(HintId::SketchSpline, "制御点を順番にクリック", "最初の点かEnter: 閉じる / Backspace: 戻す"),
-            Pen::Line => Hint::normal(HintId::SketchLine, "線の点を順番にクリック", "Enter: 線を確定 / Esc: 取消"),
+            Pen::Polygon => Hint::normal(HintId::SketchPolygon, "guide.hint.polygon", "guide.hint.points.keys"),
+            Pen::Rect => Hint::normal(HintId::SketchRectangle, "guide.hint.rect", "guide.hint.drag.keys"),
+            Pen::Circle => Hint::normal(HintId::SketchCircle, "guide.hint.circle", "guide.hint.drag.keys"),
+            Pen::Spline => Hint::normal(HintId::SketchSpline, "guide.hint.spline", "guide.hint.points.keys"),
+            Pen::Line => Hint::normal(HintId::SketchLine, "guide.hint.line", "guide.hint.line.keys"),
         };
     }
     if pipe_on {
-        return Hint::normal(HintId::Pipe, "3D画面をなぞってパイプを作る", "左ドラッグ: 描く / Esc: 終了");
+        return Hint::normal(HintId::Pipe, "guide.hint.pipe", "guide.hint.pipe.keys");
     }
     if curve_drawing {
-        return Hint::normal(HintId::Curve, "3D画面で線の節点を配置する", "左クリック: 点追加 / Enter: 確定 / Esc: 終了");
+        return Hint::normal(HintId::Curve, "guide.hint.curve", "guide.hint.curve.keys");
     }
     if shapes == 0 && op == Op::Subtract {
-        return Hint::warn("削る元の形がまだありません", "まず「足す」に切り替え、形を作ってください");
+        return Hint::warn("guide.warn.nothing_to_cut", "guide.warn.nothing_to_cut.fix");
     }
     if !selected && matches!(tool, Tool::Move | Tool::Rotate | Tool::Scale) {
-        return Hint::warn("操作する形が選ばれていません", "3D画面または左の一覧で形をクリックしてください");
+        return Hint::warn("guide.warn.no_selection", "guide.warn.no_selection.fix");
     }
     match tool {
-        Tool::Move => Hint::normal(HintId::Move, "矢印をドラッグして形を動かす", "W: 移動 / Ctrl: 1mm単位 / Ctrl+Z: 元に戻す"),
-        Tool::Rotate => Hint::normal(HintId::Rotate, "輪っかをドラッグして回す", "E: 回転 / Ctrl: 15度単位 / Ctrl+Z: 戻す"),
-        Tool::Scale => Hint::normal(HintId::Scale, "ハンドルをドラッグして大きさを変える", "R: 拡大縮小 / Ctrl+Z: 戻す"),
-        Tool::All if selected => Hint::normal(HintId::Selection, "矢印・輪っか・四角から操作を選ぶ", "左ドラッグ: 形を編集 / ホイール: 拡大縮小"),
-        _ if shapes == 0 => Hint::normal(HintId::Navigation, "左上の「スケッチ」から形を描こう", "左クリック: 選ぶ / 中ドラッグ: 視点回転 / F1: 一覧"),
-        _ => Hint::normal(HintId::Selection, "形をクリックして選ぶ", "左クリック: 選択 / 中ドラッグ: 回転 / ホイール: ズーム"),
+        Tool::Move => Hint::normal(HintId::Move, "guide.hint.move", "guide.hint.move.keys"),
+        Tool::Rotate => Hint::normal(HintId::Rotate, "guide.hint.rotate", "guide.hint.rotate.keys"),
+        Tool::Scale => Hint::normal(HintId::Scale, "guide.hint.scale", "guide.hint.scale.keys"),
+        Tool::All if selected => Hint::normal(HintId::Selection, "guide.hint.all", "guide.hint.all.keys"),
+        _ if shapes == 0 => Hint::normal(HintId::Navigation, "guide.hint.empty", "guide.hint.empty.keys"),
+        _ => Hint::normal(HintId::Selection, "guide.hint.select", "guide.hint.select.keys"),
     }
 }
 
@@ -311,10 +323,13 @@ enum Action {
 
 fn content(ui: &mut egui::Ui, step: Practice, actions: u32, elapsed: Option<f64>) -> Action {
     let mut action = Action::None;
+    let note = |ui: &mut egui::Ui, key: &str| {
+        ui.label(RichText::new(tr(key)).size(11.0).color(style::DIM));
+    };
     ui.horizontal(|ui| {
-        ui.label(RichText::new("はじめてのYuraCAD").strong().color(style::ACCENT).size(14.0));
+        ui.label(RichText::new(tr("guide.title")).strong().color(style::ACCENT).size(14.0));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.small_button("×").on_hover_text("案内を閉じる。次回は自動表示しません").clicked() {
+            if ui.small_button("×").on_hover_text(tr("guide.close.tip")).clicked() {
                 action = Action::Close;
             }
         });
@@ -322,44 +337,44 @@ fn content(ui: &mut egui::Ui, step: Practice, actions: u32, elapsed: Option<f64>
     ui.separator();
     match step {
         Practice::Off => {
-            ui.label("新規作成 → 四角を描く → 押し出す。実際に箱を1つ作ります。");
-            ui.label(RichText::new("練習を始めても現在の作品は自動で消しません。").size(11.0).color(style::DIM));
-            if ui.button("箱を1つ作ってみる").clicked() {
+            ui.label(tr("guide.intro"));
+            note(ui, "guide.intro.safe");
+            if ui.button(tr("guide.begin")).clicked() {
                 action = Action::Begin;
             }
         }
         Practice::NewScene => {
-            ui.label(RichText::new("1 / 3　練習用の新規作成").strong());
-            ui.label("新しい空の作品を用意します。未保存の変更があれば保存を確認します。");
-            if ui.button("練習用の新規作成").clicked() {
+            ui.label(RichText::new(format!("1 / 3　{}", tr("guide.new.title"))).strong());
+            ui.label(tr("guide.new.body"));
+            if ui.button(tr("guide.new.title")).clicked() {
                 action = Action::NewScene;
             }
         }
         Practice::StartSketch => {
-            ui.label(RichText::new("2 / 3　スケッチを始める").strong());
-            ui.label("左上のスケッチを選択。練習では四角形の道具を自動で選びます。");
-            if ui.button("スケッチを始める").clicked() {
+            ui.label(RichText::new(format!("2 / 3　{}", tr("guide.sketch.title"))).strong());
+            ui.label(tr("guide.sketch.body"));
+            if ui.button(tr("guide.sketch.title")).clicked() {
                 action = Action::StartSketch;
             }
         }
         Practice::DrawRectangle => {
-            ui.label(RichText::new("2 / 3　作業面に四角を描く").strong());
-            ui.label("3D画面上で、左ボタンを押しながらななめにドラッグして離してください。");
-            ui.label(RichText::new("2回クリックでも作れます。").size(11.0).color(style::DIM));
+            ui.label(RichText::new(format!("2 / 3　{}", tr("guide.rect.title"))).strong());
+            ui.label(tr("guide.rect.body"));
+            note(ui, "guide.rect.note");
         }
         Practice::Extrude => {
-            ui.label(RichText::new("3 / 3　押し出して箱にする").strong());
-            ui.label("上のスケッチカードで高さを選び「押し出しを作る」をクリックします。");
-            ui.label(RichText::new("高さは20mmのままで大丈夫。").size(11.0).color(style::DIM));
+            ui.label(RichText::new(format!("3 / 3　{}", tr("guide.extrude.title"))).strong());
+            ui.label(tr("guide.extrude.body"));
+            note(ui, "guide.extrude.note");
         }
         Practice::Complete => {
-            ui.label(RichText::new("完成！　箱を1つ作れました").strong().color(style::ACCENT));
-            ui.label(format!("ガイド内の操作: {actions}回"));
+            ui.label(RichText::new(tr("guide.done.title")).strong().color(style::ACCENT));
+            ui.label(format!("{}: {actions}", tr("guide.done.actions")));
             if let Some(seconds) = elapsed {
-                ui.label(format!("開始から約{seconds:.1}秒"));
+                ui.label(format!("{}: {seconds:.1}", tr("guide.done.seconds")));
             }
-            ui.label("このガイドは自動では再表示しません。");
-            if ui.button("閉じる").clicked() {
+            ui.label(tr("guide.done.note"));
+            if ui.button(tr("guide.done.close")).clicked() {
                 action = Action::Close;
             }
         }
@@ -378,7 +393,7 @@ impl App {
         egui::Area::new(egui::Id::new("first_use_guide"))
             .order(egui::Order::Foreground)
             .pivot(Align2::RIGHT_BOTTOM)
-            .fixed_pos(pos2(rect.right() - 12.0, rect.bottom() - 90.0))
+            .fixed_pos(pos2(rect.right() - 16.0, rect.bottom() - 16.0))
             .show(ctx, |ui| {
                 style::card().show(ui, |ui| {
                     ui.set_max_width((rect.width() - 24.0).clamp(120.0, 292.0));
@@ -398,13 +413,9 @@ impl App {
                 // Goes through the native unsaved-work confirmation.
                 self.new_scene(scene);
             }
-            Action::StartSketch => {
-                self.sk.plane = crate::sketch_ui::PlaneSel::Floor;
-                self.sk.pen = Pen::Rect;
-                self.sk.make = Make::Extrude;
-                self.sk.height = 20.0;
-                self.set_sketch_tool(true);
-            }
+            // `set_sketch_tool` sees the practice step and picks the floor, the rectangle and
+            // a live extrusion itself (the same as the Sketch button during the practice).
+            Action::StartSketch => self.set_sketch_tool(true),
         }
     }
 }
@@ -419,9 +430,7 @@ mod tests {
         assert!(shown && first.panel_open && first.prefs.intro_seen);
         let (again, shown) = Guide::from_preferences(first.prefs, false);
         assert!(!shown && !again.panel_open);
-        let (completed, shown) = Guide::from_preferences(
-            Preferences { completed_practice: true, ..Default::default() }, false,
-        );
+        let (completed, shown) = Guide::from_preferences(Preferences { completed_practice: true, ..Default::default() }, false);
         assert!(!shown && !completed.panel_open, "completion always suppresses forced tours");
         let (opening, shown) = Guide::from_preferences(Preferences::default(), true);
         assert!(!shown && !opening.panel_open);
@@ -455,21 +464,19 @@ mod tests {
 
     #[test]
     fn a_one_drag_box_takes_five_user_actions_in_guided_flow() {
-        let mut g = Guide {
-            prefs: Preferences::default(), panel_open: true, practice: Practice::Off,
-            actions: 0, started: None, elapsed_seconds: None,
-        };
-        g.begin();                    // begin guide button
-        g.clicked_new();              // create blank work button
-        g.new_scene_applied();        // actual native file operation, no extra gesture
+        let mut g =
+            Guide { prefs: Preferences::default(), panel_open: true, practice: Practice::Off, actions: 0, started: None, elapsed_seconds: None };
+        g.begin(); // begin guide button
+        g.clicked_new(); // create blank work button
+        g.new_scene_applied(); // actual native file operation, no extra gesture
         assert_eq!(g.practice, Practice::StartSketch);
-        assert!(g.sketch_started());   // sketch tool click
-        g.rectangle_gesture();        // single rectangle drag
-        g.rectangle_finished();       // actual valid profile
+        assert!(g.sketch_started()); // sketch tool click
+        g.rectangle_gesture(); // single rectangle drag
+        g.rectangle_finished(); // actual valid profile
         assert_eq!(g.practice, Practice::Extrude);
         // Avoid touching the real settings file in this pure state-machine test:
         g.practice = Practice::Complete;
-        g.actions += 1;               // native extrusion button click
+        g.actions += 1; // native extrusion button click
         assert_eq!(g.actions, 5);
         assert_eq!(g.practice, Practice::Complete);
     }
@@ -534,12 +541,8 @@ mod tests {
             let mut triangles = 0;
             for i in 0..100 {
                 let start = Instant::now();
-                let input = egui::RawInput {
-                    screen_rect: Some(egui::Rect::from_min_size(
-                        egui::Pos2::ZERO, egui::vec2(960.0, 540.0),
-                    )),
-                    ..Default::default()
-                };
+                let input =
+                    egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(960.0, 540.0))), ..Default::default() };
                 let out = ctx.run_ui(input, |ui| {
                     egui::CentralPanel::default().show(ui, |ui| {
                         if let Some(step) = step {
@@ -550,11 +553,16 @@ mod tests {
                     });
                 });
                 let tess = ctx.tessellate(out.shapes, out.pixels_per_point);
-                triangles = tess.iter().map(|p| match &p.primitive {
-                    egui::epaint::Primitive::Mesh(mesh) => mesh.indices.len() / 3,
-                    _ => 0,
-                }).sum();
-                if i >= 20 { times.push(start.elapsed().as_micros()); }
+                triangles = tess
+                    .iter()
+                    .map(|p| match &p.primitive {
+                        egui::epaint::Primitive::Mesh(mesh) => mesh.indices.len() / 3,
+                        _ => 0,
+                    })
+                    .sum();
+                if i >= 20 {
+                    times.push(start.elapsed().as_micros());
+                }
             }
             times.sort_unstable();
             (times[75], triangles) // measured p95 of 80 warm samples

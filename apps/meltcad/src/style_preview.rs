@@ -64,7 +64,7 @@ pub(crate) fn raster(prims: &[egui::ClippedPrimitive], tex: &Textures, w: usize,
     for cp in prims {
         let Primitive::Mesh(mesh) = &cp.primitive else { continue };
         let clip = cp.clip_rect;
-        for t in mesh.indices.chunks_exact(3) {
+        for t in mesh.indices.as_chunks::<3>().0.iter() {
             let v = [mesh.vertices[t[0] as usize], mesh.vertices[t[1] as usize], mesh.vertices[t[2] as usize]];
             let p: Vec<(f32, f32)> = v.iter().map(|x| (x.pos.x * ppp, x.pos.y * ppp)).collect();
             let minx = p.iter().map(|q| q.0).fold(f32::MAX, f32::min).floor().max(clip.left() * ppp).max(0.0) as usize;
@@ -80,10 +80,17 @@ pub(crate) fn raster(prims: &[egui::ClippedPrimitive], tex: &Textures, w: usize,
                     let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
                     let w0 = ((p[1].0 - px) * (p[2].1 - py) - (p[2].0 - px) * (p[1].1 - py)) / area;
                     let w1 = ((p[2].0 - px) * (p[0].1 - py) - (p[0].0 - px) * (p[2].1 - py)) / area;
-                    let w2 = 1.0 - w0 - w1;
-                    if w0 < -0.001 || w1 < -0.001 || w2 < -0.001 {
+                    let edge2 = ((p[0].0 - px) * (p[1].1 - py) - (p[0].1 - py) * (p[1].0 - px)) / area;
+                    // Half-open edges match a GPU's top-left rule. A shared triangle edge must
+                    // shade each pixel once, especially for translucent cards and modal backdrops.
+                    let covered = |w: f32, a: (f32, f32), b: (f32, f32)| {
+                        let (a, b) = if area > 0.0 { (a, b) } else { (b, a) };
+                        w > 0.0 || (w == 0.0 && (b.1 < a.1 || (b.1 == a.1 && b.0 > a.0)))
+                    };
+                    if !covered(w0, p[1], p[2]) || !covered(w1, p[2], p[0]) || !covered(edge2, p[0], p[1]) {
                         continue;
                     }
+                    let w2 = 1.0 - w0 - w1;
                     let mut c = [0.0; 4];
                     for k in 0..4 {
                         let ch = |col: Color32| [col.r(), col.g(), col.b(), col.a()][k] as f32 / 255.0;
@@ -102,6 +109,21 @@ pub(crate) fn raster(prims: &[egui::ClippedPrimitive], tex: &Textures, w: usize,
         }
     }
     img
+}
+
+#[test]
+fn translucent_quads_have_no_double_shaded_diagonal() {
+    let mut mesh = egui::epaint::Mesh::default();
+    for p in [pos2(0.0, 0.0), pos2(8.0, 0.0), pos2(8.0, 8.0), pos2(0.0, 8.0)] {
+        mesh.colored_vertex(p, Color32::from_black_alpha(128));
+    }
+    mesh.add_triangle(0, 1, 2);
+    mesh.add_triangle(0, 2, 3);
+    let prims = [egui::ClippedPrimitive { clip_rect: Rect::from_min_max(pos2(0.0, 0.0), pos2(8.0, 8.0)), primitive: Primitive::Mesh(mesh) }];
+    let img = raster(&prims, &Textures::new(), 8, 8, 1.0, [1.0; 3]);
+    for p in img {
+        assert!((p[0] - 127.0 / 255.0).abs() < 1e-5, "a shared edge was shaded twice or left uncovered: {p:?}");
+    }
 }
 
 #[test]
@@ -131,7 +153,7 @@ fn preview() {
                         ui.spacing_mut().item_spacing.x = 4.0;
                         for k in crate::model::Kind::MAIN {
                             icon_button(ui, 38.0, "", k == crate::model::Kind::Torus, |p, r, ink| {
-                                crate::glyphs::kind(p, r, k, ink, Color32::from_white_alpha(18))
+                                crate::glyphs::kind(p, r, k, ink, ink.gamma_multiply(0.15))
                             });
                         }
                     });
@@ -139,7 +161,10 @@ fn preview() {
                 tray(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 4.0;
-                        for (i, (o, c)) in [(crate::model::Op::Add, ADD), (crate::model::Op::Subtract, CUT), (crate::model::Op::Paint, PAINT)].into_iter().enumerate() {
+                        for (i, (o, c)) in [(crate::model::Op::Add, ADD), (crate::model::Op::Subtract, CUT), (crate::model::Op::Paint, PAINT)]
+                            .into_iter()
+                            .enumerate()
+                        {
                             let on = i == 0;
                             icon_button(ui, 38.0, "", on, |p, r, _| crate::glyphs::op(p, r, o, if on { Color32::WHITE } else { c }));
                         }
@@ -177,7 +202,7 @@ fn preview() {
                     ui.horizontal(|ui| {
                         for k in crate::model::Kind::MAIN {
                             let (r, _) = ui.allocate_exact_size(vec2(30.0, 30.0), Sense::hover());
-                            crate::glyphs::kind(ui.painter(), r, k, TEXT, Color32::TRANSPARENT);
+                            crate::glyphs::kind(ui.painter(), r, k, TEXT, TEXT.gamma_multiply(0.15));
                         }
                     });
                     ui.horizontal(|ui| {
@@ -209,11 +234,26 @@ fn preview() {
     assert!(std::fs::write(path, data).is_ok());
 }
 
-
 pub(crate) fn write_ppm(img: Vec<[f32; 3]>, w: usize, h: usize, path: &str) {
     let mut data = format!("P6\n{w} {h}\n255\n").into_bytes();
     for px in img {
         data.extend(px.iter().map(|c| (c.clamp(0.0, 1.0) * 255.0).round() as u8));
     }
     assert!(std::fs::write(path, data).is_ok());
+}
+
+/// CI can attach ordinary PNG screenshots without committing generated media or
+/// depending on an external image converter. Existing PPM callers still work.
+pub(crate) fn write_preview(img: Vec<[f32; 3]>, w: usize, h: usize, path: &str) {
+    if !path.ends_with(".png") {
+        write_ppm(img, w, h, path);
+        return;
+    }
+    let mut rgba = Vec::with_capacity(w * h * 4);
+    for px in img {
+        rgba.extend(px.iter().map(|c| (c.clamp(0.0, 1.0) * 255.0).round() as u8));
+        rgba.push(255);
+    }
+    let png = crate::png::encode_rgba(w as u32, h as u32, &rgba).expect("valid preview pixels");
+    assert!(std::fs::write(path, png).is_ok());
 }

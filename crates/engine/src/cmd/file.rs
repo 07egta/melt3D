@@ -3,6 +3,9 @@
 #[path = "file_thumbnail.rs"]
 mod thumbnail;
 
+#[path = "file_import.rs"]
+pub(crate) mod import;
+
 use serde_json::{Value, json};
 use solidcraft_doc::Document;
 use solidcraft_io::Format;
@@ -17,41 +20,41 @@ pub static COMMANDS: &[CommandSpec] = &[
         .icon("open")
         .key("Ctrl+O")
         .noundo()
-        .params("path: .solidcraft design, or a .step/.stp file (opens as a new design); up?: z|y and names?: solid|product|instance for a STEP or IGES file (see file.insert_step)"),
+        .params("path: .solidcraft design, or a .step/.stp/.igs/.fcstd/.3dm/.3mf/.stl/.obj/.glb/.gltf file (STEP, IGES, FreeCAD, Rhino, 3MF, STL, OBJ or glTF; opens as a new design holding the file as a component named after it, as file.insert_step and file.insert_mesh make); up?: z|y for a STEP, IGES, FreeCAD, Rhino or glTF file (see file.insert_step and file.insert_mesh); names?: auto|solid|product|instance for a STEP, IGES, FreeCAD or Rhino file (see file.insert_step)"),
     CommandSpec::new("file.insert_step", "Insert STEP", insert_step)
         .at("SOLID", "INSERT")
         .icon("import")
-        .params("path: .step/.stp file (its bodies join the design as an Import base feature); name?; up?: z|y (default z: the file's axes are kept; y: the file has Y up, so its bodies are turned a quarter turn about X, Y becoming Z, by a Move feature after the import); names?: solid|product|instance (what the bodies are named after: the solid's own name, else the product's (default); the name of the product (part) that holds the body; the name of the assembly occurrence (instance), else the product's)"),
+        .params("path: STEP, IGES, FreeCAD .FCStd or Rhino .3dm file (its bodies join the design as an Import base feature in a new component named after the file, placed in the active component; an assembly's products become nested components, a repeated part one component with an occurrence per placement, all held as one rigid group until component.unlock → component, component_name, occurrence, subcomponents?, rigid_joints?); name? (the feature's and the component's); up?: z|y (default z: the file's axes are kept; y: the file has Y up, so the import's component is turned a quarter turn about X, Y becoming Z → stand_up: its occurrence); names?: auto|solid|product|instance (default auto: keep meaningful solid names, replace placeholders with the nearest named product, else instance; solid: the solid's own name; product: the part's name; instance: the occurrence's name, else the product's); matrix?: [12 or 16 numbers] (where the new component's occurrence sits in the active component, after `up`: a rigid row-major 3x4 rotation-and-translation or 4x4 matrix, flat or as rows, as occurrence.move takes it; a scale, shear or mirror is refused before the file is read); tolerance? (see occurrence.move)"),
     CommandSpec::new("file.insert_mesh", "Insert Mesh", insert_mesh)
         .at("SOLID", "INSERT")
         .icon("import")
-        .params("path: .3mf or .stl file (its meshes join the design as mesh bodies); name?"),
+        .params("path: .3mf, .stl, .obj, .glb or .gltf file (its meshes join the design as mesh bodies in a new component named after the file → component, component_name, occurrence; a glTF file's node tree becomes nested components held as one rigid group until component.unlock, a mesh placed again another occurrence, its materials the bodies' appearances, and its metres millimetres); name?; up?: z|y for a glTF file (default y: glTF has Y up, so the import's component is turned a quarter turn about X, Y becoming Z → stand_up: its occurrence; z: the file's axes are kept)"),
     CommandSpec::new("file.save", "Save", save)
         .icon("save")
         .key("Ctrl+S")
         .noundo()
-        .params("path? (default: current file); format?: container|json (default: json for .json, otherwise container); compression?: fast|compact (default: fast); cache?: bool (warm native geometry, default: false); preview?: bool (saved display meshes, default: false)"),
+        .params("path? (default: current file); format?: container|json (default: json for .json, otherwise container); compression?: fast|compact (default: fast); cache?: bool (the evaluated model, so the design opens without rebuilding; default: true); preview?: bool (saved display meshes, default: false)"),
     CommandSpec::new("file.save_as", "Save As", save_as)
         .icon("save")
         .noundo()
-        .params("path; format?: container|json (default: json for .json, otherwise container); compression?: fast|compact (default: fast); cache?: bool (warm native geometry, default: false); preview?: bool (saved display meshes, default: false)"),
-    CommandSpec::new("doc.recovery_list", "Recoverable Designs", recovery_list)
+        .params("path; format?: container|json (default: json for .json, otherwise container); compression?: fast|compact (default: fast); cache?: bool (the evaluated model, so the design opens without rebuilding; default: true); preview?: bool (saved display meshes, default: false)"),
+    CommandSpec::new("doc.recovery_list", "Recoverable Designs", recovery_list).icon("restore")
         .noundo()
         .params("dir? (default: the recovery folder) → designs autosaved by apps that crashed or closed with unsaved changes"),
-    CommandSpec::new("doc.recover", "Recover Design", recover)
+    CommandSpec::new("doc.recover", "Recover Design", recover).icon("restore")
         .noundo()
         .params("id (from doc.recovery_list); dir?; discard?: bool (delete the entry once open) — opens it with its file path, unsaved"),
-    CommandSpec::new("doc.recovery_discard", "Discard Recovered Design", recovery_discard).noundo().params("id, or all: true; dir?"),
+    CommandSpec::new("doc.recovery_discard", "Discard Recovered Design", recovery_discard).icon("delete").noundo().params("id, or all: true; dir?"),
     CommandSpec::new("file.export", "Export", export)
         .icon("export")
         .noundo()
         .params("path; format?: stl|stla|obj|step|3mf|3mf-tagged|urdf|json (default from extension; 3mf-tagged: 3MF whose triangles carry their B-rep face, at full precision, for meshing and analysis tools; docs/formats/3mf-face-tags.md; urdf: the whole assembly as a robot, with STL meshes written next to it; docs/urdf.md); bodies?: [names] (JSON and URDF export the complete design); urdf only: mesh_prefix? (before each mesh file name, e.g. package://robot/meshes/), effort? (default 1000), velocity? (default 10)"),
     CommandSpec::new("file.save_mesh", "Save As Mesh", save_mesh)
         .at("MESH", "MODIFY")
-        .icon("export")
+        .icon("mesh_export")
         .noundo()
         .params("path; format?: stl|3mf|3mf-tagged (default from the extension, else stl; 3mf-tagged: docs/formats/3mf-face-tags.md); bodies?: [names] (default: all); ascii?: bool (STL); slicer?: id, name or program path from file.slicers (open the saved file there)"),
-    CommandSpec::new("file.slicers", "Installed Slicers", slicers)
+    CommandSpec::new("file.slicers", "Installed Slicers", slicers).icon("export")
         .noundo()
         .params("→ the slicers found on this machine: [{id, name, icon?}]; pass an id or name as file.save_mesh's `slicer`"),
 ];
@@ -86,9 +89,10 @@ fn step_options(p: &Value, cmd: &str) -> Result<StepOptions> {
     };
     let names = match p.get("names") {
         None | Some(Value::Null) => solidcraft_io::StepNames::default(),
-        Some(v) => {
-            v.as_str().and_then(solidcraft_io::StepNames::parse).ok_or_else(|| bad(cmd, "`names` must be \"solid\", \"product\" or \"instance\""))?
-        }
+        Some(v) => v
+            .as_str()
+            .and_then(solidcraft_io::StepNames::parse)
+            .ok_or_else(|| bad(cmd, "`names` must be \"auto\", \"solid\", \"product\" or \"instance\""))?,
     };
     Ok(StepOptions { y_up, names })
 }
@@ -99,90 +103,162 @@ fn read_step(path: &str, names: solidcraft_io::StepNames) -> Result<solidcraft_i
     solidcraft_io::step_import_feature_named(&bytes, path, names).map_err(|e| EngineError::Other(format!("{path}: {e}")))
 }
 
-/// Turn bodies a quarter turn about X (a file's Y up becomes Z up) with one Move feature, the
-/// same one the app's "Stand it up" offer adds, and report its id.
-fn stand_up(s: &mut Session, bodies: &[String]) -> Result<u64> {
-    let kind = solidcraft_doc::FeatureKind::Move {
-        bodies: bodies.to_vec(),
-        translate: ["0".into(), "0".into(), "0".into()],
-        rotate_axis: Some(solidcraft_geom::Vec3::X),
-        angle: Some("90 deg".into()),
-        copy: false,
-    };
-    let id = s.doc_mut().add_feature(kind, None)?;
-    s.refresh();
-    match s.model.result(id).and_then(|r| r.error.clone()) {
-        Some(e) => Err(EngineError::Other(e)),
-        None => Ok(id),
+/// Which way is up in a STEP or IGES file, from the program its header names: `("y", name)` for
+/// an exporter whose files have Y up, `("z", name)` for SolidCraft's own (its STEP and IGES exports both name it), else `None`. Only
+/// SolidWorks is listed as Y up: its STEP and IGES writers are well known to keep that program's
+/// Y-up front view, and its name is in FILE_NAME (originating system, preprocessor version) and
+/// often FILE_DESCRIPTION. Programs we aren't sure of stay unknown, so the file is only offered.
+fn exporter_up(import: &solidcraft_kernel::StepImport) -> Option<(&'static str, &'static str)> {
+    if import.system.trim().starts_with("SolidCraft") {
+        return Some(("z", "SolidCraft"));
     }
+    let named = [&import.system, &import.preprocessor, &import.description].iter().any(|h| h.to_ascii_lowercase().contains("solidworks"));
+    named.then_some(("y", "SolidWorks"))
 }
 
-/// Add an Import feature for a STEP file to the session's design.
+/// A quarter turn about X through the origin: a file's Y up becomes Z up.
+fn quarter_turn_x() -> solidcraft_doc::Mat {
+    solidcraft_doc::rigid(solidcraft_geom::Vec3::ZERO, solidcraft_geom::Vec3::ZERO, solidcraft_geom::Vec3::X, std::f64::consts::FRAC_PI_2)
+}
+
+/// Add an Import feature for a STEP file to the session's design, in a new component named
+/// after the file (#1386).
 fn add_step(s: &mut Session, path: &str, name: Option<&str>, options: &StepOptions) -> Result<Value> {
     let sf = read_step(path, options.names)?;
     let fname = name.filter(|n| !n.trim().is_empty()).unwrap_or(&sf.name).to_string();
-    let id = s.doc_mut().add_feature(sf.kind, Some(&fname))?;
-    if let Some(f) = s.doc_mut().feature_mut(id) {
-        f.body_names = sf.body_names;
-    }
-    s.active_sketch = None;
-    s.refresh();
-    if let Some(e) = s.model.result(id).and_then(|r| r.error.clone()) {
-        return Err(EngineError::Other(e));
-    }
-    let created: Vec<String> = s.model.state().bodies.iter().filter(|b| b.feature == id).map(|b| b.name.clone()).collect();
-    let turned = if options.y_up && !created.is_empty() { Some(stand_up(s, &created)?) } else { None };
+    let cname = import::component_name(path, name);
+    let (id, placed) = import::add_in_component(s, sf.kind, &fname, sf.body_names, &cname, import::Tree::Step(&sf.import))?;
+    // Y up: the import's component is turned a quarter turn about X (Y becomes Z), so an
+    // assembly's parts and instances turn together.
+    let turned = if options.y_up { turn_up(s, &placed)? } else { None };
+    let created = created_bodies(s, id);
     let fname = s.doc.feature(id).map(|f| f.name.clone()).unwrap_or_default();
-    let mut out = json!({"path": path, "feature": id, "name": fname, "bodies": created, "created_bodies": created, "warnings": sf.warnings});
+    let mut out = json!({"path": path, "feature": id, "name": fname, "bodies": created, "created_bodies": created, "warnings": sf.warnings, "system": sf.import.system});
+    if let Some((up, exporter)) = exporter_up(&sf.import) {
+        out["exporter"] = json!(exporter);
+        out["exporter_up"] = json!(up);
+    }
+    placed.report(&mut out);
     if let Some(turned) = turned {
         out["stand_up"] = json!(turned);
     }
     Ok(out)
 }
 
-/// Add a MeshImport feature for a 3MF or STL file.
-fn add_mesh(s: &mut Session, path: &str, name: Option<&str>) -> Result<Value> {
+/// The bodies an import feature built, by name.
+fn created_bodies(s: &Session, feature: u64) -> Vec<String> {
+    s.model.state().bodies.iter().filter(|b| b.feature == feature).map(|b| b.name.clone()).collect()
+}
+
+/// Add a MeshImport feature for a 3MF, STL, OBJ or glTF file, in a new component named after the
+/// file. A glTF file's nodes become components in it, and its materials the bodies' looks; it is
+/// in metres with Y up, so unless `y_up` is false its component is turned to Z up (#1505).
+fn add_mesh(s: &mut Session, path: &str, name: Option<&str>, y_up: Option<bool>) -> Result<Value> {
+    let err = |e: solidcraft_io::IoError| EngineError::Other(format!("{path}: {e}"));
     let bytes = solidcraft_io::vfs::read(path, solidcraft_io::MAX_3MF_BYTES).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
-    let mf = solidcraft_io::mesh_import_feature(&bytes, path).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
+    let gltf = solidcraft_io::is_gltf_path(path);
+    let (mf, plan, looks) = if gltf {
+        let dir = std::path::Path::new(path).parent().map(std::path::Path::to_path_buf).unwrap_or_default();
+        let mut load =
+            |name: &str| solidcraft_io::vfs::read(&dir.join(name).to_string_lossy(), solidcraft_io::MAX_GLTF_BYTES).map_err(|e| e.to_string());
+        let mut g = solidcraft_io::read_gltf(&bytes, path, &mut load).map_err(err)?;
+        if !import::mesh_plan_fits(&g.plan) {
+            g.flatten();
+        }
+        (g.feature, Some(g.plan), g.looks)
+    } else {
+        (solidcraft_io::mesh_import_feature(&bytes, path).map_err(err)?, None, Vec::new())
+    };
     let fname = name.filter(|n| !n.trim().is_empty()).unwrap_or(&mf.name).to_string();
-    let id = s.doc_mut().add_feature(mf.kind, Some(&fname))?;
-    if let Some(f) = s.doc_mut().feature_mut(id) {
-        f.body_names = mf.body_names;
+    let cname = import::component_name(path, name);
+    let tree = match &plan {
+        Some(p) if !p.places.is_empty() => import::Tree::Mesh(p),
+        _ => import::Tree::Flat,
+    };
+    let (id, placed) = import::add_in_component(s, mf.kind, &fname, mf.body_names, &cname, tree)?;
+    let bodies = created_bodies(s, id);
+    // The materials' looks, body by body (the bodies are built in the file's order).
+    if looks.iter().any(Option::is_some) && bodies.len() == looks.len() {
+        for (body, look) in bodies.iter().zip(looks) {
+            if let Some(look) = look {
+                s.doc_mut().appearances.bodies.insert(body.clone(), look);
+            }
+        }
+        s.refresh();
     }
-    s.active_sketch = None;
-    s.refresh();
-    if let Some(e) = s.model.result(id).and_then(|r| r.error.clone()) {
-        return Err(EngineError::Other(e));
-    }
-    let st = s.model.state();
-    let bodies: Vec<&str> = st.bodies.iter().filter(|b| b.feature == id).map(|b| b.name.as_str()).collect();
+    let turned = if gltf && y_up.unwrap_or(true) { turn_up(s, &placed)? } else { None };
     let fname = s.doc.feature(id).map(|f| f.name.clone()).unwrap_or_default();
-    Ok(json!({"path": path, "feature": id, "name": fname, "bodies": bodies, "created_bodies": bodies, "warnings": mf.warnings}))
+    let mut out = json!({"path": path, "feature": id, "name": fname, "bodies": bodies, "created_bodies": bodies, "warnings": mf.warnings});
+    placed.report(&mut out);
+    if let Some(turned) = turned {
+        out["stand_up"] = json!(turned);
+    }
+    Ok(out)
+}
+
+/// Turn an import's component a quarter turn about X (the file's Y up becomes Z up), contents
+/// and all. Returns its occurrence.
+fn turn_up(s: &mut Session, placed: &import::Placed) -> Result<Option<u64>> {
+    let occ = placed.occurrence.ok_or_else(|| EngineError::Other("the import has no placement to turn".into()))?;
+    if let Some(o) = s.doc_mut().occurrences.iter_mut().find(|o| o.id == occ) {
+        o.transform = solidcraft_doc::mat_mul(&quarter_turn_x(), &o.transform);
+    }
+    s.refresh();
+    Ok(Some(occ))
+}
+
+/// `up` for a glTF file: `y` (the default: glTF is Y up) turns it to Z up, `z` keeps its axes.
+/// Other mesh files take no `up`.
+fn mesh_up(p: &Value, path: &str, cmd: &str) -> Result<Option<bool>> {
+    if p.get("up").is_none_or(Value::is_null) {
+        return Ok(None);
+    }
+    if !solidcraft_io::is_gltf_path(path) {
+        return Err(bad(cmd, "`up` applies to STEP, IGES and glTF files only"));
+    }
+    Ok(Some(step_options(p, cmd)?.y_up))
 }
 
 fn insert_mesh(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.insert_mesh";
     let path = path_arg(p, cmd)?;
     if !solidcraft_io::is_mesh_path(path) {
-        return Err(bad(cmd, "only 3MF and STL files (.3mf, .stl) can be inserted as meshes"));
+        return Err(bad(cmd, "only 3MF, STL, OBJ and glTF files (.3mf, .stl, .obj, .glb, .gltf) can be inserted as meshes"));
     }
-    add_mesh(s, path, str_(p, "name"))
+    let up = mesh_up(p, path, cmd)?;
+    add_mesh(s, path, str_(p, "name"), up)
 }
 
 fn insert_step(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.insert_step";
     let path = path_arg(p, cmd)?;
     if !solidcraft_io::is_step_path(path) {
-        return Err(bad(cmd, "only STEP files (.step, .stp) can be inserted"));
+        return Err(bad(cmd, "only STEP, IGES, FreeCAD and Rhino files (.step, .stp, .igs, .iges, .fcstd, .3dm) can be inserted"));
     }
     let options = step_options(p, cmd)?;
-    add_step(s, path, str_(p, "name"), &options)
+    let placement = match p.get("matrix") {
+        None | Some(Value::Null) => None,
+        Some(m) => Some(super::component::matrix::rigid(m, super::component::matrix::tolerance(p, cmd)?, cmd)?),
+    };
+    let mut out = add_step(s, path, str_(p, "name"), &options)?;
+    if let Some(m) = placement {
+        let occ = out["occurrence"].as_u64().ok_or_else(|| EngineError::Other("the import has no placement to move".into()))?;
+        if let Some(o) = s.doc_mut().occurrences.iter_mut().find(|o| o.id == occ) {
+            o.transform = solidcraft_doc::mat_mul(&m, &o.transform);
+            out["transform"] = json!(o.transform);
+        }
+        s.refresh();
+    }
+    Ok(out)
 }
 
 fn open(s: &mut Session, p: &Value) -> Result<Value> {
     let path = path_arg(p, "doc.open")?;
-    if !solidcraft_io::is_step_path(path) && ["up", "names"].iter().any(|k| p.get(*k).is_some_and(|v| !v.is_null())) {
-        return Err(bad("doc.open", "`up` and `names` apply to STEP and IGES files only"));
+    if !solidcraft_io::is_step_path(path) && p.get("names").is_some_and(|v| !v.is_null()) {
+        return Err(bad("doc.open", "`names` applies to STEP and IGES files only"));
+    }
+    if !solidcraft_io::is_step_path(path) && !solidcraft_io::is_gltf_path(path) && p.get("up").is_some_and(|v| !v.is_null()) {
+        return Err(bad("doc.open", "`up` applies to STEP, IGES and glTF files only"));
     }
     if solidcraft_io::is_step_path(path) || solidcraft_io::is_mesh_path(path) {
         // A new, unsaved design holding the file's bodies.
@@ -191,18 +267,29 @@ fn open(s: &mut Session, p: &Value) -> Result<Value> {
         let r = if solidcraft_io::is_step_path(path) {
             add_step(&mut fresh, path, None, &step_options(p, "doc.open")?)?
         } else {
-            add_mesh(&mut fresh, path, None)?
+            add_mesh(&mut fresh, path, None, mesh_up(p, path, "doc.open")?)?
         };
+        // The design is the file: its component is the one being worked in.
+        if let Some(c) = r["component"].as_u64() {
+            fresh.active_component = c;
+            fresh.active_occurrence_path = Some(fresh.doc.first_path(c));
+        }
         fresh.undo.clear();
         s.replace_design(fresh);
         let errors = s.model.results.iter().filter(|r| r.error.is_some()).count();
-        return Ok(json!({"path": path, "features": s.doc.features.len(), "errors": errors, "bodies": r["bodies"], "warnings": r["warnings"]}));
+        let mut out = json!({"path": path, "features": s.doc.features.len(), "errors": errors, "bodies": r["bodies"], "warnings": r["warnings"]});
+        for k in ["component", "component_name", "occurrence", "subcomponents", "rigid_joints", "stand_up", "system", "exporter", "exporter_up"] {
+            if let Some(v) = r.get(k) {
+                out[k] = v.clone();
+            }
+        }
+        return Ok(out);
     }
-    let mut doc = solidcraft_io::read_design_file(path, s.open_preview.take()).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
+    let (mut doc, saved) = solidcraft_io::read_design_file(path, s.open_preview.take()).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
     if let Some(stem) = default_name_for(&doc.name, path) {
         doc.name = stem;
     }
-    s.replace_design(Session::new(doc));
+    s.replace_design(Session::opened(doc, saved.as_ref()));
     s.path = Some(path.to_string());
     let errors = s.model.results.iter().filter(|r| r.error.is_some()).count();
     Ok(json!({"path": path, "features": s.doc.features.len(), "errors": errors, "name": s.doc.name}))
@@ -222,21 +309,46 @@ fn default_name_for(name: &str, path: &str) -> Option<String> {
     (!stem.is_empty()).then_some(stem)
 }
 
+/// The name a design takes when saved to `path`, if it changes: its file's name while it has
+/// none of its own ([`default_name_for`]), or while it still has the name it took from the file
+/// it was saved as before, so Save As under another name renames it too (#1710). A name the
+/// user chose is kept.
+fn saved_name(name: &str, old_path: Option<&str>, path: &str) -> Option<String> {
+    if let Some(stem) = default_name_for(name, path) {
+        return Some(stem);
+    }
+    let stem = |p: &str| std::path::Path::new(p).file_stem().map(|x| x.to_string_lossy().trim().to_string()).filter(|x| !x.is_empty());
+    let (old, new) = (stem(old_path?)?, stem(path)?);
+    (name.trim() == old && new != old).then_some(new)
+}
+
 /// Rename the design, and the undo and redo states that still carry the old name, so undo
 /// does not bring the default name back and leave the design looking changed.
 fn rename_design(s: &mut Session, from: &str, to: &str) {
+    // A prepared world is keyed by the document's Arc. Changing only its name
+    // must not make an opted-in save lose warm geometry and display caches.
+    // Retag only a cache that already matches: cold or stale placements stay so.
+    let model = s.model.state();
+    let keep_world = s.world_cache.lock().ok().is_some_and(|cache| cache.as_ref().is_some_and(|cache| cache.matches(s, &model)));
     s.doc_mut().name = to.to_string();
     for snap in s.undo.iter_mut().chain(s.redo.iter_mut()) {
         if snap.doc.name == from {
             std::sync::Arc::make_mut(&mut snap.doc).name = to.to_string();
         }
     }
+    if keep_world
+        && let Ok(mut cache) = s.world_cache.lock()
+        && let Some(cache) = cache.as_mut()
+    {
+        cache.doc = std::sync::Arc::clone(&s.doc);
+    }
 }
 
 fn write(s: &mut Session, path: &str, format: &str, compression: &str, preview: bool, cache: bool) -> Result<Value> {
     solidcraft_io::vfs::check(path).map_err(|e| EngineError::Other(e.to_string()))?;
-    // Saving an unnamed design names it after its file (not an undoable edit).
-    let renamed = default_name_for(&s.doc.name, path).map(|stem| (s.doc.name.clone(), stem));
+    // Saving an unnamed design, or one named after the file it was saved as, names it after its
+    // file (not an undoable edit).
+    let renamed = saved_name(&s.doc.name, s.path.as_deref(), path).map(|stem| (s.doc.name.clone(), stem));
     if let Some((from, to)) = &renamed {
         rename_design(s, from, to);
     }
@@ -288,26 +400,40 @@ fn write_bytes(
 }
 
 impl Session {
+    /// Take up a save that ran on `done`, a [`Session::scratch`] copy of this session that
+    /// `file.save` or `file.save_as` ran on (on another thread, so the window keeps drawing)
+    /// while this one did not change: the name and link paths the save gave the design, its
+    /// file, and its saved state, as running the command here would have left them.
+    pub fn adopt_save(&mut self, done: &Session) {
+        if done.doc.name != self.doc.name {
+            let (from, to) = (self.doc.name.clone(), done.doc.name.clone());
+            rename_design(self, &from, &to);
+        }
+        if done.doc.links != self.doc.links {
+            self.doc_mut().links.clone_from(&done.doc.links);
+        }
+        self.path.clone_from(&done.path);
+        self.mark_saved();
+    }
+
     /// Container bytes for desktop and browser saves. Only already evaluated bodies
     /// and warm meshes are eligible; saving never forces evaluation or tessellation.
     pub fn design_container(&self, compression: solidcraft_io::DesignCompression, preview: bool, cache: bool) -> solidcraft_io::Result<Vec<u8>> {
-        let geometry = cache.then(|| saved_geometry(self)).flatten();
+        let design = self.design();
+        let geometry = cache.then(|| saved_geometry(self, &design)).flatten();
         let preview = preview.then(|| saved_preview(self)).flatten();
         let thumbnail = cache.then(|| thumbnail::saved(self)).flatten();
-        solidcraft_io::write_design_container_with_thumbnail(&self.design(), compression, preview.as_ref(), geometry.as_deref(), thumbnail.as_deref())
+        solidcraft_io::write_design_container_with_thumbnail(&design, compression, preview.as_ref(), geometry.as_ref(), thumbnail.as_deref())
     }
 }
 
-fn saved_geometry(s: &Session) -> Option<Vec<solidcraft_io::DesignGeometry>> {
-    if s.active_sketch.is_some() || !s.pending_moves.is_empty() || s.model.results.iter().any(|r| r.error.is_some()) {
+/// The evaluated model a save keeps, so opening need not rebuild it: only the finished evaluation
+/// of `design`, the document saved (no sketch being edited, no uncaptured moves, no feature errors).
+fn saved_geometry(s: &Session, design: &Document) -> Option<solidcraft_doc::SavedModel> {
+    if s.active_sketch.is_some() || !s.pending_moves.is_empty() || s.model.state().bodies.is_empty() {
         return None;
     }
-    let world = s.cached_world_state()?;
-    if world.bodies.is_empty() || world.bodies.len() > 4096 {
-        return None;
-    }
-    let painted = s.doc.painted(&world);
-    Some(painted.bodies.iter().map(|b| solidcraft_io::DesignGeometry { name: b.name.clone(), body: b.body.clone() }).collect())
+    s.model.saved(design)
 }
 
 /// Cache only warm display geometry. A save never waits for an unevaluated mesh.
@@ -351,7 +477,7 @@ fn save(s: &mut Session, p: &Value) -> Result<Value> {
         str_(p, "format").unwrap_or(default_design_format(&path)),
         str_(p, "compression").unwrap_or("fast"),
         bool_(p, "preview").unwrap_or(false),
-        bool_(p, "cache").unwrap_or(false),
+        bool_(p, "cache").unwrap_or(true),
     )
 }
 
@@ -367,7 +493,7 @@ fn save_as(s: &mut Session, p: &Value) -> Result<Value> {
         str_(p, "format").unwrap_or(default_design_format(&path)),
         str_(p, "compression").unwrap_or("fast"),
         bool_(p, "preview").unwrap_or(false),
-        bool_(p, "cache").unwrap_or(false),
+        bool_(p, "cache").unwrap_or(true),
     )
 }
 
@@ -551,6 +677,34 @@ mod urdf_tests;
 mod tests {
     use super::*;
 
+    /// #3044: a save run on a scratch copy of the session (on a worker, so the window keeps
+    /// drawing) and taken up with `adopt_save` leaves the session as saving it directly does:
+    /// the design named after its first file, its file, and nothing unsaved; undo keeps the name.
+    #[test]
+    fn a_save_run_on_a_copy_and_adopted_matches_saving_directly() {
+        let dir = std::env::temp_dir().join(format!("solidcraft-adopt-save-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut direct = Session::default();
+        direct.execute("solid.box", &json!({"length": 10, "width": 10, "height": 10})).unwrap();
+        let mut adopted = Session::new((*direct.doc).clone());
+        adopted.execute("solid.box", &json!({"length": 10, "width": 10, "height": 10})).unwrap();
+        let a = dir.join("Bracket.solidcraft");
+        let b = dir.join("Bracket copy.solidcraft");
+        direct.execute("file.save_as", &json!({"path": a.to_string_lossy()})).unwrap();
+        let mut copy = adopted.scratch();
+        copy.path.clone_from(&adopted.path);
+        copy.execute("file.save_as", &json!({"path": b.to_string_lossy()})).unwrap();
+        assert!(adopted.is_dirty(), "nothing taken up yet");
+        adopted.adopt_save(&copy);
+        assert!(!adopted.is_dirty());
+        assert_eq!(adopted.path.as_deref(), b.to_str());
+        assert_eq!(adopted.doc.name, "Bracket copy");
+        assert_eq!(direct.doc.name, "Bracket");
+        assert_eq!(adopted.undo.iter().map(|u| u.doc.name.clone()).collect::<Vec<_>>(), vec!["Bracket copy".to_string(); adopted.undo.len()]);
+        assert_eq!(solidcraft_io::read_design(&std::fs::read(&b).unwrap()).unwrap(), *adopted.doc);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     #[ignore = "manual warmed engine save and provisional-open benchmark"]
     fn benchmark_warm_design_save_with_preview() {
@@ -606,7 +760,7 @@ mod tests {
         let save_path = std::env::temp_dir().join(format!("solidcraft-preview-save-{}.solidcraft", std::process::id()));
         s.execute("file.save", &json!({"path":save_path})).unwrap();
         let saved = std::fs::read(&save_path).unwrap();
-        assert!(solidcraft_io::read_design_geometry(&saved).is_none(), "ordinary saves omit native geometry caches");
+        assert!(solidcraft_io::read_design_geometry(&saved).is_some(), "ordinary saves keep the evaluated model");
         assert!(!saved.windows(b"cache/preview.bin".len()).any(|s| s == b"cache/preview.bin"), "ordinary saves omit redundant display meshes");
         s.execute("file.save", &json!({"path":save_path,"preview":true})).unwrap();
         assert!(solidcraft_io::read_design_preview(&std::fs::read(&save_path).unwrap()).is_some());
@@ -615,9 +769,7 @@ mod tests {
         let mut preview = saved_preview(&s).unwrap();
         // A checksum-valid but forged cached shape must not become editable geometry.
         for mesh in &mut preview.meshes {
-            for coordinate in &mut mesh.positions {
-                *coordinate *= 10.0;
-            }
+            mesh.positions = mesh.positions.iter().map(|c| c * 10.0).collect();
         }
         let bytes = solidcraft_io::write_design_container_with_preview(&s.doc, solidcraft_io::DesignCompression::Fast, Some(&preview)).unwrap();
         let path = std::env::temp_dir().join(format!("solidcraft-preview-{}.solidcraft", std::process::id()));
@@ -650,7 +802,7 @@ mod tests {
         }
         *s.world_cache.lock().unwrap() = None;
         assert!(saved_preview(&s).is_none());
-        assert!(saved_geometry(&s).is_none());
+        assert!(saved_geometry(&s, &s.doc).is_some(), "the timeline's bodies need no placement");
         assert!(s.world_cache.lock().unwrap().is_none(), "saving must not prepare cold placements");
         for body in &s.world_state().bodies {
             body.mesh();
@@ -662,7 +814,7 @@ mod tests {
         }
         assert!(!s.pending_moves.is_empty());
         assert!(saved_preview(&s).is_none(), "uncaptured positions are not in the saved document");
-        assert!(saved_geometry(&s).is_none());
+        assert!(saved_geometry(&s, &s.doc).is_none());
         s.execute("component.capture_position", &json!({})).unwrap();
         for body in &s.world_state().bodies {
             body.mesh();
@@ -677,11 +829,13 @@ mod tests {
         }
         assert!(editing.active_sketch.is_some());
         assert!(saved_preview(&editing).is_none());
-        assert!(saved_geometry(&editing).is_none());
+        assert!(saved_geometry(&editing, &editing.doc).is_none());
     }
 
     #[test]
-    fn save_and_save_as_require_explicit_native_cache_opt_in() {
+    fn save_and_save_as_keep_the_model_unless_opted_out() {
+        // Thumbnails are drawn by the renderer the host installs.
+        crate::capture::install_test_renderer();
         let mut session = Session::new(Document::new("Cache opt-in"));
         session.execute("solid.box", &json!({"length":10,"width":20,"height":30})).unwrap();
         let world = session.world_state();
@@ -697,8 +851,8 @@ mod tests {
                 }
                 session.execute(command, &params).unwrap();
                 let bytes = std::fs::read(&path).unwrap();
-                assert_eq!(solidcraft_io::read_design_geometry(&bytes).is_some(), cache == Some(true), "{command}: {cache:?}");
-                assert_eq!(solidcraft_io::read_design_thumbnail(&bytes).is_some(), cache == Some(true), "{command}: {cache:?}");
+                assert_eq!(solidcraft_io::read_design_geometry(&bytes).is_some(), cache != Some(false), "{command}: {cache:?}");
+                assert_eq!(solidcraft_io::read_design_thumbnail(&bytes).is_some(), cache != Some(false), "{command}: {cache:?}");
                 assert!(
                     !bytes.windows(b"cache/preview.bin".len()).any(|entry| entry == b"cache/preview.bin"),
                     "display meshes require preview: true"
@@ -711,36 +865,37 @@ mod tests {
     }
 
     #[test]
-    fn native_cache_does_not_force_meshes_or_supply_editing_state() {
-        let mut session = Session::new(Document::new("Native cache authority"));
+    fn saved_model_needs_no_meshes_and_is_adopted_only_for_its_document() {
+        let mut session = Session::new(Document::new("Saved model"));
         session.execute("solid.box", &json!({"length":10,"width":20,"height":30})).unwrap();
         let world = session.world_state();
         assert!(world.bodies.iter().all(|b| b.cached_mesh().is_none()));
-        let mut cached = saved_geometry(&session).unwrap();
         let bytes = session.design_container(solidcraft_io::DesignCompression::Fast, false, true).unwrap();
-        assert!(world.bodies.iter().all(|b| b.cached_mesh().is_none()), "saving native geometry must not triangulate");
+        assert!(world.bodies.iter().all(|b| b.cached_mesh().is_none()), "saving the model must not triangulate");
         assert!(solidcraft_io::read_design_geometry(&bytes).is_some());
         assert!(
             solidcraft_io::read_design_geometry(&session.design_container(solidcraft_io::DesignCompression::Fast, false, false).unwrap()).is_none()
         );
-        cached[0].body = solidcraft_kernel::box_solid(solidcraft_geom::Vec3::ZERO, solidcraft_geom::Vec3::new(100., 100., 100.)).unwrap();
-        let bytes =
-            solidcraft_io::write_design_container_with_cache(&session.doc, solidcraft_io::DesignCompression::Fast, None, Some(&cached)).unwrap();
-        let path = std::env::temp_dir().join(format!("solidcraft-native-forged-{}.solidcraft", std::process::id()));
-        std::fs::write(&path, bytes).unwrap();
-        let seen = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let callback_seen = seen.clone();
-        let mut reopened = Session {
-            open_preview: Some(Box::new(move |p| {
-                callback_seen.store(!p.meshes.is_empty(), std::sync::atomic::Ordering::Relaxed);
-            })),
-            ..Session::default()
-        };
+        let path = std::env::temp_dir().join(format!("solidcraft-saved-model-{}.solidcraft", std::process::id()));
+        std::fs::write(&path, &bytes).unwrap();
+        let mut reopened = Session::default();
         reopened.execute("doc.open", &json!({"path":path})).unwrap();
-        assert!(seen.load(std::sync::atomic::Ordering::Relaxed));
         assert_eq!(reopened.doc, session.doc);
+        assert!(reopened.model.results.iter().all(|r| r.ms == session.model.results[0].ms), "taken from the file, not evaluated");
         let measured = reopened.execute("inspect.measure", &json!({})).unwrap();
         assert!((measured["bodies"][0]["volume_mm3"].as_f64().unwrap() - 6000.).abs() < 1e-6);
+        // The model of another document (a value edited in the file) is not taken: the design is
+        // evaluated.
+        let mut changed = (*session.doc).clone();
+        if let Some(solidcraft_doc::FeatureKind::Box { length, .. }) = changed.features.last_mut().map(|f| &mut f.kind) {
+            *length = "20".into();
+        }
+        let saved = saved_geometry(&session, &session.doc).unwrap();
+        let other = solidcraft_io::write_design_container_with_cache(&changed, solidcraft_io::DesignCompression::Fast, None, Some(&saved)).unwrap();
+        std::fs::write(&path, other).unwrap();
+        reopened.execute("doc.open", &json!({"path":path})).unwrap();
+        let measured = reopened.execute("inspect.measure", &json!({})).unwrap();
+        assert!((measured["bodies"][0]["volume_mm3"].as_f64().unwrap() - 12000.).abs() < 1e-6);
         std::fs::remove_file(path).unwrap();
     }
 
@@ -825,9 +980,20 @@ mod tests {
         // Undoing the box does not bring the old name back.
         s.execute("edit.undo", &json!({})).unwrap();
         assert_eq!(s.doc.name, "bracket");
-        // Saving under another file keeps the name it now has.
-        s.execute("file.save_as", &json!({"path":dir.join("copy.solidcraft")})).unwrap();
-        assert_eq!(s.doc.name, "bracket");
+        // Saved under another file, a name taken from the old file follows it (#1710), in the
+        // file too, so reopening shows it.
+        let copy = dir.join("copy.solidcraft");
+        s.execute("file.save_as", &json!({"path":copy})).unwrap();
+        assert_eq!(s.doc.name, "copy");
+        let mut reopened = Session::default();
+        reopened.execute("doc.open", &json!({"path":copy})).unwrap();
+        assert_eq!(reopened.doc.name, "copy");
+        // Saving again to the same file changes nothing.
+        s.execute("file.save", &json!({})).unwrap();
+        assert_eq!(s.doc.name, "copy");
+        // As in the issue: a design opened from its file, then saved as another.
+        reopened.execute("file.save_as", &json!({"path":dir.join("third.solidcraft")})).unwrap();
+        assert_eq!(reopened.doc.name, "third");
         // A failed save leaves the name alone.
         let mut failed = Session::default();
         assert!(failed.execute("file.save_as", &json!({"path":dir.join("missing-dir").join("plate.solidcraft")})).is_err());
@@ -912,7 +1078,8 @@ mod tests {
         for x in [0, 20, 40] {
             s.execute("solid.box", &json!({"length":10,"width":10,"height":10,"corner":[x,0,0]})).unwrap();
         }
-        s.execute("file.save", &json!({"path":path})).unwrap();
+        // Without its model: the timeline is evaluated (and watched) as it opens.
+        s.execute("file.save", &json!({"path":path, "cache": false})).unwrap();
 
         let progress = Arc::new(Progress::default());
         let mut opened = Session::default();

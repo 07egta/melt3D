@@ -232,7 +232,7 @@ fn shell_of_a_filleted_box() {
 
 /// The first tutorial part: a 60×40×15 plate with its top front edge and front right edge
 /// rounded r2, shelled with the top open. At 2 mm the rounds' inner sides collapse to sharp
-/// edges (as in Fusion); at 1.5 mm the top's round, tangent to the open top, keeps its
+/// edges (the intended behaviour); at 1.5 mm the top's round, tangent to the open top, keeps its
 /// tangency (every face moves in, the opening is swept out through the top).
 #[test]
 fn shell_of_the_tutorial_plate() {
@@ -558,6 +558,7 @@ fn blend_corners_where_edges_meet_on_a_curved_wall() {
 fn a_boundary_found_across_a_seam_is_not_used() {
     let r = fuzz::run(20, 8);
     assert_eq!(r.outcome.kind, "ok", "seed 20: {:?}\n{}", r.outcome, r.script());
+    assert!(r.steps.iter().any(|s| s.kind == "circular pattern"), "the pattern must build, not be skipped as unsupported: {:?}", r.unsupported);
 }
 
 /// Seed 33 ends in a fillet on its second body (#854's corner blends build it differently from
@@ -573,4 +574,31 @@ fn seed_33_display_plan_and_measure_agree() {
         let measured = solidcraft_kernel::measure(&b.body).unwrap().volume;
         assert!((planned - measured).abs() < 2e-5 * measured, "{}: planned {planned}, measured {measured}", b.name);
     }
+}
+
+/// A chamfer on a concave edge fills the corner, so it adds material, as a fillet there does. The
+/// fuzzer expected every chamfer to shrink the body and reported these as a wrong volume (about
+/// 1 % of the designs of a 6,000-seed run; seed 7100465: a box, a shell, a chamfer of an inside
+/// edge). On a shelled 20 mm box, a 1 mm chamfer of an inside bottom edge adds its 16 mm long
+/// half-square prism, and one of an outside bottom edge takes 20 mm of it away.
+#[test]
+fn chamfer_of_a_concave_edge_adds_material() {
+    let shelled = || {
+        vec![
+            json!({"command": "solid.box", "params": {"corner": [0, 0, 0], "length": 20, "width": 20, "height": 20}}),
+            json!({"command": "solid.shell", "params": {"faces": [[10, 10, 20]], "thickness": 2}}),
+        ]
+    };
+    let base = total_volume(&script(Value::Array(shelled())));
+    let chamfered = |edge: [f64; 3]| {
+        let mut steps = shelled();
+        steps.push(json!({"command": "solid.chamfer", "params": {"edges": [edge], "distance": 1}}));
+        total_volume(&script(Value::Array(steps)))
+    };
+    let inside = chamfered([10.0, 2.0, 2.0]);
+    let outside = chamfered([10.0, 0.0, 0.0]);
+    assert!((inside - (base + 16.0 * 0.5)).abs() < 1e-6, "inside edge: {base} -> {inside}");
+    assert!((outside - (base - 20.0 * 0.5)).abs() < 1e-6, "outside edge: {base} -> {outside}");
+    let r = fuzz::run(7100465, 8);
+    assert!(r.outcome.kind != "volume", "seed 7100465: {:?}\n{}", r.outcome, r.script());
 }

@@ -18,7 +18,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::accel::Bound;
-use crate::model::{Group, Kind, Scene, Shape};
+use crate::model::{Group, Kind, MAX_SHAPES, Scene, Shape};
 use crate::sdf::{V3, add, cross, dot, len, mul, norm, rotation, sub};
 
 /// Most instances in a scene (counting the linked copies too): the shader loops over them.
@@ -28,7 +28,7 @@ pub const MAX_SIDE: u32 = 64;
 const COORD: f32 = 5000.0;
 
 /// What `Scene` says when the instances do not all fit.
-pub const TOO_MANY: &str = "パターンのこすうが多すぎます（シーン全体で256こまで）";
+pub const TOO_MANY: &str = "Too many pattern copies (up to 256 in the whole scene)";
 
 // ---------------------------------------------------------------------------------------------
 // The transform of one instance
@@ -64,6 +64,7 @@ fn transpose(a: &Mat) -> Mat {
     [[a[0][0], a[1][0], a[2][0]], [a[0][1], a[1][1], a[2][1]], [a[0][2], a[1][2], a[2][2]]]
 }
 
+#[cfg(test)]
 fn det(a: &Mat) -> f32 {
     dot(a[0], cross(a[1], a[2]))
 }
@@ -104,12 +105,19 @@ impl Inst {
         o
     }
 
+    /// The inverse rotation `inv` of a shape, carried through this instance:
+    /// `inv' = inv * M^T`, so the shape is measured where this instance puts it.
+    pub fn combine_inverse(&self, inv: &[V3; 3]) -> Mat {
+        mat_mul(inv, &transpose(&self.m))
+    }
+
     /// First this, then `outer`.
     pub fn then(&self, outer: &Inst) -> Inst {
         Inst { m: mat_mul(&outer.m, &self.m), t: add(mul(mat_vec(&outer.m, self.t), outer.s), outer.t), s: self.s * outer.s }
     }
 
     /// Does it mirror (turn a right hand into a left one)?
+    #[cfg(test)]
     pub fn flips(&self) -> bool {
         det(&self.m) < 0.0
     }
@@ -206,22 +214,22 @@ pub enum PatternKind {
 impl PatternKind {
     pub const ALL: [PatternKind; 5] = [PatternKind::Mirror, PatternKind::Rect, PatternKind::Circular, PatternKind::Path, PatternKind::Geometry];
     pub fn label(self) -> &'static str {
-        match self {
-            PatternKind::Mirror => "ミラー",
-            PatternKind::Rect => "矩形状",
-            PatternKind::Circular => "円形状",
-            PatternKind::Path => "パス上",
-            PatternKind::Geometry => "ジオメトリ",
-        }
+        crate::i18n::tr(match self {
+            PatternKind::Mirror => "pattern.mirror",
+            PatternKind::Rect => "pattern.rect",
+            PatternKind::Circular => "pattern.circular",
+            PatternKind::Path => "pattern.path",
+            PatternKind::Geometry => "pattern.geometry",
+        })
     }
     pub fn hint(self) -> &'static str {
-        match self {
-            PatternKind::Mirror => "X・Y・Zの面で左右（上下・前後）に写します",
-            PatternKind::Rect => "たて・よこ・高さに、同じ間かくでならべます",
-            PatternKind::Circular => "ある軸のまわりに、ぐるっとならべます",
-            PatternKind::Path => "線（カーブ・スイープ・かたち）にそってならべます",
-            PatternKind::Geometry => "ほかの形の点（ふし・かど）ごとに 1こずつおきます",
-        }
+        crate::i18n::tr(match self {
+            PatternKind::Mirror => "pattern.mirror.hint",
+            PatternKind::Rect => "pattern.rect.hint",
+            PatternKind::Circular => "pattern.circular.hint",
+            PatternKind::Path => "pattern.path.hint",
+            PatternKind::Geometry => "pattern.geometry.hint",
+        })
     }
 }
 
@@ -355,7 +363,9 @@ pub fn shape_polyline(s: &Shape) -> Option<Poly> {
             to_world(crate::curve::build(&s.path, &s.params).iter().map(|p| [p[0], p[1], p[2]]).collect(), closed)
         }
         Kind::Sweep => to_world(s.path.iter().filter(|p| p.iter().all(|v| v.is_finite())).map(|p| [p[0], p[1], p[2]]).collect(), false),
-        Kind::Extrude | Kind::Loft => to_world(s.outline.iter().filter(|p| p.iter().all(|v| v.is_finite())).map(|p| [p[0], p[1], 0.0]).collect(), true),
+        Kind::Extrude | Kind::Loft => {
+            to_world(s.outline.iter().filter(|p| p.iter().all(|v| v.is_finite())).map(|p| [p[0], p[1], 0.0]).collect(), true)
+        }
         Kind::Revolve => to_world(s.outline.iter().filter(|p| p.iter().all(|v| v.is_finite())).map(|p| [p[0].max(0.0), 0.0, p[1]]).collect(), true),
         _ => None,
     }
@@ -365,17 +375,36 @@ pub fn shape_polyline(s: &Shape) -> Option<Poly> {
 /// (when it is a line).
 fn shape_points(s: &Shape) -> Vec<(V3, Option<V3>)> {
     let nodes: Option<(Vec<V3>, bool)> = match s.kind {
-        Kind::Curve | Kind::Sweep => Some((s.path.iter().filter(|p| p.iter().all(|v| v.is_finite())).map(|p| world_of(s, [p[0], p[1], p[2]])).collect(), s.kind == Kind::Curve && crate::curve::settings(&s.params).0)),
-        Kind::Extrude | Kind::Loft => Some((s.outline.iter().filter(|p| p.iter().all(|v| v.is_finite())).map(|p| world_of(s, [p[0], p[1], 0.0])).collect(), true)),
-        Kind::Revolve => Some((s.outline.iter().filter(|p| p.iter().all(|v| v.is_finite())).map(|p| world_of(s, [p[0].max(0.0), 0.0, p[1]])).collect(), true)),
+        Kind::Curve | Kind::Sweep => Some((
+            s.path.iter().filter(|p| p.iter().all(|v| v.is_finite())).map(|p| world_of(s, [p[0], p[1], p[2]])).collect(),
+            s.kind == Kind::Curve && crate::curve::settings(&s.params).0,
+        )),
+        Kind::Extrude | Kind::Loft => {
+            Some((s.outline.iter().filter(|p| p.iter().all(|v| v.is_finite())).map(|p| world_of(s, [p[0], p[1], 0.0])).collect(), true))
+        }
+        Kind::Revolve => {
+            Some((s.outline.iter().filter(|p| p.iter().all(|v| v.is_finite())).map(|p| world_of(s, [p[0].max(0.0), 0.0, p[1]])).collect(), true))
+        }
         _ => None,
     };
     if let Some((pts, closed)) = nodes {
         let n = pts.len();
         return (0..n)
             .map(|i| {
-                let prev = if i > 0 { pts.get(i - 1) } else if closed { pts.get(n - 1) } else { None };
-                let next = if i + 1 < n { pts.get(i + 1) } else if closed { pts.first() } else { None };
+                let prev = if i > 0 {
+                    pts.get(i - 1)
+                } else if closed {
+                    pts.get(n - 1)
+                } else {
+                    None
+                };
+                let next = if i + 1 < n {
+                    pts.get(i + 1)
+                } else if closed {
+                    pts.first()
+                } else {
+                    None
+                };
                 let here = pts.get(i).copied().unwrap_or([0.0; 3]);
                 let tangent = match (prev, next) {
                     (Some(a), Some(b)) => Some(sub(*b, *a)),
@@ -449,7 +478,7 @@ pub fn poly_length(poly: &Poly) -> f32 {
 
 /// The middle of a group's visible shapes.
 pub fn centre_of_shapes(shapes: &[Shape]) -> V3 {
-    let vis: Vec<&Shape> = shapes.iter().filter(|s| s.visible).collect();
+    let vis: Vec<&Shape> = shapes.iter().filter(|s| s.solid()).collect();
     if vis.is_empty() {
         return [0.0; 3];
     }
@@ -470,7 +499,7 @@ fn follow_points(src: Source, scene: &Scene) -> Vec<(V3, Option<V3>, Option<Mat>
             None => Vec::new(),
         },
         Source::Group(uid) => match scene.group_by_uid(uid).and_then(|g| scene.groups.get(g)) {
-            Some(g) => g.shapes.iter().filter(|s| s.visible).map(|s| (s.pos, None, None)).collect(),
+            Some(g) => g.shapes.iter().filter(|s| s.solid()).map(|s| (s.pos, None, None)).collect(),
             None => Vec::new(),
         },
     }
@@ -567,6 +596,9 @@ pub fn generate(p: &Pattern, scene: &Scene, anchor: V3, room: usize) -> Vec<Inst
         }
     }
     out.retain(Inst::finite);
+    // every kind keeps to the room it was given (a mirror makes up to 8 at once): the scene's
+    // total never goes past MAX_INSTANCES (#188)
+    out.truncate(room);
     out
 }
 
@@ -574,6 +606,63 @@ pub fn generate(p: &Pattern, scene: &Scene, anchor: V3, room: usize) -> Vec<Inst
 fn place_at(pt: V3, anchor: V3, frame: Option<Mat>) -> Inst {
     let m = frame.unwrap_or(EYE);
     Inst { m, t: sub(pt, mat_vec(&m, anchor)), s: 1.0 }
+}
+
+/// The instances that draw one shape: its own pattern about its middle, or just itself. The shape
+/// stays the first instance whenever the pattern starts where it is (mirror, grid, circle, path
+/// from its own place); a path that begins elsewhere follows the same rule as a group pattern.
+pub fn shape_instances(scene: &Scene, gi: usize, si: usize, room: usize) -> Vec<Inst> {
+    let Some(s) = scene.shape(gi, si) else { return Vec::new() };
+    let mut out = match &s.pattern {
+        Some(p) => generate(p, scene, s.pos, room),
+        None => Vec::new(),
+    };
+    if out.is_empty() {
+        out.push(Inst::IDENTITY);
+    }
+    out
+}
+
+/// How many copies a shape's pattern would make (cheap: no instances are made).
+pub fn shape_natural_count(scene: &Scene, gi: usize, si: usize) -> usize {
+    scene.shape(gi, si).and_then(|s| s.pattern.as_ref()).map_or(1, |p| natural_count(p, scene).max(1))
+}
+
+/// The distance from the pattern's middle to its centre in the plane it turns in: the radius a
+/// circular pattern puts the copies on.
+pub fn circular_radius(anchor: V3, centre: V3, axis: u8) -> f32 {
+    let d = sub(centre, anchor);
+    let a = usize::from(axis.min(2));
+    let mut flat = d;
+    flat[a] = 0.0;
+    let r = len(flat);
+    if r.is_finite() { r } else { 0.0 }
+}
+
+/// Move the pattern's centre so the copies sit on a circle of `radius` mm about the shape's middle,
+/// keeping the direction (the axis part of the centre stays where it is).
+pub fn set_circular_radius(anchor: V3, centre: &mut V3, axis: u8, radius: f32) -> bool {
+    let a = usize::from(axis.min(2));
+    let r = if radius.is_finite() { radius.max(0.0) } else { 0.0 };
+    let mut d = sub(*centre, anchor);
+    d[a] = 0.0;
+    let old = len(d);
+    let mut dir = if old > 1e-5 { mul(d, 1.0 / old) } else { [0.0; 3] };
+    if old <= 1e-5 {
+        dir[match a {
+            0 => 1,
+            1 => 2,
+            _ => 0,
+        }] = 1.0;
+    }
+    let before = *centre;
+    for (i, c) in centre.iter_mut().enumerate() {
+        if i == a {
+            continue;
+        }
+        *c = anchor[i] + dir[i] * r;
+    }
+    *centre != before
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -588,6 +677,9 @@ pub struct RGroup {
     pub src: usize,
     /// Empty = once, as it is.
     pub insts: Vec<Inst>,
+    /// For every shape of `src` (by its index): its own pattern's instances, or empty for none.
+    /// A group pattern repeats these along with the whole group.
+    pub shape_insts: Vec<Vec<Inst>>,
     pub linked: bool,
     /// Some instances were left out to stay under `MAX_INSTANCES`.
     pub capped: bool,
@@ -614,9 +706,22 @@ pub fn link_source(scene: &Scene, gi: usize) -> Option<usize> {
 /// whose source is gone is left out too.
 pub fn resolve(scene: &Scene) -> Vec<RGroup> {
     let mut left = MAX_INSTANCES;
+    // Shape copies cost shape slots, not group instances, so they have the shape budget.
+    let mut shape_left = MAX_SHAPES.saturating_sub(scene.shape_count()).min(MAX_INSTANCES);
+    // A linked copy shows the same shapes: plan each source group's shape copies once.
+    let mut shape_plans: std::collections::HashMap<usize, (Vec<Vec<Inst>>, bool)> = std::collections::HashMap::new();
     let mut out = Vec::new();
+    // (hiding a group hides everything nested in it)
+    let mut hidden_below: Option<u8> = None;
     for (gi, g) in scene.groups.iter().enumerate() {
+        if let Some(d) = hidden_below {
+            if g.depth > d {
+                continue;
+            }
+            hidden_below = None;
+        }
         if !g.visible {
+            hidden_below = Some(g.depth);
             continue;
         }
         let linked = g.instance_of.is_some();
@@ -628,13 +733,15 @@ pub fn resolve(scene: &Scene) -> Vec<RGroup> {
         } else {
             gi
         };
-        let src_shapes: &[Shape] = scene.groups.get(src).map_or(&[], |s| &s.shapes);
+        let Some(srcg) = scene.groups.get(src) else { continue };
+        let src_shapes: &[Shape] = &srcg.shapes;
         let centre = centre_of_shapes(src_shapes);
         let own = if linked { Some(g.xform.inst(centre)) } else { None };
         let anchor = own.map_or(centre, |o| o.apply(centre));
         let wants_pattern = g.pattern.is_some();
         if !linked && !wants_pattern {
-            out.push(RGroup { gi, src, insts: Vec::new(), linked: false, capped: false });
+            let (shape_insts, shape_capped) = shape_plan(scene, src, &mut shape_left, &mut shape_plans);
+            out.push(RGroup { gi, src, insts: Vec::new(), shape_insts, linked: false, capped: shape_capped });
             continue;
         }
         let natural = g.pattern.as_ref().map_or(1, |p| natural_count(p, scene).max(1));
@@ -654,9 +761,54 @@ pub fn resolve(scene: &Scene) -> Vec<RGroup> {
         if !linked && insts.len() == 1 && insts[0] == Inst::IDENTITY {
             insts.clear();
         }
-        out.push(RGroup { gi, src, insts, linked, capped });
+        let (shape_insts, shape_capped) = shape_plan(scene, src, &mut shape_left, &mut shape_plans);
+        out.push(RGroup { gi, src, insts, shape_insts, linked, capped: capped || shape_capped });
     }
     out
+}
+
+/// The shape copies of a source group, planned once and shared by linked copies. Returns the
+/// per-shape instance lists (empty for shapes without a pattern) and whether any were capped.
+fn shape_plan(
+    scene: &Scene,
+    src: usize,
+    shape_left: &mut usize,
+    plans: &mut std::collections::HashMap<usize, (Vec<Vec<Inst>>, bool)>,
+) -> (Vec<Vec<Inst>>, bool) {
+    if let Some((plan, capped)) = plans.get(&src) {
+        return (plan.clone(), *capped);
+    }
+    let Some(g) = scene.groups.get(src) else { return (Vec::new(), false) };
+    if !g.shapes.iter().any(|s| s.pattern.is_some()) {
+        plans.insert(src, (Vec::new(), false));
+        return (Vec::new(), false);
+    }
+    let mut plan = vec![Vec::new(); g.shapes.len()];
+    let mut capped = false;
+    for (si, s) in g.shapes.iter().enumerate() {
+        if s.pattern.is_none() || !s.solid() {
+            continue;
+        }
+        let natural = shape_natural_count(scene, src, si);
+        let insts = shape_instances(scene, src, si, (*shape_left).max(1));
+        capped |= natural > insts.len();
+        *shape_left = shape_left.saturating_sub(insts.len());
+        plan[si] = insts;
+    }
+    plans.insert(src, (plan.clone(), capped));
+    (plan, capped)
+}
+
+/// How many copies one shape's pattern makes, and whether the scene limit left some out.
+pub fn describe_shape(scene: &Scene, gi: usize, si: usize) -> (usize, bool) {
+    match resolve(scene).into_iter().find(|r| r.gi == gi) {
+        Some(r) => {
+            let n = r.shape_insts.get(si).map_or(0, Vec::len);
+            let natural = shape_natural_count(scene, gi, si);
+            (n.max(1), natural > n.max(1))
+        }
+        None => (0, false),
+    }
 }
 
 /// The instance count to show in the inspector: (how many are drawn, whether some were left out).
@@ -674,7 +826,17 @@ pub fn world_spheres(scene: &Scene) -> Vec<Bound> {
     let mut out = Vec::new();
     for rg in resolve(scene) {
         let Some(src) = scene.groups.get(rg.src) else { continue };
-        let parts: Vec<Bound> = src.shapes.iter().filter(|s| s.visible).map(|s| Bound { c: s.pos, r: crate::view::radius_of(s) }).collect();
+        let mut parts: Vec<Bound> = Vec::new();
+        for (si, s) in src.shapes.iter().enumerate() {
+            if !s.solid() {
+                continue;
+            }
+            let b = Bound { c: s.pos, r: crate::view::radius_of(s) };
+            match rg.shape_insts.get(si).filter(|v| !v.is_empty()) {
+                Some(insts) => parts.extend(insts.iter().map(|i| i.bound(b))),
+                None => parts.push(b),
+            }
+        }
         if parts.is_empty() {
             continue;
         }
@@ -690,7 +852,7 @@ pub fn world_spheres(scene: &Scene) -> Vec<Bound> {
 
 /// A sphere around the whole of a visible group's `Add` parts, in the group's own space.
 pub fn group_sphere(shapes: &[Shape]) -> Bound {
-    let spheres: Vec<Bound> = shapes.iter().filter(|s| s.visible).map(crate::accel::shape_bound).collect();
+    let spheres: Vec<Bound> = shapes.iter().filter(|s| s.solid()).map(crate::accel::shape_bound).collect();
     crate::accel::enclose(&spheres)
 }
 
@@ -712,26 +874,120 @@ impl Scene {
         self.groups.iter().enumerate().find_map(|(gi, g)| g.shapes.iter().position(|s| s.uid == uid).map(|si| (gi, si)))
     }
     fn max_uid(&self) -> u32 {
-        self.groups.iter().flat_map(|g| g.shapes.iter().map(|s| s.uid).chain(std::iter::once(g.uid))).max().unwrap_or(0)
+        // Deleted shapes may still have animation tracks: those IDs are reserved
+        // until the tracks are explicitly removed, even after a save/reload.
+        self.groups
+            .iter()
+            .flat_map(|g| g.shapes.iter().map(|s| s.uid).chain(std::iter::once(g.uid)))
+            .chain(self.anim.tracks.iter().map(|t| t.uid))
+            .chain(self.anim.links.iter().map(|t| t.uid))
+            .max()
+            .unwrap_or(0)
     }
     /// The `uid` of a group, given one first if it had none.
     pub fn ensure_group_uid(&mut self, gi: usize) -> Option<u32> {
-        let fresh = self.max_uid().saturating_add(1);
-        let g = self.groups.get_mut(gi)?;
-        if g.uid == 0 {
-            g.uid = fresh;
+        self.ensure_group_uid_above(gi, 0)
+    }
+    /// Like `ensure_group_uid` while the timeline is detached: `reserved` is its highest uid.
+    pub(crate) fn ensure_group_uid_above(&mut self, gi: usize, reserved: u32) -> Option<u32> {
+        let existing = self.groups.get(gi)?.uid;
+        if existing != 0 {
+            return Some(existing);
         }
-        Some(g.uid)
+        let fresh = self.max_uid().max(reserved).checked_add(1)?;
+        self.groups.get_mut(gi)?.uid = fresh;
+        Some(fresh)
     }
     /// The `uid` of a shape, given one first if it had none.
     pub fn ensure_shape_uid(&mut self, gi: usize, si: usize) -> Option<u32> {
-        let fresh = self.max_uid().saturating_add(1);
-        let s = self.groups.get_mut(gi)?.shapes.get_mut(si)?;
-        if s.uid == 0 {
-            s.uid = fresh;
-        }
-        Some(s.uid)
+        self.ensure_shape_uid_above(gi, si, 0)
     }
+    /// `Anim::capture` temporarily moves the timeline out of Scene. It passes
+    /// the highest UID still owned by those detached tracks so they remain reserved.
+    pub(crate) fn ensure_shape_uid_above(&mut self, gi: usize, si: usize, reserved: u32) -> Option<u32> {
+        let existing = self.shape(gi, si)?.uid;
+        if existing != 0 {
+            return Some(existing);
+        }
+        let fresh = self.max_uid().max(reserved).checked_add(1)?;
+        self.shape_mut(gi, si)?.uid = fresh;
+        Some(fresh)
+    }
+    /// The first `uid` no group, shape or animation track uses yet.
+    pub(crate) fn next_uid(&self) -> u32 {
+        self.max_uid().saturating_add(1)
+    }
+
+    /// A copied block of groups (Duplicate, Array) gets numbers of its own, and what inside the
+    /// block points at a group or shape of the block (a linked copy, a pattern's path or source)
+    /// follows the copy instead of the original (#202 #184). References outside the block stay.
+    /// `next` is the first free number; it moves on past the ones given out.
+    pub(crate) fn renumber_copies(next: &mut u32, copies: &mut [Group]) {
+        let mut groups = std::collections::HashMap::new();
+        let mut shapes = std::collections::HashMap::new();
+        let mut fresh = |old: u32, map: &mut std::collections::HashMap<u32, u32>| -> u32 {
+            let n = *next;
+            *next = next.saturating_add(1);
+            map.insert(old, n);
+            n
+        };
+        for g in copies.iter_mut() {
+            if g.uid != 0 {
+                g.uid = fresh(g.uid, &mut groups);
+            }
+            for s in &mut g.shapes {
+                if s.uid != 0 {
+                    s.uid = fresh(s.uid, &mut shapes);
+                }
+            }
+        }
+        for g in copies.iter_mut() {
+            if let Some(src) = g.instance_of
+                && let Some(n) = groups.get(&src)
+            {
+                g.instance_of = Some(*n);
+            }
+            match &mut g.pattern {
+                Some(Pattern::Path { source, .. }) => {
+                    if let Some(n) = shapes.get(source) {
+                        *source = *n;
+                    }
+                }
+                Some(Pattern::Geometry { source: Source::Shape(u), .. }) => {
+                    if let Some(n) = shapes.get(u) {
+                        *u = *n;
+                    }
+                }
+                Some(Pattern::Geometry { source: Source::Group(u), .. }) => {
+                    if let Some(n) = groups.get(u) {
+                        *u = *n;
+                    }
+                }
+                _ => {}
+            }
+            for s in &mut g.shapes {
+                match &mut s.pattern {
+                    Some(Pattern::Path { source, .. }) => {
+                        if let Some(n) = shapes.get(source) {
+                            *source = *n;
+                        }
+                    }
+                    Some(Pattern::Geometry { source: Source::Shape(u), .. }) => {
+                        if let Some(n) = shapes.get(u) {
+                            *u = *n;
+                        }
+                    }
+                    Some(Pattern::Geometry { source: Source::Group(u), .. }) => {
+                        if let Some(n) = groups.get(u) {
+                            *u = *n;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
     /// A copied group or shape carries its original's `uid`: the first one in the list keeps it,
     /// later ones lose it (and so are not what a pattern follows).
     pub fn dedupe_uids(&mut self) {
@@ -765,6 +1021,18 @@ pub fn lenient_pattern<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_mirror_after_a_full_grid_does_not_go_past_the_scene_limit() {
+        let mut sc = Scene::default();
+        sc.groups[0].pattern = Some(Pattern::Rect { counts: [64, 4, 1], spacing: [5.0, 5.0, 5.0] });
+        let mut b = Group::new("B");
+        b.shapes.push(Shape::new(Kind::Sphere, [100.0, 0.0, 0.0], Material::default()));
+        b.pattern = Some(Pattern::Mirror { axes: [true, true, true], centre: true });
+        sc.groups.push(b);
+        let total: usize = resolve(&sc).iter().map(|g| g.insts.len()).sum();
+        assert!(total <= MAX_INSTANCES, "{total} instances (#188)");
+    }
     use crate::model::Material;
 
     fn close(a: V3, b: V3) {
@@ -1117,8 +1385,87 @@ mod tests {
     }
 
     #[test]
+    fn a_single_shape_pattern_makes_its_copies_in_its_own_space() {
+        // a grid on one shape: the shape is the first copy, the rest are the right offsets away
+        let mut sc = scene_with(vec![ball([10.0, 5.0, 2.0]), ball([100.0, 0.0, 0.0])], None);
+        sc.groups[0].shapes[0].pattern = Some(Pattern::Rect { counts: [3, 2, 1], spacing: [10.0, 20.0, 0.0] });
+        let v = shape_instances(&sc, 0, 0, 256);
+        assert_eq!(v.len(), 6);
+        assert_eq!(v[0], Inst::IDENTITY, "the source shape is the first instance");
+        close(v[1].apply([10.0, 5.0, 2.0]), [20.0, 5.0, 2.0]);
+        close(v[3].apply([10.0, 5.0, 2.0]), [10.0, 25.0, 2.0]);
+        close(v[5].apply([10.0, 5.0, 2.0]), [30.0, 25.0, 2.0]);
+        // the other shape in the group is not copied
+        assert_eq!(shape_instances(&sc, 0, 1, 256), vec![Inst::IDENTITY]);
+        // a mirror about the shape's own middle flips it in place
+        sc.groups[0].shapes[0].pattern = Some(Pattern::Mirror { axes: [true, false, false], centre: true });
+        let m = shape_instances(&sc, 0, 0, 256);
+        assert_eq!(m.len(), 2);
+        close(m[0].apply([10.0, 5.0, 2.0]), [10.0, 5.0, 2.0]);
+        close(m[1].apply([13.0, 5.0, 2.0]), [7.0, 5.0, 2.0]);
+        assert!(m[1].flips());
+        // a circle about the world origin
+        sc.groups[0].shapes[0].pattern = Some(Pattern::Circular { count: 4, angle: 360.0, axis: 2, centre: [0.0; 3], rotate: true });
+        let c = shape_instances(&sc, 0, 0, 256);
+        assert_eq!(c.len(), 4);
+        close(c[1].apply([10.0, 5.0, 2.0]), [-5.0, 10.0, 2.0]);
+        let p = sc.groups[0].shapes[0].pattern.clone().unwrap_or(Pattern::Rect { counts: [1; 3], spacing: [0.0; 3] });
+        assert_eq!((natural_count(&p, &sc), shape_natural_count(&sc, 0, 0)), (4, 4));
+        // the radius control moves the centre without changing its direction
+        let mut centre = [0.0, 0.0, 0.0];
+        assert!((circular_radius([10.0, 5.0, 2.0], centre, 2) - (125.0_f32).sqrt()).abs() < 1e-3);
+        assert!(set_circular_radius([10.0, 5.0, 2.0], &mut centre, 2, 30.0));
+        assert!((circular_radius([10.0, 5.0, 2.0], centre, 2) - 30.0).abs() < 1e-3);
+        centre = [10.0, 5.0, 2.0];
+        assert!(set_circular_radius([10.0, 5.0, 2.0], &mut centre, 2, 12.0));
+        close(centre, [22.0, 5.0, 2.0]);
+    }
+
+    #[test]
+    fn a_shape_pattern_along_a_path_and_the_scene_limit() {
+        let mut sc = curve_scene();
+        let uid = sc.groups[0].shapes[1].uid;
+        sc.groups[0].shapes[0].pattern = Some(Pattern::Path { source: uid, count: 5, mode: PathMode::Even, step: 10.0, align: false });
+        let v = shape_instances(&sc, 0, 0, 256);
+        assert_eq!(v.len(), 5);
+        for (k, i) in v.iter().enumerate() {
+            close(i.apply([0.0; 3]), [25.0 * k as f32, 0.0, 0.0]);
+        }
+        assert_eq!(shape_natural_count(&sc, 0, 0), 5);
+        // hostile numbers stay inside the room and the scene limit
+        for p in [
+            Pattern::Rect { counts: [u32::MAX, u32::MAX, u32::MAX], spacing: [f32::NAN, f32::INFINITY, 1e30] },
+            Pattern::Circular { count: u32::MAX, angle: f32::NAN, axis: 200, centre: [f32::INFINITY; 3], rotate: true },
+            Pattern::Path { source: uid, count: u32::MAX, mode: PathMode::Step, step: -4.0, align: true },
+        ] {
+            sc.groups[0].shapes[0].pattern = Some(p);
+            let v = shape_instances(&sc, 0, 0, 1_000_000);
+            assert!(v.len() <= MAX_INSTANCES, "{} copies", v.len());
+            assert!(v.iter().all(Inst::finite));
+            assert!(shape_natural_count(&sc, 0, 0) <= 64 * 64 * 64);
+        }
+    }
+
+    #[test]
+    fn a_shape_pattern_round_trips_and_old_files_without_one_open() {
+        let mut sc = scene_with(vec![ball([0.0; 3])], None);
+        let p = Pattern::Rect { counts: [2, 3, 1], spacing: [4.0, 5.0, 0.0] };
+        sc.groups[0].shapes[0].pattern = Some(p.clone());
+        assert!(!sc.to_json().contains("\"pattern\":null"));
+        let back = Scene::from_json(&sc.to_json()).unwrap_or_default();
+        assert_eq!(back.groups[0].shapes[0].pattern, Some(p.clone()));
+        assert_eq!(back.groups[0].pattern, None);
+        let old = r#"{"groups":[{"name":"g","op":"Add","blend":0,"visible":true,"shapes":[{"name":"s","kind":"Sphere","size":[10,10,10],"round":0,"pos":[0,0,0],"rot":[0,0,0],"scale":[1,1,1],"op":"Add","blend":6,"material":{"color":[0.8,0.8,0.8],"roughness":0.4,"metallic":0,"glow":0,"glass":0,"iridescence":0,"coat":0,"translucency":0,"color2":[0,0,0],"gradient":0,"grad_axis":0,"grad_flip":false,"grad_local":false,"grad_soft":0.7,"grad_from":0,"grad_to":1},"visible":true,"outline":[],"outline2":[]}]}]}"#;
+        let o = Scene::from_json(old).unwrap_or_default();
+        assert_eq!(o.groups.len(), 1);
+        assert_eq!(o.groups[0].shapes.len(), 1);
+        assert!(o.groups[0].shapes[0].pattern.is_none());
+    }
+
+    #[test]
     fn patterns_round_trip_and_old_files_and_unknown_patterns_open() {
-        let mut sc = scene_with(vec![ball([0.0; 3])], Some(Pattern::Circular { count: 5, angle: 270.0, axis: 1, centre: [1.0, 2.0, 3.0], rotate: false }));
+        let mut sc =
+            scene_with(vec![ball([0.0; 3])], Some(Pattern::Circular { count: 5, angle: 270.0, axis: 1, centre: [1.0, 2.0, 3.0], rotate: false }));
         sc.ensure_group_uid(0);
         sc.groups[0].xform = Xform { pos: [1.0, 2.0, 3.0], rot: [4.0, 5.0, 6.0], scale: 1.5 };
         sc.groups[0].instance_of = Some(9);

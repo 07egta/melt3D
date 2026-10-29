@@ -103,20 +103,56 @@ fn profile_round(s: Shape, scale: f32) -> f32 {
     return min(max(s.size.w, 0.0) / max(scale, 1e-3), s.extra.y);
 }
 
+// Match organic_vase::radial_warp: the angular waveform displaces both walls
+// and a conservative distance factor guards sphere tracing across thin walls.
+fn vase_angular_envelope(t01: f32) -> f32 {
+    let t = clamp(t01, 0.0, 1.0);
+    let u = clamp(t / 0.12, 0.0, 1.0);
+    let eased = u * u * (3.0 - 2.0 * u);
+    let wave = sin(3.14159265 * t);
+    return eased * (0.5 + 0.5 * wave * wave);
+}
+
+fn vase_wave_radial(q: vec3<f32>, count: f32, strength: f32, height: f32) -> vec2<f32> {
+    let r = length(q.xy);
+    let n = clamp(round(count), 0.0, 16.0);
+    let amp = clamp(strength, 0.0, 6.0);
+    if (n < 1.0 || amp <= 0.0) { return vec2<f32>(r, 1.0); }
+    let h = clamp(height, 1.0, 380.0);
+    let t = clamp(q.z / h + 0.5, 0.0, 1.0);
+    let gate_t = clamp(r / 5.0, 0.0, 1.0);
+    let gate = gate_t * gate_t * (3.0 - 2.0 * gate_t);
+    let phase = n * atan2(q.y, q.x) + 6.2831853 * 0.4 * t;
+    let warped = r - amp * vase_angular_envelope(t) * gate * sin(phase);
+    let safety = 1.0 / (1.0 + amp * (n / 5.0 + 17.0 / h + 0.30));
+    return vec2<f32>(warped, safety);
+}
+
 fn revolve_dist(s: Shape, q: vec3<f32>) -> f32 {
     var d = 0.0;
     let rr = profile_round(s, 1.0);
+    let warped = vase_wave_radial(q, s.params.y, s.params.z, s.params.w);
+    let pt = vec2<f32>(warped.x, q.z);
     if (s.extra.w > 0.5 && s.size.w > 0.0) {
-        d = cn_cut_polygon(polygon_off_axis_d(i32(s.misc.z + 0.5), i32(s.misc.w + 0.5), vec2<f32>(length(q.xy), q.z)), vec2<f32>(length(q.xy), q.z), i32(s.misc.z + 0.5), i32(s.misc.w + 0.5), s.extra.z, s.size.w, true);
+        d = cn_cut_polygon(polygon_off_axis_d(i32(s.misc.z + 0.5), i32(s.misc.w + 0.5), pt), pt, i32(s.misc.z + 0.5), i32(s.misc.w + 0.5), s.extra.z, s.size.w, true);
     } else if (rr > 0.0) {
-        d = polygon_inset_d(i32(s.misc.z + 0.5), i32(s.misc.w + 0.5), vec2<f32>(length(q.xy), q.z), rr, s.extra.z, true) - rr;
+        d = polygon_inset_d(i32(s.misc.z + 0.5), i32(s.misc.w + 0.5), pt, rr, s.extra.z, true) - rr;
     } else {
-        d = polygon_off_axis_d(i32(s.misc.z + 0.5), i32(s.misc.w + 0.5), vec2<f32>(length(q.xy), q.z));
+        d = polygon_off_axis_d(i32(s.misc.z + 0.5), i32(s.misc.w + 0.5), pt);
     }
+    d = d * warped.y;
+    shell_k = warped.y;
     let ang = clamp(s.params.x, 1.0, 360.0);
     if (ang < 359.99) { d = max(d, wedge_d(q.xy, ang)); }
     return d;
 }
+
+
+// How much shorter than a true distance the shape maths of a sweep, loft or wave-warped revolve
+// made the distance it just returned (`Prepared::shell_shortening` on the CPU). The distance
+// function leaves it here so that a shell can use it without measuring the profile a second time.
+// `shape_dist` sets it to 1 before it measures.
+var<private> shell_k: f32;
 
 fn loft_dist(s: Shape, q: vec3<f32>) -> f32 {
     let h = max(s.size.x, 1e-3);
@@ -127,7 +163,9 @@ fn loft_dist(s: Shape, q: vec3<f32>) -> f32 {
     let w = vec2<f32>(d1 + (d2 - d1) * t + rr, abs(q.z) - h * 0.5 + rr);
     var d = min(max(w.x, w.y), 0.0) + length(max(w, vec2<f32>(0.0))) - rr;
     if (s.extra.w > 0.5 && rr > 0.0) { d = cn_pair(d1 + (d2 - d1) * t, abs(q.z) - h * 0.5, rr); }
-    return d / (1.0 + abs(d2 - d1) / h);
+    let denom = 1.0 + abs(d2 - d1) / h;
+    shell_k = 1.0 / denom;
+    return d / denom;
 }
 
 fn sweep_dist(s: Shape, q: vec3<f32>) -> f32 {
@@ -171,6 +209,7 @@ fn sweep_dist(s: Shape, q: vec3<f32>) -> f32 {
     if (bi == 0 && bt <= 0.0) { axial = -dot(q - pa.xyz, tn); }
     if (bi == n - 2 && bt >= 1.0) { axial = max(axial, dot(q - pb.xyz, tn)); }
     let w = vec2<f32>(d2, axial);
+    shell_k = 0.7;
     return (min(max(w.x, w.y), 0.0) + length(max(w, vec2<f32>(0.0)))) * 0.7;
 }
 

@@ -129,15 +129,16 @@ fn jacobi(mut a: [[f64; 3]; 3]) -> ([f64; 3], [[f64; 3]; 3]) {
             let t = if theta == 0.0 { 1.0 } else { t };
             let c = 1.0 / (t * t + 1.0).sqrt();
             let s = t * c;
-            for k in 0..3 {
-                let (akp, akq) = (a[k][p], a[k][q]);
-                a[k][p] = c * akp - s * akq;
-                a[k][q] = s * akp + c * akq;
+            for row in &mut a {
+                let (akp, akq) = (row[p], row[q]);
+                row[p] = c * akp - s * akq;
+                row[q] = s * akp + c * akq;
             }
-            for k in 0..3 {
-                let (apk, aqk) = (a[p][k], a[q][k]);
-                a[p][k] = c * apk - s * aqk;
-                a[q][k] = s * apk + c * aqk;
+            let (before_q, from_q) = a.split_at_mut(q);
+            for (apk, aqk) in before_q[p].iter_mut().zip(&mut from_q[0]) {
+                let (old_p, old_q) = (*apk, *aqk);
+                *apk = c * old_p - s * old_q;
+                *aqk = s * old_p + c * old_q;
             }
             for row in v.iter_mut() {
                 let (vkp, vkq) = (row[p], row[q]);
@@ -280,8 +281,8 @@ fn build_table() -> CellTable {
             }
         }
         let mut ids: Vec<usize> = Vec::new();
-        for e in 0..12 {
-            if !crossed[e] {
+        for (e, crossed) in crossed.iter().enumerate() {
+            if !crossed {
                 continue;
             }
             let r = find(&mut parent, e);
@@ -864,8 +865,10 @@ fn process_block(sdf: &dyn Sdf, grid: &Grid, b: [u32; 3], sc: &mut Scratch) -> B
         let ncomp = tab.ncomp.get(mask as usize).copied().unwrap_or(0) as usize;
         let cell_lo = grid.pos([c0[0] + ci as i64, c0[1] + cj as i64, c0[2] + ck as i64]);
         let cell_hi = [cell_lo[0] + h, cell_lo[1] + h, cell_lo[2] + h];
-        let mut pts: [Vec<V>; 4] = [Vec::new(), Vec::new(), Vec::new(), Vec::new()];
-        let mut nrm: [Vec<V>; 4] = [Vec::new(), Vec::new(), Vec::new(), Vec::new()];
+        // at most 12 crossed edges in a cell, so fixed arrays do: no heap allocation per cell
+        let mut pts = [[[0.0f64; 3]; 12]; 4];
+        let mut nrm = [[[0.0f64; 3]; 12]; 4];
+        let mut cnt = [0usize; 4];
         for ed in 0..12usize {
             let comp = tab.edge.get(mask as usize).and_then(|r| r.get(ed)).copied().unwrap_or(255);
             if comp == 255 {
@@ -922,13 +925,18 @@ fn process_block(sdf: &dyn Sdf, grid: &Grid, b: [u32; 3], sc: &mut Scratch) -> B
             }
             let rec = sc.herm.get(hidx).copied().unwrap_or([0.0; 6]);
             let k = comp as usize;
-            if let (Some(pl), Some(nl)) = (pts.get_mut(k), nrm.get_mut(k)) {
-                pl.push([f64::from(rec[0]), f64::from(rec[1]), f64::from(rec[2])]);
-                nl.push([f64::from(rec[3]), f64::from(rec[4]), f64::from(rec[5])]);
+            if let (Some(pl), Some(nl), Some(n)) = (pts.get_mut(k), nrm.get_mut(k), cnt.get_mut(k))
+                && let (Some(ps), Some(ns)) = (pl.get_mut(*n), nl.get_mut(*n))
+            {
+                *ps = [f64::from(rec[0]), f64::from(rec[1]), f64::from(rec[2])];
+                *ns = [f64::from(rec[3]), f64::from(rec[4]), f64::from(rec[5])];
+                *n += 1;
             }
         }
         for k in 0..ncomp.min(4) {
-            let (p, sharp) = qef(pts.get(k).map_or(&[][..], |v| &v[..]), nrm.get(k).map_or(&[][..], |v| &v[..]), cell_lo, cell_hi);
+            let n = cnt.get(k).copied().unwrap_or(0);
+            let (p, sharp) =
+                qef(pts.get(k).and_then(|v| v.get(..n)).unwrap_or(&[]), nrm.get(k).and_then(|v| v.get(..n)).unwrap_or(&[]), cell_lo, cell_hi);
             out.verts.push([p[0] as f32, p[1] as f32, p[2] as f32]);
             out.sharp.push(sharp);
         }
@@ -1073,6 +1081,20 @@ pub mod tests {
         assert!((v / exact - 1.0).abs() < 0.01, "holes {v} vs {exact}");
         // genus 2: V - E + F = 2 - 2 * 2
         assert_eq!(euler(&m.mesh), -2);
+    }
+
+    #[test]
+    fn a_shelled_sphere_exports_closed_walls_with_the_cavity_volume() {
+        let mut s = crate::model::Shape::new(crate::model::Kind::Sphere, [0.0; 3], crate::model::Material::default());
+        s.size[0] = 10.0;
+        s.shell = 2.0;
+        let prepared = crate::sdf::Prepared::new(&s);
+        let m = run(&|p| prepared.distance(p), 12.0, 0.2, 4);
+        assert!(melt::is_watertight(&m.mesh));
+        assert_eq!(euler(&m.mesh), 4, "the outer ball and the inner cavity are two closed shells");
+        let exact = ball(10.0) - ball(8.0);
+        let v = melt::volume(&m.mesh);
+        assert!((v / exact - 1.0).abs() < 0.02, "shell volume {v} vs {exact}");
     }
 
     #[test]

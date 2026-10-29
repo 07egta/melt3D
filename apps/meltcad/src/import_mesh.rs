@@ -20,19 +20,27 @@ pub const MAX_VERTICES: usize = 15_000_000;
 /// Coordinates beyond this (in file units) are taken for garbage.
 pub const MAX_COORD: f32 = 1.0e9;
 
-pub const TOO_BIG_FILE: &str = "ファイルが大きすぎます（256MB まで）";
-pub const TOO_MANY_TRIS: &str = "三角形が多すぎます（500万まで）";
-pub const TOO_MANY_VERTS: &str = "頂点が多すぎます";
-pub const CUT_OFF: &str = "ファイルが途中で切れています";
-pub const BAD_NUMBER: &str = "数値がおかしいです（NaN や無限大、または大きすぎる値）";
-pub const BAD_INDEX: &str = "頂点の番号が範囲の外です";
-pub const NO_SHAPE: &str = "形が見つかりませんでした（面積のある三角形が 0 個です）";
+pub const TOO_BIG_FILE: &str = "File is too big (up to 256 MB)";
+pub const TOO_MANY_TRIS: &str = "Too many triangles (up to 5 million)";
+pub const TOO_MANY_VERTS: &str = "Too many vertices";
+pub const CUT_OFF: &str = "File is cut off partway through";
+pub const BAD_NUMBER: &str = "Bad number (NaN, infinite, or too large)";
+pub const BAD_INDEX: &str = "Vertex index is out of range";
+pub const NO_SHAPE: &str = "No shape found (0 triangles with area)";
 
 /// A triangle mesh in millimetres.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ImportedMesh {
     pub positions: Vec<[f32; 3]>,
     pub triangles: Vec<[u32; 3]>,
+}
+
+/// Appearance information kept separate from geometry so the existing SDF baker is unchanged.
+#[derive(Clone, Debug, Default)]
+pub struct AppearanceInfo {
+    pub material: Option<crate::model::Material>,
+    pub varies: bool,
+    pub notes: Vec<String>,
 }
 
 /// The file formats we can read.
@@ -73,6 +81,8 @@ pub struct ImportOptions {
 #[derive(Clone, Debug)]
 pub struct Imported {
     pub mesh: ImportedMesh,
+    /// One material when the imported surface is uniform; otherwise a representative colour.
+    pub appearance: Option<crate::model::Material>,
     pub format: MeshFormat,
     /// The mesh was turned from Y up to Z up.
     #[allow(dead_code)] // (the card turns the model itself, from the choice of 向き)
@@ -93,6 +103,8 @@ pub struct Health {
     pub open_edges: usize,
     /// Edges shared by more than two triangles.
     pub nonmanifold_edges: usize,
+    /// Edges shared by two triangles that run along it in the same direction (a reversed face).
+    pub inconsistent_winding_edges: usize,
 }
 
 impl Health {
@@ -181,7 +193,8 @@ impl Affine {
 
     pub fn determinant(&self) -> f64 {
         let m = &self.0;
-        m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0]) + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0])
+        m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
+            + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0])
     }
 
     #[allow(dead_code)]
@@ -233,7 +246,7 @@ fn read_stl_binary(b: &[u8]) -> Result<ImportedMesh, String> {
     }
     let mut w = Welder::default();
     let mut triangles = Vec::with_capacity(n);
-    for rec in body.chunks_exact(50).take(n) {
+    for rec in body.as_chunks::<50>().0.iter().take(n) {
         let mut idx = [0u32; 3];
         for (k, slot) in idx.iter_mut().enumerate() {
             let o = 12 + 12 * k;
@@ -277,26 +290,48 @@ fn read_stl_ascii(b: &[u8]) -> Result<ImportedMesh, String> {
     Ok(ImportedMesh { positions: w.positions, triangles })
 }
 
-/// Binary STL if the size fits the triangle count (a binary header may start with "solid"),
-/// otherwise ASCII when it says "solid".
+/// True when the 84-byte header plus 50 bytes a triangle add up to the whole file: a binary STL.
+fn stl_is_binary(b: &[u8]) -> bool {
+    b.get(80..84).is_some_and(|x| 84 + 50 * u64::from(u32::from_le_bytes([x[0], x[1], x[2], x[3]])) == b.len() as u64)
+}
+
+/// Does this text hold `needle`, ignoring ASCII case?
+fn contains_ascii_ci(hay: &[u8], needle: &[u8]) -> bool {
+    needle.len() <= hay.len() && hay.windows(needle.len()).any(|w| w.eq_ignore_ascii_case(needle))
+}
+
+/// An ASCII STL says "solid" and has the words "facet" and "vertex"; a binary file may also start
+/// with "solid" in its header, so the words decide (a binary header's floats almost never spell them).
+fn stl_is_ascii(b: &[u8]) -> bool {
+    let head = b.get(..b.len().min(4096)).unwrap_or(b);
+    head.iter().skip_while(|c| c.is_ascii_whitespace()).take(5).map(u8::to_ascii_lowercase).eq(b"solid".iter().copied())
+        && contains_ascii_ci(head, b"facet")
+        && contains_ascii_ci(head, b"vertex")
+}
+
+/// Binary STL when the size fits the triangle count; otherwise ASCII when the text says "solid"
+/// (a binary header may start with "solid" too, so the "facet" and "vertex" words decide), and
+/// binary as the last resort so a damaged file still reports a reason.
 fn read_stl(b: &[u8]) -> Result<ImportedMesh, String> {
-    let exact = b.get(80..84).is_some_and(|x| 84 + 50 * (u32::from_le_bytes([x[0], x[1], x[2], x[3]]) as u64) == b.len() as u64);
-    let head = b.get(..b.len().min(512)).unwrap_or(b);
-    let solid = head.iter().skip_while(|c| c.is_ascii_whitespace()).take(5).map(u8::to_ascii_lowercase).eq(b"solid".iter().copied());
-    if exact {
-        read_stl_binary(b)
-    } else if solid {
-        read_stl_ascii(b)
-    } else {
-        read_stl_binary(b)
+    if stl_is_binary(b) {
+        return read_stl_binary(b);
     }
+    if stl_is_ascii(b) {
+        return read_stl_ascii(b);
+    }
+    read_stl_binary(b)
 }
 
 // ---------------------------------------------------------------- OBJ
 
+/// The most corners one OBJ face may have.
+const MAX_FACE_CORNERS: usize = 100_000;
+
 fn read_obj(b: &[u8]) -> Result<ImportedMesh, String> {
     let mut m = ImportedMesh::default();
     for raw in b.split(|c| *c == b'\n') {
+        // everything after a # is a comment, also at the end of a line
+        let raw = raw.split(|c| *c == b'#').next().unwrap_or(&[]);
         let mut it = words(raw);
         match it.next() {
             Some(b"v") => {
@@ -314,36 +349,33 @@ fn read_obj(b: &[u8]) -> Result<ImportedMesh, String> {
             }
             Some(b"f") => {
                 let n = m.positions.len() as i64;
-                let mut first = 0u32;
-                let mut prev = 0u32;
-                let mut count = 0usize;
+                let mut idx: Vec<u32> = Vec::new();
                 for tok in it {
                     let head = tok.split(|c| *c == b'/').next().unwrap_or(&[]);
                     let i: i64 = std::str::from_utf8(head).ok().and_then(|s| s.parse().ok()).ok_or(BAD_INDEX)?;
-                    let idx = if i > 0 {
+                    let at = if i > 0 {
                         i - 1
                     } else if i < 0 {
                         n + i
                     } else {
                         return Err(BAD_INDEX.into());
                     };
-                    if idx < 0 || idx >= i64::from(u32::MAX) {
+                    if at < 0 || at >= i64::from(u32::MAX) {
                         return Err(BAD_INDEX.into());
                     }
-                    let idx = idx as u32;
-                    if count == 0 {
-                        first = idx;
-                    } else if count >= 2 {
-                        if m.triangles.len() >= MAX_TRIANGLES {
-                            return Err(TOO_MANY_TRIS.into());
-                        }
-                        m.triangles.push([first, prev, idx]);
+                    if idx.len() >= MAX_FACE_CORNERS {
+                        return Err("A face has too many vertices".into());
                     }
-                    prev = idx;
-                    count += 1;
+                    idx.push(at as u32);
                 }
-                if count < 3 {
-                    return Err("面の頂点が 3 つ未満です".into());
+                if idx.len() < 3 {
+                    return Err("A face has fewer than 3 vertices".into());
+                }
+                for t in crate::polygon::triangulate(&m.positions, &idx) {
+                    if m.triangles.len() >= MAX_TRIANGLES {
+                        return Err(TOO_MANY_TRIS.into());
+                    }
+                    m.triangles.push(t);
                 }
             }
             _ => {}
@@ -460,19 +492,26 @@ impl Values<'_> {
 }
 
 fn read_ply(b: &[u8]) -> Result<ImportedMesh, String> {
-    const BAD: &str = "PLY のヘッダーがおかしいです";
-    let end = b.windows(10).take(1 << 16).position(|w| w == b"end_header").ok_or(BAD)?;
+    const BAD: &str = "The PLY header is wrong";
+    // Only an entire header line can terminate the header. A comment may
+    // legally contain the text "end_header" without ending the header.
+    let header_limit = b.len().min(1 << 16);
+    let mut offset = 0usize;
+    let mut boundary = None;
+    for line in b[..header_limit].split_inclusive(|&byte| byte == b'\n') {
+        if !line.ends_with(b"\n") {
+            break;
+        }
+        let line_without_nl = &line[..line.len() - 1];
+        let content = line_without_nl.strip_suffix(b"\r").unwrap_or(line_without_nl);
+        if content == b"end_header" {
+            boundary = Some((offset, offset + line.len()));
+            break;
+        }
+        offset += line.len();
+    }
+    let (end, body_start) = boundary.ok_or(BAD)?;
     let head = std::str::from_utf8(b.get(..end).ok_or(BAD)?).map_err(|_| BAD.to_string())?;
-    let mut body_start = end + 10;
-    // the header line ends with \n or \r\n
-    if b.get(body_start) == Some(&b'\r') {
-        body_start += 1;
-    }
-    if b.get(body_start) == Some(&b'\n') {
-        body_start += 1;
-    } else {
-        return Err(BAD.into());
-    }
     let mut enc = None;
     let mut elements: Vec<Element> = Vec::new();
     for (i, line) in head.lines().enumerate() {
@@ -517,11 +556,25 @@ fn read_ply(b: &[u8]) -> Result<ImportedMesh, String> {
     let mut v = Values { enc, body, pos: 0 };
     let mut m = ImportedMesh::default();
     let mut idx: Vec<u32> = Vec::new();
+    // PLY elements may appear in any declared order, including faces before vertices.
+    // Keep a compact offset table and triangulate only after all vertices are loaded.
+    let mut face_ranges: Vec<(usize, usize)> = Vec::new();
+    let mut face_indices: Vec<u32> = Vec::new();
     for el in &elements {
         // the body must be able to hold the rows before anything is reserved
         let remaining = body.len().saturating_sub(v.pos);
+        // A property-less element consumes zero bytes but used to run its
+        // declared count without any validation (even one billion iterations
+        // for a roughly 60-byte PLY header). Such rows have no information.
+        if el.count > 0 && el.props.is_empty() {
+            return Err("A PLY element with rows must declare properties".into());
+        }
+        // Unknown elements need a limit too, not only vertices/faces.
+        if el.count > MAX_VERTICES.max(MAX_TRIANGLES * 2) {
+            return Err("Too many elements in the PLY".into());
+        }
         let min_row: usize = if enc == Enc::Ascii { 1 } else { el.props.iter().map(|p| p.list.map_or(p.ty.size(), Ty::size)).sum() };
-        if !el.props.is_empty() && el.count.checked_mul(min_row.max(1)).is_none_or(|need| need > remaining) {
+        if el.count.checked_mul(min_row.max(1)).is_none_or(|need| need > remaining) {
             return Err(CUT_OFF.into());
         }
         let is_vertex = el.name == "vertex";
@@ -538,7 +591,7 @@ fn read_ply(b: &[u8]) -> Result<ImportedMesh, String> {
         let col = |name: &str| el.props.iter().position(|p| p.name == name && p.list.is_none());
         let (cx, cy, cz) = (col("x"), col("y"), col("z"));
         if is_vertex && (cx.is_none() || cy.is_none() || cz.is_none()) {
-            return Err("PLY に x y z の座標がありません".into());
+            return Err("The PLY has no x y z coordinates".into());
         }
         for _ in 0..el.count {
             let mut p = [0f64; 3];
@@ -560,7 +613,7 @@ fn read_ply(b: &[u8]) -> Result<ImportedMesh, String> {
                     Some(ct) => {
                         let k = v.next(ct)?;
                         if !(0.0..=1.0e6).contains(&k) {
-                            return Err("PLY の面の頂点数がおかしいです".into());
+                            return Err("The PLY face vertex count is wrong".into());
                         }
                         let keep = is_face && (prop.name == "vertex_indices" || prop.name == "vertex_index");
                         for _ in 0..k as usize {
@@ -581,16 +634,25 @@ fn read_ply(b: &[u8]) -> Result<ImportedMesh, String> {
                     return Err(BAD_NUMBER.into());
                 }
                 m.positions.push(q);
-            } else if is_face {
-                for k in 2..idx.len() {
-                    if m.triangles.len() >= MAX_TRIANGLES {
-                        return Err(TOO_MANY_TRIS.into());
-                    }
-                    if let (Some(&a), Some(&b2), Some(&c)) = (idx.first(), idx.get(k - 1), idx.get(k)) {
-                        m.triangles.push([a, b2, c]);
-                    }
+            } else if is_face && idx.len() >= 3 {
+                if face_indices.len().saturating_add(idx.len()) > MAX_TRIANGLES.saturating_mul(3) {
+                    return Err(TOO_MANY_TRIS.into());
                 }
+                face_ranges.push((face_indices.len(), idx.len()));
+                face_indices.extend_from_slice(&idx);
             }
+        }
+    }
+    for (start, len) in face_ranges {
+        let face = &face_indices[start..start + len];
+        if face.iter().any(|&v| v as usize >= m.positions.len()) {
+            return Err(BAD_INDEX.into());
+        }
+        for t in crate::polygon::triangulate(&m.positions, face) {
+            if m.triangles.len() >= MAX_TRIANGLES {
+                return Err(TOO_MANY_TRIS.into());
+            }
+            m.triangles.push(t);
         }
     }
     Ok(m)
@@ -759,24 +821,31 @@ impl ImportedMesh {
 
     /// Count the edges that are open or shared by too many triangles (the points should be welded).
     pub fn health(&self) -> Health {
-        let mut edges: Vec<u64> = Vec::with_capacity(self.triangles.len() * 3);
+        // (edge, direction): the direction is the lowest bit, so equal edges sit together
+        let mut edges: Vec<u128> = Vec::with_capacity(self.triangles.len() * 3);
         for t in &self.triangles {
             for e in 0..3 {
                 let (a, b) = (t[e], t[(e + 1) % 3]);
-                edges.push((u64::from(a.min(b)) << 32) | u64::from(a.max(b)));
+                let key = (u64::from(a.min(b)) << 32) | u64::from(a.max(b));
+                edges.push((u128::from(key) << 1) | u128::from(a > b));
             }
         }
         edges.sort_unstable();
         let mut h = Health::default();
         let mut i = 0;
         while i < edges.len() {
+            let key = edges.get(i).map(|e| e >> 1);
             let mut j = i;
-            while j < edges.len() && edges.get(j) == edges.get(i) {
+            while j < edges.len() && edges.get(j).map(|e| e >> 1) == key {
                 j += 1;
             }
             match j - i {
                 1 => h.open_edges += 1,
-                2 => {}
+                2 => {
+                    if edges.get(i).map(|e| e & 1) == edges.get(i + 1).map(|e| e & 1) {
+                        h.inconsistent_winding_edges += 1;
+                    }
+                }
                 _ => h.nonmanifold_edges += 1,
             }
             i = j;
@@ -825,8 +894,14 @@ fn lower_ext(name: &str) -> String {
     std::path::Path::new(name).extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default()
 }
 
+/// A UTF-8 byte-order mark (as written by Windows text editors) is not part of a model's text.
+fn without_bom(b: &[u8]) -> &[u8] {
+    b.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(b)
+}
+
 /// Which format a file is, by its first bytes and then by its name.
 pub fn sniff(b: &[u8], name: &str) -> Option<MeshFormat> {
+    let b = without_bom(b);
     if b.starts_with(b"PK\x03\x04") || b.starts_with(b"PK\x05\x06") {
         return Some(MeshFormat::ThreeMf);
     }
@@ -857,12 +932,93 @@ pub fn sniff(b: &[u8], name: &str) -> Option<MeshFormat> {
     None
 }
 
+/// OBJ colours live in a separate .mtl file that is not read: say so rather than lose them silently.
+fn appearance_obj(bytes: &[u8]) -> AppearanceInfo {
+    let mut out = AppearanceInfo::default();
+    let names_materials = bytes.split(|c| *c == b'\n').any(|line| {
+        let mut it = words(line);
+        matches!(it.next(), Some(b"mtllib" | b"usemtl"))
+    });
+    if names_materials {
+        out.notes.push("The OBJ's material file (.mtl) is not read, so its colours and materials are not kept".into());
+    }
+    // `v x y z r g b`: vertex colours. A shape has one colour, so it takes their average and says so (#190)
+    let (mut sum, mut n, mut first, mut varies) = ([0f64; 3], 0u64, None::<[f32; 3]>, false);
+    for line in bytes.split(|c| *c == b'\n') {
+        let line = line.split(|c| *c == b'#').next().unwrap_or(&[]);
+        let mut it = words(line);
+        if it.next() != Some(b"v") {
+            continue;
+        }
+        let nums: Vec<f32> = it.filter_map(parse_f32).take(7).collect();
+        if nums.len() < 6 {
+            continue;
+        }
+        let mut c = [nums[3], nums[4], nums[5]];
+        // some writers use 0..255
+        if c.iter().any(|v| *v > 1.0) {
+            c = c.map(|v| v / 255.0);
+        }
+        if !c.iter().all(|v| v.is_finite()) {
+            continue;
+        }
+        let c = c.map(|v| v.clamp(0.0, 1.0));
+        match first {
+            None => first = Some(c),
+            Some(f) if (0..3).any(|i| (f[i] - c[i]).abs() > 1.0 / 255.0) => varies = true,
+            _ => {}
+        }
+        for i in 0..3 {
+            sum[i] += f64::from(c[i]);
+        }
+        n += 1;
+    }
+    if n > 0 {
+        let avg = sum.map(|v| (v / n as f64) as f32);
+        out.material = Some(crate::model::Material::plain(avg, 0.5, 0.0));
+        // several colours: the importer's usual note says one main colour is used
+        out.varies = varies;
+    }
+    out
+}
+
+/// PLY vertex colours are not kept (a shape has one colour): say so rather than lose them silently.
+fn appearance_ply(bytes: &[u8]) -> AppearanceInfo {
+    let mut out = AppearanceInfo::default();
+    let head = bytes.get(..bytes.len().min(16 * 1024)).unwrap_or(bytes);
+    let end = head.windows(10).position(|w| w == b"end_header").unwrap_or(head.len());
+    let header = String::from_utf8_lossy(head.get(..end).unwrap_or(head)).to_ascii_lowercase();
+    let coloured = header.lines().any(|l| {
+        let mut w = l.split_whitespace();
+        w.next() == Some("property") && matches!(w.last(), Some("red" | "green" | "blue" | "diffuse_red" | "diffuse_green" | "diffuse_blue"))
+    });
+    if coloured {
+        out.notes.push("The PLY's vertex colours are not kept; the shape gets one colour".into());
+    }
+    out
+}
+
 /// Read a mesh from the bytes of a file. `name` is only used to tell the format.
 pub fn import_bytes(bytes: &[u8], name: &str, opts: &ImportOptions) -> Result<Imported, String> {
     if bytes.len() > MAX_FILE_BYTES {
         return Err(TOO_BIG_FILE.into());
     }
-    let format = sniff(bytes, name).ok_or("このファイルの形式がわかりません（STL・OBJ・PLY・3MF・GLB に対応しています）")?;
+    let format = sniff(bytes, name).ok_or("Can't tell this file's format (supports STL, OBJ, PLY, 3MF, GLB)")?;
+    // Text formats may start with a byte-order mark, which is not part of the model: left in
+    // place it hid the first OBJ vertex, so every face named the wrong corner. Binary
+    // containers (3MF, GLB, a binary STL) keep every byte they have.
+    let bytes = if matches!(format, MeshFormat::ThreeMf | MeshFormat::Glb) || (format == MeshFormat::Stl && stl_is_binary(bytes)) {
+        bytes
+    } else {
+        without_bom(bytes)
+    };
+    let appearance_info = match format {
+        MeshFormat::ThreeMf => crate::import_3mf::appearance_3mf(bytes),
+        MeshFormat::Glb => crate::import_glb::appearance_glb(bytes),
+        MeshFormat::Obj => appearance_obj(bytes),
+        MeshFormat::Ply => appearance_ply(bytes),
+        MeshFormat::Stl => Default::default(),
+    };
     let raw = match format {
         MeshFormat::Stl => read_stl(bytes),
         MeshFormat::Obj => read_obj(bytes),
@@ -876,47 +1032,122 @@ pub fn import_bytes(bytes: &[u8], name: &str, opts: &ImportOptions) -> Result<Im
         mesh.y_up_to_z_up();
     }
     let health = mesh.health();
-    let mut notes = Vec::new();
+    let mut notes = appearance_info.notes;
+    if appearance_info.varies {
+        notes.push("Several colours or materials found. SDF can't keep colours per face, so one main colour is used (the original colour split is not saved)".into());
+    }
     if health.open_edges > 0 {
-        notes.push(format!("穴があいている所があります（開いた辺 {} 本）。形は近似で読みこみます", health.open_edges));
+        notes.push(format!("There are holes (open edges: {}). The shape is loaded approximately", health.open_edges));
     }
     if health.nonmanifold_edges > 0 {
-        notes.push(format!("3 枚以上の面が重なる辺があります（{} 本）", health.nonmanifold_edges));
+        notes.push(format!("Some edges have 3 or more faces meeting ({} edges)", health.nonmanifold_edges));
+    }
+    if health.inconsistent_winding_edges > 0 {
+        notes.push(format!("Some faces are turned the wrong way ({} edges). Inside and outside may be mixed up", health.inconsistent_winding_edges));
     }
     if dropped_triangles > 0 {
-        notes.push(format!("面積のない三角形を {dropped_triangles} 個、とりのぞきました"));
+        notes.push(format!("Removed {dropped_triangles} zero-area triangles"));
     }
     let s = mesh.size();
     let longest = s.into_iter().fold(0.0f32, f32::max);
     if longest > 0.0 && s.iter().any(|d| *d < longest * 1e-6) {
-        notes.push("平らな形です（厚みがありません）".to_string());
+        notes.push("Flat shape (no thickness)".to_string());
     }
-    Ok(Imported { mesh, format, turned_y_up: y_up, dropped_triangles, health, notes })
+    Ok(Imported { mesh, appearance: appearance_info.material, format, turned_y_up: y_up, dropped_triangles, health, notes })
 }
 
+pub const IMPORT_CANCELLED: &str = "Import cancelled";
+
 /// Read a mesh file (refusing anything over 256 MB).
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn import_file(path: &std::path::Path, opts: &ImportOptions) -> Result<Imported, String> {
+    import_file_with_control(path, opts, &std::sync::atomic::AtomicBool::new(false), &std::sync::atomic::AtomicU32::new(0))
+}
+
+/// The file read checks cancellation every 256 KiB, not only after allocating the entire
+/// input. Parsing/cleaning is not interruptible internally yet; its result is discarded if
+/// cancellation arrived during that step, so no partial shape can be committed.
+pub fn import_file_with_control(
+    path: &std::path::Path,
+    opts: &ImportOptions,
+    cancel: &std::sync::atomic::AtomicBool,
+    progress: &std::sync::atomic::AtomicU32,
+) -> Result<Imported, String> {
     use std::io::Read;
-    let f = std::fs::File::open(path).map_err(|e| format!("ファイルを開けません: {e}"))?;
+    use std::sync::atomic::Ordering;
+    let cancelled = || cancel.load(Ordering::Relaxed);
+    if cancelled() {
+        return Err(IMPORT_CANCELLED.into());
+    }
+    let mut f = std::fs::File::open(path).map_err(|e| format!("Can't open the file: {e}"))?;
     let len = f.metadata().map(|m| m.len()).unwrap_or(0);
     if len > MAX_FILE_BYTES as u64 {
         return Err(TOO_BIG_FILE.into());
     }
-    let mut bytes = Vec::with_capacity(len as usize);
-    f.take(MAX_FILE_BYTES as u64 + 1).read_to_end(&mut bytes).map_err(|e| format!("ファイルを読めません: {e}"))?;
+    let mut bytes = Vec::with_capacity(len.min(MAX_FILE_BYTES as u64) as usize);
+    let mut buf = [0u8; 256 * 1024];
+    loop {
+        if cancelled() {
+            return Err(IMPORT_CANCELLED.into());
+        }
+        let n = f.read(&mut buf).map_err(|e| format!("Can't read the file: {e}"))?;
+        if n == 0 {
+            break;
+        }
+        if bytes.len().saturating_add(n) > MAX_FILE_BYTES {
+            return Err(TOO_BIG_FILE.into());
+        }
+        bytes.extend_from_slice(&buf[..n]);
+        if len > 0 {
+            progress.store(((bytes.len() as f64 / len as f64).min(1.0) * 500.0) as u32, Ordering::Relaxed);
+        }
+    }
+    progress.store(500, Ordering::Relaxed);
+    if cancelled() {
+        return Err(IMPORT_CANCELLED.into());
+    }
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    import_bytes(&bytes, &name, opts)
+    let loaded = import_bytes(&bytes, &name, opts)?;
+    if cancelled() {
+        return Err(IMPORT_CANCELLED.into());
+    }
+    progress.store(1000, Ordering::Relaxed);
+    Ok(loaded)
 }
 
 #[cfg(test)]
 pub mod tests {
     use super::*;
+
+    #[test]
+    fn obj_vertex_colours_give_the_shape_their_colour() {
+        let obj = b"v 0 0 0 1 0 0\nv 10 0 0 1 0 0\nv 0 10 0 1 0 0\nv 0 0 10 1 0 0\nf 1 3 2\nf 1 2 4\nf 2 3 4\nf 3 1 4\n";
+        let got = import_bytes(obj, "red.obj", &ImportOptions { y_up: Some(false) }).expect("reads");
+        let m = got.appearance.expect("the vertex colour is kept (#190)");
+        assert!((m.color[0] - 1.0).abs() < 1e-3 && m.color[1] < 1e-3 && m.color[2] < 1e-3, "{:?}", m.color);
+        let two = b"v 0 0 0 255 0 0\nv 10 0 0 0 0 255\nv 0 10 0 0 0 255\nv 0 0 10 255 0 0\nf 1 3 2\nf 1 2 4\nf 2 3 4\nf 3 1 4\n";
+        let got = import_bytes(two, "two.obj", &ImportOptions { y_up: Some(false) }).expect("reads");
+        assert!(got.appearance.is_some());
+        assert!(got.notes.iter().any(|n| n.contains("Several colours")), "{:?}", got.notes);
+    }
     use crate::export_formats::{self, Look, Mat8, Surface, Units};
     use solidcraft_geom::melt::TriMesh;
 
+    #[test]
+    fn pre_cancelled_mesh_read_does_not_parse_or_allocate_a_model() {
+        use std::sync::atomic::{AtomicBool, AtomicU32};
+        let cancelled = AtomicBool::new(true);
+        let progress = AtomicU32::new(0);
+        let bad_path = std::path::Path::new("file-that-does-not-need-to-exist.obj");
+        assert_eq!(import_file_with_control(bad_path, &ImportOptions::default(), &cancelled, &progress).unwrap_err(), IMPORT_CANCELLED);
+        assert_eq!(progress.load(std::sync::atomic::Ordering::Relaxed), 0);
+    }
+
     /// A closed unit-ish box from `lo` to `hi`, outward facing, 12 triangles.
     pub fn box_mesh(lo: [f32; 3], hi: [f32; 3]) -> ImportedMesh {
-        let p = |x: usize, y: usize, z: usize| [if x == 0 { lo[0] } else { hi[0] }, if y == 0 { lo[1] } else { hi[1] }, if z == 0 { lo[2] } else { hi[2] }];
+        let p = |x: usize, y: usize, z: usize| {
+            [if x == 0 { lo[0] } else { hi[0] }, if y == 0 { lo[1] } else { hi[1] }, if z == 0 { lo[2] } else { hi[2] }]
+        };
         let mut positions = Vec::new();
         for z in 0..2 {
             for y in 0..2 {
@@ -1010,6 +1241,18 @@ pub mod tests {
         facet normal 1 1 1\n outer loop\n vertex 1 0 0\n vertex 0 1 0\n vertex 0 0 1\n endloop\n endfacet\nendsolid t\n";
 
     #[test]
+    fn propertyless_ply_element_cannot_force_a_billion_empty_iterations() {
+        let malicious = b"ply\nformat ascii 1.0\nelement dummy 1000000000\nend_header\n";
+        assert!(read_ply(malicious).is_err());
+        let binary = b"ply\nformat binary_little_endian 1.0\nelement dummy 1000000000\nend_header\n";
+        assert!(read_ply(binary).is_err());
+        // A zero-row dummy element is harmless and should still be accepted
+        // alongside valid geometry by the normal reader.
+        let valid = b"ply\nformat ascii 1.0\nelement dummy 0\nelement vertex 3\nproperty float x\nproperty float y\nproperty float z\nelement face 1\nproperty list uchar int vertex_indices\nend_header\n0 0 0\n1 0 0\n0 1 0\n3 0 1 2\n";
+        assert_eq!(read_ply(valid).unwrap().triangles.len(), 1);
+    }
+
+    #[test]
     fn ascii_stl_by_hand() {
         let r = load(ASCII_TETRA.as_bytes(), "x.stl");
         assert_eq!((r.mesh.positions.len(), r.mesh.triangles.len()), (4, 4));
@@ -1033,6 +1276,24 @@ pub mod tests {
         assert_eq!(r.mesh.triangles.len(), 12);
         assert_eq!(r.mesh.positions.len(), 8);
         assert!((r.mesh.signed_volume() - 1.0).abs() < 1e-6);
+    }
+
+    /// A binary STL whose 80-byte header begins with "solid" (many writers do) and whose file has
+    /// trailing bytes is still binary: its size no longer fits the count exactly, and it used to be
+    /// parsed as text, so a valid model came in as "no shape".
+    #[test]
+    fn a_binary_stl_with_a_solid_header_and_trailing_bytes_still_reads() {
+        let b = box_mesh([0.0; 3], [1.0; 3]);
+        let mut bin = export_formats::stl_binary(&to_trimesh(&b), "box");
+        bin[..5].copy_from_slice(b"solid");
+        bin.push(b'\n');
+        let r = load(&bin, "box.stl");
+        assert_eq!(r.mesh.triangles.len(), 12);
+        assert_eq!(r.mesh.positions.len(), 8);
+        assert!((r.mesh.signed_volume() - 1.0).abs() < 1e-6, "{}", r.mesh.signed_volume());
+        // the same file without the trailing byte already worked and must keep working
+        bin.pop();
+        assert_eq!(load(&bin, "box.stl").mesh.triangles.len(), 12);
     }
 
     #[test]
@@ -1082,6 +1343,79 @@ pub mod tests {
         assert!((r.mesh.surface_area() - 1.25).abs() < 1e-6);
         // windows line ends and a missing final newline
         assert_eq!(load("v 0 0 0\r\nv 1 0 0\r\nv 0 1 0\r\nf 1 2 3".as_bytes(), "t.obj").mesh.triangles.len(), 1);
+    }
+
+    #[test]
+    fn obj_comments_may_end_a_line_and_a_concave_face_keeps_its_hole() {
+        let r = load("v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3 # triangle\n".as_bytes(), "c.obj");
+        assert_eq!(r.mesh.triangles.len(), 1);
+        // the U of the report: the notch is outside the face (area 4*4 - 2*3 = 10)
+        let u = "v 0 0 0\nv 4 0 0\nv 4 4 0\nv 3 4 0\nv 3 1 0\nv 1 1 0\nv 1 4 0\nv 0 4 0\nf 1 2 3 4 5 6 7 8\n";
+        let r = load(u.as_bytes(), "u.obj");
+        assert_eq!(r.mesh.triangles.len(), 6);
+        assert!((r.mesh.surface_area() - 10.0).abs() < 1e-4, "{}", r.mesh.surface_area());
+    }
+
+    #[test]
+    fn ply_header_end_marker_inside_comment_is_not_a_terminator() {
+        let normal = ply_ascii();
+        let with_comment = normal.replace("comment tetra", "comment end_header is mentioned here");
+        let base = load(normal.as_bytes(), "tetra.ply");
+        let again = load(with_comment.as_bytes(), "tetra.ply");
+        assert_eq!(base.mesh.positions, again.mesh.positions);
+        assert_eq!(base.mesh.triangles, again.mesh.triangles);
+    }
+
+    #[test]
+    fn ply_faces_before_vertices_still_triangulate_concave_polygons() {
+        let ply = "ply\nformat ascii 1.0\nelement face 1\nproperty list uchar int vertex_indices\nelement vertex 8\nproperty float x\nproperty float y\nproperty float z\nend_header\n\
+            8 0 1 2 3 4 5 6 7\n0 0 0\n4 0 0\n4 4 0\n3 4 0\n3 1 0\n1 1 0\n1 4 0\n0 4 0\n";
+        let imported = load(ply.as_bytes(), "concave.ply");
+        assert!((imported.mesh.surface_area() - 10.0).abs() < 1e-4, "{}", imported.mesh.surface_area());
+        assert_eq!(imported.mesh.triangles.len(), 6);
+    }
+
+    #[test]
+    fn a_concave_ply_face_is_cut_inside_its_outline_too() {
+        let ply = "ply\nformat ascii 1.0\nelement vertex 8\nproperty float x\nproperty float y\nproperty float z\nelement face 1\nproperty list uchar int vertex_indices\nend_header\n\
+            0 0 0\n4 0 0\n4 4 0\n3 4 0\n3 1 0\n1 1 0\n1 4 0\n0 4 0\n8 0 1 2 3 4 5 6 7\n";
+        let r = load(ply.as_bytes(), "u.ply");
+        assert!((r.mesh.surface_area() - 10.0).abs() < 1e-4, "{}", r.mesh.surface_area());
+    }
+
+    #[test]
+    fn colours_that_cannot_be_kept_are_reported() {
+        let obj = "mtllib a.mtl\nv 0 0 0\nv 1 0 0\nv 0 1 0\nusemtl red\nf 1 2 3\n";
+        let r = import_bytes(obj.as_bytes(), "a.obj", &opts()).unwrap();
+        assert!(r.notes.iter().any(|n| n.contains(".mtl")), "{:?}", r.notes);
+        let plain = import_bytes(b"v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n", "a.obj", &opts()).unwrap();
+        assert!(plain.notes.iter().all(|n| !n.contains(".mtl")));
+        let ply = "ply\nformat ascii 1.0\nelement vertex 3\nproperty float x\nproperty float y\nproperty float z\nproperty uchar red\nproperty uchar green\nproperty uchar blue\nelement face 1\nproperty list uchar int vertex_indices\nend_header\n0 0 0 255 0 0\n1 0 0 255 0 0\n0 1 0 255 0 0\n3 0 1 2\n";
+        let r = import_bytes(ply.as_bytes(), "a.ply", &opts()).unwrap();
+        assert!(r.notes.iter().any(|n| n.contains("vertex colours")), "{:?}", r.notes);
+    }
+
+    /// A UTF-8 byte-order mark (Notepad and other Windows tools write one) must not shift the
+    /// indices of a text model or stop it from loading. A BOM-prefixed OBJ used to lose its first
+    /// vertex, so every face named the wrong corner, and BOM-prefixed STL/PLY files were refused.
+    #[test]
+    fn a_utf8_bom_does_not_shift_or_break_a_text_model() {
+        let obj = "v 0 0 0\nv 10 0 0\nv 0 10 0\nv 99 99 99\nf 1 2 3\n";
+        let plain = load(obj.as_bytes(), "t.obj");
+        let with_bom = load(format!("\u{feff}{obj}").as_bytes(), "t.obj");
+        assert_eq!(with_bom.mesh.positions, plain.mesh.positions);
+        assert_eq!(with_bom.mesh.triangles, plain.mesh.triangles);
+        assert!((with_bom.mesh.surface_area() - 50.0).abs() < 1e-4, "the wrong corners: {}", with_bom.mesh.surface_area());
+        let stl = load(format!("\u{feff}{ASCII_TETRA}").as_bytes(), "t.stl");
+        assert_eq!(stl.mesh.triangles.len(), 4);
+        assert!((stl.mesh.signed_volume() - 1.0 / 6.0).abs() < 1e-9, "{}", stl.mesh.signed_volume());
+        let ply = load(format!("\u{feff}{}", ply_ascii()).as_bytes(), "t.ply");
+        assert_eq!((ply.mesh.positions.len(), ply.mesh.triangles.len()), (4, 4));
+        // a BOM by itself is still an empty file, and a binary file is not touched
+        assert!(import_bytes(b"\xEF\xBB\xBF", "t.obj", &opts()).is_err());
+        let b = box_mesh([0.0; 3], [1.0; 3]);
+        let bin = export_formats::stl_binary(&to_trimesh(&b), "b");
+        assert_eq!(load(&bin, "b.stl").mesh.triangles.len(), 12);
     }
 
     #[test]
@@ -1267,6 +1601,27 @@ pub mod tests {
         assert_eq!(f, b);
     }
 
+    /// #156: one reversed face of a closed box is reported, not called a normal closed surface.
+    #[test]
+    fn a_reversed_face_is_reported() {
+        let mut b = box_mesh([0.0; 3], [1.0; 3]);
+        assert_eq!(b.health().inconsistent_winding_edges, 0);
+        if let Some(t) = b.triangles.first_mut() {
+            t.swap(1, 2);
+        }
+        let h = b.health();
+        assert_eq!((h.open_edges, h.inconsistent_winding_edges), (0, 3));
+        for t in &mut b.triangles {
+            t.swap(1, 2);
+        }
+        // everything reversed again but the first: still 3; all reversed together: 0
+        let mut all = box_mesh([0.0; 3], [1.0; 3]);
+        for t in &mut all.triangles {
+            t.swap(1, 2);
+        }
+        assert_eq!(all.health().inconsistent_winding_edges, 0);
+    }
+
     #[test]
     fn open_boxes_report_holes_and_flat_meshes_are_noted() {
         let mut b = box_mesh([0.0; 3], [1.0; 3]);
@@ -1274,10 +1629,10 @@ pub mod tests {
         let bytes = export_formats::stl_binary(&to_trimesh(&b), "o");
         let r = load(&bytes, "o.stl");
         assert_eq!(r.health.open_edges, 4);
-        assert!(r.notes.iter().any(|n| n.contains("穴")));
+        assert!(r.notes.iter().any(|n| n.contains("hole")));
         let flat = ImportedMesh { positions: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], triangles: vec![[0, 1, 2]] };
         let r = load(&export_formats::stl_binary(&to_trimesh(&flat), "f"), "f.stl");
-        assert!(r.notes.iter().any(|n| n.contains("平ら")));
+        assert!(r.notes.iter().any(|n| n.contains("Flat")));
     }
 
     #[test]

@@ -168,7 +168,8 @@ struct FileLogger;
 /// Which `log` records go into the file: warnings and errors from anywhere (wgpu and eframe say
 /// why a graphics device could not be made through them), and the notes of our own graphics code.
 pub fn wanted(level: log::Level, target: &str) -> bool {
-    level <= log::Level::Warn || (level <= log::Level::Info && (target.starts_with("egui_wgpu") || target.starts_with("meltcad") || target.starts_with("eframe")))
+    level <= log::Level::Warn
+        || (level <= log::Level::Info && (target.starts_with("egui_wgpu") || target.starts_with("meltcad") || target.starts_with("eframe")))
 }
 
 impl log::Log for FileLogger {
@@ -234,7 +235,8 @@ pub fn adapter_report(
 /// Write an adapter's description to the log.
 pub fn log_adapter(adapter: &egui_wgpu::wgpu::Adapter) {
     use egui_wgpu::wgpu::TextureFormat;
-    let formats: Vec<_> = [TextureFormat::Rgba32Float, TextureFormat::Rgba16Float].into_iter().map(|f| (f, adapter.get_texture_format_features(f))).collect();
+    let formats: Vec<_> =
+        [TextureFormat::Rgba32Float, TextureFormat::Rgba16Float].into_iter().map(|f| (f, adapter.get_texture_format_features(f))).collect();
     for line in adapter_report(&adapter.get_info(), &adapter.limits(), &adapter.get_downlevel_capabilities(), &formats) {
         log(&line);
     }
@@ -342,8 +344,12 @@ mod tests {
         info.device = 0x2684;
         info.driver = "NVIDIA".into();
         info.driver_info = "551.23".into();
-        let features = wgpu::TextureFormatFeatures { allowed_usages: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST, flags: wgpu::TextureFormatFeatureFlags::empty() };
-        let lines = adapter_report(&info, &wgpu::Limits::default(), &wgpu::DownlevelCapabilities::default(), &[(wgpu::TextureFormat::Rgba32Float, features)]);
+        let features = wgpu::TextureFormatFeatures {
+            allowed_usages: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            flags: wgpu::TextureFormatFeatureFlags::empty(),
+        };
+        let lines =
+            adapter_report(&info, &wgpu::Limits::default(), &wgpu::DownlevelCapabilities::default(), &[(wgpu::TextureFormat::Rgba32Float, features)]);
         let all = lines.join("\n");
         assert!(all.contains("backend Dx12"), "{all}");
         assert!(all.contains("'Test GPU'") && all.contains("DiscreteGpu") && all.contains("0x10de"), "{all}");
@@ -354,9 +360,7 @@ mod tests {
 
     #[test]
     fn the_wgpu_version_in_the_log_is_the_one_in_cargo_lock() {
-        let lock = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Cargo.lock"))
-            .expect("Cargo.lock")
-            .replace("\r\n", "\n");
+        let lock = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Cargo.lock")).expect("Cargo.lock").replace("\r\n", "\n");
         let needle = format!("name = \"wgpu\"\nversion = \"{WGPU_VERSION}\"");
         assert!(lock.contains(&needle), "update WGPU_VERSION in gpu_log.rs");
     }

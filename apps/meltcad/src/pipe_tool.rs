@@ -72,11 +72,29 @@ pub struct State {
     pub hover: Option<V3>,
     /// The pipe made last (group, shape): the card edits it while it is selected.
     pub last: Option<(usize, usize)>,
+    /// The card of the pipe made last stays on screen until it is put away (Done, Esc, or picking
+    /// something else); this is that "still open" flag.
+    pub card_open: bool,
+    /// The card shows the extra choices (wall, ends, closed loop, plane).
+    pub more: bool,
 }
 
 impl Default for State {
     fn default() -> Self {
-        State { on: false, cfg: Config::default(), plane: Plane::Floor, stroke: Vec::new(), stroke_skin: Vec::new(), stroke_plane: Vec::new(), tracing: false, last_screen: None, hover: None, last: None }
+        State {
+            on: false,
+            cfg: Config::default(),
+            plane: Plane::Floor,
+            stroke: Vec::new(),
+            stroke_skin: Vec::new(),
+            stroke_plane: Vec::new(),
+            tracing: false,
+            last_screen: None,
+            hover: None,
+            last: None,
+            card_open: false,
+            more: false,
+        }
     }
 }
 
@@ -110,6 +128,7 @@ impl App {
             self.sketch_off();
         }
         self.pt.on = on;
+        self.pt.card_open = on;
         self.pt.stroke.clear();
         self.pt.stroke_skin.clear();
         self.pt.stroke_plane.clear();
@@ -121,7 +140,7 @@ impl App {
     /// The top-bar toggle for the pipe tool.
     pub fn pipe_button(&mut self, ui: &mut Ui) {
         let on = self.pt.on;
-        if style::icon_button(ui, 34.0, "パイプ (ドラッグでなぞって、パイプを作る)", on, glyph).clicked() {
+        if style::wide_button(ui, crate::i18n::tr("tool.pipe"), crate::i18n::tr("tool.pipe.tip"), on, None, glyph).clicked() {
             self.set_pipe_tool(!on);
         }
     }
@@ -163,7 +182,11 @@ impl App {
         stroke::bridge_surface_gaps(&mut raw, &self.pt.stroke_skin, &self.pt.stroke_plane, self.pt.cfg.radius);
         self.pt.stroke_skin.clear();
         self.pt.stroke_plane.clear();
-        self.pipe_from_stroke(&raw)
+        let made = self.pipe_from_stroke(&raw);
+        if made {
+            self.pt.card_open = true;
+        }
+        made
     }
 
     /// Throw the stroke away (Esc).
@@ -179,7 +202,12 @@ impl App {
     fn pipe_options(&self, raw: &[V3]) -> stroke::Options {
         let cfg = &self.pt.cfg;
         let mm_px = self.cam.mm_per_px(stroke::centre(raw), self.view_rect.height()).clamp(0.001, 100.0);
-        stroke::Options { tol: (mm_px * 3.0).max(cfg.radius * 0.15).max(0.2), max_nodes: PIPE_NODES, closed: cfg.closed, min_len: cfg.radius.max(2.0) }
+        stroke::Options {
+            tol: (mm_px * 3.0).max(cfg.radius * 0.15).max(0.2),
+            max_nodes: PIPE_NODES,
+            closed: cfg.closed,
+            min_len: cfg.radius.max(2.0),
+        }
     }
 
     /// Make a `Kind::Curve` pipe from raw world points. False when the stroke is no line, or the
@@ -194,7 +222,7 @@ impl App {
         cfg.sanitize();
         let pos = stroke::centre(&nodes);
         let mut sh = Shape::new(Kind::Curve, pos, Material::plain(cfg.color, 0.4, 0.0));
-        sh.name = "パイプ".to_string();
+        sh.name = "Pipe".to_string();
         sh.path = nodes.iter().map(|p| [p[0] - pos[0], p[1] - pos[1], p[2] - pos[2], cfg.radius]).collect();
         sh.params = [0.0, 1.0, 0.0, 1.0];
         sh.blend = 2.0;
@@ -244,7 +272,17 @@ impl App {
                 }
                 return Some(taken);
             }
-            self.pipe_finish();
+            // one drag, one pipe: the tool ends by itself and the new pipe stays selected, so the
+            // card keeps fixing it (radius, wall, ends). Press Pipe again for another.
+            if self.pipe_finish() {
+                self.pt.on = false;
+                self.pt.hover = None;
+            }
+            return Some(Input { over: true, taken: true, busy: false });
+        }
+        // a right click ends the tool, like Esc
+        if resp.clicked_by(egui::PointerButton::Secondary) {
+            self.set_pipe_tool(false);
             return Some(Input { over: true, taken: true, busy: false });
         }
         let over_gnomon = |p: Pos2| (p - pos2(rect.right() - 62.0, rect.top() + 62.0)).length() < 58.0;
@@ -286,6 +324,10 @@ impl App {
     /// Esc: drop the stroke being traced, or else switch the tool off. Other keys stay with the node editing.
     pub fn pipe_keys(&mut self, ctx: &egui::Context) {
         if !self.pt.on {
+            // the card of a finished pipe: Esc puts it away
+            if self.pt.card_open && self.pipe_last_selected() && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+                self.pt.card_open = false;
+            }
             return;
         }
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
@@ -326,12 +368,13 @@ impl App {
 
     /// The little card under the top bar while the tool is on (and while its pipe is selected).
     pub fn pipe_card(&mut self, ctx: &egui::Context) {
-        if !(self.pt.on || self.pipe_last_selected()) {
+        if !(self.pt.on || (self.pt.card_open && self.pipe_last_selected())) {
             return;
         }
         let rect = self.view_rect;
         let before = self.pt.cfg;
         let mut off = false;
+        let mut done = false;
         egui::Area::new(egui::Id::new("pipe_card"))
             .order(egui::Order::Middle)
             .pivot(egui::Align2::CENTER_TOP)
@@ -340,42 +383,59 @@ impl App {
                 style::card().show(ui, |ui| {
                     let cfg = &mut self.pt.cfg;
                     ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("パイプ").strong().color(style::ACCENT));
+                        ui.label(egui::RichText::new("Pipe").strong().color(style::ACCENT));
                         if self.pt.on {
-                            ui.label(egui::RichText::new("ドラッグでなぞる").size(11.0).color(style::DIM));
-                            if style::pill(ui, "やめる", false).on_hover_text("パイプツールを切る (Esc)").clicked() {
+                            ui.label(egui::RichText::new("Drag once to draw a pipe").size(11.0).color(style::DIM));
+                            if style::pill(ui, "Stop", false).on_hover_text("Stop drawing pipes (Esc or right click)").clicked() {
                                 off = true;
                             }
                         } else {
-                            ui.label(egui::RichText::new("えらんだパイプをなおす").size(11.0).color(style::DIM));
+                            ui.label(egui::RichText::new("Fix the selected pipe").size(11.0).color(style::DIM));
+                            if style::pill(ui, "Done", false).on_hover_text("Put this card away (Esc)").clicked() {
+                                done = true;
+                            }
                         }
                     });
-                    style::labeled_slider(ui, "外半径", &mut cfg.radius, 0.5..=40.0, "パイプの外がわの半径 (mm)");
-                    let max_wall = (cfg.radius - 0.1).clamp(0.0, 20.0);
-                    style::labeled_slider(ui, "かべの\nあつさ", &mut cfg.wall, 0.0..=max_wall.max(0.1), "0 = つまった棒 / それより大きい = 中が空のパイプ (mm)");
+                    style::labeled_slider(ui, "Outer radius", &mut cfg.radius, 0.5..=40.0, "Outer radius of the pipe (mm)");
                     ui.horizontal(|ui| {
-                        if style::pill(ui, "とじた輪", cfg.closed).on_hover_text("さいごとさいしょをつなぐ").clicked() {
+                        style::color_edit(ui, &mut cfg.color);
+                        let label = if self.pt.more { "Less" } else { "More…" };
+                        if style::pill(ui, label, self.pt.more).on_hover_text("Wall, ends, closed loop").clicked() {
+                            self.pt.more = !self.pt.more;
+                        }
+                    });
+                    if !self.pt.more {
+                        return;
+                    }
+                    let max_wall = (cfg.radius - 0.1).clamp(0.0, 20.0);
+                    style::labeled_slider(ui, "Wall\nthickness", &mut cfg.wall, 0.0..=max_wall.max(0.1), "0 = solid rod / larger = hollow pipe (mm)");
+                    ui.horizontal(|ui| {
+                        if style::pill(ui, "Closed loop", cfg.closed).on_hover_text("Join the last and first node").clicked() {
                             cfg.closed = !cfg.closed;
                         }
-                        ui.label(egui::RichText::new("はし").size(11.0).color(style::DIM));
-                        if style::pill(ui, "まる", !cfg.open_ends).on_hover_text("はしを丸くふさぐ").clicked() {
+                        ui.label(egui::RichText::new("Ends").size(11.0).color(style::DIM));
+                        if style::pill(ui, "Round", !cfg.open_ends).on_hover_text("Close the ends round").clicked() {
                             cfg.open_ends = false;
                         }
-                        if style::pill(ui, "すっぱり", cfg.open_ends).on_hover_text("はしをまっすぐ切る (中の穴が見える)").clicked() {
+                        if style::pill(ui, "Flat", cfg.open_ends).on_hover_text("Cut the ends straight (shows the hole)").clicked() {
                             cfg.open_ends = true;
                         }
-                        style::color_edit(ui, &mut cfg.color);
                     });
                     if self.pt.on {
                         ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new("なぞる面").size(11.0).color(style::DIM));
+                            ui.label(egui::RichText::new("Trace plane").size(11.0).color(style::DIM));
                             for pl in Plane::ALL {
-                                if style::pill(ui, pl.label(), self.pt.plane == pl).on_hover_text("形にあたらない所は、この面の上になぞる").clicked() {
+                                if style::pill(ui, pl.label(), self.pt.plane == pl)
+                                    .on_hover_text("Where there is no shape, trace on this plane")
+                                    .clicked()
+                                {
                                     self.pt.plane = pl;
                                 }
                             }
                         });
-                        ui.label(egui::RichText::new("形の上は表面にそってなぞれる　Alt+ドラッグで回す").size(11.0).color(style::DIM));
+                        ui.label(
+                            egui::RichText::new("Over a shape it follows the surface · middle drag turns the view").size(11.0).color(style::DIM),
+                        );
                     }
                 });
             });
@@ -386,51 +446,43 @@ impl App {
         if off {
             self.set_pipe_tool(false);
         }
+        if done {
+            self.pt.card_open = false;
+        }
     }
 }
 
 /// The icon of the pipe tool: a thin outline of a bent pipe with its open end showing the hole.
 pub fn glyph(p: &Painter, r: Rect, ink: Color32) {
-    let s = r.width().min(r.height()) * 0.8;
-    let f = Rect::from_center_size(r.center(), vec2(s, s));
+    // What the tool does: drag across the view and a fat, round tube follows the mouse. So: a thick
+    // round stroke (a tube, lit on top) drawn freehand, with the pencil still drawing it.
+    let side = r.width().min(r.height());
+    let f = Rect::from_center_size(r.center(), vec2(side, side));
     let at = |u: f32, v: f32| pos2(f.left() + f.width() * u, f.top() + f.height() * v);
-    let pen = Stroke::new((r.width() * 0.075).clamp(1.2, 2.6), ink);
-    // the centre line: along the bottom, a quarter-circle bend about (0.5, 0.56), then up
-    let (rad, half) = (0.24_f32, 0.085_f32);
-    let mut line: Vec<(f32, f32)> = vec![(0.10, 0.80), (0.50, 0.80)];
-    for i in 1..8 {
-        let a = std::f32::consts::FRAC_PI_2 * i as f32 / 8.0;
-        line.push((0.50 + rad * a.sin(), 0.56 + rad * a.cos()));
-    }
-    line.push((0.74, 0.56));
-    line.push((0.74, 0.14));
-    // offset both sides along the normals
-    let mut left = Vec::new();
-    let mut right = Vec::new();
-    for i in 0..line.len() {
-        let a = line[i.saturating_sub(1)];
-        let b = line[(i + 1).min(line.len() - 1)];
-        let (dx, dy) = (b.0 - a.0, b.1 - a.1);
-        let l = (dx * dx + dy * dy).sqrt().max(1e-6);
-        let (nx, ny) = (-dy / l, dx / l);
-        left.push(at(line[i].0 + nx * half, line[i].1 + ny * half));
-        right.push(at(line[i].0 - nx * half, line[i].1 - ny * half));
-    }
-    p.add(egui::Shape::line(left.clone(), pen));
-    p.add(egui::Shape::line(right.clone(), pen));
-    // the left end is cut straight; the top end is open, so its hole is an ellipse
-    if let (Some(a), Some(b)) = (left.first(), right.first()) {
-        p.line_segment([*a, *b], pen);
-    }
-    let top = at(0.74, 0.14);
-    let (rx, ry) = (f.width() * half, f.width() * half * 0.42);
-    let ring: Vec<Pos2> = (0..=20)
+    let path: Vec<Pos2> = (0..=20)
         .map(|i| {
-            let a = std::f32::consts::TAU * i as f32 / 20.0;
-            top + vec2(rx * a.cos(), ry * a.sin())
+            let t = i as f32 / 20.0;
+            at(0.10 + 0.56 * t, 0.70 - 0.30 * t + 0.12 * (t * std::f32::consts::TAU).sin())
         })
         .collect();
-    p.add(egui::Shape::line(ring, pen));
+    let fat = side * 0.22;
+    p.add(egui::Shape::line(path.clone(), Stroke::new(fat, ink.gamma_multiply(0.55))));
+    for e in [path[0], path[path.len() - 1]] {
+        p.circle_filled(e, fat * 0.5, ink.gamma_multiply(0.55));
+    }
+    // the shine along the top: it reads as round, a tube, not a flat line
+    let shine: Vec<Pos2> = path.iter().map(|q| *q + vec2(-fat * 0.12, -fat * 0.2)).collect();
+    p.add(egui::Shape::line(shine, Stroke::new(fat * 0.28, ink)));
+    // the pencil at the end of the tube, still drawing it
+    let tip = path[path.len() - 1] + vec2(fat * 0.35, -fat * 0.35);
+    let h = std::f32::consts::FRAC_1_SQRT_2;
+    let d = vec2(h, -h);
+    let n = vec2(h, h);
+    let w = side * 0.085;
+    let l = side * 0.34;
+    let body = vec![tip + d * (w * 1.3) + n * w, tip + d * l + n * w, tip + d * l - n * w, tip + d * (w * 1.3) - n * w];
+    p.add(egui::Shape::convex_polygon(body, ink, Stroke::NONE));
+    p.add(egui::Shape::convex_polygon(vec![tip, tip + d * (w * 1.3) + n * w, tip + d * (w * 1.3) - n * w], ink.gamma_multiply(0.7), Stroke::NONE));
 }
 
 #[cfg(test)]
@@ -486,6 +538,7 @@ mod tests {
             melt: Default::default(),
             env: Default::default(),
             saved: Vec::new(),
+            anim: Default::default(),
         });
         assert!(field.distance([30.0, 0.0, 4.0]) < -3.9, "the centre of the connector is solid");
         assert!(field.distance([-2.0, 0.0, 4.0]) < -1.9, "the first end is rounded");
@@ -618,7 +671,15 @@ mod tests {
         app.pipe_cancel();
         assert!(!app.pt.tracing && app.pt.stroke.is_empty() && app.pt.on);
         // Esc with the tool on and nothing traced switches it off
-        ctx.input_mut(|i| i.events.push(egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE }));
+        ctx.input_mut(|i| {
+            i.events.push(egui::Event::Key {
+                key: egui::Key::Escape,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            })
+        });
         app.pipe_keys(&ctx);
         assert!(!app.pt.on);
     }
@@ -666,6 +727,7 @@ mod tests {
             melt: Default::default(),
             env: Default::default(),
             saved: Vec::new(),
+            anim: Default::default(),
         });
         // the pipe lies along x from 0 to 59 at y = 0, z = 4
         let d = |x: f32, y: f32, z: f32| field.distance([x, y, z]);
@@ -707,19 +769,21 @@ mod tests {
         app.pipe_finish();
         // a loop on the floor
         app.pt.cfg = Config { radius: 5.0, wall: 1.5, closed: true, open_ends: false, color: [0.9, 0.5, 0.3] };
-        let ring: Vec<V3> = (0..=100).map(|i| {
-            let a = i as f32 / 100.0 * std::f32::consts::TAU;
-            [c[0] + 70.0 + 30.0 * a.cos(), c[1] + 30.0 * a.sin(), 5.0]
-        })
-        .collect();
+        let ring: Vec<V3> = (0..=100)
+            .map(|i| {
+                let a = i as f32 / 100.0 * std::f32::consts::TAU;
+                [c[0] + 70.0 + 30.0 * a.cos(), c[1] + 30.0 * a.sin(), 5.0]
+            })
+            .collect();
         app.pipe_from_stroke(&ring);
         // an open-ended elbow, so the bore shows
         app.pt.cfg = Config { radius: 6.0, wall: 1.5, closed: false, open_ends: true, color: [0.6, 0.75, 0.95] };
-        let elbow: Vec<V3> = (0..=40).map(|i| {
-            let t = i as f32 / 40.0;
-            if t < 0.5 { [c[0] - 70.0 + t * 80.0, c[1] - 50.0, 6.0] } else { [c[0] - 70.0 + 40.0, c[1] - 50.0, 6.0 + (t - 0.5) * 80.0] }
-        })
-        .collect();
+        let elbow: Vec<V3> = (0..=40)
+            .map(|i| {
+                let t = i as f32 / 40.0;
+                if t < 0.5 { [c[0] - 70.0 + t * 80.0, c[1] - 50.0, 6.0] } else { [c[0] - 70.0 + 40.0, c[1] - 50.0, 6.0 + (t - 0.5) * 80.0] }
+            })
+            .collect();
         app.pipe_from_stroke(&elbow);
         let _ = std::fs::write(out, app.scene.to_json());
     }

@@ -105,7 +105,9 @@ pub fn parse_choice(text: Option<&str>) -> Result<Choice, String> {
     match text.map(str::trim) {
         None | Some("") => Ok(Choice::Auto),
         Some(t) if t.eq_ignore_ascii_case("auto") => Ok(Choice::Auto),
-        Some(t) => Backend::parse(t).map(Choice::Fixed).ok_or_else(|| format!("MELTCAD_BACKEND={t} は知らない値です (vulkan / dx12 / gl / metal / auto)")),
+        Some(t) => Backend::parse(t)
+            .map(Choice::Fixed)
+            .ok_or_else(|| format!("MELTCAD_BACKEND={t} is not a known value (vulkan / dx12 / gl / metal / auto)")),
     }
 }
 
@@ -117,7 +119,7 @@ pub struct Settings {
     pub last_ok: Option<Backend>,
     /// Backends that failed (no device, or the shader did not compile) since.
     pub failed: Vec<Backend>,
-    /// The person chose the simple view ("かんたん表示").
+    /// The person chose the simple view ("Simple view").
     pub easy: bool,
 }
 
@@ -264,9 +266,8 @@ pub fn save_to(path: &Path, settings: &Settings) -> std::io::Result<()> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, settings.to_text())?;
-    std::fs::rename(&tmp, path)
+    // a temporary file of its own, so two Melt 3D windows never take each other's (#227)
+    crate::recovery::atomic_write(path, settings.to_text().as_bytes())
 }
 
 pub fn load() -> Settings {
@@ -303,18 +304,37 @@ pub struct Relaunch {
     pub tried: Vec<Backend>,
     /// The design to open.
     pub file: Option<PathBuf>,
+    /// Options of this run the new one keeps (`--control PORT`, so a program driving the window
+    /// finds it again on the same port, #221).
+    pub keep: Vec<OsString>,
+}
+
+/// The options of a command line a restart passes on: `--control` with its port.
+pub fn kept_options(args: &[OsString]) -> Vec<OsString> {
+    let mut out = Vec::new();
+    let mut it = args.iter().skip(1);
+    while let Some(a) = it.next() {
+        if a.to_str() == Some("--control")
+            && let Some(port) = it.next()
+        {
+            out.push(a.clone());
+            out.push(port.clone());
+        }
+    }
+    out
 }
 
 /// The command line and environment of the new run.
 pub fn relaunch_args(r: &Relaunch) -> (Vec<OsString>, Vec<(String, String)>) {
-    let args: Vec<OsString> = r.file.iter().map(|f| f.clone().into_os_string()).collect();
-    let envs = vec![("MELTCAD_BACKEND".to_string(), r.choice.clone().unwrap_or_default()), ("MELTCAD_BACKEND_TRIED".to_string(), tried_text(&r.tried))];
+    let args: Vec<OsString> = r.keep.iter().cloned().chain(r.file.iter().map(|f| f.clone().into_os_string())).collect();
+    let envs =
+        vec![("MELTCAD_BACKEND".to_string(), r.choice.clone().unwrap_or_default()), ("MELTCAD_BACKEND_TRIED".to_string(), tried_text(&r.tried))];
     (args, envs)
 }
 
 /// Start this program again. The caller then closes its own window.
 pub fn relaunch(r: &Relaunch) -> Result<(), String> {
-    let exe = std::env::current_exe().map_err(|e| format!("プログラムの場所がわかりません: {e}"))?;
+    let exe = std::env::current_exe().map_err(|e| format!("Cannot find where the program is: {e}"))?;
     let (args, envs) = relaunch_args(r);
     let mut cmd = std::process::Command::new(&exe);
     cmd.args(args);
@@ -326,7 +346,7 @@ pub fn relaunch(r: &Relaunch) -> Result<(), String> {
         }
     }
     crate::gpu_log::log(&format!("restarting {} with {r:?}", exe.display()));
-    cmd.spawn().map(|_| ()).map_err(|e| format!("もういちど起動できませんでした: {e}"))
+    cmd.spawn().map(|_| ()).map_err(|e| format!("Could not restart: {e}"))
 }
 
 /// The backends tried before this run, from the environment.
@@ -346,6 +366,30 @@ pub fn choice_now() -> (Choice, Option<String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn two_windows_saving_at_once_both_succeed_and_leave_no_temp_files() {
+        let dir = std::env::temp_dir().join(format!("melt3d-settings-race-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("settings.json");
+        let handles: Vec<_> = (0..8)
+            .map(|i| {
+                let path = path.clone();
+                std::thread::spawn(move || {
+                    let s = Settings { last_ok: None, failed: vec![], easy: i % 2 == 0 };
+                    (0..20).all(|_| save_to(&path, &s).is_ok())
+                })
+            })
+            .collect();
+        assert!(handles.into_iter().all(|h| h.join().unwrap_or(false)), "every save succeeds (#227)");
+        let text = std::fs::read_to_string(&path).expect("a settings file");
+        let _ = Settings::parse(&text);
+        let leftovers = std::fs::read_dir(&dir)
+            .map(|d| d.filter_map(Result::ok).filter(|e| e.file_name().to_string_lossy().ends_with(".tmp")).count())
+            .unwrap_or(0);
+        assert_eq!(leftovers, 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn backend_words_are_understood() {
@@ -413,7 +457,11 @@ mod tests {
         s.note_ok(Backend::Gl);
         assert_eq!(plan(Choice::Auto, true, &s, &[]), Some(Plan::Only(Backend::Gl)), "the last good one is first");
         assert_eq!(plan(Choice::Auto, true, &s, &[Backend::Gl]), Some(Plan::Only(Backend::Dx12)));
-        assert_eq!(plan(Choice::Auto, true, &s, &[Backend::Gl, Backend::Dx12]), Some(Plan::Only(Backend::Vulkan)), "failed ones still get their turn at the end");
+        assert_eq!(
+            plan(Choice::Auto, true, &s, &[Backend::Gl, Backend::Dx12]),
+            Some(Plan::Only(Backend::Vulkan)),
+            "failed ones still get their turn at the end"
+        );
     }
 
     #[test]
@@ -438,7 +486,7 @@ mod tests {
         assert_eq!(Settings::parse("not json at all"), Settings::default());
         assert_eq!(Settings::parse("{}"), Settings::default());
         assert_eq!(Settings::parse("{\"last_ok\":\"nonsense\"}"), Settings::default(), "an unknown backend word is dropped with the file");
-        assert_eq!(Settings::parse("{\"easy\":true,\"future_field\":1}").easy, true);
+        assert!(Settings::parse("{\"easy\":true,\"future_field\":1}").easy);
     }
 
     #[test]
@@ -459,7 +507,11 @@ mod tests {
         assert_eq!(next_after_failure(Choice::Auto, true, &s, &[], Plan::Only(Backend::Vulkan)), Some(Plan::Only(Backend::Dx12)));
         assert_eq!(next_after_failure(Choice::Auto, true, &s, &[Backend::Vulkan], Plan::Only(Backend::Dx12)), Some(Plan::Only(Backend::Gl)));
         assert_eq!(next_after_failure(Choice::Auto, true, &s, &[Backend::Vulkan, Backend::Dx12], Plan::Only(Backend::Gl)), None);
-        assert_eq!(next_after_failure(Choice::Fixed(Backend::Vulkan), true, &s, &[], Plan::Only(Backend::Vulkan)), None, "no loop on an explicit choice");
+        assert_eq!(
+            next_after_failure(Choice::Fixed(Backend::Vulkan), true, &s, &[], Plan::Only(Backend::Vulkan)),
+            None,
+            "no loop on an explicit choice"
+        );
         assert_eq!(next_after_failure(Choice::Auto, false, &s, &[], Plan::Default), None, "the defaults are tried once");
     }
 
@@ -493,12 +545,20 @@ mod tests {
 
     #[test]
     fn a_restart_carries_the_choice_the_tried_list_and_the_file() {
-        let r = Relaunch { choice: Some("dx12".into()), tried: vec![Backend::Vulkan], file: Some(PathBuf::from("/tmp/作品.meltcad")) };
+        let r =
+            Relaunch { choice: Some("dx12".into()), tried: vec![Backend::Vulkan], file: Some(PathBuf::from("/tmp/作品.meltcad")), keep: vec![] };
         let (args, envs) = relaunch_args(&r);
         assert_eq!(args, vec![OsString::from("/tmp/作品.meltcad")]);
         assert!(envs.contains(&("MELTCAD_BACKEND".to_string(), "dx12".to_string())));
         assert!(envs.contains(&("MELTCAD_BACKEND_TRIED".to_string(), "vulkan".to_string())));
-        let auto = Relaunch { choice: None, tried: vec![], file: None };
+        // a window driven over the control port is found again on the same port (#221)
+        let cmd: Vec<OsString> = ["meltcad", "--control", "7777", "/tmp/a.meltcad"].iter().map(OsString::from).collect();
+        let keep = kept_options(&cmd);
+        assert_eq!(keep, vec![OsString::from("--control"), OsString::from("7777")]);
+        let again = Relaunch { choice: None, tried: vec![], file: Some(PathBuf::from("/tmp/a.meltcad")), keep };
+        let (args, _) = relaunch_args(&again);
+        assert_eq!(args, vec![OsString::from("--control"), OsString::from("7777"), OsString::from("/tmp/a.meltcad")]);
+        let auto = Relaunch { choice: None, tried: vec![], file: None, keep: vec![] };
         let (args, envs) = relaunch_args(&auto);
         assert!(args.is_empty());
         assert!(envs.contains(&("MELTCAD_BACKEND".to_string(), String::new())), "empty means: remove it, auto");
