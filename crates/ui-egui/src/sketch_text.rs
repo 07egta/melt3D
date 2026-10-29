@@ -14,6 +14,7 @@ use solidcraft_engine::{
 use crate::SolveApp;
 use crate::dialogs::{Dialog, Kind};
 use crate::selection::SelInput;
+use crate::ui_kit;
 
 /// Field rows after the text: position, height (lengths), angle, letter spacing (a length) and
 /// line spacing (a factor).
@@ -23,6 +24,8 @@ const KINDS: [ValueKind; FIELDS] =
 const FIELDS: usize = 6;
 /// The field shown in degrees, and the one without a unit.
 const ANGLE: usize = 3;
+/// The fields before this one (X, Y, Height, Angle) can hold an expression of parameters.
+const ANGLE_END: usize = 4;
 const LINE_SPACING: usize = 5;
 
 /// No input is active: a click on the canvas picks no path until the Path chip is clicked.
@@ -43,6 +46,9 @@ pub struct Tx {
     initial: [String; FIELDS],
     /// The saved source: x, y, height (mm), angle (rad), letter spacing (mm) and line spacing.
     original: [f64; FIELDS],
+    /// The expressions saved behind x, y, height and angle (a field shows its expression, and
+    /// keeps it while untouched).
+    exprs: [Option<String>; FIELDS],
     /// Bold, italic, alignment, the path (the Path input's curve) and its direction as chosen.
     pub(crate) style: TextStyle,
     initial_style: TextStyle,
@@ -64,8 +70,9 @@ pub struct Tx {
     shown: Option<Source>,
 }
 
-/// A text source as the dialog sees it: text, font (empty: built-in), its values and its style.
-type Source = (String, String, [f64; FIELDS], TextStyle);
+/// A text source as the dialog sees it: text, font (empty: built-in), its values, its style and
+/// the expressions behind its values.
+type Source = (String, String, [f64; FIELDS], TextStyle, [Option<String>; FIELDS]);
 
 /// What the Text tool puts down, ready to be typed over.
 const PLACEHOLDER: &str = "Text";
@@ -112,49 +119,51 @@ pub(crate) fn one_letter() -> bool {
     ONE_LETTER.with(std::cell::Cell::get)
 }
 
-/// A text is picked whole: the profiles of its letters when profile `index` of `sketch` is
-/// bounded by one text alone (none when other geometry shares it). The letters' counters (the
-/// inside of an O) are left out; inside one, a letter is a letter again. The picked profile
-/// comes first when it is a letter.
+/// A text is picked whole: the profiles of its letters when profile `index` of `sketch` is a
+/// letter of one text, or the counter of one (none when it is bounded by other geometry alone,
+/// or by two texts). A letter that other geometry crosses (a face's projected edge the text runs
+/// over) is cut into pieces bounded by both: each piece inside the letter is picked, so the
+/// letter is picked whole. The letters' counters (the inside of an O) are left out; inside one,
+/// a letter is a letter again. The picked profile comes first when it is a letter.
 pub(crate) fn text_profiles(s: &solidcraft_engine::Session, sketch: u64, index: usize) -> Option<Vec<usize>> {
     let state = s.world_state();
     let ss = state.sketch(sketch)?;
-    let text_of = |profile: &solidcraft_engine::sketch::Profile| -> Option<String> {
-        let mut link: Option<&str> = None;
+    // The text bounding a profile, with or without other curves; whether only it bounds it.
+    let text_of = |profile: &solidcraft_engine::sketch::Profile| -> Option<(String, bool)> {
+        let (mut link, mut alone): (Option<&str>, bool) = (None, true);
         for id in profile.curve_ids() {
             let curve = ss.sketch.curves.iter().find(|curve| curve.id == id)?;
-            let source = ss.sketch.link(curve.link.as_deref()?)?;
-            if source.kind != LinkKind::Text || link.is_some_and(|old| old != source.id.as_str()) {
-                return None;
-            }
-            link = Some(source.id.as_str());
-        }
-        link.map(str::to_owned)
-    };
-    let link = text_of(ss.profiles.get(index)?)?;
-    let sorted = |ids: &[String]| {
-        let mut ids = ids.to_vec();
-        ids.sort();
-        ids
-    };
-    let mine: Vec<usize> = (0..ss.profiles.len()).filter(|&i| ss.profiles.get(i).and_then(text_of).as_deref() == Some(link.as_str())).collect();
-    // A profile whose outer loop is a hole of another one lies inside it.
-    let parent = |i: usize| -> Option<usize> {
-        let outer = sorted(&ss.profiles.get(i)?.outer_curves);
-        mine.iter().copied().find(|&j| j != i && ss.profiles.get(j).is_some_and(|p| p.hole_curves.iter().any(|hole| sorted(hole) == outer)))
-    };
-    let depth = |i: usize| {
-        let (mut at, mut depth) = (i, 0usize);
-        while let Some(up) = parent(at) {
-            at = up;
-            depth += 1;
-            if depth > mine.len() {
-                break;
+            match curve.link.as_deref().and_then(|l| ss.sketch.link(l)).filter(|source| source.kind == LinkKind::Text) {
+                Some(source) if link.is_some_and(|old| old != source.id.as_str()) => return None,
+                Some(source) => link = Some(source.id.as_str()),
+                None => alone = false,
             }
         }
-        depth
+        link.map(|l| (l.to_owned(), alone))
     };
-    let mut letters: Vec<usize> = mine.iter().copied().filter(|&i| depth(i) % 2 == 0).collect();
+    let (link, alone) = text_of(ss.profiles.get(index)?)?;
+    // The text's own outlines, the other curves left out: a point is in a letter when an odd
+    // number of them surround it (an O's ring is in one, its counter in two).
+    let mut own = ss.sketch.clone();
+    for curve in &mut own.curves {
+        if curve.link.as_deref() != Some(link.as_str()) {
+            curve.construction = true;
+        }
+    }
+    let outlines = solidcraft_engine::sketch::find_profiles(&own);
+    let in_letter = |i: usize| {
+        ss.profiles.get(i).is_some_and(|p| {
+            let at = p.region.interior_point();
+            outlines.iter().filter(|o| o.region.outer.contains(at)).count() % 2 == 1
+        })
+    };
+    // A piece the text shares with other geometry is the text's only inside a letter: the region
+    // round the letters (a face's, bounded by its edges and the letters crossing them) is not.
+    if !alone && !in_letter(index) {
+        return None;
+    }
+    let mut letters: Vec<usize> =
+        (0..ss.profiles.len()).filter(|&i| ss.profiles.get(i).and_then(text_of).is_some_and(|(l, _)| l == link) && in_letter(i)).collect();
     letters.sort_by_key(|&i| i != index);
     (!letters.is_empty()).then_some(letters)
 }
@@ -175,6 +184,13 @@ pub(crate) fn selected_entity(app: &SolveApp) -> Option<String> {
         selected = Some(id.clone());
     }
     selected
+}
+
+/// The link of the one text the selection belongs to (see [`selected_entity`]).
+pub(crate) fn selected_link(app: &SolveApp) -> Option<String> {
+    let entity = selected_entity(app)?;
+    let sk = app.session.doc.sketch(app.session.active_sketch?).ok()?;
+    sk.curves.iter().find(|curve| curve.id == entity)?.link.clone()
 }
 
 /// Show every outline affected by the open editor without changing feature selections.
@@ -200,13 +216,18 @@ fn source(app: &SolveApp, sketch: u64, link: &str) -> Option<Source> {
     }
     let sk = app.session.doc.sketch(sketch).ok()?;
     let source = sk.link(link).filter(|source| source.kind == LinkKind::Text)?;
-    let LinkSource::Text { text, at, height, angle, font, style } = &source.source else { return None };
+    let LinkSource::Text { text, at, height, angle, font, style, exprs } = &source.source else { return None };
     let values = [at.x, at.y, *height, *angle, style.letter_spacing, style.line_spacing];
-    Some((text.clone(), font.clone().unwrap_or_default(), values, style.clone()))
+    let exprs = [exprs.x.clone(), exprs.y.clone(), exprs.height.clone(), exprs.angle.clone(), None, None];
+    Some((text.clone(), font.clone().unwrap_or_default(), values, style.clone(), exprs))
 }
 
-fn fields(original: &[f64; FIELDS], unit: &'static str, scale: f64) -> [String; FIELDS] {
+/// The fields as shown: a value, or the expression behind it.
+fn fields(original: &[f64; FIELDS], exprs: &[Option<String>; FIELDS], unit: &'static str, scale: f64) -> [String; FIELDS] {
     std::array::from_fn(|i| {
+        if let Some(Some(e)) = exprs.get(i) {
+            return e.clone();
+        }
         let value = original.get(i).copied().unwrap_or_default();
         match i {
             ANGLE => shown(value.to_degrees(), "deg"),
@@ -252,9 +273,9 @@ fn kind_for(app: &SolveApp, entity: &str) -> Option<Kind> {
     let sketch = app.session.active_sketch?;
     let sk = app.session.doc.sketch(sketch).ok()?;
     let link = sk.curves.iter().find(|curve| curve.id == entity).and_then(|curve| curve.link.clone())?;
-    let (text, font, original, style) = source(app, sketch, &link)?;
+    let (text, font, original, style, exprs) = source(app, sketch, &link)?;
     let (scale, unit) = crate::prefs::unit_scale(&app.session.doc.units);
-    let values = fields(&original, unit, scale);
+    let values = fields(&original, &exprs, unit, scale);
     let mut tx = Tx {
         sketch,
         link,
@@ -265,6 +286,7 @@ fn kind_for(app: &SolveApp, entity: &str) -> Option<Kind> {
         initial: values.clone(),
         values,
         original,
+        exprs,
         unit,
         initial_style: style.clone(),
         style,
@@ -388,16 +410,16 @@ pub(crate) fn refresh(app: &SolveApp, k: &mut Tx) -> bool {
     if k.shown.as_ref() == Some(&current) {
         return true;
     }
-    let (text, font, original, style) = current;
+    let (text, font, original, style, exprs) = current;
     if style != k.initial_style {
         if k.style == k.initial_style {
             k.style = style.clone();
         }
         k.initial_style = style;
     }
-    if original != k.original {
+    if original != k.original || exprs != k.exprs {
         let (scale, unit) = crate::prefs::unit_scale(&app.session.doc.units);
-        let fresh = fields(&original, unit, scale);
+        let fresh = fields(&original, &exprs, unit, scale);
         for ((value, initial), new) in k.values.iter_mut().zip(k.initial.iter_mut()).zip(fresh) {
             if value == initial {
                 *value = new.clone();
@@ -405,6 +427,7 @@ pub(crate) fn refresh(app: &SolveApp, k: &mut Tx) -> bool {
             *initial = new;
         }
         k.original = original;
+        k.exprs = exprs;
         k.unit = unit;
     }
     if text != k.initial_text {
@@ -426,13 +449,11 @@ pub(crate) fn refresh(app: &SolveApp, k: &mut Tx) -> bool {
 /// starts a new line there). `inputs` and `active`: the dialog's Path input.
 pub(crate) fn rows(ui: &mut egui::Ui, k: &mut Tx, inputs: &mut [SelInput], active: &mut usize) -> bool {
     let mut enter = false;
-    crate::dialogs::row_label(ui, "Text");
-    let width = ui.spacing().text_edit_width;
     let id = egui::Id::new("sketch_text_content");
     if ui.memory(|m| m.has_focus(id)) {
         enter |= ui.input_mut(|i| !i.modifiers.shift && i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
     }
-    let response = ui.add(egui::TextEdit::multiline(&mut k.text).id(id).desired_rows(3).desired_width(width));
+    let response = ui_kit::multiline_text_field(ui, "Text", id, &mut k.text);
     crate::scenario::publish_handle("dialog:Text", response.rect.center());
     if k.focus {
         response.request_focus();
@@ -442,42 +463,44 @@ pub(crate) fn rows(ui: &mut egui::Ui, k: &mut Tx, inputs: &mut [SelInput], activ
         state.store(ui.ctx(), id);
         k.focus = false;
     }
-    ui.end_row();
-    crate::dialogs::row_label(ui, "Font");
-    font_row(ui, k, width);
-    ui.end_row();
-    crate::dialogs::row_label(ui, "Style");
-    ui.horizontal(|ui| {
-        let bold = ui.toggle_value(&mut k.style.bold, egui::RichText::new("B").strong()).on_hover_text(crate::i18n::tr("sketch_text.bold"));
-        crate::scenario::publish_handle("dialog:Bold", bold.rect.center());
-        let italic = ui.toggle_value(&mut k.style.italic, egui::RichText::new("I").italics()).on_hover_text(crate::i18n::tr("sketch_text.italic"));
-        crate::scenario::publish_handle("dialog:Italic", italic.rect.center());
-    });
-    ui.end_row();
-    crate::dialogs::row_label(ui, "Alignment");
-    ui.horizontal(|ui| {
-        for (align, id, handle) in [
-            (TextAlign::Left, "sketch_text.align_left", "dialog:Align left"),
-            (TextAlign::Center, "sketch_text.align_center", "dialog:Align center"),
-            (TextAlign::Right, "sketch_text.align_right", "dialog:Align right"),
-        ] {
-            let response = ui.selectable_value(&mut k.style.align, align, crate::i18n::tr(id));
-            crate::scenario::publish_handle(handle, response.rect.center());
+    ui_kit::row(ui, "Font", |ui| font_row(ui, k));
+    ui_kit::row(ui, "Style", |ui| ui_kit::text_emphasis(ui, &mut k.style.bold, &mut k.style.italic));
+    ui_kit::row(ui, "Alignment", |ui| {
+        let mut selected = match k.style.align {
+            TextAlign::Left => 0,
+            TextAlign::Center => 1,
+            TextAlign::Right => 2,
+        };
+        let labels = ["sketch_text.align_left", "sketch_text.align_center", "sketch_text.align_right"].map(crate::i18n::tr);
+        ui_kit::segmented(ui, &mut selected, &labels, ui_kit::Segments { compact: true, ..Default::default() });
+        k.style.align = match selected {
+            1 => TextAlign::Center,
+            2 => TextAlign::Right,
+            _ => TextAlign::Left,
+        };
+        for (label, handle) in labels.iter().zip(["dialog:Align left", "dialog:Align center", "dialog:Align right"]) {
+            if let Some(at) = crate::scenario::handle_at(&format!("dialog:Alignment:{label}")) {
+                crate::scenario::publish_handle(handle, at);
+            }
         }
     });
-    ui.end_row();
     // On a path the curve places the text: X, Y and the angle do not.
     let on_path = k.style.path.is_some();
-    for (i, (label, value)) in LABELS.iter().zip(k.values.iter_mut()).enumerate() {
-        crate::dialogs::row_label(ui, label);
-        let placed = on_path && matches!(i, 0 | 1 | ANGLE);
-        if placed {
-            let response = ui.add_enabled_ui(false, |ui| crate::dialogs::field(ui, value));
+    let (xy, rest) = k.values.split_at_mut(2);
+    if let [x, y] = xy {
+        let response = ui.add_enabled_ui(!on_path, |ui| ui_kit::value_pair(ui, "Position", [x, y], ["X", "Y"], None));
+        enter |= response.inner;
+        if on_path {
             response.response.on_disabled_hover_text(crate::i18n::tr("sketch_text.on_path"));
-        } else {
-            enter |= crate::dialogs::field(ui, value);
         }
-        ui.end_row();
+    }
+    for (i, (label, value)) in LABELS.iter().skip(2).zip(rest).enumerate() {
+        let index = i + 2;
+        let response = ui.add_enabled_ui(!(on_path && index == ANGLE), |ui| ui_kit::row(ui, label, |ui| ui_kit::field(ui, value)));
+        enter |= response.inner;
+        if on_path && index == ANGLE {
+            response.response.on_disabled_hover_text(crate::i18n::tr("sketch_text.on_path"));
+        }
     }
     path_row(ui, k, inputs, active);
     enter
@@ -486,25 +509,21 @@ pub(crate) fn rows(ui: &mut egui::Ui, k: &mut Tx, inputs: &mut [SelInput], activ
 /// The curve the text follows: a chip that, clicked, takes the next curve clicked on the canvas;
 /// × takes the text off it; Reverse runs it the other way along.
 fn path_row(ui: &mut egui::Ui, k: &mut Tx, inputs: &mut [SelInput], active: &mut usize) {
-    let t = crate::theme::Tokens::get();
-    crate::dialogs::row_label(ui, "Path");
-    ui.horizontal(|ui| {
+    ui_kit::row(ui, "Path", |ui| {
         let on = k.style.path.is_some();
-        let text = if on {
-            egui::RichText::new(crate::i18n::format("dialog.selected_count", &[("count", "1")])).color(egui::Color32::WHITE)
-        } else {
-            egui::RichText::new(crate::i18n::tr("dialog.select")).color(t.text)
-        };
-        let stroke = if k.picking { egui::Stroke::new(1.5, t.accent) } else { egui::Stroke::new(1.0, t.dialog_border.gamma_multiply(1.6)) };
-        let chip = egui::Button::new(text).fill(if on { t.chip } else { egui::Color32::TRANSPARENT }).stroke(stroke).min_size(egui::vec2(0.0, 22.0));
-        let chip = ui.add(chip).on_hover_text(crate::i18n::tr("sketch_text.path_hint"));
+        let text = if on { crate::i18n::format("dialog.selected_count", &[("count", "1")]) } else { crate::i18n::tr("dialog.select").into() };
+        let chip = ui_kit::selection_field(ui, &text, ui_kit::Selection { active: k.picking, filled: on })
+            .on_hover_text(crate::i18n::tr("sketch_text.path_hint"));
+        let chip_rect = chip.rect;
         crate::scenario::publish_handle("dialog:Path", chip.rect.center());
         if chip.clicked() {
             k.picking = true;
             *active = 0;
         }
         if on {
-            let clear = ui.small_button("\u{d7}").on_hover_text(crate::i18n::tr("sketch_text.path_clear"));
+            let size = crate::theme::Tokens::get().space_24;
+            let rect = egui::Rect::from_center_size(egui::pos2(chip_rect.right() - size / 2.0, chip_rect.center().y), egui::vec2(size, size));
+            let clear = ui_kit::icon_button_at(ui, rect, "close", "sketch_text.path_clear");
             crate::scenario::publish_handle("dialog:Path clear", clear.rect.center());
             if clear.clicked() {
                 for input in inputs.iter_mut() {
@@ -515,17 +534,16 @@ fn path_row(ui: &mut egui::Ui, k: &mut Tx, inputs: &mut [SelInput], active: &mut
             }
         }
     });
-    ui.end_row();
     if k.style.path.is_some() {
-        crate::dialogs::row_label(ui, "Reverse");
-        let reverse = ui.checkbox(&mut k.style.reverse, "");
-        crate::scenario::publish_handle("dialog:Reverse", reverse.rect.center());
-        ui.end_row();
+        ui_kit::section(ui, "path_options", "Options", true, |ui| {
+            let reverse = ui_kit::checkbox(ui, crate::i18n::tr_label("Reverse"), &mut k.style.reverse);
+            crate::scenario::publish_handle("dialog:Reverse", reverse.rect.center());
+        });
     }
 }
 
 /// The installed font families, listed once in the background (none on the web).
-fn families(ctx: &egui::Context) -> Option<Arc<Vec<String>>> {
+pub(crate) fn families(ctx: &egui::Context) -> Option<Arc<Vec<String>>> {
     static FAMILIES: OnceLock<Arc<Vec<String>>> = OnceLock::new();
     static STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
     if let Some(list) = FAMILIES.get() {
@@ -556,70 +574,25 @@ fn is_font_file(s: &str) -> bool {
     lower.contains(['/', '\\']) || [".ttf", ".otf", ".ttc", ".otc"].iter().any(|e| lower.ends_with(e))
 }
 
-/// Height of the font list (points).
-const FONT_LIST_PX: f32 = 260.0;
-
-/// The font: a list of the installed families (the built-in font first) with a search box; a
-/// font file's path typed there can be used too.
-fn font_row(ui: &mut egui::Ui, k: &mut Tx, width: f32) {
+/// The application supplies families/file recognition; the kit owns search and list widgets.
+fn font_row(ui: &mut egui::Ui, k: &mut Tx) {
     let builtin = crate::i18n::format("sketch_text.builtin_font", &[("family", solidcraft_engine::sketch::DEFAULT_FONT_FAMILY)]);
     let current = if k.font.trim().is_empty() { builtin.clone() } else { k.font.clone() };
-    let mut chosen = None;
-    let response = egui::ComboBox::from_id_salt("sketch_text_font")
-        .width(width)
-        .height(FONT_LIST_PX + 80.0)
-        .selected_text(current)
-        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-        .show_ui(ui, |ui| {
-            let search = egui::TextEdit::singleline(&mut k.font_filter)
-                .id_salt("sketch_text_font_search")
-                .hint_text(crate::i18n::tr("sketch_text.font_search"));
-            let search = ui.add(search.desired_width(f32::INFINITY));
-            crate::scenario::publish_handle("dialog:Font search", search.rect.center());
-            let typed = k.font_filter.trim();
-            if is_font_file(typed) {
-                let file = ui.selectable_label(false, crate::i18n::format("sketch_text.use_font_file", &[("path", typed)]));
-                crate::scenario::publish_handle("dialog:Font file", file.rect.center());
-                if file.clicked() {
-                    chosen = Some(typed.to_string());
-                    ui.close();
-                }
-                return;
-            }
-            let filter = typed.to_lowercase();
-            // The list scrolls below the search box, at one height whatever it holds.
-            let list = egui::ScrollArea::vertical()
-                .id_salt("sketch_text_font_list")
-                .max_height(FONT_LIST_PX)
-                .min_scrolled_height(FONT_LIST_PX)
-                .auto_shrink([false, false]);
-            list.show(ui, |ui| {
-                if builtin.to_lowercase().contains(&filter) {
-                    let item = ui.selectable_label(k.font.trim().is_empty(), &builtin);
-                    crate::scenario::publish_handle("dialog:Font built-in", item.rect.center());
-                    if item.clicked() {
-                        chosen = Some(String::new());
-                        ui.close();
-                    }
-                }
-                match families(ui.ctx()) {
-                    None => {
-                        ui.label(crate::i18n::tr("sketch_text.loading_fonts"));
-                    }
-                    Some(list) => {
-                        for family in list.iter().filter(|f| f.to_lowercase().contains(&filter)) {
-                            if ui.selectable_label(k.font.trim() == family, family).clicked() {
-                                chosen = Some(family.clone());
-                                ui.close();
-                            }
-                        }
-                    }
-                }
-            });
-        })
-        .response;
-    crate::scenario::publish_handle("dialog:Font", response.rect.center());
-    if let Some(font) = chosen {
+    let families = families(ui.ctx());
+    let mut options = vec![ui_kit::SearchOption { value: "", label: &builtin, handle: Some("dialog:Font built-in") }];
+    if let Some(list) = &families {
+        options.extend(list.iter().map(|family| ui_kit::SearchOption { value: family, label: family, handle: None }));
+    }
+    let custom = is_font_file(&k.font_filter).then(|| crate::i18n::format("sketch_text.use_font_file", &[("path", k.font_filter.trim())]));
+    if let Some(font) = ui_kit::searchable_dropdown(
+        ui,
+        "sketch_text_font",
+        &current,
+        &mut k.font_filter,
+        &options,
+        custom.as_deref(),
+        families.is_none().then(|| crate::i18n::tr("sketch_text.loading_fonts")),
+    ) {
         k.font = font;
         k.font_filter.clear();
     }
@@ -631,41 +604,53 @@ pub(crate) fn commands(app: &SolveApp, k: &Tx) -> Result<Vec<(String, Value)>, S
     Ok(vec![("sketch.edit_text".into(), edit_params(app, k)?)])
 }
 
-/// `sketch.edit_text`'s parameters for the fields as they are.
+/// `sketch.edit_text`'s parameters for the fields as they are. X, Y, Height and Angle go as
+/// numbers, or as their expressions when these name parameters (the text then follows them): an
+/// untouched field that holds one keeps it.
 fn edit_params(app: &SolveApp, k: &Tx) -> Result<Value, String> {
     let doc = &app.session.doc;
     let mut out = [0.0; FIELDS];
+    let mut sent: [Value; FIELDS] = std::array::from_fn(|_| Value::Null);
     for (i, slot) in out.iter_mut().enumerate() {
         let (Some(value), Some(initial), Some(original), Some(kind), Some(label)) =
             (k.values.get(i), k.initial.get(i), k.original.get(i), KINDS.get(i), LABELS.get(i))
         else {
             return Err("missing value".into());
         };
+        let given = k.exprs.get(i).and_then(Option::as_ref).filter(|_| value == initial);
         *slot = if value == initial {
             *original
         } else {
-            let v = doc.eval(&doc.with_design_unit(value.trim(), *kind), *kind).map_err(|e| format!("{label}: {e}"))?;
+            let typed = doc.with_design_unit(value.trim(), *kind);
+            let v = doc.eval(&typed, *kind).map_err(|e| format!("{label}: {e}"))?;
             if !v.is_finite() {
                 return Err(format!("{label}: not a finite number"));
             }
             v
         };
+        let names_parameters = i < ANGLE_END && !solidcraft_engine::doc::expr::references(value).is_empty();
+        sent[i] = match given {
+            Some(e) => json!(e),
+            None if value != initial && names_parameters => json!(value.trim()),
+            None => json!(if i == ANGLE { slot.to_degrees() } else { *slot }),
+        };
     }
-    let [x, y, height, angle, letter_spacing, line_spacing] = out;
+    let [_, _, _, _, letter_spacing, line_spacing] = out;
+    let [sent_x, sent_y, sent_height, sent_angle, ..] = sent;
     let align = match k.style.align {
         TextAlign::Left => "left",
         TextAlign::Center => "center",
         TextAlign::Right => "right",
     };
     let mut params = json!({
-        "link": k.link, "text": k.text, "at": [x, y], "height": height,
+        "link": k.link, "text": k.text, "at": [sent_x, sent_y], "height": sent_height,
         "bold": k.style.bold, "italic": k.style.italic, "align": align,
         "letter_spacing": letter_spacing, "line_spacing": line_spacing,
         "path": k.style.path.clone().unwrap_or_default(), "reverse": k.style.reverse,
     });
-    // Omitting an unchanged angle keeps its exact saved radians.
-    if k.values.get(3) != k.initial.get(3) {
-        params["angle"] = json!(angle.to_degrees());
+    // Omitting an unchanged angle keeps its exact saved radians (or its expression).
+    if k.values.get(ANGLE) != k.initial.get(ANGLE) {
+        params["angle"] = sent_angle;
     }
     // An untouched font stays as saved; an emptied one is the built-in font.
     if k.font.trim() != k.initial_font.trim() {
@@ -680,13 +665,7 @@ mod tests {
     use crate::scenario::Harness;
 
     fn setup() -> (Harness, String, String) {
-        let mut h = Harness::new();
-        h.app.home.open = false;
-        h.app.run("sketch.create", json!({"plane":"XY"})).unwrap();
-        let result = h.app.run("sketch.text", json!({"text":"I","at":[0,0],"height":10})).unwrap();
-        let link = result["link"].as_str().unwrap().to_owned();
-        let curve = result["curves"][0].as_str().unwrap().to_owned();
-        h.app.session.selection = vec![Sel::SketchCurve { id: curve.clone() }];
+        let (mut h, link, curve) = crate::test_support::selected_text("I", [0, 0]);
         h.frames(3);
         (h, link, curve)
     }
@@ -725,6 +704,45 @@ mod tests {
         }
         h.step(&json!({"widget":"Cancel"})).unwrap();
         assert!(highlighted(&h.app).is_empty());
+    }
+
+    /// Explode Text (#1842): the text's outlines stay where they are as ordinary sketch curves,
+    /// the text itself goes, and one undo brings it back.
+    #[test]
+    fn explode_text_leaves_its_outlines_as_normal_curves() {
+        let (mut h, link, _) = setup();
+        h.app.run("sketch.edit_text", json!({"link":link,"text":"TO"})).unwrap();
+        let sid = h.app.session.active_sketch.unwrap();
+        let outline = |h: &Harness| {
+            let sk = h.app.session.doc.sketch(sid).unwrap();
+            let mut ids: Vec<(String, Option<String>)> = sk.curves.iter().map(|c| (c.id.clone(), c.link.clone())).collect();
+            ids.sort();
+            ids
+        };
+        let before = outline(&h);
+        assert!(before.len() > 4 && before.iter().all(|(_, l)| l.as_deref() == Some(link.as_str())));
+        let profiles = h.app.session.world_state().sketch(sid).unwrap().profiles.len();
+        h.app.session.selection = vec![Sel::SketchCurve { id: before[0].0.clone() }];
+        let undo = h.app.session.undo.len();
+        let item = crate::context_menu::items(&h.app, &crate::context_menu::Target::Viewport)
+            .into_iter()
+            .find(|item| item.label == "Explode Text")
+            .expect("Explode Text is offered for a selected text");
+        assert!(item.enabled);
+        crate::context_menu::run_item(&mut h.app, &item, egui::Pos2::ZERO);
+        h.frames(2);
+        let after = outline(&h);
+        assert_eq!(after.iter().map(|c| &c.0).collect::<Vec<_>>(), before.iter().map(|c| &c.0).collect::<Vec<_>>(), "every outline stays");
+        assert!(after.iter().all(|(_, l)| l.is_none()), "no outline belongs to the text");
+        let sk = h.app.session.doc.sketch(sid).unwrap();
+        assert!(sk.link(&link).is_none(), "the text is gone");
+        assert_eq!(h.app.session.world_state().sketch(sid).unwrap().profiles.len(), profiles, "the letters still make the same profiles");
+        assert_eq!(h.app.session.undo.len(), undo + 1);
+        // No longer text: nothing to edit or explode.
+        assert!(selected_entity(&h.app).is_none());
+        assert!(!crate::context_menu::items(&h.app, &crate::context_menu::Target::Viewport).iter().any(|item| item.label == "Explode Text"));
+        h.app.run("edit.undo", json!({})).unwrap();
+        assert_eq!(outline(&h), before, "undo brings the text back");
     }
 
     #[test]
@@ -812,6 +830,7 @@ mod tests {
             angle: std::f64::consts::FRAC_PI_2,
             font: None,
             style: TextStyle::default(),
+            exprs: Default::default(),
         };
         assert_eq!(sk.link(&link).unwrap().source, expected);
         assert!(!h.app.session.world_state().sketch(sid).unwrap().profiles.is_empty());
@@ -839,7 +858,7 @@ mod tests {
         let LinkSource::Text { at, height, angle, .. } = original else { panic!("text source") };
         assert_eq!(
             h.app.session.doc.sketch(sid).unwrap().link(&link).unwrap().source,
-            LinkSource::Text { text: "O".into(), at, height, angle, font: None, style: TextStyle::default() }
+            LinkSource::Text { text: "O".into(), at, height, angle, font: None, style: TextStyle::default(), exprs: Default::default() }
         );
         h.app.session.selection = vec![Sel::SketchCurve { id: h.app.session.doc.sketch(sid).unwrap().curves[0].id.clone() }];
         h.app.start("sketch.edit_text");
@@ -1018,6 +1037,89 @@ mod tests {
         let sid = h.app.session.active_sketch.unwrap();
         let sk = h.app.session.doc.sketch(sid).unwrap();
         assert!(sk.links.iter().any(|l| matches!(&l.source, LinkSource::Text { text, .. } if text == "Pending text")));
+    }
+
+    /// Selects the text `link` again (an edit makes its outlines anew).
+    fn select_text(h: &mut Harness, link: &str) {
+        let sid = h.app.session.active_sketch.unwrap();
+        let sk = h.app.session.doc.sketch(sid).unwrap();
+        let id = sk.curves[sk.link_curves(link)[0]].id.clone();
+        h.app.session.selection = vec![Sel::SketchCurve { id }];
+        h.frames(3);
+    }
+
+    fn exprs_of(h: &Harness, link: &str) -> solidcraft_engine::sketch::TextExprs {
+        let sid = h.app.session.active_sketch.unwrap();
+        let LinkSource::Text { exprs, .. } = h.app.session.doc.sketch(sid).unwrap().link(link).unwrap().source.clone() else { panic!("text source") };
+        exprs
+    }
+
+    #[test]
+    fn a_field_that_names_parameters_stays_an_expression_and_is_shown_as_typed() {
+        let (mut h, link, _) = setup();
+        h.app.run("parameters.add", json!({"name":"tall","expression":"20 mm"})).unwrap();
+        h.app.run("parameters.add", json!({"name":"turn","expression":"90 deg"})).unwrap();
+        h.app.start("sketch.edit_text");
+        h.frames(3);
+        replace(&mut h, "dialog:X", "tall + 5 mm");
+        replace(&mut h, "dialog:Height", "tall / 2");
+        replace(&mut h, "dialog:Angle", "turn");
+        ok(&mut h);
+        assert!(!editing(&h.app), "{:?}", h.app.dialog.as_ref().and_then(|d| d.error.clone()));
+        let sid = h.app.session.active_sketch.unwrap();
+        let LinkSource::Text { at, height, angle, exprs, .. } = h.app.session.doc.sketch(sid).unwrap().link(&link).unwrap().source.clone() else {
+            panic!("text source")
+        };
+        assert_eq!(
+            (exprs.x.as_deref(), exprs.y.as_deref(), exprs.height.as_deref(), exprs.angle.as_deref()),
+            (Some("tall + 5 mm"), None, Some("tall / 2"), Some("turn"))
+        );
+        assert!((at.x - 25.0).abs() < 1e-9 && (height - 10.0).abs() < 1e-9 && (angle - std::f64::consts::FRAC_PI_2).abs() < 1e-12);
+
+        // Opened again, the fields show the expressions; a number typed in one of the others
+        // leaves them alone.
+        select_text(&mut h, &link);
+        h.app.start("sketch.edit_text");
+        h.frames(3);
+        assert_eq!(tx(&h.app).values[0], "tall + 5 mm");
+        assert_eq!((tx(&h.app).values[2].as_str(), tx(&h.app).values[3].as_str()), ("tall / 2", "turn"));
+        replace(&mut h, "dialog:Y", "7");
+        ok(&mut h);
+        let exprs = exprs_of(&h, &link);
+        assert_eq!(
+            (exprs.x.as_deref(), exprs.y.as_deref(), exprs.height.as_deref(), exprs.angle.as_deref()),
+            (Some("tall + 5 mm"), None, Some("tall / 2"), Some("turn"))
+        );
+
+        // A parameter changes while the saved numbers are not yet worked out again: OK on an
+        // untouched dialog keeps the expressions, and the numbers follow the parameter.
+        h.app.run("parameters.change", json!({"name":"tall","expression":"40 mm"})).unwrap();
+        select_text(&mut h, &link);
+        h.app.start("sketch.edit_text");
+        h.frames(3);
+        ok(&mut h);
+        let LinkSource::Text { at, height, exprs, .. } = h.app.session.doc.sketch(sid).unwrap().link(&link).unwrap().source.clone() else {
+            panic!("text source")
+        };
+        assert_eq!((exprs.x.as_deref(), exprs.height.as_deref()), (Some("tall + 5 mm"), Some("tall / 2")));
+        assert!((at.x - 45.0).abs() < 1e-9 && (at.y - 7.0).abs() < 1e-9 && (height - 20.0).abs() < 1e-9, "{at:?} {height}");
+
+        // A number typed over an expression replaces it.
+        select_text(&mut h, &link);
+        h.app.start("sketch.edit_text");
+        h.frames(3);
+        replace(&mut h, "dialog:Height", "6");
+        ok(&mut h);
+        let exprs = exprs_of(&h, &link);
+        assert_eq!((exprs.height, exprs.x.as_deref()), (None, Some("tall + 5 mm")));
+        // A name that is no parameter is an error in the dialog; nothing changes.
+        select_text(&mut h, &link);
+        h.app.start("sketch.edit_text");
+        h.frames(3);
+        replace(&mut h, "dialog:Height", "nope * 2");
+        h.frames(2);
+        ok(&mut h);
+        assert!(editing(&h.app), "the dialog stays open on a field that cannot be used");
     }
 
     #[test]
@@ -1202,6 +1304,33 @@ mod tests {
         // Inside the O's counter, the text is picked too (its letters).
         assert_eq!(text_profiles(&h.app.session, sid, counter).map(|v| v.len()), Some(2));
         assert!(text_profiles(&h.app.session, sid, 99).is_none());
+    }
+
+    /// The text runs over the edge of what it is drawn on (a face's projected edge, here a drawn
+    /// rectangle whose top crosses both letters): each letter is cut into pieces bounded by the
+    /// text and the edge. A click on a piece still picks the whole text, every piece of both
+    /// letters and nothing else; a click round the letters picks no text.
+    #[test]
+    fn a_text_crossed_by_an_edge_is_picked_whole() {
+        let (mut h, sid, i, _, _) = letters();
+        let area = |h: &Harness, picked: &[usize]| {
+            let state = h.app.session.world_state();
+            let profiles = &state.sketch(sid).unwrap().profiles;
+            picked.iter().map(|&k| profiles[k].region.area()).sum::<f64>()
+        };
+        let whole = area(&h, &text_profiles(&h.app.session, sid, i).unwrap());
+        // The I's stem, below where the rectangle's top will cross it.
+        let stem = solidcraft_engine::geom::Vec2::new(h.app.session.world_state().sketch(sid).unwrap().profiles[i].centroid.x, 2.0);
+        h.app.run("sketch.rectangle.two_point", json!({"p0":[-5,-5],"p1":[40,8]})).unwrap();
+        let state = h.app.session.world_state();
+        let profiles = &state.sketch(sid).unwrap().profiles;
+        let below = solidcraft_engine::sketch::profile_at_point(profiles, stem).unwrap();
+        let picked = text_profiles(&h.app.session, sid, below).unwrap();
+        assert_eq!(picked[0], below);
+        assert!(picked.len() > 2, "the letters are cut in pieces: {picked:?}");
+        assert!((area(&h, &picked) - whole).abs() < 1e-5 * whole, "{} {whole}", area(&h, &picked));
+        let round = solidcraft_engine::sketch::profile_at_point(profiles, solidcraft_engine::geom::Vec2::new(-3.0, -3.0)).unwrap();
+        assert!(text_profiles(&h.app.session, sid, round).is_none());
     }
 
     #[test]

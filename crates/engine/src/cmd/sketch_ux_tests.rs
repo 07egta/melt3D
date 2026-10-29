@@ -60,7 +60,7 @@ fn every_dimension_kind_has_a_drawable_frame() {
     }
     for f in [
         DimFrame::Linear { p0: Default::default(), p1: Default::default(), dir: Default::default() },
-        DimFrame::Radial { center: Default::default(), radius: 1.0, diameter: true },
+        DimFrame::Radial { center: Default::default(), radius: 1.0, diameter: true, arc: None },
         DimFrame::Angular { vertex: Default::default(), d0: Default::default(), sweep: 1.0 },
         DimFrame::ArcLength { center: Default::default(), radius: 1.0, start: 0.0, sweep: 1.0 },
     ] {
@@ -1467,4 +1467,136 @@ fn a_live_drag_shares_one_decomposition_budget() {
     let d = super::drag::last_drag::get();
     assert!(d.count > 6, "{d:?}");
     assert!(d.work <= budget + one.work, "{d:?} over a budget of {budget}");
+}
+
+/// #1365: lines drawn by eye and a construction line through the origin, as in the report.
+fn drawn_by_eye() -> Session {
+    let mut s = new_sketch();
+    run(&mut s, "sketch.line", json!({"points": [[-56.7, 0], [56.7, 0]], "construction": true, "ids": ["hc"]}));
+    run(&mut s, "sketch.constraint.coincident", json!({"a": "origin", "b": "hc"}));
+    run(&mut s, "sketch.line", json!({"points": [[0, -54], [0, 55.2]], "construction": true, "ids": ["vc"]}));
+    run(&mut s, "sketch.constraint.coincident", json!({"a": "origin", "b": "vc"}));
+    run(
+        &mut s,
+        "sketch.line",
+        json!({"points": [[0, 26], [29.6, 26], [29.6, 41.2], [44, 41.2], [44, 0]], "infer": true, "ids": ["a", "b", "c", "d"]}),
+    );
+    run(&mut s, "sketch.constraint.coincident", json!({"a": "a.start", "b": "vc"}));
+    run(&mut s, "sketch.constraint.coincident", json!({"a": "d.end", "b": "hc"}));
+    s
+}
+
+#[test]
+fn the_first_dimension_scales_a_sketch_drawn_by_eye() {
+    let mut s = drawn_by_eye();
+    let before = sketch(&s);
+    let out = run(&mut s, "sketch.dimension", json!({"entities": ["vc", "b"], "value": "50 mm", "text_at": [15, 47], "scale_sketch": true}));
+    let f = 50.0 / 29.6;
+    assert!((out["scaled"].as_f64().unwrap() - f).abs() < 1e-6, "{out}");
+    assert!((out["measured"].as_f64().unwrap() - 50.0).abs() < 1e-6, "{out}");
+    // Every point scaled about the origin: the shape and the construction lines keep their
+    // directions (the vertical construction line stays vertical), only the size changes.
+    let after = sketch(&s);
+    for (p, q) in before.points.iter().zip(&after.points) {
+        assert!(q.pos.dist(p.pos * f) < 1e-6, "{} {:?} -> {:?}", p.id, p.pos, q.pos);
+    }
+    // The second dimension sizes the sketch as usual: nothing scales again.
+    let out = run(&mut s, "sketch.dimension", json!({"entities": ["c"], "value": "30 mm", "scale_sketch": true}));
+    assert!(out.get("scaled").is_none(), "{out}");
+    assert!((pt(&s, "c.end").x - pt(&s, "c.start").x - 30.0).abs() < 1e-6);
+    assert!((pt(&s, "b.start").x - pt(&s, "vc.start").x - 50.0).abs() < 1e-6);
+    // The construction line can still be made vertical (it already is: redundant, not a conflict).
+    run(&mut s, "sketch.constraint.horizontal_vertical", json!({"line": "vc"}));
+}
+
+#[test]
+fn the_first_dimension_does_not_scale_a_sketch_that_has_a_size() {
+    // A sketch with projected or fixed geometry, or another length dimension, already has a
+    // size: its first new dimension sizes what it measures as before.
+    let mut s = new_sketch();
+    run(&mut s, "sketch.rectangle.two_point", json!({"p0": [0, 0], "p1": [60, 40]}));
+    run(&mut s, "sketch.constraint.fix", json!({"entity": "l1.end"}));
+    let out = run(&mut s, "sketch.dimension", json!({"entities": ["l2"], "value": "50 mm", "scale_sketch": true}));
+    assert!(out.get("scaled").is_none(), "{out}");
+    // An angle never scales.
+    let mut s = new_sketch();
+    run(&mut s, "sketch.line", json!({"points": [[0, 0], [30, 0], [50, 20]]}));
+    let out = run(&mut s, "sketch.dimension", json!({"entities": ["l1", "l2"], "value": "60 deg", "scale_sketch": true}));
+    assert!(out.get("scaled").is_none(), "{out}");
+}
+
+/// The cursor fallback shares the held solves' frame budget; a scripted drag can finish later.
+#[test]
+fn cursor_fallback_respects_an_exhausted_live_frame_budget() {
+    let mut s = new_sketch();
+    run(&mut s, "sketch.line", json!({"points": [[0, 0], [-10, 0]], "ids": ["crank"], "infer": false}));
+    run(&mut s, "sketch.dimension", json!({"entities": ["crank"], "value": 10}));
+    let target = v(-10.0, 16.0);
+    let nearest = target * (10.0 / target.len());
+    super::drag::last_drag::with_frame_work(0, || {
+        run(&mut s, "sketch.drag", json!({"entity": "crank.end", "from": [-10, 0], "to": [target.x, target.y], "live": true}));
+    });
+    let at = pt(&s, "crank.end");
+    assert!(at.dist(nearest) > 1.0, "an exhausted frame must not start unbudgeted cursor work: {at:?}");
+    assert!((at.len() - 10.0).abs() < 1e-6);
+    assert!(s.model.state().sketch(s.active_sketch.unwrap()).unwrap().report.ok());
+    run(&mut s, "sketch.drag", json!({"entity": "crank.end", "from": [at.x, at.y], "to": [target.x, target.y], "live": false}));
+    assert!(pt(&s, "crank.end").dist(nearest) < 1e-4, "scripted motion retains the full cursor objective");
+}
+
+fn four_bar_drag_sketch() -> Session {
+    let mut s = new_sketch();
+    let x = -10.0 + (1600.0 - 400.0 + 52.0 * 52.0) / 104.0;
+    let y = -(1600.0_f64 - (x + 10.0) * (x + 10.0)).sqrt();
+    run(&mut s, "sketch.line", json!({"points":[[0,0],[-10,0],[x,y],[42,0]],"ids":["crank","coupler","rocker"],"infer":false}));
+    run(&mut s, "sketch.line", json!({"points":["crank.start","rocker.end"],"ids":["ground"],"infer":false}));
+    for (line, len) in [("crank", 10), ("coupler", 40), ("rocker", 20), ("ground", 42)] {
+        run(&mut s, "sketch.dimension", json!({"entities":[line],"value":len}));
+    }
+    run(&mut s, "sketch.constraint.horizontal_vertical", json!({"line":"ground"}));
+    s
+}
+
+#[test]
+fn releasing_a_budget_limited_four_bar_drag_finishes_with_a_bounded_budget() {
+    for (entity, fraction) in [("crank.end", 1.0), ("crank", 0.7)] {
+        let mut s = four_bar_drag_sketch();
+        let target = v(-10.0, 16.0) * fraction;
+        let nearest = target * (10.0 * fraction / target.len());
+        super::drag::last_drag::with_frame_work(0, || {
+            run(&mut s, "sketch.drag", json!({"entity":entity,"from":[-10.0*fraction,0],"to":[target.x,target.y],"live":true}));
+            let at = pt(&s, "crank.end") * fraction;
+            assert!(at.dist(nearest) > 0.5);
+        });
+        // The release is a new frame, with the same normal frame budget, not an unbounded
+        // final solve. The pointer has not moved since the budget-limited frame.
+        let at = pt(&s, "crank.end") * fraction;
+        run(&mut s, "sketch.drag", json!({"entity":entity,"from":[at.x,at.y],"to":[target.x,target.y],"live":true}));
+        assert!((pt(&s, "crank.end") * fraction).dist(nearest) < 1e-4);
+        run(&mut s, "sketch.drag_end", json!({}));
+        assert!((pt(&s, "crank.end") * fraction).dist(nearest) < 1e-4);
+    }
+}
+
+#[test]
+fn budget_limited_cursor_progress_requests_a_frame_with_the_same_target() {
+    let mut exercised = false;
+    for budget in [2048, 4096, 8192, 16384, 32768] {
+        let mut s = four_bar_drag_sketch();
+        let target = v(-7.0, 11.2);
+        let nearest = target * (7.0 / target.len());
+        let r = super::drag::last_drag::with_frame_work(budget, || {
+            run(&mut s, "sketch.drag", json!({"entity":"crank","from":[-7,0],"to":[target.x,target.y],"live":true}))
+        });
+        if r["retry"] != true {
+            continue;
+        }
+        exercised = true;
+        let at = pt(&s, "crank.end") * 0.7;
+        assert!(at.dist(target) < v(-7.0, 0.0).dist(target));
+        let r = run(&mut s, "sketch.drag", json!({"entity":"crank","from":[at.x,at.y],"to":[target.x,target.y],"live":true}));
+        assert!((pt(&s, "crank.end") * 0.7).dist(nearest) < 1e-4);
+        assert_eq!(r["retry"], false);
+    }
+    assert!(exercised, "exercise continuation after budget-limited progress");
 }

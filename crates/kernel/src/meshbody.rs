@@ -41,6 +41,17 @@ impl TriMesh {
     }
 
     /// Distinct undirected triangle sides.
+    /// The diagonal of the box around the vertices: a mesh body's size ([`Body::size`]),
+    /// measured once when the body is made. 0 when it has none.
+    pub(crate) fn span(&self) -> f64 {
+        let mut b = solidcraft_geom::Aabb3::EMPTY;
+        for p in &self.positions {
+            b.add(*p);
+        }
+        let d = b.diagonal();
+        if d.is_finite() && d > 0.0 { d } else { 0.0 }
+    }
+
     pub(crate) fn edge_count(&self) -> usize {
         let mut set = std::collections::HashSet::new();
         for t in &self.triangles {
@@ -49,15 +60,6 @@ impl TriMesh {
             }
         }
         set.len()
-    }
-
-    /// Signed volume ×6.
-    fn volume6(&self) -> f64 {
-        self.triangles
-            .iter()
-            .filter_map(|t| Some((self.positions.get(t[0] as usize)?, self.positions.get(t[1] as usize)?, self.positions.get(t[2] as usize)?)))
-            .map(|(a, b, c)| a.dot(b.cross(*c)))
-            .sum()
     }
 }
 
@@ -90,20 +92,25 @@ pub fn mesh_body(positions: &[Vec3], triangles: &[[u32; 3]]) -> Result<Body> {
         if a == b || b == c || c == a {
             continue;
         }
+        // a flat triangle (three distinct but collinear points) has no direction: drop it too
+        if let (Some(&pa), Some(&pb), Some(&pc)) = (out.positions.get(a as usize), out.positions.get(b as usize), out.positions.get(c as usize)) {
+            let (ab, ac, bc) = (pb - pa, pc - pa, pc - pb);
+            let longest = ab.len2().max(ac.len2()).max(bc.len2());
+            if ab.cross(ac).len() <= 1e-12 * longest {
+                continue;
+            }
+        }
         out.triangles.push([a, b, c]);
     }
     if out.triangles.is_empty() {
         return Err(KernelError::Invalid("mesh has no triangles".into()));
     }
     unify_winding(&mut out);
-    if out.volume6() < 0.0 && is_closed(&out) {
-        for t in &mut out.triangles {
-            t.swap(1, 2);
-        }
-    }
+    outward_per_shell(&mut out);
     Ok(Body {
         solid: Arc::new(crate::body::Solid::new_unchecked(Vec::new())),
-        size: 0.0,
+        size: out.span(),
+        boundary_tol: None,
         volume: Some(std::sync::Arc::new(std::sync::Mutex::new(None))),
         coarse_missing: None,
         mesh: Some(Arc::new(out)),
@@ -113,8 +120,60 @@ pub fn mesh_body(positions: &[Vec3], triangles: &[[u32; 3]]) -> Result<Body> {
         face_sources: None,
         history: None,
         display_of: None,
+        meshes: None,
+        phased: false,
         regularization_protected: false,
     })
+}
+
+/// Turn each separate closed shell outward on its own (a mesh of two far-apart solids may hold
+/// one inside-out file piece next to a right one, so the total volume says nothing).
+fn outward_per_shell(m: &mut TriMesh) {
+    let n = m.positions.len();
+    let mut parent: Vec<usize> = (0..n).collect();
+    fn find(p: &mut [usize], mut x: usize) -> usize {
+        while let Some(&q) = p.get(x) {
+            if q == x {
+                break;
+            }
+            let up = p.get(q).copied().unwrap_or(q);
+            if let Some(slot) = p.get_mut(x) {
+                *slot = up;
+            }
+            x = up;
+        }
+        x
+    }
+    for t in &m.triangles {
+        let (a, b, c) = (t[0] as usize, t[1] as usize, t[2] as usize);
+        let (ra, rb, rc) = (find(&mut parent, a), find(&mut parent, b), find(&mut parent, c));
+        if let Some(s) = parent.get_mut(rb) {
+            *s = ra;
+        }
+        if let Some(s) = parent.get_mut(rc) {
+            *s = ra;
+        }
+    }
+    let mut shells: HashMap<usize, Vec<usize>> = HashMap::new();
+    for (i, t) in m.triangles.iter().enumerate() {
+        let r = find(&mut parent, t[0] as usize);
+        shells.entry(r).or_default().push(i);
+    }
+    for list in shells.values() {
+        let tris: Vec<[u32; 3]> = list.iter().filter_map(|&i| m.triangles.get(i).copied()).collect();
+        let vol: f64 = tris
+            .iter()
+            .filter_map(|t| Some((m.positions.get(t[0] as usize)?, m.positions.get(t[1] as usize)?, m.positions.get(t[2] as usize)?)))
+            .map(|(a, b, c)| a.dot(b.cross(*c)))
+            .sum();
+        if vol < 0.0 && tris_closed(&tris) {
+            for &i in list {
+                if let Some(t) = m.triangles.get_mut(i) {
+                    t.swap(1, 2);
+                }
+            }
+        }
+    }
 }
 
 /// Wind every connected piece one way: a triangle that runs a side in the same direction as
@@ -161,8 +220,12 @@ fn unify_winding(m: &mut TriMesh) {
 
 /// Every triangle side is shared by exactly two triangles in opposite directions.
 pub(crate) fn is_closed(m: &TriMesh) -> bool {
+    tris_closed(&m.triangles)
+}
+
+fn tris_closed(triangles: &[[u32; 3]]) -> bool {
     let mut count: HashMap<(u32, u32), i32> = HashMap::new();
-    for t in &m.triangles {
+    for t in triangles {
         for (a, b) in [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
             *count.entry((a, b)).or_default() += 1;
         }
@@ -200,7 +263,8 @@ impl Body {
         }
         Some(Body {
             solid: self.solid.clone(),
-            size: 0.0,
+            size: out.span(),
+            boundary_tol: None,
             volume: Some(std::sync::Arc::new(std::sync::Mutex::new(None))),
             coarse_missing: None,
             mesh: Some(Arc::new(out)),
@@ -210,6 +274,8 @@ impl Body {
             face_sources: None,
             history: None,
             display_of: None,
+            meshes: None,
+            phased: false,
             regularization_protected: self.regularization_protected,
         })
     }

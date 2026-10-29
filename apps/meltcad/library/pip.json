@@ -1,0 +1,12128 @@
+{
+ "category": "プリントインプレース",
+ "items": [
+  {
+   "name": "ちょうつがいのはこ",
+   "tags": [
+    "box",
+    "hinge",
+    "hinged lid",
+    "print in place",
+    "はこ",
+    "ちょうつがい",
+    "ふた"
+   ],
+   "group": {
+    "name": "ちょうつがいのはこ",
+    "op": "Add",
+    "blend": 0.0,
+    "visible": true,
+    "shapes": [
+     {
+      "name": "はこ",
+      "kind": "Box",
+      "size": [
+       60.0,
+       40.0,
+       24.0
+      ],
+      "round": 1.0,
+      "pos": [
+       0,
+       0,
+       12.0
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.96,
+        0.46,
+        0.13
+       ],
+       "roughness": 0.45,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "中のくぼみ",
+      "kind": "Box",
+      "size": [
+       55,
+       35,
+       24
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       0,
+       14.5
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Subtract",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.9,
+        0.6,
+        0.5
+       ],
+       "roughness": 0.5,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "はこの耳L",
+      "kind": "Box",
+      "size": [
+       8.4,
+       6.5,
+       6
+      ],
+      "round": 0.0,
+      "pos": [
+       -15.8,
+       21.25,
+       21
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.96,
+        0.46,
+        0.13
+       ],
+       "roughness": 0.45,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "はこの耳R",
+      "kind": "Box",
+      "size": [
+       8.4,
+       6.5,
+       6
+      ],
+      "round": 0.0,
+      "pos": [
+       15.8,
+       21.25,
+       21
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.96,
+        0.46,
+        0.13
+       ],
+       "roughness": 0.45,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "ピン",
+      "kind": "Cylinder",
+      "size": [
+       2.0,
+       40,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       24.5,
+       24.6
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.9,
+        0.92,
+        0.96
+       ],
+       "roughness": 0.08,
+       "metallic": 1.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "ふた",
+      "kind": "Box",
+      "size": [
+       60.0,
+       40.0,
+       3
+      ],
+      "round": 1.0,
+      "pos": [
+       0,
+       6.696092558114845,
+       41.49736310199868
+      ],
+      "rot": [
+       -40.0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.2,
+        0.45,
+        0.85
+       ],
+       "roughness": 0.45,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "ふたのうで",
+      "kind": "Box",
+      "size": [
+       22,
+       5.5,
+       3
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       23.357559195952618,
+       27.51673259131645
+      ],
+      "rot": [
+       -40.0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.2,
+        0.45,
+        0.85
+       ],
+       "roughness": 0.45,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "ふたのそで",
+      "kind": "Tube",
+      "size": [
+       3.5,
+       0.9,
+       22
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       24.5,
+       24.6
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.2,
+        0.45,
+        0.85
+       ],
+       "roughness": 0.45,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     }
+    ]
+   }
+  },
+  {
+   "name": "ヒンジ",
+   "tags": [
+    "hinge",
+    "butterfly hinge",
+    "print in place",
+    "ヒンジ",
+    "ちょうつがい",
+    "つなぎ"
+   ],
+   "group": {
+    "name": "ヒンジ",
+    "op": "Add",
+    "blend": 0.0,
+    "visible": true,
+    "shapes": [
+     {
+      "name": "はねA",
+      "kind": "Box",
+      "size": [
+       40,
+       25.4,
+       2.0
+      ],
+      "round": 0.0,
+      "pos": [
+       0.0,
+       -17.3,
+       1.0
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.74,
+        0.76,
+        0.8
+       ],
+       "roughness": 0.28,
+       "metallic": 1.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "はねB",
+      "kind": "Box",
+      "size": [
+       40,
+       25.4,
+       2.0
+      ],
+      "round": 0.0,
+      "pos": [
+       0.0,
+       17.3,
+       1.0
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.86,
+        0.66,
+        0.32
+       ],
+       "roughness": 0.3,
+       "metallic": 1.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "ねじ穴",
+      "kind": "Cylinder",
+      "size": [
+       2.0,
+       6.0,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       -10.0,
+       -17.3,
+       1.0
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Subtract",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.9,
+        0.6,
+        0.5
+       ],
+       "roughness": 0.5,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "ねじ穴",
+      "kind": "Cylinder",
+      "size": [
+       2.0,
+       6.0,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       -10.0,
+       17.3,
+       1.0
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Subtract",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.9,
+        0.6,
+        0.5
+       ],
+       "roughness": 0.5,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "ねじ穴",
+      "kind": "Cylinder",
+      "size": [
+       2.0,
+       6.0,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       10.0,
+       -17.3,
+       1.0
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Subtract",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.9,
+        0.6,
+        0.5
+       ],
+       "roughness": 0.5,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "ねじ穴",
+      "kind": "Cylinder",
+      "size": [
+       2.0,
+       6.0,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       10.0,
+       17.3,
+       1.0
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Subtract",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.9,
+        0.6,
+        0.5
+       ],
+       "roughness": 0.5,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "くびれA",
+      "kind": "Cylinder",
+      "size": [
+       4.0,
+       7.52,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       -16.240000000000002,
+       0,
+       4.0
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.74,
+        0.76,
+        0.8
+       ],
+       "roughness": 0.28,
+       "metallic": 1.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "つなぎA",
+      "kind": "Box",
+      "size": [
+       7.52,
+       2.5,
+       2.0
+      ],
+      "round": 0.0,
+      "pos": [
+       -16.240000000000002,
+       -3.75,
+       1.0
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.74,
+        0.76,
+        0.8
+       ],
+       "roughness": 0.28,
+       "metallic": 1.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "くびれB",
+      "kind": "Tube",
+      "size": [
+       4.0,
+       1.9,
+       7.5200000000000005
+      ],
+      "round": 0.0,
+      "pos": [
+       -8.12,
+       0,
+       4.0
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.86,
+        0.66,
+        0.32
+       ],
+       "roughness": 0.3,
+       "metallic": 1.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "つなぎB",
+      "kind": "Box",
+      "size": [
+       7.5200000000000005,
+       2.5,
+       2.0
+      ],
+      "round": 0.0,
+      "pos": [
+       -8.12,
+       3.75,
+       1.0
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.86,
+        0.66,
+        0.32
+       ],
+       "roughness": 0.3,
+       "metallic": 1.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "くびれA",
+      "kind": "Cylinder",
+      "size": [
+       4.0,
+       7.5200000000000005,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       2.220446049250313e-15,
+       0,
+       4.0
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.74,
+        0.76,
+        0.8
+       ],
+       "roughness": 0.28,
+       "metallic": 1.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "つなぎA",
+      "kind": "Box",
+      "size": [
+       7.5200000000000005,
+       2.5,
+       2.0
+      ],
+      "round": 0.0,
+      "pos": [
+       2.220446049250313e-15,
+       -3.75,
+       1.0
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.74,
+        0.76,
+        0.8
+       ],
+       "roughness": 0.28,
+       "metallic": 1.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "くびれB",
+      "kind": "Tube",
+      "size": [
+       4.0,
+       1.9,
+       7.52
+      ],
+      "round": 0.0,
+      "pos": [
+       8.120000000000003,
+       0,
+       4.0
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.86,
+        0.66,
+        0.32
+       ],
+       "roughness": 0.3,
+       "metallic": 1.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "つなぎB",
+      "kind": "Box",
+      "size": [
+       7.52,
+       2.5,
+       2.0
+      ],
+      "round": 0.0,
+      "pos": [
+       8.120000000000003,
+       3.75,
+       1.0
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.86,
+        0.66,
+        0.32
+       ],
+       "roughness": 0.3,
+       "metallic": 1.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "くびれA",
+      "kind": "Cylinder",
+      "size": [
+       4.0,
+       7.52,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       16.240000000000002,
+       0,
+       4.0
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.74,
+        0.76,
+        0.8
+       ],
+       "roughness": 0.28,
+       "metallic": 1.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "つなぎA",
+      "kind": "Box",
+      "size": [
+       7.52,
+       2.5,
+       2.0
+      ],
+      "round": 0.0,
+      "pos": [
+       16.240000000000002,
+       -3.75,
+       1.0
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.74,
+        0.76,
+        0.8
+       ],
+       "roughness": 0.28,
+       "metallic": 1.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "ピン",
+      "kind": "Cylinder",
+      "size": [
+       1.5,
+       40,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       0.0,
+       0,
+       4.0
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.9,
+        0.92,
+        0.96
+       ],
+       "roughness": 0.08,
+       "metallic": 1.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     }
+    ]
+   }
+  },
+  {
+   "name": "くさり",
+   "tags": [
+    "chain",
+    "links",
+    "interlocked",
+    "print in place",
+    "くさり",
+    "チェーン",
+    "輪"
+   ],
+   "group": {
+    "name": "くさり",
+    "op": "Add",
+    "blend": 0.0,
+    "visible": true,
+    "shapes": [
+     {
+      "name": "くさりの輪1",
+      "kind": "Torus",
+      "size": [
+       10.0,
+       2.2,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       0,
+       12.2
+      ],
+      "rot": [
+       90,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.9,
+        0.92,
+        0.96
+       ],
+       "roughness": 0.08,
+       "metallic": 1.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "くさりの輪2",
+      "kind": "Torus",
+      "size": [
+       10.0,
+       2.2,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       0,
+       26.2
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.86,
+        0.66,
+        0.32
+       ],
+       "roughness": 0.3,
+       "metallic": 1.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "くさりの輪3",
+      "kind": "Torus",
+      "size": [
+       10.0,
+       2.2,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       0,
+       40.2
+      ],
+      "rot": [
+       90,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.9,
+        0.92,
+        0.96
+       ],
+       "roughness": 0.08,
+       "metallic": 1.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "くさりの輪4",
+      "kind": "Torus",
+      "size": [
+       10.0,
+       2.2,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       0,
+       54.2
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.86,
+        0.66,
+        0.32
+       ],
+       "roughness": 0.3,
+       "metallic": 1.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "くさりの輪5",
+      "kind": "Torus",
+      "size": [
+       10.0,
+       2.2,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       0,
+       68.2
+      ],
+      "rot": [
+       90,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.9,
+        0.92,
+        0.96
+       ],
+       "roughness": 0.08,
+       "metallic": 1.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     }
+    ]
+   }
+  },
+  {
+   "name": "ボールジョイント",
+   "tags": [
+    "ball joint",
+    "socket",
+    "ball and socket",
+    "print in place",
+    "ボール",
+    "ジョイント",
+    "玉"
+   ],
+   "group": {
+    "name": "ボールジョイント",
+    "op": "Add",
+    "blend": 0.0,
+    "visible": true,
+    "shapes": [
+     {
+      "name": "うけざら",
+      "kind": "Box",
+      "size": [
+       30,
+       30,
+       30
+      ],
+      "round": 1.0,
+      "pos": [
+       0,
+       0,
+       15
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.96,
+        0.46,
+        0.13
+       ],
+       "roughness": 0.45,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "玉のくぼみ",
+      "kind": "Sphere",
+      "size": [
+       8.6,
+       1,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       0,
+       15.0
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Subtract",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.9,
+        0.6,
+        0.5
+       ],
+       "roughness": 0.5,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "玉の口",
+      "kind": "Cylinder",
+      "size": [
+       5.0,
+       22,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       0,
+       26
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Subtract",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.9,
+        0.6,
+        0.5
+       ],
+       "roughness": 0.5,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "前の窓",
+      "kind": "Cylinder",
+      "size": [
+       6.0,
+       20,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       -15,
+       15.0
+      ],
+      "rot": [
+       90,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Subtract",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.9,
+        0.6,
+        0.5
+       ],
+       "roughness": 0.5,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "玉",
+      "kind": "Sphere",
+      "size": [
+       8.0,
+       1,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       0,
+       15.0
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.9,
+        0.92,
+        0.96
+       ],
+       "roughness": 0.08,
+       "metallic": 1.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "棒",
+      "kind": "Cylinder",
+      "size": [
+       3.5,
+       22,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       0,
+       26
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.9,
+        0.92,
+        0.96
+       ],
+       "roughness": 0.08,
+       "metallic": 1.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "うで",
+      "kind": "Box",
+      "size": [
+       30,
+       6,
+       6
+      ],
+      "round": 1.0,
+      "pos": [
+       0,
+       0,
+       39.5
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.2,
+        0.45,
+        0.85
+       ],
+       "roughness": 0.45,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "うでの先L",
+      "kind": "Sphere",
+      "size": [
+       4.0,
+       1,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       -15,
+       0,
+       39.5
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.2,
+        0.45,
+        0.85
+       ],
+       "roughness": 0.45,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "うでの先R",
+      "kind": "Sphere",
+      "size": [
+       4.0,
+       1,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       15,
+       0,
+       39.5
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.2,
+        0.45,
+        0.85
+       ],
+       "roughness": 0.45,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     }
+    ]
+   }
+  },
+  {
+   "name": "ギアのくみあわせ",
+   "tags": [
+    "gears",
+    "gear pair",
+    "meshing gears",
+    "print in place",
+    "ギア",
+    "歯車",
+    "くみあわせ"
+   ],
+   "group": {
+    "name": "ギアのくみあわせ",
+    "op": "Add",
+    "blend": 0.0,
+    "visible": true,
+    "shapes": [
+     {
+      "name": "歯車A",
+      "kind": "Extrude",
+      "size": [
+       6,
+       1,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       -12.3,
+       0,
+       6.6
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.85,
+        0.18,
+        0.15
+       ],
+       "roughness": 0.5,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        10.41017104442501,
+        -1.3705250183105415
+       ],
+       [
+        12.954407170243556,
+        -1.0878119633201013
+       ],
+       [
+        12.954407170243556,
+        1.0878119633201013
+       ],
+       [
+        10.41017104442501,
+        1.3705250183105415
+       ],
+       [
+        9.70073509136851,
+        4.018176039833443
+       ],
+       [
+        11.762751682058255,
+        5.535130790345944
+       ],
+       [
+        10.674939718738152,
+        7.419276379897611
+       ],
+       [
+        8.33021007305797,
+        6.391995004591566
+       ],
+       [
+        6.391995004591567,
+        8.33021007305797
+       ],
+       [
+        7.419276379897614,
+        10.674939718738152
+       ],
+       [
+        5.535130790345947,
+        11.762751682058253
+       ],
+       [
+        4.018176039833444,
+        9.70073509136851
+       ],
+       [
+        1.370525018310543,
+        10.41017104442501
+       ],
+       [
+        1.0878119633201007,
+        12.954407170243556
+       ],
+       [
+        -1.0878119633200993,
+        12.954407170243556
+       ],
+       [
+        -1.3705250183105417,
+        10.41017104442501
+       ],
+       [
+        -4.01817603983344,
+        9.700735091368513
+       ],
+       [
+        -5.53513079034594,
+        11.762751682058257
+       ],
+       [
+        -7.419276379897611,
+        10.674939718738154
+       ],
+       [
+        -6.391995004591563,
+        8.330210073057971
+       ],
+       [
+        -8.330210073057968,
+        6.391995004591569
+       ],
+       [
+        -10.674939718738148,
+        7.419276379897618
+       ],
+       [
+        -11.762751682058251,
+        5.5351307903459475
+       ],
+       [
+        -9.700735091368509,
+        4.018176039833448
+       ],
+       [
+        -10.41017104442501,
+        1.3705250183105415
+       ],
+       [
+        -12.954407170243556,
+        1.0878119633201044
+       ],
+       [
+        -12.954407170243556,
+        -1.0878119633201013
+       ],
+       [
+        -10.41017104442501,
+        -1.3705250183105389
+       ],
+       [
+        -9.700735091368513,
+        -4.018176039833442
+       ],
+       [
+        -11.762751682058257,
+        -5.5351307903459395
+       ],
+       [
+        -10.674939718738154,
+        -7.419276379897611
+       ],
+       [
+        -8.330210073057971,
+        -6.391995004591563
+       ],
+       [
+        -6.391995004591569,
+        -8.330210073057966
+       ],
+       [
+        -7.419276379897618,
+        -10.674939718738148
+       ],
+       [
+        -5.535130790345948,
+        -11.762751682058251
+       ],
+       [
+        -4.018176039833449,
+        -9.700735091368509
+       ],
+       [
+        -1.3705250183105422,
+        -10.41017104442501
+       ],
+       [
+        -1.0878119633201053,
+        -12.954407170243556
+       ],
+       [
+        1.0878119633201004,
+        -12.954407170243556
+       ],
+       [
+        1.3705250183105384,
+        -10.41017104442501
+       ],
+       [
+        4.0181760398334365,
+        -9.700735091368513
+       ],
+       [
+        5.535130790345934,
+        -11.762751682058258
+       ],
+       [
+        7.419276379897605,
+        -10.674939718738157
+       ],
+       [
+        6.391995004591559,
+        -8.330210073057975
+       ],
+       [
+        8.330210073057966,
+        -6.391995004591569
+       ],
+       [
+        10.674939718738148,
+        -7.419276379897619
+       ],
+       [
+        11.762751682058251,
+        -5.535130790345949
+       ],
+       [
+        9.700735091368509,
+        -4.018176039833449
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "軸あなA",
+      "kind": "Cylinder",
+      "size": [
+       3.1,
+       10,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       -12.3,
+       0,
+       6.6
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Subtract",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.9,
+        0.6,
+        0.5
+       ],
+       "roughness": 0.5,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "歯車B",
+      "kind": "Extrude",
+      "size": [
+       6,
+       1,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       12.3,
+       0,
+       6.6
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.2,
+        0.45,
+        0.85
+       ],
+       "roughness": 0.45,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        10.41017104442501,
+        1.3705250183105415
+       ],
+       [
+        12.794542903600146,
+        2.3021016241545826
+       ],
+       [
+        12.231449996404931,
+        4.403592963188788
+       ],
+       [
+        9.70073509136851,
+        4.018176039833443
+       ],
+       [
+        8.33021007305797,
+        6.391995004591567
+       ],
+       [
+        9.929348372250349,
+        8.390949940411357
+       ],
+       [
+        8.390949940411359,
+        9.929348372250347
+       ],
+       [
+        6.391995004591567,
+        8.33021007305797
+       ],
+       [
+        4.018176039833445,
+        9.700735091368509
+       ],
+       [
+        4.403592963188789,
+        12.231449996404931
+       ],
+       [
+        2.3021016241545866,
+        12.794542903600144
+       ],
+       [
+        1.370525018310543,
+        10.41017104442501
+       ],
+       [
+        -1.3705250183105395,
+        10.41017104442501
+       ],
+       [
+        -2.3021016241545826,
+        12.794542903600146
+       ],
+       [
+        -4.403592963188785,
+        12.231449996404933
+       ],
+       [
+        -4.018176039833442,
+        9.70073509136851
+       ],
+       [
+        -6.391995004591567,
+        8.33021007305797
+       ],
+       [
+        -8.390949940411355,
+        9.92934837225035
+       ],
+       [
+        -9.929348372250349,
+        8.390949940411357
+       ],
+       [
+        -8.330210073057968,
+        6.391995004591569
+       ],
+       [
+        -9.70073509136851,
+        4.018176039833444
+       ],
+       [
+        -12.23144999640493,
+        4.4035929631887925
+       ],
+       [
+        -12.794542903600144,
+        2.3021016241545844
+       ],
+       [
+        -10.41017104442501,
+        1.370525018310546
+       ],
+       [
+        -10.41017104442501,
+        -1.3705250183105435
+       ],
+       [
+        -12.794542903600146,
+        -2.3021016241545813
+       ],
+       [
+        -12.231449996404931,
+        -4.403592963188789
+       ],
+       [
+        -9.700735091368513,
+        -4.018176039833442
+       ],
+       [
+        -8.33021007305797,
+        -6.391995004591567
+       ],
+       [
+        -9.92934837225035,
+        -8.390949940411353
+       ],
+       [
+        -8.390949940411359,
+        -9.929348372250347
+       ],
+       [
+        -6.391995004591569,
+        -8.330210073057966
+       ],
+       [
+        -4.018176039833449,
+        -9.700735091368509
+       ],
+       [
+        -4.403592963188799,
+        -12.231449996404926
+       ],
+       [
+        -2.302101624154591,
+        -12.794542903600142
+       ],
+       [
+        -1.370525018310551,
+        -10.410171044425008
+       ],
+       [
+        1.3705250183105384,
+        -10.41017104442501
+       ],
+       [
+        2.302101624154575,
+        -12.794542903600146
+       ],
+       [
+        4.403592963188784,
+        -12.231449996404933
+       ],
+       [
+        4.0181760398334365,
+        -9.700735091368513
+       ],
+       [
+        6.391995004591559,
+        -8.330210073057975
+       ],
+       [
+        8.390949940411344,
+        -9.92934837225036
+       ],
+       [
+        9.92934837225034,
+        -8.390949940411367
+       ],
+       [
+        8.33021007305796,
+        -6.391995004591577
+       ],
+       [
+        9.700735091368509,
+        -4.018176039833449
+       ],
+       [
+        12.231449996404926,
+        -4.4035929631888
+       ],
+       [
+        12.794542903600142,
+        -2.302101624154592
+       ],
+       [
+        10.410171044425008,
+        -1.370525018310552
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "軸あなB",
+      "kind": "Cylinder",
+      "size": [
+       3.1,
+       10,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       12.3,
+       0,
+       6.6
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Subtract",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.9,
+        0.6,
+        0.5
+       ],
+       "roughness": 0.5,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "だい",
+      "kind": "Box",
+      "size": [
+       80,
+       40,
+       3
+      ],
+      "round": 1.0,
+      "pos": [
+       0,
+       0,
+       1.5
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.56,
+        0.58,
+        0.61
+       ],
+       "roughness": 0.55,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "軸A",
+      "kind": "Cylinder",
+      "size": [
+       2.5,
+       12.2,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       -12.3,
+       0,
+       6.1
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.9,
+        0.92,
+        0.96
+       ],
+       "roughness": 0.08,
+       "metallic": 1.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "ふたA",
+      "kind": "Cylinder",
+      "size": [
+       4.5,
+       2.0,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       -12.3,
+       0,
+       11.2
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.9,
+        0.92,
+        0.96
+       ],
+       "roughness": 0.08,
+       "metallic": 1.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "軸B",
+      "kind": "Cylinder",
+      "size": [
+       2.5,
+       12.2,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       12.3,
+       0,
+       6.1
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.9,
+        0.92,
+        0.96
+       ],
+       "roughness": 0.08,
+       "metallic": 1.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "ふたB",
+      "kind": "Cylinder",
+      "size": [
+       4.5,
+       2.0,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       12.3,
+       0,
+       11.2
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.9,
+        0.92,
+        0.96
+       ],
+       "roughness": 0.08,
+       "metallic": 1.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     }
+    ]
+   }
+  },
+  {
+   "name": "ベアリング",
+   "tags": [
+    "bearing",
+    "ball bearing",
+    "race",
+    "print in place",
+    "ベアリング",
+    "玉軸受",
+    "ボール"
+   ],
+   "group": {
+    "name": "ベアリング",
+    "op": "Add",
+    "blend": 0.0,
+    "visible": true,
+    "shapes": [
+     {
+      "name": "保持器",
+      "kind": "Tube",
+      "size": [
+       14.5,
+       3,
+       5
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       0,
+       3.5
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.96,
+        0.46,
+        0.13
+       ],
+       "roughness": 0.45,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "ボールのあな1",
+      "kind": "Sphere",
+      "size": [
+       3.0,
+       1,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       13.0,
+       0.0,
+       3.5
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Subtract",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.9,
+        0.6,
+        0.5
+       ],
+       "roughness": 0.5,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "ボールのあな2",
+      "kind": "Sphere",
+      "size": [
+       3.0,
+       1,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       9.19238815542512,
+       9.192388155425117,
+       3.5
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Subtract",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.9,
+        0.6,
+        0.5
+       ],
+       "roughness": 0.5,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "ボールのあな3",
+      "kind": "Sphere",
+      "size": [
+       3.0,
+       1,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       7.960204194457795e-16,
+       13.0,
+       3.5
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Subtract",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.9,
+        0.6,
+        0.5
+       ],
+       "roughness": 0.5,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "ボールのあな4",
+      "kind": "Sphere",
+      "size": [
+       3.0,
+       1,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       -9.192388155425117,
+       9.19238815542512,
+       3.5
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Subtract",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.9,
+        0.6,
+        0.5
+       ],
+       "roughness": 0.5,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "ボールのあな5",
+      "kind": "Sphere",
+      "size": [
+       3.0,
+       1,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       -13.0,
+       1.592040838891559e-15,
+       3.5
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Subtract",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.9,
+        0.6,
+        0.5
+       ],
+       "roughness": 0.5,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "ボールのあな6",
+      "kind": "Sphere",
+      "size": [
+       3.0,
+       1,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       -9.19238815542512,
+       -9.192388155425117,
+       3.5
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Subtract",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.9,
+        0.6,
+        0.5
+       ],
+       "roughness": 0.5,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "ボールのあな7",
+      "kind": "Sphere",
+      "size": [
+       3.0,
+       1,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       -2.3880612583373385e-15,
+       -13.0,
+       3.5
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Subtract",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.9,
+        0.6,
+        0.5
+       ],
+       "roughness": 0.5,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "ボールのあな8",
+      "kind": "Sphere",
+      "size": [
+       3.0,
+       1,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       9.192388155425116,
+       -9.19238815542512,
+       3.5
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Subtract",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.9,
+        0.6,
+        0.5
+       ],
+       "roughness": 0.5,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "ボール1",
+      "kind": "Sphere",
+      "size": [
+       2.5,
+       1,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       13.0,
+       0.0,
+       3.5
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.9,
+        0.92,
+        0.96
+       ],
+       "roughness": 0.08,
+       "metallic": 1.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "ボール2",
+      "kind": "Sphere",
+      "size": [
+       2.5,
+       1,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       9.19238815542512,
+       9.192388155425117,
+       3.5
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.9,
+        0.92,
+        0.96
+       ],
+       "roughness": 0.08,
+       "metallic": 1.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "ボール3",
+      "kind": "Sphere",
+      "size": [
+       2.5,
+       1,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       7.960204194457795e-16,
+       13.0,
+       3.5
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.9,
+        0.92,
+        0.96
+       ],
+       "roughness": 0.08,
+       "metallic": 1.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "ボール4",
+      "kind": "Sphere",
+      "size": [
+       2.5,
+       1,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       -9.192388155425117,
+       9.19238815542512,
+       3.5
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.9,
+        0.92,
+        0.96
+       ],
+       "roughness": 0.08,
+       "metallic": 1.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "ボール5",
+      "kind": "Sphere",
+      "size": [
+       2.5,
+       1,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       -13.0,
+       1.592040838891559e-15,
+       3.5
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.9,
+        0.92,
+        0.96
+       ],
+       "roughness": 0.08,
+       "metallic": 1.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "ボール6",
+      "kind": "Sphere",
+      "size": [
+       2.5,
+       1,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       -9.19238815542512,
+       -9.192388155425117,
+       3.5
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.9,
+        0.92,
+        0.96
+       ],
+       "roughness": 0.08,
+       "metallic": 1.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "ボール7",
+      "kind": "Sphere",
+      "size": [
+       2.5,
+       1,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       -2.3880612583373385e-15,
+       -13.0,
+       3.5
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.9,
+        0.92,
+        0.96
+       ],
+       "roughness": 0.08,
+       "metallic": 1.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "ボール8",
+      "kind": "Sphere",
+      "size": [
+       2.5,
+       1,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       9.192388155425116,
+       -9.19238815542512,
+       3.5
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.9,
+        0.92,
+        0.96
+       ],
+       "roughness": 0.08,
+       "metallic": 1.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "外のわ",
+      "kind": "Tube",
+      "size": [
+       20,
+       4,
+       7
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       0,
+       3.5
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.74,
+        0.76,
+        0.8
+       ],
+       "roughness": 0.28,
+       "metallic": 1.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "のぞき窓",
+      "kind": "Box",
+      "size": [
+       10,
+       10,
+       5
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       -20.7,
+       3.5
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Subtract",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.9,
+        0.6,
+        0.5
+       ],
+       "roughness": 0.5,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "内のわ",
+      "kind": "Tube",
+      "size": [
+       10,
+       3,
+       7
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       0,
+       3.5
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.86,
+        0.66,
+        0.32
+       ],
+       "roughness": 0.3,
+       "metallic": 1.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     }
+    ]
+   }
+  },
+  {
+   "name": "スライダー",
+   "tags": [
+    "slider",
+    "rail",
+    "sliding block",
+    "print in place",
+    "スライダー",
+    "レール",
+    "すべり"
+   ],
+   "group": {
+    "name": "スライダー",
+    "op": "Add",
+    "blend": 0.0,
+    "visible": true,
+    "shapes": [
+     {
+      "name": "スライダー",
+      "kind": "Box",
+      "size": [
+       24,
+       16,
+       16
+      ],
+      "round": 1.0,
+      "pos": [
+       0,
+       0,
+       16
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.96,
+        0.46,
+        0.13
+       ],
+       "roughness": 0.45,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "レールのあな",
+      "kind": "Cylinder",
+      "size": [
+       4.6,
+       40,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       0,
+       16
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Subtract",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.9,
+        0.6,
+        0.5
+       ],
+       "roughness": 0.5,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "つまみ",
+      "kind": "Box",
+      "size": [
+       10,
+       10,
+       6
+      ],
+      "round": 1.0,
+      "pos": [
+       0,
+       0,
+       27
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.2,
+        0.45,
+        0.85
+       ],
+       "roughness": 0.45,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "だい",
+      "kind": "Box",
+      "size": [
+       90,
+       30,
+       3
+      ],
+      "round": 0.5,
+      "pos": [
+       0,
+       0,
+       1.5
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.56,
+        0.58,
+        0.61
+       ],
+       "roughness": 0.55,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "はしらL",
+      "kind": "Box",
+      "size": [
+       6,
+       12,
+       13
+      ],
+      "round": 0.0,
+      "pos": [
+       -30,
+       0,
+       9.5
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.56,
+        0.58,
+        0.61
+       ],
+       "roughness": 0.55,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "はしらR",
+      "kind": "Box",
+      "size": [
+       6,
+       12,
+       13
+      ],
+      "round": 0.0,
+      "pos": [
+       30,
+       0,
+       9.5
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.56,
+        0.58,
+        0.61
+       ],
+       "roughness": 0.55,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "レール",
+      "kind": "Cylinder",
+      "size": [
+       4.0,
+       62,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       0,
+       16
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.9,
+        0.92,
+        0.96
+       ],
+       "roughness": 0.08,
+       "metallic": 1.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     }
+    ]
+   }
+  },
+  {
+   "name": "スピナー",
+   "tags": [
+    "spinner",
+    "fidget spinner",
+    "fidget",
+    "print in place",
+    "スピナー",
+    "ファイドゲット",
+    "こま"
+   ],
+   "group": {
+    "name": "スピナー",
+    "op": "Add",
+    "blend": 0.0,
+    "visible": true,
+    "shapes": [
+     {
+      "name": "ハブ",
+      "kind": "Tube",
+      "size": [
+       7,
+       2.4,
+       7.6
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       0,
+       7.4
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.85,
+        0.18,
+        0.15
+       ],
+       "roughness": 0.5,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "うで1",
+      "kind": "Box",
+      "size": [
+       14,
+       6,
+       7.6
+      ],
+      "round": 1.0,
+      "pos": [
+       12.0,
+       0.0,
+       7.4
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.85,
+        0.18,
+        0.15
+       ],
+       "roughness": 0.5,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "うで2",
+      "kind": "Box",
+      "size": [
+       14,
+       6,
+       7.6
+      ],
+      "round": 1.0,
+      "pos": [
+       -5.999999999999997,
+       10.392304845413264,
+       7.4
+      ],
+      "rot": [
+       0,
+       0,
+       120
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.85,
+        0.18,
+        0.15
+       ],
+       "roughness": 0.5,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "うで3",
+      "kind": "Box",
+      "size": [
+       14,
+       6,
+       7.6
+      ],
+      "round": 1.0,
+      "pos": [
+       -6.000000000000005,
+       -10.39230484541326,
+       7.4
+      ],
+      "rot": [
+       0,
+       0,
+       240
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.85,
+        0.18,
+        0.15
+       ],
+       "roughness": 0.5,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "おもり1",
+      "kind": "Cylinder",
+      "size": [
+       8,
+       7.6,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       18.0,
+       0.0,
+       7.4
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.85,
+        0.18,
+        0.15
+       ],
+       "roughness": 0.5,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "おもり2",
+      "kind": "Cylinder",
+      "size": [
+       8,
+       7.6,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       -8.999999999999996,
+       15.588457268119896,
+       7.4
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.85,
+        0.18,
+        0.15
+       ],
+       "roughness": 0.5,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "おもり3",
+      "kind": "Cylinder",
+      "size": [
+       8,
+       7.6,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       -9.000000000000007,
+       -15.58845726811989,
+       7.4
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.85,
+        0.18,
+        0.15
+       ],
+       "roughness": 0.5,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "おもりのあな1",
+      "kind": "Cylinder",
+      "size": [
+       3,
+       10,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       18.0,
+       0.0,
+       7.4
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Subtract",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.9,
+        0.6,
+        0.5
+       ],
+       "roughness": 0.5,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "おもりのあな2",
+      "kind": "Cylinder",
+      "size": [
+       3,
+       10,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       -8.999999999999996,
+       15.588457268119896,
+       7.4
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Subtract",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.9,
+        0.6,
+        0.5
+       ],
+       "roughness": 0.5,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "おもりのあな3",
+      "kind": "Cylinder",
+      "size": [
+       3,
+       10,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       -9.000000000000007,
+       -15.58845726811989,
+       7.4
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Subtract",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.9,
+        0.6,
+        0.5
+       ],
+       "roughness": 0.5,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "台",
+      "kind": "Cylinder",
+      "size": [
+       34,
+       3,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       0,
+       1.5
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.56,
+        0.58,
+        0.61
+       ],
+       "roughness": 0.55,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "くい",
+      "kind": "Cylinder",
+      "size": [
+       4,
+       14,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       0,
+       7
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.56,
+        0.58,
+        0.61
+       ],
+       "roughness": 0.55,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "ぼうし",
+      "kind": "Cylinder",
+      "size": [
+       6,
+       2.2,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       0,
+       12.9
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.56,
+        0.58,
+        0.61
+       ],
+       "roughness": 0.55,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     }
+    ]
+   }
+  },
+  {
+   "name": "フレキシへび",
+   "tags": [
+    "snake",
+    "flexi",
+    "articulated",
+    "segments",
+    "print in place",
+    "へび",
+    "ヘビ"
+   ],
+   "group": {
+    "name": "フレキシへび",
+    "op": "Add",
+    "blend": 0.0,
+    "visible": true,
+    "shapes": [
+     {
+      "name": "あたま",
+      "kind": "Box",
+      "size": [
+       14,
+       16,
+       14
+      ],
+      "round": 4.0,
+      "pos": [
+       0,
+       0,
+       10.0
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.96,
+        0.46,
+        0.13
+       ],
+       "roughness": 0.45,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "体1",
+      "kind": "Box",
+      "size": [
+       8.0,
+       14.4,
+       11.6
+      ],
+      "round": 2.5,
+      "pos": [
+       -11.6,
+       0,
+       10.0
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.3,
+        0.72,
+        0.38
+       ],
+       "roughness": 0.5,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "体1のあな",
+      "kind": "Cylinder",
+      "size": [
+       2.1,
+       8.2,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       -11.6,
+       0,
+       10.0
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Subtract",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.9,
+        0.6,
+        0.5
+       ],
+       "roughness": 0.5,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "体2",
+      "kind": "Box",
+      "size": [
+       8.0,
+       13.8,
+       11.2
+      ],
+      "round": 2.5,
+      "pos": [
+       -20.2,
+       0,
+       10.0
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.2,
+        0.45,
+        0.85
+       ],
+       "roughness": 0.45,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "体2のあな",
+      "kind": "Cylinder",
+      "size": [
+       2.1,
+       8.2,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       -20.2,
+       0,
+       10.0
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Subtract",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.9,
+        0.6,
+        0.5
+       ],
+       "roughness": 0.5,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "体3",
+      "kind": "Box",
+      "size": [
+       8.0,
+       13.2,
+       10.8
+      ],
+      "round": 2.5,
+      "pos": [
+       -28.799999999999997,
+       0,
+       10.0
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.3,
+        0.72,
+        0.38
+       ],
+       "roughness": 0.5,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "体3のあな",
+      "kind": "Cylinder",
+      "size": [
+       2.1,
+       8.2,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       -28.799999999999997,
+       0,
+       10.0
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Subtract",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.9,
+        0.6,
+        0.5
+       ],
+       "roughness": 0.5,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "体4",
+      "kind": "Box",
+      "size": [
+       8.0,
+       12.6,
+       10.4
+      ],
+      "round": 2.5,
+      "pos": [
+       -37.4,
+       0,
+       10.0
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.2,
+        0.45,
+        0.85
+       ],
+       "roughness": 0.45,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "体4のあな",
+      "kind": "Cylinder",
+      "size": [
+       2.1,
+       8.2,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       -37.4,
+       0,
+       10.0
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Subtract",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.9,
+        0.6,
+        0.5
+       ],
+       "roughness": 0.5,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "体5",
+      "kind": "Box",
+      "size": [
+       8.0,
+       12.0,
+       10.0
+      ],
+      "round": 2.5,
+      "pos": [
+       -46.0,
+       0,
+       10.0
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.3,
+        0.72,
+        0.38
+       ],
+       "roughness": 0.5,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "体5のあな",
+      "kind": "Cylinder",
+      "size": [
+       2.1,
+       8.2,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       -46.0,
+       0,
+       10.0
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Subtract",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.9,
+        0.6,
+        0.5
+       ],
+       "roughness": 0.5,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "体6",
+      "kind": "Box",
+      "size": [
+       8.0,
+       11.4,
+       9.6
+      ],
+      "round": 2.5,
+      "pos": [
+       -54.6,
+       0,
+       10.0
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.2,
+        0.45,
+        0.85
+       ],
+       "roughness": 0.45,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "体6のあな",
+      "kind": "Cylinder",
+      "size": [
+       2.1,
+       8.2,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       -54.6,
+       0,
+       10.0
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Subtract",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.9,
+        0.6,
+        0.5
+       ],
+       "roughness": 0.5,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "体7",
+      "kind": "Box",
+      "size": [
+       8.0,
+       10.8,
+       9.2
+      ],
+      "round": 2.5,
+      "pos": [
+       -63.2,
+       0,
+       10.0
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.3,
+        0.72,
+        0.38
+       ],
+       "roughness": 0.5,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "体7のあな",
+      "kind": "Cylinder",
+      "size": [
+       2.1,
+       8.2,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       -63.2,
+       0,
+       10.0
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Subtract",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.9,
+        0.6,
+        0.5
+       ],
+       "roughness": 0.5,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "せぼね",
+      "kind": "Curve",
+      "size": [
+       1,
+       1,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       0,
+       0
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.07,
+        0.07,
+        0.08
+       ],
+       "roughness": 0.4,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0.7,
+       0,
+       1
+      ],
+      "path": [
+       [
+        -63.2,
+        0,
+        10.0,
+        1.5
+       ],
+       [
+        -58.98666666666667,
+        0,
+        10.0,
+        1.5
+       ],
+       [
+        -54.77333333333333,
+        0,
+        10.0,
+        1.5
+       ],
+       [
+        -50.56,
+        0,
+        10.0,
+        1.5
+       ],
+       [
+        -46.346666666666664,
+        0,
+        10.0,
+        1.5
+       ],
+       [
+        -42.13333333333334,
+        0,
+        10.0,
+        1.5
+       ],
+       [
+        -37.92,
+        0,
+        10.0,
+        1.5
+       ],
+       [
+        -33.70666666666666,
+        0,
+        10.0,
+        1.5
+       ],
+       [
+        -29.493333333333332,
+        0,
+        10.0,
+        1.5
+       ],
+       [
+        -25.28,
+        0,
+        10.0,
+        1.5
+       ],
+       [
+        -21.06666666666667,
+        0,
+        10.0,
+        1.5
+       ],
+       [
+        -16.85333333333333,
+        0,
+        10.0,
+        1.5
+       ],
+       [
+        -12.639999999999993,
+        0,
+        10.0,
+        1.5
+       ],
+       [
+        -8.42666666666667,
+        0,
+        10.0,
+        1.5
+       ],
+       [
+        -4.213333333333331,
+        0,
+        10.0,
+        1.5
+       ],
+       [
+        0.0,
+        0,
+        10.0,
+        1.5
+       ]
+      ],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "め",
+      "kind": "Sphere",
+      "size": [
+       1.8,
+       1,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       5.0,
+       -6.5,
+       13.0
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.07,
+        0.07,
+        0.08
+       ],
+       "roughness": 0.4,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "め",
+      "kind": "Sphere",
+      "size": [
+       1.8,
+       1,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       5.0,
+       6.5,
+       13.0
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.07,
+        0.07,
+        0.08
+       ],
+       "roughness": 0.4,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     }
+    ]
+   }
+  },
+  {
+   "name": "フレキシさかな",
+   "tags": [
+    "fish",
+    "flexi fish",
+    "articulated",
+    "print in place",
+    "さかな",
+    "魚",
+    "おさかな"
+   ],
+   "group": {
+    "name": "フレキシさかな",
+    "op": "Add",
+    "blend": 0.0,
+    "visible": true,
+    "shapes": [
+     {
+      "name": "あたま",
+      "kind": "Box",
+      "size": [
+       16,
+       18,
+       16
+      ],
+      "round": 6.0,
+      "pos": [
+       0,
+       0,
+       12.0
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.96,
+        0.46,
+        0.13
+       ],
+       "roughness": 0.45,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "体1",
+      "kind": "Box",
+      "size": [
+       9,
+       16,
+       14
+      ],
+      "round": 3.0,
+      "pos": [
+       -13.1,
+       0,
+       12.0
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.3,
+        0.72,
+        0.38
+       ],
+       "roughness": 0.5,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "体1のあな",
+      "kind": "Cylinder",
+      "size": [
+       2.1,
+       9.2,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       -13.1,
+       0,
+       12.0
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Subtract",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.9,
+        0.6,
+        0.5
+       ],
+       "roughness": 0.5,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "体2",
+      "kind": "Box",
+      "size": [
+       9,
+       15,
+       13
+      ],
+      "round": 3.0,
+      "pos": [
+       -22.7,
+       0,
+       12.0
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.3,
+        0.72,
+        0.38
+       ],
+       "roughness": 0.5,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "体2のあな",
+      "kind": "Cylinder",
+      "size": [
+       2.1,
+       9.2,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       -22.7,
+       0,
+       12.0
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Subtract",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.9,
+        0.6,
+        0.5
+       ],
+       "roughness": 0.5,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "体3",
+      "kind": "Box",
+      "size": [
+       9,
+       13,
+       11
+      ],
+      "round": 3.0,
+      "pos": [
+       -32.3,
+       0,
+       12.0
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.3,
+        0.72,
+        0.38
+       ],
+       "roughness": 0.5,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "体3のあな",
+      "kind": "Cylinder",
+      "size": [
+       2.1,
+       9.2,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       -32.3,
+       0,
+       12.0
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Subtract",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.9,
+        0.6,
+        0.5
+       ],
+       "roughness": 0.5,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "しっぽ",
+      "kind": "Extrude",
+      "size": [
+       3,
+       1,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       -38.4,
+       0,
+       12.0
+      ],
+      "rot": [
+       90,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.2,
+        0.45,
+        0.85
+       ],
+       "roughness": 0.45,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        1,
+        0
+       ],
+       [
+        -12,
+        -9
+       ],
+       [
+        -9,
+        0
+       ],
+       [
+        -12,
+        9
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "せびれ",
+      "kind": "Extrude",
+      "size": [
+       2,
+       1,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       -13.1,
+       0,
+       18
+      ],
+      "rot": [
+       90,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.2,
+        0.45,
+        0.85
+       ],
+       "roughness": 0.45,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -5,
+        0
+       ],
+       [
+        0,
+        9
+       ],
+       [
+        5,
+        0
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "せぼね",
+      "kind": "Curve",
+      "size": [
+       1,
+       1,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       0,
+       0
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.07,
+        0.07,
+        0.08
+       ],
+       "roughness": 0.4,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0.7,
+       0,
+       1
+      ],
+      "path": [
+       [
+        -40.4,
+        0,
+        12.0,
+        1.5
+       ],
+       [
+        -37.70666666666666,
+        0,
+        12.0,
+        1.5
+       ],
+       [
+        -35.013333333333335,
+        0,
+        12.0,
+        1.5
+       ],
+       [
+        -32.32,
+        0,
+        12.0,
+        1.5
+       ],
+       [
+        -29.626666666666665,
+        0,
+        12.0,
+        1.5
+       ],
+       [
+        -26.93333333333333,
+        0,
+        12.0,
+        1.5
+       ],
+       [
+        -24.24,
+        0,
+        12.0,
+        1.5
+       ],
+       [
+        -21.546666666666663,
+        0,
+        12.0,
+        1.5
+       ],
+       [
+        -18.85333333333333,
+        0,
+        12.0,
+        1.5
+       ],
+       [
+        -16.16,
+        0,
+        12.0,
+        1.5
+       ],
+       [
+        -13.466666666666665,
+        0,
+        12.0,
+        1.5
+       ],
+       [
+        -10.773333333333333,
+        0,
+        12.0,
+        1.5
+       ],
+       [
+        -8.079999999999998,
+        0,
+        12.0,
+        1.5
+       ],
+       [
+        -5.38666666666667,
+        0,
+        12.0,
+        1.5
+       ],
+       [
+        -2.693333333333328,
+        0,
+        12.0,
+        1.5
+       ],
+       [
+        0.0,
+        0,
+        12.0,
+        1.5
+       ]
+      ],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "め",
+      "kind": "Sphere",
+      "size": [
+       2.2,
+       1,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       4.0,
+       -9.0,
+       14.0
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.07,
+        0.07,
+        0.08
+       ],
+       "roughness": 0.4,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "め",
+      "kind": "Sphere",
+      "size": [
+       2.2,
+       1,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       4.0,
+       9.0,
+       14.0
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.07,
+        0.07,
+        0.08
+       ],
+       "roughness": 0.4,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     }
+    ]
+   }
+  },
+  {
+   "name": "ドアのちょうつがい",
+   "tags": [
+    "door hinge",
+    "hinge",
+    "butt hinge",
+    "print in place",
+    "ドア",
+    "ちょうつがい",
+    "とびら"
+   ],
+   "group": {
+    "name": "ドアのちょうつがい",
+    "op": "Add",
+    "blend": 0.0,
+    "visible": true,
+    "shapes": [
+     {
+      "name": "はねA",
+      "kind": "Box",
+      "size": [
+       21.4,
+       2.0,
+       36
+      ],
+      "round": 0.0,
+      "pos": [
+       -15.3,
+       0.0,
+       18.0
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.74,
+        0.76,
+        0.8
+       ],
+       "roughness": 0.28,
+       "metallic": 1.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "はねB",
+      "kind": "Box",
+      "size": [
+       21.4,
+       2.0,
+       36
+      ],
+      "round": 0.0,
+      "pos": [
+       15.3,
+       0.0,
+       18.0
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.86,
+        0.66,
+        0.32
+       ],
+       "roughness": 0.3,
+       "metallic": 1.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "ねじ穴",
+      "kind": "Cylinder",
+      "size": [
+       2.0,
+       6.0,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       -15.3,
+       0.0,
+       9.0
+      ],
+      "rot": [
+       90,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Subtract",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.9,
+        0.6,
+        0.5
+       ],
+       "roughness": 0.5,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "ねじ穴",
+      "kind": "Cylinder",
+      "size": [
+       2.0,
+       6.0,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       15.3,
+       0.0,
+       9.0
+      ],
+      "rot": [
+       90,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Subtract",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.9,
+        0.6,
+        0.5
+       ],
+       "roughness": 0.5,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "ねじ穴",
+      "kind": "Cylinder",
+      "size": [
+       2.0,
+       6.0,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       -15.3,
+       0.0,
+       27.0
+      ],
+      "rot": [
+       90,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Subtract",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.9,
+        0.6,
+        0.5
+       ],
+       "roughness": 0.5,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "ねじ穴",
+      "kind": "Cylinder",
+      "size": [
+       2.0,
+       6.0,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       15.3,
+       0.0,
+       27.0
+      ],
+      "rot": [
+       90,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Subtract",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.9,
+        0.6,
+        0.5
+       ],
+       "roughness": 0.5,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "くびれA",
+      "kind": "Cylinder",
+      "size": [
+       4.0,
+       6.720000000000001,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       0.0,
+       3.3600000000000003
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.74,
+        0.76,
+        0.8
+       ],
+       "roughness": 0.28,
+       "metallic": 1.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "つなぎA",
+      "kind": "Box",
+      "size": [
+       2.5,
+       2.0,
+       6.720000000000001
+      ],
+      "round": 0.0,
+      "pos": [
+       -3.75,
+       0.0,
+       3.3600000000000003
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.74,
+        0.76,
+        0.8
+       ],
+       "roughness": 0.28,
+       "metallic": 1.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "くびれB",
+      "kind": "Tube",
+      "size": [
+       4.0,
+       1.9,
+       6.720000000000001
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       0.0,
+       10.68
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.86,
+        0.66,
+        0.32
+       ],
+       "roughness": 0.3,
+       "metallic": 1.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "つなぎB",
+      "kind": "Box",
+      "size": [
+       2.5,
+       2.0,
+       6.720000000000001
+      ],
+      "round": 0.0,
+      "pos": [
+       3.75,
+       0.0,
+       10.68
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.86,
+        0.66,
+        0.32
+       ],
+       "roughness": 0.3,
+       "metallic": 1.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "くびれA",
+      "kind": "Cylinder",
+      "size": [
+       4.0,
+       6.719999999999999,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       0.0,
+       18.0
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.74,
+        0.76,
+        0.8
+       ],
+       "roughness": 0.28,
+       "metallic": 1.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "つなぎA",
+      "kind": "Box",
+      "size": [
+       2.5,
+       2.0,
+       6.719999999999999
+      ],
+      "round": 0.0,
+      "pos": [
+       -3.75,
+       0.0,
+       18.0
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.74,
+        0.76,
+        0.8
+       ],
+       "roughness": 0.28,
+       "metallic": 1.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "くびれB",
+      "kind": "Tube",
+      "size": [
+       4.0,
+       1.9,
+       6.719999999999999
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       0.0,
+       25.32
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.86,
+        0.66,
+        0.32
+       ],
+       "roughness": 0.3,
+       "metallic": 1.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "つなぎB",
+      "kind": "Box",
+      "size": [
+       2.5,
+       2.0,
+       6.719999999999999
+      ],
+      "round": 0.0,
+      "pos": [
+       3.75,
+       0.0,
+       25.32
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.86,
+        0.66,
+        0.32
+       ],
+       "roughness": 0.3,
+       "metallic": 1.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "くびれA",
+      "kind": "Cylinder",
+      "size": [
+       4.0,
+       6.719999999999999,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       0.0,
+       32.64
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.74,
+        0.76,
+        0.8
+       ],
+       "roughness": 0.28,
+       "metallic": 1.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "つなぎA",
+      "kind": "Box",
+      "size": [
+       2.5,
+       2.0,
+       6.719999999999999
+      ],
+      "round": 0.0,
+      "pos": [
+       -3.75,
+       0.0,
+       32.64
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.74,
+        0.76,
+        0.8
+       ],
+       "roughness": 0.28,
+       "metallic": 1.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "ピン",
+      "kind": "Cylinder",
+      "size": [
+       1.5,
+       36,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       0.0,
+       18.0
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.9,
+        0.92,
+        0.96
+       ],
+       "roughness": 0.08,
+       "metallic": 1.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     }
+    ]
+   }
+  },
+  {
+   "name": "ボルトとナットのくみあわせ",
+   "tags": [
+    "bolt",
+    "nut",
+    "thread",
+    "loose nut",
+    "print in place",
+    "ボルト",
+    "ナット"
+   ],
+   "group": {
+    "name": "ボルトとナットのくみあわせ",
+    "op": "Add",
+    "blend": 0.0,
+    "visible": true,
+    "shapes": [
+     {
+      "name": "ナット",
+      "kind": "PrismN",
+      "size": [
+       10,
+       8,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       0,
+       24
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.9,
+        0.92,
+        0.96
+       ],
+       "roughness": 0.08,
+       "metallic": 1.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       6,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "ナットの穴",
+      "kind": "Cylinder",
+      "size": [
+       5.5,
+       10,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       0,
+       24
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Subtract",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.9,
+        0.6,
+        0.5
+       ],
+       "roughness": 0.5,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "ボルトの頭",
+      "kind": "PrismN",
+      "size": [
+       11,
+       8,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       0,
+       4
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.74,
+        0.76,
+        0.8
+       ],
+       "roughness": 0.28,
+       "metallic": 1.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       6,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "軸",
+      "kind": "Cylinder",
+      "size": [
+       4,
+       32,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       0,
+       24
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.74,
+        0.76,
+        0.8
+       ],
+       "roughness": 0.28,
+       "metallic": 1.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "ねじ山",
+      "kind": "Curve",
+      "size": [
+       1,
+       1,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       0,
+       0
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.74,
+        0.76,
+        0.8
+       ],
+       "roughness": 0.28,
+       "metallic": 1.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0.7,
+       0,
+       1
+      ],
+      "path": [
+       [
+        4.0,
+        0.0,
+        9.0,
+        0.9
+       ],
+       [
+        1.3892210113792811,
+        3.7510085285883217,
+        9.967741935483872,
+        0.9
+       ],
+       [
+        -3.0350324907711634,
+        2.605489930888889,
+        10.935483870967742,
+        0.9
+       ],
+       [
+        -3.497386464578329,
+        -1.9412078501243233,
+        11.903225806451612,
+        0.9
+       ],
+       [
+        0.6057111100183067,
+        -3.9538732973124455,
+        12.870967741935484,
+        0.9
+       ],
+       [
+        3.918119765009978,
+        -0.8051940803546411,
+        13.838709677419356,
+        0.9
+       ],
+       [
+        2.1158560413078513,
+        3.394577029979003,
+        14.806451612903226,
+        0.9
+       ],
+       [
+        -2.448423930190652,
+        3.1631029477507937,
+        15.774193548387096,
+        0.9
+       ],
+       [
+        -3.8165570256001953,
+        -1.197452491893432,
+        16.741935483870968,
+        0.9
+       ],
+       [
+        -0.20259667535485162,
+        -3.994866028684211,
+        17.70967741935484,
+        0.9
+       ],
+       [
+        3.675831246480922,
+        -1.5774234204532758,
+        18.67741935483871,
+        0.9
+       ],
+       [
+        2.7558676763027483,
+        2.899171148916478,
+        19.645161290322584,
+        0.9
+       ],
+       [
+        -1.7615766062305342,
+        3.591218158282968,
+        20.612903225806452,
+        0.9
+       ],
+       [
+        -3.97947729356758,
+        -0.4046732879497315,
+        21.580645161290324,
+        0.9
+       ],
+       [
+        -1.0026101290348803,
+        -3.8723084754648176,
+        22.548387096774192,
+        0.9
+       ],
+       [
+        3.283053764829102,
+        -2.285072860379174,
+        23.516129032258064,
+        0.9
+       ],
+       [
+        3.283053764829105,
+        2.2850728603791692,
+        24.483870967741936,
+        0.9
+       ],
+       [
+        -1.0026101290348746,
+        3.8723084754648194,
+        25.451612903225804,
+        0.9
+       ],
+       [
+        -3.9794772935675806,
+        0.4046732879497303,
+        26.41935483870968,
+        0.9
+       ],
+       [
+        -1.7615766062305331,
+        -3.5912181582829685,
+        27.387096774193548,
+        0.9
+       ],
+       [
+        2.755867676302744,
+        -2.899171148916482,
+        28.35483870967742,
+        0.9
+       ],
+       [
+        3.675831246480927,
+        1.577423420453264,
+        29.32258064516129,
+        0.9
+       ],
+       [
+        -0.20259667535484577,
+        3.9948660286842115,
+        30.290322580645164,
+        0.9
+       ],
+       [
+        -3.8165570256001957,
+        1.1974524918934308,
+        31.258064516129032,
+        0.9
+       ],
+       [
+        -2.448423930190657,
+        -3.16310294775079,
+        32.225806451612904,
+        0.9
+       ],
+       [
+        2.115856041307837,
+        -3.3945770299790117,
+        33.19354838709677,
+        0.9
+       ],
+       [
+        3.918119765009977,
+        0.8051940803546458,
+        34.16129032258065,
+        0.9
+       ],
+       [
+        0.605711110018309,
+        3.953873297312445,
+        35.12903225806451,
+        0.9
+       ],
+       [
+        -3.49738646457833,
+        1.9412078501243206,
+        36.096774193548384,
+        0.9
+       ],
+       [
+        -3.0350324907711754,
+        -2.605489930888875,
+        37.064516129032256,
+        0.9
+       ],
+       [
+        1.3892210113792698,
+        -3.751008528588326,
+        38.03225806451613,
+        0.9
+       ],
+       [
+        4.0,
+        -5.878304635907295e-15,
+        39.0,
+        0.9
+       ]
+      ],
+      "outline2": [],
+      "shell": 0.0
+     }
+    ]
+   }
+  },
+  {
+   "name": "ユニバーサルジョイント",
+   "tags": [
+    "universal joint",
+    "cardan joint",
+    "cross",
+    "yoke",
+    "print in place",
+    "ユニバーサル",
+    "十字"
+   ],
+   "group": {
+    "name": "ユニバーサルジョイント",
+    "op": "Add",
+    "blend": 0.0,
+    "visible": true,
+    "shapes": [
+     {
+      "name": "Aのうで1",
+      "kind": "Box",
+      "size": [
+       3,
+       10,
+       19
+      ],
+      "round": 0.0,
+      "pos": [
+       -13,
+       0,
+       12.5
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.2,
+        0.45,
+        0.85
+       ],
+       "roughness": 0.45,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "Aのうで2",
+      "kind": "Box",
+      "size": [
+       3,
+       10,
+       19
+      ],
+      "round": 0.0,
+      "pos": [
+       13,
+       0,
+       12.5
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.2,
+        0.45,
+        0.85
+       ],
+       "roughness": 0.45,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "Aのわ",
+      "kind": "Box",
+      "size": [
+       29,
+       10,
+       2.4
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       0,
+       20.8
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.2,
+        0.45,
+        0.85
+       ],
+       "roughness": 0.45,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "Aのあな",
+      "kind": "Cylinder",
+      "size": [
+       2.6,
+       60,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       0,
+       11.0
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Subtract",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.9,
+        0.6,
+        0.5
+       ],
+       "roughness": 0.5,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "Bのうで1",
+      "kind": "Box",
+      "size": [
+       10,
+       3,
+       19
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       -13,
+       12.5
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.96,
+        0.46,
+        0.13
+       ],
+       "roughness": 0.45,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "Bのうで2",
+      "kind": "Box",
+      "size": [
+       10,
+       3,
+       19
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       13,
+       12.5
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.96,
+        0.46,
+        0.13
+       ],
+       "roughness": 0.45,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "Bのわ",
+      "kind": "Box",
+      "size": [
+       10,
+       29,
+       3
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       0,
+       1.5
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.96,
+        0.46,
+        0.13
+       ],
+       "roughness": 0.45,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "Bのあな",
+      "kind": "Cylinder",
+      "size": [
+       2.6,
+       60,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       0,
+       11.0
+      ],
+      "rot": [
+       90,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Subtract",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.9,
+        0.6,
+        0.5
+       ],
+       "roughness": 0.5,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "十字の芯",
+      "kind": "Box",
+      "size": [
+       8,
+       8,
+       8
+      ],
+      "round": 1.0,
+      "pos": [
+       0,
+       0,
+       11.0
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.56,
+        0.58,
+        0.61
+       ],
+       "roughness": 0.55,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "十字のピンX",
+      "kind": "Cylinder",
+      "size": [
+       2.0,
+       26,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       0,
+       11.0
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.9,
+        0.92,
+        0.96
+       ],
+       "roughness": 0.08,
+       "metallic": 1.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "十字のピンY",
+      "kind": "Cylinder",
+      "size": [
+       2.0,
+       26,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       0,
+       11.0
+      ],
+      "rot": [
+       90,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.9,
+        0.92,
+        0.96
+       ],
+       "roughness": 0.08,
+       "metallic": 1.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "軸",
+      "kind": "Cylinder",
+      "size": [
+       4,
+       19,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       0,
+       30.5
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.2,
+        0.45,
+        0.85
+       ],
+       "roughness": 0.45,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     }
+    ]
+   }
+  },
+  {
+   "name": "ふたつきカプセル",
+   "tags": [
+    "capsule",
+    "gachapon",
+    "capsule toy",
+    "hinged lid",
+    "print in place",
+    "カプセル",
+    "ふた"
+   ],
+   "group": {
+    "name": "ふたつきカプセル",
+    "op": "Add",
+    "blend": 0.0,
+    "visible": true,
+    "shapes": [
+     {
+      "name": "ふた",
+      "kind": "Hemi",
+      "size": [
+       20.0,
+       1,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       0.0,
+       12.276765018890941,
+       44.330134673353264
+      ],
+      "rot": [
+       -40.0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.2,
+        0.45,
+        0.85
+       ],
+       "roughness": 0.45,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "ふたのくぼみ",
+      "kind": "Sphere",
+      "size": [
+       17,
+       1,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       5.848888922025548,
+       36.66969024216348
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Subtract",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.9,
+        0.6,
+        0.5
+       ],
+       "roughness": 0.5,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "入れもの",
+      "kind": "Hemi",
+      "size": [
+       20.0,
+       1,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       0.0,
+       -1.2246467991473533e-15,
+       10.0
+      ],
+      "rot": [
+       180.0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.96,
+        0.46,
+        0.13
+       ],
+       "roughness": 0.45,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "中のくぼみ",
+      "kind": "Sphere",
+      "size": [
+       17,
+       1,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       0,
+       20
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Subtract",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.9,
+        0.6,
+        0.5
+       ],
+       "roughness": 0.5,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "耳L",
+      "kind": "Box",
+      "size": [
+       7.4,
+       9,
+       6
+      ],
+      "round": 0.0,
+      "pos": [
+       -10.3,
+       20.5,
+       17
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.96,
+        0.46,
+        0.13
+       ],
+       "roughness": 0.45,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "耳R",
+      "kind": "Box",
+      "size": [
+       7.4,
+       9,
+       6
+      ],
+      "round": 0.0,
+      "pos": [
+       10.3,
+       20.5,
+       17
+      ],
+      "rot": [
+       0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.96,
+        0.46,
+        0.13
+       ],
+       "roughness": 0.45,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "ピン",
+      "kind": "Cylinder",
+      "size": [
+       2.0,
+       28,
+       1
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       25.0,
+       20.6
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.9,
+        0.92,
+        0.96
+       ],
+       "roughness": 0.08,
+       "metallic": 1.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "ふたのそで",
+      "kind": "Tube",
+      "size": [
+       3.5,
+       0.9,
+       12
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       25.0,
+       20.6
+      ],
+      "rot": [
+       0,
+       90,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.2,
+        0.45,
+        0.85
+       ],
+       "roughness": 0.45,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     },
+     {
+      "name": "ふたのうで",
+      "kind": "Box",
+      "size": [
+       12,
+       7,
+       2
+      ],
+      "round": 0.0,
+      "pos": [
+       0,
+       22.961632058770117,
+       23.615801077021867
+      ],
+      "rot": [
+       -40.0,
+       0,
+       0
+      ],
+      "scale": [
+       1,
+       1,
+       1
+      ],
+      "op": "Add",
+      "blend": 0.0,
+      "material": {
+       "color": [
+        0.2,
+        0.45,
+        0.85
+       ],
+       "roughness": 0.45,
+       "metallic": 0.0,
+       "glow": 0.0,
+       "glass": 0.0,
+       "iridescence": 0.0,
+       "coat": 0.0,
+       "translucency": 0.0
+      },
+      "visible": true,
+      "outline": [
+       [
+        -15,
+        -15
+       ],
+       [
+        15,
+        -15
+       ],
+       [
+        15,
+        15
+       ],
+       [
+        -15,
+        15
+       ]
+      ],
+      "params": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "path": [],
+      "outline2": [],
+      "shell": 0.0
+     }
+    ]
+   }
+  }
+ ]
+}

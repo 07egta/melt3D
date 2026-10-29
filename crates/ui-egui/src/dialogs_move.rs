@@ -2,15 +2,17 @@
 //! their rows and inputs, the triad on the canvas and the solid.move they make. Nothing
 //! moves until a value is typed or the triad is dragged.
 
+use crate::selection::SelectionExt as _;
+use crate::ui_kit::{choice_row, expr_row};
 use serde_json::{Value, json};
 use solidcraft_engine::Sel;
 use solidcraft_engine::doc::expr::Kind as ValueKind;
 use solidcraft_engine::geom::Vec3;
 
 use crate::SolveApp;
-use crate::dialogs::{Dialog, Kind, combo, field, row_label};
+use crate::dialogs::{Dialog, Kind};
 use crate::gizmo::{self, Change, Drag};
-use crate::selection::{AXES, BODIES, EDGES, FACES, SelInput, VERTICES};
+use crate::selection::{AXES, BODIES, EDGES, FACES, ORIGIN, SelInput, VERTICES};
 
 pub const TYPES: [&str; 5] = ["Free Move", "Translate", "Rotate", "Point to Point", "Point to Position"];
 pub const FREE: usize = 0;
@@ -18,7 +20,7 @@ pub const TRANSLATE: usize = 1;
 pub const ROTATE: usize = 2;
 pub const POINT_TO_POINT: usize = 3;
 pub const POINT_TO_POSITION: usize = 4;
-const POINTS: u16 = VERTICES | FACES | EDGES;
+const POINTS: u16 = VERTICES | FACES | EDGES | ORIGIN;
 
 /// A fresh Move dialog of a type (all values zero).
 pub fn kind(mode: usize) -> Kind {
@@ -46,10 +48,8 @@ pub fn inputs(mode: usize) -> Vec<SelInput> {
 /// The Move Type row (above the inputs); switching keeps the bodies and resets the values.
 pub fn type_row(d: &mut Dialog, ui: &mut egui::Ui) {
     let Kind::Move { mode, .. } = d.kind else { return };
-    row_label(ui, "Move Type");
     let mut m = mode;
-    combo(ui, "move_type", &TYPES, &mut m);
-    ui.end_row();
+    choice_row(ui, "Move Type", "move_type", &mut m, &TYPES);
     if m != mode {
         let bodies = d.inputs.first().map(|i| i.items.clone()).unwrap_or_default();
         d.kind = kind(m);
@@ -70,27 +70,22 @@ fn bodies_empty(d: &Dialog) -> bool {
 pub fn rows(ui: &mut egui::Ui, k: &mut Kind) -> bool {
     let Kind::Move { mode, x, y, z, rx, ry, rz, angle } = k else { return false };
     let mut enter = false;
-    let mut row = |ui: &mut egui::Ui, l: &str, v: &mut String| {
-        row_label(ui, l);
-        enter |= field(ui, v);
-        ui.end_row();
-    };
     match *mode {
         FREE | TRANSLATE => {
-            row(ui, "X Distance", x);
-            row(ui, "Y Distance", y);
-            row(ui, "Z Distance", z);
+            enter |= expr_row(ui, "X Distance", x);
+            enter |= expr_row(ui, "Y Distance", y);
+            enter |= expr_row(ui, "Z Distance", z);
             if *mode == FREE {
-                row(ui, "X Angle", rx);
-                row(ui, "Y Angle", ry);
-                row(ui, "Z Angle", rz);
+                enter |= expr_row(ui, "X Angle", rx);
+                enter |= expr_row(ui, "Y Angle", ry);
+                enter |= expr_row(ui, "Z Angle", rz);
             }
         }
-        ROTATE => row(ui, "Angle", angle),
+        ROTATE => enter |= expr_row(ui, "Angle", angle),
         POINT_TO_POSITION => {
-            row(ui, "X", x);
-            row(ui, "Y", y);
-            row(ui, "Z", z);
+            enter |= expr_row(ui, "X", x);
+            enter |= expr_row(ui, "Y", y);
+            enter |= expr_row(ui, "Z", z);
         }
         _ => {}
     }
@@ -105,11 +100,7 @@ fn sel_point(s: Option<&Sel>) -> Option<Vec3> {
 }
 
 fn items(d: &Dialog, i: usize) -> &[Sel] {
-    d.inputs.get(i).map(|x| x.items.as_slice()).unwrap_or(&[])
-}
-
-fn body_names(d: &Dialog) -> Vec<String> {
-    items(d, 0).iter().filter_map(|x| if let Sel::Body { name } = x { Some(name.clone()) } else { None }).collect()
+    crate::selection::items(&d.inputs, i)
 }
 
 /// The centre of the picked bodies where they are before this move.
@@ -119,7 +110,7 @@ fn bodies_center(app: &SolveApp, d: &Dialog) -> Option<Vec3> {
         None => app.session.model.state(),
     };
     let mut bb: Option<(Vec3, Vec3)> = None;
-    for n in body_names(d) {
+    for n in items(d, 0).body_names() {
         let Some(b) = st.body(&n) else { continue };
         let x = b.mesh().bounds();
         bb = Some(match bb {
@@ -168,7 +159,7 @@ fn deg(v: f64) -> String {
 /// The solid.move parameters (bodies, translate, axis, angle).
 pub fn params(app: &SolveApp, d: &Dialog) -> Result<Value, String> {
     let Kind::Move { mode, x, y, z, rx, ry, rz, angle } = &d.kind else { return Err("not a move".into()) };
-    let bodies = body_names(d);
+    let bodies = items(d, 0).body_names();
     if bodies.is_empty() {
         return Err("select bodies first".into());
     }
@@ -288,8 +279,15 @@ pub fn drag(app: &SolveApp, d: &mut Dialog, g: Drag) {
 
 /// The dialog for editing a move: Free Move with its translation and, about a world axis
 /// through the origin, its angle (another axis is kept as it is).
-pub fn for_feature(d: &mut Dialog, bodies: &[String], translate: &[String; 3], axis: Option<Vec3>, angle: Option<&String>, copy: bool) {
-    let [x, y, z] = translate.clone();
+pub fn for_feature(
+    d: &mut Dialog,
+    bodies: &[String],
+    translate: &[solidcraft_engine::doc::Expr; 3],
+    axis: Option<Vec3>,
+    angle: Option<&solidcraft_engine::doc::Expr>,
+    copy: bool,
+) {
+    let [x, y, z] = translate.clone().map(String::from);
     let mut k = kind(FREE);
     if let Kind::Move { x: kx, y: ky, z: kz, rx, ry, rz, .. } = &mut k {
         (*kx, *ky, *kz) = (x, y, z);
@@ -297,9 +295,9 @@ pub fn for_feature(d: &mut Dialog, bodies: &[String], translate: &[String; 3], a
             let dir = axis.unwrap_or(Vec3::Z);
             let world = [Vec3::X, Vec3::Y, Vec3::Z].iter().position(|w| dir.cross(*w).len() < 1e-9 && dir.dot(*w) > 0.0);
             match world {
-                Some(0) => *rx = a.clone(),
-                Some(1) => *ry = a.clone(),
-                Some(_) => *rz = a.clone(),
+                Some(0) => *rx = a.to_string(),
+                Some(1) => *ry = a.to_string(),
+                Some(_) => *rz = a.to_string(),
                 None => {
                     d.extra.insert("axis".into(), json!([dir.x, dir.y, dir.z]));
                     d.extra.insert("angle".into(), json!(a));

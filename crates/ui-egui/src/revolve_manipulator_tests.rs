@@ -33,7 +33,7 @@ fn volume(h: &Harness) -> f64 {
 }
 fn angle(h: &Harness) -> String {
     let FeatureKind::Revolve { angle, .. } = &h.app.session.doc.find_feature("Turn").unwrap().kind else { panic!("revolve") };
-    angle.clone()
+    angle.to_string()
 }
 fn expected_volume(degrees: f64) -> f64 {
     0.5 * (225.0 - 100.0) * 5.0 * degrees.to_radians()
@@ -162,7 +162,7 @@ fn selected_second_placement_custom_axis_handle_and_preview_stay_in_its_frame() 
         _ => panic!("revolve"),
     };
     open(&mut h);
-    assert!(h.widget("↖ Custom Axis").is_some());
+    assert_eq!(crate::scenario::count_of("dialog:selection:Axis:filled"), Some(1.0), "the stored custom axis stays selected");
     handle_at(&mut h, "revolve", world(90.0));
     h.step(&json!({"drag":[{"handle":"revolve"},{"world":world(60.0)}]})).unwrap();
     let commands = crate::dialogs::apply_commands(&h.app, h.app.dialog.as_ref().unwrap()).unwrap();

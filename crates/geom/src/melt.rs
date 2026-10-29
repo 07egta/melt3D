@@ -407,6 +407,32 @@ fn inside_flags(grid: &Grid, tris: &[[V; 3]]) -> Vec<bool> {
     inside
 }
 
+/// Mesh the zero level of a ready-made field: `n` points per axis, `h` mm apart from `origin`,
+/// x fastest, then y, then z. A value below zero is inside. `smooth` rounds of Taubin smoothing.
+pub fn polygonize(origin: [f64; 3], h: f64, n: [usize; 3], field: &[f32], smooth: usize) -> Result<TriMesh, String> {
+    if !origin.iter().all(|c| c.is_finite()) || !h.is_finite() || h <= 0.0 {
+        return Err("the grid needs a finite origin and a cell size above zero".into());
+    }
+    if n.iter().any(|c| *c < 2) {
+        return Err("the grid needs at least two points along every axis".into());
+    }
+    let too_big = || "the grid is too big; lower the resolution".to_string();
+    let points = n[0].checked_mul(n[1]).and_then(|p| p.checked_mul(n[2])).ok_or_else(too_big)?;
+    if points > MAX_GRID_POINTS {
+        return Err(too_big());
+    }
+    if field.len() != points {
+        return Err("the field does not match the grid size".into());
+    }
+    let grid = Grid { origin, h, n };
+    let mut out = marching_tetrahedra(&grid, field);
+    smooth_surface(&mut out, smooth);
+    if out.triangles.is_empty() {
+        return Err("nothing is solid: the field has no inside".into());
+    }
+    Ok(out)
+}
+
 /// Corner offsets of a grid cell, and the six tetrahedra around its main diagonal 0–6.
 const CORNERS: [[usize; 3]; 8] = [[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0], [0, 0, 1], [1, 0, 1], [1, 1, 1], [0, 1, 1]];
 const TETS: [[usize; 4]; 6] = [[0, 1, 2, 6], [0, 1, 5, 6], [0, 3, 2, 6], [0, 3, 7, 6], [0, 4, 5, 6], [0, 4, 7, 6]];
@@ -685,7 +711,7 @@ mod tests {
     #[test]
     fn bad_input_is_an_error_and_never_a_panic() {
         let s = sphere([0.0; 3], 10.0, 16, 24);
-        assert!(melt(&[s.clone()], &Params::default()).is_err());
+        assert!(melt(std::slice::from_ref(&s), &Params::default()).is_err());
         assert!(melt(&[], &Params::default()).is_err());
         assert!(melt(&[s.clone(), TriMesh::default()], &Params::default()).is_err());
         let mut broken = s.clone();
@@ -695,5 +721,29 @@ mod tests {
         nan.positions[0][0] = f64::NAN;
         assert!(melt(&[s.clone(), nan], &Params::default()).is_err());
         assert!(melt(&[s.clone(), s], &Params { strength: -1.0, ..Params::default() }).is_err());
+    }
+
+    #[test]
+    fn polygonize_meshes_a_sphere_field_and_refuses_bad_grids() {
+        let (n, h, r) = (40usize, 0.5_f64, 8.0_f64);
+        let o = -(n as f64 - 1.0) * h / 2.0;
+        let mut field = Vec::new();
+        for k in 0..n {
+            for j in 0..n {
+                for i in 0..n {
+                    let p = [o + i as f64 * h, o + j as f64 * h, o + k as f64 * h];
+                    field.push(((p[0] * p[0] + p[1] * p[1] + p[2] * p[2]).sqrt() - r) as f32);
+                }
+            }
+        }
+        let m = polygonize([o; 3], h, [n; 3], &field, 2).unwrap();
+        assert!(is_watertight(&m));
+        assert!((volume(&m) / ball(r) - 1.0).abs() < 0.03, "volume {}", volume(&m));
+        assert!(polygonize([o; 3], h, [n; 3], &field[1..], 0).is_err());
+        assert!(polygonize([o; 3], 0.0, [n; 3], &field, 0).is_err());
+        assert!(polygonize([f64::NAN; 3], h, [n; 3], &field, 0).is_err());
+        assert!(polygonize([o; 3], h, [1, n, n], &field, 0).is_err());
+        assert!(polygonize([o; 3], h, [usize::MAX, 2, 2], &field, 0).is_err());
+        assert!(polygonize([o; 3], h, [n; 3], &vec![1.0; n * n * n], 0).is_err());
     }
 }

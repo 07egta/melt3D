@@ -1,5 +1,5 @@
-//! Update notifications (docs/updates.md). At start, and at most once a day after that, a
-//! background thread asks GitHub for the latest stable release (`releases/latest`; nightlies and
+//! Update notifications (docs/book/src/guide/updates.md). At every start, and once a day after
+//! that while the app stays open, a background thread asks GitHub for the latest stable release (`releases/latest`; nightlies and
 //! release candidates are never "latest"). When it is newer than this build, an Update button
 //! appears in the application bar beside Report a bug; it opens a small window with the version,
 //! the release notes and Download, Skip this version and Remind me later.
@@ -16,12 +16,13 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, TryRecvError};
 
-use egui::{Color32, FontId, RichText, text::LayoutJob};
+use egui::{FontId, RichText, text::LayoutJob};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::SolveApp;
 use crate::theme::Tokens;
+use crate::ui_kit;
 
 /// The repository releases come from.
 pub const REPO: &str = "bherbruck/solidcraft";
@@ -29,23 +30,30 @@ pub const REPO: &str = "bherbruck/solidcraft";
 pub const LATEST_API: &str = "https://api.github.com/repos/bherbruck/solidcraft/releases/latest";
 /// Where Download goes when no package fits this installation.
 pub const RELEASES_PAGE: &str = "https://github.com/bherbruck/solidcraft/releases/latest";
-/// Release pages and assets must be on GitHub, under this repository.
-const RELEASE_PREFIX: &str = "https://github.com/bherbruck/solidcraft/releases/";
+/// Release pages and assets must be on GitHub, under this repository. The repository is moving
+/// to the `tangency-labs` organisation, so releases may name either owner (the API request stays
+/// on the old name, which GitHub redirects after a transfer).
+const RELEASE_PREFIXES: [&str; 2] = ["https://github.com/bherbruck/solidcraft/releases/", "https://github.com/tangency-labs/solidcraft/releases/"];
 
-/// Automatic checks: at most one a day.
+/// A release page or asset URL: github.com, one of the two owners, exactly `solidcraft`, then
+/// `/releases/` (the trailing slash rules out look-alike names such as `solidcraft-evil`).
+fn is_release_url(url: &str) -> bool {
+    RELEASE_PREFIXES.iter().any(|p| url.starts_with(p))
+}
+
+/// While the app stays open, automatic checks run once a day (every start checks too).
 pub const CHECK_INTERVAL_S: f64 = 24.0 * 3600.0;
 /// Remind me later hides the button for three days.
 pub const REMIND_DELAY_S: f64 = 3.0 * 24.0 * 3600.0;
 /// Check now can't be pressed more often than this (GitHub allows 60 anonymous requests an hour).
 pub const MANUAL_COOLDOWN_S: f64 = 30.0;
-/// After a failed automatic check, try again after this long (an hour), not every start.
+/// After a failed automatic check, the open app tries again after this long (an hour).
 pub const RETRY_AFTER_FAILURE_S: f64 = 3600.0;
 /// Caps on what a release response may hold (it comes from the network).
 const MAX_NOTES: usize = 64 * 1024;
 const MAX_ASSETS: usize = 400;
-/// The Update window's width, and its release notes' wrap width.
-const WINDOW_W: f32 = 460.0;
-const NOTES_W: f32 = WINDOW_W - 30.0;
+/// The room the Update pill's long label leaves for the document tabs.
+const TAB_ROOM: f32 = 300.0;
 
 /// The Linux app ID (Flatpak, desktop files).
 pub const APP_ID: &str = "ai.storyteller.solidcraft";
@@ -134,7 +142,7 @@ pub enum InstallKind {
     Rpm,
     /// The plain `.tar.gz`, unpacked somewhere.
     LinuxTarball,
-    /// Installed by the `.msi` (under Program Files).
+    /// Installed by the `.msi` (under Program Files, or in the folder the installer recorded).
     WindowsMsi,
     /// The portable `.zip`, unpacked somewhere.
     WindowsPortable,
@@ -155,6 +163,9 @@ pub struct Probe<'a> {
     /// The running executable.
     pub exe: Option<PathBuf>,
     pub exists: &'a dyn Fn(&Path) -> bool,
+    /// Where the Windows installer put SolidCraft (`HKLM\Software\SolidCraft`, `InstallDir`): a
+    /// folder chosen in its wizard can be anywhere, not only under Program Files (#1870).
+    pub msi_dir: Option<PathBuf>,
 }
 
 pub fn detect(p: &Probe) -> InstallKind {
@@ -192,7 +203,8 @@ pub fn detect(p: &Probe) -> InstallKind {
         }
         "windows" => {
             let under = |k: &str| env(k).is_some_and(|dir| starts_with_ci(&exe, Path::new(&dir)));
-            if under("ProgramFiles") || under("ProgramW6432") || under("ProgramFiles(x86)") {
+            let installed = p.msi_dir.as_deref().is_some_and(|dir| starts_with_ci(&exe, dir));
+            if installed || under("ProgramFiles") || under("ProgramW6432") || under("ProgramFiles(x86)") {
                 return InstallKind::WindowsMsi;
             }
             if exe.parent().is_some_and(|d| (p.exists)(&d.join("solidcraft-cli.exe"))) {
@@ -230,8 +242,28 @@ pub fn this_install() -> InstallKind {
     {
         let env = |k: &str| std::env::var(k).ok();
         let exists = |p: &Path| p.exists();
-        detect(&Probe { os: std::env::consts::OS, release_build: release_build(), env: &env, exe: std::env::current_exe().ok(), exists: &exists })
+        let msi_dir = msi_install_dir();
+        detect(&Probe {
+            os: std::env::consts::OS,
+            release_build: release_build(),
+            env: &env,
+            exe: std::env::current_exe().ok(),
+            exists: &exists,
+            msi_dir,
+        })
     }
+}
+
+/// The folder the Windows installer recorded (solidcraft.wxs writes it for upgrades), if any.
+#[cfg(windows)]
+fn msi_install_dir() -> Option<PathBuf> {
+    let key = winreg::RegKey::predef(winreg::enums::HKEY_LOCAL_MACHINE).open_subkey(r"Software\SolidCraft").ok()?;
+    key.get_value::<String, _>("InstallDir").ok().map(PathBuf::from)
+}
+
+#[cfg(all(not(windows), not(target_arch = "wasm32")))]
+fn msi_install_dir() -> Option<PathBuf> {
+    None
 }
 
 impl InstallKind {
@@ -356,7 +388,7 @@ impl Release {
             notes.truncate(cut);
             notes.push_str("\n\n…");
         }
-        let page = Some(s("html_url")).filter(|u| u.starts_with(RELEASE_PREFIX)).unwrap_or_else(|| RELEASES_PAGE.to_string());
+        let page = Some(s("html_url")).filter(|u| is_release_url(u)).unwrap_or_else(|| RELEASES_PAGE.to_string());
         let assets = v
             .get("assets")
             .and_then(Value::as_array)
@@ -366,7 +398,7 @@ impl Release {
             .filter_map(|a| {
                 let name = a.get("name")?.as_str()?.to_string();
                 let url = a.get("browser_download_url")?.as_str()?.to_string();
-                url.starts_with(RELEASE_PREFIX).then(|| Asset { name, url, size: a.get("size").and_then(Value::as_u64).unwrap_or(0) })
+                is_release_url(&url).then(|| Asset { name, url, size: a.get("size").and_then(Value::as_u64).unwrap_or(0) })
             })
             .collect();
         Ok(Release {
@@ -407,7 +439,8 @@ impl Release {
 pub struct Memo {
     /// When the last check finished (successfully or not).
     pub last_check: f64,
-    /// The next automatic check: a day after a successful one, an hour after a failed one.
+    /// The next automatic check while the app stays open: a day after a successful one, an hour
+    /// after a failed one. A new start doesn't wait for it.
     pub next_check: f64,
     /// GitHub's rate limit was reached: no request at all before this, not even Check now.
     pub rate_limited_until: f64,
@@ -418,9 +451,13 @@ pub struct Memo {
 }
 
 impl Memo {
-    /// An automatic check is due (a clock set back by more than a day counts as due).
-    pub fn due(&self, now: f64) -> bool {
-        now >= self.rate_limited_until && (now >= self.next_check || self.next_check - now > CHECK_INTERVAL_S)
+    /// An automatic check is due. `launch`: no automatic check has run since SolidCraft started,
+    /// so one is due whatever the daily schedule says (someone who started yesterday's version
+    /// this morning hears about today's release at the next start). GitHub's rate limit always
+    /// holds. A clock set back by more than a day counts as due.
+    pub fn due(&self, now: f64, launch: bool) -> bool {
+        let limited = now < self.rate_limited_until && self.rate_limited_until - now <= CHECK_INTERVAL_S;
+        !limited && (launch || now >= self.next_check || self.next_check - now > CHECK_INTERVAL_S)
     }
 
     /// The Update button shows for `release`.
@@ -484,6 +521,10 @@ pub struct Updater {
     /// The check in flight, and whether Check now started it.
     rx: Option<(Receiver<Result<Release, FetchError>>, bool)>,
     started: bool,
+    /// An automatic check has started since launch (until then one is due at once).
+    launch_checked: bool,
+    /// `SOLIDCRAFT_UPDATE_CHECK=0`: no checks at all.
+    off: bool,
     /// When Check now was last pressed (Unix seconds).
     last_manual: f64,
     /// A release given by `SOLIDCRAFT_UPDATE_FEED` (a file), for tests and screenshots.
@@ -511,10 +552,11 @@ pub fn offered(app: &SolveApp) -> Option<&Release> {
 
 /// Checks may run here: a release build with the host's HTTP client, or a test feed.
 pub fn available(app: &mut SolveApp) -> bool {
-    app.updater.feed.is_some() || (app.services.http_get.is_some() && app.updater.kind().checks())
+    !app.updater.off && (app.updater.feed.is_some() || (app.services.http_get.is_some() && app.updater.kind().checks()))
 }
 
-/// Per frame: the first frame starts a due automatic check; a finished check is collected.
+/// Per frame: the first frame of each launch starts an automatic check, the open app checks
+/// again once a day (an hour after a failure), and a finished check is collected.
 pub fn tick(app: &mut SolveApp, ctx: &egui::Context) {
     poll_install(app);
     // Quitting to restart or install was cancelled (a "save changes?" answered Cancel).
@@ -527,6 +569,7 @@ pub fn tick(app: &mut SolveApp, ctx: &egui::Context) {
         {
             install::clean_up_after_update(std::env::current_exe().ok().as_deref());
             if std::env::var("SOLIDCRAFT_UPDATE_CHECK").is_ok_and(|v| v == "0") {
+                app.updater.off = true;
                 return;
             }
             app.updater.feed = std::env::var_os("SOLIDCRAFT_UPDATE_FEED").map(PathBuf::from);
@@ -534,7 +577,9 @@ pub fn tick(app: &mut SolveApp, ctx: &egui::Context) {
     }
     poll(app);
     let now = unix_now();
-    if app.updater.rx.is_none() && app.preferences.check_updates && app.preferences.update.due(now) && available(app) {
+    let launch = !app.updater.launch_checked;
+    if app.updater.rx.is_none() && app.preferences.check_updates && app.preferences.update.due(now, launch) && available(app) {
+        app.updater.launch_checked = true;
         start(app, ctx, false);
     }
 }
@@ -682,8 +727,13 @@ fn poll_install(app: &mut SolveApp) {
     app.updater.job = None;
     match &result {
         Ok(install::Outcome::Installer(program, args)) => {
-            // The installer replaces this program: start it once SolidCraft has closed.
-            app.updater.launch = Some((program.clone(), args.clone()));
+            // The installer replaces this program: start it once SolidCraft has closed. On
+            // Windows the installer is followed by the new version (see install::relaunch_after).
+            app.updater.launch = Some(match std::env::current_exe() {
+                #[cfg(windows)]
+                Ok(exe) => install::relaunch_after(program, args, &exe),
+                _ => (program.clone(), args.clone()),
+            });
             crate::documents::request_quit(app);
         }
         Ok(install::Outcome::Opened(dmg)) => {
@@ -714,42 +764,22 @@ pub fn take_launch(app: &mut SolveApp) -> Option<(PathBuf, Vec<String>)> {
 
 // ---- user interface ---------------------------------------------------------------------------
 
-/// The application bar's Update button, right of `right`; returns its rect (None: not shown).
-pub fn button(app: &mut SolveApp, ui: &mut egui::Ui, right: f32, top: f32, labeled: bool) -> Option<egui::Rect> {
-    offered(app)?;
-    let t = Tokens::get();
-    let text = crate::i18n::tr("update.button");
-    let width = if labeled {
-        30.0 + ui.fonts_mut(|f| f.layout_no_wrap(text.to_string(), FontId::proportional(13.0), Color32::WHITE).size().x) + 10.0
-    } else {
-        28.0
-    };
-    let rect = egui::Rect::from_min_size(egui::pos2(right - width, top), egui::vec2(width, 26.0));
-    let response = ui.interact(rect, ui.id().with("sc_update_button"), egui::Sense::click());
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), text));
-    crate::scenario::publish_handle("titlebar:update", rect.center());
-    let fill = if response.hovered() || response.has_focus() { t.hover } else { t.app_bar };
-    ui.painter().rect_filled(rect, 4.0, fill);
-    ui.painter().rect_stroke(rect, 4.0, egui::Stroke::new(1.0, t.accent), egui::StrokeKind::Inside);
-    let icon = egui::Rect::from_center_size(egui::pos2(rect.left() + 14.0, rect.center().y), egui::vec2(18.0, 18.0));
-    crate::icons::paint(ui.painter(), icon, "update", t.accent, t.accent, t.app_bar);
-    if labeled {
-        ui.painter().text(
-            egui::pos2(rect.left() + 29.0, rect.center().y),
-            egui::Align2::LEFT_CENTER,
-            text,
-            FontId::proportional(13.0),
-            t.app_bar_text,
-        );
-    }
-    let version = app.updater.release.as_ref().map(|r| r.version().to_string()).unwrap_or_default();
-    if response.on_hover_text(crate::i18n::format("update.button_tip", &[("version", &version)])).clicked() {
+/// The application bar's Update pill ("Update to 0.14.0"), at the right of `span`: it opens and
+/// closes the Update window. Returns its rect (None: not shown).
+pub fn button(app: &mut SolveApp, ui: &mut egui::Ui, span: egui::Rect, labeled: bool) -> Option<egui::Rect> {
+    let version = offered(app)?.version().to_string();
+    // "Update to 0.14.0" while the document tabs keep room; a short "Update" when they would be
+    // squeezed; the icon alone in a narrow bar.
+    let full = crate::i18n::format("update.button_version", &[("version", &version)]);
+    let labels = [full.as_str(), crate::i18n::tr("update.button")];
+    let (rect, response) = crate::toolbar::offer_pill(ui, span, labeled, &labels, TAB_ROOM, "update", "titlebar:update")?;
+    if response.on_hover_text(crate::i18n::format("update.available", &[("version", &version)])).clicked() {
         app.updater.open = !app.updater.open;
     }
     Some(rect)
 }
 
-/// The Update window.
+/// The Update card.
 pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
     if !app.updater.open {
         return;
@@ -762,120 +792,109 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
     let install = install_method(app);
     let arch = std::env::consts::ARCH;
     let t = Tokens::get();
-    let mut open = true;
-    let mut action = None;
-    let shown = crate::frame::window(ctx, crate::i18n::tr("update.title"), crate::frame::Width::Wide)
-        .id(egui::Id::new("sc_update"))
-        .open(&mut open)
-        .resizable(false)
-        .show(ctx, |ui| {
-            ui.set_width(WINDOW_W);
-            ui.set_max_width(WINDOW_W);
-            ui.label(RichText::new(crate::i18n::format("update.available", &[("version", release.version())])).strong().size(15.0));
-            ui.label(RichText::new(crate::i18n::format("update.you_have", &[("version", current_version())])).color(t.text_dim));
-            ui.add_space(6.0);
-            egui::Frame::group(ui.style()).show(ui, |ui| {
+    let one_click = install.is_some() && !matches!(app.updater.installed, Some(Err(_)));
+    let downloading = app.updater.job.is_some();
+    let state = match &app.updater.installed {
+        _ if downloading => State::Downloading,
+        Some(Ok(install::Outcome::Restart(_))) => State::Restart,
+        Some(Ok(install::Outcome::Installer(..) | install::Outcome::Opened(_))) => State::Started,
+        _ => State::Offer,
+    };
+    let primary = match (&install, one_click) {
+        (Some(install::Method::Msi), true) => crate::i18n::tr("update.install_msi"),
+        (Some(install::Method::Dmg), true) => crate::i18n::tr("update.download_open"),
+        (Some(_), true) => crate::i18n::tr("update.update_now"),
+        _ if kind.system_managed() => crate::i18n::tr("update.release_page"),
+        _ => crate::i18n::tr("update.download"),
+    };
+    let download = if kind.system_managed() { crate::i18n::tr("update.release_page") } else { crate::i18n::tr("update.download") };
+    let (ok, cancel, apply) = match state {
+        State::Downloading => ("", crate::i18n::tr("ui.cancel"), None),
+        State::Restart => (crate::i18n::tr("update.restart"), crate::i18n::tr("update.restart_later"), None),
+        State::Started => ("", crate::i18n::tr("ui.close"), None),
+        State::Offer => (primary, crate::i18n::tr("update.later"), Some(crate::i18n::tr("update.skip"))),
+    };
+    let id = egui::Id::new("sc_update");
+    let mut also_download = false;
+    let (closed, answer) =
+        ui_kit::Window::new(id, "update", crate::i18n::tr("update.title")).cards(1.7).actions(ok, cancel, apply).show(ctx, true, |ui| {
+            ui_kit::text(ui, &crate::i18n::format("update.available", &[("version", release.version())]), ui_kit::Text::Report("available", false));
+            ui_kit::text(ui, &crate::i18n::format("update.you_have", &[("version", current_version())]), ui_kit::Text::Note("have"));
+            ui_kit::list_frame(ui, "release_notes", |ui| {
                 ui.set_width(ui.available_width());
-                ui.set_max_width(NOTES_W + 12.0);
                 egui::ScrollArea::vertical().max_height(260.0).auto_shrink([false, true]).show(ui, |ui| {
                     if release.notes.trim().is_empty() {
-                        ui.label(RichText::new(crate::i18n::tr("update.no_notes")).color(t.text_dim));
+                        ui_kit::text(ui, crate::i18n::tr("update.no_notes"), ui_kit::Text::Note("no_notes"));
                     } else {
                         markdown(ui, &release.notes, &t);
                     }
                 });
             });
-            ui.add_space(6.0);
             let asset = release.asset_for(&kind, arch).map(|a| a.name.clone());
             if let Some(cmd) = kind.update_command(asset.as_deref()) {
                 let how = match kind {
                     InstallKind::Deb | InstallKind::Rpm | InstallKind::Snap { store: false } => "update.package_hint",
                     _ => "update.system_hint",
                 };
-                ui.add(egui::Label::new(crate::i18n::format(how, &[("kind", kind.label())])).wrap());
-                ui.horizontal(|ui| {
-                    ui.add(egui::Label::new(RichText::new(&cmd).monospace()).selectable(true));
-                    if ui.small_button(crate::i18n::tr("update.copy")).clicked() {
+                ui_kit::text(ui, &crate::i18n::format(how, &[("kind", kind.label())]), ui_kit::Text::Report("how", false));
+                ui_kit::label_actions(ui, &cmd, |ui| {
+                    if ui_kit::button(ui, crate::i18n::tr("update.copy"), ui_kit::Button::Small).clicked() {
                         ui.ctx().copy_text(cmd.clone());
                     }
                 });
-                ui.add_space(4.0);
             } else if let Some(name) = asset.as_ref().filter(|_| app.updater.installed.as_ref().is_none_or(|r| r.is_err())) {
-                ui.label(RichText::new(crate::i18n::format("update.file", &[("file", name)])).size(11.0).color(t.text_dim));
+                ui_kit::text(ui, &crate::i18n::format("update.file", &[("file", name)]), ui_kit::Text::Note("file"));
             }
-            if let Some((_, progress)) = &app.updater.job {
-                let done = progress.done.load(std::sync::atomic::Ordering::Relaxed);
-                let total = progress.total.load(std::sync::atomic::Ordering::Relaxed).max(1);
-                let mb = |b: u64| format!("{:.1}", b as f64 / 1_048_576.0);
-                ui.add(
-                    egui::ProgressBar::new((done as f32 / total as f32).clamp(0.0, 1.0))
-                        .text(crate::i18n::format("update.downloading", &[("done", &mb(done)), ("total", &mb(total))])),
-                );
-                if ui.button(crate::i18n::tr("ui.cancel")).clicked() {
-                    progress.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+            match (&state, &app.updater.installed, &app.updater.job) {
+                (State::Downloading, _, Some((_, progress))) => {
+                    let done = progress.done.load(std::sync::atomic::Ordering::Relaxed);
+                    let total = progress.total.load(std::sync::atomic::Ordering::Relaxed).max(1);
+                    let mb = |b: u64| format!("{:.1}", b as f64 / 1_048_576.0);
+                    ui_kit::text(
+                        ui,
+                        &crate::i18n::format("update.downloading", &[("done", &mb(done)), ("total", &mb(total))]),
+                        ui_kit::Text::Report("downloading", false),
+                    );
+                    ui_kit::progress(ui, "download", done as f32 / total as f32);
+                    ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
                 }
-                ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
-                return;
+                (State::Restart, ..) => {
+                    ui_kit::text(
+                        ui,
+                        &crate::i18n::format("update.installed", &[("version", release.version())]),
+                        ui_kit::Text::Report("installed", false),
+                    );
+                }
+                (_, Some(Ok(install::Outcome::Installer(..))), _) => {
+                    ui_kit::text(ui, crate::i18n::tr("update.installer_started"), ui_kit::Text::Report("installer", false));
+                }
+                (_, Some(Ok(install::Outcome::Opened(_))), _) => {
+                    ui_kit::text(ui, crate::i18n::tr("update.dmg_opened"), ui_kit::Text::Report("dmg", false));
+                }
+                (_, Some(Err(e)), _) => {
+                    ui_kit::text(ui, &crate::i18n::format("update.install_failed", &[("error", e)]), ui_kit::Text::Report("failed", true));
+                }
+                _ => {}
             }
-            match &app.updater.installed {
-                Some(Ok(install::Outcome::Restart(_))) => {
-                    ui.label(RichText::new(crate::i18n::format("update.installed", &[("version", release.version())])).strong());
-                    ui.horizontal(|ui| {
-                        let r = ui.add(egui::Button::new(RichText::new(crate::i18n::tr("update.restart")).strong()).fill(t.accent));
-                        crate::scenario::publish_rect("update:restart", r.rect);
-                        if r.clicked() {
-                            action = Some("restart");
-                        }
-                        if ui.button(crate::i18n::tr("update.restart_later")).clicked() {
-                            action = Some("close");
-                        }
-                    });
-                    return;
-                }
-                Some(Ok(install::Outcome::Installer(..))) => {
-                    ui.label(crate::i18n::tr("update.installer_started"));
-                    return;
-                }
-                Some(Ok(install::Outcome::Opened(_))) => {
-                    ui.add(egui::Label::new(crate::i18n::tr("update.dmg_opened")).wrap());
-                    return;
-                }
-                Some(Err(e)) => {
-                    ui.add(egui::Label::new(RichText::new(crate::i18n::format("update.install_failed", &[("error", e)])).color(t.error)).wrap());
-                }
-                None => {}
+            // With a one-click install the footer's main action installs; the download stays one click away.
+            if state == State::Offer && one_click {
+                also_download = ui_kit::button(ui, download, ui_kit::Button::Normal).clicked();
             }
-            ui.horizontal(|ui| {
-                let one_click = install.is_some() && !matches!(app.updater.installed, Some(Err(_)));
-                if let Some(m) = install.as_ref().filter(|_| one_click) {
-                    let label = match m {
-                        install::Method::Msi => crate::i18n::tr("update.install_msi"),
-                        install::Method::Dmg => crate::i18n::tr("update.download_open"),
-                        _ => crate::i18n::tr("update.update_now"),
-                    };
-                    let r = ui.add(egui::Button::new(RichText::new(label).strong()).fill(t.accent));
-                    crate::scenario::publish_rect("update:install", r.rect);
-                    if r.clicked() {
-                        action = Some("install");
-                    }
-                }
-                let download = if kind.system_managed() { crate::i18n::tr("update.release_page") } else { crate::i18n::tr("update.download") };
-                let r = if one_click { ui.button(download) } else { ui.add(egui::Button::new(RichText::new(download).strong()).fill(t.accent)) };
-                crate::scenario::publish_rect("update:download", r.rect);
-                if r.clicked() {
-                    action = Some("download");
-                }
-                if ui.button(crate::i18n::tr("update.skip")).clicked() {
-                    action = Some("skip");
-                }
-                if ui.button(crate::i18n::tr("update.later")).clicked() {
-                    action = Some("later");
-                }
-            });
         });
-    if let Some(w) = &shown {
-        crate::scenario::publish_rect("update:window", w.response.rect);
+    if let Some(area) = ctx.memory(|m| m.area_rect(id)) {
+        crate::scenario::publish_rect("update:window", area);
     }
+    let action = match (&state, answer) {
+        (State::Offer, ui_kit::Action::Ok) if one_click => Some("install"),
+        (State::Offer, ui_kit::Action::Ok) => Some("download"),
+        (State::Offer, ui_kit::Action::Apply) => Some("skip"),
+        (State::Offer, ui_kit::Action::Cancel) => Some("later"),
+        (State::Offer, _) if also_download => Some("download"),
+        (State::Restart, ui_kit::Action::Ok) => Some("restart"),
+        (State::Restart | State::Started, ui_kit::Action::Cancel) => Some("close"),
+        (State::Downloading, ui_kit::Action::Cancel) => Some("cancel_download"),
+        _ => None,
+    };
     let now = unix_now();
     match action {
         Some("download") => {
@@ -894,41 +913,54 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
         Some("install") => start_install(app, ctx),
         Some("restart") => restart(app),
         Some("close") => app.updater.open = false,
-        _ if !open => app.updater.open = false,
+        Some("cancel_download") => {
+            if let Some((_, progress)) = &app.updater.job {
+                progress.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
+        _ if closed => app.updater.open = false,
         _ => {}
     }
 }
 
+/// What the Update card shows below the notes.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum State {
+    /// A newer release: install or download it, skip it or be reminded.
+    Offer,
+    /// The package is downloading.
+    Downloading,
+    /// The update is installed and waits for a restart.
+    Restart,
+    /// An installer or disk image was started; nothing is left to do here.
+    Started,
+}
+
 /// Preferences ▸ General: the automatic check and Check now.
-pub fn prefs_rows(app: &mut SolveApp, ui: &mut egui::Ui, t: &Tokens) {
+pub fn prefs_rows(app: &mut SolveApp, ui: &mut egui::Ui) {
     let can = available(app);
     let kind = app.updater.kind().clone();
-    ui.label(crate::i18n::tr("update.prefs_label"));
-    ui.add_enabled(can, egui::Checkbox::new(&mut app.preferences.check_updates, crate::i18n::tr("update.check_automatically")));
-    ui.end_row();
-    ui.label("");
-    ui.horizontal(|ui| {
+    ui.add_enabled_ui(can, |ui| ui_kit::checkbox(ui, crate::i18n::tr("update.check_automatically"), &mut app.preferences.check_updates));
+    ui.horizontal_wrapped(|ui| {
         let busy = app.updater.status == Status::Checking;
-        let r = ui.add_enabled(can && !busy, egui::Button::new(crate::i18n::tr("update.check_now")));
+        let (status, warning) = match (&app.updater.status, offered_or_newer(app)) {
+            _ if !can => (String::new(), false),
+            (Status::Checking, _) => (crate::i18n::tr("update.checking").to_string(), false),
+            (Status::Failed(e), _) => (crate::i18n::format("update.failed", &[("error", e)]), true),
+            (_, Some(v)) => (crate::i18n::format("update.available", &[("version", &v)]), false),
+            (Status::UpToDate, None) => (crate::i18n::tr("update.up_to_date").to_string(), false),
+            (Status::Idle, None) => (String::new(), false),
+        };
+        if !status.is_empty() {
+            ui_kit::settings_badge(ui, &status, warning);
+        }
+        let r = ui_kit::button(ui, crate::i18n::tr("update.check_now"), ui_kit::Button::Enabled(can && !busy));
         crate::scenario::publish_rect("prefs:check_now", r.rect);
         if r.clicked() {
             let ctx = ui.ctx().clone();
             check_now(app, &ctx);
         }
-        let status = match (&app.updater.status, offered_or_newer(app)) {
-            _ if !can => String::new(),
-            (Status::Checking, _) => crate::i18n::tr("update.checking").to_string(),
-            (Status::Failed(e), _) => crate::i18n::format("update.failed", &[("error", e)]),
-            (_, Some(v)) => crate::i18n::format("update.available", &[("version", &v)]),
-            (Status::UpToDate, None) => crate::i18n::tr("update.up_to_date").to_string(),
-            (Status::Idle, None) => String::new(),
-        };
-        if !status.is_empty() {
-            ui.label(RichText::new(status).color(t.text_dim));
-        }
     });
-    ui.end_row();
-    ui.label("");
     let note = if can {
         crate::i18n::format("update.prefs_note", &[("version", current_version()), ("kind", kind.label())])
     } else if let InstallKind::Flatpak(id) = &kind {
@@ -936,11 +968,10 @@ pub fn prefs_rows(app: &mut SolveApp, ui: &mut egui::Ui, t: &Tokens) {
     } else {
         crate::i18n::format("update.prefs_dev", &[("version", current_version())])
     };
-    ui.add(egui::Label::new(RichText::new(note).size(11.0).color(t.text_dim)).wrap());
-    ui.end_row();
+    ui_kit::text(ui, &note, ui_kit::Text::Hint("updates"));
     if let Some(v) = offered_or_newer(app)
         && offered(app).is_none()
-        && ui.link(crate::i18n::format("update.show", &[("version", &v)])).clicked()
+        && ui_kit::button(ui, crate::i18n::format("update.show", &[("version", &v)]), ui_kit::Button::Normal).clicked()
     {
         app.updater.open = true;
     }
@@ -959,8 +990,17 @@ pub enum Span {
     Text(String),
     Strong(String),
     Code(String),
-    /// A link's text (the target is dropped: the release page has them).
-    Link(String),
+    /// A link's text and, for a web address (`https://`, `http://`), where it goes (#2943).
+    Link {
+        text: String,
+        url: Option<String>,
+    },
+}
+
+/// A link target the notes may open: web addresses only.
+fn web_url(url: &str) -> Option<String> {
+    let url = url.trim();
+    (url.starts_with("https://") || url.starts_with("http://")).then(|| url.to_string())
 }
 
 /// A block of the release notes.
@@ -974,7 +1014,7 @@ pub enum Block {
 
 /// The Markdown GitHub release notes use, enough to read them: headings, paragraphs (soft line
 /// breaks joined), `-`/`*` lists, `**strong**`, `` `code` ``, `[links](…)` and bare pull-request
-/// URLs (shown as `#123`). Anything else shows as written.
+/// URLs (shown as `#123`, linking to them). Anything else shows as written.
 pub fn parse_markdown(src: &str) -> Vec<Block> {
     let mut blocks = Vec::new();
     let mut para = String::new();
@@ -1043,7 +1083,8 @@ pub fn inline(text: &str) -> Vec<Span> {
             && let Some(end) = after.get(close + 2..).and_then(|s| s.find(')'))
         {
             push_plain(&mut out, &mut plain);
-            out.push(Span::Link(strip_links(after.get(..close).unwrap_or_default())));
+            let url = after.get(close + 2..close + 2 + end).and_then(web_url);
+            out.push(Span::Link { text: strip_links(after.get(..close).unwrap_or_default()), url });
             rest = after.get(close + 2 + end + 1..).unwrap_or_default();
         } else if rest.starts_with("https://github.com/") {
             let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
@@ -1054,7 +1095,7 @@ pub fn inline(text: &str) -> Vec<Span> {
             match (number, kind) {
                 (Some(n), Some("pull" | "issues")) => {
                     push_plain(&mut out, &mut plain);
-                    out.push(Span::Link(format!("#{n}")));
+                    out.push(Span::Link { text: format!("#{n}"), url: web_url(tail) });
                     rest = rest.get(tail.len()..).unwrap_or_default();
                 }
                 _ => {
@@ -1076,7 +1117,7 @@ fn strip_links(s: &str) -> String {
     inline(s)
         .into_iter()
         .map(|span| match span {
-            Span::Text(t) | Span::Strong(t) | Span::Code(t) | Span::Link(t) => t,
+            Span::Text(t) | Span::Strong(t) | Span::Code(t) | Span::Link { text: t, .. } => t,
         })
         .collect()
 }
@@ -1090,32 +1131,54 @@ fn markdown(ui: &mut egui::Ui, src: &str, t: &Tokens) {
             let (text, font, color) = match span {
                 Span::Text(s) => (s.as_str(), FontId::proportional(size), if strong { t.text } else { body }),
                 Span::Strong(s) => (s.as_str(), FontId::proportional(size), t.text),
-                Span::Code(s) => (s.as_str(), FontId::monospace(size - 1.0), body),
-                Span::Link(s) => (s.as_str(), FontId::proportional(size), t.accent),
+                Span::Code(s) => (s.as_str(), FontId::monospace(size - (t.font_body - t.font_small)), body),
+                Span::Link { text, .. } => (text.as_str(), FontId::proportional(size), t.accent),
             };
             job.append(text, 0.0, egui::TextFormat { font_id: font, color, ..Default::default() });
         }
         job
     };
-    // Fixed widths: the notes never widen the window, whatever their lines.
-    let width = NOTES_W;
+    // A laid-out text can't be clicked in parts: a block's web links follow it as buttons that
+    // open them in the browser (#2943), as the agent chat shows its links.
+    let links = |ui: &mut egui::Ui, spans: &[Span], indent: f32| {
+        let targets: Vec<(&str, &str)> = spans
+            .iter()
+            .filter_map(|s| match s {
+                Span::Link { text, url: Some(url) } => Some((text.as_str(), url.as_str())),
+                _ => None,
+            })
+            .collect();
+        if targets.is_empty() {
+            return;
+        }
+        ui.horizontal_wrapped(|ui| {
+            ui.add_space(indent);
+            for (text, url) in targets {
+                ui.hyperlink_to(RichText::new(text).size(t.font_caption), url).on_hover_text(url);
+            }
+        });
+    };
+    // The notes wrap to the card; they never widen it, whatever their lines.
+    let width = (ui.available_width() - 2.0 * t.space_8).max(60.0);
     for block in parse_markdown(src) {
         match block {
             Block::Heading(spans) => {
                 ui.add_space(4.0);
-                ui.add(egui::Label::new(job(&spans, 14.0, true, width)).wrap());
+                ui.add(egui::Label::new(job(&spans, t.font_heading, true, width)).wrap());
             }
             Block::Paragraph(spans) => {
-                ui.add(egui::Label::new(job(&spans, 12.5, false, width)).wrap());
+                ui.add(egui::Label::new(job(&spans, t.font_label, false, width)).wrap());
+                links(ui, &spans, 0.0);
                 ui.add_space(3.0);
             }
             Block::Item(depth, spans) => {
                 let indent = 6.0 + 12.0 * depth.min(4) as f32;
                 ui.horizontal_top(|ui| {
                     ui.add_space(indent);
-                    ui.label(RichText::new("•").size(12.5));
-                    ui.add(egui::Label::new(job(&spans, 12.5, false, width - indent - 14.0)).wrap());
+                    ui.label(RichText::new("•").size(crate::theme::Tokens::get().font_label));
+                    ui.add(egui::Label::new(job(&spans, t.font_label, false, width - indent - 14.0)).wrap());
                 });
+                links(ui, &spans, indent + 14.0);
             }
         }
     }

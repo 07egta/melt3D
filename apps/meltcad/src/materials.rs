@@ -1,0 +1,480 @@
+//! A library of ready-made materials and the little ball that previews one.
+
+use egui::{Color32, Painter, Pos2, Stroke, vec2};
+
+use crate::model::Material;
+use crate::style::gfx;
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Category {
+    Basic,
+    Metal,
+    Glass,
+    Glow,
+    Fun,
+}
+
+impl Category {
+    pub const ALL: [Category; 5] = [Category::Basic, Category::Metal, Category::Glass, Category::Glow, Category::Fun];
+    pub fn label(self) -> &'static str {
+        match self {
+            Category::Basic => "Basic",
+            Category::Metal => "Metal",
+            Category::Glass => "Glass",
+            Category::Glow => "Glow",
+            Category::Fun => "Wonder",
+        }
+    }
+}
+
+pub struct Preset {
+    pub name: &'static str,
+    pub category: Category,
+    pub material: Material,
+}
+
+const fn m(color: [f32; 3], roughness: f32, metallic: f32, glow: f32, glass: f32, iridescence: f32, coat: f32) -> Material {
+    Material { glow, glass, iridescence, coat, ..Material::plain(color, roughness, metallic) }
+}
+
+/// The same material with a gradient from its colour to `color2` (bottom to top; `soft` is the
+/// width of the blend).
+const fn grad(base: Material, color2: [f32; 3], soft: f32) -> Material {
+    Material { color2, gradient: 1.0, grad_soft: soft, ..base }
+}
+
+/// The same material with light seeping through it.
+const fn t(base: Material, translucency: f32) -> Material {
+    Material { translucency, ..base }
+}
+
+const fn p(name: &'static str, category: Category, material: Material) -> Preset {
+    Preset { name, category, material }
+}
+
+use Category::{Basic, Fun, Glass, Glow, Metal};
+
+static PRESETS: &[Preset] = &[
+    // basic
+    p("Clay", Basic, m([0.93, 0.62, 0.50], 0.85, 0.0, 0.0, 0.0, 0.0, 0.0)),
+    p("Matte", Basic, m([0.80, 0.80, 0.82], 0.95, 0.0, 0.0, 0.0, 0.0, 0.0)),
+    p("Plastic", Basic, m([0.92, 0.55, 0.42], 0.45, 0.0, 0.0, 0.0, 0.0, 0.0)),
+    p("Glossy plastic", Basic, m([0.40, 0.62, 0.96], 0.18, 0.0, 0.0, 0.0, 0.0, 0.0)),
+    p("Rubber", Basic, m([0.14, 0.14, 0.16], 0.70, 0.0, 0.0, 0.0, 0.0, 0.0)),
+    p("Wax", Basic, t(m([0.98, 0.88, 0.62], 0.50, 0.0, 0.0, 0.0, 0.0, 0.0), 0.6)),
+    p("Milk", Basic, t(m([0.97, 0.96, 0.93], 0.80, 0.0, 0.0, 0.0, 0.0, 0.0), 0.3)),
+    p("Ink", Basic, m([0.09, 0.09, 0.11], 0.30, 0.0, 0.0, 0.0, 0.0, 0.0)),
+    p("Strawberry", Basic, m([0.96, 0.40, 0.52], 0.28, 0.0, 0.0, 0.0, 0.0, 0.0)),
+    p("Mint", Basic, m([0.55, 0.90, 0.78], 0.45, 0.0, 0.0, 0.0, 0.0, 0.0)),
+    p("Sky", Basic, m([0.50, 0.75, 0.98], 0.35, 0.0, 0.0, 0.0, 0.0, 0.0)),
+    p("Lavender", Basic, m([0.72, 0.64, 0.96], 0.45, 0.0, 0.0, 0.0, 0.0, 0.0)),
+    p("Lemon", Basic, m([0.98, 0.90, 0.46], 0.40, 0.0, 0.0, 0.0, 0.0, 0.0)),
+    p("Pink", Basic, t(m([0.99, 0.78, 0.86], 0.55, 0.0, 0.0, 0.0, 0.0, 0.0), 0.25)),
+    p("Nut", Basic, m([0.50, 0.32, 0.20], 0.65, 0.0, 0.0, 0.0, 0.0, 0.0)),
+    p("Stone", Basic, m([0.52, 0.52, 0.54], 0.90, 0.0, 0.0, 0.0, 0.0, 0.0)),
+    // metal
+    p("Gold", Metal, m([1.00, 0.78, 0.35], 0.25, 1.0, 0.0, 0.0, 0.0, 0.0)),
+    p("Rose gold", Metal, m([0.97, 0.64, 0.56], 0.28, 1.0, 0.0, 0.0, 0.0, 0.0)),
+    p("Silver", Metal, m([0.93, 0.93, 0.95], 0.22, 1.0, 0.0, 0.0, 0.0, 0.0)),
+    p("Chrome", Metal, m([0.86, 0.88, 0.92], 0.07, 1.0, 0.0, 0.0, 0.0, 0.0)),
+    p("Copper", Metal, m([0.95, 0.55, 0.40], 0.30, 1.0, 0.0, 0.0, 0.0, 0.0)),
+    p("Bronze", Metal, m([0.80, 0.55, 0.30], 0.38, 1.0, 0.0, 0.0, 0.0, 0.0)),
+    p("Titanium", Metal, m([0.62, 0.62, 0.66], 0.42, 1.0, 0.0, 0.0, 0.0, 0.0)),
+    p("Rusty iron", Metal, m([0.55, 0.32, 0.22], 0.85, 0.7, 0.0, 0.0, 0.0, 0.0)),
+    p("Gunmetal", Metal, m([0.25, 0.26, 0.30], 0.30, 1.0, 0.0, 0.0, 0.0, 0.0)),
+    p("Verdigris", Metal, m([0.35, 0.72, 0.62], 0.55, 0.8, 0.0, 0.0, 0.0, 0.0)),
+    // glass
+    p("Clear glass", Glass, m([0.97, 0.99, 1.00], 0.03, 0.0, 0.0, 1.0, 0.0, 0.0)),
+    p("Clear", Glass, m([1.00, 1.00, 1.00], 0.0, 0.0, 0.0, 1.0, 0.0, 0.5)),
+    p("Water", Glass, t(m([0.86, 0.95, 1.00], 0.0, 0.0, 0.0, 1.0, 0.0, 0.3), 0.15)),
+    p("Frosted glass", Glass, m([0.95, 0.97, 1.00], 0.45, 0.0, 0.0, 0.85, 0.0, 0.0)),
+    p("Blue glass", Glass, m([0.45, 0.70, 1.00], 0.04, 0.0, 0.0, 1.0, 0.0, 0.0)),
+    p("Green glass", Glass, m([0.45, 0.90, 0.58], 0.04, 0.0, 0.0, 1.0, 0.0, 0.0)),
+    p("Pink glass", Glass, m([1.00, 0.62, 0.78], 0.05, 0.0, 0.0, 1.0, 0.0, 0.0)),
+    p("Ruby", Glass, m([0.90, 0.10, 0.18], 0.03, 0.0, 0.0, 1.0, 0.0, 0.0)),
+    p("Amber", Glass, m([1.00, 0.62, 0.15], 0.04, 0.0, 0.0, 1.0, 0.0, 0.0)),
+    p("Diamond", Glass, m([0.98, 0.99, 1.00], 0.02, 0.0, 0.0, 1.0, 0.25, 0.0)),
+    p("Drop", Glass, t(m([0.90, 0.97, 1.00], 0.02, 0.0, 0.0, 0.92, 0.0, 0.6), 0.3)),
+    // glow
+    p("Neon pink", Glow, m([1.00, 0.30, 0.65], 0.4, 0.0, 1.6, 0.0, 0.0, 0.0)),
+    p("Neon blue", Glow, m([0.25, 0.65, 1.00], 0.4, 0.0, 1.6, 0.0, 0.0, 0.0)),
+    p("Neon green", Glow, m([0.35, 1.00, 0.45], 0.4, 0.0, 1.5, 0.0, 0.0, 0.0)),
+    p("Lamp", Glow, m([1.00, 0.82, 0.50], 0.5, 0.0, 1.8, 0.0, 0.0, 0.0)),
+    p("Lava", Glow, m([1.00, 0.38, 0.10], 0.6, 0.0, 1.4, 0.0, 0.0, 0.0)),
+    p("Firefly", Glow, m([0.80, 1.00, 0.30], 0.5, 0.0, 1.2, 0.0, 0.0, 0.0)),
+    p("Ice", Glow, t(m([0.70, 0.92, 1.00], 0.2, 0.0, 0.4, 0.4, 0.0, 0.0), 0.5)),
+    // fun
+    p("Soap bubble", Fun, m([0.95, 0.98, 1.00], 0.03, 0.0, 0.0, 0.92, 1.0, 0.0)),
+    p("Hologram", Fun, m([0.85, 0.88, 0.95], 0.18, 0.8, 0.0, 0.0, 1.0, 0.0)),
+    p("Car paint", Fun, m([0.86, 0.06, 0.10], 0.25, 0.0, 0.0, 0.0, 0.0, 1.0)),
+    p("Pearl", Fun, m([0.97, 0.95, 0.97], 0.30, 0.0, 0.0, 0.0, 0.35, 0.8)),
+    p("Jewel beetle", Fun, m([0.05, 0.35, 0.22], 0.22, 0.8, 0.0, 0.0, 0.9, 0.0)),
+    p("Candy", Fun, m([1.00, 0.45, 0.70], 0.30, 0.0, 0.0, 0.0, 0.0, 1.0)),
+    p("Jelly", Fun, t(m([1.00, 0.55, 0.20], 0.10, 0.0, 0.0, 0.62, 0.0, 0.8), 0.8)),
+    p("Opal", Fun, m([0.95, 0.96, 1.00], 0.20, 0.0, 0.0, 0.35, 0.85, 0.4)),
+    p("Night sky", Fun, m([0.10, 0.12, 0.35], 0.20, 0.5, 0.2, 0.0, 0.6, 0.7)),
+    p("Marshmallow", Fun, t(m([1.00, 0.92, 0.94], 0.75, 0.0, 0.0, 0.0, 0.0, 0.0), 0.7)),
+    p("Chocolate", Fun, m([0.30, 0.16, 0.10], 0.35, 0.0, 0.0, 0.0, 0.0, 0.7)),
+    p("Sunset", Fun, grad(m([0.99, 0.74, 0.28], 0.40, 0.0, 0.0, 0.0, 0.0, 0.0), [0.55, 0.22, 0.78], 0.9)),
+    p("Sea", Fun, grad(m([0.05, 0.22, 0.62], 0.25, 0.0, 0.0, 0.0, 0.0, 0.5), [0.30, 0.92, 0.85], 0.8)),
+    p("Ramune", Fun, grad(t(m([0.55, 0.85, 1.00], 0.15, 0.0, 0.0, 0.3, 0.0, 0.6), 0.4), [0.90, 0.98, 1.00], 0.7)),
+    p("Strawberry milk", Fun, grad(m([1.00, 0.45, 0.60], 0.45, 0.0, 0.0, 0.0, 0.0, 0.3), [1.00, 0.93, 0.92], 0.6)),
+    p("Aurora", Fun, grad(m([0.20, 0.95, 0.60], 0.30, 0.0, 0.5, 0.0, 0.0, 0.4), [0.60, 0.25, 0.95], 1.0)),
+    p("Forest morning", Fun, grad(m([0.14, 0.40, 0.22], 0.70, 0.0, 0.0, 0.0, 0.0, 0.0), [0.88, 0.96, 0.55], 0.8)),
+    p("Mint ice cream", Fun, t(m([0.62, 0.95, 0.85], 0.55, 0.0, 0.0, 0.0, 0.0, 0.3), 0.4)),
+];
+
+pub fn presets() -> &'static [Preset] {
+    PRESETS
+}
+
+/// Decode a 3MF base-material or color-group display colour (#RRGGBB or #RRGGBBAA).
+/// 3MF specifies sRGB, just like the colours in YuraCAD's material editor.
+pub(crate) fn from_3mf_hex(value: &str) -> Option<Material> {
+    let hex = value.strip_prefix('#')?;
+    if hex.len() != 6 && hex.len() != 8 {
+        return None;
+    }
+    let byte = |i: usize| u8::from_str_radix(hex.get(i..i + 2)?, 16).ok();
+    let rgb = [f32::from(byte(0)?) / 255.0, f32::from(byte(2)?) / 255.0, f32::from(byte(4)?) / 255.0];
+    let alpha = if hex.len() == 8 { f32::from(byte(6)?) / 255.0 } else { 1.0 };
+    let mut m = Material::plain(rgb, 0.5, 0.0);
+    // Transparency is an approximation: YuraCAD uses refractive glass rather than alpha blending.
+    m.glass = 1.0 - alpha;
+    Some(m)
+}
+
+/// glTF 2.0 PBR factors are *linear* RGB; the YuraCAD editor stores sRGB.
+/// Convert only the limited scalar factors which its renderer can represent.
+pub(crate) fn from_gltf_pbr(rgba: [f32; 4], roughness: f32, metallic: f32) -> Option<Material> {
+    if !rgba.iter().chain([roughness, metallic].iter()).all(|v| v.is_finite()) {
+        return None;
+    }
+    let linear_to_srgb = |v: f32| {
+        let v = v.clamp(0.0, 1.0);
+        if v <= 0.0031308 { 12.92 * v } else { 1.055 * v.powf(1.0 / 2.4) - 0.055 }
+    };
+    let mut m = Material::plain(<[f32; 3]>::try_from(&rgba[..3]).ok()?.map(linear_to_srgb), roughness.clamp(0.0, 1.0), metallic.clamp(0.0, 1.0));
+    m.glass = 1.0 - rgba[3].clamp(0.0, 1.0);
+    Some(m)
+}
+
+/// sRGB 0..1 to a colour (NaN safe, clamped).
+pub fn color32(c: [f32; 3]) -> Color32 {
+    let f = |v: f32| if v.is_finite() { (v.clamp(0.0, 1.0) * 255.0).round() as u8 } else { 0 };
+    Color32::from_rgb(f(c[0]), f(c[1]), f(c[2]))
+}
+
+fn shade(c: [f32; 3], k: f32) -> Color32 {
+    color32([c[0] * k, c[1] * k, c[2] * k])
+}
+
+fn lighten(c: [f32; 3], t: f32) -> Color32 {
+    color32([c[0] + (1.0 - c[0]) * t, c[1] + (1.0 - c[1]) * t, c[2] + (1.0 - c[2]) * t])
+}
+
+/// The gradient over a swatch: the second colour fades in from the bottom to the top of the ball
+/// (the swatch always shows the vertical direction, whichever axis the material uses).
+fn gradient_tint(painter: &Painter, centre: Pos2, r: f32, m: &Material, body_alpha: f32) {
+    use egui::epaint::Mesh;
+    const STEPS: usize = 40;
+    let tint = |y: f32| {
+        // y from the centre, down is positive: t = 0 at the bottom of the ball, 1 at the top
+        let t = (0.5 - y / (2.0 * r)).clamp(0.0, 1.0);
+        let t = if m.grad_flip { 1.0 - t } else { t };
+        let a = (m.gradient_weight(t) * 0.8 * body_alpha).clamp(0.0, 1.0);
+        let c = color32(m.color2);
+        Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), (a * 255.0) as u8)
+    };
+    let mut mesh = Mesh::default();
+    mesh.reserve_vertices(STEPS + 2);
+    mesh.reserve_triangles(STEPS);
+    mesh.colored_vertex(centre, tint(0.0));
+    for i in 0..=STEPS {
+        let a = i as f32 / STEPS as f32 * std::f32::consts::TAU;
+        let (sn, cs) = a.sin_cos();
+        mesh.colored_vertex(centre + vec2(cs * r, sn * r), tint(sn * r));
+    }
+    for i in 1..=STEPS as u32 {
+        mesh.add_triangle(0, i, i + 1);
+    }
+    painter.add(egui::Shape::mesh(mesh));
+}
+
+/// A small shaded ball showing roughly what the material looks like.
+pub fn swatch(painter: &Painter, centre: Pos2, radius: f32, m: &Material) {
+    let r = radius.max(2.0);
+    let c = m.color;
+    let rough = m.roughness.clamp(0.0, 1.0);
+    let metal = m.metallic.clamp(0.0, 1.0);
+    let glass = m.glass.clamp(0.0, 1.0);
+    let glow = m.glow.clamp(0.0, 4.0);
+    let irid = m.iridescence.clamp(0.0, 1.0);
+    let coat = m.coat.clamp(0.0, 1.0);
+    // the glow reaches outside the ball
+    if glow > 0.05 {
+        for (k, a) in [(1.7, 14.0), (1.45, 24.0), (1.22, 40.0)] {
+            let alpha = (a * glow.min(2.0)).min(90.0) as u8;
+            painter.circle_filled(centre, r * k, color32(c).gamma_multiply(alpha as f32 / 255.0));
+        }
+    }
+    if glass > 0.05 {
+        // a grey checker behind, so see-through reads
+        painter.circle_filled(centre, r, Color32::from_gray(58));
+        painter.circle_filled(centre + vec2(-r * 0.32, -r * 0.3), r * 0.38, Color32::from_gray(84));
+        painter.circle_filled(centre + vec2(r * 0.34, r * 0.34), r * 0.34, Color32::from_gray(84));
+    }
+    // the body: dark at the edge, lighter toward the lit side
+    let body_alpha = 1.0 - glass * 0.72;
+    let base = if metal > 0.5 { shade(c, 0.55) } else { shade(c, 0.62) };
+    // smooth rings from the light spot (top left) out to the dark rim
+    gfx::ball(
+        painter,
+        centre,
+        r,
+        vec2(-0.34, -0.38),
+        &[
+            (0.0, lighten(c, 0.22).gamma_multiply(body_alpha)),
+            (0.45, shade(c, 0.92).gamma_multiply(body_alpha)),
+            (1.0, base.gamma_multiply(body_alpha)),
+        ],
+    );
+    if m.has_gradient() {
+        gradient_tint(painter, centre, r, m, body_alpha);
+    }
+    if metal > 0.3 {
+        // a bright horizon band
+        let y = centre.y + r * 0.1;
+        painter.line_segment(
+            [Pos2::new(centre.x - r * 0.78, y), Pos2::new(centre.x + r * 0.78, y)],
+            Stroke::new(r * 0.16, lighten(c, 0.55).gamma_multiply(0.55 * metal)),
+        );
+    }
+    if irid > 0.05 {
+        for (dx, dy, col) in [(-0.35, -0.3, [1.0, 0.45, 0.85]), (0.35, 0.05, [0.35, 0.95, 1.0]), (-0.05, 0.45, [1.0, 0.95, 0.4])] {
+            painter.circle_filled(centre + vec2(r * dx, r * dy), r * 0.42, color32(col).gamma_multiply(0.42 * irid));
+        }
+    }
+    if glass > 0.05 {
+        // a bright rim and the crescent of bent light
+        painter.circle_stroke(centre, r - 0.5, Stroke::new((r * 0.12).max(1.0), Color32::from_white_alpha((150.0 * glass) as u8)));
+        painter.circle_stroke(
+            centre + vec2(r * 0.12, r * 0.14),
+            r * 0.62,
+            Stroke::new((r * 0.10).max(0.8), Color32::from_white_alpha((70.0 * glass) as u8)),
+        );
+    }
+    // the highlight gets smaller and sharper as it gets smoother
+    let hl = r * (0.14 + 0.30 * rough);
+    let alpha = (255.0 * (0.95 - 0.55 * rough)) as u8;
+    painter.circle_filled(centre + vec2(-r * 0.34, -r * 0.38), hl, Color32::from_white_alpha(alpha));
+    if coat > 0.05 {
+        painter.circle_filled(centre + vec2(-r * 0.30, -r * 0.34), r * 0.12, Color32::from_white_alpha((255.0 * coat) as u8));
+    }
+    if glow > 0.05 {
+        painter.circle_filled(centre, r * 0.35, Color32::from_white_alpha((70.0 * glow.min(2.0)) as u8));
+    }
+}
+
+/// How heavy a material is for the graphics card (0 = light). Glass bends rays and soaks light, the
+/// clear coat and rainbow sheen add taps, metal and glow add a little.
+pub fn cost(m: &Material) -> f32 {
+    m.glass.clamp(0.0, 1.0) * 3.0
+        + m.translucency.clamp(0.0, 1.0) * 1.5
+        + m.coat.clamp(0.0, 1.0)
+        + m.iridescence.clamp(0.0, 1.0)
+        + (m.glow.clamp(0.0, 4.0) / 4.0) * 0.5
+        + m.metallic.clamp(0.0, 1.0) * 0.4
+}
+
+/// "Light", "Medium" or "Heavy", for the label next to a material.
+pub fn weight_word(m: &Material) -> &'static str {
+    let c = cost(m);
+    if c < 0.6 {
+        "Light"
+    } else if c < 2.0 {
+        "Medium"
+    } else {
+        "Heavy"
+    }
+}
+
+/// The same look with the expensive parts switched off (see-through, soaking, coat, sheen).
+pub fn lighter(m: &Material) -> Material {
+    Material { glass: 0.0, translucency: 0.0, coat: 0.0, iridescence: 0.0, ..*m }
+}
+
+/// A pleasant random colour (soft, not muddy), stepping the generator `seed`.
+pub fn random_color(seed: &mut u32) -> [f32; 3] {
+    let mut next = || {
+        // xorshift32: small, fine for picking colours
+        let mut x = if *seed == 0 { 0x9E37_79B9 } else { *seed };
+        x ^= x << 13;
+        x ^= x >> 17;
+        x ^= x << 5;
+        *seed = x;
+        (x >> 8) as f32 / (1u32 << 24) as f32
+    };
+    let h = next();
+    let s = 0.35 + next() * 0.4;
+    let v = 0.78 + next() * 0.2;
+    let (i, f) = ((h * 6.0).floor(), h * 6.0 - (h * 6.0).floor());
+    let (p, q, t) = (v * (1.0 - s), v * (1.0 - s * f), v * (1.0 - s * (1.0 - f)));
+    match (i as i32).rem_euclid(6) {
+        0 => [v, t, p],
+        1 => [q, v, p],
+        2 => [p, v, t],
+        3 => [p, q, v],
+        4 => [t, p, v],
+        _ => [v, p, q],
+    }
+}
+
+/// A starting value for `random_color` that differs on every press.
+pub fn fresh_seed() -> u32 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos() ^ (d.as_secs() as u32).rotate_left(16))
+        .unwrap_or(0x1234_5678)
+        | 1
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lighter_materials_cost_less_and_random_colours_are_valid() {
+        let glass = presets().iter().find(|p| p.name == "Clear glass").map(|p| p.material).unwrap_or_default();
+        assert!(cost(&lighter(&glass)) < cost(&glass));
+        assert_eq!(weight_word(&lighter(&glass)), "Light");
+        assert_eq!(weight_word(&glass), "Heavy");
+        let mut seed = 0;
+        let mut seen = Vec::new();
+        for _ in 0..50 {
+            let c = random_color(&mut seed);
+            assert!(c.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v)), "{c:?}");
+            seen.push((c[0] * 255.0) as u8);
+        }
+        seen.sort_unstable();
+        seen.dedup();
+        assert!(seen.len() > 10, "colours vary");
+    }
+
+    #[test]
+    fn the_library_is_big_and_valid() {
+        let list = presets();
+        assert!(list.len() >= 40);
+        let mut names: Vec<_> = list.iter().map(|p| p.name).collect();
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(names.len(), list.len(), "names are unique");
+        for cat in Category::ALL {
+            assert!(list.iter().filter(|p| p.category == cat).count() >= 6, "{cat:?}");
+        }
+        for pr in list {
+            let mut c = pr.material;
+            c.sanitize();
+            assert_eq!(c, pr.material, "{} is already in range", pr.name);
+        }
+    }
+
+    #[test]
+    fn colours_are_clamped() {
+        assert_eq!(color32([2.0, -1.0, f32::NAN]), Color32::from_rgb(255, 0, 0));
+    }
+
+    #[test]
+    fn every_swatch_draws() {
+        let ctx = egui::Context::default();
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let painter = ui.painter().clone();
+            for pr in presets() {
+                swatch(&painter, Pos2::new(40.0, 40.0), 14.0, &pr.material);
+            }
+        });
+        out.textures_delta.clear();
+    }
+
+    /// Time to draw every preset swatch once (the Material tab redraws them every frame):
+    /// `cargo test --release -p meltcad swatch_cost -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn swatch_cost() {
+        let ctx = egui::Context::default();
+        let list = presets();
+        let t = std::time::Instant::now();
+        let frames = 50;
+        for _ in 0..frames {
+            let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+                let painter = ui.painter().clone();
+                for pr in list {
+                    swatch(&painter, Pos2::new(40.0, 40.0), 14.0, &pr.material);
+                }
+            });
+            out.textures_delta.clear();
+        }
+        eprintln!("{} swatches per frame: {:.3} ms per frame", list.len(), t.elapsed().as_secs_f64() * 1000.0 / f64::from(frames));
+    }
+
+    /// `YT_OUT=/tmp/grad.yura cargo test -p meltcad dump_gradient_showcase -- --ignored` writes a scene with the
+    /// gradient presets and a few directions, for looking at.
+    #[test]
+    #[ignore]
+    fn dump_gradient_showcase() {
+        use crate::model::{Kind, Op, Shape};
+        let out = std::env::var("YT_OUT").unwrap_or_else(|_| "/tmp/grad.yura".into());
+        let mut sc = crate::model::Scene::default();
+        sc.groups[0].shapes.clear();
+        sc.groups[0].blend = 0.0;
+        let grads: Vec<&Preset> = presets().iter().filter(|p| p.material.has_gradient()).collect();
+        for (i, pr) in grads.iter().enumerate() {
+            let mut sh = Shape::new(Kind::Sphere, [i as f32 * 28.0, 0.0, 12.0], pr.material);
+            sh.size = [12.0, 1.0, 1.0];
+            sh.blend = 0.0;
+            sc.groups[0].shapes.push(sh);
+        }
+        // directions, flip, follow the shape, a stain over a gradient
+        let base = Material { color: [1.0, 0.2, 0.2], color2: [0.2, 0.3, 1.0], gradient: 1.0, grad_soft: 0.5, ..Material::default() };
+        for (i, (axis, flip, local, rot)) in
+            [(0u8, false, false, 0.0), (1, false, false, 0.0), (2, true, false, 0.0), (2, false, true, 35.0), (2, false, false, 35.0)]
+                .into_iter()
+                .enumerate()
+        {
+            let mut sh =
+                Shape::new(Kind::Box, [i as f32 * 28.0, 40.0, 12.0], Material { grad_axis: axis, grad_flip: flip, grad_local: local, ..base });
+            sh.size = [20.0, 20.0, 24.0];
+            sh.rot = [rot, 0.0, 0.0];
+            sh.blend = 0.0;
+            sh.round = 4.0;
+            sc.groups[0].shapes.push(sh);
+        }
+        let mut stain = Shape::new(Kind::Sphere, [0.0, 82.0, 12.0], Material { color: [0.1, 0.9, 0.3], ..Material::default() });
+        stain.size = [9.0, 1.0, 1.0];
+        stain.op = Op::Paint;
+        stain.blend = 3.0;
+        let mut cyl = Shape::new(Kind::Cylinder, [0.0, 80.0, 12.0], base);
+        cyl.size = [14.0, 24.0, 1.0];
+        cyl.blend = 0.0;
+        cyl.round = 3.0;
+        sc.groups[0].shapes.push(cyl);
+        sc.groups[0].shapes.push(stain);
+        let _ = std::fs::write(out, sc.to_json());
+    }
+    #[test]
+    fn file_colour_conversions_and_scene_serialization() {
+        let red = from_3mf_hex("#FF0000").unwrap();
+        assert_eq!(red.color, [1.0, 0.0, 0.0]);
+        assert!(from_3mf_hex("#XYZ").is_none());
+        let transparent = from_3mf_hex("#0033FF80").unwrap();
+        assert!((transparent.glass - 127.0 / 255.0).abs() < 1e-6);
+        let gltf = from_gltf_pbr([0.5, 0.0, 1.0, 1.0], 0.2, 0.8).unwrap();
+        assert!((gltf.color[0] - 0.73536).abs() < 0.001);
+        assert!((gltf.roughness - 0.2).abs() < 1e-6);
+        assert!((gltf.metallic - 0.8).abs() < 1e-6);
+        let mut scene = crate::model::Scene::default();
+        scene.groups[0].shapes.push(crate::model::Shape::new(crate::model::Kind::Box, [0.0; 3], gltf));
+        let loaded = crate::model::Scene::from_json(&scene.to_json()).unwrap();
+        assert_eq!(loaded.groups[0].shapes.last().unwrap().material, gltf);
+    }
+}

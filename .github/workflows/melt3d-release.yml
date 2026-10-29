@@ -1,0 +1,173 @@
+name: Melt 3D release
+
+# Builds Melt 3D (apps/meltcad) for Windows and macOS (Apple Silicon and Intel) and attaches the
+# downloads to a GitHub Release. Run it by hand from the Actions tab ("Run workflow") and give the
+# version; it creates a DRAFT release (tag melt3d-v<version>) that is published after a look.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version number, e.g. 0.1.0 (the tag becomes melt3d-v0.1.0)"
+        required: true
+        default: "0.1.0"
+      publish:
+        description: "Publish the release right away (otherwise it stays a draft)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows-x64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+          - name: linux-x64
+            os: ubuntu-22.04   # older Linux, so the download also runs on older distributions
+            target: x86_64-unknown-linux-gnu
+          - name: macos-arm64
+            os: macos-14
+            target: aarch64-apple-darwin
+          - name: macos-intel
+            os: macos-14   # cross-built: Apple Silicon runners also make the Intel build
+            target: x86_64-apple-darwin
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - name: Linux libraries
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libx11-dev libxcursor-dev libxi-dev libxrandr-dev libgtk-3-dev
+      - name: Build
+        run: cargo build --release --locked -p meltcad --target ${{ matrix.target }}
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $out = "Melt3D-${{ inputs.version }}-windows-x64"
+          New-Item -ItemType Directory -Path $out | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/meltcad.exe" "$out/Melt3D.exe"
+          @"
+          Melt 3D ${{ inputs.version }} (Windows)
+          Double-click Melt3D.exe. No install needed.
+          If Windows says "protected your PC", press "More info" and then "Run anyway":
+          the app is not code-signed yet.
+          "@ | Set-Content "$out/README.txt"
+          Compress-Archive -Path $out -DestinationPath "$out.zip"
+          (Get-FileHash "$out.zip" -Algorithm SHA256).Hash.ToLower() + "  $out.zip" | Set-Content "$out.zip.sha256"
+
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="Melt3D-${{ inputs.version }}-linux-x64"
+          mkdir "$out"
+          cp "target/${{ matrix.target }}/release/meltcad" "$out/Melt3D"
+          cat > "$out/README.txt" <<TXT
+          Melt 3D ${{ inputs.version }} (Linux, 64-bit)
+          Run ./Melt3D (if it does not start: chmod +x Melt3D).
+          Needs a graphics driver with Vulkan (or OpenGL) support.
+          TXT
+          tar -czf "$out.tar.gz" "$out"
+          sha256sum "$out.tar.gz" > "$out.tar.gz.sha256"
+
+      - name: Package (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="Melt3D-${{ inputs.version }}-${{ matrix.name }}"
+          app="Melt 3D.app"
+          mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+          cp "target/${{ matrix.target }}/release/meltcad" "$app/Contents/MacOS/Melt3D"
+          cat > "$app/Contents/Info.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>CFBundleName</key><string>Melt 3D</string>
+            <key>CFBundleDisplayName</key><string>Melt 3D</string>
+            <key>CFBundleIdentifier</key><string>io.github.07egta.melt3d</string>
+            <key>CFBundleExecutable</key><string>Melt3D</string>
+            <key>CFBundlePackageType</key><string>APPL</string>
+            <key>CFBundleShortVersionString</key><string>${{ inputs.version }}</string>
+            <key>CFBundleVersion</key><string>${{ inputs.version }}</string>
+            <key>LSMinimumSystemVersion</key><string>11.0</string>
+            <key>NSHighResolutionCapable</key><true/>
+          </dict></plist>
+          PLIST
+          # ad-hoc signature: Apple Silicon refuses to start unsigned binaries
+          codesign --force --deep -s - "$app"
+          ditto -c -k --keepParent "$app" "$out.zip"
+          shasum -a 256 "$out.zip" > "$out.zip.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: melt3d-${{ matrix.name }}
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            Melt3D-*.zip
+            Melt3D-*.tar.gz
+            Melt3D-*.sha256
+
+  release:
+    name: Draft release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: melt3d-*
+          merge-multiple: true
+          path: dist
+      - name: Create the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="melt3d-v${{ inputs.version }}"
+          cat dist/*.sha256 > dist/SHA256SUMS.txt
+          cat > notes.md <<NOTES
+          # Melt 3D ${{ inputs.version }}
+
+          An easy, light 3D modeller where shapes melt into each other.
+
+          | Computer | Download |
+          |---|---|
+          | Windows (64-bit) | \`Melt3D-${{ inputs.version }}-windows-x64.zip\` |
+          | Linux (64-bit) | \`Melt3D-${{ inputs.version }}-linux-x64.tar.gz\` |
+          | Mac, Apple Silicon (M1 and newer) | \`Melt3D-${{ inputs.version }}-macos-arm64.zip\` |
+          | Mac, Intel | \`Melt3D-${{ inputs.version }}-macos-intel.zip\` |
+
+          **Windows:** unzip, double-click \`Melt3D.exe\`. If "Windows protected your PC" appears: More info, then Run anyway.
+
+          **Linux:** `tar -xzf` it and run `./Melt3D`.
+
+          **Mac:** unzip, drag "Melt 3D" to Applications. The first time, right-click it, choose Open, then Open again (the app is not notarized yet).
+
+          Checksums are in \`SHA256SUMS.txt\`. Built from commit ${GITHUB_SHA} by CI.
+          NOTES
+          args=(--repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "Melt 3D ${{ inputs.version }}" --notes-file notes.md)
+          if [ "${{ inputs.publish }}" != "true" ]; then args+=(--draft); fi
+          gh release create "$tag" dist/*.zip dist/*.tar.gz dist/SHA256SUMS.txt "${args[@]}"
