@@ -6,9 +6,151 @@
 
 use serde_json::Value;
 
-use crate::import_mesh::{Affine, BAD_INDEX, BAD_NUMBER, CUT_OFF, ImportedMesh, MAX_TRIANGLES, MAX_VERTICES, NO_SHAPE, TOO_MANY_TRIS, TOO_MANY_VERTS, append_transformed};
+use crate::import_mesh::{
+    Affine, BAD_INDEX, BAD_NUMBER, CUT_OFF, ImportedMesh, MAX_TRIANGLES, MAX_VERTICES, NO_SHAPE, TOO_MANY_TRIS, TOO_MANY_VERTS, append_transformed,
+};
 
-const BAD_GLB: &str = "GLB ファイルがこわれています";
+/// The meshes that `read_glb` would place: those of the nodes of the active scene (or, with no
+/// scene, of the root nodes; with no nodes at all, every mesh).
+fn reachable_meshes(json: &Value) -> Vec<usize> {
+    let nodes = json.get("nodes").and_then(Value::as_array);
+    let roots: Vec<usize> =
+        match json.get("scenes").and_then(|s| s.get(usz(json.get("scene")).unwrap_or(0))).and_then(|s| s.get("nodes")).and_then(Value::as_array) {
+            Some(a) => a.iter().filter_map(|v| usz(Some(v))).collect(),
+            None => match nodes {
+                Some(nodes) => {
+                    let mut is_child = vec![false; nodes.len()];
+                    for n in nodes {
+                        for c in n.get("children").and_then(Value::as_array).into_iter().flatten() {
+                            if let Some(slot) = usz(Some(c)).and_then(|i| is_child.get_mut(i)) {
+                                *slot = true;
+                            }
+                        }
+                    }
+                    (0..nodes.len()).filter(|i| !is_child[*i]).collect()
+                }
+                None => return (0..json.get("meshes").and_then(Value::as_array).map_or(0, Vec::len)).collect(),
+            },
+        };
+    let mut out = Vec::new();
+    let mut stack: Vec<(usize, usize)> = roots.into_iter().map(|r| (r, 0)).collect();
+    let mut visits = 0usize;
+    while let Some((i, depth)) = stack.pop() {
+        visits += 1;
+        if visits > MAX_NODE_VISITS || depth > MAX_DEPTH {
+            break;
+        }
+        let Some(n) = nodes.and_then(|a| a.get(i)) else { continue };
+        if let Some(m) = usz(n.get("mesh"))
+            && !out.contains(&m)
+        {
+            out.push(m);
+        }
+        for c in n.get("children").and_then(Value::as_array).into_iter().flatten() {
+            if let Some(c) = usz(Some(c)) {
+                stack.push((c, depth + 1));
+            }
+        }
+    }
+    out.sort_unstable();
+    out
+}
+
+/// Read only appearance metadata; never changes geometry decoding or allocates image pixels.
+pub(crate) fn appearance_glb(bytes: &[u8]) -> crate::import_mesh::AppearanceInfo {
+    use crate::import_mesh::AppearanceInfo;
+    let mut out = AppearanceInfo::default();
+    if bytes.get(..4) != Some(b"glTF") {
+        return out;
+    }
+    let mut offset = 12usize;
+    let json_bytes = loop {
+        let Some(length) = u32at(bytes, offset).map(|n| n as usize) else { return out };
+        let Some(kind) = u32at(bytes, offset + 4) else { return out };
+        let Some(start) = offset.checked_add(8) else { return out };
+        let Some(end) = start.checked_add(length) else { return out };
+        let Some(chunk) = bytes.get(start..end) else { return out };
+        if kind == 0x4E4F_534A {
+            break chunk;
+        }
+        let Some(next) = start.checked_add(length.div_ceil(4) * 4) else { return out };
+        if next <= offset || next >= bytes.len() {
+            return out;
+        }
+        offset = next;
+    };
+    let Ok(doc) = serde_json::from_slice::<Value>(json_bytes) else { return out };
+    let materials = doc.get("materials").and_then(Value::as_array);
+    let mut used: Vec<usize> = Vec::new();
+    let mut vertex_colours = false;
+    if let Some(meshes) = doc.get("meshes").and_then(Value::as_array) {
+        // only the meshes the model really takes from the file (the active scene), as read_glb does
+        let reached = reachable_meshes(&doc);
+        for mesh in reached.iter().filter_map(|i| meshes.get(*i)) {
+            if let Some(primitives) = mesh.get("primitives").and_then(Value::as_array) {
+                for p in primitives {
+                    if p.get("mode").and_then(Value::as_u64).unwrap_or(4) < 4 {
+                        continue;
+                    }
+                    if p.get("attributes").and_then(|a| a.get("COLOR_0")).is_some() {
+                        vertex_colours = true;
+                    }
+                    let idx = usz(p.get("material")).unwrap_or(usize::MAX);
+                    if !used.contains(&idx) {
+                        used.push(idx);
+                    }
+                }
+            }
+        }
+    }
+    if used.len() > 1 || vertex_colours {
+        out.varies = true;
+    }
+    for idx in used {
+        let Some(mat) = materials.and_then(|a| a.get(idx)) else { continue };
+        let pbr = mat.get("pbrMetallicRoughness");
+        let v = pbr.and_then(|p| p.get("baseColorFactor")).and_then(Value::as_array);
+        let mut rgba = [1.0f32; 4];
+        if let Some(a) = v
+            && a.len() == 4
+        {
+            for (i, slot) in rgba.iter_mut().enumerate() {
+                let Some(x) = a[i].as_f64() else { return out };
+                *slot = x as f32;
+            }
+        }
+        let rough = pbr.and_then(|p| p.get("roughnessFactor")).and_then(Value::as_f64).unwrap_or(1.0) as f32;
+        let metal = pbr.and_then(|p| p.get("metallicFactor")).and_then(Value::as_f64).unwrap_or(1.0) as f32;
+        if out.material.is_none() {
+            out.material = crate::materials::from_gltf_pbr(rgba, rough, metal);
+        }
+        if pbr.and_then(|p| p.get("baseColorTexture")).is_some()
+            || mat.get("normalTexture").is_some()
+            || mat.get("occlusionTexture").is_some()
+            || mat.get("emissiveTexture").is_some()
+        {
+            out.notes.push("GLB image textures (base colour, normals, etc.) can't be loaded. A plain colour is used instead".into());
+        }
+        if mat.get("extensions").is_some() {
+            out.notes.push("GLB extended materials can't be fully reproduced".into());
+        }
+        if rgba[3] < 1.0 || mat.get("alphaMode").and_then(Value::as_str).is_some_and(|a| a != "OPAQUE") {
+            out.notes.push("GLB transparency is approximated as glass (not the same as alpha blending)".into());
+        }
+        if mat.get("emissiveFactor").is_some() {
+            out.notes.push("GLB glow colours are not reproduced".into());
+        }
+    }
+    if vertex_colours {
+        out.notes.push("GLB vertex colours (COLOR_0) can't be turned into a single-colour SDF".into());
+    }
+    if out.material.is_none() && vertex_colours {
+        out.notes.push("GLB has only vertex colours, so the default material is used".into());
+    }
+    out
+}
+
+const BAD_GLB: &str = "The GLB file is broken";
 const MAX_NODE_VISITS: usize = 100_000;
 const MAX_DEPTH: usize = 64;
 
@@ -44,7 +186,7 @@ impl Accessor {
     fn open(json: &Value, bin: &[u8], index: usize) -> Result<Accessor, String> {
         let a = json.get("accessors").and_then(|x| x.get(index)).ok_or(BAD_GLB)?;
         if a.get("sparse").is_some() {
-            return Err("GLB のスパース（sparse）データには対応していません".into());
+            return Err("Sparse GLB data is not supported".into());
         }
         let count = usz(a.get("count")).ok_or(BAD_GLB)?;
         if count > MAX_VERTICES.max(MAX_TRIANGLES * 3) {
@@ -61,22 +203,28 @@ impl Accessor {
         let csize = Self::comp_size(ctype).ok_or(BAD_GLB)?;
         let view = json.get("bufferViews").and_then(|x| x.get(usz(a.get("bufferView")).unwrap_or(usize::MAX))).ok_or(BAD_GLB)?;
         if usz(view.get("buffer")).unwrap_or(0) != 0 {
-            return Err("GLB の外にあるデータには対応していません".into());
+            return Err("Data stored outside the GLB is not supported".into());
         }
         let view_off = usz(view.get("byteOffset")).unwrap_or(0);
         let view_len = usz(view.get("byteLength")).ok_or(BAD_GLB)?;
         if view_off.checked_add(view_len).is_none_or(|e| e > bin.len()) {
             return Err(CUT_OFF.into());
         }
-        let elem = csize * ncomp;
+        let elem = csize.checked_mul(ncomp).ok_or(BAD_GLB)?;
         let stride = usz(view.get("byteStride")).filter(|s| *s != 0).unwrap_or(elem);
         if stride < elem || stride > 252 {
             return Err(BAD_GLB.into());
         }
-        let offset = view_off + usz(a.get("byteOffset")).unwrap_or(0);
+        let view_end = view_off.checked_add(view_len).ok_or(CUT_OFF)?;
+        let offset = view_off.checked_add(usz(a.get("byteOffset")).unwrap_or(0)).ok_or(CUT_OFF)?;
+        // A wrapped offset may land *before* the view's beginning; checking
+        // only the last byte against the upper bound is insufficient.
+        if offset < view_off || offset > view_end {
+            return Err(CUT_OFF.into());
+        }
         if count > 0 {
             let last = (count - 1).checked_mul(stride).and_then(|x| x.checked_add(offset)).and_then(|x| x.checked_add(elem)).ok_or(BAD_GLB)?;
-            if last > view_off + view_len {
+            if last > view_end {
                 return Err(CUT_OFF.into());
             }
         }
@@ -89,8 +237,8 @@ impl Accessor {
             return None;
         }
         let csize = Self::comp_size(self.ctype)?;
-        let o = self.offset + i * self.stride + c * csize;
-        let b = bin.get(o..o + csize)?;
+        let o = self.offset.checked_add(i.checked_mul(self.stride)?)?.checked_add(c.checked_mul(csize)?)?;
+        let b = bin.get(o..o.checked_add(csize)?)?;
         let v = match self.ctype {
             5120 => {
                 let x = f64::from(b[0] as i8);
@@ -162,7 +310,7 @@ fn read_primitive(json: &Value, bin: &[u8], prim: &Value) -> Result<Option<Part>
         return Ok(None); // points and lines
     }
     if prim.get("extensions").is_some_and(|e| e.get("KHR_draco_mesh_compression").is_some() || e.get("EXT_meshopt_compression").is_some()) {
-        return Err("圧縮された GLB（Draco など）には対応していません".into());
+        return Err("Compressed GLB (Draco etc.) is not supported".into());
     }
     let Some(pos_index) = usz(prim.get("attributes").and_then(|a| a.get("POSITION"))) else { return Ok(None) };
     let acc = Accessor::open(json, bin, pos_index)?;
@@ -203,7 +351,7 @@ fn read_primitive(json: &Value, bin: &[u8], prim: &Value) -> Result<Option<Part>
     match mode {
         4 => {
             tris.reserve(indices.len() / 3);
-            for t in indices.chunks_exact(3) {
+            for t in indices.as_chunks::<3>().0.iter() {
                 tris.push([t[0], t[1], t[2]]);
             }
         }
@@ -237,7 +385,9 @@ struct Walk<'a> {
 
 impl Walk<'_> {
     fn mesh(&mut self, index: usize, m: &Affine) -> Result<(), String> {
-        let Some(prims) = self.json.get("meshes").and_then(|x| x.get(index)).and_then(|x| x.get("primitives")).and_then(Value::as_array) else { return Ok(()) };
+        let Some(prims) = self.json.get("meshes").and_then(|x| x.get(index)).and_then(|x| x.get("primitives")).and_then(Value::as_array) else {
+            return Ok(());
+        };
         for p in prims {
             if let Some((pos, tris)) = read_primitive(self.json, self.bin, p)? {
                 append_transformed(&mut self.out, &pos, &tris, m)?;
@@ -248,11 +398,11 @@ impl Walk<'_> {
 
     fn node(&mut self, index: usize, parent: &Affine, depth: usize) -> Result<(), String> {
         if depth > MAX_DEPTH {
-            return Err("GLB のノードが深く入れ子になりすぎています".into());
+            return Err("The GLB nodes are nested too deeply".into());
         }
         self.visits += 1;
         if self.visits > MAX_NODE_VISITS {
-            return Err("GLB のノードが多すぎます".into());
+            return Err("Too many nodes in the GLB".into());
         }
         let Some(n) = self.json.get("nodes").and_then(|x| x.get(index)) else { return Err(BAD_GLB.into()) };
         let m = parent.after(&node_matrix(n)?);
@@ -268,14 +418,14 @@ impl Walk<'_> {
     }
 }
 
-/// Read a GLB file. glTF is metres by definition but the numbers are taken as they are (they are
-/// scaled to the wanted size afterwards, and our own exporter writes millimetres).
+/// Read a GLB file. glTF is metres by definition: the numbers are turned into millimetres (and
+/// our own exporter writes metres, so a part keeps its real size in other programs).
 pub fn read_glb(b: &[u8]) -> Result<ImportedMesh, String> {
     if b.get(..4) != Some(b"glTF") {
         return Err(BAD_GLB.into());
     }
     if u32at(b, 4) != Some(2) {
-        return Err("glTF 2.0 の GLB だけに対応しています".into());
+        return Err("Only glTF 2.0 GLB is supported".into());
     }
     let total = u32at(b, 8).ok_or(BAD_GLB)? as usize;
     if total > b.len() || total < 12 {
@@ -306,17 +456,21 @@ pub fn read_glb(b: &[u8]) -> Result<ImportedMesh, String> {
     if let Some(req) = json.get("extensionsRequired").and_then(Value::as_array)
         && req.iter().filter_map(Value::as_str).any(|e| matches!(e, "KHR_draco_mesh_compression" | "EXT_meshopt_compression"))
     {
-        return Err("圧縮された GLB（Draco など）には対応していません".into());
+        return Err("Compressed GLB (Draco etc.) is not supported".into());
     }
     if let Some(buffers) = json.get("buffers").and_then(Value::as_array)
         && (buffers.len() > 1 || buffers.first().is_some_and(|b0| b0.get("uri").is_some()))
     {
-        return Err("GLB の外にあるデータには対応していません".into());
+        return Err("Data stored outside the GLB is not supported".into());
     }
     let mut w = Walk { json: &json, bin, visits: 0, out: ImportedMesh::default() };
     let scene_nodes: Option<Vec<usize>> = {
         let scene = usz(json.get("scene")).unwrap_or(0);
-        json.get("scenes").and_then(|s| s.get(scene)).and_then(|s| s.get("nodes")).and_then(Value::as_array).map(|a| a.iter().filter_map(|v| usz(Some(v))).collect())
+        json.get("scenes")
+            .and_then(|s| s.get(scene))
+            .and_then(|s| s.get("nodes"))
+            .and_then(Value::as_array)
+            .map(|a| a.iter().filter_map(|v| usz(Some(v))).collect())
     };
     match scene_nodes {
         Some(nodes) => {
@@ -351,6 +505,15 @@ pub fn read_glb(b: &[u8]) -> Result<ImportedMesh, String> {
     }
     if w.out.triangles.is_empty() {
         return Err(NO_SHAPE.into());
+    }
+    // glTF coordinates are metres; the model is in millimetres
+    for p in &mut w.out.positions {
+        for c in p.iter_mut() {
+            *c *= 1000.0;
+            if !c.is_finite() || c.abs() > crate::import_mesh::MAX_COORD {
+                return Err("The GLB is too large".into());
+            }
+        }
     }
     Ok(w.out)
 }
@@ -415,25 +578,43 @@ mod tests {
     }
 
     #[test]
+    fn accessor_offsets_cannot_wrap_or_escape_the_buffer_view() {
+        let mut bin = vec![0u8; 20];
+        bin[8..12].copy_from_slice(&1.25f32.to_le_bytes());
+        let make = |offset: u64, count: usize| {
+            json!({
+                "accessors":[{"bufferView":0,"byteOffset":offset,"componentType":5126,"count":count,"type":"VEC3"}],
+                "bufferViews":[{"buffer":0,"byteOffset":8,"byteLength":12}]
+            })
+        };
+        let good = Accessor::open(&make(0, 1), &bin, 0).expect("valid accessor at view start");
+        assert_eq!(good.get(&bin, 0, 0), Some(1.25));
+        assert!(Accessor::open(&make(1, 1), &bin, 0).is_err(), "unaligned overrun is out of the view");
+        assert!(Accessor::open(&make(usize::MAX as u64 - 7, 1), &bin, 0).is_err(), "checked sum must reject overflow");
+        assert!(Accessor::open(&make(13, 0), &bin, 0).is_err(), "even an empty accessor may not point beyond the view");
+        assert!(Accessor::open(&make(12, 0), &bin, 0).is_ok(), "empty accessor at the view end is allowed");
+    }
+
+    #[test]
     fn a_hand_made_triangle_with_node_transforms() {
         let bin = tri_bin();
         let m = read_glb(&glb(&tri_doc(json!([{"mesh": 0}]), json!([0])), &bin)).unwrap();
         assert_eq!((m.positions.len(), m.triangles.len()), (3, 1));
-        assert!((m.surface_area() - 3.0).abs() < 1e-6);
+        assert!((m.surface_area() - 3.0e6).abs() < 10.0, "metres become millimetres");
         // translation + scale + rotation by 90 degrees about z (quaternion), parent and child
         let s = 0.5f64.sqrt();
         let nodes = json!([{"children": [1], "translation": [10.0, 0.0, 0.0], "scale": [2.0, 2.0, 2.0]}, {"mesh": 0, "rotation": [0.0, 0.0, s, s]}]);
         let m = read_glb(&glb(&tri_doc(nodes, json!([0])), &bin)).unwrap();
-        assert!((m.surface_area() - 12.0).abs() < 1e-4);
+        assert!((m.surface_area() - 12.0e6).abs() < 500.0);
         let (lo, hi) = m.bounds().unwrap();
-        // x' = 10 + 2*(-y): [-6, 10]; y' = 2*x: [0, 4]
-        assert!((lo[0] - 4.0).abs() < 1e-4 && (hi[0] - 10.0).abs() < 1e-4, "{lo:?} {hi:?}");
-        assert!(lo[1].abs() < 1e-4 && (hi[1] - 4.0).abs() < 1e-4);
+        // x' = 10 + 2*(-y): [4, 10]; y' = 2*x: [0, 4] (metres, read as millimetres)
+        assert!((lo[0] - 4000.0).abs() < 0.1 && (hi[0] - 10000.0).abs() < 0.1, "{lo:?} {hi:?}");
+        assert!(lo[1].abs() < 0.1 && (hi[1] - 4000.0).abs() < 0.1);
         // a matrix (column major): mirror x -> the winding is flipped so the area stays positive
         let nodes = json!([{"mesh": 0, "matrix": [-1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 5.0, 0.0, 0.0, 1.0]}]);
         let m = read_glb(&glb(&tri_doc(nodes, json!([0])), &bin)).unwrap();
         let (lo, hi) = m.bounds().unwrap();
-        assert!((lo[0] - 3.0).abs() < 1e-5 && (hi[0] - 5.0).abs() < 1e-5);
+        assert!((lo[0] - 3000.0).abs() < 0.1 && (hi[0] - 5000.0).abs() < 0.1);
         let t = m.triangles[0];
         let p = |i: u32| m.positions[i as usize];
         let (a, b, c) = (p(t[0]), p(t[1]), p(t[2]));
@@ -463,7 +644,7 @@ mod tests {
                 "bufferViews": [{"buffer": 0, "byteLength": 48}], "buffers": [{"byteLength": 48}]});
             let m = read_glb(&glb(&doc, &quad)).unwrap();
             assert_eq!(m.triangles.len(), 2);
-            assert!((m.surface_area() - 1.0).abs() < 1e-6);
+            assert!((m.surface_area() - 1.0e6).abs() < 10.0);
         }
     }
 
@@ -481,7 +662,36 @@ mod tests {
             "accessors": [{"bufferView": 0, "componentType": 5122, "normalized": true, "count": 3, "type": "VEC3"}],
             "bufferViews": [{"buffer": 0, "byteLength": 24, "byteStride": 8}], "buffers": [{"byteLength": 24}]});
         let m = read_glb(&glb(&doc, &bin)).unwrap();
-        assert!((m.surface_area() - 0.5).abs() < 1e-6);
+        assert!((m.surface_area() - 0.5e6).abs() < 10.0);
+    }
+
+    #[test]
+    fn the_colour_comes_from_the_mesh_that_is_placed_not_from_an_unused_one() {
+        let bin = tri_bin();
+        let mut doc = tri_doc(json!([{"mesh": 1}]), json!([0]));
+        let prim = doc["meshes"][0]["primitives"][0].clone();
+        let mut red = prim.clone();
+        red["material"] = json!(0);
+        let mut blue = prim;
+        blue["material"] = json!(1);
+        doc["meshes"] = json!([{"primitives": [red]}, {"primitives": [blue]}]);
+        doc["materials"] = json!([
+            {"pbrMetallicRoughness": {"baseColorFactor": [1.0, 0.0, 0.0, 1.0]}},
+            {"pbrMetallicRoughness": {"baseColorFactor": [0.0, 0.0, 1.0, 1.0]}}
+        ]);
+        let a = appearance_glb(&glb(&doc, &bin));
+        let c = a.material.expect("a colour").color;
+        assert!(c[2] > 0.5 && c[0] < 0.5, "blue expected, got {c:?}");
+        assert!(!a.varies, "the unused red mesh must not make the file look multi-coloured");
+    }
+
+    #[test]
+    fn a_one_metre_cube_is_a_thousand_millimetres() {
+        let bin = tri_bin();
+        let m = read_glb(&glb(&tri_doc(json!([{"mesh": 0}]), json!([0])), &bin)).unwrap();
+        // tri_bin is 2 x 3 metres: the size is in millimetres
+        let s = m.size();
+        assert!(s.iter().any(|x| *x >= 999.0), "{s:?}");
     }
 
     #[test]
@@ -519,11 +729,13 @@ mod tests {
         assert!(edit(&|d| d["meshes"][0]["primitives"][0]["mode"] = json!(1)).is_err()); // lines only: no shape
         // a lot of instances of a big mesh
         let wide: Vec<Value> = (0..2000).map(|_| json!({"mesh": 0})).collect();
-        assert!(edit(&|d| {
-            d["nodes"] = json!(wide);
-            d["scenes"][0]["nodes"] = json!((0..2000).collect::<Vec<_>>());
-        })
-        .is_ok());
+        assert!(
+            edit(&|d| {
+                d["nodes"] = json!(wide);
+                d["scenes"][0]["nodes"] = json!((0..2000).collect::<Vec<_>>());
+            })
+            .is_ok()
+        );
         // broken containers
         assert!(read_glb(b"glTF").is_err());
         assert!(read_glb(b"glTF\x01\0\0\0\x0c\0\0\0").is_err());
@@ -565,5 +777,37 @@ mod tests {
         let b = box_mesh([0.0; 3], [1.0, 2.0, 3.0]);
         let g = export_formats::glb(&surface(&b), "b").unwrap();
         assert!((read_glb(&g).unwrap().signed_volume() - 6.0).abs() < 1e-5);
+    }
+    #[test]
+    fn glb_pbr_colour_and_unsupported_textures_are_explained() {
+        let mut doc = tri_doc(json!([{"mesh":0}]), json!([0]));
+        doc["materials"] = json!([{"pbrMetallicRoughness": {"baseColorFactor":[0.5,0.0,0.0,1.0],"roughnessFactor":0.25,"metallicFactor":0.75}}]);
+        doc["meshes"][0]["primitives"][0]["material"] = json!(0);
+        let g = glb(&doc, &tri_bin());
+        let a = appearance_glb(&g);
+        let m = a.material.unwrap();
+        assert!(!a.varies);
+        assert!((m.color[0] - 0.73536).abs() < 0.001);
+        assert_eq!(m.color[1], 0.0);
+        assert!((m.roughness - 0.25).abs() < 1e-6);
+        assert!((m.metallic - 0.75).abs() < 1e-6);
+        doc["materials"][0]["pbrMetallicRoughness"]["baseColorTexture"] = json!({"index":0});
+        doc["meshes"][0]["primitives"][0]["attributes"]["COLOR_0"] = json!(0);
+        let a = appearance_glb(&glb(&doc, &tri_bin()));
+        assert!(a.varies);
+        assert!(a.notes.iter().any(|n| n.contains("texture")));
+        assert!(a.notes.iter().any(|n| n.contains("vertex colour")));
+    }
+
+    #[test]
+    fn exported_glb_uniform_look_recovers_colour_and_roughness() {
+        let s = surface(&box_mesh([0.0; 3], [1.0; 3]));
+        let g = export_formats::glb(&s, "coloured").unwrap();
+        let a = appearance_glb(&g);
+        let m = a.material.unwrap();
+        assert!(!a.varies);
+        assert!((m.color[0] - 200.0 / 255.0).abs() < 0.002);
+        assert!((m.color[1] - 100.0 / 255.0).abs() < 0.002);
+        assert!((m.roughness - 100.0 / 255.0).abs() < 0.002);
     }
 }

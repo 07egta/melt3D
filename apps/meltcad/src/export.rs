@@ -20,7 +20,7 @@ mod tests {
     fn scene_of(shapes: Vec<Shape>) -> Scene {
         let mut g = Group::new("g");
         g.shapes = shapes;
-        Scene { groups: vec![g], melt: Default::default(), env: Default::default(), saved: Vec::new() }
+        Scene { groups: vec![g], melt: Default::default(), env: Default::default(), saved: Vec::new(), anim: Default::default() }
     }
 
     fn slab(x: f32) -> Shape {
@@ -50,12 +50,10 @@ mod tests {
             assert!(built.closed, "{degrees} degrees produced an open mesh");
             assert!(built.tris > 100, "{degrees} produced too few triangles: {}", built.tris);
             let v = melt::volume(&built.surface.mesh).abs();
-            assert!((v / expected_volume - 1.0).abs() < 0.12,
-                "{degrees} degrees altered volume too much: {v} vs {expected_volume}");
+            assert!((v / expected_volume - 1.0).abs() < 0.12, "{degrees} degrees altered volume too much: {v} vs {expected_volume}");
             let file = std::env::temp_dir().join(format!("meltcad_twist_{degrees}.stl"));
             let serialized = crate::export_job::serialize(&built, &o, &file).unwrap();
-            assert!(!serialized.is_empty() && serialized.iter().all(|(_, bytes)| bytes.len() > 84),
-                "{degrees}: STL writer returned empty data");
+            assert!(!serialized.is_empty() && serialized.iter().all(|(_, bytes)| bytes.len() > 84), "{degrees}: STL writer returned empty data");
         }
     }
 

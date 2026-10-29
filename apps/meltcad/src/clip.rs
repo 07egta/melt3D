@@ -6,9 +6,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::app::App;
 use crate::model::{Group, MAX_GROUPS, MAX_SHAPES, Pick, Scene, Shape};
+use crate::pattern::{Pattern, Source};
 
-/// How far a pasted copy sits from the original, so it can be seen.
-const STEP: f32 = 8.0;
+/// A pasted copy sits exactly where the original was (no shift).
+const STEP: f32 = 0.0;
 
 #[derive(Serialize, Deserialize)]
 struct Clip {
@@ -16,6 +17,10 @@ struct Clip {
     /// The copied group (all of it when `whole`, else only its first shape matters).
     group: Group,
     whole: bool,
+    /// The groups nested inside `group`, in order (with the depths they had): a copied group
+    /// takes its whole outline along, like Duplicate.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    inner: Vec<Group>,
 }
 
 /// The selection as clipboard text (None when nothing is selected).
@@ -25,36 +30,53 @@ pub fn copy_text(app: &App) -> Option<String> {
             let shape = app.scene.shape(g, s)?.clone();
             let mut group = Group::new("");
             group.shapes.push(shape);
-            Clip { yuracad_clip: 1, group, whole: false }
+            Clip { yuracad_clip: 1, group, whole: false, inner: Vec::new() }
         }
-        Pick::Group(g) => Clip { yuracad_clip: 1, group: app.scene.groups.get(g)?.clone(), whole: true },
+        Pick::Group(g) => {
+            let end = app.scene.subtree_end(g);
+            let inner = app.scene.groups.get(g + 1..end).map(<[Group]>::to_vec).unwrap_or_default();
+            Clip { yuracad_clip: 1, group: app.scene.groups.get(g)?.clone(), whole: true, inner }
+        }
     };
     serde_json::to_string(&clip).ok()
 }
 
 /// Put the text into the scene. Returns what was added ("" when the text is not something MELTCAD knows).
 pub fn paste_text(app: &mut App, text: &str) -> Result<String, String> {
+    if !app.allow_scene_structure_change() {
+        return Err(app.sk.msg.clone());
+    }
     let text = text.trim();
     let _guard = crate::mesh::LoadGuard::begin();
     if let Ok(clip) = serde_json::from_str::<Clip>(text) {
         if clip.yuracad_clip != 1 {
-            return Err("このコピーは新しいバージョンのものです".into());
+            return Err("This copy is from a newer version".into());
         }
-        let mut sc = Scene { groups: vec![clip.group], ..Scene::default() };
+        // the top group stands at depth 0 and what was inside it keeps its place below it
+        let mut top = clip.group;
+        let base = top.depth;
+        top.depth = 0;
+        let mut groups = vec![top];
+        if clip.whole {
+            groups.extend(clip.inner.into_iter().map(|mut g| {
+                g.depth = g.depth.saturating_sub(base).max(1);
+                g
+            }));
+        }
+        let mut sc = Scene { groups, ..Scene::default() };
         sc.sanitize();
-        let group = sc.groups.pop().ok_or("空でした")?;
-        return if clip.whole { add_group(app, group, true) } else { add_shapes(app, group.shapes) };
+        if !clip.whole {
+            let group = sc.groups.into_iter().next().ok_or("It was empty")?;
+            return add_shapes(app, group.shapes);
+        }
+        return add_block(app, sc.groups, "Pasted", true);
     }
     // a whole scene file pasted as text: its groups are added
     if let Ok(sc) = Scene::from_json(text) {
-        let mut n = 0;
-        for g in sc.groups {
-            add_group(app, g, false)?;
-            n += 1;
-        }
-        return Ok(format!("グループを{n}個貼りつけました"));
+        let n = sc.groups.len();
+        return add_block(app, sc.groups, &format!("Pasted {n} groups"), false);
     }
-    Err("貼りつけられるものがありません".into())
+    Err("Nothing to paste".into())
 }
 
 fn shifted(shapes: &mut [Shape], d: f32) {
@@ -66,63 +88,137 @@ fn shifted(shapes: &mut [Shape], d: f32) {
 
 fn add_shapes(app: &mut App, mut shapes: Vec<Shape>) -> Result<String, String> {
     if shapes.is_empty() {
-        return Err("空でした".into());
+        return Err("It was empty".into());
     }
     if app.scene.shape_count() + shapes.len() > MAX_SHAPES {
-        return Err(format!("形は{MAX_SHAPES}個までです"));
+        return Err(format!("Up to {MAX_SHAPES} shapes"));
     }
     if app.scene.groups.is_empty() {
-        app.scene.groups.push(Group::new("グループ 1"));
+        app.scene.groups.push(Group::new("Group 1"));
     }
     let g = match app.sel {
         Some(Pick::Shape(g, _)) | Some(Pick::Group(g)) if g < app.scene.groups.len() => g,
         _ => app.scene.groups.len() - 1,
     };
+    if app.scene.groups[g].is_linked() {
+        return Err("This is a linked copy. Select its source or Unlink it before pasting shapes".into());
+    }
     crate::mesh::can_add(&app.scene, shapes.iter())?;
     shifted(&mut shapes, STEP);
     for s in &mut shapes {
-        s.name = format!("{} コピー", s.name.trim_end_matches(" コピー"));
+        s.name = format!("{} copy", s.name.trim_end_matches(" copy"));
     }
     let group = &mut app.scene.groups[g];
     group.shapes.extend(shapes);
     app.sel = Some(Pick::Shape(g, group.shapes.len() - 1));
-    Ok("貼りつけました".into())
+    Ok("Pasted".into())
 }
 
-fn add_group(app: &mut App, mut group: Group, offset: bool) -> Result<String, String> {
-    if app.scene.groups.len() >= MAX_GROUPS {
-        return Err(format!("グループは{MAX_GROUPS}個までです"));
+/// Put a block of groups (a group with the groups nested in it, or a whole scene) into the scene
+/// after the selection, keeping how they nest. All of it goes in, or none of it does.
+fn add_block(app: &mut App, mut block: Vec<Group>, done: &str, from_clipboard: bool) -> Result<String, String> {
+    if block.is_empty() {
+        return Err("It was empty".into());
     }
-    if app.scene.shape_count() + group.shapes.len() > MAX_SHAPES {
-        return Err(format!("形は{MAX_SHAPES}個までです"));
+    // Pasted letter contours stay usable solids but must not keep the source text identity,
+    // or editing the original text would regenerate the pasted copy as well.
+    for g in &mut block {
+        g.puffy_text = None;
     }
-    crate::mesh::can_add(&app.scene, group.shapes.iter())?;
-    if offset {
-        shifted(&mut group.shapes, STEP);
+    if app.scene.groups.len() + block.len() > MAX_GROUPS {
+        return Err(format!("Up to {MAX_GROUPS} groups"));
+    }
+    if app.scene.shape_count() + block.iter().map(|g| g.shapes.len()).sum::<usize>() > MAX_SHAPES {
+        return Err(format!("Up to {MAX_SHAPES} shapes"));
+    }
+    crate::mesh::can_add(&app.scene, block.iter().flat_map(|g| g.shapes.iter()))?;
+    // Copied scenes may reuse IDs from the destination. Rebase group IDs,
+    // shape IDs, link sources and pattern references *before* splicing so
+    // linked copies cannot silently attach to pre-existing geometry.
+    let mut incoming = Scene { groups: block, ..Scene::default() };
+    // A copied linked group (or geometry pattern) may intentionally refer to
+    // a source *outside* the copied subtree in the same scene. Preserve those
+    // references only for the application's clipboard; a foreign whole-scene
+    // JSON must never connect to a coincidentally matching destination UID.
+    let original = from_clipboard.then(|| incoming.groups.clone());
+    let own_groups: std::collections::HashSet<u32> = incoming.groups.iter().map(|g| g.uid).filter(|u| *u != 0).collect();
+    let own_shapes: std::collections::HashSet<u32> =
+        incoming.groups.iter().flat_map(|g| g.shapes.iter().map(|s| s.uid)).filter(|u| *u != 0).collect();
+    let by = crate::add_file::max_uid(&app.scene);
+    if by.checked_add(crate::add_file::max_uid(&incoming)).is_none() {
+        return Err("Too many identifiers to paste safely".into());
+    }
+    crate::add_file::shift_uids(&mut incoming, by);
+    if let Some(original) = original {
+        for (new, old) in incoming.groups.iter_mut().zip(&original) {
+            if let Some(source) = old.instance_of
+                && !own_groups.contains(&source)
+                && app.scene.group_by_uid(source).is_some()
+            {
+                new.instance_of = Some(source);
+            }
+            match (&mut new.pattern, &old.pattern) {
+                (Some(Pattern::Path { source: dest, .. }), Some(Pattern::Path { source, .. }))
+                    if !own_shapes.contains(source) && app.scene.shape_by_uid(*source).is_some() =>
+                {
+                    *dest = *source
+                }
+                (Some(Pattern::Geometry { source: Source::Shape(dest), .. }), Some(Pattern::Geometry { source: Source::Shape(source), .. }))
+                    if !own_shapes.contains(source) && app.scene.shape_by_uid(*source).is_some() =>
+                {
+                    *dest = *source
+                }
+                (Some(Pattern::Geometry { source: Source::Group(dest), .. }), Some(Pattern::Geometry { source: Source::Group(source), .. }))
+                    if !own_groups.contains(source) && app.scene.group_by_uid(*source).is_some() =>
+                {
+                    *dest = *source
+                }
+                _ => {}
+            }
+        }
+    }
+    block = incoming.groups;
+    let base = block.first().map_or(0, |g| g.depth);
+    for g in &mut block {
+        g.depth = g.depth.saturating_sub(base);
     }
     let at = match app.sel {
-        Some(Pick::Shape(g, _)) | Some(Pick::Group(g)) => (g + 1).min(app.scene.groups.len()),
+        Some(Pick::Shape(g, _)) | Some(Pick::Group(g)) => app.scene.subtree_end(g).min(app.scene.groups.len()),
         None => app.scene.groups.len(),
     };
-    app.scene.groups.insert(at, group);
+    app.scene.groups.splice(at..at, block);
+    app.scene.normalize_depths();
     app.sel = Some(Pick::Group(at));
-    Ok("貼りつけました".into())
+    Ok(done.into())
 }
 
 impl App {
     /// Copy the selection (to the system clipboard and to the app's own copy for the menu).
     pub fn copy(&mut self, ctx: &egui::Context) {
+        let many = self.picks().len();
         match copy_text(self) {
             Some(t) => {
                 ctx.copy_text(t.clone());
                 self.clipboard = Some(t);
-                self.say(ctx, "コピーしました");
+                if many > 1 {
+                    self.say(ctx, format!("Copied the first of {many} selected (a copy holds one thing)"));
+                } else {
+                    self.say(ctx, "Copied");
+                }
             }
-            None => self.say(ctx, "コピーするものをえらんでください"),
+            None => self.say(ctx, "Select something to copy"),
         }
     }
 
     pub fn cut(&mut self, ctx: &egui::Context) {
+        if !self.allow_scene_structure_change() {
+            return;
+        }
+        // A copy holds one thing. Deleting several after copying one would lose the rest.
+        if self.picks().len() > 1 {
+            self.say(ctx, "Cut takes one thing at a time. Select one, or press Delete to remove several");
+            return;
+        }
         if self.sel.is_some() {
             self.copy(ctx);
             self.delete_selected();
@@ -132,7 +228,7 @@ impl App {
     /// Paste the given text (a Ctrl+V), or the app's own copy when `text` is None (the menu).
     pub fn paste(&mut self, ctx: &egui::Context, text: Option<String>) {
         let Some(t) = text.or_else(|| self.clipboard.clone()) else {
-            self.say(ctx, "コピーしたものがありません");
+            self.say(ctx, "Nothing copied yet");
             return;
         };
         match paste_text(self, &t) {
@@ -186,6 +282,107 @@ mod tests {
         assert!(app.scene.groups.len() <= MAX_GROUPS && app.scene.shape_count() <= MAX_SHAPES);
     }
 
+    fn nested_app() -> App {
+        let mut app = App::new(true, None);
+        let mut child = Group::new("child");
+        child.depth = 1;
+        child.shapes.push(app.scene.groups[0].shapes[0].clone());
+        app.scene.groups.push(child);
+        app
+    }
+
+    #[test]
+    fn copying_a_parent_group_takes_its_children_along() {
+        let mut app = nested_app();
+        app.sel = Some(Pick::Group(0));
+        let t = copy_text(&app).unwrap_or_default();
+        assert!(paste_text(&mut app, &t).is_ok());
+        let depths: Vec<u8> = app.scene.groups.iter().map(|g| g.depth).collect();
+        assert_eq!(depths, vec![0, 1, 0, 1], "{depths:?}");
+        assert_eq!(app.scene.groups[3].name, "child");
+        assert_eq!(app.sel, Some(Pick::Group(2)));
+    }
+
+    #[test]
+    fn a_pasted_scene_keeps_how_its_groups_nest() {
+        let mut app = App::new(true, None);
+        let other = nested_app().scene;
+        assert!(paste_text(&mut app, &other.to_json()).is_ok());
+        let depths: Vec<u8> = app.scene.groups.iter().map(|g| g.depth).collect();
+        assert_eq!(depths, vec![0, 0, 1], "{depths:?}");
+    }
+
+    #[test]
+    fn pasting_a_scene_remaps_colliding_link_source_uids() {
+        let mut app = App::new(true, None);
+        app.scene.groups[0].name = "existing sphere".into();
+        app.scene.groups[0].uid = 1;
+        app.sel = None;
+
+        let mut box_group = Group::new("incoming box");
+        box_group.uid = 1;
+        box_group.shapes.push(Shape::new(Kind::Box, [35.0, 0.0, 10.0], Default::default()));
+        let mut link = Group::new("incoming link");
+        link.instance_of = Some(1);
+        let incoming = Scene { groups: vec![box_group, link], ..Scene::default() };
+        assert!(paste_text(&mut app, &incoming.to_json()).is_ok());
+        let source_uid = app.scene.groups[1].uid;
+        assert_ne!(source_uid, app.scene.groups[0].uid);
+        assert_eq!(app.scene.groups[2].instance_of, Some(source_uid));
+        assert_eq!(crate::pattern::link_source(&app.scene, 2), Some(1));
+        assert_eq!(app.scene.groups[1].shapes[0].kind, Kind::Box);
+        assert_eq!(app.scene.groups[0].shapes[0].kind, Kind::Sphere);
+        let reopened = Scene::from_json(&app.scene.to_json()).unwrap();
+        assert_eq!(crate::pattern::link_source(&reopened, 2), Some(1));
+    }
+
+    #[test]
+    fn pasted_shapes_cannot_disappear_inside_linked_copies() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        app.sel = Some(Pick::Shape(0, 0));
+        let text = copy_text(&app).unwrap();
+        app.sel = Some(Pick::Group(0));
+        app.make_instance(&ctx);
+        let original_count = app.scene.shape_count();
+        assert!(paste_text(&mut app, &text).is_err());
+        assert_eq!(app.scene.shape_count(), original_count);
+    }
+
+    #[test]
+    fn copying_a_link_within_one_scene_keeps_its_original_source() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        app.sel = Some(Pick::Group(0));
+        app.make_instance(&ctx);
+        let original_link = match app.sel {
+            Some(Pick::Group(gi)) => gi,
+            _ => panic!("linked copy"),
+        };
+        let uid = app.scene.groups[original_link].instance_of.expect("linked source");
+        let clip = copy_text(&app).unwrap();
+        assert!(paste_text(&mut app, &clip).is_ok());
+        let new_link = match app.sel {
+            Some(Pick::Group(gi)) => gi,
+            _ => panic!("pasted linked copy"),
+        };
+        assert!(app.scene.groups[new_link].is_linked());
+        assert_eq!(app.scene.groups[new_link].instance_of, Some(uid));
+        assert_eq!(crate::pattern::link_source(&app.scene, new_link), Some(0));
+    }
+
+    #[test]
+    fn a_paste_that_does_not_fit_changes_nothing() {
+        let mut app = App::new(true, None);
+        while app.scene.groups.len() < MAX_GROUPS - 1 {
+            app.scene.groups.push(Group::new("g"));
+        }
+        let before = app.scene.clone();
+        let other = nested_app().scene;
+        assert!(paste_text(&mut app, &other.to_json()).is_err());
+        assert_eq!(app.scene, before, "nothing was half-added");
+    }
+
     #[test]
     fn a_pasted_scene_file_adds_its_groups_and_junk_is_refused() {
         let mut app = App::new(true, None);
@@ -211,5 +408,21 @@ mod tests {
         assert_eq!(app.scene.shape_count(), 1);
         app.paste(&ctx, None);
         assert_eq!(app.scene.shape_count(), 2);
+    }
+
+    #[test]
+    fn cut_with_several_selected_keeps_them_all() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        app.add_shape(&ctx, Kind::Box);
+        app.add_shape(&ctx, Kind::Sphere);
+        let before = app.scene.shape_count();
+        let first = app.picks()[0];
+        let other = Pick::Shape(0, 0);
+        app.multi_for = app.sel;
+        app.multi.push(if first == other { Pick::Shape(0, 1) } else { other });
+        assert!(app.picks().len() > 1);
+        app.cut(&ctx);
+        assert_eq!(app.scene.shape_count(), before, "nothing is lost when a copy cannot hold the whole selection");
     }
 }

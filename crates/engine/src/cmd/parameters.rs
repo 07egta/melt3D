@@ -12,35 +12,48 @@ use crate::{EngineError, Result, Session};
 pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("parameters.change", "Change Parameters", change_param).at("SOLID", "MODIFY").icon("params").params(
         "name, expression (number or text), unit?: mm|cm|m|in|ft|deg|rad|\"\" (new parameters default to their value's unit), comment?, \
-             favorite?: bool, new_name?: rename (references follow); or delete: name → recomputed: features rebuilt, \
+             favorite?: bool, new_name?: rename (references follow); or delete: name; or changes: {name: expression, …} (existing \
+         parameters, checked together and rebuilt once, all or nothing) → changed?: {name: value} (with changes), recomputed: features rebuilt, \
          restored: features whose earlier result for the same inputs was reused (e.g. a value set back)",
     ),
-    CommandSpec::new("parameters.list", "List Parameters", list).noundo().doc_only().params(
+    CommandSpec::new("parameters.list", "List Parameters", list).icon("list").noundo().doc_only().params(
         "favorites?: bool (only favourites), filter?: all|user|sketch|feature|favorites → parameters (name, expression, unit, value in its unit, \
          source, feature/input, comment, favorite, uses, used_by, error) and cycles",
     ),
-    CommandSpec::new("parameters.add", "Add User Parameter", add).params("name, expression, unit?, comment?, favorite?: bool"),
+    CommandSpec::new("parameters.add", "Add User Parameter", add).icon("new").params("name, expression, unit?, comment?, favorite?: bool"),
     CommandSpec::new("parameters.rename", "Rename Parameter", rename)
+        .icon("rename")
         .params("name, new_name (expressions, feature inputs and dimensions that use it follow)"),
-    CommandSpec::new("parameters.delete", "Delete Parameter", delete).params("name (refused while something uses it; the error lists the users)"),
-    CommandSpec::new("parameters.favorite", "Favourite Parameter", favorite).params("name, favorite?: bool (default true)"),
-    CommandSpec::new("parameters.comment", "Comment Parameter", comment).params("name, comment"),
+    CommandSpec::new("parameters.delete", "Delete Parameter", delete)
+        .icon("delete")
+        .params("name (refused while something uses it; the error lists the users)"),
+    CommandSpec::new("parameters.favorite", "Favourite Parameter", favorite).icon("star").params("name, favorite?: bool (default true)"),
+    CommandSpec::new("parameters.move", "Move Parameter", move_param)
+        .icon("reorder")
+        .params("name, before | after: another user parameter; the user parameter is listed just before or after it"),
+    CommandSpec::new("parameters.comment", "Comment Parameter", comment).icon("text").params("name, comment"),
     CommandSpec::new("parameters.users", "Parameter Users", users)
+        .icon("graph")
         .noundo()
         .params("name → users (parameters, feature inputs, dimensions) and the features it drives"),
     CommandSpec::new("parameters.graph", "Parameter Graph", graph)
+        .icon("graph")
         .noundo()
         .params("→ nodes, edges [user, used] (users include Feature:<name>), cycles, errors"),
     CommandSpec::new("parameters.export", "Export Parameters", export)
+        .icon("export")
         .noundo()
         .params("format?: csv|json (default csv, or from the path), path?: write to a file → text"),
     CommandSpec::new("parameters.import", "Import Parameters", import)
+        .icon("import")
         .params("text: CSV (header with name, expression, unit?, comment?) or JSON [{name, expression, unit?, comment?}] | path; all or nothing"),
     CommandSpec::new("expr.evaluate", "Evaluate Expression", evaluate)
+        .icon("params")
         .noundo()
         .doc_only()
         .params("expression, kind?: length|angle|unitless (or unit?: mm|in|deg…) → ok, value (mm/rad), display_value, references, error"),
     CommandSpec::new("parameters.complete", "Complete Expression", complete)
+        .icon("params")
         .noundo()
         .doc_only()
         .params("prefix?: the text before the cursor → word, suggestions [{text, kind: parameter|function|unit|constant, detail}]"),
@@ -70,6 +83,9 @@ fn known(s: &Session, name: &str) -> bool {
 fn change_param(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "parameters.change";
     let solved = s.solved_sketches();
+    if let Some(changes) = p.get("changes") {
+        return change_many(s, changes, &solved);
+    }
     if let Some(n) = str_(p, "delete") {
         s.doc_mut().remove_param(n.trim())?;
         s.settle_value_edit(&solved)?;
@@ -115,6 +131,26 @@ fn change_param(s: &mut Session, p: &Value) -> Result<Value> {
     out["restored"] = json!(s.model.last_restored);
     out["errors"] = json!(failing(s));
     Ok(out)
+}
+
+/// `parameters.change {changes}`: several existing parameters set at once, so a design is
+/// rebuilt once for all of them instead of once per parameter.
+fn change_many(s: &mut Session, changes: &Value, solved: &crate::SketchValues) -> Result<Value> {
+    let cmd = "parameters.change";
+    let Some(map) = changes.as_object() else { return Err(bad(cmd, "`changes` must be an object of name: expression")) };
+    if map.is_empty() {
+        return Err(bad(cmd, "`changes` is empty"));
+    }
+    let mut list = Vec::with_capacity(map.len());
+    for (name, e) in map {
+        let e = expr_arg(&json!({"e": e}), "e").ok_or_else(|| bad(cmd, format!("`changes.{name}` must be a number or text")))?;
+        list.push((name.trim().to_string(), e));
+    }
+    s.doc_mut().change_params_atomic(&list)?;
+    s.settle_value_edit(solved)?;
+    let (vals, _) = s.doc.param_values();
+    let values: serde_json::Map<String, Value> = list.iter().map(|(n, _)| (n.clone(), json!(vals.get(n).map(|v| v.v)))).collect();
+    Ok(json!({"changed": values, "recomputed": s.model.last_recomputed, "restored": s.model.last_restored, "errors": failing(s)}))
 }
 
 fn list(s: &mut Session, p: &Value) -> Result<Value> {
@@ -177,6 +213,19 @@ fn favorite(s: &mut Session, p: &Value) -> Result<Value> {
     let on = bool_(p, "favorite").unwrap_or(true);
     s.doc_mut().set_favorite(&name, on)?;
     Ok(json!({"name": name, "favorite": on}))
+}
+
+fn move_param(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "parameters.move";
+    let name = param_name(cmd, p)?.to_string();
+    let (target, after) = match (str_(p, "before"), str_(p, "after")) {
+        (Some(t), None) => (t.to_string(), false),
+        (None, Some(t)) => (t.to_string(), true),
+        _ => return Err(bad(cmd, "give one of `before` or `after`: another user parameter")),
+    };
+    s.doc_mut().move_user_param(&name, &target, after)?;
+    let order: Vec<&str> = s.doc.params.iter().filter(|q| !q.model).map(|q| q.name.as_str()).collect();
+    Ok(json!({"name": name, "order": order}))
 }
 
 fn comment(s: &mut Session, p: &Value) -> Result<Value> {
@@ -299,11 +348,16 @@ fn complete(s: &mut Session, p: &Value) -> Result<Value> {
     let text = str_(p, "prefix").unwrap_or("");
     // The identifier being typed: trailing letters, digits and underscores.
     let word: String = text.chars().rev().take_while(|c| c.is_alphanumeric() || *c == '_').collect::<Vec<_>>().into_iter().rev().collect();
-    let starts = |n: &str| word.is_empty() || n.to_ascii_lowercase().starts_with(&word.to_ascii_lowercase());
+    let lower = word.to_ascii_lowercase();
+    let starts = |n: &str| word.is_empty() || n.to_ascii_lowercase().starts_with(&lower);
+    // A parameter matches wherever the word appears in its name (`side` finds
+    // `cab_side_thickness`, #2757); functions, constants and units match from the start.
+    let within = |n: &str| word.is_empty() || n.to_ascii_lowercase().contains(&lower);
     let mut out: Vec<Value> = Vec::new();
-    let mut rows: Vec<solidcraft_doc::ParamRow> = s.doc.param_rows().into_iter().filter(|r| starts(&r.name)).collect();
-    // Favourites, then user parameters, then the rest.
-    rows.sort_by_key(|r| (!r.favorite, r.source != "user"));
+    let mut rows: Vec<solidcraft_doc::ParamRow> = s.doc.param_rows().into_iter().filter(|r| within(&r.name)).collect();
+    // Names that start with the word, then the rest; within each, favourites, then user
+    // parameters, then the others.
+    rows.sort_by_key(|r| (!starts(&r.name), !r.favorite, r.source != "user"));
     for r in rows.into_iter().take(200) {
         let v = r.value.map(|v| format!("{v:.4} {}", r.unit).trim().to_string()).unwrap_or_else(|| "error".into());
         let mut detail = format!("{} = {v}", r.expression);

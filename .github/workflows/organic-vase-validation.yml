@@ -1,0 +1,45 @@
+name: Organic Vase Validation
+
+# A scoped verification workflow for the feature branch. It never publishes an EXE
+# and does not alter the healthy latest release.
+on:
+  push:
+    branches:
+      - feat/meltcad-organic-vase-20261017
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux-validation:
+    name: Rust, shader, STL geometry
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install GUI compile dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-dev libwayland-dev libx11-dev mesa-vulkan-drivers
+      - name: Compile all MeltCAD tests
+        run: cargo test --locked -p meltcad --no-run
+      - name: Organic vase unit and integration tests
+        run: cargo test --locked -p meltcad organic_vase -- --nocapture
+      - name: Validate the complete WGSL shader
+        run: cargo test --locked -p meltcad the_shader_is_valid_wgsl -- --nocapture
+      - name: Check watertight STL for the three designs
+        run: cargo test --locked -p meltcad organic_vase_stl_is_watertight -- --ignored --nocapture
+
+  windows-check:
+    name: Windows compilation
+    runs-on: windows-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Compile Windows MeltCAD
+        run: cargo check --locked -p meltcad

@@ -4,6 +4,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
 use std::time::Instant;
 
@@ -33,6 +34,22 @@ pub enum Scope {
 pub enum Up {
     Z,
     Y,
+}
+
+impl Up {
+    pub fn id(self) -> &'static str {
+        match self {
+            Up::Z => "z",
+            Up::Y => "y",
+        }
+    }
+    pub fn from_id(id: &str) -> Option<Up> {
+        match id {
+            "z" => Some(Up::Z),
+            "y" => Some(Up::Y),
+            _ => None,
+        }
+    }
 }
 
 /// How to make the mesh lighter.
@@ -102,7 +119,24 @@ pub fn threads() -> usize {
 // ---------------------------------------------------------------- picking the part of the scene
 
 /// The scene to mesh: the chosen part of it, without stains if they are to be ignored.
-pub fn prepare(scene: &Scene, sel: Option<Pick>, scope: Scope, ignore_paint: bool) -> Result<Scene, String> {
+/// What is selected: one pick, several (a multi-selection), or nothing.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Picks(pub Vec<Pick>);
+
+impl From<Option<Pick>> for Picks {
+    fn from(p: Option<Pick>) -> Self {
+        Picks(p.into_iter().collect())
+    }
+}
+
+impl From<Vec<Pick>> for Picks {
+    fn from(p: Vec<Pick>) -> Self {
+        Picks(p)
+    }
+}
+
+pub fn prepare(scene: &Scene, sel: impl Into<Picks>, scope: Scope, ignore_paint: bool) -> Result<Scene, String> {
+    let sel: Picks = sel.into();
     let mut s = scene.clone();
     match scope {
         Scope::Visible => {}
@@ -117,29 +151,58 @@ pub fn prepare(scene: &Scene, sel: Option<Pick>, scope: Scope, ignore_paint: boo
         Scope::Selected => {
             // everything else is hidden rather than removed: patterns and linked copies find their
             // sources by number, wherever they are in the list
-            let Some(pick) = sel else { return Err("nothing is selected".into()) };
-            let (gi, only) = match pick {
-                Pick::Group(gi) => (gi, None),
-                Pick::Shape(gi, si) => (gi, Some(si)),
-            };
-            if scene.groups.get(gi).is_none() {
-                return Err("the selection is gone".into());
+            if sel.0.is_empty() {
+                return Err("nothing is selected".into());
             }
-            if let Some(si) = only
-                && scene.shape(gi, si).is_none()
-            {
-                return Err("the selection is gone".into());
+            // The groups taken whole (with all they hold), the single shapes taken from a group,
+            // and the groups above them, which stay only as containers.
+            let mut whole: Vec<(usize, usize)> = Vec::new();
+            let mut single: std::collections::HashMap<usize, std::collections::HashSet<usize>> = std::collections::HashMap::new();
+            let mut ancestors = std::collections::HashSet::new();
+            for pick in &sel.0 {
+                let gi = match *pick {
+                    Pick::Group(gi) | Pick::Shape(gi, _) => gi,
+                };
+                if scene.groups.get(gi).is_none() {
+                    return Err("the selection is gone".into());
+                }
+                match *pick {
+                    Pick::Group(gi) => whole.push((gi, scene.subtree_end(gi))),
+                    Pick::Shape(gi, si) => {
+                        if scene.shape(gi, si).is_none() {
+                            return Err("the selection is gone".into());
+                        }
+                        single.entry(gi).or_default().insert(si);
+                    }
+                }
+                let mut at = scene.parent_of(gi);
+                while let Some(parent) = at {
+                    ancestors.insert(parent);
+                    at = scene.parent_of(parent);
+                }
             }
+            let tops: std::collections::HashSet<usize> = whole.iter().map(|w| w.0).collect();
             for (i, g) in s.groups.iter_mut().enumerate() {
-                g.visible = i == gi;
-                if i == gi {
+                let in_whole = whole.iter().any(|(a, b)| (*a..*b).contains(&i));
+                let some_shapes = single.get(&i);
+                let selected = in_whole || some_shapes.is_some();
+                let container = !selected && ancestors.contains(&i);
+                g.visible = selected || container;
+                if container {
                     g.op = Op::Add;
-                    if let Some(si) = only {
-                        for (k, sh) in g.shapes.iter_mut().enumerate() {
-                            sh.visible = k == si;
-                            if k == si {
-                                sh.op = Op::Add;
-                            }
+                    g.pattern = None;
+                    for sh in &mut g.shapes {
+                        sh.visible = false;
+                    }
+                }
+                if tops.contains(&i) || (some_shapes.is_some() && !in_whole) {
+                    g.op = Op::Add;
+                }
+                if let (Some(only), false) = (some_shapes, in_whole) {
+                    for (k, sh) in g.shapes.iter_mut().enumerate() {
+                        sh.visible = only.contains(&k);
+                        if only.contains(&k) {
+                            sh.op = Op::Add;
                         }
                     }
                 }
@@ -147,10 +210,19 @@ pub fn prepare(scene: &Scene, sel: Option<Pick>, scope: Scope, ignore_paint: boo
         }
     }
     if ignore_paint {
+        // Paint groups can contain Add descendants: deleting only the Paint
+        // parent accidentally turns those descendants into solid geometry.
+        // Hide instead; the existing hierarchy and UID references stay intact.
         for g in &mut s.groups {
-            g.shapes.retain(|sh| sh.op != Op::Paint);
+            if g.op == Op::Paint {
+                g.visible = false;
+            }
+            for sh in &mut g.shapes {
+                if sh.op == Op::Paint {
+                    sh.visible = false;
+                }
+            }
         }
-        s.groups.retain(|g| g.op != Op::Paint && (!g.shapes.is_empty() || g.is_linked()));
     }
     Ok(s)
 }
@@ -165,12 +237,13 @@ fn reach_of(s: &Shape) -> f64 {
         Kind::Torus => sz[0] + sz[1],
         Kind::Extrude => {
             let wide = s.outline.iter().map(|p| f64::from(p[0]).hypot(f64::from(p[1]))).fold(0.0_f64, f64::max);
-            wide.hypot(sz[0] * 0.5)
+            wide.hypot(sz[0] * 0.5) + f64::from(if s.params[0].is_nan() { 0.0 } else { s.params[0].clamp(0.0, 40.0) })
         }
         _ => s.local_half().iter().map(|v| f64::from(*v) * f64::from(*v)).sum::<f64>().sqrt(),
     };
     let scale = s.scale.iter().map(|v| f64::from(*v)).fold(0.0_f64, f64::max);
-    let r = local * scale;
+    let extra = s.ripple.map_or(0.0, |p| if p.preserve_outline { 0.0 } else { f64::from(p.height) * scale });
+    let r = local * scale + extra;
     // hollow shapes and rounded corners never reach farther than the solid
     if r.is_finite() { r } else { 0.0 }
 }
@@ -193,8 +266,8 @@ pub fn bounds(scene: &Scene) -> Result<([f64; 3], [f64; 3]), String> {
         }
         let one = [crate::pattern::Inst::IDENTITY];
         let insts: &[crate::pattern::Inst] = if rg.insts.is_empty() { &one } else { &rg.insts };
-        for s in src.shapes.iter().filter(|s| s.visible && s.op == Op::Add) {
-            let r = reach_of(s) * 1.05 + (f64::from(s.blend.max(0.0)) + f64::from(g.blend.max(0.0))) * amount * factor;
+        for s in src.shapes.iter().filter(|s| s.solid() && s.op == Op::Add) {
+            let r = reach_of(s) * 1.05 + (f64::from(s.blend.max(0.0)) + f64::from(scene.group_melt_reach(rg.gi))) * amount * factor;
             for inst in insts {
                 let at = inst.apply(s.pos);
                 let r = r * f64::from(inst.s);
@@ -218,7 +291,15 @@ fn single_look(scene: &Scene) -> Option<Mat8> {
     let mut first: Option<Mat8> = None;
     for rg in crate::pattern::resolve(scene) {
         let Some(src) = scene.groups.get(rg.src) else { continue };
-        for s in src.shapes.iter().filter(|s| s.visible) {
+        if scene.groups.get(rg.gi).is_some_and(|g| g.op == Op::Paint) {
+            return None;
+        }
+        for s in src.shapes.iter().filter(|s| s.solid()) {
+            // One base material does not imply one surface colour: a shape
+            // can carry a spatial gradient or a Paint stain.
+            if s.material.has_gradient() || s.op == Op::Paint {
+                return None;
+            }
             let m = look_of(s.material.color, s.material.roughness, s.material.metallic);
             match first {
                 None => first = Some(m),
@@ -272,19 +353,12 @@ impl ExportField<'_> {
                 for instance in insts {
                     // The minimum scale bounds the inverse local coordinate
                     // of any world point; instances have rigid rotations.
-                    let min_scale = sh.scale.iter().copied().fold(f32::INFINITY, f32::min)
-                        .max(0.01) * instance.s.max(1e-6);
+                    let min_scale = sh.scale.iter().copied().fold(f32::INFINITY, f32::min).max(0.01) * instance.s.max(1e-6);
                     // Only the source's geometric radius follows the
                     // pattern scale; drip and Boolean blend reach are in the
                     // receiving scene's world units.
-                    let radius = (reach_of(sh) as f32 * 1.1 * instance.s.max(1e-6))
-                        + mult * amount * (sh.blend + group.blend).max(0.0)
-                        + drip + 4.0;
-                    twists.push(TwistInfluence {
-                        center: instance.apply(sh.pos),
-                        radius,
-                        rate: rate / min_scale,
-                    });
+                    let radius = (reach_of(sh) as f32 * 1.1 * instance.s.max(1e-6)) + mult * amount * (sh.blend + group.blend).max(0.0) + drip + 4.0;
+                    twists.push(TwistInfluence { center: instance.apply(sh.pos), radius, rate: rate / min_scale });
                 }
             }
         }
@@ -301,7 +375,7 @@ impl export_mesh::Sdf for ExportField<'_> {
         let d = self.field.distance(p);
         let mut factor = 1.0_f32;
         for t in &self.twists {
-            let delta = [p[0]-t.center[0], p[1]-t.center[1], p[2]-t.center[2]];
+            let delta = [p[0] - t.center[0], p[1] - t.center[1], p[2] - t.center[2]];
             let distance = delta[0].hypot(delta[1]).hypot(delta[2]);
             // Outside every possible affected surface region, legacy
             // pruning remains untouched. Otherwise use the Lipschitz upper
@@ -352,63 +426,20 @@ pub fn mesh_scene(scene: &Scene, tolerance: f64, threads: usize, prog: &export_m
 /// field leaves stains out because they change no distance; the GPU shader paints them, and so
 /// does this, with the same soft edge.)
 struct Painter {
-    base: Field,
-    stains: Vec<(Field, f32)>,
+    field: Field,
 }
 
 impl Painter {
     fn new(scene: &Scene) -> Painter {
-        let amount = if scene.melt.amount.is_finite() { scene.melt.amount.max(0.0) } else { 1.0 };
-        // a stain alone: the whole scene with everything hidden but that group (so that patterns and
-        // linked copies still find what they follow)
-        let alone = |gi: usize, g: crate::model::Group| {
-            let mut sc = Scene { groups: scene.groups.clone(), melt: scene.melt, env: scene.env.clone(), saved: Vec::new() };
-            for other in &mut sc.groups {
-                other.visible = false;
-            }
-            if let Some(slot) = sc.groups.get_mut(gi) {
-                *slot = g;
-            }
-            Field::new(&sc)
-        };
-        let mut stains = Vec::new();
-        for (gi, g) in scene.groups.iter().enumerate().filter(|(_, g)| g.visible) {
-            if g.op == Op::Paint {
-                let mut u = g.clone();
-                u.op = Op::Add;
-                stains.push((alone(gi, u), g.blend * amount));
-            } else {
-                for sh in g.shapes.iter().filter(|s| s.visible && s.op == Op::Paint) {
-                    let mut one = sh.clone();
-                    one.op = Op::Add;
-                    let mut u = g.clone();
-                    u.op = Op::Add;
-                    u.visible = true;
-                    u.shapes = vec![one];
-                    stains.push((alone(gi, u), sh.blend * amount));
-                }
-            }
-        }
-        Painter { base: Field::new(scene), stains }
+        // Field::sample already composites Op::Paint masks in exactly the
+        // same direction as the CPU renderer. Reapplying masks here used to
+        // recolour surfaces OUTSIDE the painted area (and double-blend edges).
+        Painter { field: Field::new(scene) }
     }
 
     fn look(&self, p: [f32; 3]) -> Mat8 {
-        let s = self.base.sample(p);
-        let (mut c, mut r, mut m) = (s.color, s.roughness, s.metallic);
-        for (field, k) in &self.stains {
-            let b = field.sample(p);
-            let soft = (k * 0.35).max(0.3);
-            let w = (0.5 - b.dist / soft).clamp(0.0, 1.0);
-            if !w.is_finite() || w >= 1.0 {
-                continue;
-            }
-            for a in 0..3 {
-                c[a] = b.color[a] + (c[a] - b.color[a]) * w;
-            }
-            r = b.roughness + (r - b.roughness) * w;
-            m = b.metallic + (m - b.metallic) * w;
-        }
-        look_of(c, r, m)
+        let s = self.field.sample(p);
+        look_of(s.color, s.roughness, s.metallic)
     }
 }
 
@@ -437,8 +468,8 @@ fn classify(looks: &[Mat8], max: usize) -> (Vec<u16>, usize) {
             let key = (u32::from(m.rgb[0]) >> shift)
                 | ((u32::from(m.rgb[1]) >> shift) << 8)
                 | ((u32::from(m.rgb[2]) >> shift) << 16)
-                | (u32::from(m.rough >> (shift + 1)) << 24)
-                | (u32::from(m.metal >> (shift + 1)) << 28);
+                | ((u32::from(m.rough) >> (shift + 1)) << 24)
+                | ((u32::from(m.metal) >> (shift + 1)) << 28);
             let next = map.len();
             let c = *map.entry(key).or_insert(next as u16);
             if map.len() > max {
@@ -532,7 +563,7 @@ fn size_of(mesh: &TriMesh) -> [f64; 3] {
 }
 
 /// Mesh, smooth, lighten, colour and convert: everything up to writing.
-pub fn build(scene: &Scene, sel: Option<Pick>, o: &Options, prog: &Progress) -> Result<Built, String> {
+pub fn build(scene: &Scene, sel: impl Into<Picks>, o: &Options, prog: &Progress) -> Result<Built, String> {
     let o = o.sanitized();
     let th = threads();
     let scene = prepare(scene, sel, o.scope, o.ignore_paint)?;
@@ -599,17 +630,18 @@ pub fn build(scene: &Scene, sel: Option<Pick>, o: &Options, prog: &Progress) -> 
         finish_look(&mesh, &carry)
     };
     let size_mm = size_of(&mesh);
-    // the mesher closes the surface by construction; the check is only worth its time on lighter meshes
-    let closed = complete && (mesh.triangles.len() > 3_000_000 || melt::is_watertight(&mesh));
+    // Never report a closed surface that was not checked, however big the mesh is.
+    let closed = complete && melt::is_watertight(&mesh);
     let (tris, verts) = (mesh.triangles.len(), mesh.positions.len());
     convert(&mut mesh, &o);
     Ok(Built { surface: Surface { mesh, look }, size_mm, tris, verts, closed })
 }
 
-/// Units, scale and the up axis. glTF is always in metres.
+/// Units, scale and the up axis. glTF is always in metres: its writer turns millimetres into metres
+/// itself, so a GLB surface stays in millimetres here and only the scale is applied (applying the
+/// metre unit here too made every GLB a thousand times too small).
 fn convert(mesh: &mut TriMesh, o: &Options) -> f64 {
-    let unit = if o.format == Format::Glb { Units::M } else { o.units };
-    let k = unit.per_mm() * f64::from(o.scale_pct) / 100.0;
+    let k = if o.format == Format::Glb { f64::from(o.scale_pct) / 100.0 } else { o.units.per_mm() * f64::from(o.scale_pct) / 100.0 };
     for p in &mut mesh.positions {
         let q = [p[0] * k, p[1] * k, p[2] * k];
         *p = if o.up == Up::Y { [q[0], q[2], -q[1]] } else { q };
@@ -622,15 +654,34 @@ pub fn file_unit(o: &Options) -> Units {
     if o.format == Format::Glb { Units::M } else { o.units }
 }
 
+/// OBJ's mtllib directive accepts whitespace-separated library names, not quoted
+/// filenames in every importer. Keep a safe ASCII companion filename and a stable
+/// suffix if sanitization was needed, to avoid collisions with other OBJ exports.
+fn obj_material_path(path: &Path) -> PathBuf {
+    let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).filter(|s| !s.is_empty()).unwrap_or_else(|| "model".into());
+    let plain: String = stem.chars().take(64).map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' }).collect();
+    let plain = if plain.is_empty() { "model".to_owned() } else { plain };
+    let safe = if plain == stem {
+        plain
+    } else {
+        let hash = stem.as_bytes().iter().fold(2166136261u32, |h, b| (h ^ u32::from(*b)).wrapping_mul(16777619));
+        format!("{plain}_{hash:08x}")
+    };
+    path.with_file_name(format!("{safe}.mtl"))
+}
+
 /// The files of a build, named after `path` (an OBJ with colours also gets its MTL).
 pub fn serialize(b: &Built, o: &Options, path: &Path) -> Result<Vec<(PathBuf, Vec<u8>)>, String> {
+    // All formats must report broken faces, including the legacy infallible STL
+    // byte writers, instead of producing an apparently successful empty mesh.
+    fmt::check(&b.surface.mesh)?;
     let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).filter(|s| !s.is_empty()).unwrap_or_else(|| "MELTCAD".into());
     let main = path.to_path_buf();
     Ok(match o.format {
         Format::Stl => vec![(main, fmt::stl_binary(&b.surface.mesh, &stem))],
         Format::StlAscii => vec![(main, fmt::stl_ascii(&b.surface.mesh, &stem).into_bytes())],
         Format::Obj => {
-            let mtl_path = path.with_extension("mtl");
+            let mtl_path = obj_material_path(path);
             let mtl_name = mtl_path.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "model.mtl".into());
             let (obj, mtl) = fmt::obj_files(&b.surface, &stem, &mtl_name)?;
             let mut v = vec![(main, obj.into_bytes())];
@@ -660,8 +711,7 @@ pub struct Report {
     pub closed: bool,
 }
 
-pub const NAMES: [&str; 6] =
-    ["空間をさがしています", "形をはかっています", "面をつないでいます", "なめらかにしています", "三角形をへらしています", "色をしらべています"];
+pub const NAMES: [&str; 6] = ["Searching space…", "Measuring the shape…", "Joining faces…", "Smoothing…", "Reducing triangles…", "Checking colours…"];
 
 /// An export running on its own thread.
 pub struct Job {
@@ -669,21 +719,30 @@ pub struct Job {
     rx: std::sync::Mutex<Receiver<Result<Report, String>>>,
     started: Instant,
     pub label: String,
-    writing: Arc<std::sync::atomic::AtomicBool>,
+    // 0 = cancellable; 1 = cancel requested; 2 = final commit (cannot cancel).
+    writing: Arc<AtomicU8>,
 }
 
 impl Job {
-    pub fn start(scene: Scene, sel: Option<Pick>, opts: Options, path: PathBuf) -> Job {
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn start(scene: Scene, sel: impl Into<Picks>, opts: Options, path: PathBuf) -> Job {
+        Self::start_with_permit(scene, sel, opts, path, None)
+    }
+
+    /// The UI passes an exclusive high-memory permit; it remains owned by the worker until exit.
+    pub fn start_with_permit(scene: Scene, sel: impl Into<Picks>, opts: Options, path: PathBuf, permit: Option<crate::work_budget::Permit>) -> Job {
+        let sel: Picks = sel.into();
         let progress = Arc::new(Progress::new());
-        let writing = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let writing = Arc::new(AtomicU8::new(0));
         let (tx, rx) = channel();
         let p = progress.clone();
         let w = writing.clone();
         let label = path.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
         let spawned = std::thread::Builder::new().name("yura-export".into()).spawn(move || {
             let t0 = Instant::now();
-            let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(&scene, sel, &opts, &path, &p, &w, t0)));
+            let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(&scene, sel.clone(), &opts, &path, &p, &w, t0)));
             let res = res.unwrap_or_else(|_| Err("the export stopped unexpectedly".into()));
+            drop(permit); // unlock before the completion is observed on the next UI frame
             let _ = tx.send(res);
         });
         if let Err(e) = spawned {
@@ -704,8 +763,18 @@ impl Job {
         }
     }
 
-    pub fn cancel(&self) {
-        self.progress.cancel();
+    /// Cancellation wins only while the worker has not entered the final file commit.
+    pub fn cancel(&self) -> bool {
+        if self.writing.compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire).is_ok() {
+            self.progress.cancel();
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn can_cancel(&self) -> bool {
+        self.writing.load(Ordering::Acquire) == 0
     }
 
     pub fn elapsed(&self) -> f64 {
@@ -718,34 +787,29 @@ impl Job {
     }
 
     pub fn phase_name(&self) -> &'static str {
-        if self.writing.load(std::sync::atomic::Ordering::Relaxed) {
-            return "ファイルに書いています";
+        if self.writing.load(Ordering::Acquire) == 2 {
+            return "Writing the file (this last step cannot be stopped)…";
         }
-        NAMES.get(self.progress.phase() as usize).copied().unwrap_or("つくっています")
+        if self.writing.load(Ordering::Acquire) == 1 {
+            return "Waiting for the stop to finish…";
+        }
+        NAMES.get(self.progress.phase() as usize).copied().unwrap_or("Building…")
     }
 }
 
-fn run(
-    scene: &Scene,
-    sel: Option<Pick>,
-    o: &Options,
-    path: &Path,
-    prog: &Progress,
-    writing: &std::sync::atomic::AtomicBool,
-    t0: Instant,
-) -> Result<Report, String> {
+fn run(scene: &Scene, sel: Picks, o: &Options, path: &Path, prog: &Progress, writing: &AtomicU8, t0: Instant) -> Result<Report, String> {
     let built = build(scene, sel, o, prog)?;
-    writing.store(true, std::sync::atomic::Ordering::Relaxed);
+    if prog.cancelled() {
+        return Err(export_mesh::CANCELLED.into());
+    }
     prog.set(0.95);
     let files = serialize(&built, &o.sanitized(), path)?;
-    let mut bytes = 0u64;
-    for (p, data) in &files {
-        if prog.cancelled() {
-            return Err(export_mesh::CANCELLED.into());
-        }
-        std::fs::write(p, data).map_err(|e| format!("could not save {}: {e}", p.display()))?;
-        bytes += data.len() as u64;
-    }
+    let bytes = crate::atomic_files::write_files(
+        &files,
+        &|| prog.cancelled(),
+        &|| writing.compare_exchange(0, 2, Ordering::AcqRel, Ordering::Acquire).is_ok(),
+        &|p| prog.set(0.96 + f64::from(p) * 0.039),
+    )?;
     prog.set(1.0);
     Ok(Report {
         path: path.to_path_buf(),
@@ -792,7 +856,7 @@ fn tri_normal_area(t: [[f64; 3]; 3]) -> ([f64; 3], f64) {
 
 /// Measure the model for printing. `tolerance` is the precision wanted; the check itself never goes
 /// below a cell of a 350th of the model so that it stays quick.
-pub fn print_check(scene: &Scene, sel: Option<Pick>, o: &Options, prog: &Progress) -> Result<PrintCheck, String> {
+pub fn print_check(scene: &Scene, sel: impl Into<Picks>, o: &Options, prog: &Progress) -> Result<PrintCheck, String> {
     let th = threads();
     let scene = prepare(scene, sel, o.scope, o.ignore_paint)?;
     let (lo, hi) = bounds(&scene)?;
@@ -800,7 +864,13 @@ pub fn print_check(scene: &Scene, sel: Option<Pick>, o: &Options, prog: &Progres
     let cell = f64::from(o.tolerance.clamp(MIN_TOLERANCE, MAX_TOLERANCE)).max(extent / 350.0).max(0.05);
     let meshed = mesh_scene(&scene, cell, th, &prog.slice(0.0, 0.8))?;
     let mesh = &meshed.mesh;
-    let size = size_of(mesh);
+    // Uniform export scaling changes real-world thickness and volume, not just
+    // the coordinates written to disk. File units do not change physical mm.
+    let physical_scale = f64::from(o.sanitized().scale_pct) / 100.0;
+    let size = size_of(mesh).map(|v| v * physical_scale);
+    let thin_limit_source = THIN_MM / physical_scale;
+    let thin_step_source = 0.1 / physical_scale;
+    let inside_source = 0.03_f64.min(thin_limit_source * 0.1);
     let (mut zmin, mut area, mut over) = (f64::INFINITY, 0.0, 0.0);
     for p in &mesh.positions {
         zmin = zmin.min(p[2]);
@@ -845,19 +915,20 @@ pub fn print_check(scene: &Scene, sel: Option<Pick>, o: &Options, prog: &Progres
             }
             let d = [n[0] / l, n[1] / l, n[2] / l];
             total += *a;
-            // just inside, then in 0.1 mm steps until the solid ends
+            // Ray march in source coordinates, but test the *exported*
+            // physical 0.8 mm wall threshold (and report the exported mm).
             let at = |t: f64| field.distance([(p[0] - d[0] * t) as f32, (p[1] - d[1] * t) as f32, (p[2] - d[2] * t) as f32]);
-            if at(0.03) >= 0.0 {
+            if at(inside_source) >= 0.0 {
                 continue;
             }
-            let mut t = 0.1;
-            while t < THIN_MM {
+            let mut t = thin_step_source;
+            while t < thin_limit_source {
                 if at(t) >= 0.0 {
                     thin += *a;
-                    thinnest = thinnest.min(t);
+                    thinnest = thinnest.min(t * physical_scale);
                     break;
                 }
-                t += 0.1;
+                t += thin_step_source;
             }
         }
         Ok((thin, total, thinnest))
@@ -865,13 +936,13 @@ pub fn print_check(scene: &Scene, sel: Option<Pick>, o: &Options, prog: &Progres
     let (thin, total, thinnest) = parts.iter().fold((0.0, 0.0, f64::INFINITY), |a, p| (a.0 + p.0, a.1 + p.1, a.2.min(p.2)));
     Ok(PrintCheck {
         size,
-        volume_cm3: melt::volume(mesh).abs() / 1000.0,
+        volume_cm3: melt::volume(mesh).abs() * physical_scale.powi(3) / 1000.0,
         closed: melt::is_watertight(mesh),
         thin_pct: if total > 0.0 { 100.0 * thin / total } else { 0.0 },
         thinnest: thinnest.is_finite().then_some(thinnest),
         overhang_pct: if area > 0.0 { 100.0 * over / area } else { 0.0 },
         tris: mesh.triangles.len(),
-        cell,
+        cell: cell * physical_scale,
     })
 }
 
@@ -903,7 +974,7 @@ impl Estimate {
     }
 }
 
-pub fn estimate(scene: &Scene, sel: Option<Pick>, o: &Options, prog: &Progress) -> Result<Estimate, String> {
+pub fn estimate(scene: &Scene, sel: impl Into<Picks>, o: &Options, prog: &Progress) -> Result<Estimate, String> {
     let scene = prepare(scene, sel, o.scope, o.ignore_paint)?;
     let (lo, hi) = bounds(&scene)?;
     let extent = (0..3).map(|a| hi[a] - lo[a]).fold(0.0_f64, f64::max);
@@ -937,6 +1008,48 @@ mod tests {
     use crate::export_formats::tests::{read_stl_binary, unzip};
     use crate::model::{Group, Material};
 
+    #[test]
+    fn obj_material_names_are_safe_and_match_actual_companion_file() {
+        let paths = ["My Car.obj", "バッグ (青).obj", "Ordinary_Name.obj"];
+        for name in paths {
+            let path = Path::new(name);
+            let mtl = obj_material_path(path);
+            let mtl_name = mtl.file_name().unwrap().to_string_lossy();
+            assert!(mtl_name.is_ascii());
+            assert!(!mtl_name.contains(char::is_whitespace));
+            assert!(mtl_name.ends_with(".mtl"));
+            assert_eq!(mtl.parent(), path.parent(), "material stays next to OBJ");
+        }
+        assert_ne!(obj_material_path(Path::new("My Car.obj")), obj_material_path(Path::new("My_Car.obj")));
+
+        let mesh = TriMesh { positions: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], triangles: vec![[0, 1, 2]] };
+        let built = Built {
+            surface: Surface { mesh, look: Look::uniform(Mat8 { rgb: [255, 0, 0], rough: 128, metal: 0 }) },
+            size_mm: [1.0, 1.0, 0.0],
+            tris: 1,
+            verts: 3,
+            closed: false,
+        };
+        let options = Options { format: Format::Obj, ..Options::default() };
+        for name in ["My Car.obj", "バッグ (青).obj"] {
+            let files = serialize(&built, &options, Path::new(name)).expect("serialize OBJ and MTL");
+            assert_eq!(files.len(), 2);
+            let mtl = files[1].0.file_name().unwrap().to_string_lossy();
+            let obj = String::from_utf8(files[0].1.clone()).unwrap();
+            assert!(obj.contains(&format!("mtllib {mtl}\n")), "{obj}");
+        }
+    }
+
+    #[test]
+    fn no_export_format_may_write_invalid_mesh_indices() {
+        let mesh = TriMesh { positions: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], triangles: vec![[0, 1, 9]] };
+        let built = Built { surface: Surface { mesh, look: Look::none() }, size_mm: [1.0, 1.0, 0.0], tris: 1, verts: 3, closed: false };
+        for format in Format::ALL {
+            let options = Options { format, ..Options::default() };
+            assert!(serialize(&built, &options, Path::new("bad")).is_err(), "{format:?}");
+        }
+    }
+
     fn ball(r: f64) -> f64 {
         4.0 / 3.0 * std::f64::consts::PI * r * r * r
     }
@@ -944,7 +1057,7 @@ mod tests {
     pub fn scene_of(shapes: Vec<Shape>) -> Scene {
         let mut g = Group::new("g");
         g.shapes = shapes;
-        Scene { groups: vec![g], melt: Default::default(), env: Default::default(), saved: Vec::new() }
+        Scene { groups: vec![g], melt: Default::default(), env: Default::default(), saved: Vec::new(), anim: Default::default() }
     }
 
     fn sphere_at(x: f32, r: f32, m: Material) -> Shape {
@@ -963,6 +1076,159 @@ mod tests {
     }
     fn blue() -> Material {
         Material::plain([0.0, 0.0, 1.0], 0.8, 1.0)
+    }
+
+    #[test]
+    fn exporting_a_parent_includes_children_and_exporting_a_child_keeps_its_ancestors() {
+        let mut parent = Group::new("parent");
+        parent.shapes.push(sphere_at(0.0, 5.0, red()));
+        let mut child = Group::new("child");
+        child.depth = 1;
+        child.shapes.push(sphere_at(40.0, 5.0, blue()));
+        let sc = Scene { groups: vec![parent, child], ..Scene::default() };
+
+        let both = prepare(&sc, Some(Pick::Group(0)), Scope::Selected, false).unwrap();
+        assert!(Field::new(&both).distance([0.0, 0.0, 20.0]) < 0.0);
+        assert!(Field::new(&both).distance([40.0, 0.0, 20.0]) < 0.0);
+
+        let only_child = prepare(&sc, Some(Pick::Group(1)), Scope::Selected, false).unwrap();
+        assert!(only_child.groups[0].visible && !only_child.groups[0].shapes[0].visible);
+        assert!(Field::new(&only_child).distance([40.0, 0.0, 20.0]) < 0.0);
+        assert!(Field::new(&only_child).distance([0.0, 0.0, 20.0]) > 0.0);
+    }
+
+    #[test]
+    fn ignoring_paint_keeps_nested_masks_out_of_geometry() {
+        let mut base = Group::new("base");
+        base.shapes.push(sphere_at(0.0, 3.0, red()));
+        let mut mask = Group::new("paint mask");
+        mask.op = Op::Paint;
+        let mut child = Group::new("paint child");
+        child.depth = 1;
+        child.shapes.push(sphere_at(30.0, 3.0, blue()));
+        let sc = Scene { groups: vec![base, mask, child], ..Scene::default() };
+        let without_stain = prepare(&sc, None, Scope::Visible, true).unwrap();
+        assert_eq!(without_stain.groups.len(), 3, "paint parents must not be deleted out from under children");
+        assert!(!without_stain.groups[1].visible);
+        assert!(Field::new(&without_stain).distance([30.0, 0.0, 20.0]) > 0.0);
+    }
+
+    #[test]
+    fn export_palette_handles_256_distinct_looks_without_a_shift_panic() {
+        let mut looks = Vec::new();
+        for red in [0, 64, 128, 192] {
+            for green in [0, 64, 128, 192] {
+                for blue in [0, 64, 128, 192] {
+                    for rough in [0, 128] {
+                        for metal in [0, 128] {
+                            looks.push(Mat8 { rgb: [red, green, blue], rough, metal });
+                        }
+                    }
+                }
+            }
+        }
+        assert_eq!(looks.len(), 256);
+        let (classes, n) = classify(&looks, 250);
+        assert_eq!(classes.len(), looks.len());
+        assert!((1..=250).contains(&n), "palette size {n}");
+    }
+
+    #[test]
+    fn export_samples_gradient_colours_instead_of_treating_them_as_uniform() {
+        let mut mat = red();
+        mat.gradient = 1.0;
+        mat.color2 = [0.0, 0.0, 1.0];
+        let mut shape = Shape::new(Kind::Sphere, [0.0; 3], mat);
+        shape.size[0] = 10.0;
+        shape.blend = 0.0;
+        let sc = scene_of(vec![shape]);
+        assert!(single_look(&sc).is_none());
+        let painter = Painter::new(&sc);
+        let bottom = painter.look([0.0, 0.0, -9.0]).rgb;
+        let top = painter.look([0.0, 0.0, 9.0]).rgb;
+        assert_ne!(bottom, top, "the two ends of the sphere need different vertex colours");
+    }
+
+    #[test]
+    fn paint_only_colours_the_surface_inside_its_mask() {
+        let mut base = Shape::new(Kind::Box, [0.0; 3], red());
+        base.size = [20.0, 20.0, 20.0];
+        base.blend = 0.0;
+        let mut stain = Shape::new(Kind::Sphere, [0.0, -10.0, 0.0], Material::plain([0.0, 1.0, 0.0], 0.3, 0.0));
+        stain.size[0] = 3.0;
+        stain.blend = 0.0;
+        stain.op = Op::Paint;
+        let sc = scene_of(vec![base, stain]);
+        assert!(single_look(&sc).is_none());
+        let painter = Painter::new(&sc);
+        let inside = painter.look([0.0, -10.0, 0.0]);
+        let outside = painter.look([8.0, -10.0, 0.0]);
+        assert_eq!(inside.rgb, [0, 255, 0]);
+        assert_eq!(outside.rgb, [255, 0, 0], "mask outside should keep the base colour");
+    }
+
+    #[test]
+    fn incremental_preparation_never_changes_thin_shell_boolean_stl_export() {
+        let mut wall = sphere_at(0.0, 12.0, red());
+        wall.shell = 1.2; // precision-sensitive hollow wall
+        let mut cut = sphere_at(8.0, 5.0, blue());
+        cut.op = Op::Subtract;
+        let before = scene_of(vec![wall, cut]);
+        let previous = Field::new(&before);
+        let mut scene = before.clone();
+        scene.groups[0].shapes[1].pos[0] += 0.7;
+        let incremental = Field::reusing(&scene, Some((&previous, &before)));
+        let cold = Field::new(&scene);
+        assert_eq!(incremental.prepared_built, 1);
+        assert_eq!(incremental.prepared_reused, 1);
+        for x in -15..=15 {
+            for z in [8.0, 12.0, 20.0, 31.0] {
+                let p = [x as f32, 0.0, z];
+                assert_eq!(incremental.distance(p).to_bits(), cold.distance(p).to_bits());
+            }
+        }
+        // Export intentionally takes an uncached, exact Field::new. Both exports must be
+        // identical at the same tolerance, and the STL must round-trip every triangle.
+        let options = opts(Format::Stl, 0.55);
+        let output = build(&scene, None, &options, &Progress::new()).unwrap();
+        let bytes = crate::export_formats::stl_binary(&output.surface.mesh, "shell-boolean");
+        let faces = read_stl_binary(&bytes);
+        assert_eq!(faces.len(), output.surface.mesh.triangles.len());
+        assert!(!faces.is_empty());
+    }
+
+    #[test]
+    fn organic_tubes_export_as_closed_meshes_in_stl_and_3mf() {
+        use crate::organic_tube::Preset;
+        for (preset, format) in [(Preset::Wave, Format::Stl), (Preset::Ring, Format::ThreeMf)] {
+            let mut shape = preset.shape();
+            if preset == Preset::Wave {
+                shape.size[1] = 0.68;
+                shape.size[2] = 2.0;
+                shape.params[2] = 0.35;
+            }
+            let scene = scene_of(vec![shape]);
+            let result = build(&scene, None, &opts(format, 0.75), &Progress::new())
+                .unwrap_or_else(|e| panic!("{preset:?} export failed: {e}"));
+            assert!(result.closed, "{preset:?} must export a closed 2-manifold surface");
+            assert!(melt::is_watertight(&result.surface.mesh), "{preset:?}: open/non-manifold boundary");
+            assert!(melt::volume(&result.surface.mesh) > 10.0, "{preset:?}: no filled solid");
+            assert!(!result.surface.mesh.triangles.is_empty());
+        }
+    }
+
+    /// Slow, high-precision reference: can run on a Windows build runner during
+    /// release qualification, without slowing the normal editing test suite.
+    #[test]
+    #[ignore]
+    fn organic_tube_high_precision_stl_is_watertight() {
+        let mut shape = crate::organic_tube::Preset::S.shape();
+        shape.size[1] = 0.55;
+        shape.size[2] = 2.0;
+        let result = build(&scene_of(vec![shape]), None, &opts(Format::Stl, 0.25), &Progress::new())
+            .expect("high-precision Organic Tube export");
+        assert!(result.closed && melt::is_watertight(&result.surface.mesh));
+        assert!(melt::volume(&result.surface.mesh) > 10.0);
     }
 
     #[test]
@@ -991,12 +1257,97 @@ mod tests {
         assert!((lo[1] - 0.0).abs() < 0.01 && (hi[1] - 40.0 * k).abs() < 0.01, "{lo:?} {hi:?}");
         // still facing outwards after the turn
         assert!(melt::volume(&b.surface.mesh) > 0.0 && melt::is_watertight(&b.surface.mesh));
-        // glTF is in metres whatever the unit
-        let o = Options { units: Units::Inch, ..opts(Format::Glb, 0.5) };
+    }
+
+    /// The vertex positions of a GLB's first POSITION accessor, in the units of the file.
+    fn glb_positions(bytes: &[u8]) -> Vec<[f32; 3]> {
+        assert_eq!(bytes.get(..4), Some(b"glTF".as_slice()));
+        let json_len = u32::from_le_bytes([bytes[12], bytes[13], bytes[14], bytes[15]]) as usize;
+        let doc: serde_json::Value = serde_json::from_slice(&bytes[20..20 + json_len]).expect("GLB JSON chunk");
+        let bin = &bytes[20 + json_len + 8..];
+        let n = doc["accessors"][0]["count"].as_u64().expect("POSITION count") as usize;
+        (0..n)
+            .map(|i| {
+                let o = i * 12;
+                let f = |k: usize| f32::from_le_bytes([bin[o + k], bin[o + k + 1], bin[o + k + 2], bin[o + k + 3]]);
+                [f(0), f(4), f(8)]
+            })
+            .collect()
+    }
+
+    /// What every format writes must read back at the same physical size, facing outwards, whichever
+    /// unit and up axis the card chose for that format.
+    #[test]
+    fn every_written_file_reads_back_at_the_same_size_and_facing_out() {
+        // a 30 mm ball standing on the floor
+        let sc = scene_of(vec![sphere_at(0.0, 15.0, red())]);
+        for f in Format::ALL {
+            // the same choice the card makes when this format is picked
+            let up = if f.y_up_by_default() { Up::Y } else { Up::Z };
+            let o = Options { format: f, up, lighten: Lighten::Off, tolerance: 0.5, ..Options::default() };
+            let built = build(&sc, None, &o, &Progress::new()).unwrap();
+            let files = serialize(&built, &o, Path::new(&format!("ball.{}", f.ext()))).unwrap();
+            let bytes = &files[0].1;
+            let read = crate::import_mesh::import_bytes(bytes, &format!("ball.{}", f.ext()), &crate::import_mesh::ImportOptions::default())
+                .unwrap_or_else(|e| panic!("{f:?}: {e}"));
+            let size = read.mesh.size();
+            assert!(size.iter().all(|s| (s - 30.0).abs() < 1.5), "{f:?}: {size:?}");
+            assert!(read.mesh.signed_volume() > 0.0, "{f:?}: the triangles face inwards");
+            assert!(read.health.is_closed(), "{f:?}: {:?}", read.notes);
+        }
+    }
+
+    /// glTF is in metres: the writer turns millimetres into metres, so the job must not do it too.
+    /// (A 40 mm ball was written as 0.00004 m, a thousand times too small for every other app.)
+    #[test]
+    fn glb_files_are_written_in_metres_and_keep_the_real_size() {
+        // the card's GLB settings: Y up, and the unit choice does not matter for glTF
+        let o = Options { format: Format::Glb, up: Up::Y, units: Units::Inch, tolerance: 0.6, ..Options::default() };
         let b = build(&Scene::default(), None, &o, &Progress::new()).unwrap();
-        let m = &b.surface.mesh;
-        let hx = m.positions.iter().map(|p| p[0]).fold(f64::NEG_INFINITY, f64::max);
-        assert!((hx - 0.02).abs() < 0.001, "{hx}");
+        let files = serialize(&b, &o, Path::new("ball.glb")).unwrap();
+        let bytes = &files[0].1;
+        let pos = glb_positions(bytes);
+        let (mut lo, mut hi) = ([f32::INFINITY; 3], [f32::NEG_INFINITY; 3]);
+        for p in &pos {
+            for a in 0..3 {
+                lo[a] = lo[a].min(p[a]);
+                hi[a] = hi[a].max(p[a]);
+            }
+        }
+        for a in 0..3 {
+            assert!((hi[a] - lo[a] - 0.04).abs() < 0.002, "axis {a} is {:.6} m (40 mm is 0.04 m)", hi[a] - lo[a]);
+        }
+        // our reader turns those metres back into millimetres, so the part keeps its size
+        let back = crate::import_mesh::import_bytes(bytes, "ball.glb", &crate::import_mesh::ImportOptions { y_up: Some(true) }).unwrap();
+        let size = back.mesh.size();
+        assert!((size[0] - 40.0).abs() < 1.0 && (size[2] - 40.0).abs() < 1.0, "{size:?}");
+    }
+
+    #[test]
+    fn a_multi_selection_exports_every_picked_shape_and_group() {
+        let ball = |x: f32| {
+            let mut b = Shape::new(Kind::Sphere, [x, 0.0, 0.0], Material::default());
+            b.blend = 0.0;
+            b
+        };
+        let mut sc = Scene::default();
+        sc.groups.clear();
+        for (i, x) in [-100.0f32, 0.0, 100.0].into_iter().enumerate() {
+            let mut g = crate::model::Group::new(format!("g{i}"));
+            g.shapes.push(ball(x));
+            sc.groups.push(g);
+        }
+        let vol = |picks: Vec<Pick>| {
+            let o = Options { scope: Scope::Selected, tolerance: 2.0, ..Options::default() };
+            build(&sc, picks, &o, &Progress::new()).map(|b| melt::volume(&b.surface.mesh))
+        };
+        let one = vol(vec![Pick::Shape(0, 0)]).unwrap();
+        let two = vol(vec![Pick::Shape(0, 0), Pick::Group(2)]).unwrap();
+        assert!((two / one - 2.0).abs() < 0.05, "two picks give two balls: {two} vs {one}");
+        let three = vol(vec![Pick::Group(0), Pick::Group(1), Pick::Shape(2, 0)]).unwrap();
+        assert!((three / one - 3.0).abs() < 0.08);
+        assert!(vol(vec![]).is_err());
+        assert!(vol(vec![Pick::Group(0), Pick::Group(9)]).is_err());
     }
 
     #[test]
@@ -1121,6 +1472,32 @@ mod tests {
     }
 
     #[test]
+    fn obj_material_reference_uses_safe_matching_filename() {
+        let built = Built {
+            surface: Surface { mesh: crate::export_formats::tests::tetra(10.0), look: crate::export_formats::tests::two_colours() },
+            tris: 4,
+            verts: 4,
+            size_mm: [10.0; 3],
+            closed: true,
+        };
+        let options = opts(Format::Obj, 0.5);
+        for stem in ["My Car", "日本語 (バッグ)", "My_Car", "model"] {
+            let path = Path::new("exports").join(format!("{stem}.obj"));
+            let files = serialize(&built, &options, &path).expect("serialize OBJ+MTL");
+            assert_eq!(files.len(), 2);
+            let mtl_name = files[1].0.file_name().unwrap().to_str().unwrap();
+            assert!(mtl_name.is_ascii() && !mtl_name.chars().any(char::is_whitespace));
+            assert_eq!(files[0].0, path);
+            let obj = String::from_utf8(files[0].1.clone()).unwrap();
+            assert!(obj.lines().any(|line| line == format!("mtllib {mtl_name}")));
+            assert!(String::from_utf8(files[1].1.clone()).unwrap().contains("newmtl"));
+        }
+        let a = serialize(&built, &options, Path::new("My Car.obj")).unwrap();
+        let b = serialize(&built, &options, Path::new("My_Car.obj")).unwrap();
+        assert_ne!(a[1].0, b[1].0, "escaped filenames cannot overwrite literal underscores");
+    }
+
+    #[test]
     fn every_format_writes_a_file_that_reads_back() {
         let dir = std::env::temp_dir().join(format!("yura_export_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -1192,7 +1569,8 @@ mod tests {
         let tiny = Options { tolerance: 0.0, ..Options::default() };
         assert_eq!(tiny.sanitized().tolerance, MIN_TOLERANCE);
         // an empty scene
-        let empty = Scene { groups: vec![Group::new("e")], melt: Default::default(), env: Default::default(), saved: Vec::new() };
+        let empty =
+            Scene { groups: vec![Group::new("e")], melt: Default::default(), env: Default::default(), saved: Vec::new(), anim: Default::default() };
         assert!(build(&empty, None, &Options::default(), &Progress::new()).is_err());
         assert!(build(&Scene { groups: vec![], ..empty.clone() }, None, &Options::default(), &Progress::new()).is_err());
         // a shape with broken numbers
@@ -1260,6 +1638,20 @@ mod tests {
     }
 
     #[test]
+    fn print_check_measures_the_physical_wall_after_export_scale() {
+        let mut plate = Shape::new(Kind::Box, [0.0, 0.0, 1.0], Material::default());
+        plate.size = [20.0, 20.0, 2.0];
+        plate.blend = 0.0;
+        let sc = scene_of(vec![plate]);
+        let opts = Options { scale_pct: 10.0, tolerance: 0.15, ..Options::default() };
+        let check = print_check(&sc, None, &opts, &Progress::new()).unwrap();
+        assert!((check.size[0] - 2.0).abs() < 0.1, "{:?}", check.size);
+        assert!((check.size[2] - 0.2).abs() < 0.1, "{:?}", check.size);
+        assert!(check.thin_pct > 5.0, "a scaled 0.2 mm wall must be thin: {:?}", check.thin_pct);
+        assert!(check.thinnest.is_some_and(|t| t < THIN_MM), "{:?}", check.thinnest);
+    }
+
+    #[test]
     fn the_estimate_is_in_the_right_range() {
         let e = estimate(&Scene::default(), None, &Options::default(), &Progress::new()).unwrap();
         let area = 4.0 * std::f64::consts::PI * 400.0;
@@ -1285,8 +1677,7 @@ mod tests {
         scenes.push(("r100 sphere".into(), scene_of(vec![round])));
         for (ci, ii) in [(0usize, 0usize), (7, 0), (10, 0), (10, 5), (8, 0), (2, 1)] {
             if let Some(item) = crate::library::all().get(ci).and_then(|c| c.items.get(ii)) {
-                let mut sc = Scene::default();
-                sc.groups = vec![item.group.clone()];
+                let sc = Scene { groups: vec![item.group.clone()], ..Scene::default() };
                 scenes.push((format!("lib {} / {}", crate::library::all()[ci].name, item.name), sc));
             }
         }

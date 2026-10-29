@@ -8,7 +8,10 @@
 use std::collections::HashMap;
 
 use crate::import_inflate::Zip;
-use crate::import_mesh::{Affine, BAD_INDEX, BAD_NUMBER, CUT_OFF, ImportedMesh, MAX_TRIANGLES, MAX_VERTICES, NO_SHAPE, TOO_MANY_TRIS, TOO_MANY_VERTS, append_transformed, parse_f32};
+use crate::import_mesh::{
+    Affine, BAD_INDEX, BAD_NUMBER, CUT_OFF, ImportedMesh, MAX_TRIANGLES, MAX_VERTICES, NO_SHAPE, TOO_MANY_TRIS, TOO_MANY_VERTS, append_transformed,
+    parse_f32,
+};
 
 /// The biggest model XML we unpack (bytes). The tests use a small cap so that the "bomb" test is light.
 #[cfg(not(test))]
@@ -27,7 +30,7 @@ const MAX_VISITS: usize = 200_000;
 const MAX_OBJECTS: usize = 100_000;
 const MAX_DOCS: usize = 64;
 
-const BAD_XML: &str = "3MF のモデルファイル（XML）がこわれています";
+const BAD_XML: &str = "The 3MF model file (XML) is broken";
 
 // ---------------------------------------------------------------- a tiny XML tag reader
 
@@ -129,11 +132,8 @@ fn next_tag<'a>(src: &'a [u8], pos: &mut usize) -> Result<Option<Tag<'a>>, &'sta
         let end = loop {
             match rest.get(k) {
                 None => return Err(BAD_XML),
-                Some(&c) if quote != 0 => {
-                    if c == quote {
-                        quote = 0;
-                    }
-                }
+                Some(&c) if quote != 0 && c == quote => quote = 0,
+                Some(_) if quote != 0 => {}
                 Some(&c) if c == b'"' || c == b'\'' => quote = c,
                 Some(b'>') => break k,
                 _ => {}
@@ -225,14 +225,19 @@ fn parse_doc(src: &[u8], total_verts: &mut usize, total_tris: &mut usize) -> Res
             (b"object", false) => {
                 let id = id_attr(&t, "id")?;
                 let ty = t.attr("type").unwrap_or("model");
-                let obj = Obj { v: doc.verts.len()..doc.verts.len(), t: doc.tris.len()..doc.tris.len(), skip: ty == "support" || ty == "solidsupport", ..Obj::default() };
+                let obj = Obj {
+                    v: doc.verts.len()..doc.verts.len(),
+                    t: doc.tris.len()..doc.tris.len(),
+                    skip: ty == "support" || ty == "solidsupport",
+                    ..Obj::default()
+                };
                 if t.self_closing {
                     doc.objects.insert(id, obj);
                 } else {
                     cur = Some((id, obj));
                 }
                 if doc.objects.len() > MAX_OBJECTS {
-                    return Err("3MF の中の形が多すぎます".into());
+                    return Err("Too many shapes in the 3MF".into());
                 }
             }
             (b"object", true) => {
@@ -264,7 +269,7 @@ fn parse_doc(src: &[u8], total_verts: &mut usize, total_tris: &mut usize) -> Res
             (b"component", false) => {
                 if let Some((_, obj)) = cur.as_mut() {
                     if obj.comps.len() >= 100_000 {
-                        return Err("3MF の部品が多すぎます".into());
+                        return Err("Too many parts in the 3MF".into());
                     }
                     let m = match t.attr("transform") {
                         Some(s) => parse_transform(s)?,
@@ -281,7 +286,7 @@ fn parse_doc(src: &[u8], total_verts: &mut usize, total_tris: &mut usize) -> Res
                     None => Affine::IDENTITY,
                 };
                 if doc.build.len() >= 100_000 {
-                    return Err("3MF の配置が多すぎます".into());
+                    return Err("Too many placements in the 3MF".into());
                 }
                 doc.build.push((id_attr(&t, "objectid")?, t.attr("p:path").map(str::to_string), m));
             }
@@ -311,9 +316,9 @@ impl Package<'_> {
             return Ok(());
         }
         if self.docs.len() >= MAX_DOCS {
-            return Err("3MF のモデルファイルが多すぎます".into());
+            return Err("Too many model files in the 3MF".into());
         }
-        let e = self.zip.find(path).ok_or_else(|| format!("3MF の中にモデルファイル {path} がありません"))?.clone();
+        let e = self.zip.find(path).ok_or_else(|| format!("The 3MF has no model file {path}"))?.clone();
         if self.xml_bytes + e.size() > MAX_TOTAL_XML {
             return Err(crate::import_inflate::InflateError::TooBig.to_string());
         }
@@ -326,39 +331,56 @@ impl Package<'_> {
 
     fn emit(&mut self, file: &str, id: u32, m: &Affine, depth: usize, out: &mut ImportedMesh) -> Result<(), String> {
         if depth > MAX_DEPTH {
-            return Err("3MF の部品が深く入れ子になりすぎています".into());
+            return Err("The 3MF parts are nested too deeply".into());
         }
         self.visits += 1;
         if self.visits > MAX_VISITS {
-            return Err("3MF の部品が多すぎます".into());
+            return Err("Too many parts in the 3MF".into());
         }
         self.load(file)?;
         let key = file.trim_start_matches('/').to_ascii_lowercase();
         // copy what is needed so that the package can be borrowed again for the components
         let (unit, comps, part) = {
             let Some(doc) = self.docs.get(&key) else { return Ok(()) };
-            let Some(obj) = doc.objects.get(&id) else { return Err(format!("3MF に番号 {id} の形がありません")) };
+            let Some(obj) = doc.objects.get(&id) else { return Err(format!("The 3MF has no shape with number {id}")) };
             if obj.skip {
                 return Ok(());
             }
             let part = if obj.t.is_empty() {
                 None
             } else {
-                Some((doc.verts.get(obj.v.clone()).map(<[_]>::to_vec).ok_or(BAD_INDEX)?, doc.tris.get(obj.t.clone()).map(<[_]>::to_vec).ok_or(BAD_INDEX)?))
+                Some((
+                    doc.verts.get(obj.v.clone()).map(<[_]>::to_vec).ok_or(BAD_INDEX)?,
+                    doc.tris.get(obj.t.clone()).map(<[_]>::to_vec).ok_or(BAD_INDEX)?,
+                ))
             };
             let comps: Vec<(u32, Option<String>, Affine)> = obj.comps.iter().map(|c| (c.id, c.path.clone(), c.m)).collect();
             (doc.unit_mm, comps, part)
         };
-        let _ = unit;
         if let Some((v, t)) = part {
             append_transformed(out, &v, &t, m)?;
         }
         for (cid, cpath, cm) in comps {
-            let inner = m.after(&cm);
+            let mut inner = m.after(&cm);
             let f = cpath.as_deref().unwrap_or(file);
+            // another model file counts in its own unit: its numbers are turned into this file's unit first
+            inner = inner.after(&self.unit_change(file, unit, f)?);
             self.emit(f, cid, &inner, depth + 1, out)?;
         }
         Ok(())
+    }
+
+    /// The scale that turns numbers written in the unit of file `to` into the unit `from_unit` of file `from`
+    /// (the identity inside one file).
+    fn unit_change(&mut self, from: &str, from_unit: f64, to: &str) -> Result<Affine, String> {
+        let key = |p: &str| p.trim_start_matches('/').to_ascii_lowercase();
+        if key(from) == key(to) {
+            return Ok(Affine::IDENTITY);
+        }
+        self.load(to)?;
+        let to_unit = self.docs.get(&key(to)).map_or(from_unit, |d| d.unit_mm);
+        let r = if from_unit > 0.0 && to_unit.is_finite() { to_unit / from_unit } else { 1.0 };
+        Ok(Affine([[r, 0.0, 0.0, 0.0], [0.0, r, 0.0, 0.0], [0.0, 0.0, r, 0.0]]))
     }
 }
 
@@ -386,7 +408,168 @@ fn model_path(zip: &Zip) -> Result<String, String> {
         .iter()
         .find(|e| e.name.to_ascii_lowercase().ends_with(".model"))
         .map(|e| e.name.clone())
-        .ok_or_else(|| "3MF の中にモデル（3D/3dmodel.model）が見つかりません".to_string())
+        .ok_or_else(|| "No model (3D/3dmodel.model) found in the 3MF".to_string())
+}
+
+/// Inspect base materials without affecting the safety-critical geometry reader.
+/// A single base colour maps exactly to the editor's sRGB. Multiple palette entries
+/// cannot be painted onto a single distance volume and are reported explicitly.
+pub(crate) fn appearance_3mf(bytes: &[u8]) -> crate::import_mesh::AppearanceInfo {
+    use crate::import_mesh::AppearanceInfo;
+    let mut out = AppearanceInfo::default();
+    let Ok(zip) = Zip::open(bytes) else { return out };
+    let Ok(path) = model_path(&zip) else { return out };
+    let Some(entry) = zip.find(&path) else { return out };
+    let Ok(main_xml) = zip.read(entry, MAX_MODEL_BYTES) else { return out };
+    // The main model first, then the models its components live in (`p:path`): an id is told
+    // apart by the file it is in (file number in the upper half), so each file keeps its own.
+    let norm = |p: &str| p.trim_start_matches('/').to_ascii_lowercase();
+    let mut names: Vec<String> = vec![norm(&path)];
+    let mut sources: Vec<Vec<u8>> = vec![main_xml];
+    for e in zip.entries.iter() {
+        let n = norm(&e.name);
+        if sources.len() >= 16 || !n.ends_with(".model") || names.contains(&n) {
+            continue;
+        }
+        if let Ok(xml) = zip.read(e, MAX_MODEL_BYTES) {
+            names.push(n);
+            sources.push(xml);
+        }
+    }
+    let key = |file: usize, id: u32| (file as u64) << 32 | u64::from(id);
+    let mut groups: HashMap<u64, Vec<crate::model::Material>> = HashMap::new();
+    // what each object asks for, which objects it is made of, and what the build places
+    let mut refs: HashMap<u64, Vec<(u64, usize)>> = HashMap::new();
+    let mut parts: HashMap<u64, Vec<u64>> = HashMap::new();
+    let mut items: Vec<u64> = Vec::new();
+    let mut unsupported = false;
+    let mut textures = false;
+    for (fi, xml) in sources.iter().enumerate() {
+        let mut pos = 0;
+        let mut current_group: Option<u32> = None;
+        let mut current_object: Option<u32> = None;
+        let file_of = |t: &Tag| t.attr("p:path").and_then(|p| names.iter().position(|n| *n == norm(p))).unwrap_or(fi);
+        while let Ok(Some(t)) = next_tag(xml, &mut pos) {
+            if t.closing {
+                if t.name == b"basematerials" || t.name == b"colorgroup" {
+                    current_group = None;
+                }
+                if t.name == b"object" {
+                    current_object = None;
+                }
+                continue;
+            }
+            match t.name {
+                b"basematerials" | b"colorgroup" => {
+                    current_group = t.attr("id").and_then(|s| s.parse::<u32>().ok());
+                    if let Some(id) = current_group {
+                        groups.entry(key(fi, id)).or_default();
+                    }
+                    if t.self_closing {
+                        current_group = None;
+                    }
+                }
+                b"base" | b"color" if current_group.is_some() => {
+                    let value = t.attr("displaycolor").or_else(|| t.attr("color"));
+                    if let Some(m) = value.and_then(crate::materials::from_3mf_hex) {
+                        if let Some(g) = current_group.and_then(|id| groups.get_mut(&key(fi, id))) {
+                            if g.len() < 65536 {
+                                g.push(m);
+                            } else {
+                                unsupported = true;
+                            }
+                        }
+                    } else {
+                        unsupported = true;
+                    }
+                }
+                b"object" => {
+                    let id = t.attr("id").and_then(|s| s.parse::<u32>().ok());
+                    current_object = if t.self_closing { None } else { id };
+                    if let (Some(id), Some(pid), Some(idx)) =
+                        (id, t.attr("pid").and_then(|s| s.parse::<u32>().ok()), t.attr("pindex").and_then(|s| s.parse::<usize>().ok()))
+                    {
+                        refs.entry(key(fi, id)).or_default().push((key(fi, pid), idx));
+                    }
+                }
+                b"component" => {
+                    if let (Some(obj), Some(part)) = (current_object, t.attr("objectid").and_then(|s| s.parse::<u32>().ok())) {
+                        parts.entry(key(fi, obj)).or_default().push(key(file_of(&t), part));
+                    }
+                }
+                b"item" => {
+                    if let Some(id) = t.attr("objectid").and_then(|s| s.parse::<u32>().ok()) {
+                        items.push(key(file_of(&t), id));
+                    }
+                }
+                b"triangle" => {
+                    if let (Some(obj), Some(pid)) = (current_object, t.attr("pid").and_then(|s| s.parse::<u32>().ok())) {
+                        let p1 = t.attr("p1").and_then(|s| s.parse::<usize>().ok()).unwrap_or(0);
+                        let list = refs.entry(key(fi, obj)).or_default();
+                        list.push((key(fi, pid), p1));
+                        for pk in ["p2", "p3"] {
+                            if let Some(index) = t.attr(pk).and_then(|s| s.parse::<usize>().ok()) {
+                                list.push((key(fi, pid), index));
+                            }
+                        }
+                    }
+                }
+                b"texture2d" | b"texture2dgroup" => textures = true,
+                b"compositematerials" | b"multiproperties" => unsupported = true,
+                _ => {}
+            }
+        }
+    }
+    // Resources may be written after objects, so resolve the palette once parsing is complete.
+    // Object defaults are used by triangles with no per-face override.
+    // only the objects that are really placed count: the build items and what they are made of
+    // (without a build section: the objects nobody else uses as a part)
+    let mut roots = items;
+    if roots.is_empty() {
+        let used: std::collections::HashSet<u64> = parts.values().flatten().copied().collect();
+        let mut all: Vec<u64> = refs.keys().chain(parts.keys()).copied().filter(|i| !used.contains(i)).collect();
+        all.sort_unstable();
+        all.dedup();
+        roots = all;
+    }
+    let mut placed: Vec<u64> = Vec::new();
+    while let Some(id) = roots.pop() {
+        if placed.contains(&id) || placed.len() > 4096 {
+            continue;
+        }
+        placed.push(id);
+        roots.extend(parts.get(&id).into_iter().flatten().copied());
+    }
+    placed.sort_unstable();
+    let palette_refs: Vec<(u64, usize)> = placed.iter().flat_map(|id| refs.get(id).into_iter().flatten().copied()).collect();
+    let mut distinct: Vec<crate::model::Material> = Vec::new();
+    for (pid, idx) in palette_refs {
+        if let Some(m) = groups.get(&pid).and_then(|v| v.get(idx)).copied() {
+            if !distinct.contains(&m) {
+                distinct.push(m);
+            }
+        } else {
+            unsupported = true;
+        }
+        if distinct.len() > 1 {
+            out.varies = true;
+        }
+    }
+    // Some files define exactly one base material without attaching it to the object.
+    if distinct.is_empty()
+        && groups.len() == 1
+        && let Some(one) = groups.values().next().and_then(|a| (a.len() == 1).then(|| a[0]))
+    {
+        distinct.push(one);
+    }
+    out.material = distinct.first().copied();
+    if unsupported {
+        out.notes.push("The 3MF has unsupported or invalid colour/material settings. Some looks will not be kept".into());
+    }
+    if textures {
+        out.notes.push("Image textures in the 3MF can't be loaded".into());
+    }
+    out
 }
 
 /// Read a 3MF file: every build item (or, without a build section, every object) becomes part of
@@ -407,15 +590,16 @@ pub fn read_3mf(bytes: &[u8]) -> Result<ImportedMesh, String> {
     let mut out = ImportedMesh::default();
     if build.is_empty() {
         // no build section: take the objects nobody else uses as a component
-        let used: std::collections::HashSet<u32> = pkg.docs.get(&main_key).map(|d| d.objects.values().flat_map(|o| o.comps.iter().map(|c| c.id)).collect()).unwrap_or_default();
+        let used: std::collections::HashSet<u32> =
+            pkg.docs.get(&main_key).map(|d| d.objects.values().flat_map(|o| o.comps.iter().map(|c| c.id)).collect()).unwrap_or_default();
         all_ids.retain(|i| !used.contains(i));
         for id in all_ids {
             pkg.emit(&main, id, &scale, 0, &mut out)?;
         }
     } else {
         for (id, path, m) in build {
-            let inner = scale.after(&m);
             let f = path.as_deref().unwrap_or(&main).to_string();
+            let inner = scale.after(&m).after(&pkg.unit_change(&main, unit, &f)?);
             pkg.emit(&f, id, &inner, 0, &mut out)?;
         }
     }
@@ -433,7 +617,8 @@ mod tests {
     use crate::import_mesh::tests::{box_mesh, sphere_mesh, surface};
 
     fn model(unit: &str, body: &str) -> Vec<u8> {
-        format!("<?xml version=\"1.0\"?>\n<model unit=\"{unit}\" xmlns=\"http://schemas.microsoft.com/3dmanufacturing/core/2015/02\">{body}</model>").into_bytes()
+        format!("<?xml version=\"1.0\"?>\n<model unit=\"{unit}\" xmlns=\"http://schemas.microsoft.com/3dmanufacturing/core/2015/02\">{body}</model>")
+            .into_bytes()
     }
 
     fn pkg(xml: &[u8]) -> Vec<u8> {
@@ -478,7 +663,12 @@ mod tests {
         assert_eq!((lo[0], hi[0]), (-110.0, 0.0));
         assert_eq!((lo[1], hi[1]), (5.0, 15.0));
         // a rotation by 90 degrees about z (row vectors): x -> y
-        let xml = model("millimeter", &format!("<resources><object id=\"1\">{TETRA}</object></resources><build><item objectid=\"1\" transform=\"0 1 0 -1 0 0 0 0 1 0 0 0\"/></build>"));
+        let xml = model(
+            "millimeter",
+            &format!(
+                "<resources><object id=\"1\">{TETRA}</object></resources><build><item objectid=\"1\" transform=\"0 1 0 -1 0 0 0 0 1 0 0 0\"/></build>"
+            ),
+        );
         let m = read_3mf(&pkg(&xml)).unwrap();
         assert!((vol(&m) - 1000.0 / 6.0).abs() < 1e-3);
         let (lo, hi) = m.bounds().unwrap();
@@ -487,7 +677,12 @@ mod tests {
 
     #[test]
     fn without_a_build_section_the_free_objects_are_used() {
-        let xml = model("millimeter", &format!("<resources><object id=\"1\">{TETRA}</object><object id=\"2\"><components><component objectid=\"1\"/></components></object></resources>"));
+        let xml = model(
+            "millimeter",
+            &format!(
+                "<resources><object id=\"1\">{TETRA}</object><object id=\"2\"><components><component objectid=\"1\"/></components></object></resources>"
+            ),
+        );
         assert_eq!(read_3mf(&pkg(&xml)).unwrap().triangles.len(), 4);
     }
 
@@ -503,6 +698,59 @@ mod tests {
         // the referenced file is missing
         let z = zip(&[("3D/3dmodel.model", &main)], false);
         assert!(read_3mf(&z).is_err());
+    }
+
+    /// #254: the colour is read from the model file the component lives in.
+    #[test]
+    fn the_colour_of_an_object_in_another_model_file_is_kept() {
+        let main = model(
+            "millimeter",
+            "<resources><object id=\"5\"><components><component objectid=\"1\" p:path=\"/3D/Objects/part.model\" xmlns:p=\"http://schemas.microsoft.com/3dmanufacturing/production/2015/06\"/></components></object></resources><build><item objectid=\"5\"/></build>",
+        );
+        let part = model(
+            "millimeter",
+            &format!(
+                "<resources><basematerials id=\"3\"><base name=\"red\" displaycolor=\"#FF0000\"/></basematerials><object id=\"1\" pid=\"3\" pindex=\"0\">{TETRA}</object></resources>"
+            ),
+        );
+        let z = zip(&[("3D/3dmodel.model", &main), ("3D/Objects/part.model", &part)], true);
+        let info = appearance_3mf(&z);
+        let m = info.material.expect("the red of the part file");
+        assert!(m.color[0] > 0.9 && m.color[1] < 0.1 && m.color[2] < 0.1, "{:?}", m.color);
+        assert!(!info.varies);
+        // two colours in the part file are noticed as well
+        let part2 = model(
+            "millimeter",
+            "<resources><basematerials id=\"3\"><base name=\"red\" displaycolor=\"#FF0000\"/><base name=\"blue\" displaycolor=\"#0000FF\"/></basematerials><object id=\"1\" pid=\"3\" pindex=\"0\"><mesh><vertices><vertex x=\"0\" y=\"0\" z=\"0\"/><vertex x=\"1\" y=\"0\" z=\"0\"/><vertex x=\"0\" y=\"1\" z=\"0\"/></vertices><triangles><triangle v1=\"0\" v2=\"1\" v3=\"2\" pid=\"3\" p1=\"1\"/></triangles></mesh></object></resources>",
+        );
+        let z = zip(&[("3D/3dmodel.model", &main), ("3D/Objects/part.model", &part2)], true);
+        assert!(appearance_3mf(&z).varies);
+    }
+
+    #[test]
+    fn a_model_file_in_another_unit_keeps_its_real_size() {
+        // the main file counts in millimetres, the part file in centimetres: its 10-wide tetrahedron is 100 mm
+        let main = model(
+            "millimeter",
+            "<resources><object id=\"5\"><components><component objectid=\"1\" p:path=\"/3D/Objects/part.model\" xmlns:p=\"http://schemas.microsoft.com/3dmanufacturing/production/2015/06\"/></components></object></resources><build><item objectid=\"5\"/></build>",
+        );
+        let part = model("centimeter", &format!("<resources><object id=\"1\">{TETRA}</object></resources>"));
+        let z = zip(&[("3D/3dmodel.model", &main), ("3D/Objects/part.model", &part)], true);
+        let m = read_3mf(&z).unwrap();
+        let want = 1000.0 / 6.0 * 1000.0;
+        assert!((vol(&m) - want).abs() / want < 1e-4, "{} vs {want}", vol(&m));
+    }
+
+    #[test]
+    fn an_object_that_is_not_placed_does_not_colour_the_shape() {
+        let body = format!(
+            "<resources><basematerials id=\"9\"><base name=\"red\" displaycolor=\"#FF0000\"/><base name=\"blue\" displaycolor=\"#0000FF\"/></basematerials>\
+             <object id=\"1\" pid=\"9\" pindex=\"0\">{TETRA}</object><object id=\"2\" pid=\"9\" pindex=\"1\">{TETRA}</object></resources><build><item objectid=\"2\"/></build>"
+        );
+        let a = appearance_3mf(&pkg(&model("millimeter", &body)));
+        let c = a.material.expect("a colour").color;
+        assert!(c[2] > 0.5 && c[0] < 0.5, "blue expected, got {c:?}");
+        assert!(!a.varies, "the unplaced red object must not make it two-coloured");
     }
 
     #[test]
@@ -528,7 +776,9 @@ mod tests {
 
     #[test]
     fn hostile_models_fail_cleanly() {
-        let obj = |inner: &str| model("millimeter", &format!("<resources><object id=\"1\">{inner}</object></resources><build><item objectid=\"1\"/></build>"));
+        let obj = |inner: &str| {
+            model("millimeter", &format!("<resources><object id=\"1\">{inner}</object></resources><build><item objectid=\"1\"/></build>"))
+        };
         for bad in [
             // index out of range
             obj(&TETRA.replace("v3=\"3\"", "v3=\"4\"")),
@@ -550,11 +800,17 @@ mod tests {
         }
         // a bad transform
         for tr in ["1 2 3", "1 0 0 0 1 0 0 0 1 0 0 nan", "a b c d e f g h i j k l", "1 0 0 0 1 0 0 0 1 0 0 1e99"] {
-            let xml = model("millimeter", &format!("<resources><object id=\"1\">{TETRA}</object></resources><build><item objectid=\"1\" transform=\"{tr}\"/></build>"));
+            let xml = model(
+                "millimeter",
+                &format!("<resources><object id=\"1\">{TETRA}</object></resources><build><item objectid=\"1\" transform=\"{tr}\"/></build>"),
+            );
             assert!(read_3mf(&pkg(&xml)).is_err(), "{tr}");
         }
         // a component cycle and a very deep chain
-        let cyc = model("millimeter", "<resources><object id=\"1\"><components><component objectid=\"2\"/></components></object><object id=\"2\"><components><component objectid=\"1\"/></components></object></resources><build><item objectid=\"1\"/></build>");
+        let cyc = model(
+            "millimeter",
+            "<resources><object id=\"1\"><components><component objectid=\"2\"/></components></object><object id=\"2\"><components><component objectid=\"1\"/></components></object></resources><build><item objectid=\"1\"/></build>",
+        );
         assert!(read_3mf(&pkg(&cyc)).is_err());
         // exponential fan-out: 10 components each referencing the next level, 10 levels
         let mut body = String::from("<resources><object id=\"0\">");
@@ -609,5 +865,30 @@ mod tests {
             assert_eq!(m.triangles.len(), s.triangles.len());
             assert!((vol(&m) - v).abs() / v < 1e-3, "{u:?}: {} vs {v}", vol(&m));
         }
+    }
+    #[test]
+    fn basematerials_and_multicolour_are_reported() {
+        let mesh = TETRA;
+        let prefix = "<resources><basematerials id=\"9\"><base name=\"red\" displaycolor=\"#FF0000\"/><base name=\"blue\" displaycolor=\"#0000FF\"/></basematerials>";
+        let xml = model(
+            "millimeter",
+            &format!("{prefix}<object id=\"1\" pid=\"9\" pindex=\"0\">{mesh}</object></resources><build><item objectid=\"1\"/></build>"),
+        );
+        let a = appearance_3mf(&pkg(&xml));
+        assert_eq!(a.material.unwrap().color, [1.0, 0.0, 0.0]);
+        assert!(!a.varies);
+        let xml = model(
+            "millimeter",
+            &format!(
+                "{prefix}<object id=\"1\" pid=\"9\" pindex=\"0\">{}</object></resources><build><item objectid=\"1\"/></build>",
+                mesh.replacen("<triangle v1=", "<triangle pid=\"9\" p1=\"1\" v1=", 1)
+            ),
+        );
+        let a = appearance_3mf(&pkg(&xml));
+        assert!(a.varies);
+        let s = surface(&box_mesh([0.0; 3], [1.0; 3]));
+        let z = export_formats::threemf(&s, "roundtrip", Units::Mm).unwrap();
+        let m = appearance_3mf(&z).material.unwrap();
+        assert!((m.color[0] - 200.0 / 255.0).abs() < 0.002);
     }
 }

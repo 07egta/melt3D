@@ -15,3 +15,12 @@ Flowcharts and Mermaid diagrams cannot substitute for evidence of visible behavi
 ## Integration status
 
 Record the upstream commit and PR status checked before handoff, any conflicts resolved, and validation after integration. Keep up with upstream merges and monitor this PR while the task is active; rebase before pushing and never force-push.
+
+## YuraCAD checklist (for changes in `apps/meltcad`)
+
+- Competing / overlapping PR numbers (or "none"):
+- Base branch is `easy-layout-and-melt`: [ ] yes
+- Build run (`cargo test -p meltcad`, clippy, fmt): [ ] yes  [ ] partly — what was not run:
+- Operated by hand on Windows: [ ] yes  [ ] no — steps and result:
+- Before/after image compared: [ ] yes  [ ] not visible
+- Remaining problems / unverified items:

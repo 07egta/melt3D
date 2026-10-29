@@ -2,20 +2,29 @@ name: MeltCAD PR validation
 
 on:
   pull_request:
-    branches: [main, easy-layout-and-melt, integration/yuracad-20261017]
+    branches:
+      - main
+      - easy-layout-and-melt
+      - integration/yuracad-20261017
+    paths:
+      - 'apps/meltcad/**'
+      - 'crates/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/meltcad-pr-validation.yml'
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: meltcad-pr-validation-${{ github.event.pull_request.number }}
+  group: meltcad-pr-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
-  meltcad:
-    name: MELTCAD tests (${{ matrix.os }})
+  test:
+    name: MeltCAD tests (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -24,11 +33,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: Install Linux native dependencies
+      - name: Install Linux graphics dependencies
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libx11-dev mesa-vulkan-drivers
-      - name: Run MELTCAD tests
+      - name: Test MeltCAD
         run: cargo test --profile ci --locked -p meltcad
-      - name: Build Windows release executable
+      - name: Build Windows app
         if: runner.os == 'Windows'
         run: cargo build --release --locked -p meltcad

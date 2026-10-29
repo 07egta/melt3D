@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
-use crate::expr::{self, Kind, ParamDef, Value};
+use crate::expr::{self, Expr, Kind, ParamDef, Value};
 use crate::walk::Walk;
 use crate::{DocError, Document, FeatureKind, MAX_PARAMS, Result};
 
@@ -23,7 +23,7 @@ pub(crate) enum ExprRole {
 
 impl FeatureKind {
     /// The feature's numeric inputs: (label, expression, kind), in a fixed order.
-    pub fn inputs_mut(&mut self) -> Vec<(&'static str, &mut String, Kind)> {
+    pub fn inputs_mut(&mut self) -> Vec<(&'static str, &mut Expr, Kind)> {
         let mut v = Vec::new();
         self.walk_exprs_mut(&mut |(label, e, kind, role)| {
             if role == ExprRole::Input {
@@ -38,7 +38,31 @@ impl FeatureKind {
         let mut v = Vec::new();
         self.walk_exprs(&mut |(label, e, kind, role)| {
             if role == ExprRole::Input {
-                v.push((label, e.clone(), kind));
+                v.push((label, e.to_string(), kind));
+            }
+        });
+        v
+    }
+
+    /// The coordinates of the points that place the feature: a primitive's position, an
+    /// explicit plane's origin. They are not inputs (no parameter names), but follow
+    /// parameters as inputs do.
+    pub fn placement_exprs_mut(&mut self) -> Vec<&mut Expr> {
+        let mut v = Vec::new();
+        self.walk_exprs_mut(&mut |(_, e, _, role)| {
+            if role == ExprRole::Placement {
+                v.push(e);
+            }
+        });
+        v
+    }
+
+    /// Read-only view of [`FeatureKind::placement_exprs_mut`].
+    pub fn placement_exprs(&self) -> Vec<&str> {
+        let mut v = Vec::new();
+        self.walk_exprs(&mut |(_, e, _, role)| {
+            if role == ExprRole::Placement {
+                v.push(e.as_str());
             }
         });
         v
@@ -236,7 +260,7 @@ impl Document {
         if let Some(f) = next.features.get_mut(i)
             && let Some((_, e, _)) = f.kind.inputs_mut().into_iter().nth(k)
         {
-            *e = expr_s.clone();
+            *e = expr_s.clone().into();
         }
         if let Some(c) = comment {
             next.param_comments.insert(name.to_string(), c.to_string());
@@ -284,7 +308,7 @@ impl Document {
             if *target != normalized {
                 changed.insert(name.clone());
             }
-            *target = normalized;
+            *target = normalized.into();
         }
         let (_, errors) = next.param_values();
         for (name, error) in errors {
@@ -350,6 +374,25 @@ impl Document {
             }
         }
         rows
+    }
+
+    /// Move user parameter `name` to just before (or with `after`, just after) user parameter
+    /// `target`: the order the Parameters dialog lists them in. Nothing else changes.
+    pub fn move_user_param(&mut self, name: &str, target: &str, after: bool) -> Result<()> {
+        fn user(params: &[crate::Param], n: &str) -> Option<usize> {
+            params.iter().position(|p| p.name == n && !p.model)
+        }
+        let (Some(from), Some(_)) = (user(&self.params, name), user(&self.params, target)) else {
+            let missing = if user(&self.params, name).is_none() { name } else { target };
+            return Err(DocError::Unknown(format!("user parameter `{missing}`")));
+        };
+        if name == target {
+            return Err(DocError::Invalid("a parameter cannot move next to itself".into()));
+        }
+        let moved = self.params.remove(from);
+        let at = user(&self.params, target).map_or(self.params.len(), |i| if after { i + 1 } else { i });
+        self.params.insert(at, moved);
+        Ok(())
     }
 
     pub fn set_favorite(&mut self, name: &str, on: bool) -> Result<()> {
@@ -420,14 +463,92 @@ impl Document {
         if rows.len() > 10_000 {
             return Err(DocError::Invalid("too many parameters".into()));
         }
+        // Each row is checked and applied as `change_param` would, but the parameters are
+        // evaluated once for all of them, not once per row (thousands of rows took minutes).
         let mut next = self.clone();
-        let mut names = Vec::new();
-        for (n, e, u, c) in rows {
-            next.change_param(&n, &e, u.as_deref(), c.as_deref())?;
-            names.push(n);
+        let (mut vals, _) = next.param_values();
+        for (n, e, u, c) in &rows {
+            next.import_row(n, e, u.as_deref(), c.as_deref(), &mut vals)?;
+        }
+        let (_, errors) = next.param_values();
+        if let Some(e) = rows.iter().find_map(|(n, ..)| errors.get(n)) {
+            return Err(DocError::Expr(e.clone()));
         }
         *self = next;
-        Ok(names)
+        Ok(rows.into_iter().map(|(n, ..)| n).collect())
+    }
+
+    /// One imported row: the checks and change of `change_param` (a feature's parameter) or
+    /// `set_param` (a user parameter, a new one taking the unit of its value) without evaluating
+    /// every parameter. `vals` are the values so far, for the units of the rows after it.
+    fn import_row(&mut self, name: &str, expr_s: &str, unit: Option<&str>, comment: Option<&str>, vals: &mut BTreeMap<String, Value>) -> Result<()> {
+        if expr_s.len() > 4096 {
+            return Err(DocError::Expr("expression too long".into()));
+        }
+        let hit = self.features.iter().enumerate().find_map(|(i, f)| f.param_names.iter().position(|n| n == name).map(|k| (i, k)));
+        if let Some((i, k)) = hit {
+            let kind = self.features.get(i).and_then(|f| f.kind.inputs().get(k).map(|x| x.2)).unwrap_or(Kind::Unitless);
+            let expr_s = self.with_design_unit(expr_s, kind);
+            if let Some(f) = self.features.get_mut(i)
+                && let Some((_, e, _)) = f.kind.inputs_mut().into_iter().nth(k)
+            {
+                *e = expr_s.into();
+            }
+            if let Some(c) = comment {
+                self.param_comments.insert(name.to_string(), c.to_string());
+            }
+            return Ok(());
+        }
+        if let Some(p) = Self::param_name_problem(name) {
+            return Err(DocError::Invalid(p));
+        }
+        if expr_s.trim().is_empty() {
+            return Err(DocError::Expr("empty expression".into()));
+        }
+        if let Some(u) = unit
+            && expr::unit_info(u).is_none()
+        {
+            return Err(DocError::Expr(format!("unknown unit `{u}` (mm, cm, m, in, ft, deg, rad or none)")));
+        }
+        if comment.is_some_and(|c| c.len() > 4096) {
+            return Err(DocError::Invalid("comment too long".into()));
+        }
+        match self.params.iter_mut().find(|p| p.name == name) {
+            Some(p) => {
+                p.expr = expr_s.trim().to_string();
+                if let Some(u) = unit {
+                    p.unit = u.trim().to_string();
+                }
+                if let Some(c) = comment {
+                    p.comment = c.to_string();
+                }
+            }
+            None => {
+                if self.params.len() >= MAX_PARAMS {
+                    return Err(DocError::Invalid("too many parameters".into()));
+                }
+                let unit = match unit {
+                    Some(u) => u.trim().to_string(),
+                    None => Self::infer_unit_in(vals, expr_s),
+                };
+                self.params.push(crate::Param {
+                    name: name.into(),
+                    expr: expr_s.trim().into(),
+                    unit,
+                    comment: comment.unwrap_or_default().into(),
+                    model: false,
+                });
+            }
+        }
+        let def = self.params.iter().find(|p| p.name == name).map(|p| ParamDef { name: p.name.clone(), expr: p.expr.clone(), unit: p.unit.clone() });
+        let value = def.and_then(|d| {
+            expr::eval_def(&d, &|n| vals.get(n).copied().ok_or_else(|| DocError::Expr(format!("unknown parameter `{n}`"))), doc_len(&self.units)).ok()
+        });
+        match value {
+            Some(v) => vals.insert(name.to_string(), v),
+            None => vals.remove(name),
+        };
+        Ok(())
     }
 }
 
@@ -443,6 +564,9 @@ pub enum ParamUser {
     Dimension { feature: u64, name: String, constraint: String },
     /// A configured column or an expression saved in a configuration row.
     Configuration { row: Option<String>, column: String },
+    /// A joint's offset, angle or value, or a motion link's gear, rack or screw length (`input`
+    /// says which; a link is named by the joint it drives).
+    Joint { joint: u64, name: String, input: String },
 }
 
 impl ParamUser {
@@ -455,6 +579,7 @@ impl ParamUser {
                 Some(row) => format!("configuration `{row}` ({column})"),
                 None => format!("configuration column {column}"),
             },
+            ParamUser::Joint { name, input, .. } => format!("joint {name} ({input})"),
         }
     }
 }
@@ -511,7 +636,11 @@ impl Document {
     /// The unit for a new parameter with this expression: that of its value; a bare number is
     /// a length (mm).
     pub(crate) fn infer_unit(&self, e: &str) -> String {
-        let (vals, _) = self.param_values();
+        Self::infer_unit_in(&self.param_values().0, e)
+    }
+
+    /// [`Document::infer_unit`] against parameter values already worked out.
+    fn infer_unit_in(vals: &BTreeMap<String, Value>, e: &str) -> String {
         let v = expr::eval_with(e, &|n| vals.get(n).copied().ok_or_else(|| DocError::Expr(format!("unknown parameter `{n}`"))));
         match v.ok().and_then(|v| v.kind()) {
             Some(Kind::Unitless) if !expr::references(e).is_empty() => String::new(),
@@ -556,7 +685,7 @@ impl Document {
                     }
                 }
             }
-            if f.kind.point_expr().is_some_and(|p| p.iter().any(|e| expr::references(e).iter().any(|r| r == name))) {
+            if f.kind.placement_exprs().iter().any(|e| expr::references(e).iter().any(|r| r == name)) {
                 out.push(ParamUser::Feature { feature: f.id, name: f.name.clone(), input: "Position".into() });
             }
             if let FeatureKind::Sketch { sketch, .. } = &f.kind {
@@ -565,6 +694,17 @@ impl Document {
                         out.push(ParamUser::Dimension { feature: f.id, name: f.name.clone(), constraint: c.id.clone() });
                     }
                 }
+                for (what, e) in sketch.text_exprs() {
+                    if expr::references(e).iter().any(|r| r == name) {
+                        out.push(ParamUser::Feature { feature: f.id, name: f.name.clone(), input: what.to_string() });
+                    }
+                }
+            }
+        }
+        for (joint, input, e) in self.assembly.exprs() {
+            if expr::references(e).iter().any(|r| r == name) {
+                let jname = self.assembly.joints.iter().find(|j| j.id == joint).map(|j| j.name.clone()).unwrap_or_else(|| joint.to_string());
+                out.push(ParamUser::Joint { joint, name: jname, input });
             }
         }
         out
@@ -622,17 +762,17 @@ impl Document {
                     *x = new.to_string();
                 }
             }
-            for e in f.kind.point_expr_mut().into_iter().flatten() {
+            for e in f.kind.placement_exprs_mut() {
                 let r = expr::rename_reference(e, old, new);
                 if r != *e {
-                    *e = r;
+                    *e = r.into();
                     n += 1;
                 }
             }
             for (_, e, _) in f.kind.inputs_mut() {
                 let r = expr::rename_reference(e, old, new);
                 if r != *e {
-                    *e = r;
+                    *e = r.into();
                     n += 1;
                 }
             }
@@ -640,6 +780,13 @@ impl Document {
                 for c in &mut sketch.constraints {
                     if c.param.as_deref() == Some(old) {
                         c.param = Some(new.to_string());
+                        n += 1;
+                    }
+                }
+                for e in sketch.text_exprs_mut() {
+                    let r = expr::rename_reference(e, old, new);
+                    if r != *e {
+                        *e = r;
                         n += 1;
                     }
                 }
@@ -662,6 +809,13 @@ impl Document {
                 if matches!(column, crate::config::Column::Param(_)) {
                     *cell = expr::rename_reference(cell, old, new);
                 }
+            }
+        }
+        for e in self.assembly.exprs_mut() {
+            let r = expr::rename_reference(e, old, new);
+            if r != *e {
+                *e = r;
+                n += 1;
             }
         }
         if let Some(c) = self.param_comments.remove(old) {
@@ -698,6 +852,7 @@ impl Document {
             let mut names: BTreeSet<String> = f.param_names.iter().filter(|n| !n.is_empty()).cloned().collect();
             if let FeatureKind::Sketch { sketch, .. } = &f.kind {
                 names.extend(sketch.constraints.iter().filter_map(|c| c.param.clone()));
+                names.extend(sketch.text_exprs().into_iter().flat_map(|(_, e)| expr::references(e)));
             }
             out.extend(names.into_iter().map(|n| (format!("Feature:{}", f.name), n)));
         }
@@ -725,6 +880,7 @@ impl Document {
             hit |= f.kind.expressions().iter().any(|e| expr::references(e).iter().any(|r| affected.contains(r)));
             if let FeatureKind::Sketch { sketch, .. } = &f.kind {
                 hit |= sketch.constraints.iter().any(|c| c.param.as_ref().is_some_and(|p| affected.contains(p)));
+                hit |= sketch.text_exprs().iter().any(|(_, e)| expr::references(e).iter().any(|r| affected.contains(r)));
             }
             if hit {
                 out.push(f.id);

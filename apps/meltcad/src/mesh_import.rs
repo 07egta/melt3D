@@ -8,7 +8,7 @@
 
 use std::path::Path;
 
-use crate::import_mesh::{self, Imported, ImportOptions, ImportedMesh, MeshFormat};
+use crate::import_mesh::{self, ImportOptions, Imported, ImportedMesh, MeshFormat};
 use crate::mesh::SharedVolume;
 use crate::sdf_volume::{BakeControl, BakeOptions, BakeStats, Volume, bake_with};
 
@@ -39,16 +39,16 @@ impl Up {
     pub const ALL: [Up; 3] = [Up::Auto, Up::Y, Up::Z];
     pub fn label(self) -> &'static str {
         match self {
-            Up::Auto => "自動",
-            Up::Y => "Y上",
-            Up::Z => "Z上",
+            Up::Auto => "Auto",
+            Up::Y => "Y up",
+            Up::Z => "Z up",
         }
     }
     pub fn hint(self) -> &'static str {
         match self {
-            Up::Auto => "ファイルの種類でえらびます（OBJとGLBはY上、ほかはZ上）",
-            Up::Y => "Yが上のデータ。立てて入れます",
-            Up::Z => "Zが上のデータ。そのまま入れます",
+            Up::Auto => "Picks by file type (OBJ and GLB are Y up, others Z up)",
+            Up::Y => "Y-up data. Stands it up on import",
+            Up::Z => "Z-up data. Imported as is",
         }
     }
     /// Is the file Y up?
@@ -107,11 +107,17 @@ pub struct Loaded {
 }
 
 /// Read a mesh file (checked and cleaned; the up axis is not applied yet).
+#[cfg(test)]
 pub fn load(path: &Path) -> Result<Loaded, String> {
-    let imported = import_mesh::import_file(path, &ImportOptions { y_up: Some(false) })?;
+    load_with_control(path, &std::sync::atomic::AtomicBool::new(false), &std::sync::atomic::AtomicU32::new(0))
+}
+
+/// The background file reader updates progress and can stop before parsing or after parsing.
+pub fn load_with_control(path: &Path, cancel: &std::sync::atomic::AtomicBool, progress: &std::sync::atomic::AtomicU32) -> Result<Loaded, String> {
+    let imported = import_mesh::import_file_with_control(path, &ImportOptions { y_up: Some(false) }, cancel, progress)?;
     let size = imported.mesh.size();
     let file_name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    let stem = path.file_stem().map(|n| n.to_string_lossy().into_owned()).filter(|s| !s.is_empty()).unwrap_or_else(|| "メッシュ".into());
+    let stem = path.file_stem().map(|n| n.to_string_lossy().into_owned()).filter(|s| !s.is_empty()).unwrap_or_else(|| "Mesh".into());
     Ok(Loaded { file_name, stem, imported, size })
 }
 
@@ -134,7 +140,8 @@ pub fn estimate(size: [f32; 3], tris: usize, res: u32) -> Estimate {
     let opts = BakeOptions { res, ..BakeOptions::default() };
     let longest = size.into_iter().fold(0.0f32, f32::max).max(1e-6);
     let mut cells = f64::from(res.clamp(4, 512));
-    let nodes_at = |cells: f64| -> f64 { size.iter().map(|s| (f64::from(s / longest) * cells).ceil().max(1.0) + 2.0 * f64::from(opts.pad) + 1.0).product() };
+    let nodes_at =
+        |cells: f64| -> f64 { size.iter().map(|s| (f64::from(s / longest) * cells).ceil().max(1.0) + 2.0 * f64::from(opts.pad) + 1.0).product() };
     // (the bake lowers the cell count itself when the grid would be too big)
     while nodes_at(cells) > opts.max_cells as f64 && cells > 8.0 {
         cells -= 1.0;
@@ -154,7 +161,101 @@ pub struct Baked {
     pub stats: BakeStats,
 }
 
-/// Turn, centre, scale and bake. Cancelling through `ctl` gives `Err("中止しました")`.
+pub fn mesh_hash(mesh: &ImportedMesh) -> u64 {
+    let mut h = 0xcbf2_9ce4_8422_2325u64;
+    for p in &mesh.positions {
+        for v in p {
+            for b in v.to_bits().to_le_bytes() {
+                h = (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3);
+            }
+        }
+    }
+    for t in &mesh.triangles {
+        for v in t {
+            for b in v.to_le_bytes() {
+                h = (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3);
+            }
+        }
+    }
+    h
+}
+
+/// Re-bake at the exact final size, preserving anisotropic scale as geometry.
+pub fn rebake(mesh: &ImportedMesh, y_up: bool, final_size: [f32; 3], res: u32, ctl: &BakeControl) -> Result<Baked, String> {
+    let mut m = mesh.clone();
+    if y_up {
+        m.y_up_to_z_up();
+    }
+    let (lo, hi) = m.bounds().ok_or_else(|| import_mesh::NO_SHAPE.to_string())?;
+    let c = [0, 1, 2].map(|a| 0.5 * (lo[a] + hi[a]));
+    let orig = m.size();
+    if final_size.iter().any(|x| !x.is_finite() || *x <= 0.0) || orig.iter().any(|x| *x <= 0.0) {
+        return Err("Invalid dimensions".into());
+    }
+    let factors = [0, 1, 2].map(|a| final_size[a] / orig[a]);
+    for p in &mut m.positions {
+        for a in 0..3 {
+            p[a] = (p[a] - c[a]) * factors[a];
+        }
+    }
+    let (volume, stats) = bake_with(&m, &BakeOptions { res, ..BakeOptions::default() }, ctl)?;
+    Ok(Baked { volume: SharedVolume::new(volume), size: final_size, file_centre: [0.0; 3], stats })
+}
+
+/// Bake original Z-up millimetre geometry without applying the interactive import defaults.
+/// The volume is centred around the source bounds and `file_centre` restores its original
+/// position when the resulting shape is placed in the scene.
+pub fn bake_original(mesh: &ImportedMesh, res: u32, ctl: &BakeControl) -> Result<Baked, String> {
+    let (lo, hi) = mesh.bounds().ok_or_else(|| import_mesh::NO_SHAPE.to_string())?;
+    let size = [0, 1, 2].map(|a| hi[a] - lo[a]);
+    let centre = [0, 1, 2].map(|a| lo[a] + size[a] * 0.5);
+    if size.iter().any(|x| !x.is_finite() || !(0.01..=2000.0).contains(x)) || centre.iter().any(|x| !x.is_finite() || !(-5000.0..=5000.0).contains(x))
+    {
+        return Err("立体が Melt の対応範囲を超えています（各辺 0.01〜2000 mm、中心位置 ±5000 mm）。SolidCraft で寸法・位置を調整してください".into());
+    }
+    let mut centered = mesh.clone();
+    for p in &mut centered.positions {
+        for a in 0..3 {
+            p[a] -= centre[a];
+        }
+    }
+    let (volume, stats) = bake_with(&centered, &BakeOptions { res: res.clamp(16, 256), ..BakeOptions::default() }, ctl)?;
+    Ok(Baked { volume: SharedVolume::new(volume), size, file_centre: centre, stats })
+}
+
+/// Surface-centroid SDF residual (mean, maximum, number sampled), not Hausdorff error.
+pub fn surface_residual(mesh: &ImportedMesh, y_up: bool, final_size: [f32; 3], volume: &Volume) -> (f32, f32, usize) {
+    let mut m = mesh.clone();
+    if y_up {
+        m.y_up_to_z_up();
+    }
+    let Some((lo, hi)) = m.bounds() else { return (0.0, 0.0, 0) };
+    let sz = m.size();
+    if sz.iter().any(|x| *x <= 0.0) {
+        return (0.0, 0.0, 0);
+    }
+    let c = [0, 1, 2].map(|a| (lo[a] + hi[a]) * 0.5);
+    let mut total = 0.0f64;
+    let mut worst = 0.0f32;
+    let mut n = 0usize;
+    let stride = (m.triangles.len() / 2048).max(1);
+    for tri in m.triangles.iter().step_by(stride) {
+        let (Some(a), Some(b), Some(d)) = (m.positions.get(tri[0] as usize), m.positions.get(tri[1] as usize), m.positions.get(tri[2] as usize))
+        else {
+            continue;
+        };
+        let p = [0, 1, 2].map(|i| ((a[i] + b[i] + d[i]) / 3.0 - c[i]) * final_size[i] / sz[i]);
+        let residual = volume.distance(p).abs();
+        if residual.is_finite() {
+            total += f64::from(residual);
+            worst = worst.max(residual);
+            n += 1;
+        }
+    }
+    (if n > 0 { (total / n as f64) as f32 } else { 0.0 }, worst, n)
+}
+
+/// Turn, centre, scale and bake. Cancelling through `ctl` gives `Err("Stopped")`.
 pub fn bake(mesh: &ImportedMesh, format: MeshFormat, st: &Settings, ctl: &BakeControl) -> Result<Baked, String> {
     let st = st.sanitized();
     let mut m = mesh.clone();
@@ -212,6 +313,33 @@ pub(crate) mod tests {
         // a sphere of radius r, made 2r across, baked as is
         let st = Settings { target_mm: 2.0 * r, up: Up::Z, floor: true, centre: true, res };
         bake(&sphere_mesh(r, 40, 80), MeshFormat::Stl, &st, &BakeControl::new()).unwrap()
+    }
+
+    #[test]
+    fn original_bake_keeps_large_and_submillimetre_geometry_and_offset() {
+        for (lo, hi, res) in [([-120.0, 20.0, 7.0], [120.0, 60.0, 31.0], 32), ([4.0, -3.0, 0.25], [4.4, -2.7, 0.45], 16)] {
+            let b = bake_original(&box_mesh(lo, hi), res, &BakeControl::new()).unwrap();
+            let expected_size = [0, 1, 2].map(|a| hi[a] - lo[a]);
+            let expected_centre = [0, 1, 2].map(|a| (lo[a] + hi[a]) * 0.5);
+            assert_eq!(b.size, expected_size);
+            assert_eq!(b.file_centre, expected_centre);
+            let local_inside = [0.0, 0.0, 0.0];
+            let local_outside = [expected_size[0] * 0.5 + b.volume.cell * 2.0, 0.0, 0.0];
+            assert!(b.volume.distance(local_inside) < 0.0);
+            assert!(b.volume.distance(local_outside) > 0.0);
+            let pos = place(&b, false, false, [0.0; 2]);
+            assert_eq!(pos, expected_centre);
+            let shape = shape_of(&b, "original", "source", pos, Material::default());
+            let field = Field::new(&scene_with(shape));
+            assert!(field.distance(expected_centre) < 0.0);
+        }
+    }
+
+    #[test]
+    fn original_bake_rejects_dimensions_and_positions_outside_scene_bounds() {
+        assert!(bake_original(&box_mesh([0.0; 3], [2001.0, 10.0, 10.0]), 16, &BakeControl::new()).is_err());
+        assert!(bake_original(&box_mesh([0.0; 3], [0.009, 1.0, 1.0]), 16, &BakeControl::new()).is_err());
+        assert!(bake_original(&box_mesh([5001.0, 0.0, 0.0], [5002.0, 1.0, 1.0]), 16, &BakeControl::new()).is_err());
     }
 
     #[test]
@@ -302,14 +430,17 @@ pub(crate) mod tests {
     fn the_up_axis_choice_stands_a_model_upright() {
         // a tall box in a Y-up file: 10 wide, 40 tall (y), 20 deep (z)
         let m = box_mesh([-5.0, 0.0, -10.0], [5.0, 40.0, 10.0]);
-        for (up, fmt, tall) in [(Up::Auto, MeshFormat::Obj, true), (Up::Auto, MeshFormat::Stl, false), (Up::Y, MeshFormat::Stl, true), (Up::Z, MeshFormat::Obj, false)] {
+        for (up, fmt, tall) in
+            [(Up::Auto, MeshFormat::Obj, true), (Up::Auto, MeshFormat::Stl, false), (Up::Y, MeshFormat::Stl, true), (Up::Z, MeshFormat::Obj, false)]
+        {
             let st = Settings { target_mm: 40.0, up, floor: true, centre: true, res: 32 };
             let b = bake(&m, fmt, &st, &BakeControl::new()).unwrap();
             assert_eq!(b.size[2] > 30.0, tall, "{up:?} {fmt:?} {:?}", b.size);
         }
         assert_eq!(upright_size([10.0, 40.0, 20.0], true), [10.0, 20.0, 40.0]);
         // where the file had it is kept when centring is off
-        let b = bake(&m, MeshFormat::Stl, &Settings { target_mm: 40.0, up: Up::Z, floor: false, centre: false, res: 32 }, &BakeControl::new()).unwrap();
+        let b =
+            bake(&m, MeshFormat::Stl, &Settings { target_mm: 40.0, up: Up::Z, floor: false, centre: false, res: 32 }, &BakeControl::new()).unwrap();
         let p = place(&b, false, false, [99.0, 99.0]);
         assert!((p[1] - 20.0).abs() < 1e-3 && p[0].abs() < 1e-3 && p[2].abs() < 1e-3, "{p:?}");
     }
@@ -443,5 +574,46 @@ pub(crate) mod tests {
         }
         assert!(checked > 300, "{checked}");
         eprintln!("end to end: {checked} points, worst difference {worst:.3} mm, cell {cell:.3} mm, volume {} nodes", baked.volume.nodes());
+    }
+    #[test]
+    fn rebake_reduces_cell_width_and_records_surface_residuals() {
+        let mesh = sphere_mesh(5.0, 16, 32);
+        let ctrl = BakeControl::new();
+        let size = [20.0, 10.0, 10.0];
+        let started = std::time::Instant::now();
+        let low = rebake(&mesh, false, size, 24, &ctrl).unwrap();
+        let low_secs = started.elapsed().as_secs_f64();
+        let started = std::time::Instant::now();
+        let high = rebake(&mesh, false, size, 48, &ctrl).unwrap();
+        let high_secs = started.elapsed().as_secs_f64();
+        assert!(high.volume.cell < low.volume.cell);
+        assert_eq!(high.size, size);
+        let e0 = surface_residual(&mesh, false, size, &low.volume);
+        let e1 = surface_residual(&mesh, false, size, &high.volume);
+        assert!(e0.2 > 0 && e1.2 > 0);
+        assert!(e0.0.is_finite() && e1.0.is_finite());
+        eprintln!(
+            "rebake centroid residual mean/max low {:.4}/{:.4}mm {:.3}s; high {:.4}/{:.4}mm {:.3}s",
+            e0.0, e0.1, low_secs, e1.0, e1.1, high_secs
+        );
+    }
+
+    #[test]
+    fn rebake_cancel_keeps_the_caller_in_control() {
+        use std::sync::atomic::Ordering;
+        let mesh = box_mesh([-5.0; 3], [5.0; 3]);
+        let ctrl = BakeControl::new();
+        ctrl.cancel.store(true, Ordering::Relaxed);
+        let result = rebake(&mesh, false, [10.0; 3], 64, &ctrl);
+        assert_eq!(result.unwrap_err(), crate::sdf_volume::ERR_CANCEL);
+    }
+
+    #[test]
+    fn cleaned_mesh_fingerprint_is_deterministic_and_detects_changes() {
+        let mut mesh = box_mesh([-1.0; 3], [1.0; 3]);
+        let before = mesh_hash(&mesh);
+        assert_eq!(before, mesh_hash(&mesh));
+        mesh.positions[0][0] += 0.1;
+        assert_ne!(before, mesh_hash(&mesh));
     }
 }

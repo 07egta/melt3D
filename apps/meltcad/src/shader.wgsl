@@ -16,8 +16,11 @@ struct Shape {
     extra: vec4<f32>,   // x = shell wall thickness (0 = solid), y z = profile rounding limit, winding, w = 1: chamfer instead of round
     gcol: vec4<f32>,    // gradient: second colour rgb, strength (0 = no gradient)
     gpar: vec4<f32>,    // gradient: direction (0 x, 1 y, 2 z; +3 = along the shape's own box), softness, from, to
-    twist0: vec4<f32>,  // axis ID (0 = off, 1 X / 2 Y / 3 Z), signed degrees, range start/end
-    twist1: vec4<f32>,  // bottom/top factors, pre-deform axis half-height, radial extent
+    ripple: vec4<f32>,  // mode, amplitude, wavelength, number
+    ripple2: vec4<f32>, // angle, edge fade, preserve, detail
+    ripple_half: vec4<f32>, // local bounding half extents (before a Twist), w = 1: a Twist follows
+    twist_a: vec4<f32>, // Twist (deform.rs gpu_parameters): unit axis, ray step factor ((0, 0, 0, 1) = none)
+    twist_b: vec4<f32>, // t = clamp(along * x + y, 0, 1); angle at t = 0, its change up to t = 1
 };
 
 // Everything per frame and small is in the uniform buffer; the scene itself (groups, blocks,
@@ -49,11 +52,11 @@ fn D(i: i32) -> vec4<f32> { return textureLoad(DT, vec2<i32>(i & 1023, i >> 10),
 //   group  (3 vec4): [first block, block count, op sign, blend] [first instance, instance count, first item (see cand), 0] [bounding sphere]
 //   block  (2 vec4): [bounding sphere] [largest blend, 1 = never skip, first shape, shape count]
 //   instance (4 vec4): three rows (x y z, offset) taking a world point back into the group's own space, then [world centre of the group's sphere, scale]
-//   shape (18 vec4): [bounding sphere = position, radius] then the 17 vec4 of struct Shape
+//   shape (21 vec4): [bounding sphere = position, radius] then the 20 vec4 of struct Shape
 fn group_at(gi: i32) -> i32 { return i32(G.offs.x + 0.5) + gi * 3; }
 fn block_at(bi: i32) -> i32 { return i32(G.offs.y + 0.5) + bi * 2; }
 fn inst_at(i: i32) -> i32 { return i32(G.offs.z + 0.5) + i * 4; }
-fn shape_rec(i: i32) -> i32 { return i32(G.offs.w + 0.5) + i * 18; }
+fn shape_rec(i: i32) -> i32 { return i32(G.offs.w + 0.5) + i * 21; }
 fn path_pt(i: i32) -> vec4<f32> { return D(i32(G.offs2.y + 0.5) + i); }
 
 fn shape_at(i: i32) -> Shape {
@@ -74,13 +77,15 @@ fn shape_at(i: i32) -> Shape {
     s.extra = D(b + 12);
     s.gcol = D(b + 13);
     s.gpar = D(b + 14);
-    // Most shapes have no modifier: avoid two extra texture loads per
-    // distance evaluation while retaining a fixed-size scene record.
-    s.twist0 = vec4<f32>(0.0);
-    s.twist1 = vec4<f32>(0.0);
-    if (s.r0.w > 0.5) {
-        s.twist0 = D(b + 15);
-        s.twist1 = D(b + 16);
+    s.ripple = D(b + 15);
+    s.ripple2 = D(b + 16);
+    s.ripple_half = D(b + 17);
+    // Most shapes have no Twist: its two vec4 are read only when ripple_half.w says so.
+    s.twist_a = vec4<f32>(0.0, 0.0, 0.0, 1.0);
+    s.twist_b = vec4<f32>(0.0);
+    if (s.ripple_half.w > 0.5) {
+        s.twist_a = D(b + 18);
+        s.twist_b = D(b + 19);
     }
     return s;
 }
@@ -88,31 +93,18 @@ fn shape_at(i: i32) -> Shape {
 fn flag(bit: i32) -> bool { return (i32(G.view.w + 0.5) & bit) != 0; }
 fn is_fast() -> bool { return flag(2); }
 
-// Inverse (sample-point) deformation shared with deform.rs. It rotates each
-// transverse slice rigidly; no scale is applied to that slice. A cubic smooth
-// interpolation stops the angular derivative at both editable range limits.
-fn twist_angle(s: Shape, q: vec3<f32>) -> f32 {
-    let axis = i32(s.twist0.x + 0.5);
-    if (axis == 0) { return 0.0; }
-    var along = q.z;
-    if (axis == 1) { along = q.x; }
-    if (axis == 2) { along = q.y; }
-    let half_height = max(s.twist1.z, 0.01);
-    let t = clamp((along / (2.0 * half_height) + 0.5 - s.twist0.z) / max(s.twist0.w - s.twist0.z, 0.02), 0.0, 1.0);
-    let eased = t * t * (3.0 - 2.0 * t);
-    let amount = mix(s.twist1.x, s.twist1.y, eased);
-    return radians(s.twist0.y) * amount;
-}
-
+// Inverse (sample-point) Twist, the same map as Twist::inverse in deform.rs: every slice across
+// the axis turns rigidly back by the angle at its height (a smoothstep between the range ends).
+// One dot product and one Rodrigues rotation, no branch on the axis, so the copies of shape_dist
+// stay small; shapes without a Twist return at once.
 fn untwist_shape(s: Shape, q: vec3<f32>) -> vec3<f32> {
-    let axis = i32(s.twist0.x + 0.5);
-    if (axis == 0) { return q; }
-    let angle = -twist_angle(s, q);
-    let cs = cos(angle);
-    let sn = sin(angle);
-    if (axis == 1) { return vec3<f32>(q.x, cs * q.y - sn * q.z, sn * q.y + cs * q.z); }
-    if (axis == 2) { return vec3<f32>(sn * q.z + cs * q.x, q.y, cs * q.z - sn * q.x); }
-    return vec3<f32>(cs * q.x - sn * q.y, sn * q.x + cs * q.y, q.z);
+    if (s.ripple_half.w < 0.5) { return q; }
+    let k = s.twist_a.xyz;
+    let along = dot(k, q);
+    let t = clamp(along * s.twist_b.x + s.twist_b.y, 0.0, 1.0);
+    let a = -(s.twist_b.z + s.twist_b.w * (t * t * (3.0 - 2.0 * t)));
+    let c = cos(a);
+    return q * c + cross(k, q) * sin(a) + k * (along * (1.0 - c));
 }
 
 // How far away a shape must be (at least) for a blend with value `a` to ignore it: beyond that
@@ -205,6 +197,73 @@ fn get_pt(i: i32) -> vec2<f32> {
     return v.zw;
 }
 
+fn ripple_adjust(base: f32, q: vec3<f32>, s: Shape) -> f32 {
+    let rr = s.ripple;
+    let r2 = s.ripple2;
+    if (rr.x < 0.5 || rr.y <= 0.0) { return base; }
+    let amplitude = rr.y * s.pos.w;
+    if (abs(base) > amplitude * 2.0) {
+        if (base > 0.0 && r2.z < 0.5) { return base - amplitude; }
+        return base;
+    }
+    let angle = r2.x * 0.017453292519943295;
+    let sn = sin(angle);
+    let cs = cos(angle);
+    let u = q.x * cs + q.y * sn;
+    let v = q.y * cs - q.x * sn;
+    let radius = length(q.xy);
+    let k = 6.283185307179586 / rr.z;
+    let linear = rr.x > 1.5 && rr.x < 2.5;
+    let random = rr.x > 2.5;
+    let support = rr.w * rr.z * select(1.0, 0.5, linear);
+    let distance = select(radius, abs(u), linear);
+    let fade_width = max(support * r2.y, 0.001);
+    let t = clamp((distance - (support - fade_width)) / fade_width, 0.0, 1.0);
+    var envelope = 1.0 - t * t * (3.0 - 2.0 * t);
+    let h = s.ripple_half.xyz;
+    if (r2.z > 0.5) {
+        let edge = max(abs(q.x) / max(h.x, 0.01), abs(q.y) / max(h.y, 0.01));
+        let f = clamp((edge - 0.68) / 0.32, 0.0, 1.0);
+        envelope *= 1.0 - f * f * (3.0 - 2.0 * f);
+    }
+    let core = select(radius, u, linear);
+    var wave = sin(select(core * k, (0.84 * u + 0.34 * v) * k, random));
+    var weight = 1.0;
+    if (r2.w >= 2.0) {
+        let a = select(core * k * 2.0 + 0.3, (-0.31 * u + 1.23 * v) * k + 0.8, random);
+        wave += 0.15 * sin(a);
+        weight += 0.15;
+    }
+    if (r2.w >= 3.0) {
+        let a = select(core * k * 3.0 + 1.1, (1.37 * u - 0.71 * v) * k + 1.1, random);
+        wave += 0.07 * sin(a);
+        weight += 0.07;
+    }
+    if (r2.w >= 4.0) {
+        let a = select(core * k * 4.0 + 2.0, (-1.73 * u - 0.48 * v) * k + 2.0, random);
+        wave += 0.035 * sin(a);
+        weight += 0.035;
+    }
+    wave /= weight;
+    let delta = rr.y * envelope * select(-wave, (1.0 - wave) * 0.5, r2.z > 0.5);
+    let edge_slope = select(0.0, 6.0 / max(min(h.x, h.y), 0.01), r2.z > 0.5);
+    let safety = 1.0 + rr.y * (3.0 * k + 2.0 / fade_width + edge_slope);
+    return (base + delta * s.pos.w) / safety;
+}
+
+// The factor `ripple_adjust` divides by where it bends the surface (Ripple::safety).
+fn ripple_safety(s: Shape) -> f32 {
+    let rr = s.ripple;
+    let r2 = s.ripple2;
+    let k = 6.283185307179586 / rr.z;
+    let linear = rr.x > 1.5 && rr.x < 2.5;
+    let support = rr.w * rr.z * select(1.0, 0.5, linear);
+    let fade_width = max(support * r2.y, 0.001);
+    let h = s.ripple_half.xyz;
+    let edge_slope = select(0.0, 6.0 / max(min(h.x, h.y), 0.01), r2.z > 0.5);
+    return 1.0 + rr.y * (3.0 * k + 2.0 / fade_width + edge_slope);
+}
+
 fn shape_dist(s: Shape, p: vec3<f32>) -> f32 {
     let d = p - s.pos.xyz;
     let source_q = vec3<f32>(dot(s.r0.xyz, d), dot(s.r1.xyz, d), dot(s.r2.xyz, d)) / s.scale.xyz;
@@ -213,6 +272,7 @@ fn shape_dist(s: Shape, p: vec3<f32>) -> f32 {
     let sz = s.size.xyz;
     let rd = s.size.w;
     let chamfer = s.extra.w > 0.5 && rd > 0.0;
+    shell_k = 1.0;
     var r = 0.0;
     if (kind == 0) {
         r = length(q) - sz.x;
@@ -289,15 +349,80 @@ fn shape_dist(s: Shape, p: vec3<f32>) -> f32 {
             let w = vec2<f32>(d2, abs(q.z) - hh + rr);
             r = min(max(w.x, w.y), 0.0) + length(max(w, vec2<f32>(0.0))) - rr;
         }
+        // Same signed inflation used by the CPU SDF and mesh export for Extrude.
+        r -= clamp(s.params.x, -40.0, 40.0);
     }
-    r = r * s.pos.w;
-    // hollow walls of thickness `shell`
-    let sh = s.extra.x;
-    if (sh > 0.0 && kind != 18) { r = abs(r + sh * 0.5) - sh * 0.5; }
+    let fc = i32(s.r0.w + 0.5);
+    if (fc > 0) { r = face_melt(s, q, r, fc); }
+    let scaled = r * s.pos.w;
+    var ripple_shorten = 1.0;
+    if (s.ripple.x >= 0.5 && s.ripple.y > 0.0 && abs(scaled) <= s.ripple.y * s.pos.w * 2.0) {
+        ripple_shorten = 1.0 / ripple_safety(s);
+    }
+    r = ripple_adjust(scaled, q, s);
+    // Hollow walls of thickness `shell`, in the shape's own mm, through the same
+    // distance-shortening the shape maths uses. (A curve hollows itself in curve_dist.)
+    if (s.extra.x > 0.0 && kind != 18) {
+        let sh = s.extra.x * s.pos.w * shell_shortening(s, q, fc) * ripple_shorten;
+        r = abs(r + sh * 0.5) - sh * 0.5;
+    }
     return r;
 }
 
+// A melt on one face (face_melt_distance in sdf.rs): swells or sinks that face, nothing else.
+fn face_melt(s: Shape, q: vec3<f32>, d: f32, fc: i32) -> f32 {
+    let ax = (fc - 1) / 2;
+    var sg = 1.0;
+    if (((fc - 1) % 2) == 1) { sg = -1.0; }
+    let amount = s.r1.w;
+    let reach = max(s.r2.w, 1.0);
+    let t = sg * q[ax] - s.mat2.w;
+    let k = 1.0 / reach;
+    var w = clamp(1.0 - abs(t) * k, 0.0, 1.0);
+    if (w <= 0.0) { return d; }
+    w = w * w * (3.0 - 2.0 * w);
+    let u = q[(ax + 1) % 3];
+    let v = q[(ax + 2) % 3];
+    let f = 6.2832 / (reach * 1.6);
+    let wave = 0.5 + 0.5 * sin(u * f + sin(v * f * 1.3)) * cos(v * f * 0.8 + cos(u * f * 0.6));
+    let slope = abs(amount) * (1.6 * k + 1.32 * f);
+    return (d - amount * w * wave) / sqrt(1.0 + slope * slope);
+}
+
+// The factor `face_melt` divides by inside the face's reach (1 outside it).
+fn face_melt_shortening(s: Shape, q: vec3<f32>, fc: i32) -> f32 {
+    let ax = (fc - 1) / 2;
+    var sg = 1.0;
+    if (((fc - 1) % 2) == 1) { sg = -1.0; }
+    let amount = s.r1.w;
+    let reach = max(s.r2.w, 1.0);
+    let t = sg * q[ax] - s.mat2.w;
+    let k = 1.0 / reach;
+    if (clamp(1.0 - abs(t) * k, 0.0, 1.0) <= 0.0) { return 1.0; }
+    let f = 6.2832 / (reach * 1.6);
+    let slope = abs(amount) * (1.6 * k + 1.32 * f);
+    return 1.0 / sqrt(1.0 + slope * slope);
+}
+
+// How much shorter than a true distance the shape maths makes this point's distance
+// (`Prepared::shell_shortening`): sweeps, lofts and wave-warped revolves scale it down so that
+// marching cannot overshoot (they leave their factor in `shell_k`), and so do face melts; a shell
+// on that field must use the same scale.
+fn shell_shortening(s: Shape, q: vec3<f32>, fc: i32) -> f32 {
+    var shorten = shell_k;
+    if (fc > 0) { shorten = shorten * face_melt_shortening(s, q, fc); }
+    return shorten;
+}
+
 // The surface colour of a shape at p: its colour, or the gradient (Material::gradient_weight).
+fn mix_colour(a: vec3<f32>, b: vec3<f32>, t: f32) -> vec3<f32> {
+    if (t <= 0.0) { return a; }
+    if (t >= 1.0) { return b; }
+    let al = pow(max(a, vec3<f32>(0.0)), vec3<f32>(2.2));
+    let bl = pow(max(b, vec3<f32>(0.0)), vec3<f32>(2.2));
+    return pow(max(mix(al, bl, t), vec3<f32>(0.0)), vec3<f32>(1.0 / 2.2));
+}
+
 fn shape_color(s: Shape, p: vec3<f32>) -> vec3<f32> {
     if (s.gcol.w <= 0.001) { return s.color.rgb; }
     let code = i32(s.gpar.x + 0.5);
@@ -313,14 +438,14 @@ fn shape_color(s: Shape, p: vec3<f32>) -> vec3<f32> {
     let u = clamp((t - s.gpar.z) / max(s.gpar.w - s.gpar.z, 0.02), 0.0, 1.0);
     let w = max(s.gpar.y * 0.5, 0.001);
     let k = smoothstep(0.5 - w, 0.5 + w, u);
-    return mix(s.color.rgb, s.gcol.rgb, k * s.gcol.w);
+    return mix_colour(s.color.rgb, s.gcol.rgb, k * s.gcol.w);
 }
 
 fn mix_hit(a: Hit, b: Hit, t: f32) -> Hit {
     // b at weight 0, a at weight 1
     var o: Hit;
     o.d = 0.0;
-    o.col = mix(b.col, a.col, t);
+    o.col = mix_colour(b.col, a.col, t);
     o.rough = mix(b.rough, a.rough, t);
     o.metal = mix(b.metal, a.metal, t);
     o.glow = mix(b.glow, a.glow, t);
@@ -559,6 +684,7 @@ fn find_candidates(ro: vec3<f32>, rd: vec3<f32>, t0: f32, t1: f32, slack: f32) {
         let fi = i32(gn.x + 0.5);
         let ib0 = i32(gn.z + 0.5);
         let grow = rm * gr.w * amount + slack;
+        let nonleaf = nh_nonleaf(gn.w);
         let fb = i32(gr.x + 0.5);
         let nb = i32(gr.y + 0.5);
         for (var j = 0; j < max(ni, 1); j = j + 1) {
@@ -574,7 +700,7 @@ fn find_candidates(ro: vec3<f32>, rd: vec3<f32>, t0: f32, t1: f32, slack: f32) {
             }
             let near = seg_sphere(ro, rd, 1.0, t0, t1, sphere);
             // (a group that keeps only the overlap changes the result everywhere: never left out)
-            if (near >= grow && gr.z < 1.5) { continue; }
+            if (near >= grow && gr.z < 1.5 && !nonleaf) { continue; }
             let item = ib0 + j;
             if (item < 256) { cand[item >> 5] = cand[item >> 5] | (1u << u32(item & 31)); }
             // the ray in the group's own space (the instance's rows carry a world point back)
@@ -587,6 +713,15 @@ fn find_candidates(ro: vec3<f32>, rd: vec3<f32>, t0: f32, t1: f32, slack: f32) {
             }
             let dd = max(dot(d, d), 1e-12);
             let key = (u32(gi) << 8u) | u32(j & 255);
+            // a group with groups nested in it always opens, even when none of its own shapes is near
+            if (nonleaf) {
+                if (ncs < MAXC) {
+                    cs[ncs] = (key << 9u) | 0x80000000u;
+                    ncs = ncs + 1;
+                } else {
+                    ovf = true;
+                }
+            }
             for (var bi = 0; bi < nb; bi = bi + 1) {
                 let bb = block_at(fb + bi);
                 let b0 = D(bb);
@@ -601,15 +736,13 @@ fn find_candidates(ro: vec3<f32>, rd: vec3<f32>, t0: f32, t1: f32, slack: f32) {
                     if (op > -0.5 && op < 0.5) { continue; }   // a stain changes no distance
                     let reach = rm * misc.y * amount + slack;
                     if (op < 1.5 && seg_sphere(o, d, dd, t0, t1, D(rec)) * scl >= reach) { continue; }
-                    // This quick segment reject tests the source curve's path.
-                    // A twisted curve must NOT be rejected by its unwarped
-                    // segment spheres; the full shape sphere above is safe.
-                    if (op < 1.5 && D(rec + 1).w < 0.5 && i32(D(rec + 5).w + 0.5) == 18 && curve_far(rec, o, d, t0, t1, scl, reach)) { continue; }
-                    // Keep Boolean distances unscaled. Restrict only the ray
-                    // step when a modifier actually influences this ray.
-                    if (D(rec + 1).w > 0.5) {
-                        candidate_step_safety = min(candidate_step_safety, clamp(D(rec + 2).w, 0.01, 1.0));
-                    }
+                    // This quick segment reject tests the source curve's path: a twisted curve
+                    // (ripple_half.w, rec + 18) is not where its unwarped segment spheres are
+                    // (the shape sphere above is safe).
+                    if (op < 1.5 && i32(D(rec + 5).w + 0.5) == 18 && D(rec + 18).w < 0.5 && curve_far(rec, o, d, t0, t1, scl, reach)) { continue; }
+                    // Boolean distances stay unscaled; only the ray steps near a Twist shorten
+                    // (rec + 19 = twist_a, w = the ray step factor, 1 without a Twist).
+                    candidate_step_safety = min(candidate_step_safety, clamp(D(rec + 19).w, 0.01, 1.0));
                     if (ncs < MAXC) {
                         cs[ncs] = (key << 9u) | u32(first + si);
                         ncs = ncs + 1;
@@ -622,13 +755,127 @@ fn find_candidates(ro: vec3<f32>, rd: vec3<f32>, t0: f32, t1: f32, slack: f32) {
     }
 }
 
+// Nested groups: a group melts into the group it sits in, and that group (with everything nested in it)
+// melts into the scene. The open groups are kept by depth (0..3); a group closes into its parent when the
+// next group at its depth or higher comes. The group table carries the depth (and 0.5 if groups are nested
+// below it) in its second row's last number.
+var<private> nh_open: array<bool, 4>;
+var<private> nh_have: array<bool, 4>;
+var<private> nh_acc: array<Hit, 4>;
+var<private> nh_op: array<f32, 4>;
+var<private> nh_k: array<f32, 4>;
+var<private> nh_root: Hit;
+var<private> nh_rhave: bool;
+
+fn nh_depth(gw: f32) -> i32 { return clamp(i32(gw + 0.01), 0, 3); }
+fn nh_nonleaf(gw: f32) -> bool { return fract(gw + 0.01) > 0.25; }
+
+fn nh_reset() {
+    for (var l = 0; l < 4; l = l + 1) { nh_open[l] = false; nh_have[l] = false; }
+    nh_rhave = false;
+    nh_root = empty_hit();
+}
+
+fn nh_close(from_l: i32, mode: i32) {
+    // (fixed-count loops only: some shader compilers cannot unroll a loop that counts to a variable)
+    for (var i = 0; i < 4; i = i + 1) {
+        let l = 3 - i;
+        if (l >= from_l && nh_open[l]) {
+            nh_open[l] = false;
+            if (nh_have[l]) {
+                var pl = -1;
+                for (var j = 0; j < 3; j = j + 1) {
+                    let c = l - 1 - j;
+                    if (pl < 0 && c >= 0 && nh_open[c]) { pl = c; }
+                }
+                var pacc = nh_root;
+                var phave = nh_rhave;
+                if (pl >= 0) { pacc = nh_acc[pl]; phave = nh_have[pl]; }
+                var res = nh_acc[l];
+                if (phave) { res = combine(pacc, nh_acc[l], nh_op[l], nh_k[l], mode); }
+                if (phave || nh_op[l] >= 0.5) {
+                    if (pl >= 0) { nh_acc[pl] = res; nh_have[pl] = true; } else { nh_root = res; nh_rhave = true; }
+                }
+            }
+        }
+    }
+}
+
+// (distance, 1 if there is one): what a group at depth d melts into
+fn nh_parent(d: i32) -> vec2<f32> {
+    var pl = -1;
+    for (var j = 0; j < 3; j = j + 1) {
+        let c = d - 1 - j;
+        if (pl < 0 && c >= 0 && nh_open[c]) { pl = c; }
+    }
+    if (pl < 0) { return vec2<f32>(nh_root.d, select(0.0, 1.0, nh_rhave)); }
+    return vec2<f32>(nh_acc[pl].d, select(0.0, 1.0, nh_have[pl]));
+}
+
+// the same for the distance alone
+var<private> nd_open: array<bool, 4>;
+var<private> nd_have: array<bool, 4>;
+var<private> nd_acc: array<f32, 4>;
+var<private> nd_op: array<f32, 4>;
+var<private> nd_k: array<f32, 4>;
+var<private> nd_root: f32;
+var<private> nd_rhave: bool;
+
+fn nd_reset() {
+    for (var l = 0; l < 4; l = l + 1) { nd_open[l] = false; nd_have[l] = false; }
+    nd_rhave = false;
+    nd_root = 1e6;
+}
+
+fn nd_fold(acc: f32, gv: f32, op: f32, k: f32, mode: i32) -> f32 {
+    // (one blend for all three: add = smin, subtract = -smin(-a, b), keep the overlap = -smin(-a, -b))
+    let na = op > 1.5 || op <= 0.0;
+    let nb = op > 1.5;
+    let r = smin_h(select(acc, -acc, na), select(gv, -gv, nb), k, mode).x;
+    return select(r, -r, na);
+}
+
+fn nd_close(from_l: i32, mode: i32) {
+    // (fixed-count loops only: some shader compilers cannot unroll a loop that counts to a variable)
+    for (var i = 0; i < 4; i = i + 1) {
+        let l = 3 - i;
+        if (l >= from_l && nd_open[l]) {
+            nd_open[l] = false;
+            if (nd_have[l]) {
+                var pl = -1;
+                for (var j = 0; j < 3; j = j + 1) {
+                    let c = l - 1 - j;
+                    if (pl < 0 && c >= 0 && nd_open[c]) { pl = c; }
+                }
+                var pacc = nd_root;
+                var phave = nd_rhave;
+                if (pl >= 0) { pacc = nd_acc[pl]; phave = nd_have[pl]; }
+                var res = nd_acc[l];
+                if (phave) { res = nd_fold(pacc, nd_acc[l], nd_op[l], nd_k[l], mode); }
+                if (phave || nd_op[l] >= 0.5) {
+                    if (pl >= 0) { nd_acc[pl] = res; nd_have[pl] = true; } else { nd_root = res; nd_rhave = true; }
+                }
+            }
+        }
+    }
+}
+
+fn nd_parent(d: i32) -> vec2<f32> {
+    var pl = -1;
+    for (var j = 0; j < 3; j = j + 1) {
+        let c = d - 1 - j;
+        if (pl < 0 && c >= 0 && nd_open[c]) { pl = c; }
+    }
+    if (pl < 0) { return vec2<f32>(nd_root, select(0.0, 1.0, nd_rhave)); }
+    return vec2<f32>(nd_acc[pl], select(0.0, 1.0, nd_have[pl]));
+}
+
 fn map(p0: vec3<f32>) -> Hit {
     let p = warp(p0);
     let mode = i32(G.melt.x + 0.5);
     let amount = G.melt.y;
     let rm = reach_mult();
-    var acc = empty_hit();
-    var have = false;
+    nh_reset();
     let ng = i32(G.counts.x + 0.5);
     for (var gi = 0; gi < ng; gi = gi + 1) {
         let gb = group_at(gi);
@@ -637,6 +884,8 @@ fn map(p0: vec3<f32>) -> Hit {
         let gs = D(gb + 2);
         let ni = i32(gn.y + 0.5);
         let fi = i32(gn.x + 0.5);
+        let gd = nh_depth(gn.w);
+        let nonleaf = nh_nonleaf(gn.w);
         // every instance of the group melts into the result in turn (none: the group once, as it is)
         for (var j = 0; j < max(ni, 1); j = j + 1) {
             var sc = 1.0;
@@ -647,20 +896,23 @@ fn map(p0: vec3<f32>) -> Hit {
                 sc = ic.w;
                 sphere = vec4<f32>(ic.xyz, gs.w * sc);
             }
-            if (have && group_far(gr, sphere, p, acc.d, amount, rm, mode)) { continue; }
+            nh_close(gd, mode);
+            let par = nh_parent(gd);
+            if (!nonleaf && par.y > 0.5 && group_far(gr, sphere, p, par.x, amount, rm, mode)) { continue; }
             let q = to_group(ni, ib, p);
             var gx = group_hit(gr, q, amount, rm, mode);
-            if (!gx.ok) { continue; }
-            gx.h.d = gx.h.d * sc;
-            if (!have) {
-                if (gr.z < 0.5) { continue; }
-                acc = gx.h;
-                have = true;
-            } else {
-                acc = combine(acc, gx.h, gr.z, gr.w * amount, mode);
+            nh_open[gd] = true;
+            nh_op[gd] = gr.z;
+            nh_k[gd] = gr.w * amount;
+            nh_have[gd] = gx.ok;
+            if (gx.ok) {
+                gx.h.d = gx.h.d * sc;
+                nh_acc[gd] = gx.h;
             }
         }
     }
+    nh_close(0, mode);
+    var acc = nh_root;
     if (G.melt.z > 0.0) {
         let slope = G.melt.z * 1.32 * 0.12 * G.melt.w;
         acc.d = acc.d / sqrt(1.0 + slope * slope);
@@ -722,8 +974,7 @@ fn map_d(p0: vec3<f32>) -> f32 {
     let mode = i32(G.melt.x + 0.5);
     let amount = G.melt.y;
     let rm = reach_mult();
-    var acc = 1e6;
-    var have = false;
+    nd_reset();
     let ng = i32(G.counts.x + 0.5);
     for (var gi = 0; gi < ng; gi = gi + 1) {
         let gb = group_at(gi);
@@ -734,8 +985,10 @@ fn map_d(p0: vec3<f32>) -> f32 {
         let ni = i32(gn.y + 0.5);
         let fi = i32(gn.x + 0.5);
         let ib0 = i32(gn.z + 0.5);
+        let gd = nh_depth(gn.w);
+        let nonleaf = nh_nonleaf(gn.w);
         for (var j = 0; j < max(ni, 1); j = j + 1) {
-            if (!is_cand(ib0 + j)) { continue; }
+            if (!nonleaf && !is_cand(ib0 + j)) { continue; }
             var sc = 1.0;
             var sphere = gs;
             let ib = inst_at(fi + j);
@@ -744,24 +997,20 @@ fn map_d(p0: vec3<f32>) -> f32 {
                 sc = ic.w;
                 sphere = vec4<f32>(ic.xyz, gs.w * sc);
             }
-            if (have && group_far(gr, sphere, p, acc, amount, rm, mode)) { continue; }
+            nd_close(gd, mode);
+            let par = nd_parent(gd);
+            if (!nonleaf && par.y > 0.5 && group_far(gr, sphere, p, par.x, amount, rm, mode)) { continue; }
             let q = to_group(ni, ib, p);
-            let gd = group_dist(gr, q, amount, rm, mode);
-            if (gd.y < 0.5) { continue; }
-            let gv = gd.x * sc;
-            if (!have) {
-                if (gr.z < 0.5) { continue; }
-                acc = gv;
-                have = true;
-            } else if (gr.z > 1.5) {
-                acc = -smin_h(-acc, -gv, gr.w * amount, mode).x;
-            } else if (gr.z > 0.0) {
-                acc = smin_h(acc, gv, gr.w * amount, mode).x;
-            } else {
-                acc = -smin_h(-acc, gv, gr.w * amount, mode).x;
-            }
+            let gv = group_dist(gr, q, amount, rm, mode);
+            nd_open[gd] = true;
+            nd_op[gd] = gr.z;
+            nd_k[gd] = gr.w * amount;
+            nd_have[gd] = gv.y > 0.5;
+            nd_acc[gd] = gv.x * sc;
         }
     }
+    nd_close(0, mode);
+    var acc = nd_root;
     if (G.melt.z > 0.0) {
         let slope = G.melt.z * 1.32 * 0.12 * G.melt.w;
         acc = acc / sqrt(1.0 + slope * slope);
@@ -776,36 +1025,28 @@ fn map_d_cand(p0: vec3<f32>) -> f32 {
     let mode = i32(G.melt.x + 0.5);
     let amount = G.melt.y;
     let rm = reach_mult();
-    var acc = 1e6;
-    var have = false;
+    nd_reset();
     var key = -1;
     var skip = false;
     var q = p;
     var sc = 1.0;
     var gop = 0.0;
     var gk = 0.0;
+    var gdep = 0;
     var g = 0.0;
     var gh = false;
     for (var e = 0; e <= ncs; e = e + 1) {
         var ent = 0xffffffffu;
         if (e < ncs) { ent = cs[e]; }
-        let nkey = i32(ent >> 9u);
+        let nkey = i32((ent & 0x7fffffffu) >> 9u);
         if (nkey != key) {
-            // the group item before is finished: melt it into the result
-            if (gh && !skip) {
-                let gv = g * sc;
-                if (!have) {
-                    if (gop >= 0.5) {
-                        acc = gv;
-                        have = true;
-                    }
-                } else if (gop > 1.5) {
-                    acc = -smin_h(-acc, -gv, gk, mode).x;
-                } else if (gop > 0.0) {
-                    acc = smin_h(acc, gv, gk, mode).x;
-                } else {
-                    acc = -smin_h(-acc, gv, gk, mode).x;
-                }
+            // the group item before is finished: it opens (its own shapes are its first part; groups nested in it follow)
+            if (key >= 0 && !skip) {
+                nd_open[gdep] = true;
+                nd_op[gdep] = gop;
+                nd_k[gdep] = gk;
+                nd_have[gdep] = gh;
+                nd_acc[gdep] = g * sc;
             }
             if (e >= ncs) { break; }
             key = nkey;
@@ -821,6 +1062,7 @@ fn map_d_cand(p0: vec3<f32>) -> f32 {
             let ib = inst_at(i32(gn.x + 0.5) + (nkey & 255));
             gop = gr.z;
             gk = gr.w * amount;
+            gdep = nh_depth(gn.w);
             var sphere = gs;
             sc = 1.0;
             if (ni > 0) {
@@ -828,10 +1070,13 @@ fn map_d_cand(p0: vec3<f32>) -> f32 {
                 sc = ic.w;
                 sphere = vec4<f32>(ic.xyz, gs.w * sc);
             }
-            skip = have && group_far(gr, sphere, p, acc, amount, rm, mode);
+            nd_close(gdep, mode);
+            let par = nd_parent(gdep);
+            skip = !nh_nonleaf(gn.w) && par.y > 0.5 && group_far(gr, sphere, p, par.x, amount, rm, mode);
             q = to_group(ni, ib, p);
         }
         if (skip) { continue; }
+        if ((ent & 0x80000000u) != 0u) { continue; }   // (the mark of a group that has groups nested in it: it always opens)
         let si = i32(ent & 511u);
         let rec = shape_rec(si);
         let misc = D(rec + 7);
@@ -859,6 +1104,8 @@ fn map_d_cand(p0: vec3<f32>) -> f32 {
             g = -smin_h(-g, b, k, mode).x;
         }
     }
+    nd_close(0, mode);
+    var acc = nd_root;
     if (G.melt.z > 0.0) {
         let slope = G.melt.z * 1.32 * 0.12 * G.melt.w;
         acc = acc / sqrt(1.0 + slope * slope);
@@ -950,7 +1197,8 @@ fn soft_shadow(ro: vec3<f32>, rd: vec3<f32>, maxt: f32, nsteps: i32) -> f32 {
             h = map_d(ro + rd * t);
         }
         res = min(res, 10.0 * h / t);
-        t = t + clamp(h * shadow_step_safety, 0.05, max_step);
+        // (a factor of 1, no Twist near the ray, keeps the plain steps exactly)
+        t = t + clamp(h * shadow_step_safety, max(0.4 * shadow_step_safety, 0.05), max_step);
         if (res < 0.001 || t > tend) { break; }
     }
     use_cand = false;
@@ -1060,6 +1308,27 @@ fn vs(@builtin(vertex_index) i: u32) -> VOut {
     return o;
 }
 
+// Analysis view modes (G.hover.z: 0 normal, 1 zebra horizontal, 2 zebra vertical, 3 rings, 4 up / down).
+// Same formulas as view_mode.rs. One call, at the end of fs; no loops.
+fn view_mode_band(x: f32) -> f32 { return smoothstep(0.0, 0.06, fract(x)) - smoothstep(0.5, 0.56, fract(x)); }
+
+fn view_mode_color(c: vec3<f32>, n: vec3<f32>, rd: vec3<f32>, on: bool) -> vec3<f32> {
+    let m = i32(G.hover.z + 0.5);
+    if (!on || m < 1 || m > 4) { return c; }
+    let d = dot(rd, n);
+    let r = rd - 2.0 * d * n;
+    let ndv = clamp(-d, 0.0, 1.0);
+    let x = select(dot(r, G.cam_up.xyz), dot(r, G.cam_right.xyz), m == 2);
+    let zebra = mix(vec3<f32>(0.06, 0.06, 0.08), vec3<f32>(0.96, 0.96, 0.94), view_mode_band(x * 5.0));
+    let rings = mix(vec3<f32>(0.10, 0.16, 0.34), vec3<f32>(0.88, 0.94, 1.0), view_mode_band(ndv * 9.0));
+    let ud0 = select(vec3<f32>(0.85, 0.22, 0.20), vec3<f32>(0.22, 0.72, 0.34), n.z > 0.0) * (0.7 + 0.3 * ndv);
+    let ud = mix(ud0, vec3<f32>(0.10, 0.30, 1.0), 1.0 - smoothstep(0.02, 0.05, abs(n.z)));
+    var o = select(zebra, rings, m == 3);
+    o = select(o, ud, m == 4);
+    // (the colours are display values: a target that encodes sRGB itself wants them linear)
+    return select(o, pow(o, vec3<f32>(2.2)), flag(1));
+}
+
 @fragment
 fn fs(in: VOut) -> @location(0) vec4<f32> {
     let aspect = G.view.x / max(G.view.y, 1.0);
@@ -1094,8 +1363,10 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
     // shows (inside the ground branches, pixels at the edge of a shape took different ways, and
     // DirectX's compiler warns about gradients in divergent flow).
     let gp0 = ro + rd * t_ground;
-    let gw1 = max(fwidth(gp0.xy / 10.0), vec2<f32>(1e-4));
-    let gw2 = max(fwidth(gp0.xy / 100.0), vec2<f32>(1e-4));
+    // Grid spacing comes from Preferences (`env[4].w`); 10 mm is the default.
+    let gs = max(G.env[4].w, 0.1);
+    let gw1 = max(fwidth(gp0.xy / gs), vec2<f32>(1e-4));
+    let gw2 = max(fwidth(gp0.xy / (gs * 10.0)), vec2<f32>(1e-4));
     let gwy = max(fwidth(gp0.y), 1e-4);
     let gwx = max(fwidth(gp0.x), 1e-4);
 
@@ -1124,12 +1395,8 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
             t_max = -bq + sq;
         }
     }
-    // the floor hides everything behind it: the march ends there (the last step is taken just to it)
-    var t_cut = t_max;
-    if (run && !glow_scene && ro.z >= 0.0 && t_ground < 1e8 && (grid_on || floor_on)) {
-        t_cut = min(t_max, t_ground + 0.05);
-        if (t > t_cut) { run = false; }
-    }
+    // The modelling floor is a shadow receiver and grid overlay, never a ray-march clip plane.
+    let t_cut = t_max;
     var last = false;
     var trace_safety = max(G.offs2.w, 0.01);
     // a little per-pixel jitter turns banding in the lamp glow into fine noise
@@ -1154,7 +1421,7 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
     if (glow_scene || (has_sel && sel_carving)) { relax = 0.9; }
     var max_it = select(128, 48, fast);
     if (trace_safety < 0.95) { max_it = select(240, 120, fast); }
-    if (glow_scene) { max_it = 240; }
+    if (glow_scene) { max_it = select(200, 240, trace_safety < 0.95); }
     var prev_r = 0.0;
     var stp = 0.0;
     for (var i = 0; i < max_it; i = i + 1) {
@@ -1220,8 +1487,9 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
     // What is seen is the floor or a surface (never both). Either way the key light's shadow of
     // that point is wanted: it is found here, in one place (the code of a shadow is large).
     let above = ro.z >= 0.0;
-    let floor_vis = above && t_ground < 1e8 && (!hit || t_ground < t) && (grid_on || floor_on);
-    let surf_vis = hit && (t_ground > t || !(grid_on || floor_on));
+    let ground_in_front = t_ground < 1e8 && (!hit || t_ground < t);
+    let floor_vis = above && t_ground < 1e8 && !hit && floor_on;
+    let surf_vis = hit;
     var n_hit = vec3<f32>(0.0, 0.0, 1.0);
     var sh_ro = vec3<f32>(0.0);
     var sh_steps = 0;
@@ -1257,20 +1525,6 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
     // ground
     if (floor_vis) {
         let gp = ro + rd * t_ground;
-        let fade = clamp(1.0 - length(gp.xy) / 600.0, 0.0, 1.0);
-        if (grid_on) {
-            let gs = 10.0;
-            let a = abs(fract(gp.xy / gs - 0.5) - 0.5) / gw1;
-            let line = 1.0 - min(min(a.x, a.y), 1.0);
-            let major = abs(fract(gp.xy / (gs * 10.0) - 0.5) - 0.5) / gw2;
-            let lm = 1.0 - min(min(major.x, major.y), 1.0);
-            let axisx = 1.0 - min(abs(gp.y) / gwy, 1.0);
-            let axisy = 1.0 - min(abs(gp.x) / gwx, 1.0);
-            col = mix(col, col + vec3<f32>(0.03), line * 0.5 * fade);
-            col = mix(col, col + vec3<f32>(0.05), lm * 0.6 * fade);
-            col = mix(col, lin(vec3<f32>(0.85, 0.35, 0.35)), axisx * 0.55 * fade);
-            col = mix(col, lin(vec3<f32>(0.42, 0.78, 0.42)), axisy * 0.55 * fade);
-        }
         if (floor_on) {
             // contact shadow of the blob on the ground
             if (fast) {
@@ -1420,18 +1674,31 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
         col = c;
     }
 
-    // seen from below the ground is see-through: only its lines are drawn
-    if (!above && t_ground < 1e8 && (!hit || t_ground < t) && grid_on) {
+    // The grid is an overlay on geometry behind its plane from either side; it never occludes.
+    if (grid_on && ground_in_front) {
         let gp = ro + rd * t_ground;
-        let fade = clamp(1.0 - length(gp.xy) / 600.0, 0.0, 1.0) * 0.6;
-        let gs = 10.0;
         let a = abs(fract(gp.xy / gs - 0.5) - 0.5) / gw1;
         let line = 1.0 - min(min(a.x, a.y), 1.0);
-        let axisx = 1.0 - min(abs(gp.y) / gwy, 1.0);
-        let axisy = 1.0 - min(abs(gp.x) / gwx, 1.0);
-        col = mix(col, col + vec3<f32>(0.04), line * 0.5 * fade);
-        col = mix(col, lin(vec3<f32>(0.85, 0.35, 0.35)), axisx * 0.55 * fade);
-        col = mix(col, lin(vec3<f32>(0.42, 0.78, 0.42)), axisy * 0.55 * fade);
+        if (above) {
+            // Keep the existing LOD handoff for the top-side grid.
+            let f1 = 1.0 - smoothstep(0.12, 0.45, max(gw1.x, gw1.y));
+            let f2 = 1.0 - smoothstep(0.12, 0.45, max(gw2.x, gw2.y));
+            let major = abs(fract(gp.xy / (gs * 10.0) - 0.5) - 0.5) / gw2;
+            let lm = 1.0 - min(min(major.x, major.y), 1.0);
+            let axisx = 1.0 - min(abs(gp.y) / gwy, 1.0);
+            let axisy = 1.0 - min(abs(gp.x) / gwx, 1.0);
+            col = mix(col, col + vec3<f32>(0.03), line * 0.5 * f1);
+            col = mix(col, col + vec3<f32>(0.05), lm * 0.6 * f2);
+            col = mix(col, lin(vec3<f32>(0.85, 0.35, 0.35)), axisx * 0.55);
+            col = mix(col, lin(vec3<f32>(0.42, 0.78, 0.42)), axisy * 0.55);
+        } else {
+            let fade = (1.0 - smoothstep(0.12, 0.45, max(gw1.x, gw1.y))) * 0.6;
+            let axisx = 1.0 - min(abs(gp.y) / gwy, 1.0);
+            let axisy = 1.0 - min(abs(gp.x) / gwx, 1.0);
+            col = mix(col, col + vec3<f32>(0.04), line * 0.5 * fade);
+            col = mix(col, lin(vec3<f32>(0.85, 0.35, 0.35)), axisx * 0.55 * 0.6);
+            col = mix(col, lin(vec3<f32>(0.42, 0.78, 0.42)), axisy * 0.55 * 0.6);
+        }
     }
 
     col = col + halo;
@@ -1449,5 +1716,5 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
         col = mix(col, vec3<f32>(0.32, 0.24, 0.95), clamp(a, 0.0, 1.0));
     }
 
-    return vec4<f32>(encode(col), 1.0);
+    return vec4<f32>(view_mode_color(encode(col), n_hit, rd, surf_vis), 1.0);
 }

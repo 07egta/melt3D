@@ -10,8 +10,8 @@ use egui_wgpu::wgpu;
 use egui_wgpu::wgpu::util::DeviceExt;
 
 use crate::camera::{Camera, TAN_HALF_FOV};
-use crate::model::{MAX_GROUPS, MAX_SHAPES, Pick, Scene};
 use crate::gpu_status::{AdapterInfo, GpuStatus, describe_wgpu_error};
+use crate::model::{MAX_GROUPS, MAX_SHAPES, Pick, Scene};
 use crate::sdf::Prepared;
 
 /// Per-frame numbers (camera, light, counts, where the lists start) travel in a small uniform
@@ -32,16 +32,28 @@ pub const GLOBAL_V4: usize = V4_ENV + ENV_V4;
 pub const GLOBAL_BYTES: usize = GLOBAL_V4 * 16;
 /// vec4 per texture row of the scene list.
 pub const ROW: usize = 1024;
-/// vec4 per group, block, instance and shape (sphere + 15 base vec4 + 2 modifier vec4).
+/// vec4 per group, per block of shapes, per instance, per shape (a bounding sphere, the 18 of
+/// `struct Shape` up to the ripple, and the two Twist vec4).
 const G_STRIDE: usize = 3;
 const B_STRIDE: usize = 2;
 const I_STRIDE: usize = 4;
-const S_STRIDE: usize = 18;
+const S_STRIDE: usize = 21;
 /// Outline points the lists hold (two points per vec4) and path nodes (one per vec4).
 pub const POLY_PTS: usize = 65536;
-pub const PATH_V4: usize = 32768;
+/// Path nodes one curve takes: its two box records, `curve::MAX_POINTS` points and one bounding
+/// sphere per `curve::GROUP_SEGMENTS` of them (the same shape `pack_curve` writes).
+pub const CURVE_PATH_V4: usize = 2 + crate::curve::MAX_POINTS + (crate::curve::MAX_POINTS - 1).div_ceil(crate::curve::GROUP_SEGMENTS);
+/// Room for a whole scene of curves (`MAX_SHAPES`): the path pool never has to shorten or drop a
+/// curve, so the GPU measures the same points as the CPU SDF and the exports (#201). A shape that
+/// is not a curve takes at most `model::MAX_PATH` (`< CURVE_PATH_V4`) nodes.
+pub const PATH_V4: usize = MAX_SHAPES * CURVE_PATH_V4;
 /// The longest the scene list can ever be (vec4), well inside a 2048-row texture.
-pub const MAX_POOL_V4: usize = MAX_GROUPS * G_STRIDE + MAX_SHAPES * (S_STRIDE + B_STRIDE) + (crate::pattern::MAX_INSTANCES + MAX_GROUPS) * I_STRIDE + POLY_PTS / 2 + PATH_V4 + 4096;
+pub const MAX_POOL_V4: usize = MAX_GROUPS * G_STRIDE
+    + MAX_SHAPES * (S_STRIDE + B_STRIDE)
+    + (crate::pattern::MAX_INSTANCES + MAX_GROUPS) * I_STRIDE
+    + POLY_PTS / 2
+    + PATH_V4
+    + 4096;
 const _: () = assert!(MAX_POOL_V4 <= 2048 * ROW, "the scene list must fit a 2048 x 1024 texture");
 
 /// The volume texture: every imported mesh's distances, half floats, four grid nodes to a texel
@@ -141,6 +153,14 @@ pub struct ScenePack {
     /// Shapes in the list and groups to draw.
     pub shape_n: usize,
     pub group_n: usize,
+    /// Number of unchanged shapes whose packed data was safely reused.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub shapes_reused: usize,
+    #[cfg_attr(not(test), allow(dead_code))]
+    /// Number of shape payloads computed on this revision.
+    pub shapes_repacked: usize,
+    /// Group bounds/blocks are retained for unchanged source groups.
+    source_infos: std::collections::HashMap<usize, Arc<crate::accel::GroupInfo>>,
     offs: [f32; 4],
     offs2: [f32; 2],
     resolved: Vec<crate::pattern::RGroup>,
@@ -152,6 +172,16 @@ pub struct ScenePack {
 
 impl ScenePack {
     pub fn new(scene: &Scene, vols: VolumeSet) -> ScenePack {
+        Self::reusing(scene, vols, None)
+    }
+
+    /// Keep exact packed payloads of unchanged shapes while updating dependent group bounds,
+    /// ordering, Boolean operations and instance transforms. Pool offsets are rebased below;
+    /// meshes and curves take the original path to avoid reusing context-dependent volume
+    /// locations or an adaptively truncated curve.
+    pub fn reusing(scene: &Scene, vols: VolumeSet, previous: Option<(&Scene, &ScenePack)>) -> ScenePack {
+        let old_slots: std::collections::HashMap<(usize, usize), usize> =
+            previous.map(|(_, pack)| pack.slots.iter().map(|&(g, s, slot)| ((g, s), slot)).collect()).unwrap_or_default();
         let resolved = crate::pattern::resolve(scene);
         let mut groups: Vec<f32> = Vec::new();
         let mut blocks: Vec<f32> = Vec::new();
@@ -166,6 +196,9 @@ impl ScenePack {
         let mut inst_n = 0usize;
         let mut slots: Vec<(usize, usize, usize)> = Vec::new();
         let mut ranges: Vec<(usize, usize, usize)> = Vec::new();
+        let mut shapes_reused = 0;
+        let mut shapes_repacked = 0;
+        let mut source_infos: std::collections::HashMap<usize, Arc<crate::accel::GroupInfo>> = std::collections::HashMap::new();
         // every group whose shapes are drawn (itself, or as the source of a linked copy) is packed once
         let mut srcs: Vec<usize> = resolved.iter().map(|r| r.src).collect();
         srcs.sort_unstable();
@@ -180,26 +213,72 @@ impl ScenePack {
         for gi in srcs {
             let Some(g) = scene.groups.get(gi) else { continue };
             let first = shape_n;
-            let mut members: Vec<&crate::model::Shape> = Vec::new();
-            for (si, s) in g.shapes.iter().enumerate() {
-                if !s.visible || shape_n >= MAX_SHAPES {
+            let mut members: Vec<crate::model::Shape> = Vec::new();
+            let patterned = g.shapes.iter().any(|s| s.pattern.is_some());
+            let shape_insts = resolved.iter().find(|r| r.src == gi).map(|r| &r.shape_insts);
+            for si in g.fold_order() {
+                let Some(s) = g.shapes.get(si) else { continue };
+                if !s.solid() {
                     continue;
                 }
-                pack_shape(s, &mut shapes, &mut poly, &mut path, &vols);
-                if let Some(d) = s.deformation {
-                    ray_step = ray_step.min(d.ray_step_safety(s.base_local_half()));
+                let insts: Vec<crate::pattern::Inst> =
+                    shape_insts.and_then(|v| v.get(si)).filter(|v| !v.is_empty()).cloned().unwrap_or_else(|| vec![crate::pattern::Inst::IDENTITY]);
+                for inst in insts {
+                    if shape_n >= MAX_SHAPES {
+                        break;
+                    }
+                    let identity = inst == crate::pattern::Inst::IDENTITY;
+                    let reused = !patterned
+                        && identity
+                        && previous.is_some_and(|(old_scene, old_pack)| {
+                            old_scene.shape(gi, si).is_some_and(|old| old == s)
+                                && old_slots
+                                    .get(&(gi, si))
+                                    .is_some_and(|&slot| reuse_shape_pack(s, old_pack, slot, &vols, &mut shapes, &mut poly, &mut path))
+                        });
+                    if reused {
+                        shapes_reused += 1;
+                    } else {
+                        pack_shape(s, (!identity).then_some(&inst), &mut shapes, &mut poly, &mut path, &vols);
+                        shapes_repacked += 1;
+                    }
+                    if let Some(d) = s.deformation {
+                        ray_step = ray_step.min(d.ray_step_safety(s.base_local_half()));
+                    }
+                    packed_overlap |= s.op == crate::model::Op::Intersect;
+                    let mut member = s.clone();
+                    member.pos = inst.apply(s.pos);
+                    member.scale = [s.scale[0] * inst.s, s.scale[1] * inst.s, s.scale[2] * inst.s];
+                    members.push(member);
+                    slots.push((gi, si, shape_n));
+                    shape_n += 1;
                 }
-                packed_overlap |= s.op == crate::model::Op::Intersect;
-                members.push(s);
-                slots.push((gi, si, shape_n));
-                shape_n += 1;
             }
             let count = shape_n - first;
             ranges.push((gi, first, count));
             if count == 0 {
                 continue;
             }
-            let info = crate::accel::group_info(&members, &scene.melt);
+            let info = previous
+                .and_then(|(old_scene, old_pack)| {
+                    let old_group = old_scene.groups.get(gi)?;
+                    // A group may be only partly admitted when earlier groups consume the
+                    // MAX_SHAPES budget. Reusing its old bounds/blocks is safe only when the
+                    // packed slice starts at the same offset and admits the same number of
+                    // members; otherwise the new prefix can contain geometry the old bounds
+                    // never covered (or retain blocks for shapes that are no longer packed).
+                    let same_admission =
+                        old_pack.ranges.iter().any(|&(old_gi, old_first, old_count)| old_gi == gi && old_first == first && old_count == count);
+                    (!patterned
+                        && old_group.shapes == g.shapes
+                        && old_scene.melt.mode == scene.melt.mode
+                        && old_scene.melt.amount == scene.melt.amount
+                        && same_admission)
+                        .then(|| old_pack.source_infos.get(&gi).cloned())
+                        .flatten()
+                })
+                .unwrap_or_else(|| Arc::new(crate::accel::group_info(&members.iter().collect::<Vec<_>>(), &scene.melt)));
+            source_infos.insert(gi, Arc::clone(&info));
             for b in &info.blocks {
                 push(&mut blocks, [b.bound.c[0], b.bound.c[1], b.bound.c[2], b.bound.r]);
                 push(&mut blocks, [b.kmax, if b.skippable { 0.0 } else { 1.0 }, (first + b.first) as f32, b.count as f32]);
@@ -227,9 +306,13 @@ impl ScenePack {
                 push(&mut insts, [c[0], c[1], c[2], i.s]);
                 inst_n += 1;
             }
-            push(&mut groups, [p.first_block as f32, p.n_blocks as f32, g.op.sign(), g.blend]);
+            push(&mut groups, [p.first_block as f32, p.n_blocks as f32, g.op.sign(), scene.group_melt_reach(rg.gi)]);
             // (the third number is this group's first item: every instance, or the group itself, is one item the march can leave out)
-            push(&mut groups, [first_inst as f32, (inst_n - first_inst) as f32, item_n as f32, 0.0]);
+            let nested_below = scene.groups.get(rg.gi + 1).is_some_and(|n| n.depth > g.depth);
+            push(
+                &mut groups,
+                [first_inst as f32, (inst_n - first_inst) as f32, item_n as f32, f32::from(g.depth) + if nested_below { 0.5 } else { 0.0 }],
+            );
             item_n += (inst_n - first_inst).max(1);
             push(&mut groups, [p.sphere.c[0], p.sphere.c[1], p.sphere.c[2], p.sphere.r]);
             group_n += 1;
@@ -239,7 +322,7 @@ impl ScenePack {
         let block_base = v4(&groups);
         let inst_base = block_base + v4(&blocks);
         let shape_base = inst_base + v4(&insts);
-        while poly.len() % 4 != 0 {
+        while !poly.len().is_multiple_of(4) {
             poly.push(0.0);
         }
         let poly_base = shape_base + v4(&shapes);
@@ -255,13 +338,15 @@ impl ScenePack {
             id: PACK_IDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             list: Arc::new(list),
             vols: Arc::new(vols),
-            glow: crate::perf::scene_has_glow(scene),
+            glow: crate::perf::scene_has_glow_resolved(scene, &resolved),
             ray_step,
-            overlaps: resolved.iter().filter_map(|r| scene.groups.get(r.gi)).any(|g| g.op == crate::model::Op::Intersect)
-                || packed_overlap,
+            overlaps: resolved.iter().filter_map(|r| scene.groups.get(r.gi)).any(|g| g.op == crate::model::Op::Intersect) || packed_overlap,
             instances: inst_n,
             shape_n,
             group_n,
+            shapes_reused,
+            shapes_repacked,
+            source_infos,
             offs: [0.0, block_base as f32, inst_base as f32, shape_base as f32],
             offs2: [poly_base as f32, path_base as f32],
             resolved,
@@ -275,9 +360,42 @@ impl ScenePack {
         self.slots.iter().find(|(g, s, _)| *g == gi && *s == si).map(|(_, _, n)| *n)
     }
 
+    /// The first packed number of a shape and how many copies it has (a shape pattern packs one
+    /// payload per instance; they are next to each other).
+    fn slot_range_of(&self, gi: usize, si: usize) -> Option<(usize, usize)> {
+        let first = self.slot_of(gi, si)?;
+        let count = self.slots.iter().filter(|(g, s, _)| *g == gi && *s == si).count();
+        Some((first, count.max(1)))
+    }
+
     /// The per-frame numbers (`GLOBAL_V4` vec4): camera, light, counts, where the lists start, the
     /// selection. `scene` must be the one this pack was made from.
-    pub fn globals(&self, scene: &Scene, cam: &Camera, size: [f32; 2], selected: Option<Pick>, hover: Option<Pick>, srgb: bool) -> [f32; GLOBAL_V4 * 4] {
+    pub fn globals(
+        &self,
+        scene: &Scene,
+        cam: &Camera,
+        size: [f32; 2],
+        selected: Option<Pick>,
+        hover: Option<Pick>,
+        srgb: bool,
+    ) -> [f32; GLOBAL_V4 * 4] {
+        self.globals_with_grid(scene, cam, size, selected, hover, srgb, crate::prefs::GridView::default())
+    }
+
+    /// `globals` with the floor-grid preference from the Settings window. The shader reads the
+    /// spacing from `env[4].w`; `flags` bit 0 still decides whether the grid is drawn.
+    #[allow(clippy::too_many_arguments)] // globals plus the one grid value
+    pub fn globals_with_grid(
+        &self,
+        scene: &Scene,
+        cam: &Camera,
+        size: [f32; 2],
+        selected: Option<Pick>,
+        hover: Option<Pick>,
+        srgb: bool,
+        grid: crate::prefs::GridView,
+    ) -> [f32; GLOBAL_V4 * 4] {
+        let grid = grid.sanitized();
         let mut u = [0.0_f32; GLOBAL_V4 * 4];
         let (right, up, fwd) = cam.basis();
         let eye = cam.eye();
@@ -291,7 +409,7 @@ impl ScenePack {
         let (mut sel_first, mut sel_count, mut hover_first, mut hover_count) = (-1.0_f32, 0.0_f32, -1.0_f32, 0.0_f32);
         let find = |p: Option<Pick>| -> Option<(f32, f32)> {
             match p? {
-                Pick::Shape(g, s) => self.slot_of(g, s).map(|n| (n as f32, 1.0)),
+                Pick::Shape(g, s) => self.slot_range_of(g, s).map(|(n, c)| (n as f32, c as f32)),
                 Pick::Group(g) => self.ranges.iter().find(|(gi, _, c)| *gi == g && *c > 0).map(|(_, f, c)| (*f as f32, *c as f32)),
             }
         };
@@ -300,9 +418,9 @@ impl ScenePack {
         }
         // (the hover names one shape only)
         if let Some(Pick::Shape(g, s)) = hover
-            && let Some(n) = self.slot_of(g, s)
+            && let Some((n, c)) = self.slot_range_of(g, s)
         {
-            (hover_first, hover_count) = (n as f32, 1.0);
+            (hover_first, hover_count) = (n as f32, c as f32);
         }
         put(&mut u, 6, [self.group_n as f32, self.shape_n as f32, sel_first, sel_count]);
         put(&mut u, V4_OFFS, self.offs);
@@ -312,12 +430,13 @@ impl ScenePack {
         put(&mut u, V4_HOVER, [hover_first, hover_count, 0.0, 0.0]);
         put(&mut u, V4_SELSPH, crate::perf::sphere_of(scene, &crate::view::targets(scene, selected)));
         let e = &scene.env;
-        let flags = (if e.grid { 1.0 } else { 0.0 }) + (if e.floor { 2.0 } else { 0.0 });
+        let flags = (if e.grid && grid.on { 1.0 } else { 0.0 }) + (if e.floor { 2.0 } else { 0.0 });
         put(&mut u, V4_ENV, [e.exposure, e.ambient, e.shadow, flags]);
         put(&mut u, V4_ENV + 1, [e.backdrop[0], e.backdrop[1], e.backdrop[2], e.lights.len() as f32]);
         put(&mut u, V4_ENV + 2, [e.sky_top[0], e.sky_top[1], e.sky_top[2], 0.0]);
         put(&mut u, V4_ENV + 3, [e.sky_horizon[0], e.sky_horizon[1], e.sky_horizon[2], 0.0]);
-        put(&mut u, V4_ENV + 4, [e.sky_bottom[0], e.sky_bottom[1], e.sky_bottom[2], 0.0]);
+        // w carries the grid spacing in mm (the shader's `gs`).
+        put(&mut u, V4_ENV + 4, [e.sky_bottom[0], e.sky_bottom[1], e.sky_bottom[2], grid.size_mm]);
         for (i, l) in e.lights.iter().enumerate().take(crate::model::MAX_LIGHTS) {
             let d = l.dir();
             put(&mut u, V4_ENV + 5 + i * 2, [d[0], d[1], d[2], l.power]);
@@ -327,10 +446,112 @@ impl ScenePack {
     }
 }
 
-/// One shape's 18 vec4 (a bounding sphere, then `struct Shape`); its outline points and path nodes
+/// Copy a previously packed unchanged shape without redoing transforms, CAD inset or polygon
+/// preparation. Rebase its outline/path indices to the current compact pools. Returns false
+/// (falling back to the original packer) if any pool would overflow or the old data was truncated.
+/// Curves are reused only when their old path-pool offset is unchanged (the adaptive
+/// subdivision then had identical room); meshes only when volume layout is identical.
+fn reuse_shape_pack(
+    shape: &crate::model::Shape,
+    old: &ScenePack,
+    slot: usize,
+    vols: &VolumeSet,
+    shapes: &mut Vec<f32>,
+    poly: &mut Vec<f32>,
+    path: &mut Vec<f32>,
+) -> bool {
+    use crate::model::Kind;
+    if shape.kind == Kind::Mesh && !vols.same_as(&old.vols) {
+        return false;
+    }
+    let start = (old.offs[3] as usize + slot * S_STRIDE) * 4;
+    let Some(old_data) = old.list.get(start..start + S_STRIDE * 4) else { return false };
+    let mut data = old_data.to_vec();
+
+    let poly_base = old.offs2[0] as usize * 4;
+    let path_base = old.offs2[1] as usize * 4;
+
+    if shape.kind == Kind::Curve {
+        // pack_curve starts with two bounding-box records, then points, then one
+        // bounding sphere per GROUP_SEGMENTS edges. If the pool prefix is unchanged,
+        // both the available adaptive-subdivision budget and all packed values match.
+        let old_start = data[12 * 4] as usize;
+        let count = data[12 * 4 + 1] as usize;
+        let Some(first) = old_start.checked_sub(2) else { return false };
+        if count < 2 || first != path.len() / 4 {
+            return false;
+        }
+        let nodes = 2 + count + (count - 1).div_ceil(crate::curve::GROUP_SEGMENTS);
+        if first + nodes > PATH_V4 {
+            return false;
+        }
+        let at = path_base + first * 4;
+        let Some(old_path) = old.list.get(at..at + nodes * 4) else { return false };
+        path.extend_from_slice(old_path);
+        shapes.extend_from_slice(&data);
+        return true;
+    }
+    let grab_poly = |start_slot: usize, count_slot: usize, enabled: bool, count_expected: usize| -> Option<&[f32]> {
+        if !enabled {
+            return Some(&[]);
+        }
+        let (first, count) = (data[start_slot] as usize, data[count_slot] as usize);
+        if count != count_expected {
+            return None;
+        }
+        let at = poly_base.checked_add(first.checked_mul(2)?)?;
+        let end = at.checked_add(count.checked_mul(2)?)?;
+        old.list.get(at..end)
+    };
+    let Some(outline) = grab_poly(7 * 4 + 2, 7 * 4 + 3, shape.kind.uses_outline(), shape.outline.len()) else { return false };
+    let Some(outline2) = grab_poly(12 * 4 + 2, 12 * 4 + 3, shape.kind.uses_outline2(), shape.outline2.len()) else { return false };
+    let (old_start, old_count) = (data[12 * 4] as usize, data[12 * 4 + 1] as usize);
+    let path_slice = if shape.kind.uses_path() {
+        if old_count != shape.path.len() {
+            return false;
+        }
+        let at = path_base + old_start * 4;
+        let Some(nodes) = old.list.get(at..at + old_count * 4) else { return false };
+        nodes
+    } else {
+        &[]
+    };
+    if poly.len() / 2 + outline.len() / 2 + outline2.len() / 2 > POLY_PTS || path.len() / 4 + path_slice.len() / 4 > PATH_V4 {
+        return false;
+    }
+    let mut append_poly = |slot: usize, count: usize, enabled: bool, pts: &[f32]| {
+        if enabled && count > 0 {
+            data[slot] = (poly.len() / 2) as f32;
+            poly.extend_from_slice(pts);
+        } else {
+            data[slot] = 0.0;
+        }
+    };
+    append_poly(7 * 4 + 2, shape.outline.len(), shape.kind.uses_outline(), outline);
+    append_poly(12 * 4 + 2, shape.outline2.len(), shape.kind.uses_outline2(), outline2);
+    if shape.kind.uses_path() {
+        data[12 * 4] = (path.len() / 4) as f32;
+        path.extend_from_slice(path_slice);
+    }
+    shapes.extend_from_slice(&data);
+    true
+}
+
+/// One shape's 21 vec4 (a bounding sphere, then `struct Shape`, then the two Twist vec4); its outline points and path nodes
 /// go into the shared pools.
-fn pack_shape(s: &crate::model::Shape, out: &mut Vec<f32>, poly: &mut Vec<f32>, path: &mut Vec<f32>, vols: &VolumeSet) {
-    let p = Prepared::new(s);
+fn pack_shape(
+    s: &crate::model::Shape,
+    inst: Option<&crate::pattern::Inst>,
+    out: &mut Vec<f32>,
+    poly: &mut Vec<f32>,
+    path: &mut Vec<f32>,
+    vols: &VolumeSet,
+) {
+    let p = match inst {
+        Some(i) if *i != crate::pattern::Inst::IDENTITY => Prepared::transformed(s, i),
+        _ => Prepared::new(s),
+    };
+    let copy_scale = inst.map_or(1.0, |i| i.s);
     // outline points, two per vec4: returns (first point, count)
     let pack_outline = |pts: &[[f32; 2]], poly: &mut Vec<f32>| -> (usize, usize) {
         let used = poly.len() / 2;
@@ -356,22 +577,29 @@ fn pack_shape(s: &crate::model::Shape, out: &mut Vec<f32>, poly: &mut Vec<f32>, 
     } else {
         (0, 0)
     };
-    let radius = crate::perf::shape_radius(s);
+    let radius = crate::perf::shape_radius(s) * copy_scale;
     // a mesh: size = nodes along x, y, z (0 = nothing to draw), params = place of node 0 and the cell, ext.x = first node
-    let (mut size4, mut params4, mut ext4) = ([s.size[0], s.size[1], s.size[2], p.round], s.params, [pstart as f32, pcount as f32, start2 as f32, count2 as f32]);
+    let (mut size4, mut params4, mut ext4) =
+        ([s.size[0], s.size[1], s.size[2], p.round], s.params, [pstart as f32, pcount as f32, start2 as f32, count2 as f32]);
     if s.kind == crate::model::Kind::Mesh {
         let found = s.volume.as_ref().and_then(|v| vols.base_of(v).map(|b| (v, b)));
         (size4, params4, ext4) = match found {
-            Some((v, base)) => ([v.dims[0] as f32, v.dims[1] as f32, v.dims[2] as f32, 0.0], [v.origin[0], v.origin[1], v.origin[2], v.cell], [base as f32, 0.0, 0.0, 0.0]),
+            Some((v, base)) => (
+                [v.dims[0] as f32, v.dims[1] as f32, v.dims[2] as f32, 0.0],
+                [v.origin[0], v.origin[1], v.origin[2], v.cell],
+                [base as f32, 0.0, 0.0, 0.0],
+            ),
             None => ([0.0; 4], [0.0; 4], [0.0; 4]),
         };
     }
-    push(out, [s.pos[0], s.pos[1], s.pos[2], radius]);
-    push(out, [p.inv[0][0], p.inv[0][1], p.inv[0][2], if s.deformation.is_some() { 1.0 } else { 0.0 }]);
-    push(out, [p.inv[1][0], p.inv[1][1], p.inv[1][2], s.deformation.map_or(1.0, |d| d.ray_step_safety(s.base_local_half()))]);
-    push(out, [p.inv[2][0], p.inv[2][1], p.inv[2][2], 0.0]);
-    push(out, [s.pos[0], s.pos[1], s.pos[2], p.min_scale()]);
-    push(out, [s.scale[0], s.scale[1], s.scale[2], s.kind.id()]);
+    push(out, [p.pos[0], p.pos[1], p.pos[2], radius]);
+    // (the free fourth numbers of the three rotation rows carry a face melt: face, amount, reach)
+    let fm = p.face_melt.map_or([0.0; 3], |(ax, sg, a, r)| [(ax * 2 + usize::from(sg < 0.0) + 1) as f32, a, r]);
+    push(out, [p.inv[0][0], p.inv[0][1], p.inv[0][2], fm[0]]);
+    push(out, [p.inv[1][0], p.inv[1][1], p.inv[1][2], fm[1]]);
+    push(out, [p.inv[2][0], p.inv[2][1], p.inv[2][2], fm[2]]);
+    push(out, [p.pos[0], p.pos[1], p.pos[2], p.min_scale()]);
+    push(out, [p.scale[0], p.scale[1], p.scale[2], s.kind.id()]);
     push(out, size4);
     push(out, [s.op.sign(), s.blend, start as f32, count as f32]);
     let m = &s.material;
@@ -380,17 +608,24 @@ fn pack_shape(s: &crate::model::Shape, out: &mut Vec<f32>, poly: &mut Vec<f32>, 
     // the gradient: slot 13 = second colour + strength, slot 14 = direction (+ 3 when it follows
     // the shape's own box), softness, from, to; mat2.z = signed 1 / the gradient's length
     let inv_len = if m.has_gradient() { (if m.grad_flip { -0.5 } else { 0.5 }) / p.grad_half.max(1e-3) } else { 0.0 };
-    push(out, [m.coat, m.translucency, inv_len, 0.0]);
+    push(out, [m.coat, m.translucency, inv_len, p.face_melt.map_or(0.0, |(ax, _, _, _)| p.half[ax])]);
     push(out, params4);
     push(out, ext4);
     push(out, [p.shell, p.poly_limit, p.poly_orient, if p.chamfer && p.round > 0.0 { 1.0 } else { 0.0 }]);
     push(out, [m.color2[0], m.color2[1], m.color2[2], if m.has_gradient() { m.gradient } else { 0.0 }]);
     push(out, [f32::from(m.grad_axis.min(2)) + if m.grad_local { 3.0 } else { 0.0 }, m.grad_soft, m.grad_from, m.grad_to]);
-    // Non-destructive modifier lives in the already-packed scene-list texture.
-    // (0 in twist0.x means no deformation, so legacy model behaviour is exact.)
-    let (twist0, twist1) = s.deformation.map_or(([0.0; 4], [0.0; 4]), |d| d.gpu_parameters(s.base_local_half()));
-    push(out, twist0);
-    push(out, twist1);
+    let r = s.ripple.unwrap_or_default();
+    push(out, [if s.ripple.is_some() { r.mode.id() } else { 0.0 }, r.height, r.spacing, f32::from(r.count)]);
+    push(out, [r.direction, r.edge_fade, if r.preserve_outline { 1.0 } else { 0.0 }, f32::from(r.detail)]);
+    // The ripple acts on the source shape before a Twist: its unwarped box (as `Prepared::half`).
+    // w = 1: the two Twist vec4 below are in use (shape_at reads them only then).
+    let h = s.base_local_half();
+    push(out, [h[0], h[1], h[2], if s.deformation.is_some() { 1.0 } else { 0.0 }]);
+    // Non-destructive modifier (deform.rs, `Deformation::gpu_parameters`); [0, 0, 0, 1] and zeros
+    // without one, so the ray-step factor read by the candidate pass stays 1.
+    let (twist_a, twist_b) = s.deformation.map_or(([0.0, 0.0, 0.0, 1.0], [0.0; 4]), |d| d.gpu_parameters(s.base_local_half()));
+    push(out, twist_a);
+    push(out, twist_b);
 }
 
 /// A curve's smoothed points go into the path list behind two header entries (the low and high
@@ -398,18 +633,21 @@ fn pack_shape(s: &crate::model::Shape, out: &mut Vec<f32>, poly: &mut Vec<f32>, 
 /// the tube's thickness) for every `curve::GROUP_SEGMENTS` segments: the shader looks at those
 /// first and measures only the groups that can hold the nearest piece. Returns (first point,
 /// count); (0, 0) when there is no room.
+///
+/// `PATH_V4` holds `CURVE_PATH_V4` for every shape a scene may have, so the full `build_shape`
+/// points always fit: the GPU and the CPU SDF measure exactly the same curve (#201). The old code
+/// thinned the points (or dropped the curve) when the pool was full, which made the viewport and
+/// the exports show different shapes.
 fn pack_curve(s: &crate::model::Shape, path: &mut Vec<f32>) -> (usize, usize) {
     let used = path.len() / 4;
     let room = PATH_V4.saturating_sub(used + 2);
     let need = |n: usize| n + n.saturating_sub(1).div_ceil(crate::curve::GROUP_SEGMENTS);
-    let mut pts = crate::curve::build(&s.path, &s.params);
-    if need(pts.len()) > room {
-        pts = crate::curve::build_max(&s.path, &s.params, (room * crate::curve::GROUP_SEGMENTS / (crate::curve::GROUP_SEGMENTS + 1)).max(4));
-    }
+    let pts = crate::curve::build_shape(s);
     if pts.len() < 2 || need(pts.len()) > room {
         return (0, 0);
     }
-    let (lo, hi) = crate::curve::bounds(&pts);
+    let squircle = s.size[2] >= 1.5;
+    let (lo, hi) = crate::curve::bounds_profile(&pts, squircle);
     let closed = s.params[0] > 0.5;
     push(path, [lo[0], lo[1], lo[2], crate::curve::max_joint_blend(&pts, closed)]);
     push(path, [hi[0], hi[1], hi[2], crate::curve::closed_joint_blend(&pts, closed)]);
@@ -417,7 +655,7 @@ fn pack_curve(s: &crate::model::Shape, path: &mut Vec<f32>) -> (usize, usize) {
     for pt in &pts {
         push(path, *pt);
     }
-    for g in crate::curve::group_spheres(&pts) {
+    for g in crate::curve::group_spheres_profile(&pts, squircle) {
         push(path, g);
     }
     (st, pts.len())
@@ -442,13 +680,16 @@ fn bounds_of(scene: &Scene, selected: Option<Pick>, resolved: &[crate::pattern::
                 Some(Pick::Group(a)) => a == rg.gi,
                 None => false,
             };
-            if !s.visible || (!is_sel && (s.op != crate::model::Op::Add || g.op != crate::model::Op::Add)) {
+            if !s.solid() || (!is_sel && (s.op != crate::model::Op::Add || g.op != crate::model::Op::Add)) {
                 continue;
             }
             // a lamp's glow reaches a good way out
             let halo = if s.material.glow > 0.0 { 30.0 } else { 0.0 };
-            let reach = (s.blend + g.blend) * scene.melt.amount * 1.5 + scene.melt.drip + 2.0 + halo;
-            parts.push(Bound { c: s.pos, r: crate::view::radius_of(s) + reach });
+            let reach = (s.blend + scene.group_melt_reach(rg.gi)) * scene.melt.amount * 1.5 + scene.melt.drip + 2.0 + halo;
+            match rg.shape_insts.get(si).filter(|v| !v.is_empty()) {
+                Some(insts) => parts.extend(insts.iter().map(|i| Bound { c: i.apply(s.pos), r: crate::view::radius_of(s) * i.s + reach })),
+                None => parts.push(Bound { c: s.pos, r: crate::view::radius_of(s) + reach }),
+            }
         }
         if parts.is_empty() {
             continue;
@@ -467,6 +708,14 @@ fn bounds_of(scene: &Scene, selected: Option<Pick>, resolved: &[crate::pattern::
     let c = items.iter().fold([0.0; 3], |a, b| [a[0] + b.c[0] / n, a[1] + b.c[1] / n, a[2] + b.c[2] / n]);
     let r = items.iter().map(|b| crate::sdf::len(crate::sdf::sub(b.c, c)) + b.r).fold(0.0_f32, f32::max);
     (c, r)
+}
+
+/// Set the analysis view mode (`G.hover.z`, see `view_mode::ViewMode::id`). It is part of the
+/// picture's key, so a change redraws.
+pub fn set_view_mode(data: &mut [f32], mode: u32) {
+    if let Some(dst) = data.get_mut(V4_HOVER * 4 + 2) {
+        *dst = mode as f32;
+    }
 }
 
 /// Set the shader's flag word (`G.view.w`): see `perf::view_flags`.
@@ -574,7 +823,8 @@ pub fn shader_source() -> String {
         include_str!("shader_curve.wgsl"),
         include_str!("shader_corner.wgsl"),
         include_str!("shader_mesh.wgsl"),
-    ].join("\n")
+    ]
+    .join("\n")
 }
 
 const BLIT_SOURCE: &str = include_str!("blit.wgsl");
@@ -631,19 +881,38 @@ fn texture_entry(binding: u32, visibility: wgpu::ShaderStages, filterable: bool)
     wgpu::BindGroupLayoutEntry {
         binding,
         visibility,
-        ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable }, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false },
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable },
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        },
         count: None,
     }
 }
 
 /// A pipeline that draws one full-screen triangle with `module`'s `vs` and `fs` into `format`.
-fn triangle_pipeline(device: &wgpu::Device, label: &str, layout: &wgpu::PipelineLayout, module: &wgpu::ShaderModule, format: wgpu::TextureFormat) -> wgpu::RenderPipeline {
+fn triangle_pipeline(
+    device: &wgpu::Device,
+    label: &str,
+    layout: &wgpu::PipelineLayout,
+    module: &wgpu::ShaderModule,
+    format: wgpu::TextureFormat,
+    // drawn inside the window's own pass, which carries a depth buffer (the precise solid view needs one)
+    in_window: bool,
+) -> wgpu::RenderPipeline {
+    let depth = in_window.then(|| wgpu::DepthStencilState {
+        format: wgpu::TextureFormat::Depth24PlusStencil8,
+        depth_write_enabled: Some(false),
+        depth_compare: Some(wgpu::CompareFunction::Always),
+        stencil: wgpu::StencilState::default(),
+        bias: wgpu::DepthBiasState::default(),
+    });
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some(label),
         layout: Some(layout),
         vertex: wgpu::VertexState { module, entry_point: Some("vs"), buffers: &[], compilation_options: Default::default() },
         primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, ..Default::default() },
-        depth_stencil: None,
+        depth_stencil: depth,
         multisample: wgpu::MultisampleState::default(),
         fragment: Some(wgpu::FragmentState {
             module,
@@ -664,7 +933,7 @@ fn try_build(device: &wgpu::Device, queue: &wgpu::Queue, format: wgpu::TextureFo
 
 /// `try_build` with the scene shader's source given (so that tests can hand it a broken one).
 pub(crate) fn try_build_from(device: &wgpu::Device, queue: &wgpu::Queue, format: wgpu::TextureFormat, source: &str) -> Result<Resources, String> {
-    let module = step(device, "シェーダーを読む (create_shader_module)", || {
+    let module = step(device, "Read shader (create_shader_module)", || {
         device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("meltcad"), source: wgpu::ShaderSource::Wgsl(source.into()) })
     })?;
     let (messages, any_error) = compilation_messages(&module);
@@ -672,7 +941,7 @@ pub(crate) fn try_build_from(device: &wgpu::Device, queue: &wgpu::Queue, format:
         crate::gpu_log::log(&format!("shader: {m}"));
     }
     if any_error {
-        return Err(format!("シェーダーのエラー:\n{}", messages.join("\n")));
+        return Err(format!("Shader error:\n{}", messages.join("\n")));
     }
     crate::perf::mark("shader module created");
     let (bgl, layout) = step(device, "bind group layout", || {
@@ -690,11 +959,16 @@ pub(crate) fn try_build_from(device: &wgpu::Device, queue: &wgpu::Queue, format:
                 texture_entry(2, wgpu::ShaderStages::FRAGMENT, false),
             ],
         });
-        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: Some("meltcad"), bind_group_layouts: &[Some(&bgl)], immediate_size: 0 });
+        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("meltcad"),
+            bind_group_layouts: &[Some(&bgl)],
+            immediate_size: 0,
+        });
         (bgl, layout)
     })?;
     // (the slow one: the driver compiles the shader here)
-    let pipeline = step(device, "シーンの描画パイプライン (create_render_pipeline)", || triangle_pipeline(device, "meltcad", &layout, &module, format))?;
+    let pipeline =
+        step(device, "Scene render pipeline (create_render_pipeline)", || triangle_pipeline(device, "meltcad", &layout, &module, format, false))?;
     crate::perf::mark("scene pipeline created");
     let buffer = step(device, "uniform buffer", || {
         device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -706,7 +980,8 @@ pub(crate) fn try_build_from(device: &wgpu::Device, queue: &wgpu::Queue, format:
 
     // the copy of the finished pictures into egui's frame
     let (blit_layout, blit) = step(device, "blit pipeline", || {
-        let blit_module = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("meltcad blit"), source: wgpu::ShaderSource::Wgsl(BLIT_SOURCE.into()) });
+        let blit_module = device
+            .create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("meltcad blit"), source: wgpu::ShaderSource::Wgsl(BLIT_SOURCE.into()) });
         let blit_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("meltcad blit"),
             entries: &[
@@ -726,8 +1001,12 @@ pub(crate) fn try_build_from(device: &wgpu::Device, queue: &wgpu::Queue, format:
                 },
             ],
         });
-        let blit_pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: Some("meltcad blit"), bind_group_layouts: &[Some(&blit_layout)], immediate_size: 0 });
-        let blit = triangle_pipeline(device, "meltcad blit", &blit_pl, &blit_module, format);
+        let blit_pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("meltcad blit"),
+            bind_group_layouts: &[Some(&blit_layout)],
+            immediate_size: 0,
+        });
+        let blit = triangle_pipeline(device, "meltcad blit", &blit_pl, &blit_module, format, true);
         (blit_layout, blit)
     })?;
     let blit_params = step(device, "blit parameters", || {
@@ -737,7 +1016,12 @@ pub(crate) fn try_build_from(device: &wgpu::Device, queue: &wgpu::Queue, format:
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         })
     })?;
-    let linear = device.create_sampler(&wgpu::SamplerDescriptor { label: Some("meltcad"), mag_filter: wgpu::FilterMode::Linear, min_filter: wgpu::FilterMode::Linear, ..Default::default() });
+    let linear = device.create_sampler(&wgpu::SamplerDescriptor {
+        label: Some("meltcad"),
+        mag_filter: wgpu::FilterMode::Linear,
+        min_filter: wgpu::FilterMode::Linear,
+        ..Default::default()
+    });
     // (the one-row volume texture: Rgba16Float must be bindable)
     let vol = step(device, "volume texture", || VolTex::new(device, 1))?;
     Ok(Resources {
@@ -818,7 +1102,7 @@ pub fn install(rs: &egui_wgpu::RenderState, ctx: &egui::Context, status: &GpuSta
                 }
             }
             Err(payload) => {
-                let message = format!("パニック (panic) がおきました: {}", crate::gpu_status::panic_text(&*payload));
+                let message = format!("Panic happened: {}", crate::gpu_status::panic_text(&*payload));
                 crate::gpu_log::log(&format!("shader compile: PANIC after {secs:.3} s: {message}"));
                 st.finish_err(generation, message);
                 if let Some(b) = backend {
@@ -856,7 +1140,13 @@ impl Pool {
         Pool { texture, view, rows, bind }
     }
 
-    fn bind(device: &wgpu::Device, res_buffer: &wgpu::Buffer, layout: &wgpu::BindGroupLayout, list: &wgpu::TextureView, vol: &wgpu::TextureView) -> wgpu::BindGroup {
+    fn bind(
+        device: &wgpu::Device,
+        res_buffer: &wgpu::Buffer,
+        layout: &wgpu::BindGroupLayout,
+        list: &wgpu::TextureView,
+        vol: &wgpu::TextureView,
+    ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("meltcad"),
             layout,
@@ -903,7 +1193,12 @@ impl VolTex {
             }
             let part = bytes.get(done * 8..(done + w * h) * 8).unwrap_or(&[]);
             queue.write_texture(
-                wgpu::TexelCopyTextureInfo { texture: &self.texture, mip_level: 0, origin: wgpu::Origin3d { x: x as u32, y: y as u32, z: 0 }, aspect: wgpu::TextureAspect::All },
+                wgpu::TexelCopyTextureInfo {
+                    texture: &self.texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d { x: x as u32, y: y as u32, z: 0 },
+                    aspect: wgpu::TextureAspect::All,
+                },
                 part,
                 wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(w as u32 * 8), rows_per_image: Some(h as u32) },
                 wgpu::Extent3d { width: w as u32, height: h as u32, depth_or_array_layers: 1 },
@@ -1093,7 +1388,12 @@ fn upload_list(res: &mut Resources, queue: &wgpu::Queue, list: &[f32], id: u64) 
             }
         }
         queue.write_texture(
-            wgpu::TexelCopyTextureInfo { texture: &pool.texture, mip_level: 0, origin: wgpu::Origin3d { x: 0, y: first as u32, z: 0 }, aspect: wgpu::TextureAspect::All },
+            wgpu::TexelCopyTextureInfo {
+                texture: &pool.texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d { x: 0, y: first as u32, z: 0 },
+                aspect: wgpu::TextureAspect::All,
+            },
             &texels,
             wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(ROW as u32 * 16), rows_per_image: Some(n as u32) },
             wgpu::Extent3d { width: ROW as u32, height: n as u32, depth_or_array_layers: 1 },
@@ -1165,7 +1465,14 @@ fn patched(globals: &[f32], size: [u32; 2], fast: bool) -> Vec<f32> {
 }
 
 /// Draw the scene into `view` (the globals go into the uniform buffer; the list must be in the pool).
-fn scene_pass(res: &mut Resources, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView, globals: &[f32], spec: &PassSpec) {
+fn scene_pass(
+    res: &mut Resources,
+    queue: &wgpu::Queue,
+    encoder: &mut wgpu::CommandEncoder,
+    view: &wgpu::TextureView,
+    globals: &[f32],
+    spec: &PassSpec,
+) {
     let g = patched(globals, spec.size, spec.fast);
     let mut bytes = Vec::with_capacity(GLOBAL_BYTES);
     for v in g.iter().take(GLOBAL_V4 * 4) {
@@ -1192,7 +1499,10 @@ fn scene_pass(res: &mut Resources, queue: &wgpu::Queue, encoder: &mut wgpu::Comm
                 view,
                 depth_slice: None,
                 resolve_target: None,
-                ops: wgpu::Operations { load: if spec.clear { wgpu::LoadOp::Clear(wgpu::Color::BLACK) } else { wgpu::LoadOp::Load }, store: wgpu::StoreOp::Store },
+                ops: wgpu::Operations {
+                    load: if spec.clear { wgpu::LoadOp::Clear(wgpu::Color::BLACK) } else { wgpu::LoadOp::Load },
+                    store: wgpu::StoreOp::Store,
+                },
             })],
             depth_stencil_attachment: None,
             timestamp_writes: writes,
@@ -1221,7 +1531,14 @@ pub(crate) fn draw(res: &mut Resources, queue: &wgpu::Queue, encoder: &mut wgpu:
     upload_list(res, queue, list, id);
     let size = [globals.get(V4_VIEW * 4).copied().unwrap_or(1.0) as u32, globals.get(V4_VIEW * 4 + 1).copied().unwrap_or(1.0) as u32];
     let fast = globals.get(V4_VIEW * 4 + 3).is_some_and(|f| (*f + 0.5) as u32 & crate::perf::FLAG_FAST != 0);
-    scene_pass(res, queue, encoder, view, globals, &PassSpec { size, rows: None, clear: true, fast, kind: crate::gpu_timing::Kind::Whole, scale: 1.0 });
+    scene_pass(
+        res,
+        queue,
+        encoder,
+        view,
+        globals,
+        &PassSpec { size, rows: None, clear: true, fast, kind: crate::gpu_timing::Kind::Whole, scale: 1.0 },
+    );
 }
 
 impl egui_wgpu::CallbackTrait for Callback {
@@ -1240,7 +1557,7 @@ impl egui_wgpu::CallbackTrait for Callback {
         // our own resources are made inside an error scope: a refusal from the driver (no memory
         // for the picture, a texture it cannot make) fails the graphics path with a message
         // instead of panicking the window
-        let (_, errors) = scoped(device, "描画の準備 (prepare)", || self.prepare_frame(device, queue, encoder, res));
+        let (_, errors) = scoped(device, "Prepare frame (prepare)", || self.prepare_frame(device, queue, encoder, res));
         if !errors.is_empty() && res.timer.is_some() {
             // (the timing of passes is a convenience: before giving the whole graphics path up, try without it)
             crate::gpu_log::log(&format!("drawing failed, trying without the timing of passes:\n{}", errors.join("\n")));
@@ -1312,14 +1629,28 @@ impl Callback {
         let lin = |size: [u32; 2]| size[0] as f32 / vp[0] as f32;
         if self.fast {
             if pics.a.key != Some(key_a) {
-                scene_pass(res, queue, encoder, &pics.a.view, &self.globals, &PassSpec { size: size_a, rows: None, clear: true, fast: true, kind: crate::gpu_timing::Kind::Moving, scale: lin(size_a) });
+                scene_pass(
+                    res,
+                    queue,
+                    encoder,
+                    &pics.a.view,
+                    &self.globals,
+                    &PassSpec { size: size_a, rows: None, clear: true, fast: true, kind: crate::gpu_timing::Kind::Moving, scale: lin(size_a) },
+                );
                 pics.a.key = Some(key_a);
                 pics.a.used = size_a;
             }
         } else if pics.b.key != Some(key_b) || !pics.bands.complete() {
             if !same_scene(pics.a.key) && !self.whole {
                 // the cheap picture of this very state first: it is what is shown while the sharp one builds
-                scene_pass(res, queue, encoder, &pics.a.view, &self.globals, &PassSpec { size: size_a, rows: None, clear: true, fast: true, kind: crate::gpu_timing::Kind::Moving, scale: lin(size_a) });
+                scene_pass(
+                    res,
+                    queue,
+                    encoder,
+                    &pics.a.view,
+                    &self.globals,
+                    &PassSpec { size: size_a, rows: None, clear: true, fast: true, kind: crate::gpu_timing::Kind::Moving, scale: lin(size_a) },
+                );
                 pics.a.key = Some(key_a);
                 pics.a.used = size_a;
                 again = true;
@@ -1334,7 +1665,14 @@ impl Callback {
                 }
                 let rows = if self.whole { size_b[1] } else { res.pacer.rows(size_b[1]) };
                 if let Some((first, n)) = pics.bands.next(rows) {
-                    let spec = PassSpec { size: size_b, rows: Some((first, n)), clear: first == 0, fast: false, kind: crate::gpu_timing::Kind::Band, scale: lin(size_b) };
+                    let spec = PassSpec {
+                        size: size_b,
+                        rows: Some((first, n)),
+                        clear: first == 0,
+                        fast: false,
+                        kind: crate::gpu_timing::Kind::Band,
+                        scale: lin(size_b),
+                    };
                     scene_pass(res, queue, encoder, &pics.b.view, &self.globals, &spec);
                     pics.bands.advance(n);
                 }
@@ -1343,7 +1681,8 @@ impl Callback {
         }
         // what the blit shows: A everywhere, and the finished rows of B on top when B is of this very state
         let b_current = pics.b.key == Some(key_b);
-        let reveal = if b_current { pics.bands.fraction() } else { 0.0 };
+        // (shown all at once when the whole sharp picture is done: a sweep from the top looked like a glitch)
+        let reveal = if b_current && pics.bands.complete() { 1.0 } else { 0.0 };
         let cap = [pics.capacity[0] as f32, pics.capacity[1] as f32];
         let share = |u: [u32; 2]| [u[0] as f32 / cap[0], u[1] as f32 / cap[1], 1.0 / cap[0], 1.0 / cap[1]];
         let (a, b) = (share(pics.a.used), share(pics.b.used));
@@ -1359,7 +1698,8 @@ impl Callback {
         let sharp_done = if b_current { pics.bands.fraction() } else { 0.0 };
         res.pics = Some(pics);
         let band_rows = res.pacer.rows(size_b[1]);
-        self.feedback.push(passes, FeedbackState { timing: res.timer.is_some(), sharp: sharp_done, moving_px: size_a, band_rows, frames: res.frames });
+        self.feedback
+            .push(passes, FeedbackState { timing: res.timer.is_some(), sharp: sharp_done, moving_px: size_a, band_rows, frames: res.frames });
         if again {
             self.ctx.request_repaint();
         }
@@ -1396,12 +1736,7 @@ pub(crate) mod offscreen {
     }
 
     impl Offscreen {
-        #[cfg_attr(not(test), allow(dead_code))]
-        pub fn open() -> Result<Offscreen, String> {
-            Offscreen::open_with(None, None)
-        }
-
-        /// `open`, with the scene shader's source given (the tests count work with an instrumented copy)
+        /// Open with the scene shader's source given (the tests count work with an instrumented copy)
         /// and the backend the window uses (`None`: what the environment says, else the usual set).
         pub fn open_with(source: Option<&str>, backends: Option<wgpu::Backends>) -> Result<Offscreen, String> {
             let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
@@ -1415,7 +1750,7 @@ pub(crate) mod offscreen {
                 compatible_surface: None,
                 ..Default::default()
             }))
-            .map_err(|e| format!("グラフィックスのアダプターが見つかりません: {e}"))?;
+            .map_err(|e| format!("No graphics adapter found: {e}"))?;
             let info = adapter.get_info();
             let gl = info.backend == wgpu::Backend::Gl;
             let base = if gl { wgpu::Limits::downlevel_webgl2_defaults() } else { wgpu::Limits::default() };
@@ -1426,7 +1761,7 @@ pub(crate) mod offscreen {
                 required_limits: wgpu::Limits { max_texture_dimension_2d: adapter.limits().max_texture_dimension_2d.min(8192), ..base },
                 ..Default::default()
             }))
-            .map_err(|e| format!("グラフィックスのデバイスを作れません: {e}"))?;
+            .map_err(|e| format!("Could not create a graphics device: {e}"))?;
             let t = std::time::Instant::now();
             let res = match source {
                 Some(src) => try_build_from(&device, &queue, wgpu::TextureFormat::Rgba8Unorm, src)?,
@@ -1486,20 +1821,36 @@ pub(crate) mod offscreen {
         /// The picture's pixels (RGBA8), for a look at what was drawn.
         #[cfg_attr(not(test), allow(dead_code))]
         pub fn read(&self, pic: &Picture) -> Vec<u8> {
+            let mut px = Vec::new();
+            self.read_into(pic, &mut px);
+            px
+        }
+
+        /// The picture's pixels, into a buffer that a run of pictures can reuse (#217).
+        pub fn read_into(&self, pic: &Picture, px: &mut Vec<u8>) {
             let (w, h) = (pic.size[0], pic.size[1]);
             let bpr = (w * 4).next_multiple_of(256);
-            let out = self.device.create_buffer(&wgpu::BufferDescriptor { label: Some("readback"), size: u64::from(bpr) * u64::from(h), usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false });
+            let out = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("readback"),
+                size: u64::from(bpr) * u64::from(h),
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            });
             let mut enc = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
             enc.copy_texture_to_buffer(
                 wgpu::TexelCopyTextureInfo { texture: &pic.texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
-                wgpu::TexelCopyBufferInfo { buffer: &out, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(bpr), rows_per_image: Some(h) } },
+                wgpu::TexelCopyBufferInfo {
+                    buffer: &out,
+                    layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(bpr), rows_per_image: Some(h) },
+                },
                 wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
             );
             self.queue.submit([enc.finish()]);
             let slice = out.slice(..);
             slice.map_async(wgpu::MapMode::Read, |_| {});
             let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
-            let mut px = Vec::with_capacity((w * h * 4) as usize);
+            px.clear();
+            px.reserve((w * h * 4) as usize);
             if let Ok(mapped) = slice.get_mapped_range() {
                 for y in 0..h {
                     let row = (y * bpr) as usize;
@@ -1509,7 +1860,6 @@ pub(crate) mod offscreen {
                 }
             }
             out.unmap();
-            px
         }
     }
 }
@@ -1517,6 +1867,7 @@ pub(crate) mod offscreen {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::{Material, Shape};
 
     /// A reader for a packed frame: where each list starts.
     pub(super) struct Frame<'a> {
@@ -1565,6 +1916,177 @@ mod tests {
         }
     }
 
+    fn incremental_pack_scene(count: usize) -> Scene {
+        let mut scene = Scene::default();
+        scene.groups.clear();
+        for gi in 0..count.div_ceil(10) {
+            let mut group = crate::model::Group::new(format!("group-{gi}"));
+            group.blend = 2.0;
+            group.op = if gi > 0 && gi % 4 == 0 { crate::model::Op::Subtract } else { crate::model::Op::Add };
+            for si in 0..10 {
+                let i = gi * 10 + si;
+                if i >= count {
+                    break;
+                }
+                let kind = match i % 7 {
+                    0 => crate::model::Kind::Sphere,
+                    1 => crate::model::Kind::Extrude,
+                    2 => crate::model::Kind::Revolve,
+                    3 => crate::model::Kind::Sweep,
+                    4 => crate::model::Kind::Box,
+                    5 => crate::model::Kind::Cylinder,
+                    _ => crate::model::Kind::Curve, // deliberately uses the uncached exact path
+                };
+                let mut sh = Shape::new(kind, [(i % 20) as f32 * 25.0, (i / 20) as f32 * 25.0, 10.0], Material::default());
+                if i % 5 == 0 {
+                    sh.shell = 0.6;
+                }
+                if i % 6 == 0 && si > 0 {
+                    sh.op = crate::model::Op::Subtract;
+                }
+                if matches!(kind, crate::model::Kind::Curve | crate::model::Kind::Sweep) {
+                    sh.path = vec![[0.0, 0.0, 0.0, 2.0], [8.0, 0.0, 1.0, 2.0], [12.0, 8.0, 0.0, 2.0]];
+                }
+                group.shapes.push(sh);
+            }
+            scene.groups.push(group);
+        }
+        scene
+    }
+
+    fn same_pack_as_cold(scene: &Scene, prev: Option<(&Scene, &ScenePack)>) -> ScenePack {
+        let fast = ScenePack::reusing(scene, VolumeSet::of(scene), prev);
+        let cold = ScenePack::new(scene, VolumeSet::of(scene));
+        assert_eq!(fast.list.as_ref(), cold.list.as_ref(), "GPU input must be bit-for-bit identical");
+        assert_eq!(fast.offs, cold.offs);
+        assert_eq!(fast.offs2, cold.offs2);
+        assert_eq!(fast.slots, cold.slots);
+        assert_eq!(fast.ranges, cold.ranges);
+        assert_eq!(fast.shape_n, cold.shape_n);
+        assert_eq!(fast.group_n, cold.group_n);
+        assert_eq!(fast.glow, cold.glow);
+        assert_eq!(fast.overlaps, cold.overlaps);
+        fast
+    }
+
+    #[test]
+    fn incremental_gpu_pack_is_byte_identical_for_10_100_300_boolean_thin_and_path_shapes() {
+        for n in [10, 100, 300] {
+            let original = incremental_pack_scene(n);
+            let old = same_pack_as_cold(&original, None);
+            let mut changed = original.clone();
+            changed.groups[0].shapes[0].pos[0] += 1.25;
+            changed.melt.mode = crate::model::BlendMode::Gooey;
+            let fresh = same_pack_as_cold(&changed, Some((&original, &old)));
+            assert_eq!(fresh.shapes_reused, n - 1, "{n} shapes; unchanged curve payloads retain exact room");
+            assert_eq!(fresh.shapes_repacked, 1);
+
+            // Undo/redo must not resurrect cached positions or a previous Boolean op.
+            let undone = same_pack_as_cold(&original, Some((&changed, &fresh)));
+            assert_eq!(undone.shape_n, n);
+            let mut op_change = changed.clone();
+            op_change.groups[0].shapes[3].op = crate::model::Op::Intersect;
+            let other = 1.min(op_change.groups.len() - 1);
+            op_change.groups[other].op = crate::model::Op::Subtract;
+            let _ = same_pack_as_cold(&op_change, Some((&changed, &fresh)));
+
+            // When an earlier path grows, a later Curve must fall back to exact
+            // adaptive packing; it cannot reuse a path offset from the old layout.
+            let mut path_change = original.clone();
+            path_change.groups[0].shapes[3].path.push([17.0, 8.0, 3.0, 2.0]);
+            let _ = same_pack_as_cold(&path_change, Some((&original, &old)));
+
+            // Insertion/deletion shifts the slots and polygon offsets; no old slot can leak.
+            let mut deleted = original.clone();
+            deleted.groups[0].shapes.remove(1);
+            let _ = same_pack_as_cold(&deleted, Some((&original, &old)));
+        }
+    }
+
+    #[test]
+    fn incremental_gpu_pack_rebuilds_group_bounds_when_shape_budget_admission_changes() {
+        let mut original = Scene::default();
+        original.groups[0].shapes.clear();
+        let mut first = crate::model::Group::new(String::from("first"));
+        let mut second = crate::model::Group::new(String::from("second"));
+        for i in 0..508 {
+            first.shapes.push(Shape::new(crate::model::Kind::Sphere, [i as f32 * 3.0, 0.0, 10.0], Material::default()));
+        }
+        for i in 0..7 {
+            second.shapes.push(Shape::new(crate::model::Kind::Sphere, [10_000.0 + i as f32 * 30.0, 0.0, 10.0], Material::default()));
+        }
+        original.groups = vec![first, second];
+        assert_eq!(original.shape_count(), crate::model::MAX_SHAPES + 3);
+        let old = same_pack_as_cold(&original, None);
+        assert_eq!(old.ranges[1].2, 4, "the final group is truncated by the shape cap");
+
+        // Removing three earlier shapes admits three more shapes from the unchanged
+        // second group. Its old source bounds cover only four of the now-seven members.
+        let mut changed = original.clone();
+        changed.groups[0].shapes.truncate(505);
+        let updated = same_pack_as_cold(&changed, Some((&original, &old)));
+        assert_eq!(updated.ranges[1].2, 7);
+    }
+
+    /// Run explicitly for comparative CPU packing timings on the actual target machine.
+    #[test]
+    #[ignore]
+    fn incremental_gpu_pack_timing_10_100_300() {
+        use std::time::{Duration, Instant};
+        const REPEATS: usize = 30;
+        for n in [10, 100, 300] {
+            let mut scene = incremental_pack_scene(n);
+            let mut last = ScenePack::new(&scene, VolumeSet::of(&scene));
+            let mut cold_time = Duration::ZERO;
+            let mut reuse_time = Duration::ZERO;
+            for k in 0..REPEATS {
+                let mut edited = scene.clone();
+                let si = k % n;
+                edited.groups[si / 10].shapes[si % 10].pos[0] += 0.3;
+                let started = Instant::now();
+                let cold = ScenePack::new(&edited, VolumeSet::of(&edited));
+                cold_time += started.elapsed();
+                let started = Instant::now();
+                let updated = ScenePack::reusing(&edited, VolumeSet::of(&edited), Some((&scene, &last)));
+                reuse_time += started.elapsed();
+                assert_eq!(updated.list.as_ref(), cold.list.as_ref());
+                scene = edited;
+                last = updated;
+            }
+            eprintln!(
+                "GPU pack {:>3} shapes: cold {:.3}ms/edit, incremental {:.3}ms/edit, speedup {:.2}x ({} edits)",
+                n,
+                cold_time.as_secs_f64() * 1000.0 / REPEATS as f64,
+                reuse_time.as_secs_f64() * 1000.0 / REPEATS as f64,
+                cold_time.as_secs_f64() / reuse_time.as_secs_f64().max(1e-12),
+                REPEATS
+            );
+        }
+    }
+
+    #[test]
+    fn puffy_extrude_inflation_reaches_the_existing_shader_params_slot() {
+        let mut scene = Scene::default();
+        let shape = {
+            let shape = &mut scene.groups[0].shapes[0];
+            shape.kind = crate::model::Kind::Extrude;
+            shape.outline = vec![[-10.0, -10.0], [10.0, -10.0], [10.0, 10.0], [-10.0, 10.0]];
+            shape.size[0] = 8.0;
+            shape.params[0] = 1.25;
+            shape.clone()
+        };
+        let frame = pack(&scene, &Camera::default(), [800.0, 600.0], None, None, true);
+        let data = Frame::new(&frame);
+        // One bounding sphere record precedes the 15-field shader Shape struct.
+        assert_eq!(data.shape(0, 11)[0], 1.25);
+        let sample = [10.75, 0.0, 20.0];
+        assert!(crate::sdf::Prepared::new(&shape).distance(sample) < 0.0, "inflated outline reaches the sample");
+        let mut plain = shape.clone();
+        plain.params[0] = 0.0;
+        assert!(crate::sdf::Prepared::new(&plain).distance(sample) > 0.0, "legacy uninflated outline does not");
+        assert!(include_str!("shader.wgsl").contains("r -= clamp(s.params.x, -40.0, 40.0)"));
+    }
+
     #[test]
     fn twist_modifier_is_packed_without_corrupting_shape_offsets() {
         use crate::deform::{Axis, Deformation, Twist};
@@ -1575,20 +2097,27 @@ mod tests {
         let half = plain.base_local_half();
         let mut twisted = plain.clone();
         twisted.pos[0] = 35.0;
-        twisted.deformation = Some(Deformation::Twist(Twist {
-            axis: Axis::Y, reverse: true, degrees: 360.0,
-            begin: 0.2, end: 0.85, lower: 0.25, upper: 1.5,
-        }));
+        twisted.deformation =
+            Some(Deformation::Twist(Twist { axis: Axis::Y, reverse: true, degrees: 360.0, begin: 0.2, end: 0.85, lower: 0.25, upper: 1.5 }));
         sc.groups[0].shapes = vec![plain, twisted];
         let u = pack(&sc, &Camera::default(), [800.0, 600.0], Some(Pick::Shape(0, 1)), None, true);
         let f = Frame::new(&u);
-        assert_eq!(S_STRIDE, 18, "WGSL shape_rec must use the same stride");
-        assert_eq!(f.shape(0, 16), [0.0; 4]);
-        assert_eq!(f.shape(0, 17), [0.0; 4]);
-        assert_eq!(f.shape(1, 16), [2.0, -360.0, 0.2, 0.85]);
-        let p = f.shape(1, 17);
-        assert_eq!(&p[..3], &[0.25, 1.5, half[1]]);
-        assert!((p[3] - half[2].hypot(half[0])).abs() < 1e-4);
+        assert_eq!(S_STRIDE, 21, "WGSL shape_rec must use the same stride");
+        // slot 18 = ripple_half (w = 1: a Twist follows), 19 and 20 = the Twist itself
+        assert_eq!(f.shape(0, 18)[3], 0.0);
+        assert_eq!(f.shape(0, 19), [0.0, 0.0, 0.0, 1.0]);
+        assert_eq!(f.shape(0, 20), [0.0; 4]);
+        assert_eq!(f.shape(1, 18), [half[0], half[1], half[2], 1.0], "ripple keeps the unwarped box");
+        let a = f.shape(1, 19);
+        assert_eq!(&a[..3], &[0.0, 1.0, 0.0], "Y axis");
+        assert!(a[3] > 0.0 && a[3] < 1.0, "ray step factor {}", a[3]);
+        let b = f.shape(1, 20);
+        let span = 0.85 - 0.2;
+        let turn = -std::f32::consts::TAU;
+        assert!((b[0] - 1.0 / (2.0 * half[1] * span)).abs() < 1e-5);
+        assert!((b[1] - (0.5 - 0.2) / span).abs() < 1e-5);
+        assert!((b[2] - turn * 0.25).abs() < 1e-4);
+        assert!((b[3] - turn * 1.25).abs() < 1e-4);
         assert_eq!(f.shape(1, 4)[0], 35.0, "next shape's position not shifted");
         assert!(f.shape(1, 0)[3] >= f.shape(0, 0)[3], "expanded bounds enclose rotated corners");
         // Packed offsets still point to the first 2D outline after both shapes.
@@ -1614,6 +2143,20 @@ mod tests {
     }
 
     #[test]
+    fn the_grid_preference_reaches_the_shader_uniform() {
+        let sc = Scene::default();
+        let pack = ScenePack::new(&sc, VolumeSet::of(&sc));
+        let globals = |grid| pack.globals_with_grid(&sc, &Camera::default(), [800.0, 600.0], None, None, true, grid);
+        let off = globals(crate::prefs::GridView { on: false, size_mm: 25.0 });
+        assert_eq!(off[V4_ENV * 4 + 3], 2.0, "floor survives, grid flag is off");
+        assert_eq!(off[(V4_ENV + 4) * 4 + 3], 25.0, "spacing is in env[4].w");
+        let on = globals(crate::prefs::GridView { on: true, size_mm: 25.0 });
+        assert_eq!(on[V4_ENV * 4 + 3], 3.0, "floor and grid are on");
+        let clamped = globals(crate::prefs::GridView { on: true, size_mm: 500.0 });
+        assert_eq!(clamped[(V4_ENV + 4) * 4 + 3], crate::prefs::MAX_GRID_MM);
+    }
+
+    #[test]
     fn a_big_scene_packs_all_its_shapes() {
         let mut sc = Scene::default();
         let base = sc.groups[0].shapes[0].clone();
@@ -1633,7 +2176,7 @@ mod tests {
         assert_eq!(f.counts()[1] as usize, crate::model::MAX_SHAPES);
         // every shape has its record, with its position, and every block points at real shapes
         for i in 0..crate::model::MAX_SHAPES {
-            assert_eq!(f.shape(i, 0)[3] > 0.0, true, "shape {i} has a radius");
+            assert!(f.shape(i, 0)[3] > 0.0, "shape {i} has a radius");
             assert_eq!(f.shape(i, 4)[0], f.shape(i, 0)[0]);
         }
         let mut covered = 0;
@@ -1705,6 +2248,41 @@ mod instance_tests {
     }
 
     #[test]
+    fn a_single_shape_pattern_packs_its_copies_and_selects_the_source() {
+        let mut sc = Scene::default();
+        sc.groups[0].shapes[0].pos = [0.0, 0.0, 20.0];
+        sc.groups[0].shapes[0].size = [8.0; 3];
+        sc.groups[0].shapes[0].pattern = Some(Pattern::Rect { counts: [3, 1, 1], spacing: [25.0, 0.0, 0.0] });
+        let u = pack(&sc, &Camera::default(), [800.0, 600.0], Some(Pick::Shape(0, 0)), None, true);
+        let f = Frame::new(&u);
+        assert_eq!(f.counts()[1], 3.0, "one payload per copy");
+        let at: Vec<f32> = (0..3).map(|i| f.shape(i, 4)[0]).collect();
+        assert_eq!(at, [0.0, 25.0, 50.0]);
+        // selecting any copy names the source shape: the selection covers all copies
+        assert_eq!(&f.counts()[2..], &[0.0, 3.0]);
+        assert_eq!(&u[V4_HOVER * 4..V4_HOVER * 4 + 2], &[-1.0, 0.0], "nothing is hovered");
+        // picking a copy still names the source shape
+        assert!(sc.shape(0, 0).is_some());
+        // a circular pattern of the same shape, and a group pattern over it
+        sc.groups[0].shapes[0].pattern = Some(Pattern::Circular { count: 4, angle: 360.0, axis: 2, centre: [0.0, 0.0, 20.0], rotate: true });
+        sc.groups[0].pattern = Some(Pattern::Rect { counts: [1, 2, 1], spacing: [0.0, 60.0, 0.0] });
+        let u = pack(&sc, &Camera::default(), [800.0, 600.0], None, None, true);
+        let f = Frame::new(&u);
+        assert_eq!(f.counts()[1], 4.0, "4 shape copies; the group pattern repeats them");
+        assert_eq!(instances_of(&f, 0).len(), 2);
+        // removing the shape pattern leaves one shape per group copy
+        sc.groups[0].shapes[0].pattern = None;
+        let u = pack(&sc, &Camera::default(), [800.0, 600.0], None, None, true);
+        let f = Frame::new(&u);
+        assert_eq!(f.counts()[1], 1.0);
+        // hostile counts stay bounded by the shape budget
+        sc.groups[0].shapes[0].pattern = Some(Pattern::Rect { counts: [64, 64, 64], spacing: [1.0, 1.0, 1.0] });
+        let u = pack(&sc, &Camera::default(), [800.0, 600.0], None, None, true);
+        let f = Frame::new(&u);
+        assert!(f.counts()[1] <= crate::model::MAX_SHAPES as f32);
+    }
+
+    #[test]
     fn a_linked_copy_points_at_the_sources_blocks() {
         let mut sc = Scene::default();
         let uid = sc.ensure_group_uid(0).unwrap_or(0);
@@ -1747,7 +2325,7 @@ mod instance_tests {
         let u = pack(&sc, &Camera::default(), [800.0, 600.0], None, None, true);
         let f = Frame::new(&u);
         let total: usize = (0..crate::model::MAX_GROUPS).map(|g| instances_of(&f, g).len()).sum();
-        assert!(total >= crate::pattern::MAX_INSTANCES && total <= crate::pattern::MAX_INSTANCES + crate::model::MAX_GROUPS, "{total} instances");
+        assert!((crate::pattern::MAX_INSTANCES..=crate::pattern::MAX_INSTANCES + crate::model::MAX_GROUPS).contains(&total), "{total} instances");
         assert!(f.list_len() <= MAX_POOL_V4, "{} <= {MAX_POOL_V4}", f.list_len());
         // and the CPU field copes with the same scene
         let field = crate::sdf::Field::new(&sc);
@@ -1779,10 +2357,10 @@ mod curve_tests {
         let mut g = Group::new("g");
         for i in 0..n {
             let mut s = Shape::new(Kind::Curve, [i as f32 * 3.0, 0.0, 10.0], Material::default());
-            s.path = (0..32).map(|k| [k as f32 * 2.0, (k * k) as f32 * 0.1, 0.0, 3.0]).collect();
+            s.path = (0..crate::model::MAX_PATH).map(|k| [k as f32 * 2.0, (k * k) as f32 * 0.1, 0.0, 3.0]).collect();
             g.shapes.push(s);
         }
-        Scene { groups: vec![g], melt: Default::default(), env: Default::default(), saved: Vec::new() }
+        Scene { groups: vec![g], melt: Default::default(), env: Default::default(), saved: Vec::new(), anim: Default::default() }
     }
 
     #[test]
@@ -1811,19 +2389,46 @@ mod curve_tests {
         let scene = scene_with_curves(crate::model::MAX_SHAPES);
         let u = pack(&scene, &Camera::default(), [800.0, 600.0], None, None, true);
         let f = Frame::new(&u);
-        let mut used = 0;
         let mut drawn = 0;
         for i in 0..scene.shape_count() {
             let ext = f.shape(i, 12);
             let (start, count) = (ext[0] as usize, ext[1] as usize);
             if count > 0 {
                 assert!(start + count + (count - 1).div_ceil(crate::curve::GROUP_SEGMENTS) <= PATH_V4, "curve {i} runs past the list");
-                used = used.max(start + count);
                 drawn += 1;
             }
         }
-        assert!(used > 0 && drawn >= 100, "{drawn} curves fit");
+        assert_eq!(drawn, crate::model::MAX_SHAPES, "the path pool holds every curve");
         assert!(f.list_len() <= MAX_POOL_V4);
+    }
+
+    /// #201: when most of the model is curves, the GPU used to thin (or drop) the curves that ran
+    /// the old 32768-node pool out, while the CPU SDF and the exports kept every point. The pool
+    /// now holds a full `curve::MAX_POINTS` curve for every shape a scene may have, so both sides
+    /// measure exactly the same points.
+    #[test]
+    fn a_full_scene_of_curves_gives_the_gpu_the_same_points_the_cpu_sdf_uses() {
+        let scene = scene_with_curves(crate::model::MAX_SHAPES);
+        let u = pack(&scene, &Camera::default(), [800.0, 600.0], None, None, true);
+        let f = Frame::new(&u);
+        let at = |slot: usize| f.d(f.path_base() + slot);
+        let mut drawn = 0usize;
+        let mut nodes = 0usize;
+        for (i, s) in scene.groups[0].shapes.iter().enumerate() {
+            // what the CPU SDF and the mesher measure
+            let cpu = Prepared::new(s).path;
+            let ext = f.shape(i, 12);
+            let (start, count) = (ext[0] as usize, ext[1] as usize);
+            assert_eq!(count, cpu.len(), "curve {i}: the GPU must get the whole curve, not a thinner copy");
+            for (k, want) in cpu.iter().enumerate() {
+                assert_eq!(at(start + k), *want, "curve {i} point {k}");
+            }
+            drawn += 1;
+            nodes += count;
+            assert!(start + count + (count - 1).div_ceil(crate::curve::GROUP_SEGMENTS) <= PATH_V4);
+        }
+        assert_eq!(drawn, crate::model::MAX_SHAPES, "every curve is drawn");
+        assert!(nodes > 32768, "this scene is bigger than the old path pool ({nodes} points)");
     }
 
     #[test]
@@ -1835,7 +2440,7 @@ mod curve_tests {
             s.outline2 = s.outline.clone();
             g.shapes.push(s);
         }
-        let scene = Scene { groups: vec![g], melt: Default::default(), env: Default::default(), saved: Vec::new() };
+        let scene = Scene { groups: vec![g], melt: Default::default(), env: Default::default(), saved: Vec::new(), anim: Default::default() };
         let u = pack(&scene, &Camera::default(), [800.0, 600.0], None, None, true);
         let f = Frame::new(&u);
         let mut points = 0;
@@ -1892,7 +2497,7 @@ mod shader_tests {
         let src = shader_source();
         assert!(src.contains("textureLoad(DT"), "scene data is read from the list texture");
         assert!(!src.contains("array<Shape"), "no shape array in the uniform");
-        assert!(GLOBAL_BYTES <= 16384, "the globals fit the smallest uniform limit (WebGL2/GL: 16 KB), {GLOBAL_BYTES}");
+        const { assert!(GLOBAL_BYTES <= 16384, "the globals fit the smallest uniform limit (WebGL2/GL: 16 KB)") };
         assert!(ROW.is_power_of_two() && src.contains("& 1023") && src.contains(">> 10"), "ROW matches the shader's row width");
     }
 
@@ -1907,9 +2512,11 @@ mod shader_tests {
 
     #[test]
     fn the_limits_are_what_the_readme_says() {
-        assert!(crate::model::MAX_SHAPES >= 512 && crate::model::MAX_GROUPS >= 96);
-        assert!(MAX_POOL_V4 <= 2048 * ROW);
-        assert!(POLY_PTS >= 16 * 1024 && PATH_V4 >= 16 * 1024, "much bigger outline and path pools");
+        const {
+            assert!(crate::model::MAX_SHAPES >= 512 && crate::model::MAX_GROUPS >= 96);
+            assert!(MAX_POOL_V4 <= 2048 * ROW);
+            assert!(POLY_PTS >= 16 * 1024 && PATH_V4 >= 16 * 1024, "much bigger outline and path pools");
+        }
     }
 }
 
@@ -1947,7 +2554,13 @@ pub(crate) mod headless {
             desc.backends = b;
         }
         let instance = wgpu::Instance::new(desc);
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions { power_preference: wgpu::PowerPreference::HighPerformance, force_fallback_adapter: false, compatible_surface: None, ..Default::default() })).ok()?;
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            force_fallback_adapter: false,
+            compatible_surface: None,
+            ..Default::default()
+        }))
+        .ok()?;
         let base = if downlevel { wgpu::Limits::downlevel_webgl2_defaults() } else { wgpu::Limits::default() };
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("headless"),
@@ -1981,12 +2594,20 @@ pub(crate) mod headless {
             ensure_volumes(&mut self.res, &self.device, &self.queue, vols);
             ensure_pool(&mut self.res, &self.device, data.len().saturating_sub(GLOBAL_V4 * 4));
             let bpr = (size[0] * 4).next_multiple_of(256);
-            let out = self.device.create_buffer(&wgpu::BufferDescriptor { label: Some("readback"), size: (bpr * size[1]) as u64, usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false });
+            let out = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("readback"),
+                size: (bpr * size[1]) as u64,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            });
             let mut enc = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
             draw(&mut self.res, &self.queue, &mut enc, &view, data);
             enc.copy_texture_to_buffer(
                 wgpu::TexelCopyTextureInfo { texture: &tex, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
-                wgpu::TexelCopyBufferInfo { buffer: &out, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(bpr), rows_per_image: Some(size[1]) } },
+                wgpu::TexelCopyBufferInfo {
+                    buffer: &out,
+                    layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(bpr), rows_per_image: Some(size[1]) },
+                },
                 wgpu::Extent3d { width: size[0], height: size[1], depth_or_array_layers: 1 },
             );
             let t0 = std::time::Instant::now();
@@ -2030,6 +2651,63 @@ mod headless_tests {
     /// error text (shown in the viewport and the log), never as a panic on the compile thread.
     /// Needs an adapter (the software one is fine); skips itself without.
     #[test]
+    #[ignore = "needs a graphics adapter"]
+    fn gpu_ground_is_transparent_and_colours_mix_without_a_dark_seam() {
+        use crate::model::{Kind, Material, Shape};
+        let start = std::time::Instant::now();
+        let mut gpu = headless::open(false).expect("a working graphics adapter and scene pipeline");
+        eprintln!("pipeline {:.1}s on {}", start.elapsed().as_secs_f64(), gpu.info);
+        let size = [128_u32, 128_u32];
+        let mut sc = Scene::default();
+        sc.groups[0].shapes =
+            vec![Shape::new(Kind::Sphere, [0.0, 0.0, -25.0], Material { color: [0.95, 0.04, 0.02], roughness: 0.8, ..Material::default() })];
+        sc.groups[0].shapes[0].size[0] = 15.0;
+        sc.env.grid = true;
+        sc.env.floor = true;
+        let mut cam = Camera { target: [0.0; 3], dist: 120.0, ..Camera::default() };
+        for above in [true, false] {
+            sc.groups[0].shapes[0].pos[2] = if above { -25.0 } else { 25.0 };
+            cam.look(0.0, if above { 1.568 } else { -1.568 });
+            let data = pack(&sc, &cam, [size[0] as f32, size[1] as f32], None, None, false);
+            let (rgba, _) = gpu.render(&data, size);
+            let red = rgba.chunks(4).filter(|p| p[0] > p[1].saturating_add(35) && p[0] > p[2].saturating_add(35)).count();
+            assert!(red > 60, "a model across the ground remains visible (above={above}, red={red})");
+        }
+        sc.env.grid = false;
+        sc.env.floor = false;
+        let material = Material { color: [1.0, 0.0, 0.0], roughness: 0.8, ..Material::default() };
+        let mut a = Shape::new(Kind::Sphere, [0.0, 0.0, 20.0], material);
+        a.blend = 8.0;
+        let mut b = a.clone();
+        b.material.color = [0.0, 0.0, 1.0];
+        sc.groups[0].shapes = vec![a, b];
+        cam = Camera::default();
+        cam.target = [0.0, 0.0, 20.0];
+        let data = pack(&sc, &cam, [size[0] as f32, size[1] as f32], None, None, false);
+        let (mixed, _) = gpu.render(&data, size);
+        sc.groups[0].shapes.truncate(1);
+        sc.groups[0].shapes[0].size[0] = 22.0;
+        sc.groups[0].shapes[0].material.color = [0.7297401, 0.0, 0.7297401];
+        let data = pack(&sc, &cam, [size[0] as f32, size[1] as f32], None, None, false);
+        let (reference, _) = gpu.render(&data, size);
+        let centre = ((size[1] / 2 * size[0] + size[0] / 2) * 4) as usize;
+        for i in 0..3 {
+            assert!(
+                (mixed[centre + i] as i16 - reference[centre + i] as i16).abs() < 6,
+                "GPU colour interpolation must match the expected linear-light mixture: {:?} vs {:?}",
+                &mixed[centre..centre + 3],
+                &reference[centre..centre + 3]
+            );
+        }
+    }
+
+    /// An imported mesh as the (software) GPU draws it, against the CPU field: our own STL of a small
+    /// model is read back, baked and put in a scene beside a sphere that melts into it and a
+    /// cylinder that carves it. The silhouettes of the two renderers must agree, and the mesh must
+    /// be there (it covers a good part of the picture).
+    /// `cargo test -p meltcad --release gpu_headless_mesh_matches_cpu -- --ignored --nocapture`
+    /// (OpenGL like the window: `WGPU_BACKEND=gl YURA_GL_LIMITS=1 xvfb-run ...`)
+    #[test]
     fn a_shader_the_driver_refuses_is_an_error_not_a_panic() {
         let Some((device, queue, info)) = headless::open_device(false) else {
             eprintln!("no adapter: skipped");
@@ -2071,7 +2749,7 @@ mod headless_tests {
             })
         });
         assert_eq!(errors.len(), 1, "{errors:?}");
-        assert!(errors[0].starts_with("test: 検証エラー"), "{}", errors[0]);
+        assert!(errors[0].starts_with("test: Validation error"), "{}", errors[0]);
         let (_, none) = scoped(&device, "test", || 1 + 1);
         assert!(none.is_empty());
     }
@@ -2079,7 +2757,12 @@ mod headless_tests {
     #[test]
     fn the_library_scene_has_the_asked_size() {
         let sc = library_scene(300);
-        assert!(sc.shape_count() >= 300 && sc.shape_count() <= 340 && sc.groups.len() < MAX_GROUPS, "{} shapes in {} groups", sc.shape_count(), sc.groups.len());
+        assert!(
+            sc.shape_count() >= 300 && sc.shape_count() <= 340 && sc.groups.len() < MAX_GROUPS,
+            "{} shapes in {} groups",
+            sc.shape_count(),
+            sc.groups.len()
+        );
     }
 
     /// Read the real WGSL curve distance back as pixels on an adapter. This covers the rounded
@@ -2099,10 +2782,15 @@ mod headless_tests {
         let mut depth = 0_i32;
         let mut close = None;
         for (off, ch) in src[open..].char_indices() {
-            if ch == '{' { depth += 1; }
+            if ch == '{' {
+                depth += 1;
+            }
             if ch == '}' {
                 depth -= 1;
-                if depth == 0 { close = Some(open + off); break; }
+                if depth == 0 {
+                    close = Some(open + off);
+                    break;
+                }
             }
         }
         src.replace_range(open..=close.expect("fragment end"), "{\n    let q = vec3<f32>(in.uv.x * 48.0 - 24.0, in.uv.y * 48.0 - 24.0, 0.0);\n    let d = curve_dist(shape_at(0), q);\n    return vec4<f32>(clamp((d + 16.0) / 32.0, 0.0, 1.0), 0.0, 0.0, 1.0);\n}");
@@ -2112,15 +2800,23 @@ mod headless_tests {
         apex.path = vec![[0.0, -16.0, 0.0, 4.0], [16.0, 0.0, 0.0, 4.0], [0.0, 16.0, 0.0, 4.0]];
         apex.params = [0.0, 0.0, 0.0, 1.0];
         let mut looped = Shape::new(Kind::Curve, [0.0; 3], Material::default());
-        looped.path = (0..12).map(|i| {
-            let a = i as f32 * std::f32::consts::TAU / 12.0;
-            [12.0 * a.cos(), 12.0 * a.sin(), 0.0, 4.0]
-        }).collect();
+        looped.path = (0..12)
+            .map(|i| {
+                let a = i as f32 * std::f32::consts::TAU / 12.0;
+                [12.0 * a.cos(), 12.0 * a.sin(), 0.0, 4.0]
+            })
+            .collect();
         looped.params = [1.0, 0.0, 0.0, 1.0];
         let size = [64_u32, 64_u32];
         for shape in [apex, looped] {
             let prep = Prepared::new(&shape);
-            let scene = Scene { groups: vec![Group { shapes: vec![shape], ..Group::new("pipe") }], melt: Default::default(), env: Default::default(), saved: Vec::new() };
+            let scene = Scene {
+                groups: vec![Group { shapes: vec![shape], ..Group::new("pipe") }],
+                melt: Default::default(),
+                env: Default::default(),
+                saved: Vec::new(),
+                anim: Default::default(),
+            };
             let data = pack(&scene, &Camera::default(), [size[0] as f32, size[1] as f32], None, None, false);
             let (pixels, _) = gpu.render(&data, size);
             assert_eq!(pixels.len(), (size[0] * size[1] * 4) as usize);
@@ -2129,7 +2825,9 @@ mod headless_tests {
                 for x in (0..size[0]).step_by(3) {
                     let q = [(x as f32 + 0.5) * 48.0 / size[0] as f32 - 24.0, (y as f32 + 0.5) * 48.0 / size[1] as f32 - 24.0, 0.0];
                     let cpu = prep.distance(q);
-                    if !(-15.5..15.5).contains(&cpu) { continue; }
+                    if !(-15.5..15.5).contains(&cpu) {
+                        continue;
+                    }
                     let gpu_d = f32::from(pixels[((y * size[0] + x) * 4) as usize]) * 32.0 / 255.0 - 16.0;
                     assert!((gpu_d - cpu).abs() < 0.18, "at {q:?}: GPU {gpu_d}, CPU {cpu}");
                     compared += 1;
@@ -2157,10 +2855,15 @@ mod headless_tests {
         let mut depth = 0_i32;
         let mut close = None;
         for (off, ch) in src[open..].char_indices() {
-            if ch == '{' { depth += 1; }
+            if ch == '{' {
+                depth += 1;
+            }
             if ch == '}' {
                 depth -= 1;
-                if depth == 0 { close = Some(open + off); break; }
+                if depth == 0 {
+                    close = Some(open + off);
+                    break;
+                }
             }
         }
         src.replace_range(open..=close.expect("fragment end"),
@@ -2172,24 +2875,20 @@ mod headless_tests {
             for axis in Axis::ALL {
                 let mut shape = Shape::new(kind, [0.0; 3], Material::default());
                 shape.size = if kind == Kind::Box { [30.0, 18.0, 40.0] } else { [14.0, 40.0, 1.0] };
-                shape.deformation = Some(Deformation::Twist(Twist {
-                    axis, degrees: 180.0, begin: 0.1, end: 0.9, ..Twist::default()
-                }));
+                shape.deformation = Some(Deformation::Twist(Twist { axis, degrees: 180.0, begin: 0.1, end: 0.9, ..Twist::default() }));
                 let prep = Prepared::new(&shape);
-                let scene = Scene {
-                    groups: vec![Group { shapes: vec![shape], ..Group::new("twist") }],
-                    melt: Default::default(), env: Default::default(), saved: Vec::new()
-                };
+                let scene = Scene { groups: vec![Group { shapes: vec![shape], ..Group::new("twist") }], ..Scene::default() };
                 let data = pack(&scene, &Camera::default(), [64.0, 64.0], None, None, false);
                 let (pixels, _) = gpu.render(&data, size);
                 assert_eq!(pixels.len(), (size[0] * size[1] * 4) as usize);
                 let mut compared = 0;
                 for y in (0..size[1]).step_by(4) {
                     for x in (0..size[0]).step_by(4) {
-                        let q = [(x as f32 + 0.5) * 48.0 / 64.0 - 24.0,
-                                 (y as f32 + 0.5) * 48.0 / 64.0 - 24.0, 6.0];
+                        let q = [(x as f32 + 0.5) * 48.0 / 64.0 - 24.0, (y as f32 + 0.5) * 48.0 / 64.0 - 24.0, 6.0];
                         let cpu = prep.distance(q);
-                        if !(-15.5..15.5).contains(&cpu) { continue; }
+                        if !(-15.5..15.5).contains(&cpu) {
+                            continue;
+                        }
                         let gpu_d = f32::from(pixels[((y * 64 + x) * 4) as usize]) * 32.0 / 255.0 - 16.0;
                         assert!((gpu_d - cpu).abs() < 0.25, "{kind:?}/{axis:?} at {q:?}: GPU {gpu_d} CPU {cpu}");
                         compared += 1;
@@ -2268,7 +2967,10 @@ mod headless_tests {
             }
         }
         eprintln!("{secs:.2} s, silhouette: {both} in both, {gpu_only} only the GPU, {cpu_only} only the CPU");
-        let _ = std::fs::write("/tmp/yt_scale/gpu_patterns.ppm", [format!("P6\n{} {}\n255\n", size[0], size[1]).into_bytes(), shown.chunks(4).flat_map(|p| [p[0], p[1], p[2]]).collect()].concat());
+        let _ = std::fs::write(
+            "/tmp/yt_scale/gpu_patterns.ppm",
+            [format!("P6\n{} {}\n255\n", size[0], size[1]).into_bytes(), shown.chunks(4).flat_map(|p| [p[0], p[1], p[2]]).collect()].concat(),
+        );
         assert!(both > 1500, "the scene covers a good part of the picture ({both})");
         // (the two march with different steps and hit limits, so a thin rim of edge pixels differs)
         assert!((gpu_only + cpu_only) * 100 < both * 6, "the silhouettes differ by more than 6%");
@@ -2300,15 +3002,28 @@ mod headless_tests {
         scenes.push(("default_fast", Scene::default(), Some(Pick::Shape(0, 0)), true));
         let mut glass = Scene::default();
         glass.groups[0].shapes.clear();
-        let mut ball = Shape::new(Kind::Sphere, [0.0, 0.0, 22.0], Material { glass: 1.0, color: [0.6, 0.8, 1.0], roughness: 0.1, ..Material::default() });
+        let mut ball =
+            Shape::new(Kind::Sphere, [0.0, 0.0, 22.0], Material { glass: 1.0, color: [0.6, 0.8, 1.0], roughness: 0.1, ..Material::default() });
         ball.size = [22.0, 22.0, 22.0];
         glass.groups[0].shapes.push(ball);
-        glass.groups[0].shapes.push(Shape::new(Kind::Box, [40.0, 10.0, 12.0], Material { metallic: 1.0, roughness: 0.25, iridescence: 0.6, coat: 0.8, ..Material::default() }));
-        glass.groups[0].shapes.push(Shape::new(Kind::Torus, [-40.0, 0.0, 14.0], Material { translucency: 0.8, color: [0.9, 0.5, 0.3], ..Material::default() }));
+        glass.groups[0].shapes.push(Shape::new(
+            Kind::Box,
+            [40.0, 10.0, 12.0],
+            Material { metallic: 1.0, roughness: 0.25, iridescence: 0.6, coat: 0.8, ..Material::default() },
+        ));
+        glass.groups[0].shapes.push(Shape::new(
+            Kind::Torus,
+            [-40.0, 0.0, 14.0],
+            Material { translucency: 0.8, color: [0.9, 0.5, 0.3], ..Material::default() },
+        ));
         scenes.push(("glass", glass.clone(), None, false));
         scenes.push(("glass_fast", glass.clone(), None, true));
         let mut lamp = glass.clone();
-        lamp.groups[0].shapes.push(Shape::new(Kind::Sphere, [0.0, 50.0, 30.0], Material { glow: 3.0, color: [1.0, 0.7, 0.3], ..Material::default() }));
+        lamp.groups[0].shapes.push(Shape::new(
+            Kind::Sphere,
+            [0.0, 50.0, 30.0],
+            Material { glow: 3.0, color: [1.0, 0.7, 0.3], ..Material::default() },
+        ));
         scenes.push(("lamp", lamp, Some(Pick::Shape(0, 1)), false));
         scenes.push(("library", library_scene(12), Some(Pick::Group(0)), false));
         let size = [240u32, 156u32];
@@ -2319,7 +3034,8 @@ mod headless_tests {
             let mut data = pack(&sc, &cam, [size[0] as f32, size[1] as f32], sel, None, false);
             set_view_flags(&mut data, crate::perf::view_flags(false, fast, crate::perf::scene_has_glow(&sc)));
             let (rgba, secs) = gpu.render(&data, size);
-            let ppm = [format!("P6\n{} {}\n255\n", size[0], size[1]).into_bytes(), rgba.chunks(4).flat_map(|p| [p[0], p[1], p[2]]).collect()].concat();
+            let ppm =
+                [format!("P6\n{} {}\n255\n", size[0], size[1]).into_bytes(), rgba.chunks(4).flat_map(|p| [p[0], p[1], p[2]]).collect()].concat();
             let _ = std::fs::write(dir.join(format!("{name}.ppm")), ppm);
             let lit = rgba.chunks(4).filter(|p| p[0] > 8 || p[1] > 8 || p[2] > 8).count();
             eprintln!("{name}: {secs:.2} s, {lit} lit pixels");
@@ -2406,7 +3122,10 @@ mod headless_tests {
         eprintln!("{secs:.2} s, mesh silhouette: {both} in both, {gpu_only} only the GPU, {cpu_only} only the CPU");
         if let Some(dir) = std::env::var_os("YURA_OUT") {
             let _ = std::fs::write(std::path::Path::new(&dir).join("mesh_scene.meltcad"), sc.to_json());
-            let _ = std::fs::write(std::path::Path::new(&dir).join("gpu_mesh.ppm"), [format!("P6\n{} {}\n255\n", size[0], size[1]).into_bytes(), shown.chunks(4).flat_map(|p| [p[0], p[1], p[2]]).collect()].concat());
+            let _ = std::fs::write(
+                std::path::Path::new(&dir).join("gpu_mesh.ppm"),
+                [format!("P6\n{} {}\n255\n", size[0], size[1]).into_bytes(), shown.chunks(4).flat_map(|p| [p[0], p[1], p[2]]).collect()].concat(),
+            );
         }
         assert!(both > 1500, "the mesh covers a good part of the picture ({both})");
         assert!((gpu_only + cpu_only) * 100 < both * 6, "the silhouettes differ by more than 6%");

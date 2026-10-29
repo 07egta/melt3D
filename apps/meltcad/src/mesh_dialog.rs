@@ -1,11 +1,11 @@
-//! The card for importing a mesh ("メッシュを読み込む"): file name and type, triangles, size, health
+//! The card for importing a mesh ("Import mesh"): file name and type, triangles, size, health
 //! notes, then the options (target size, which way is up, put it on the floor, put it in the middle,
 //! how fine), and a progress bar with a cancel button while the distance volume is baked on a
 //! worker thread. The result is a `Kind::Mesh` shape in a new group at the middle of the view.
 //! The state lives in egui's memory like the other cards, so `App` needs no new fields.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -13,34 +13,90 @@ use egui::{Align2, Color32, RichText, Stroke};
 
 use crate::app::App;
 use crate::mesh_import::{self, Baked, Loaded, RES_CHOICES, Settings, Up};
-use crate::model::{Group, MAX_GROUPS, MAX_SHAPES, Material, Pick};
-use crate::sdf_volume::{BakeControl, ERR_CANCEL};
+use crate::model::{Group, MAX_GROUPS, MAX_SHAPES, Material, MeshSource, Pick, Shape};
+use crate::sdf_volume::{BakeControl, ERR_CANCEL, Volume};
 use crate::style;
+use crate::work_budget;
 
-/// A job on another thread whose answer is picked up later.
-struct Job<T> {
+/// A worker that holds its memory permit until the actual thread exits.
+pub(crate) struct Job<T> {
     slot: Mutex<Option<Result<T, String>>>,
+    cancel: AtomicBool,
+    progress: AtomicU32,
 }
 
 impl<T: Send + 'static> Job<T> {
-    fn spawn(name: &str, f: impl FnOnce() -> Result<T, String> + Send + 'static) -> Arc<Job<T>> {
-        let job = Arc::new(Job { slot: Mutex::new(None) });
+    pub(crate) fn spawn(
+        name: &str,
+        ctx: &egui::Context,
+        f: impl FnOnce(&AtomicBool, &AtomicU32) -> Result<T, String> + Send + 'static,
+    ) -> Arc<Job<T>> {
+        let job = Arc::new(Job { slot: Mutex::new(None), cancel: AtomicBool::new(false), progress: AtomicU32::new(0) });
+        let permit = match work_budget::try_acquire(ctx) {
+            Ok(permit) => permit,
+            Err(e) => {
+                if let Ok(mut slot) = job.slot.lock() {
+                    *slot = Some(Err(e));
+                }
+                return job;
+            }
+        };
         let j = job.clone();
         let spawned = std::thread::Builder::new().name(name.into()).spawn(move || {
-            let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).unwrap_or_else(|_| Err("途中で止まってしまいました".into()));
-            if let Ok(mut s) = j.slot.lock() {
-                *s = Some(res);
+            let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(&j.cancel, &j.progress)))
+                .unwrap_or_else(|_| Err("Stopped partway through".into()));
+            let res = if j.cancel.load(Ordering::Relaxed) { Err(crate::import_mesh::IMPORT_CANCELLED.into()) } else { res };
+            drop(permit); // free the budget before the UI can see a completed read
+            if let Ok(mut slot) = j.slot.lock() {
+                *slot = Some(res);
             }
         });
-        if spawned.is_err()
-            && let Ok(mut s) = job.slot.lock()
+        if let Err(e) = spawned
+            && let Ok(mut slot) = job.slot.lock()
         {
-            *s = Some(Err("読みこみを始められませんでした".into()));
+            *slot = Some(Err(format!("Couldn't start loading: {e}")));
         }
         job
     }
-    fn take(&self) -> Option<Result<T, String>> {
+    pub(crate) fn cancel(&self) {
+        self.cancel.store(true, Ordering::Relaxed);
+    }
+    pub(crate) fn cancelled(&self) -> bool {
+        self.cancel.load(Ordering::Relaxed)
+    }
+    pub(crate) fn fraction(&self) -> f32 {
+        (self.progress.load(Ordering::Relaxed) as f32 / 1000.0).clamp(0.0, 1.0)
+    }
+    pub(crate) fn take(&self) -> Option<Result<T, String>> {
         self.slot.lock().ok()?.take()
+    }
+}
+
+/// Why a transfer is dropped: the document it was started for is gone (a new or opened design,
+/// or a control command that replaced the scene). It must never land in the new document.
+pub(crate) const DOCUMENT_REPLACED: &str = "別の作品が開かれたため、取り込みを取り消しました";
+
+/// The outcome of a SolidCraft transfer. A completed bake is not a success until its shape
+/// has actually been inserted into the Melt scene.
+#[derive(Clone)]
+pub struct SolidImport {
+    result: Arc<Mutex<Option<Result<(), String>>>>,
+    completed: Arc<AtomicBool>,
+}
+
+impl SolidImport {
+    fn new() -> Self {
+        Self { result: Arc::new(Mutex::new(None)), completed: Arc::new(AtomicBool::new(false)) }
+    }
+
+    pub fn take_result(&self) -> Option<Result<(), String>> {
+        self.result.lock().unwrap_or_else(|e| e.into_inner()).take()
+    }
+
+    fn complete(&self, result: Result<(), String>) {
+        if !self.completed.swap(true, Ordering::AcqRel) {
+            *self.result.lock().unwrap_or_else(|e| e.into_inner()) = Some(result);
+        }
     }
 }
 
@@ -51,6 +107,255 @@ struct BakeJob {
     /// What it is baking (the card may be changed meanwhile, the shape is made from these).
     loaded: Arc<Loaded>,
     settings: Settings,
+    path: Option<PathBuf>,
+    original: bool,
+}
+
+#[derive(Clone)]
+struct RebakeRequest {
+    group: usize,
+    shape: usize,
+    original: Shape,
+    res: u32,
+    path: Option<PathBuf>,
+    job: Option<Arc<RebakeJob>>,
+    msg: String,
+}
+
+struct RebakeJob {
+    job: Arc<Job<RebakeResult>>,
+    ctl: Arc<BakeControl>,
+    started: Instant,
+}
+
+struct RebakeResult {
+    baked: Baked,
+    before: (f32, f32, usize),
+    after: (f32, f32, usize),
+    elapsed: f64,
+    source: MeshSource,
+}
+
+fn rebake_id() -> egui::Id {
+    egui::Id::new("mesh_rebake_card")
+}
+
+/// Older MeshSource records have no fingerprint. Fall back to their original
+/// filename rather than accepting an arbitrary replacement silently.
+fn check_rebake_source(original: &Shape, file_name: &str, mesh_hash: u64) -> Result<(), String> {
+    if let Some(src) = &original.mesh_source {
+        if src.mesh_hash != 0 {
+            if src.mesh_hash != mesh_hash {
+                return Err("The original file has changed. Can't overwrite with a different model".into());
+            }
+            return Ok(());
+        }
+        let expected = Path::new(&src.path)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .filter(|s| !s.is_empty())
+            .or_else(|| (!original.source.is_empty()).then_some(original.source.as_str()))
+            .ok_or("This old mesh has no identifiable source. Please import the original mesh again")?;
+        if expected != file_name {
+            return Err("File name doesn't match the original mesh. Pick the original file".into());
+        }
+    } else if original.source.is_empty() || original.source != file_name {
+        return Err("File name doesn't match. Pick the original file".into());
+    }
+    Ok(())
+}
+
+/// The work of a re-bake. The file read, the residuals and the bake all watch the Stop flag of
+/// `c`, so Stop ends it promptly instead of after the whole file has been read.
+fn rebake_work(path: &Path, orig: &Shape, old: &Volume, resolution: u32, c: &BakeControl) -> Result<RebakeResult, String> {
+    let began = Instant::now();
+    let stopped = || c.cancel.load(Ordering::Relaxed);
+    let loaded = mesh_import::load_with_control(path, &c.cancel, &c.progress)?;
+    if stopped() {
+        return Err(ERR_CANCEL.into());
+    }
+    let hash = mesh_import::mesh_hash(&loaded.imported.mesh);
+    check_rebake_source(orig, &loaded.file_name, hash)?;
+    if stopped() {
+        return Err(ERR_CANCEL.into());
+    }
+    let y_up = orig.mesh_source.as_ref().map_or(loaded.imported.format.y_up_by_default(), |src| src.y_up);
+    let size = [0, 1, 2].map(|a| orig.size[a] * orig.scale[a]);
+    let before = mesh_import::surface_residual(&loaded.imported.mesh, y_up, orig.size, old);
+    if stopped() {
+        return Err(ERR_CANCEL.into());
+    }
+    // The old SDF is sampled in its original unscaled local coordinates.
+    // Convert the old residuals into conservative world-mm values.
+    let old_scale = orig.scale.into_iter().fold(0.0f32, f32::max);
+    let before = (before.0 * old_scale, before.1 * old_scale, before.2);
+    let baked = mesh_import::rebake(&loaded.imported.mesh, y_up, size, resolution, c)?;
+    if stopped() {
+        return Err(ERR_CANCEL.into());
+    }
+    let after = mesh_import::surface_residual(&loaded.imported.mesh, y_up, size, &baked.volume);
+    Ok(RebakeResult {
+        baked,
+        before,
+        after,
+        elapsed: began.elapsed().as_secs_f64(),
+        source: MeshSource { path: path.to_string_lossy().into_owned(), y_up, mesh_hash: hash },
+    })
+}
+
+fn launch_rebake(req: &mut RebakeRequest, ctx: &egui::Context) {
+    let Some(path) = req.path.clone() else {
+        req.msg = "Please pick the original mesh file again".into();
+        return;
+    };
+    let Some(old) = req.original.volume.clone() else { return };
+    let orig = req.original.clone();
+    let resolution = req.res;
+    let ctl = Arc::new(BakeControl::new());
+    let c = ctl.clone();
+    let job = Job::spawn("meltcad-mesh-rebake", ctx, move |_, _| rebake_work(&path, &orig, &old, resolution, &c));
+    req.job = Some(Arc::new(RebakeJob { job, ctl, started: Instant::now() }));
+    req.msg.clear();
+}
+
+fn begin_selected_rebake(app: &App, ctx: &egui::Context) {
+    let clicked = ctx.data_mut(|m| m.remove_temp::<bool>(egui::Id::new("rebake_inspector_clicked"))).unwrap_or(false);
+    if !clicked {
+        return;
+    }
+    let Some(Pick::Shape(group, shape)) = app.sel else { return };
+    let Some(original) = app.scene.shape(group, shape).cloned() else { return };
+    if original.volume.is_none() {
+        return;
+    }
+    let path = original.mesh_source.as_ref().map(|src| PathBuf::from(&src.path)).filter(|p| p.is_file());
+    ctx.data_mut(|m| m.insert_temp(rebake_id(), RebakeRequest { group, shape, original, res: 160, path, job: None, msg: String::new() }));
+}
+
+/// Completion may race with the Stop button: cancellation always wins.
+fn accept_rebake_result<T>(ctl: &BakeControl, result: Result<T, String>) -> Result<T, String> {
+    if ctl.cancel.load(Ordering::Acquire) { Err(ERR_CANCEL.into()) } else { result }
+}
+
+fn rebake_panel(app: &mut App, ctx: &egui::Context) {
+    let Some(mut req) = ctx.data_mut(|m| {
+        let r = m.get_temp::<RebakeRequest>(rebake_id());
+        m.remove::<RebakeRequest>(rebake_id());
+        r
+    }) else {
+        return;
+    };
+    let mut close = false;
+    if let Some(j) = req.job.clone() {
+        match j.job.take().map(|result| accept_rebake_result(&j.ctl, result)) {
+            Some(Ok(result)) => {
+                req.job = None;
+                // Reject stale results and replacements that would exceed the scene volume budget.
+                if app.scene.shape(req.group, req.shape) != Some(&req.original) {
+                    req.msg = "The target changed while editing. Please run it again".into();
+                } else {
+                    let mut candidate = app.scene.clone();
+                    if let Some(sh) = candidate.shape_mut(req.group, req.shape) {
+                        sh.volume = Some(result.baked.volume.clone());
+                        sh.size = result.baked.size;
+                        sh.scale = [1.0; 3];
+                        sh.mesh_source = Some(result.source);
+                    }
+                    if let Err(e) = crate::mesh::can_add(&candidate, std::iter::empty::<&Shape>()) {
+                        req.msg = e.into();
+                    } else {
+                        app.scene = candidate;
+                        app.say(
+                            ctx,
+                            format!(
+                                "Re-bake done in {:.2} s. Surface error avg {:.3}→{:.3} mm, max {:.3}→{:.3} mm ({} / {} points each)",
+                                result.elapsed, result.before.0, result.after.0, result.before.1, result.after.1, result.before.2, result.after.2
+                            ),
+                        );
+                        close = true;
+                    }
+                }
+            }
+            Some(Err(e)) => {
+                req.job = None;
+                req.msg = jp_error(&e);
+            }
+            None => ctx.request_repaint_after(std::time::Duration::from_millis(70)),
+        }
+    }
+    let mut start = false;
+    let mut pick = false;
+    egui::Window::new("Re-bake mesh").collapsible(false).resizable(false).show(ctx, |ui| {
+        let Some(vol) = req.original.volume.as_ref() else {
+            ui.label("No distance data");
+            return;
+        };
+        let size = [0, 1, 2].map(|a| req.original.size[a] * req.original.scale[a]);
+        let effective = [0, 1, 2].map(|a| vol.cell * req.original.scale[a]);
+        ui.label(format!("Current actual cell width: X {:.3} / Y {:.3} / Z {:.3} mm", effective[0], effective[1], effective[2]));
+        ui.label(format!("Target: {}", req.original.name));
+        ui.horizontal(|ui| {
+            ui.label("Detail:");
+            for r in [64, 96, 128, 160, 192, 256] {
+                ui.selectable_value(&mut req.res, r, r.to_string());
+            }
+        });
+        let e = mesh_import::estimate(size, 100_000, req.res);
+        let budget = crate::mesh::Usage::of(app.scene.groups.iter().flat_map(|g| g.shapes.iter()));
+        let remaining = crate::mesh::MAX_TOTAL_NODES.saturating_sub(budget.nodes.saturating_sub(vol.nodes()));
+        ui.label(format!("Estimated nodes: {} / limit {}, working distance array about {:.1} MB", e.nodes, remaining, e.nodes as f64 * 4.0 / 1e6));
+        let projected_cell = size.into_iter().fold(0.0_f32, f32::max) / req.res as f32;
+        let min_dim = size.into_iter().fold(f32::INFINITY, f32::min);
+        if min_dim < 3.0 * projected_cell {
+            ui.colored_label(style::CUT, "Note: thin parts are close to the cell width and may disappear");
+        }
+        if e.nodes > remaining {
+            ui.colored_label(style::CUT, "Over the memory or scene limit. Lower the detail");
+        }
+        if let Some(p) = &req.path {
+            ui.label(format!("Original file: {}", p.display()));
+        } else {
+            ui.colored_label(style::CUT, "Original file location unknown. Please pick it again");
+        }
+        if let Some(j) = &req.job {
+            ui.label(format!(
+                "Recalculating {:.0}% / {:.1} sec",
+                j.ctl.progress.load(Ordering::Relaxed) as f32 / 10.0,
+                j.started.elapsed().as_secs_f64()
+            ));
+            if ui.button("Stop").clicked() {
+                j.ctl.cancel.store(true, Ordering::Relaxed);
+            }
+        } else {
+            ui.horizontal(|ui| {
+                if ui.button("Pick original file again…").clicked() {
+                    pick = true;
+                }
+                if ui.add_enabled(req.path.is_some() && e.nodes <= remaining, egui::Button::new("Start re-bake")).clicked() {
+                    start = true;
+                }
+                if ui.button("Close").clicked() {
+                    close = true;
+                }
+            });
+        }
+        if !req.msg.is_empty() {
+            ui.colored_label(style::CUT, &req.msg);
+        }
+    });
+    if pick && let Some(path) = rfd::FileDialog::new().add_filter("Mesh", &mesh_import::EXTENSIONS).pick_file() {
+        req.path = Some(path);
+    }
+    if start {
+        launch_rebake(&mut req, ctx);
+    }
+    if close {
+        if let Some(j) = &req.job {
+            j.ctl.cancel.store(true, Ordering::Relaxed);
+        }
+    } else {
+        ctx.data_mut(|m| m.insert_temp(rebake_id(), req));
+    }
 }
 
 #[derive(Clone)]
@@ -62,11 +367,31 @@ struct Dlg {
     bake: Option<Arc<BakeJob>>,
     msg: String,
     open: bool,
+    path: Option<PathBuf>,
+    /// An automatic SolidCraft transfer is waiting for the previous worker to free the
+    /// memory budget. It starts itself as soon as the permit is free, without a click.
+    waiting: bool,
+    /// An in-memory SolidCraft transfer, completed only after insertion or explicit cancellation.
+    completion: Option<SolidImport>,
+    /// The document it belongs to (see `App::document_generation`): a card started for another
+    /// document is discarded instead of adding its shape to the new one.
+    generation: u64,
 }
 
 impl Default for Dlg {
     fn default() -> Dlg {
-        Dlg { reading: None, loaded: None, st: Settings::new([60.0; 3]), bake: None, msg: String::new(), open: false }
+        Dlg {
+            reading: None,
+            loaded: None,
+            st: Settings::new([60.0; 3]),
+            bake: None,
+            msg: String::new(),
+            open: false,
+            path: None,
+            waiting: false,
+            completion: None,
+            generation: 0,
+        }
     }
 }
 
@@ -74,51 +399,118 @@ fn id() -> egui::Id {
     egui::Id::new("mesh_import_card")
 }
 
-/// Menu entry "メッシュを読み込む…": ask for a file, then show the card.
-pub fn open(ctx: &egui::Context) {
-    let Some(path) = rfd::FileDialog::new().add_filter("メッシュ (STL・OBJ・3MF・PLY・GLB)", &mesh_import::EXTENSIONS).pick_file() else { return };
-    open_path(ctx, path);
+/// Imports and re-bakes must finish or be cancelled before changing modelling views.
+pub fn is_open(ctx: &egui::Context) -> bool {
+    ctx.data(|m| m.get_temp::<Dlg>(id()).is_some_and(|d| d.open) || m.get_temp::<RebakeRequest>(rebake_id()).is_some())
+}
+
+fn cancel_dialog(d: &Dlg, reason: &str) {
+    if let Some((job, _)) = &d.reading {
+        job.cancel();
+    }
+    if let Some(b) = &d.bake {
+        b.ctl.cancel.store(true, Ordering::Relaxed);
+        b.job.cancel();
+    }
+    if let Some(completion) = &d.completion {
+        completion.complete(Err(reason.into()));
+    }
+}
+
+/// Cancel any import or re-bake owned by this context, including pending SolidCraft transfers.
+#[cfg(test)]
+pub fn cancel(ctx: &egui::Context) -> bool {
+    let (dialog, rebake) = ctx.data_mut(|m| {
+        let dialog = m.remove_temp::<Dlg>(id());
+        let rebake = m.get_temp::<RebakeRequest>(rebake_id());
+        m.remove::<RebakeRequest>(rebake_id());
+        (dialog, rebake)
+    });
+    let had_request = dialog.is_some() || rebake.is_some();
+    if let Some(d) = dialog {
+        cancel_dialog(&d, "SolidCraft の取り込みを取り消しました");
+    }
+    if let Some(req) = rebake
+        && let Some(job) = req.job
+    {
+        job.ctl.cancel.store(true, Ordering::Relaxed);
+    }
+    had_request
+}
+
+/// Start converting an already loaded exact solid, retaining its original Z-up millimetres.
+/// An existing import is left intact so another operation cannot silently replace it.
+/// `generation` is the document it was started for (see `App::document_generation`).
+pub fn open_solid(ctx: &egui::Context, loaded: Loaded, generation: u64) -> Result<SolidImport, String> {
+    if is_open(ctx) {
+        return Err("先にメッシュの取り込みや再計算を完了するか、取り消してください".into());
+    }
+    let completion = SolidImport::new();
+    let st =
+        Settings { target_mm: loaded.size.into_iter().fold(0.0, f32::max), up: Up::Z, floor: false, centre: false, ..Settings::new(loaded.size) };
+    let mut d = Dlg { loaded: Some(Arc::new(loaded)), st, open: true, completion: Some(completion.clone()), generation, ..Dlg::default() };
+    start_bake(&mut d, ctx);
+    ctx.data_mut(|m| m.insert_temp(id(), d));
+    ctx.request_repaint();
+    Ok(completion)
+}
+
+/// Menu entry "Import mesh…": ask for a file, then show the card.
+pub fn open(ctx: &egui::Context, generation: u64) {
+    let Some(path) = rfd::FileDialog::new().add_filter("Mesh (STL, OBJ, 3MF, PLY, GLB)", &mesh_import::EXTENSIONS).pick_file() else {
+        return;
+    };
+    open_path(ctx, path, generation);
 }
 
 /// Show the card for this file (a dropped file, or the one just chosen).
-pub fn open_path(ctx: &egui::Context, path: PathBuf) {
-    let mut d = ctx.data_mut(|m| m.remove_temp::<Dlg>(id())).filter(|d| d.open).unwrap_or_default();
-    if let Some(b) = &d.bake {
-        b.ctl.cancel.store(true, Ordering::Relaxed);
+pub fn open_path(ctx: &egui::Context, path: PathBuf, generation: u64) {
+    if let Some(d) = ctx.data_mut(|m| m.remove_temp::<Dlg>(id())) {
+        // A cancelled worker still owns large allocations until it has actually exited.
+        // (a pending SolidCraft transfer is cancelled below instead, as before)
+        if d.open && d.completion.is_none() && (d.reading.is_some() || d.bake.is_some()) {
+            let mut d = d;
+            d.msg = "Busy. Stop the current job and wait for it to end before opening another file".into();
+            ctx.data_mut(|m| m.insert_temp(id(), d));
+            return;
+        }
+        cancel_dialog(&d, "別のメッシュの読み込みに切り替えたため、SolidCraft の取り込みを取り消しました");
     }
-    d.bake = None;
-    d.loaded = None;
-    d.msg.clear();
-    d.open = true;
     let p = path.clone();
-    d.reading = Some((Job::spawn("meltcad-mesh-read", move || mesh_import::load(&p)), path));
+    let d = Dlg {
+        open: true,
+        path: Some(path.clone()),
+        reading: Some((Job::spawn("meltcad-mesh-read", ctx, move |cancel, progress| mesh_import::load_with_control(&p, cancel, progress)), path)),
+        generation,
+        ..Dlg::default()
+    };
     ctx.data_mut(|m| m.insert_temp(id(), d));
     ctx.request_repaint();
 }
 
 /// Dropped mesh files open the card (other kinds are left for the rest of the app).
-fn take_drops(ctx: &egui::Context) {
+fn take_drops(ctx: &egui::Context, generation: u64) {
     let files = ctx.input(|i| i.raw.dropped_files.clone());
     for f in files {
         let path = f.path().to_path_buf();
         if mesh_import::is_mesh_file(&path) {
-            open_path(ctx, path);
+            open_path(ctx, path, generation);
             break;
         }
     }
 }
 
 fn count_text(n: usize) -> String {
-    if n >= 10_000 { format!("{:.1}万", n as f64 / 1.0e4) } else { format!("{n}") }
+    if n >= 10_000 { format!("{:.1} x10K", n as f64 / 1.0e4) } else { format!("{n}") }
 }
 
 fn time_text(s: f64) -> String {
     if s < 1.5 {
-        "1秒くらい".into()
+        "about 1 sec".into()
     } else if s < 90.0 {
-        format!("{s:.0}秒くらい")
+        format!("about {s:.0} sec")
     } else {
-        format!("{:.0}分くらい", s / 60.0)
+        format!("about {:.0} min", s / 60.0)
     }
 }
 
@@ -132,56 +524,102 @@ fn size_text(s: [f32; 3]) -> String {
 
 /// Friendly words for an error from the readers or the bake.
 fn jp_error(e: &str) -> String {
-    if e == ERR_CANCEL { "やめました".into() } else { e.to_string() }
+    if e == ERR_CANCEL || e == crate::import_mesh::IMPORT_CANCELLED { "Cancelled".into() } else { e.to_string() }
 }
 
-fn start_bake(d: &mut Dlg) {
+fn start_bake(d: &mut Dlg, ctx: &egui::Context) {
     let Some(loaded) = d.loaded.clone() else { return };
+    d.waiting = false;
     let settings = d.st.sanitized();
     let ctl = Arc::new(BakeControl::new());
     let (l, c) = (loaded.clone(), ctl.clone());
-    let job = Job::spawn("meltcad-mesh-bake", move || mesh_import::bake(&l.imported.mesh, l.imported.format, &settings, &c));
-    d.bake = Some(Arc::new(BakeJob { job, ctl, started: Instant::now(), loaded, settings }));
+    let original = d.completion.is_some();
+    let job = Job::spawn("meltcad-mesh-bake", ctx, move |cancel, _| {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(ERR_CANCEL.into());
+        }
+        let out = if original {
+            mesh_import::bake_original(&l.imported.mesh, settings.res, &c)
+        } else {
+            mesh_import::bake(&l.imported.mesh, l.imported.format, &settings, &c)
+        };
+        if cancel.load(Ordering::Relaxed) { Err(ERR_CANCEL.into()) } else { out }
+    });
+    d.bake = Some(Arc::new(BakeJob { job, ctl, started: Instant::now(), loaded, settings, path: d.path.clone(), original }));
     d.msg.clear();
 }
 
-/// The shape and group of a baked mesh go into the scene. Returns whether the card can close.
-fn finish(app: &mut App, ctx: &egui::Context, b: &BakeJob, baked: &Baked) -> bool {
+/// The shape and group of a baked mesh go into the scene, or the card keeps a visible reason.
+fn finish(app: &mut App, ctx: &egui::Context, b: &BakeJob, baked: &Baked) -> Result<(), String> {
+    if !app.allow_scene_structure_change() {
+        return Err("編集中のスケッチや立体を確定するか、取り消してから取り込んでください".into());
+    }
     if app.scene.groups.len() >= MAX_GROUPS {
-        app.say(ctx, format!("グループは{MAX_GROUPS}個までです"));
-        return false;
+        return Err(format!("Up to {MAX_GROUPS} groups"));
     }
     if app.scene.shape_count() >= MAX_SHAPES {
-        app.say(ctx, format!("形は{MAX_SHAPES}個までです"));
-        return false;
+        return Err(format!("Up to {MAX_SHAPES} shapes"));
     }
     if let Some(why) = mesh_import::refuse(&app.scene, baked.volume.nodes()) {
-        app.say(ctx, why);
-        return false;
+        return Err(why.into());
     }
     let st = b.settings;
     let pos = mesh_import::place(baked, st.floor, st.centre, [app.cam.target[0], app.cam.target[1]]);
-    let clay = Material::plain([0.80, 0.80, 0.83], 0.5, 0.0);
-    let shape = mesh_import::shape_of(baked, &b.loaded.stem, &b.loaded.file_name, pos, clay);
+    let clay = b.loaded.imported.appearance.unwrap_or_else(|| Material::plain([0.80, 0.80, 0.83], 0.5, 0.0));
+    let mut shape = mesh_import::shape_of(baked, &b.loaded.stem, &b.loaded.file_name, pos, clay);
+    if let Some(path) = b.path.as_ref() {
+        shape.mesh_source = Some(MeshSource {
+            path: path.to_string_lossy().into_owned(),
+            y_up: b.settings.up.is_y(b.loaded.imported.format),
+            mesh_hash: mesh_import::mesh_hash(&b.loaded.imported.mesh),
+        });
+    }
     let mut group = Group::new(b.loaded.stem.clone());
+    if b.original {
+        // Use the ordinary group "Melt: on" default so the global Melt amount works
+        // immediately, including when the transferred mesh is alone in its group.
+        group.blend = 12.0;
+    }
     group.shapes.push(shape);
+    app.settle(ctx);
     app.scene.groups.push(group);
     let gi = app.scene.groups.len() - 1;
     app.sel = Some(Pick::Shape(gi, 0));
+    app.settle(ctx);
     app.frame_view(true);
     let secs = baked.stats.bvh_secs + baked.stats.sign_secs + baked.stats.dist_secs;
-    app.say(ctx, format!("メッシュを入れました: {}（{}・{:.1}秒）", b.loaded.file_name, size_text(baked.size), secs));
-    true
+    if b.original {
+        app.tab = crate::app::Tab::Melt;
+        app.say(ctx, format!("SolidCraft の立体を取り込みました（{}・{secs:.1} 秒）", size_text(baked.size)));
+    } else {
+        app.say(ctx, format!("Added mesh: {} ({} · {:.1} sec)", b.loaded.file_name, size_text(baked.size), secs));
+    }
+    Ok(())
 }
 
 /// Call once per frame: handles dropped files, the running jobs, and shows the card when it is open.
 pub fn update(app: &mut App, ctx: &egui::Context) {
-    take_drops(ctx);
+    take_drops(ctx, app.document_generation());
+    begin_selected_rebake(app, ctx);
+    rebake_panel(app, ctx);
+    let generation = app.document_generation();
     let Some(mut d) = ctx.data_mut(|m| m.remove_temp::<Dlg>(id())).filter(|d| d.open) else { return };
+    if d.generation != generation {
+        // The document this card was started for is gone (File > New / Open, or a control
+        // command). Its shape belongs to the old one: drop it without touching this scene.
+        cancel_dialog(&d, DOCUMENT_REPLACED);
+        return;
+    }
     // the file has been read
     if let Some((job, path)) = d.reading.clone() {
         match job.take() {
             Some(Ok(l)) => {
+                if job.cancelled() {
+                    d.reading = None;
+                    d.msg = "Cancelled".into();
+                    ctx.data_mut(|m| m.insert_temp(id(), d));
+                    return;
+                }
                 d.st = Settings::new(l.size);
                 d.msg.clear();
                 d.loaded = Some(Arc::new(l));
@@ -195,36 +633,95 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
         }
     }
     // the bake has finished
-    let mut close = false;
+    let mut inserted = false;
+    // A cancelled worker holds the memory budget until it has really exited. An automatic
+    // transfer waits for it and starts itself: a "busy" card would need a click nobody expects.
+    if d.waiting && d.bake.is_none() {
+        if work_budget::is_busy(ctx) {
+            ctx.request_repaint_after(std::time::Duration::from_millis(60));
+        } else {
+            start_bake(&mut d, ctx);
+        }
+    }
     if let Some(b) = d.bake.clone() {
         match b.job.take() {
             Some(Ok(baked)) => {
                 d.bake = None;
-                close = finish(app, ctx, &b, &baked);
+                if b.ctl.cancel.load(Ordering::Relaxed) || b.job.cancelled() {
+                    d.msg = "Cancelled".into();
+                } else {
+                    match finish(app, ctx, &b, &baked) {
+                        Ok(()) => inserted = true,
+                        Err(e) => d.msg = e,
+                    }
+                }
             }
             Some(Err(e)) => {
                 d.bake = None;
-                d.msg = jp_error(&e);
+                if e == work_budget::BUSY && d.completion.is_some() && d.loaded.is_some() {
+                    d.waiting = true;
+                    d.msg.clear();
+                    ctx.request_repaint_after(std::time::Duration::from_millis(60));
+                } else {
+                    d.msg = jp_error(&e);
+                }
             }
             None => ctx.request_repaint_after(std::time::Duration::from_millis(60)),
         }
     }
+    if inserted {
+        if let Some(completion) = &d.completion {
+            completion.complete(Ok(()));
+        }
+        return;
+    }
+    let mut close = false;
     let mut go = false;
     let mut pick = false;
     let busy_read = d.reading.is_some();
+    let original = d.completion.is_some();
     egui::Area::new(egui::Id::new("mesh_import_area")).order(egui::Order::Foreground).anchor(Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
         style::card().show(ui, |ui| {
             ui.set_width(380.0);
-            ui.label(RichText::new("メッシュを読み込む").strong().size(15.0));
-            ui.label(RichText::new("STL・OBJ・3MF・PLY・GLB の立体を、ほかの形と同じようにとかしたり くり抜いたりできます").size(11.5).color(style::DIM));
+            if original {
+                ui.label(RichText::new("SolidCraft の立体を Melt に取り込み中").strong().size(15.0));
+                ui.label(RichText::new("大きさと位置を保って、メルトできる形に変換します。").size(11.5).color(style::DIM));
+            } else {
+                ui.label(RichText::new("Import mesh").strong().size(15.0));
+                ui.label(RichText::new("Loads STL, OBJ, 3MF, PLY and GLB solids. Melt or cut them like other shapes").size(11.5).color(style::DIM));
+            }
             ui.add_space(4.0);
             if let Some(b) = d.bake.clone() {
                 baking(ui, &b);
             } else if busy_read {
-                ui.label(RichText::new("ファイルを読んでいます…").color(style::DIM));
+                ui.label(RichText::new("Reading the file…").color(style::DIM));
+                if let Some((job, _)) = &d.reading {
+                    ui.add(egui::ProgressBar::new(job.fraction()).show_percentage());
+                    if job.cancelled() {
+                        ui.label("Waiting for the stop to finish (memory is freed after parsing)…");
+                    }
+                }
                 if let Some((_, p)) = &d.reading {
                     ui.label(RichText::new(p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()).size(11.5).color(style::DIM));
                 }
+            } else if d.waiting {
+                ui.label(RichText::new("前の作業が終わるのを待っています…").size(12.0).color(style::DIM));
+            } else if original {
+                if let Some(loaded) = &d.loaded {
+                    ui.label(RichText::new(format!("立体の大きさ: {}", size_text(loaded.size))).size(12.0));
+                }
+                ui.label(RichText::new("SolidCraft の作業は残っています。もう一度試すか、取り消して編集に戻れます。").size(11.5).color(style::DIM));
+                ui.horizontal(|ui| {
+                    ui.label("細かさ");
+                    for res in RES_CHOICES {
+                        if style::pill(ui, &res.to_string(), d.st.res == res)
+                            .on_hover_text("大きいほど滑らかになります。容量の上限で失敗したときは小さくして再試行できます")
+                            .clicked()
+                        {
+                            d.st.res = res;
+                        }
+                    }
+                });
             } else {
                 options(ui, &mut d, app, &mut pick);
             }
@@ -234,42 +731,61 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
             }
             ui.add_space(4.0);
             ui.horizontal(|ui| {
-                if d.bake.is_some() {
-                    if style::pill(ui, "中止", false).clicked()
-                        && let Some(b) = &d.bake
-                    {
+                if original && d.reading.is_none() {
+                    if d.bake.is_none() && !d.waiting {
+                        ui.add_enabled_ui(d.loaded.is_some() && !app.scene_structure_locked(), |ui| {
+                            if style::pill(ui, "もう一度", true).clicked() {
+                                go = true;
+                            }
+                        });
+                    }
+                    if ui.button("取消").clicked() {
+                        close = true;
+                    }
+                } else if let Some(b) = &d.bake {
+                    if style::pill(ui, "Stop", false).clicked() {
                         b.ctl.cancel.store(true, Ordering::Relaxed);
+                        b.job.cancel();
+                    }
+                    if b.ctl.cancel.load(Ordering::Relaxed) {
+                        ui.label("Waiting for the stop to finish…");
+                    }
+                } else if let Some((job, _)) = &d.reading {
+                    if style::pill(ui, "Stop", false).clicked() {
+                        job.cancel();
                     }
                 } else {
-                    ui.add_enabled_ui(d.loaded.is_some(), |ui| {
-                        let b = egui::Button::new(RichText::new("読みこむ").strong().color(Color32::WHITE)).fill(style::ACCENT_SOFT).stroke(Stroke::new(1.0, style::ACCENT));
+                    ui.add_enabled_ui(d.loaded.is_some() && !app.scene_structure_locked(), |ui| {
+                        let b = egui::Button::new(RichText::new("Load").strong().color(Color32::WHITE))
+                            .fill(style::ACCENT_SOFT)
+                            .stroke(Stroke::new(1.0, style::ACCENT));
                         if ui.add(b).clicked() {
                             go = true;
                         }
                     });
-                    if ui.button("やめる").clicked() {
+                    if ui.button("Cancel").clicked() {
                         close = true;
                     }
                 }
             });
         });
     });
-    if pick && let Some(p) = rfd::FileDialog::new().add_filter("メッシュ", &mesh_import::EXTENSIONS).pick_file() {
+    if pick && let Some(p) = rfd::FileDialog::new().add_filter("Mesh", &mesh_import::EXTENSIONS).pick_file() {
         ctx.data_mut(|m| m.insert_temp(id(), d));
-        open_path(ctx, p);
+        open_path(ctx, p, generation);
         return;
     }
     if go {
-        let nodes = d.loaded.as_ref().map_or(0, |l| estimate_of(l, &d.st).nodes);
+        let nodes = d.loaded.as_ref().map_or(0, |l| {
+            if original { mesh_import::estimate(l.size, l.imported.mesh.triangles.len(), d.st.res).nodes } else { estimate_of(l, &d.st).nodes }
+        });
         match mesh_import::refuse(&app.scene, nodes) {
             Some(why) => d.msg = why.to_string(),
-            None => start_bake(&mut d),
+            None => start_bake(&mut d, ctx),
         }
     }
     if close {
-        if let Some(b) = &d.bake {
-            b.ctl.cancel.store(true, Ordering::Relaxed);
-        }
+        cancel_dialog(&d, "SolidCraft の取り込みを取り消しました");
         return;
     }
     ctx.data_mut(|m| m.insert_temp(id(), d));
@@ -284,8 +800,13 @@ fn estimate_of(l: &Loaded, st: &Settings) -> mesh_import::Estimate {
 }
 
 fn baking(ui: &mut egui::Ui, b: &BakeJob) {
-    ui.label(RichText::new(format!("かたちをはかっています… {}", b.loaded.file_name)).size(13.0));
-    ui.label(RichText::new("まわりの空間までの きょりを 計算しています").size(11.5).color(style::DIM));
+    if b.original {
+        ui.label(RichText::new("立体の表面までの距離を計算しています").size(13.0));
+        ui.label(RichText::new(format!("大きさ: {}", size_text(b.loaded.size))).size(11.5).color(style::DIM));
+    } else {
+        ui.label(RichText::new(format!("Measuring the shape… {}", b.loaded.file_name)).size(13.0));
+        ui.label(RichText::new("Calculating distance to the surrounding space").size(11.5).color(style::DIM));
+    }
     let frac = (b.ctl.progress.load(Ordering::Relaxed) as f32 / 1000.0).clamp(0.0, 1.0);
     let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 10.0), egui::Sense::hover());
     ui.painter().rect_filled(rect, 5.0, style::PANEL_DARK);
@@ -293,38 +814,47 @@ fn baking(ui: &mut egui::Ui, b: &BakeJob) {
     if w > 1.0 {
         ui.painter().rect_filled(egui::Rect::from_min_size(rect.min, egui::vec2(w, rect.height())), 5.0, style::ACCENT);
     }
-    ui.label(RichText::new(format!("{:.0}%　{:.0}秒", frac * 100.0, b.started.elapsed().as_secs_f64())).size(11.5).color(style::DIM));
+    let unit = if b.original { "秒" } else { "sec" };
+    ui.label(RichText::new(format!("{:.0}%  {:.0} {unit}", frac * 100.0, b.started.elapsed().as_secs_f64())).size(11.5).color(style::DIM));
 }
 
 fn options(ui: &mut egui::Ui, d: &mut Dlg, app: &App, pick: &mut bool) {
     ui.horizontal(|ui| {
-        if style::pill(ui, "ファイルをえらぶ…", false).clicked() {
+        if style::pill(ui, "Choose file…", false).clicked() {
             *pick = true;
         }
     });
-    ui.label(RichText::new("（ファイルを ここにドラッグしてもOK）").size(11.0).color(style::DIM));
+    ui.label(RichText::new("(You can also drag a file here)").size(11.0).color(style::DIM));
     let Some(l) = d.loaded.clone() else { return };
     ui.add_space(2.0);
     let imp = &l.imported;
-    let dropped = if imp.dropped_triangles > 0 { format!("（面積のない {} 個はのぞきました）", imp.dropped_triangles) } else { String::new() };
-    ui.label(RichText::new(format!("{}　{}　三角形 {}{}", l.file_name, imp.format.label(), count_text(imp.mesh.triangles.len()), dropped)).size(12.5));
+    let dropped = if imp.dropped_triangles > 0 { format!("({} zero-area removed)", imp.dropped_triangles) } else { String::new() };
+    ui.label(
+        RichText::new(format!("{} · {} · triangles {}{}", l.file_name, imp.format.label(), count_text(imp.mesh.triangles.len()), dropped)).size(12.5),
+    );
     let y_up = d.st.up.is_y(imp.format);
-    ui.label(RichText::new(format!("もとの大きさ {}", size_text(mesh_import::upright_size(l.size, y_up)))).size(11.5).color(style::DIM));
+    ui.label(RichText::new(format!("Original size {}", size_text(mesh_import::upright_size(l.size, y_up)))).size(11.5).color(style::DIM));
     for n in &imp.notes {
-        ui.label(RichText::new(format!("・{n}")).size(11.5).color(style::KEEP));
+        ui.label(RichText::new(format!("· {n}")).size(11.5).color(style::KEEP));
     }
     ui.add_space(2.0);
     egui::Grid::new("mesh_import_grid").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
-        ui.label(RichText::new("目標の大きさ").color(style::DIM));
+        ui.label(RichText::new("Target size").color(style::DIM));
         ui.horizontal(|ui| {
-            ui.add(egui::DragValue::new(&mut d.st.target_mm).speed(0.5).range(mesh_import::MIN_TARGET_MM..=mesh_import::MAX_TARGET_MM).suffix(" mm").max_decimals(1))
-                .on_hover_text("いちばん長い辺の長さ");
-            if style::pill(ui, "もとの大きさ", false).on_hover_text("ファイルの大きさのまま（200mmより大きいときは200mm）").clicked() {
+            ui.add(
+                egui::DragValue::new(&mut d.st.target_mm)
+                    .speed(0.5)
+                    .range(mesh_import::MIN_TARGET_MM..=mesh_import::MAX_TARGET_MM)
+                    .suffix(" mm")
+                    .max_decimals(1),
+            )
+            .on_hover_text("Length of the longest side");
+            if style::pill(ui, "Original size", false).on_hover_text("Keeps the file's size (capped at 200 mm if bigger)").clicked() {
                 d.st.target_mm = mesh_import::default_target(l.size);
             }
         });
         ui.end_row();
-        ui.label(RichText::new("向き").color(style::DIM));
+        ui.label(RichText::new("Orientation").color(style::DIM));
         let items: Vec<(&str, &str)> = Up::ALL.iter().map(|u| (u.label(), u.hint())).collect();
         let cur = Up::ALL.iter().position(|u| *u == d.st.up);
         if let Some(i) = style::segmented(ui, "mesh_up", &items, cur, false)
@@ -335,14 +865,17 @@ fn options(ui: &mut egui::Ui, d: &mut Dlg, app: &App, pick: &mut bool) {
         ui.end_row();
         ui.label("");
         ui.vertical(|ui| {
-            style::checkbox(ui, &mut d.st.floor, "床に置く").on_hover_text("いちばん下を 床（高さ0）にそろえます");
-            style::checkbox(ui, &mut d.st.centre, "まんなかに置く").on_hover_text("いま見ている場所の まんなかに置きます。切ると、ファイルの位置のまま");
+            style::checkbox(ui, &mut d.st.floor, "Place on floor").on_hover_text("Lines the bottom up with the floor (height 0)");
+            style::checkbox(ui, &mut d.st.centre, "Centre it").on_hover_text("Puts it in the middle of the view. Off keeps the file's position");
         });
         ui.end_row();
-        ui.label(RichText::new("細かさ").color(style::DIM));
+        ui.label(RichText::new("Detail").color(style::DIM));
         ui.horizontal(|ui| {
             for r in RES_CHOICES {
-                if style::pill(ui, &r.to_string(), d.st.res == r).on_hover_text("いちばん長い辺を 何マスに分けるか。大きいほど きれいで、重くなります").clicked() {
+                if style::pill(ui, &r.to_string(), d.st.res == r)
+                    .on_hover_text("Cells across the longest side. Bigger is smoother but heavier")
+                    .clicked()
+                {
                     d.st.res = r;
                 }
             }
@@ -352,7 +885,9 @@ fn options(ui: &mut egui::Ui, d: &mut Dlg, app: &App, pick: &mut bool) {
     let e = estimate_of(&l, &d.st);
     let refuse = mesh_import::refuse(&app.scene, e.nodes);
     let col = if refuse.is_some() { style::CUT } else { style::DIM };
-    ui.label(RichText::new(format!("目安: {}・ファイル {}・マス {}", time_text(e.secs), bytes_text(e.bytes), count_text(e.nodes))).size(11.5).color(col));
+    ui.label(
+        RichText::new(format!("About {} · file {} · cells {}", time_text(e.secs), bytes_text(e.bytes), count_text(e.nodes))).size(11.5).color(col),
+    );
     if let Some(why) = refuse {
         ui.label(RichText::new(why).size(11.5).color(style::CUT));
     }
@@ -361,23 +896,39 @@ fn options(ui: &mut egui::Ui, d: &mut Dlg, app: &App, pick: &mut bool) {
 /// The part of the inspector for a mesh shape: where it came from, how big it is, how fine.
 pub fn inspector(ui: &mut egui::Ui, sh: &mut crate::model::Shape) {
     ui.horizontal_wrapped(|ui| {
-        ui.label(RichText::new("もとのファイル").color(style::DIM).size(12.0));
-        ui.label(RichText::new(if sh.source.is_empty() { "（不明）" } else { &sh.source }).size(12.0));
+        ui.label(RichText::new("Original file").color(style::DIM).size(12.0));
+        ui.label(RichText::new(if sh.source.is_empty() { "(unknown)" } else { &sh.source }).size(12.0));
     });
     let now = [sh.size[0] * sh.scale[0], sh.size[1] * sh.scale[1], sh.size[2] * sh.scale[2]];
     ui.horizontal_wrapped(|ui| {
-        ui.label(RichText::new("大きさ").color(style::DIM).size(12.0));
+        ui.label(RichText::new("Size").color(style::DIM).size(12.0));
         ui.label(RichText::new(size_text(now)).size(12.0));
     });
     if let Some(v) = &sh.volume {
         ui.horizontal_wrapped(|ui| {
-            ui.label(RichText::new("細かさ").color(style::DIM).size(12.0));
-            ui.label(RichText::new(format!("1マス {:.2} mm　{}×{}×{}マス", v.cell, v.dims[0], v.dims[1], v.dims[2])).size(12.0));
+            ui.label(RichText::new("Detail").color(style::DIM).size(12.0));
+            ui.label(
+                RichText::new(format!(
+                    "Saved cell {:.3} mm / actual cell X {:.3} Y {:.3} Z {:.3} mm  {}×{}×{}",
+                    v.cell,
+                    v.cell * sh.scale[0],
+                    v.cell * sh.scale[1],
+                    v.cell * sh.scale[2],
+                    v.dims[0],
+                    v.dims[1],
+                    v.dims[2]
+                ))
+                .size(12.0),
+            );
         });
     } else {
-        ui.label(RichText::new("データがありません").size(12.0).color(style::CUT));
+        ui.label(RichText::new("No data").size(12.0).color(style::CUT));
     }
-    if sh.scale != [1.0; 3] && style::pill(ui, "もとの大きさにもどす", false).clicked() {
+    if sh.volume.is_some() && ui.button("Raise resolution / re-bake…").clicked() {
+        // The inspector is invoked from the selected shape; resolve its location in panel code.
+        ui.ctx().data_mut(|m| m.insert_temp(egui::Id::new("rebake_inspector_clicked"), true));
+    }
+    if sh.scale != [1.0; 3] && style::pill(ui, "Restore original size", false).clicked() {
         sh.scale = [1.0; 3];
     }
 }
@@ -393,6 +944,64 @@ mod tests {
     use super::*;
     use crate::model::Kind;
 
+    /// #200: Stop reaches the file read of a re-bake (it ends before the file is even opened).
+    #[test]
+    fn stop_ends_a_rebake_before_it_reads_the_file() {
+        let shape = Shape::new(Kind::Mesh, [0.0; 3], Material::default());
+        let old = Volume { dims: [1, 1, 1], origin: [0.0; 3], cell: 1.0, data: vec![0.0] };
+        let ctl = BakeControl::new();
+        ctl.cancel.store(true, Ordering::Relaxed);
+        let err = rebake_work(Path::new("/definitely/not/here.stl"), &shape, &old, 32, &ctl).err().unwrap();
+        assert_eq!(err, crate::import_mesh::IMPORT_CANCELLED, "stopped, not 'cannot read the file'");
+    }
+
+    #[test]
+    fn old_mesh_sources_never_accept_an_unrelated_file_silently() {
+        let mut shape = Shape::new(Kind::Mesh, [0.0; 3], Material::default());
+        shape.mesh_source = Some(MeshSource { path: "models/original.obj".into(), y_up: false, mesh_hash: 0 });
+        assert!(check_rebake_source(&shape, "another.obj", 123).is_err());
+        assert!(check_rebake_source(&shape, "original.obj", 123).is_ok());
+
+        shape.mesh_source.as_mut().unwrap().mesh_hash = 456;
+        assert!(check_rebake_source(&shape, "original.obj", 123).is_err());
+        assert!(check_rebake_source(&shape, "renamed.obj", 456).is_ok(), "new sources use the fingerprint");
+        shape.mesh_source = Some(MeshSource { path: String::new(), y_up: false, mesh_hash: 0 });
+        shape.source.clear();
+        assert!(check_rebake_source(&shape, "any.obj", 123).is_err());
+    }
+
+    #[test]
+    fn stopping_rebake_wins_even_if_worker_has_already_completed() {
+        let ctl = BakeControl::new();
+        assert_eq!(accept_rebake_result(&ctl, Ok(17)), Ok(17));
+        ctl.cancel.store(true, Ordering::Release);
+        assert_eq!(accept_rebake_result(&ctl, Ok(17)), Err(ERR_CANCEL.into()));
+        assert_eq!(accept_rebake_result(&ctl, Err::<i32, String>("failed".into())), Err(ERR_CANCEL.into()));
+    }
+
+    fn loaded_box(lo: [f32; 3], hi: [f32; 3]) -> Loaded {
+        let mesh = crate::import_mesh::tests::box_mesh(lo, hi);
+        let size = mesh.size();
+        Loaded {
+            file_name: "SolidCraft.stl".into(),
+            stem: "SolidCraft".into(),
+            imported: crate::import_mesh::Imported {
+                mesh,
+                appearance: None,
+                format: crate::import_mesh::MeshFormat::Stl,
+                turned_y_up: false,
+                dropped_triangles: 0,
+                health: crate::import_mesh::Health::default(),
+                notes: Vec::new(),
+            },
+            size,
+        }
+    }
+
+    fn offset_box() -> Loaded {
+        loaded_box([250.0, -45.0, 65.0], [570.0, -25.0, 75.0])
+    }
+
     /// Run frames until `done` says so (the worker threads need a little time).
     fn pump(app: &mut App, ctx: &egui::Context, done: impl Fn(&App) -> bool) {
         for _ in 0..400 {
@@ -405,20 +1014,166 @@ mod tests {
     }
 
     #[test]
+    fn a_solid_transfer_completes_after_insertion_preserves_geometry_and_is_one_undo() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        app.cam.target = [-200.0, 300.0, 0.0];
+        let before = app.scene.shape_count();
+        let completion = open_solid(&ctx, offset_box(), 0).expect("start transfer");
+        assert!(is_open(&ctx));
+        assert_eq!(completion.take_result(), None, "a worker finishing alone is not an insertion");
+        let d = ctx.data(|m| m.get_temp::<Dlg>(id())).expect("transfer card");
+        assert_eq!((d.st.target_mm, d.st.up, d.st.floor, d.st.centre), (320.0, Up::Z, false, false));
+        assert!(d.bake.is_some(), "conversion starts without a Load click");
+        pump(&mut app, &ctx, |a| a.scene.shape_count() > before);
+        assert_eq!(completion.take_result(), Some(Ok(())));
+        assert_eq!(completion.take_result(), None, "completion is consumed once");
+        assert!(!is_open(&ctx));
+        let sh = app.scene.groups.last().and_then(|g| g.shapes.first()).expect("imported solid").clone();
+        assert_eq!(sh.size, [320.0, 20.0, 10.0], "no 200 mm import cap");
+        assert_eq!(sh.pos, [410.0, -35.0, 70.0], "no floor or camera recentering");
+        assert_eq!(app.scene.groups.last().unwrap().blend, 12.0, "global Melt controls must affect a transferred solid immediately");
+        assert_eq!(app.tab, crate::app::Tab::Melt);
+        assert_eq!(app.scene.shape_count(), before + 1);
+        app.undo();
+        assert_eq!(app.scene.shape_count(), before);
+        app.redo();
+        assert_eq!(app.scene.groups.last().and_then(|g| g.shapes.first()), Some(&sh));
+    }
+
+    #[test]
+    fn solid_transfers_do_not_replace_existing_imports_and_cancelled_transfers_can_retry() {
+        let ctx = egui::Context::default();
+        let manual = PathBuf::from("/nonexistent/meltcad-existing-import.stl");
+        open_path(&ctx, manual.clone(), 0);
+        assert!(open_solid(&ctx, offset_box(), 0).is_err());
+        assert_eq!(ctx.data(|m| m.get_temp::<Dlg>(id())).and_then(|d| d.path), Some(manual));
+        assert!(cancel(&ctx));
+        assert!(!is_open(&ctx));
+
+        let completion = open_solid(&ctx, offset_box(), 0).expect("start transfer");
+        assert!(open_solid(&ctx, offset_box(), 0).is_err(), "an automatic transfer is protected too");
+        assert_eq!(completion.take_result(), None);
+        assert!(cancel(&ctx));
+        assert!(completion.take_result().is_some_and(|r| r.is_err()));
+        assert_eq!(completion.take_result(), None);
+        assert!(!is_open(&ctx));
+        let retry = open_solid(&ctx, offset_box(), 0).expect("cancel does not prevent retry");
+        assert_eq!(retry.take_result(), None);
+        cancel(&ctx);
+        assert!(retry.take_result().is_some_and(|r| r.is_err()));
+    }
+
+    #[test]
+    fn choosing_a_manual_file_cancels_the_previous_solid_transfer() {
+        let ctx = egui::Context::default();
+        let completion = open_solid(&ctx, offset_box(), 0).expect("start transfer");
+        let path = PathBuf::from("/nonexistent/meltcad-replacement-import.stl");
+        open_path(&ctx, path.clone(), 0);
+        assert!(completion.take_result().is_some_and(|r| r.is_err()));
+        let d = ctx.data(|m| m.get_temp::<Dlg>(id())).expect("manual card");
+        assert_eq!(d.path, Some(path));
+        assert!(d.completion.is_none());
+        assert!(is_open(&ctx));
+        cancel(&ctx);
+    }
+
+    #[test]
+    fn a_rebake_request_blocks_solid_transfer_without_being_replaced() {
+        let ctx = egui::Context::default();
+        let app = App::new(true, None);
+        let original = app.scene.groups[0].shapes[0].clone();
+        ctx.data_mut(|m| {
+            m.insert_temp(rebake_id(), RebakeRequest { group: 0, shape: 0, original, res: 128, path: None, job: None, msg: String::new() });
+        });
+        assert!(is_open(&ctx));
+        assert!(open_solid(&ctx, offset_box(), 0).is_err());
+        assert!(ctx.data(|m| m.get_temp::<RebakeRequest>(rebake_id())).is_some());
+        assert!(cancel(&ctx));
+        assert!(!is_open(&ctx));
+    }
+
+    #[test]
+    fn an_automatic_transfer_waits_for_a_cancelled_worker_and_retries_itself() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        let before = app.scene.shape_count();
+        // A cancelled worker keeps the one-high-memory-job permit until it has really exited.
+        let permit = work_budget::try_acquire(&ctx).expect("previous worker");
+        let completion = open_solid(&ctx, offset_box(), 0).expect("start transfer");
+        for _ in 0..5 {
+            ctx.run_ui(egui::RawInput::default(), |ui| update(&mut app, ui.ctx())).textures_delta.clear();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert_eq!(completion.take_result(), None, "waiting is not a failed transfer");
+        assert_eq!(app.scene.shape_count(), before, "nothing comes in while the permit is held");
+        assert!(is_open(&ctx), "the card stays open instead of asking for another click");
+        // The transfer starts itself once the old worker has exited; no click is needed.
+        drop(permit);
+        pump(&mut app, &ctx, |a| a.scene.shape_count() > before);
+        assert_eq!(completion.take_result(), Some(Ok(())), "the automatic retry brings the solid in");
+        assert!(!is_open(&ctx));
+        assert_eq!(app.scene.shape_count(), before + 1);
+    }
+
+    #[test]
+    fn failed_bakes_keep_the_transfer_pending_until_cancel() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        let before = app.scene.shape_count();
+        let completion = open_solid(&ctx, loaded_box([0.0; 3], [2001.0, 10.0, 10.0]), 0).expect("conversion reports its error in the card");
+        pump(&mut app, &ctx, |_| ctx.data(|m| m.get_temp::<Dlg>(id())).is_some_and(|d| d.bake.is_none()));
+        let mut d = ctx.data(|m| m.get_temp::<Dlg>(id())).expect("failed transfer remains open");
+        assert!(!d.msg.is_empty());
+        assert_eq!(completion.take_result(), None);
+        start_bake(&mut d, &ctx);
+        ctx.data_mut(|m| m.insert_temp(id(), d));
+        pump(&mut app, &ctx, |_| ctx.data(|m| m.get_temp::<Dlg>(id())).is_some_and(|d| d.bake.is_none()));
+        assert_eq!(completion.take_result(), None, "retry failure is not acknowledged as insertion");
+        assert_eq!(app.scene.shape_count(), before);
+        cancel(&ctx);
+        assert!(completion.take_result().is_some_and(|r| r.is_err()));
+    }
+
+    #[test]
+    fn insertion_rejections_stay_visible_and_can_be_retried() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        while app.scene.groups.len() < MAX_GROUPS {
+            app.scene.groups.push(Group::new("existing"));
+        }
+        app.settle(&ctx);
+        let before = app.scene.shape_count();
+        let completion = open_solid(&ctx, offset_box(), 0).expect("start transfer");
+        pump(&mut app, &ctx, |_| ctx.data(|m| m.get_temp::<Dlg>(id())).is_some_and(|d| d.bake.is_none()));
+        let mut d = ctx.data(|m| m.get_temp::<Dlg>(id())).expect("rejected insertion stays open");
+        assert!(d.msg.contains("groups"), "{}", d.msg);
+        assert_eq!(completion.take_result(), None);
+        assert_eq!(app.scene.shape_count(), before);
+        app.scene.groups.pop();
+        app.settle(&ctx);
+        start_bake(&mut d, &ctx);
+        ctx.data_mut(|m| m.insert_temp(id(), d));
+        pump(&mut app, &ctx, |a| a.scene.shape_count() > before);
+        assert_eq!(completion.take_result(), Some(Ok(())));
+        assert!(!is_open(&ctx));
+    }
+
+    #[test]
     fn the_card_reads_a_file_bakes_it_and_adds_a_selected_mesh_in_a_new_group() {
         let dir = std::env::temp_dir().join(format!("meltcad_card_{}", std::process::id()));
         let _ = std::fs::create_dir_all(&dir);
-        let path = dir.join("かたまり.stl");
+        let path = dir.join("Solid.stl");
         std::fs::write(&path, mesh_import::tests::sample_stl()).unwrap();
         let ctx = egui::Context::default();
         let mut app = App::new(true, None);
         let (groups, shapes) = (app.scene.groups.len(), app.scene.shape_count());
-        open_path(&ctx, path);
+        open_path(&ctx, path, 0);
         // reading
         pump(&mut app, &ctx, |_| ctx.data(|m| m.get_temp::<Dlg>(id())).is_some_and(|d| d.loaded.is_some()));
         let d = ctx.data(|m| m.get_temp::<Dlg>(id())).unwrap();
         let l = d.loaded.clone().expect("the file was read");
-        assert_eq!(l.file_name, "かたまり.stl");
+        assert_eq!(l.file_name, "Solid.stl");
         assert!(l.imported.mesh.triangles.len() > 100 && d.msg.is_empty(), "{}", d.msg);
         // options: smaller and coarse so the test is quick
         let mut d = d;
@@ -427,7 +1182,7 @@ mod tests {
         d.st.floor = true;
         d.st.centre = true;
         app.cam.target = [40.0, -10.0, 0.0];
-        start_bake(&mut d);
+        start_bake(&mut d, &ctx);
         ctx.data_mut(|m| m.insert_temp(id(), d));
         pump(&mut app, &ctx, |a| a.scene.groups.len() > groups);
         assert_eq!((app.scene.groups.len(), app.scene.shape_count()), (groups + 1, shapes + 1), "a new group with one shape");
@@ -435,7 +1190,7 @@ mod tests {
         let sh = app.scene.groups[g].shapes[0].clone();
         assert_eq!(sh.kind, Kind::Mesh);
         assert!(sh.volume.is_some());
-        assert_eq!((sh.source.as_str(), app.scene.groups[g].name.as_str()), ("かたまり.stl", "かたまり"));
+        assert_eq!((sh.source.as_str(), app.scene.groups[g].name.as_str()), ("Solid.stl", "Solid"));
         assert!((sh.pos[0] - 40.0).abs() < 1e-3 && (sh.pos[1] + 10.0).abs() < 1e-3, "at the view's middle: {:?}", sh.pos);
         assert!((sh.pos[2] - sh.size[2] * 0.5).abs() < 1e-3, "on the floor");
         assert!(sh.size.iter().cloned().fold(0.0, f32::max) > 29.0 && sh.size.iter().cloned().fold(0.0, f32::max) < 31.0);
@@ -463,7 +1218,7 @@ mod tests {
         std::fs::write(&bad, b"solid x\nthis is not a mesh\n").unwrap();
         let ctx = egui::Context::default();
         let mut app = App::new(true, None);
-        open_path(&ctx, bad);
+        open_path(&ctx, bad, 0);
         pump(&mut app, &ctx, |_| ctx.data(|m| m.get_temp::<Dlg>(id())).is_some_and(|d| d.reading.is_none()));
         let d = ctx.data(|m| m.get_temp::<Dlg>(id())).unwrap();
         assert!(d.loaded.is_none() && !d.msg.is_empty() && d.open, "{}", d.msg);
@@ -471,11 +1226,11 @@ mod tests {
         // cancelling a bake leaves the scene alone
         let good = dir.join("ok.stl");
         std::fs::write(&good, mesh_import::tests::sample_stl()).unwrap();
-        open_path(&ctx, good);
+        open_path(&ctx, good, 0);
         pump(&mut app, &ctx, |_| ctx.data(|m| m.get_temp::<Dlg>(id())).is_some_and(|d| d.loaded.is_some()));
         let mut d = ctx.data(|m| m.get_temp::<Dlg>(id())).unwrap();
         d.st.res = 160;
-        start_bake(&mut d);
+        start_bake(&mut d, &ctx);
         if let Some(b) = &d.bake {
             b.ctl.cancel.store(true, Ordering::Relaxed);
         }
@@ -483,7 +1238,7 @@ mod tests {
         pump(&mut app, &ctx, |_| ctx.data(|m| m.get_temp::<Dlg>(id())).is_some_and(|d| d.bake.is_none()));
         let d = ctx.data(|m| m.get_temp::<Dlg>(id())).unwrap();
         assert_eq!(app.scene.shape_count(), 1, "nothing was added");
-        assert!(d.msg == "やめました" || d.loaded.is_some(), "{}", d.msg);
+        assert!(d.msg == "Cancelled" || d.loaded.is_some(), "{}", d.msg);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

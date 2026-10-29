@@ -7,3 +7,9 @@
 /.claude/worktrees/
 /target-snapshot
 __pycache__/
+.impeccable/
+.agents/skills/impeccable/scripts/bin/
+.agents/skills/remotion-best-practices/
+
+# cargo-mutants output (docs/mutation-testing.md)
+mutants.out*/

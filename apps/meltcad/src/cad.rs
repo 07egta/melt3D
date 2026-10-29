@@ -181,14 +181,19 @@ fn profile_round(p: &Prepared, scale: f32) -> f32 {
 
 fn revolve(p: &Prepared, q: V3) -> f32 {
     let rr = profile_round(p, 1.0);
-    let pt = [q[0].hypot(q[1]), q[2]];
+    // The same classic Revolve profile is used for a vase; only its radial
+    // coordinate changes with angle. Ordinary profiles (params[1] == 0)
+    // take the original unmodified SDF path.
+    let r = q[0].hypot(q[1]);
+    let (r, safety) = crate::organic_vase::radial_warp(r, q, p.params[1], p.params[2], p.params[3]);
+    let pt = [r, q[2]];
     let d = if p.chamfer && p.round > 0.0 {
         corner::cut_polygon(polygon_off_axis(&p.outline, pt), pt, &p.outline, p.poly_orient, p.round, true)
     } else if rr > 0.0 {
-        polygon_inset(&p.outline, [q[0].hypot(q[1]), q[2]], rr, p.poly_orient, true) - rr
+        polygon_inset(&p.outline, pt, rr, p.poly_orient, true) - rr
     } else {
-        polygon_off_axis(&p.outline, [q[0].hypot(q[1]), q[2]])
-    };
+        polygon_off_axis(&p.outline, pt)
+    } * safety;
     let a = if p.params[0].is_finite() { p.params[0].clamp(1.0, 360.0) } else { 360.0 };
     if a < 359.99 { d.max(wedge(q[0], q[1], a)) } else { d }
 }
@@ -242,7 +247,11 @@ fn sweep(p: &Prepared, q: V3) -> f32 {
     let rr = profile_round(p, r);
     let d2 = if p.chamfer && p.round > 0.0 {
         corner::cut_polygon(polygon(&p.outline, uv), uv, &p.outline, p.poly_orient, p.round / r.max(1e-3), false) * r
-    } else if rr > 0.0 { (polygon_inset(&p.outline, uv, rr, p.poly_orient, false) - rr) * r } else { polygon(&p.outline, uv) * r };
+    } else if rr > 0.0 {
+        (polygon_inset(&p.outline, uv, rr, p.poly_orient, false) - rr) * r
+    } else {
+        polygon(&p.outline, uv) * r
+    };
     // flat end caps: how far past the first / last node along the path
     let mut axial = -1e5_f32;
     if i == 0 && t <= 0.0 {

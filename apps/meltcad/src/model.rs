@@ -3,9 +3,14 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::mesh::SharedVolume;
 use crate::deform::Deformation;
+use crate::mesh::SharedVolume;
 use crate::pattern::{Pattern, Xform};
+use crate::ripple::Ripple;
+
+fn is_false(v: &bool) -> bool {
+    !*v
+}
 
 fn is_zero(v: &u32) -> bool {
     *v == 0
@@ -43,7 +48,7 @@ pub enum Kind {
     Revolve,
     /// `outline` at the bottom blends into `outline2` at the top over `size[0]` mm.
     Loft,
-    /// A tube through the `path` nodes (x, y, z, radius), like Womp's curve tool.
+    /// A tube through the `path` nodes (x, y, z, radius).
     Curve,
     /// `outline` pulled along `path`.
     Sweep,
@@ -76,7 +81,7 @@ impl Kind {
         Kind::Sweep,
     ];
     /// The six always shown on the top bar.
-    pub const MAIN: [Kind; 6] = [Kind::Sphere, Kind::Box, Kind::Cylinder, Kind::Torus, Kind::Cone, Kind::Extrude];
+    pub const MAIN: [Kind; 5] = [Kind::Sphere, Kind::Box, Kind::Cylinder, Kind::Torus, Kind::Cone];
     /// The extra solids in the "more" menu.
     pub const MORE: [Kind; 10] =
         [Kind::Prism3, Kind::PrismN, Kind::Octa, Kind::Tetra, Kind::Pyramid, Kind::Capsule, Kind::Hemi, Kind::Tube, Kind::Wedge, Kind::Star];
@@ -84,27 +89,27 @@ impl Kind {
     pub const CAD: [Kind; 4] = [Kind::Revolve, Kind::Loft, Kind::Curve, Kind::Sweep];
     pub fn label(self) -> &'static str {
         match self {
-            Kind::Sphere => "球",
-            Kind::Box => "箱",
-            Kind::Cylinder => "円柱",
-            Kind::Torus => "ドーナツ",
-            Kind::Cone => "円すい",
-            Kind::Extrude => "押し出し",
-            Kind::Prism3 => "三角柱",
-            Kind::PrismN => "多角柱",
-            Kind::Octa => "正八面体",
-            Kind::Tetra => "正四面体",
-            Kind::Pyramid => "ピラミッド",
-            Kind::Capsule => "カプセル",
-            Kind::Hemi => "半球",
-            Kind::Tube => "パイプ",
-            Kind::Wedge => "くさび",
-            Kind::Star => "星柱",
-            Kind::Revolve => "回転体",
-            Kind::Loft => "ロフト",
-            Kind::Curve => "線",
-            Kind::Sweep => "スイープ",
-            Kind::Mesh => "メッシュ",
+            Kind::Sphere => "Sphere",
+            Kind::Box => "Box",
+            Kind::Cylinder => "Cylinder",
+            Kind::Torus => "Torus",
+            Kind::Cone => "Cone",
+            Kind::Extrude => "Extrude",
+            Kind::Prism3 => "Prism",
+            Kind::PrismN => "Polygon Prism",
+            Kind::Octa => "Octahedron",
+            Kind::Tetra => "Tetrahedron",
+            Kind::Pyramid => "Pyramid",
+            Kind::Capsule => "Capsule",
+            Kind::Hemi => "Hemisphere",
+            Kind::Tube => "Pipe",
+            Kind::Wedge => "Wedge",
+            Kind::Star => "Star Prism",
+            Kind::Revolve => "Revolve",
+            Kind::Loft => "Loft",
+            Kind::Curve => "Curve",
+            Kind::Sweep => "Sweep",
+            Kind::Mesh => "Mesh",
         }
     }
     pub fn id(self) -> f32 {
@@ -152,20 +157,20 @@ impl Kind {
     /// What the size numbers mean, for the inspector.
     pub fn size_labels(self) -> [&'static str; 3] {
         match self {
-            Kind::Sphere => ["半径", "", ""],
-            Kind::Box => ["幅", "奥行", "高さ"],
-            Kind::Cylinder => ["半径", "高さ", ""],
-            Kind::Torus => ["大半径", "小半径", ""],
-            Kind::Cone => ["半径", "高さ", ""],
-            Kind::Extrude => ["高さ", "", ""],
-            Kind::Prism3 | Kind::PrismN | Kind::Star => ["外半径", "高さ", ""],
-            Kind::Octa | Kind::Tetra | Kind::Hemi => ["半径", "", ""],
-            Kind::Pyramid => ["底の半径", "高さ", ""],
-            Kind::Capsule => ["半径", "長さ", ""],
-            Kind::Tube => ["外半径", "肉厚", "高さ"],
-            Kind::Wedge => ["幅", "奥行", "高さ"],
+            Kind::Sphere => ["Radius", "", ""],
+            Kind::Box => ["Width", "Depth", "Height"],
+            Kind::Cylinder => ["Radius", "Height", ""],
+            Kind::Torus => ["Major radius", "Minor radius", ""],
+            Kind::Cone => ["Radius", "Height", ""],
+            Kind::Extrude => ["Height", "", ""],
+            Kind::Prism3 | Kind::PrismN | Kind::Star => ["Outer radius", "Height", ""],
+            Kind::Octa | Kind::Tetra | Kind::Hemi => ["Radius", "", ""],
+            Kind::Pyramid => ["Base radius", "Height", ""],
+            Kind::Capsule => ["Radius", "Length", ""],
+            Kind::Tube => ["Outer radius", "Wall", "Height"],
+            Kind::Wedge => ["Width", "Depth", "Height"],
             Kind::Revolve => ["", "", ""],
-            Kind::Loft => ["高さ", "", ""],
+            Kind::Loft => ["Height", "", ""],
             Kind::Curve => ["", "", ""],
             Kind::Sweep => ["", "", ""],
             // (the size is the model's size in mm, shown by the mesh inspector, not edited)
@@ -192,6 +197,8 @@ impl Kind {
             Kind::Star => [24.0, 14.0, 1.0],
             Kind::Revolve => [1.0, 1.0, 1.0],
             Kind::Loft => [40.0, 1.0, 1.0],
+            // Curve uses size.y = cross-section width (0.45..1), size.z = rounded-square selector.
+            // 1,1 keeps existing circular paths bit-for-bit on the fast SDF route.
             Kind::Curve => [1.0, 1.0, 1.0],
             Kind::Sweep => [1.0, 1.0, 1.0],
             Kind::Mesh => [1.0, 1.0, 1.0],
@@ -200,10 +207,10 @@ impl Kind {
     /// Labels of the four extra numbers (`Shape::params`); empty = unused.
     pub fn param_labels(self) -> [&'static str; 4] {
         match self {
-            Kind::PrismN => ["辺の数", "", "", ""],
-            Kind::Pyramid => ["辺の数", "", "", ""],
-            Kind::Star => ["とがり数", "内側の比", "", ""],
-            Kind::Revolve => ["回す角度", "", "", ""],
+            Kind::PrismN => ["Sides", "", "", ""],
+            Kind::Pyramid => ["Sides", "", "", ""],
+            Kind::Star => ["Points", "Inner ratio", "", ""],
+            Kind::Revolve => ["Angle", "", "", ""],
             _ => ["", "", "", ""],
         }
     }
@@ -327,6 +334,9 @@ impl Material {
     /// shape's size; the flip is already in `t`). The range `grad_from..grad_to` is stretched over
     /// 0..1 and `grad_soft` decides how wide the blend is around its middle. The GPU copy is
     /// `shape_color` in `shader.wgsl`.
+    // max/min deliberately give the shader-compatible zero weight for NaN;
+    // f32::clamp would propagate it into the material and rendered pixels.
+    #[allow(clippy::manual_clamp)]
     pub fn gradient_weight(&self, t: f32) -> f32 {
         let span = (self.grad_to - self.grad_from).max(0.02);
         let u = ((t - self.grad_from) / span).max(0.0).min(1.0);
@@ -360,8 +370,45 @@ impl Material {
     }
 }
 
+/// Optional pointer to the original imported mesh. The vertices are not embedded in the scene:
+/// a missing/moved source file must be selected again before re-baking.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MeshSource {
+    pub path: String,
+    /// Whether the original mesh was converted from Y-up to Z-up at import.
+    pub y_up: bool,
+    /// Fingerprint of cleaned vertices/triangles; zero denotes an older unknown source.
+    #[serde(default)]
+    pub mesh_hash: u64,
+}
+
+/// A node on a tube curve can retain the historical Catmull-Rom behaviour, have
+/// coupled C1-continuous Bezier handles, or independent handles for a sharp corner.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CurveNodeMode {
+    #[default]
+    Auto,
+    Smooth,
+    Corner,
+}
+
+/// Handle offsets from the node centre, in its local XYZ coordinates (millimetres).
+/// These are true cubic Bezier control handles, not interpolated polyline points.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct CurveHandles {
+    #[serde(default)]
+    pub mode: CurveNodeMode,
+    #[serde(default)]
+    pub incoming: [f32; 3],
+    #[serde(default)]
+    pub outgoing: [f32; 3],
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Shape {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ripple: Option<Ripple>,
     pub name: String,
     pub kind: Kind,
     pub size: [f32; 3],
@@ -377,6 +424,14 @@ pub struct Shape {
     pub blend: f32,
     pub material: Material,
     pub visible: bool,
+    /// A sketch line: drawn on the screen as a line, never part of the solid (not rendered, not
+    /// exported, not measured). Extrude, Loft or Revolve turn it into a solid.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub guide: bool,
+    /// Original sketch axes in the shape's local space. Keeping the origin and axes
+    /// makes a saved sketch usable for Revolve without moving its axis to its centre.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guide_plane: Option<GuidePlane>,
     /// Corners of an `Extrude` outline, in the shape's own XY plane.
     pub outline: Vec<[f32; 2]>,
     /// Kind-specific extra numbers (`Kind::param_labels`).
@@ -388,10 +443,15 @@ pub struct Shape {
     /// Nodes (x, y, z, radius) of a `Curve` or `Sweep`, in the shape's own space.
     #[serde(default)]
     pub path: Vec<[f32; 4]>,
+    /// Optional, index-aligned handles for Curve nodes. Empty in old files: their
+    /// exact Catmull-Rom interpolation is preserved when no handle is authored.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub curve_handles: Vec<CurveHandles>,
     /// The top profile of a `Loft`.
     #[serde(default)]
     pub outline2: Vec<[f32; 2]>,
-    /// Wall thickness in mm that hollows out any kind (0 = solid).
+    /// Wall thickness in the shape's own mm (it scales with `Shape::scale`, like `round`); it
+    /// hollows out any kind (0 = solid).
     #[serde(default)]
     pub shell: f32,
     /// How `round` treats the edges: a round fillet (default) or a flat 45-degree bevel.
@@ -404,9 +464,80 @@ pub struct Shape {
     /// from each other share it (it is never copied), and scenes compare it by pointer.
     #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "crate::mesh::lenient_volume")]
     pub volume: Option<SharedVolume>,
+    /// Sketch outlines remain vertex arrays. Precision dimensions are applied directly to these
+    /// arrays, so existing saves and Extrude/Revolve/Loft/Sweep readers need no schema migration.
     /// Where an imported mesh came from (its file name), shown in the inspector.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub source: String,
+    /// Parametric vase controls; ordinary Revolve sketches remain unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vase: Option<crate::organic_vase::VaseParams>,
+    /// Optional source reference, absent in all legacy .meltcad files.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mesh_source: Option<MeshSource>,
+    /// Melt only one face: the rest of the shape keeps its exact size.
+    #[serde(default, skip_serializing_if = "FaceMelt::is_off")]
+    pub face_melt: FaceMelt,
+    /// A solid made in SolidCraft carries its design, so it can be opened there again and edited.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub solid: Option<SolidLink>,
+    /// Live copies of this one shape (mirror, grid, circle, along a path, on points): the shape
+    /// itself stays the first instance, and the copies use no shape slots. Old files have none.
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "crate::pattern::lenient_pattern")]
+    pub pattern: Option<Pattern>,
+}
+
+/// The SolidCraft design behind a shape that came from SolidCraft.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SolidLink {
+    /// The design file's text (SolidCraft's JSON form).
+    pub design: String,
+    /// Where the shape stood when it came in: an edit moves the new solid by what the shape has
+    /// been moved since, so it stays where it was put.
+    pub placed_at: [f32; 3],
+}
+
+/// The largest SolidCraft design a shape keeps (bigger ones still come in, just not editable).
+pub const MAX_SOLID_DESIGN: usize = 16 * 1024 * 1024;
+
+/// A saved sketch's two plane axes and inner contours. The outer contour remains
+/// in `Shape::path`, so moving or editing its nodes does not leave a stale copy.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct GuidePlane {
+    pub u: [f32; 3],
+    pub v: [f32; 3],
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub holes: Vec<Vec<[f32; 2]>>,
+}
+
+/// A melt that touches just one face of a shape (and a little way into it).
+/// `face`: 0 = none, 1..6 = +x -x +y -y +z -z in the shape's own axes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct FaceMelt {
+    #[serde(default)]
+    pub face: u8,
+    /// How far the melted face swells out (+) or sinks in (-), in mm.
+    #[serde(default)]
+    pub amount: f32,
+    /// How deep the melt reaches from the face, in mm.
+    #[serde(default)]
+    pub reach: f32,
+}
+
+impl FaceMelt {
+    pub const FACES: [(&'static str, &'static str); 6] =
+        [("+X", "+x face"), ("-X", "-x face"), ("+Y", "+y face"), ("-Y", "-y face"), ("+Z", "+z face"), ("-Z", "-z face")];
+    pub fn is_off(&self) -> bool {
+        self.face == 0 || self.face > 6 || !self.amount.is_finite() || self.amount == 0.0
+    }
+    /// The values the renderers use: (axis, +1/-1, amount, reach); nothing if the melt is off.
+    pub fn parts(&self) -> Option<(usize, f32, f32, f32)> {
+        if self.is_off() || !self.reach.is_finite() {
+            return None;
+        }
+        let i = usize::from(self.face - 1);
+        Some((i / 2, if i % 2 == 0 { 1.0 } else { -1.0 }, self.amount.clamp(-60.0, 60.0), self.reach.clamp(1.0, 200.0)))
+    }
 }
 
 /// The style of a shape's cut edges: what `Shape::round` makes of them.
@@ -433,8 +564,14 @@ pub const MAX_ROUND: f32 = 500.0;
 pub const MAX_PATH: usize = 48;
 
 impl Shape {
+    /// Shown and part of the solid (a hidden shape or a sketch line is not).
+    pub fn solid(&self) -> bool {
+        self.visible && !self.guide
+    }
+
     pub fn new(kind: Kind, pos: [f32; 3], material: Material) -> Shape {
         Shape {
+            ripple: None,
             name: kind.label().to_string(),
             kind,
             size: kind.default_size(),
@@ -446,17 +583,33 @@ impl Shape {
             blend: 6.0,
             material,
             visible: true,
+            guide: false,
+            guide_plane: None,
             outline: kind.default_outline(),
             params: kind.default_params(),
             deformation: None,
             path: kind.default_path(),
+            curve_handles: Vec::new(),
             outline2: kind.default_outline2(),
             shell: 0.0,
             corner: Corner::Round,
             uid: 0,
             volume: None,
             source: String::new(),
+            mesh_source: None,
+            face_melt: FaceMelt::default(),
+            solid: None,
+            pattern: None,
+            vase: None,
         }
+    }
+
+    /// Grid widths in actual model millimetres after nonuniform scaling.
+    /// A stored SDF has one cell size; on screen it may have three different pitches.
+    #[cfg(test)]
+    pub fn mesh_cell_mm(&self) -> Option<[f32; 3]> {
+        let v = self.volume.as_ref()?;
+        (self.kind == Kind::Mesh).then(|| [0, 1, 2].map(|a| v.cell * self.scale[a].abs()))
     }
 
     /// An imported mesh: `volume` is its baked distances, `model_size` its size in mm.
@@ -486,7 +639,11 @@ impl Shape {
             Kind::Box | Kind::Wedge => [s[0] * 0.5, s[1] * 0.5, s[2] * 0.5],
             Kind::Cylinder | Kind::Cone => [s[0], s[0], s[1] * 0.5],
             Kind::Torus => [s[0] + s[1], s[0] + s[1], s[1]],
-            Kind::Extrude => [mx(&self.outline, 0), mx(&self.outline, 1), s[0] * 0.5],
+            Kind::Extrude => {
+                // params[0] is an optional signed puff distance. Legacy extrusions use zero.
+                let swell = if self.params[0].is_nan() { 0.0 } else { self.params[0].clamp(0.0, 40.0) };
+                [mx(&self.outline, 0) + swell, mx(&self.outline, 1) + swell, s[0] * 0.5 + swell]
+            },
             Kind::Prism3 | Kind::PrismN | Kind::Star | Kind::Pyramid => [s[0], s[0], s[1] * 0.5],
             Kind::Octa | Kind::Tetra => [s[0]; 3],
             // the dome fills z in -r/2 ..= r/2 (flat face at the bottom of its box)
@@ -494,7 +651,10 @@ impl Shape {
             Kind::Capsule => [s[0], s[0], s[1] * 0.5 + s[0]],
             Kind::Tube => [s[0], s[0], s[2] * 0.5],
             Kind::Revolve => {
-                let r = mx(&self.outline, 0);
+                // The angular waves can extend past the 2D profile: include their full
+                // amplitude in the bounds, otherwise culling could clip the petals.
+                let wave = if self.vase.is_some() { self.params[2].abs().min(6.0) } else { 0.0 };
+                let r = mx(&self.outline, 0) + wave;
                 [r, r, mx(&self.outline, 1)]
             }
             Kind::Loft => {
@@ -502,7 +662,7 @@ impl Shape {
                 let y = mx(&self.outline, 1).max(mx(&self.outline2, 1));
                 [x, y, s[0] * 0.5]
             }
-            Kind::Curve => crate::curve::half_extent(&self.path, &self.params),
+            Kind::Curve => crate::curve::half_extent_shape(self),
             // the box of the volume's nodes as seen from the shape's origin (the origin need not be its middle)
             Kind::Mesh => match &self.volume {
                 Some(v) => {
@@ -523,6 +683,33 @@ impl Shape {
                 h
             }
         }
+    }
+    /// Atomically replace a sketch-driven outline. Validate before touching the model:
+    /// invalid drags must never enter the 3D renderer, undo history or saved file.
+    /// The coordinates are already in the shape's local plane, so position, rotation,
+    /// height, material and the other loft profile remain unchanged.
+    pub fn set_sketch_outline(&mut self, top: bool, points: Vec<[f32; 2]>) -> Result<bool, String> {
+        if !self.kind.uses_outline() || (top && !self.kind.uses_outline2()) {
+            return Err("この形には編集できる輪かくがありません".to_string());
+        }
+        if points.iter().any(|p| p.iter().any(|v| !v.is_finite() || v.abs() > crate::sketch::COORD_MAX)) {
+            return Err("輪かくの座標は±2000mm以内にしてください".to_string());
+        }
+        let checked = crate::sketch::validate_profile(&points).map_err(|e| e.message())?;
+        if checked.len() != points.len() {
+            return Err(crate::sketch::SketchError::TooSmall.message());
+        }
+        if self.kind == Kind::Revolve && points.iter().any(|p| p[0] < 0.0) {
+            return Err(crate::sketch::SketchError::LeftOfAxis.message());
+        }
+        // Keep the original vertex order, so selection indices do not jump if a
+        // legacy model happens to have clockwise winding.
+        let original = if top { &mut self.outline2 } else { &mut self.outline };
+        if *original == points {
+            return Ok(false);
+        }
+        *original = points;
+        Ok(true)
     }
 }
 
@@ -552,6 +739,36 @@ impl Kind {
     }
 }
 
+fn is_zero_u8(v: &u8) -> bool {
+    *v == 0
+}
+
+/// A saved blend amount made safe: negative and non-finite values melt nothing.
+fn clean_blend(blend: f32) -> f32 {
+    if blend.is_finite() { blend.max(0.0) } else { 0.0 }
+}
+
+/// The deepest a group can be nested.
+/// Two levels are enough: a big group holds groups, and groups hold shapes. Groups melt into each
+/// other inside the big group, and the big group melts with the rest as one piece.
+pub const MAX_DEPTH: u8 = 1;
+
+/// Editor controls for a non-destructive Smooth Fusion preset.
+/// Actual geometry uses each editable Shape's existing SDF blend and position.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SmoothFusion {
+    /// Smooth-union transition width in millimetres (Shape::blend).
+    pub radius_mm: f32,
+    /// 0 = deep overlap, 1 = nearly touching, implemented by changing spacing.
+    pub contact: f32,
+}
+
+impl Default for SmoothFusion {
+    fn default() -> Self {
+        Self { radius_mm: 14.0, contact: 0.38 }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Group {
     pub name: String,
@@ -560,6 +777,24 @@ pub struct Group {
     pub blend: f32,
     pub visible: bool,
     pub shapes: Vec<Shape>,
+    /// How deep the group sits in the outline: it is part of the nearest group above it with a smaller depth.
+    #[serde(default, skip_serializing_if = "is_zero_u8")]
+    pub depth: u8,
+    /// This group represents one extrusion with independent subtractive sketch holes.
+    #[serde(default)]
+    pub sketch_holes: bool,
+    /// Parametric Designer Bag settings. Stored alongside editable parts in scene files.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bag: Option<crate::designer_bag::BagConfig>,
+    /// Re-editable Designer Chair parameters; none for ordinary groups and old scenes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub designer_chair: Option<crate::designer_chair::Parameters>,
+    /// Optional Smooth Fusion editor settings (old files omit this field).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fusion: Option<SmoothFusion>,
+    /// Non-destructive Puffy Text source. Geometry remains ordinary extrusions and cuts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub puffy_text: Option<crate::puffy_text::LetterMeta>,
     /// A number linked copies and patterns find this group by (0 = none; see `Scene::ensure_group_uid`).
     #[serde(default, skip_serializing_if = "is_zero")]
     pub uid: u32,
@@ -572,11 +807,67 @@ pub struct Group {
     /// Where a linked copy stands (move, turn, scale about the source's middle).
     #[serde(default, skip_serializing_if = "Xform::is_identity")]
     pub xform: Xform,
+    /// Set when the group holds a whole file that was added to this one ("Add file"): a piece of the big file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub piece: Option<Piece>,
+    /// Editable native Designer Lamp parameters; old projects omit this optional field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lamp: Option<crate::designer_lamp::LampParams>,
+    /// Regenerable SDF furniture controls (old scene files simply omit this field).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub organic_furniture: Option<crate::organic_furniture::Settings>,
+    /// Re-editable gravity-melt preset settings; old project files omit this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub melt_preset: Option<crate::melt_preset::Settings>,
 }
 
+/// Which file a piece of the big file came from, so it can be read again or saved back.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Piece {
+    /// The file's name (no folder).
+    pub file: String,
+    /// Where it was read from, when that is known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+}
+
+/// The longest file name and path a piece keeps.
+pub const MAX_PIECE_FILE: usize = 80;
+pub const MAX_PIECE_PATH: usize = 1024;
+
 impl Group {
+    /// The order the shapes are melted together in: everything that is not a minus first (in list
+    /// order), then the minus shapes. So a minus cuts all the plus shapes of its group, wherever it
+    /// sits in the list, and moving it up or down never changes the result.
+    pub fn fold_order(&self) -> Vec<usize> {
+        let keep = |s: &Shape| s.op != Op::Subtract;
+        let firsts = self.shapes.iter().enumerate().filter(|(_, s)| keep(s)).map(|(i, _)| i);
+        let cuts = self.shapes.iter().enumerate().filter(|(_, s)| !keep(s)).map(|(i, _)| i);
+        firsts.chain(cuts).collect()
+    }
+
     pub fn new(name: impl Into<String>) -> Group {
-        Group { name: name.into(), op: Op::Add, blend: 0.0, visible: true, shapes: Vec::new(), uid: 0, pattern: None, instance_of: None, xform: Xform::default() }
+        Group {
+            name: name.into(),
+            op: Op::Add,
+            blend: 0.0,
+            visible: true,
+            shapes: Vec::new(),
+            depth: 0,
+            sketch_holes: false,
+            bag: None,
+            uid: 0,
+            pattern: None,
+            instance_of: None,
+            xform: Xform::default(),
+            piece: None,
+            lamp: None,
+            designer_chair: None,
+            organic_furniture: None,
+            fusion: None,
+            puffy_text: None,
+            melt_preset: None,
+        }
     }
 }
 
@@ -595,9 +886,9 @@ impl BlendMode {
     pub const ALL: [BlendMode; 3] = [BlendMode::Smooth, BlendMode::Round, BlendMode::Gooey];
     pub fn label(self) -> &'static str {
         match self {
-            BlendMode::Smooth => "なめらか",
-            BlendMode::Round => "まるく",
-            BlendMode::Gooey => "どろっと",
+            BlendMode::Smooth => "Smooth",
+            BlendMode::Round => "Round",
+            BlendMode::Gooey => "Gooey",
         }
     }
     pub fn id(self) -> f32 {
@@ -790,15 +1081,18 @@ pub struct Scene {
     /// Materials the person saved to use again.
     #[serde(default)]
     pub saved: Vec<Material>,
+    /// Poses on a timeline (empty until the person makes the first one).
+    #[serde(default, skip_serializing_if = "crate::anim::Anim::is_empty")]
+    pub anim: crate::anim::Anim,
 }
 
 pub const MAX_SAVED: usize = 24;
 
 impl Default for Scene {
     fn default() -> Self {
-        let mut g = Group::new("グループ 1");
+        let mut g = Group::new("Group 1");
         g.shapes.push(Shape::new(Kind::Sphere, [0.0, 0.0, 20.0], Material::default()));
-        Scene { groups: vec![g], melt: Melt::default(), env: Environment::default(), saved: Vec::new() }
+        Scene { groups: vec![g], melt: Melt::default(), env: Environment::default(), saved: Vec::new(), anim: Default::default() }
     }
 }
 
@@ -819,10 +1113,16 @@ impl Scene {
     pub fn shape_count(&self) -> usize {
         self.groups.iter().map(|g| g.shapes.len()).sum()
     }
+    #[cfg(test)]
     pub fn to_json(&self) -> String {
-        // (a volume used by several shapes is written once: see mesh.rs)
+        self.try_to_json().unwrap_or_default()
+    }
+    /// Serialization must report errors to disk writers (never save an empty design).
+    pub fn try_to_json(&self) -> Result<String, String> {
         let _guard = crate::mesh::SaveGuard::begin();
-        serde_json::to_string_pretty(self).unwrap_or_default()
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| serde_json::to_string_pretty(self)))
+            .map_err(|_| "作品のシリアライズに失敗しました".to_owned())?
+            .map_err(|e| e.to_string())
     }
     /// A scene from JSON, with every number made safe (a damaged or hostile file never panics).
     pub fn from_json(text: &str) -> Result<Scene, String> {
@@ -835,9 +1135,232 @@ impl Scene {
             let _guard = crate::mesh::LoadGuard::begin();
             serde_json::from_str(text).map_err(|e| e.to_string())?
         };
+        // Sanitization still truncates impossible in-memory scenes as a
+        // defensive last resort. File Open must be stricter: accepting an
+        // oversized design and then silently discarding its groups or shapes
+        // makes the next Save permanently destroy the original work.
+        if s.groups.len() > MAX_GROUPS {
+            return Err(format!(
+                "This project contains {} groups (maximum {MAX_GROUPS}). Nothing was loaded; the original file was preserved.",
+                s.groups.len()
+            ));
+        }
+        let shapes = s
+            .groups
+            .iter()
+            .try_fold(0usize, |total, g| total.checked_add(g.shapes.len()))
+            .ok_or("This project has too many shapes; the original file was preserved")?;
+        if shapes > MAX_SHAPES {
+            return Err(format!(
+                "This project contains {shapes} shapes (maximum {MAX_SHAPES}). Nothing was loaded; the original file was preserved."
+            ));
+        }
         let notes = s.sanitize_notes();
         Ok((s, notes))
     }
+    // ----- nested groups: `Group::depth` makes the flat list an outline -----
+
+    /// A default name no other group already has: `base`, else `base (2)`, `base (3)`, … Existing
+    /// groups are never renamed, so a new default group beside an equal name stays distinguishable.
+    pub fn unique_group_name(&self, base: &str) -> String {
+        if !self.groups.iter().any(|g| g.name == base) {
+            return base.to_owned();
+        }
+        let last = self.groups.len().saturating_add(2);
+        for n in 2..=last {
+            let candidate = format!("{base} ({n})");
+            if !self.groups.iter().any(|g| g.name == candidate) {
+                return candidate;
+            }
+        }
+        // At most `groups.len()` names are taken, so `last` above always finds a free number;
+        // this stays panic-free if that ever changes.
+        format!("{base} ({last})")
+    }
+
+    /// Make the depths a valid outline: the first group is at the top, and no group sits more
+    /// than one level below the one before it.
+    pub fn normalize_depths(&mut self) {
+        let mut prev: i32 = -1;
+        for g in &mut self.groups {
+            let d = i32::from(g.depth).min(prev + 1).min(i32::from(MAX_DEPTH));
+            g.depth = d.max(0) as u8;
+            prev = i32::from(g.depth);
+        }
+    }
+
+    /// The groups from `g` on that belong to it (itself and everything nested in it): `g..end`.
+    pub fn subtree_end(&self, g: usize) -> usize {
+        let Some(top) = self.groups.get(g) else { return g };
+        let mut e = g + 1;
+        while self.groups.get(e).is_some_and(|n| n.depth > top.depth) {
+            e += 1;
+        }
+        e
+    }
+
+    /// The group `g` sits in, if any.
+    pub fn parent_of(&self, g: usize) -> Option<usize> {
+        let d = self.groups.get(g)?.depth;
+        if d == 0 {
+            return None;
+        }
+        (0..g).rev().find(|&i| self.groups[i].depth < d)
+    }
+
+    /// How far a group melts into what comes before it: its own Melt amount, raised to the amount
+    /// of the group around it when that is larger. Melt on a parent therefore also melts the
+    /// groups inside it, without changing any saved amount. The scene's `Melt.amount` multiplies
+    /// this later.
+    pub fn group_melt_reach(&self, g: usize) -> f32 {
+        let Some(group) = self.groups.get(g) else { return 0.0 };
+        let mut reach = clean_blend(group.blend);
+        let mut above = self.parent_of(g);
+        while let Some(p) = above {
+            let Some(parent) = self.groups.get(p) else { break };
+            reach = reach.max(clean_blend(parent.blend));
+            above = self.parent_of(p);
+        }
+        reach
+    }
+
+    /// Put `g` (with what is nested in it) into the group just above it.
+    pub fn indent_group(&mut self, g: usize) -> bool {
+        let e = self.subtree_end(g);
+        let Some(top) = self.groups.get(g) else { return false };
+        let above = match g.checked_sub(1).and_then(|i| self.groups.get(i)) {
+            Some(a) => a.depth,
+            None => return false,
+        };
+        let deepest = self.groups[g..e].iter().map(|x| x.depth).max().unwrap_or(0);
+        if top.depth > above || deepest >= MAX_DEPTH {
+            return false;
+        }
+        for x in &mut self.groups[g..e] {
+            x.depth += 1;
+        }
+        true
+    }
+
+    /// Take `g` (with what is nested in it) out of its group: it lands right after that group.
+    /// Returns the new index.
+    pub fn outdent_group(&mut self, g: usize) -> Option<usize> {
+        let p = self.parent_of(g)?;
+        let (e, pe) = (self.subtree_end(g), self.subtree_end(p));
+        let mut block: Vec<Group> = self.groups.drain(g..e).collect();
+        for x in &mut block {
+            x.depth -= 1;
+        }
+        let at = pe - (e - g);
+        for (i, x) in block.into_iter().enumerate() {
+            self.groups.insert(at + i, x);
+        }
+        Some(at)
+    }
+
+    /// The first group before `g` at the same level (inside the same group), if any.
+    pub fn prev_sibling(&self, g: usize) -> Option<usize> {
+        let d = self.groups.get(g)?.depth;
+        for i in (0..g).rev() {
+            let x = self.groups[i].depth;
+            if x == d {
+                return Some(i);
+            }
+            if x < d {
+                return None;
+            }
+        }
+        None
+    }
+
+    /// The group right after `g`'s subtree, if it is at the same level.
+    pub fn next_sibling(&self, g: usize) -> Option<usize> {
+        let e = self.subtree_end(g);
+        (self.groups.get(e)?.depth == self.groups.get(g)?.depth).then_some(e)
+    }
+
+    /// Move `g` (with what is in it) up or down one place among its siblings. Returns where it is now.
+    pub fn shift_group(&mut self, g: usize, down: bool) -> Option<usize> {
+        let d = self.groups.get(g)?.depth;
+        let size = self.subtree_end(g) - g;
+        if down {
+            let ns = self.next_sibling(g)?;
+            let ne = self.subtree_end(ns);
+            Some(self.move_subtree(g, ne - size, d))
+        } else {
+            let ps = self.prev_sibling(g)?;
+            Some(self.move_subtree(g, ps, d))
+        }
+    }
+
+    /// Wrap `g` (with what is in it) in a new, empty group that takes its place. Returns the new group's index.
+    pub fn wrap_in_group(&mut self, g: usize, name: String) -> Option<usize> {
+        if g >= self.groups.len() || self.groups.len() >= MAX_GROUPS || self.groups[g..self.subtree_end(g)].iter().any(|x| x.depth >= MAX_DEPTH) {
+            return None;
+        }
+        let e = self.subtree_end(g);
+        let mut parent = Group::new(name);
+        parent.depth = self.groups[g].depth;
+        for x in &mut self.groups[g..e] {
+            x.depth += 1;
+        }
+        self.groups.insert(g, parent);
+        Some(g)
+    }
+
+    /// Put `g` (with what is nested in it) inside `parent`, after what is already there. `None` when
+    /// it cannot go there (into itself, or nesting deeper than [`MAX_DEPTH`]). Returns its new index.
+    pub fn move_group_into(&mut self, g: usize, parent: usize) -> Option<usize> {
+        let n = self.groups.len();
+        if g >= n || parent >= n || g == parent {
+            return None;
+        }
+        let e = self.subtree_end(g);
+        if (g..e).contains(&parent) {
+            return None;
+        }
+        let base = self.groups[g].depth;
+        let deepest = self.groups[g..e].iter().map(|x| x.depth - base).max().unwrap_or(0);
+        let depth = self.groups[parent].depth.checked_add(1)?;
+        if depth.saturating_add(deepest) > MAX_DEPTH {
+            return None;
+        }
+        let pe = self.subtree_end(parent);
+        let removed = e - g;
+        let to = if pe >= e { pe - removed } else { pe };
+        Some(self.move_subtree(g, to, depth))
+    }
+
+    /// Remove `g`; what was nested in it moves up one level.
+    pub fn remove_group(&mut self, g: usize) {
+        if g >= self.groups.len() {
+            return;
+        }
+        let e = self.subtree_end(g);
+        for x in &mut self.groups[g + 1..e] {
+            x.depth = x.depth.saturating_sub(1);
+        }
+        self.groups.remove(g);
+        self.normalize_depths();
+    }
+
+    /// Move `g` and everything nested in it so that it starts at index `to` of the list as it is
+    /// without them; it takes the depth `depth`. Returns where it starts now.
+    pub fn move_subtree(&mut self, g: usize, to: usize, depth: u8) -> usize {
+        let e = self.subtree_end(g);
+        let base = i32::from(self.groups[g].depth);
+        let mut block: Vec<Group> = self.groups.drain(g..e).collect();
+        for x in &mut block {
+            x.depth = (i32::from(x.depth) - base + i32::from(depth)).clamp(0, i32::from(MAX_DEPTH)) as u8;
+        }
+        let at = to.min(self.groups.len());
+        for (i, x) in block.into_iter().enumerate() {
+            self.groups.insert(at + i, x);
+        }
+        self.normalize_depths();
+        at
+    }
+
     /// Clamp every number to a range the renderer and the mesher cope with.
     pub fn sanitize(&mut self) {
         let _ = self.sanitize_notes();
@@ -848,13 +1371,16 @@ impl Scene {
             *v = if v.is_finite() { v.clamp(lo, hi) } else { d };
         };
         let (mut lost, mut over) = (0usize, 0usize);
+        let mut broken_furniture = 0usize;
         let mut vol_shapes = 0usize;
         let mut vol_nodes = 0usize;
         let mut vol_seen: Vec<usize> = Vec::new();
+        self.normalize_depths();
         fix(&mut self.melt.amount, 0.0, 10.0, 1.0);
         fix(&mut self.melt.drip, 0.0, 40.0, 0.0);
         fix(&mut self.melt.ripple, 0.3, 4.0, 1.0);
         self.env.sanitize();
+        self.anim.sanitize();
         self.saved.truncate(MAX_SAVED);
         for m in &mut self.saved {
             m.sanitize();
@@ -864,16 +1390,44 @@ impl Scene {
         let mut left = MAX_SHAPES;
         for g in &mut self.groups {
             fix(&mut g.blend, 0.0, 200.0, 0.0);
+            if let Some(p) = &mut g.piece {
+                p.file = p.file.chars().filter(|c| !c.is_control()).take(MAX_PIECE_FILE).collect();
+                if let Some(path) = &mut p.path {
+                    path.truncate(path.char_indices().nth(MAX_PIECE_PATH).map_or(path.len(), |(i, _)| i));
+                }
+            }
+            if let Some(bag) = &mut g.bag {
+                bag.sanitize();
+            }
+            if let Some(p) = &mut g.designer_chair {
+                p.sanitize();
+            }
+            if let Some(fusion) = &mut g.fusion {
+                fix(&mut fusion.radius_mm, 0.0, 80.0, 14.0);
+                fix(&mut fusion.contact, 0.0, 1.0, 0.38);
+            }
             if let Some(p) = &mut g.pattern {
                 p.sanitize();
             }
             g.xform.sanitize();
+            if let Some(params) = &mut g.organic_furniture {
+                params.sanitize();
+            }
+            if let Some(meta) = &mut g.puffy_text { meta.sanitize(); }
+            if let Some(preset) = &mut g.melt_preset {
+                preset.sanitize();
+            }
             if g.instance_of.is_some() {
+                g.organic_furniture = None;
                 // a linked copy shows its source's shapes, not its own
                 g.shapes.clear();
+                g.fusion = None;
             }
             g.shapes.truncate(left);
             left -= g.shapes.len();
+            if let Some(lamp) = &mut g.lamp {
+                lamp.sanitize();
+            }
             for s in &mut g.shapes {
                 for v in &mut s.size {
                     fix(v, 0.01, 2000.0, 10.0);
@@ -890,7 +1444,12 @@ impl Scene {
                     fix(v, 0.01, 100.0, 1.0);
                 }
                 s.material.sanitize();
-                if let Some(d) = &mut s.deformation { d.sanitize(); }
+                if let Some(d) = &mut s.deformation {
+                    d.sanitize();
+                }
+                if let Some(r) = &mut s.ripple {
+                    r.sanitize();
+                }
                 s.outline.truncate(MAX_OUTLINE);
                 for p in &mut s.outline {
                     fix(&mut p[0], -2000.0, 2000.0, 0.0);
@@ -902,7 +1461,15 @@ impl Scene {
                 for v in &mut s.params {
                     fix(v, -5000.0, 5000.0, 0.0);
                 }
+                if s.kind == Kind::Curve {
+                    fix(&mut s.size[1], 0.45, 1.0, 1.0);
+                    fix(&mut s.size[2], 1.0, 2.0, 1.0);
+                    fix(&mut s.params[2], 0.0, 1.0, 0.0);
+                }
                 fix(&mut s.shell, 0.0, 500.0, 0.0);
+                if let Some(p) = &mut s.pattern {
+                    p.sanitize();
+                }
                 s.outline2.truncate(MAX_OUTLINE);
                 for p in &mut s.outline2 {
                     fix(&mut p[0], -2000.0, 2000.0, 0.0);
@@ -911,7 +1478,9 @@ impl Scene {
                 if s.kind.uses_outline2() && s.outline2.len() < 3 {
                     s.outline2 = s.kind.default_outline2();
                 }
-                s.path.truncate(MAX_PATH);
+                // A finished sketch already contains its sampled outline. Do not
+                // silently drop its last 16 vertices when reopening the document.
+                s.path.truncate(if s.guide { MAX_OUTLINE } else { MAX_PATH });
                 for p in &mut s.path {
                     fix(&mut p[0], -5000.0, 5000.0, 0.0);
                     fix(&mut p[1], -5000.0, 5000.0, 0.0);
@@ -921,8 +1490,45 @@ impl Scene {
                 if s.kind.uses_path() && s.path.len() < 2 {
                     s.path = s.kind.default_path();
                 }
+                // one handle pair per node at most, each finite and inside the world (#215): a file
+                // with a huge handle list must not slow every curve sample down
+                s.curve_handles.truncate(s.path.len());
+                for h in &mut s.curve_handles {
+                    for v in h.incoming.iter_mut().chain(h.outgoing.iter_mut()) {
+                        fix(v, -5000.0, 5000.0, 0.0);
+                    }
+                }
+                if !s.guide || s.kind != Kind::Curve {
+                    s.guide_plane = None;
+                } else if let Some(plane) = &mut s.guide_plane {
+                    if let Some(frame) = crate::sketch::Frame::from_axes([0.0; 3], plane.u, plane.v) {
+                        plane.u = frame.u;
+                        plane.v = frame.v;
+                        plane.holes.truncate(crate::sketch::MAX_HOLES);
+                        for hole in &mut plane.holes {
+                            hole.truncate(MAX_OUTLINE);
+                        }
+                        plane.holes.retain(|hole| {
+                            hole.iter().flatten().all(|v| v.is_finite() && v.abs() <= crate::sketch::COORD_MAX)
+                                && crate::sketch::validate_profile(hole).is_ok()
+                        });
+                    } else {
+                        s.guide_plane = None;
+                    }
+                }
                 if s.kind != Kind::Mesh {
                     s.volume = None;
+                    s.mesh_source = None;
+                }
+                if s.mesh_source.as_ref().is_some_and(|src| src.path.is_empty() || src.path.len() > 4096) {
+                    s.mesh_source = None;
+                }
+                // Restore the derived profile after loading user-edited vase parameters.
+                // Kind changes abandon the parametric generator instead of overwriting geometry.
+                if s.kind == Kind::Revolve && s.vase.is_some() {
+                    crate::organic_vase::apply(s);
+                } else {
+                    s.vase = None;
                 }
             }
             // a mesh whose data is gone or damaged cannot be drawn: it goes, with a note; so do
@@ -947,13 +1553,25 @@ impl Scene {
                 }
                 true
             });
+            if g.organic_furniture.as_ref().is_some_and(|p| !crate::organic_furniture::is_generated_group(g, p)) {
+                // A user may have deleted or reordered the managed shapes. Keep the geometry
+                // exactly as it is, but drop metadata that could overwrite the wrong parts.
+                g.organic_furniture = None;
+                broken_furniture += 1;
+            }
         }
         let mut notes = Vec::new();
         if lost > 0 {
             notes.push(format!("こわれていて読めないメッシュが{lost}個あったので、取りのぞきました"));
         }
         if over > 0 {
-            notes.push(format!("メッシュが多すぎるので、{over}個を取りのぞきました（{}個・データ量に上限があります）", crate::mesh::MAX_VOLUME_SHAPES));
+            notes.push(format!(
+                "メッシュが多すぎるので、{over}個を取りのぞきました（{}個・データ量に上限があります）",
+                crate::mesh::MAX_VOLUME_SHAPES
+            ));
+        }
+        if broken_furniture > 0 {
+            notes.push(format!("家具プリセットの部品が変わった{broken_furniture}組は、形を残して通常のグループとして開きました"));
         }
         notes
     }
@@ -966,9 +1584,126 @@ pub const MAX_SHAPES: usize = 512;
 mod tests {
     use super::*;
 
+    fn named(names: &[(&str, u8)]) -> Scene {
+        let groups = names
+            .iter()
+            .map(|&(n, d)| {
+                let mut g = Group::new(n);
+                g.depth = d;
+                g
+            })
+            .collect();
+        Scene { groups, ..Scene::default() }
+    }
+
+    fn layout(sc: &Scene) -> Vec<(String, u8)> {
+        sc.groups.iter().map(|g| (g.name.clone(), g.depth)).collect()
+    }
+
+    #[test]
+    fn a_file_with_a_huge_curve_handle_list_loads_with_one_handle_per_node() {
+        let mut sc = Scene::default();
+        let mut sh = Shape::new(Kind::Curve, [0.0; 3], Material::default());
+        sh.path = vec![[0.0, 0.0, 0.0, 4.0], [10.0, 0.0, 0.0, 4.0], [20.0, 5.0, 0.0, 4.0]];
+        sh.curve_handles = vec![CurveHandles::default(); 100_000];
+        sh.curve_handles[0].outgoing = [-1e9, 1e9, 2.0];
+        sc.groups[0].shapes.push(sh);
+        let (back, _) = Scene::from_json_notes(&sc.to_json()).expect("loads");
+        let curve = back.groups[0].shapes.iter().find(|s| s.kind == Kind::Curve).expect("the curve");
+        assert_eq!(curve.curve_handles.len(), 3, "one handle pair per node (#215)");
+        let o = curve.curve_handles[0].outgoing;
+        assert!(o.iter().all(|v| v.is_finite() && v.abs() <= 5000.0), "{o:?}");
+    }
+
+    #[test]
+    fn a_group_dropped_onto_another_goes_inside_it() {
+        // A, B, C: put B inside C, then A inside C as well -> C is the big group
+        let mut sc = named(&[("A", 0), ("B", 0), ("C", 0)]);
+        let at = sc.move_group_into(1, 2).expect("B goes into C");
+        assert_eq!(layout(&sc), vec![("A".into(), 0), ("C".into(), 0), ("B".into(), 1)]);
+        assert_eq!(sc.groups[at].name, "B");
+        sc.move_group_into(0, 1).expect("A goes into C too (a group before its new parent)");
+        assert_eq!(layout(&sc), vec![("C".into(), 0), ("B".into(), 1), ("A".into(), 1)]);
+    }
+
+    #[test]
+    fn nesting_stops_at_two_levels() {
+        let mut sc = named(&[("A", 0), ("a1", 1), ("B", 0), ("b1", 1)]);
+        assert_eq!(sc.move_group_into(0, 1), None, "not into its own child");
+        assert_eq!(sc.move_group_into(0, 0), None);
+        assert_eq!(sc.move_group_into(9, 0), None);
+        let before = sc.clone();
+        assert_eq!(sc.move_group_into(2, 0), None, "a big group cannot go inside another group");
+        assert_eq!(sc.move_group_into(3, 1), None, "a group inside a big group cannot take another group");
+        assert_eq!(sc, before, "a refused move changes nothing");
+        assert!(sc.move_group_into(3, 0).is_some(), "but a group can move from one big group to another");
+        assert_eq!(layout(&sc), vec![("A".into(), 0), ("a1".into(), 1), ("b1".into(), 1), ("B".into(), 0)]);
+    }
+
+    #[test]
+    fn a_parent_melt_reaches_the_groups_inside_it() {
+        let mut sc = named(&[("parent", 0), ("child a", 1), ("child b", 1), ("top", 0)]);
+        sc.groups[0].blend = 67.38;
+        assert_eq!(sc.group_melt_reach(0), 67.38);
+        assert_eq!(sc.group_melt_reach(1), 67.38, "a parent's Melt melts the groups inside it");
+        assert_eq!(sc.group_melt_reach(2), 67.38);
+        assert_eq!(sc.group_melt_reach(3), 0.0, "a group outside the parent keeps its own amount");
+        sc.groups[1].blend = 80.0;
+        assert_eq!(sc.group_melt_reach(1), 80.0, "a child may melt further than its parent");
+        sc.groups[0].blend = 0.0;
+        assert_eq!(sc.group_melt_reach(2), 0.0, "Melt off everywhere unions plainly");
+        sc.groups[0].blend = f32::NAN;
+        assert_eq!(sc.group_melt_reach(2), 0.0, "a hostile amount melts nothing");
+    }
+
+    #[test]
+    fn a_sketch_outline_edit_updates_the_solid_atomically_and_survives_reload() {
+        use crate::sdf::Prepared;
+
+        let built = crate::sketch::extrude(&crate::sketch::Frame::floor(), &crate::sketch::rect([-10.0, -10.0], [10.0, 10.0]), 10.0, false)
+            .expect("a rectangle extrudes");
+        let mut shape = Shape::new(Kind::Extrude, [0.0; 3], Material::default());
+        crate::sketch::apply(&built, &mut shape);
+        let original = shape.clone();
+        let probe = [13.0, 7.0, 5.0];
+        assert!(Prepared::new(&shape).distance(probe) > 0.0);
+
+        let mut crossing = shape.outline.clone();
+        crossing[2] = [-20.0, 0.0];
+        assert!(shape.set_sketch_outline(false, crossing).is_err());
+        assert_eq!(shape, original, "rejecting a crossing is non-destructive");
+
+        let mut repeated = shape.outline.clone();
+        repeated[2] = repeated[1];
+        assert!(shape.set_sketch_outline(false, repeated).is_err());
+        assert_eq!(shape, original, "zero-length edges are also rejected");
+
+        let mut enlarged = shape.outline.clone();
+        enlarged[2] = [20.0, 10.0];
+        assert_eq!(shape.set_sketch_outline(false, enlarged.clone()), Ok(true));
+        assert_eq!(shape.set_sketch_outline(false, enlarged.clone()), Ok(false));
+        assert!(Prepared::new(&shape).distance(probe) < 0.0, "3D solid follows the new profile");
+        assert_eq!((shape.pos, shape.rot, shape.size), (original.pos, original.rot, original.size));
+        assert_eq!(shape.material, original.material);
+
+        let mut scene = Scene::default();
+        scene.groups[0].shapes = vec![shape.clone()];
+        let restored = Scene::from_json(&scene.to_json()).expect("saved sketch loads");
+        let mut reopened = restored.shape(0, 0).expect("shape stays").clone();
+        assert_eq!(reopened, shape, "the vertices and other properties survive serialization");
+        assert!(Prepared::new(&reopened).distance(probe) < 0.0);
+        let mut new_outline = reopened.outline.clone();
+        new_outline[2] = [24.0, 10.0];
+        assert_eq!(reopened.set_sketch_outline(false, new_outline), Ok(true), "reopened sketch is editable again");
+
+        let mut primitive = Shape::new(Kind::Box, [0.0; 3], Material::default());
+        assert!(primitive.set_sketch_outline(false, enlarged).is_err());
+        assert!(shape.set_sketch_outline(true, shape.outline.clone()).is_err(), "only lofts have a top outline");
+    }
+
     #[test]
     fn twist_preserves_the_original_shape_and_old_json_can_be_loaded() {
-        use crate::deform::{Deformation, Twist, Axis};
+        use crate::deform::{Axis, Deformation, Twist};
         let mut sc = Scene::default();
         sc.groups[0].shapes[0] = Shape::new(Kind::Box, [0.0, 0.0, 15.0], Material::default());
         let original = sc.groups[0].shapes[0].clone();
@@ -995,10 +1730,8 @@ mod tests {
         let mut sc = Scene::default();
         let shape = &mut sc.groups[0].shapes[0];
         let kind = shape.kind;
-        shape.deformation = Some(Deformation::Twist(Twist {
-            degrees: f32::INFINITY, begin: -12.0, end: -5.0, lower: -2.0,
-            upper: 99.0, ..Twist::default()
-        }));
+        shape.deformation =
+            Some(Deformation::Twist(Twist { degrees: f32::INFINITY, begin: -12.0, end: -5.0, lower: -2.0, upper: 99.0, ..Twist::default() }));
         sc.sanitize();
         let shape = &sc.groups[0].shapes[0];
         assert_eq!(shape.kind, kind);
@@ -1063,7 +1796,15 @@ mod tests {
 
     #[test]
     fn gradient_fields_are_sanitised() {
-        let mut m = Material { gradient: f32::NAN, grad_soft: 9.0, grad_from: -3.0, grad_to: f32::INFINITY, grad_axis: 77, color2: [f32::NAN, 5.0, -1.0], ..Material::default() };
+        let mut m = Material {
+            gradient: f32::NAN,
+            grad_soft: 9.0,
+            grad_from: -3.0,
+            grad_to: f32::INFINITY,
+            grad_axis: 77,
+            color2: [f32::NAN, 5.0, -1.0],
+            ..Material::default()
+        };
         m.sanitize();
         assert_eq!(m.gradient, 0.0);
         assert_eq!(m.grad_soft, 1.0);
@@ -1117,7 +1858,17 @@ mod tests {
         assert_eq!(m.color, [1.0, 0.0, 0.0]);
         assert!(!m.has_gradient());
         assert_eq!(m.grad_axis, 2);
-        let g = Material { gradient: 0.7, grad_axis: 0, grad_flip: true, grad_local: true, color2: [0.1, 0.2, 0.3], grad_soft: 0.3, grad_from: 0.1, grad_to: 0.9, ..Material::default() };
+        let g = Material {
+            gradient: 0.7,
+            grad_axis: 0,
+            grad_flip: true,
+            grad_local: true,
+            color2: [0.1, 0.2, 0.3],
+            grad_soft: 0.3,
+            grad_from: 0.1,
+            grad_to: 0.9,
+            ..Material::default()
+        };
         let back: Material = serde_json::from_str(&serde_json::to_string(&g).unwrap_or_default()).unwrap_or_default();
         assert_eq!(back, g);
         // a whole old scene still opens
@@ -1127,7 +1878,9 @@ mod tests {
 
     #[test]
     fn a_file_with_too_much_is_cut_to_the_new_limits() {
-        assert!(MAX_SHAPES >= 512 && MAX_GROUPS >= 96);
+        const {
+            assert!(MAX_SHAPES >= 512 && MAX_GROUPS >= 96);
+        }
         let mut sc = Scene::default();
         let one = sc.groups[0].shapes[0].clone();
         sc.groups.clear();
@@ -1136,9 +1889,12 @@ mod tests {
             gr.shapes = vec![one.clone(); 8];
             sc.groups.push(gr);
         }
-        let back = Scene::from_json(&sc.to_json()).unwrap_or_default();
-        assert_eq!(back.groups.len(), MAX_GROUPS);
-        assert_eq!(back.shape_count(), MAX_SHAPES, "{} groups of 8 shapes are cut at {MAX_SHAPES}", MAX_GROUPS);
+        let original = sc.to_json();
+        assert!(Scene::from_json(&original).is_err(), "oversized projects must not silently lose groups");
+        // In-memory hardening still clamps programmatic hostile scenes.
+        sc.sanitize();
+        assert_eq!(sc.groups.len(), MAX_GROUPS);
+        assert_eq!(sc.shape_count(), MAX_SHAPES, "{} groups of 8 shapes are cut at {MAX_SHAPES}", MAX_GROUPS);
         // a file with a hostile pattern keeps only safe numbers
         let hostile = r#"{"groups":[{"name":"g","op":"Add","blend":0,"visible":true,"shapes":[],"pattern":{"Rect":{"counts":[4000000000,0,9],"spacing":[1e30,-1e30,0]}},"xform":{"pos":[1e30,0,0],"rot":[0,0,0],"scale":-4}}]}"#;
         let h = Scene::from_json(hostile).unwrap_or_default();
@@ -1157,6 +1913,30 @@ mod tests {
     }
 
     #[test]
+    fn opening_one_group_with_513_shapes_fails_without_truncation() {
+        let mut sc = Scene::default();
+        let shape = sc.groups[0].shapes[0].clone();
+        sc.groups[0].shapes = vec![shape; MAX_SHAPES + 1];
+        let text = sc.to_json();
+        let failure = Scene::from_json_notes(&text).expect_err("must reject a 513-shape document");
+        assert!(failure.contains("maximum") && failure.contains("preserved"), "{failure}");
+        assert!(serde_json::from_str::<Scene>(&text).is_ok(), "the source itself is recoverable");
+    }
+
+    #[test]
+    fn opening_97_groups_fails_instead_of_discarding_the_last_group() {
+        let mut sc = Scene { groups: Vec::new(), ..Scene::default() };
+        for i in 0..=MAX_GROUPS {
+            sc.groups.push(Group::new(format!("Group {}", i + 1)));
+        }
+        let text = sc.to_json();
+        assert!(Scene::from_json_notes(&text).unwrap_err().contains("groups"));
+        assert!(serde_json::from_str::<Scene>(&text).is_ok());
+        sc.groups.truncate(MAX_GROUPS);
+        assert!(Scene::from_json(&sc.to_json()).is_ok());
+    }
+
+    #[test]
     fn rounding_is_held_inside_the_file_limits() {
         let mut sc = Scene::default();
         if let Some(s) = sc.groups[0].shapes.first_mut() {
@@ -1171,5 +1951,18 @@ mod tests {
         assert_eq!(sc.groups[0].shapes[0].round, MAX_ROUND);
         assert!(Kind::Box.can_round() && Kind::Cone.can_round() && Kind::Sweep.can_round());
         assert!(!Kind::Sphere.can_round() && !Kind::Curve.can_round());
+    }
+    #[test]
+    fn mesh_source_is_optional_for_legacy_files_and_roundtrips_when_present() {
+        let mut sh = Shape::new(Kind::Mesh, [0.0; 3], Material::default());
+        let old_text = serde_json::to_string(&sh).unwrap();
+        let old: Shape = serde_json::from_str(&old_text).unwrap();
+        assert!(old.mesh_source.is_none());
+        sh.mesh_source = Some(MeshSource { path: "original.stl".into(), y_up: true, mesh_hash: 12345 });
+        let again: Shape = serde_json::from_str(&serde_json::to_string(&sh).unwrap()).unwrap();
+        assert_eq!(again.mesh_source, sh.mesh_source);
+        sh.scale = [2.0, 3.0, 4.0];
+        sh.volume = Some(crate::mesh::SharedVolume::new(crate::mesh::tests::ball_volume(8)));
+        assert_eq!(sh.mesh_cell_mm(), Some([2.0, 3.0, 4.0]));
     }
 }

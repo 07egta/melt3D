@@ -5,15 +5,14 @@
 
 use std::collections::BTreeMap;
 
-use crate::FeatureKind;
 use crate::walk::Walk;
+use crate::{BodyName, FeatureKind, FeatureName, SketchId};
 
-/// A reference a feature holds: `S` is `&u64` or `&mut u64` (a sketch id), `N` is `&String` or
-/// `&mut String` (a feature or body name).
-pub(crate) enum Ref<S, N> {
+/// A reference a feature holds: `S` is `&SketchId` or `&mut SketchId`, and so on.
+pub(crate) enum Ref<S, F, B> {
     Sketch(S),
-    Feature(N),
-    Body(N),
+    Feature(F),
+    Body(B),
 }
 
 impl FeatureKind {
@@ -23,10 +22,22 @@ impl FeatureKind {
         let mut v = Vec::new();
         self.walk_refs(&mut |r| {
             if let Ref::Sketch(id) = r {
-                v.push(*id);
+                v.push(id.0);
             }
         });
         v
+    }
+
+    /// Whether the feature names the feature `name` (the construction plane a plane is built on,
+    /// a patterned or mirrored feature).
+    pub fn names_feature(&self, name: &str) -> bool {
+        let mut found = false;
+        self.walk_refs(&mut |r| {
+            if let Ref::Feature(n) = r {
+                found |= n.as_ref() == name;
+            }
+        });
+        found
     }
 
     /// Point references to sketches (by id) and features (by name) at their copies, or at a
@@ -34,13 +45,13 @@ impl FeatureKind {
     pub fn remap_refs(&mut self, sketches: &BTreeMap<u64, u64>, names: &BTreeMap<String, String>) {
         self.walk_refs_mut(&mut |r| match r {
             Ref::Sketch(id) => {
-                if let Some(n) = sketches.get(id) {
-                    *id = *n;
+                if let Some(n) = sketches.get(&id.0) {
+                    *id = SketchId(*n);
                 }
             }
             Ref::Feature(name) => {
-                if let Some(n) = names.get(name) {
-                    *name = n.clone();
+                if let Some(n) = names.get(name.as_ref()) {
+                    *name = FeatureName(n.clone());
                 }
             }
             Ref::Body(_) => {}
@@ -51,9 +62,9 @@ impl FeatureKind {
     pub fn remap_bodies(&mut self, bodies: &BTreeMap<String, String>) {
         self.walk_refs_mut(&mut |r| {
             if let Ref::Body(name) = r
-                && let Some(n) = bodies.get(name)
+                && let Some(n) = bodies.get(name.as_ref())
             {
-                *name = n.clone();
+                *name = BodyName(n.clone());
             }
         });
     }

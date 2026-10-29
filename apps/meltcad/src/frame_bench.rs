@@ -48,7 +48,8 @@ impl Rig {
 
     fn frame_with(&mut self, events: Vec<Event>, _modifiers: Modifiers) -> f32 {
         self.time += 0.0083;
-        let input = RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1264.0, 720.0))), events, time: Some(self.time), ..Default::default() };
+        let input =
+            RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1264.0, 720.0))), events, time: Some(self.time), ..Default::default() };
         let t = Instant::now();
         let app = &mut self.app;
         let mut out = self.ctx.run_ui(input, |ui| app.frame_body(ui));
@@ -201,7 +202,12 @@ fn frame_cpu_bench() {
         let shapes = sc.shape_count();
         let report = |what: &str, r: &Rig| {
             let (avg, p95, max) = r.stats();
-            eprintln!("{label:<18} {shapes:>4} shapes  {what:<14} cpu ms/frame: avg {avg:6.2}  p95 {p95:6.2}  max {max:6.2}  ({} frames, {} packs, {} fields)", r.times.len(), r.app.perf.pack.packs, r.app.field_builds.get());
+            eprintln!(
+                "{label:<18} {shapes:>4} shapes  {what:<14} cpu ms/frame: avg {avg:6.2}  p95 {p95:6.2}  max {max:6.2}  ({} frames, {} packs, {} fields)",
+                r.times.len(),
+                r.app.perf.pack.packs,
+                r.app.field_builds.get()
+            );
         };
         // idle
         let mut r = Rig::new(sc.clone());
@@ -244,4 +250,112 @@ fn frame_cpu_bench() {
             report("gizmo drag", &r);
         }
     }
+}
+
+/// Measures actual CPU frame-body responsiveness while a large native file loads.
+/// This is a UI-input benchmark, NOT a GPU benchmark. The file is deliberately padded
+/// with valid JSON whitespace so disk reading and parsing overlap mouse movement.
+/// `cargo test --release -p meltcad document_io_frame_bench -- --ignored --nocapture`
+#[test]
+#[ignore]
+fn document_io_frame_bench() {
+    let sc = crate::bench::library_scene(300);
+    let path = std::env::temp_dir().join(format!("yura_document_frame_{}.yura", std::process::id()));
+    let mut payload = sc.to_json().into_bytes();
+    payload.resize(payload.len() + 32 * 1024 * 1024, b' ');
+    std::fs::write(&path, &payload).expect("prepare large document");
+    drop(payload);
+
+    let mut rig = Rig::new(Scene::default());
+    let centre = viewport_centre(&rig);
+    rig.app.open_path(path.clone());
+    rig.times.clear();
+    let begin = Instant::now();
+    for k in 0..100 {
+        // True egui pointer events while the document worker runs.
+        let p = centre + vec2((k as f32 * 2.0).sin() * 100.0, (k as f32 * 0.1).cos() * 60.0);
+        rig.frame(vec![Event::PointerMoved(p)]);
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    let (avg, p95, max) = rig.stats();
+    eprintln!(
+        "native document load + 100 pointer frames: {:.2}s total, CPU avg {:.3}ms p95 {:.3}ms max {:.3}ms",
+        begin.elapsed().as_secs_f64(),
+        avg,
+        p95,
+        max
+    );
+    // No arbitrary FPS or latency assertion: report actual machine/build values,
+    // separately from the existing 100/300-shape and GPU timestamp benchmarks.
+    assert!(avg.is_finite() && p95.is_finite() && max.is_finite());
+    let _ = std::fs::remove_file(path);
+}
+
+/// The scene list scrolls with the mouse wheel when several groups are picked (it did not).
+#[test]
+fn the_scene_list_scrolls_while_several_groups_are_picked() {
+    let mut sc = Scene::default();
+    sc.groups.clear();
+    for i in 0..40 {
+        let mut g = crate::model::Group::new(format!("G{i}"));
+        g.shapes.push(crate::model::Shape::new(crate::model::Kind::Sphere, [0.0; 3], crate::model::Material::default()));
+        sc.groups.push(g);
+    }
+    let scroll_moves = |multi: bool| -> f32 {
+        let mut r = Rig::new(sc.clone());
+        r.frame(vec![]);
+        r.app.sel = Some(Pick::Group(0));
+        if multi {
+            r.app.multi = vec![Pick::Group(1), Pick::Group(2)];
+            r.app.multi_for = r.app.sel;
+        }
+        for _ in 0..3 {
+            r.frame(vec![]);
+        }
+        let Some((_, rect)) = r.app.row_rects.first().copied() else { return -1.0 };
+        let y0 = rect.top();
+        let at = rect.center();
+        r.frame(vec![Event::PointerMoved(at)]);
+        for _ in 0..6 {
+            r.frame(vec![Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: vec2(0.0, -80.0), phase: egui::TouchPhase::Move, modifiers: Modifiers::NONE }]);
+        }
+        for _ in 0..4 {
+            r.frame(vec![]);
+        }
+        let y1 = r.app.row_rects.first().map_or(y0, |(_, rc)| rc.top());
+        y0 - y1
+    };
+    let single = scroll_moves(false);
+    let several = scroll_moves(true);
+    assert!(single > 20.0, "baseline: the list scrolls ({single})");
+    assert!(several > 20.0, "with several groups picked the list must scroll too ({several})");
+}
+
+/// The wheel zooms the view while several groups are picked.
+#[test]
+fn the_wheel_zooms_while_several_groups_are_picked() {
+    let mut sc = Scene::default();
+    sc.groups.clear();
+    for i in 0..4 {
+        let mut g = crate::model::Group::new(format!("G{i}"));
+        g.shapes.push(crate::model::Shape::new(crate::model::Kind::Sphere, [i as f32 * 30.0, 0.0, 0.0], crate::model::Material::default()));
+        sc.groups.push(g);
+    }
+    let mut r = Rig::new(sc);
+    r.app.sel = Some(Pick::Group(0));
+    r.app.multi = vec![Pick::Group(1), Pick::Group(2)];
+    r.app.multi_for = r.app.sel;
+    for _ in 0..3 {
+        r.frame(vec![]);
+    }
+    let c = viewport_centre(&r);
+    r.frame(vec![Event::PointerMoved(c)]);
+    let d0 = r.app.cam.dist;
+    for _ in 0..5 {
+        r.frame(vec![Event::MouseWheel { unit: egui::MouseWheelUnit::Line, delta: vec2(0.0, 3.0), phase: egui::TouchPhase::Move, modifiers: Modifiers::NONE }]);
+    }
+    for _ in 0..5 {
+        r.frame(vec![]);
+    }
+    assert!((r.app.cam.dist - d0).abs() > 1.0, "the wheel must zoom ({d0} -> {})", r.app.cam.dist);
 }

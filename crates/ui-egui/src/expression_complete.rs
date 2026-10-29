@@ -1,8 +1,9 @@
 //! Focus-scoped completion keyboard handling before editors and CAD shortcuts see input.
 
-use egui::{Key, RichText};
+use crate::ui_kit;
+use egui::Key;
 
-use crate::params_dialog::{suggestions, word_before};
+use crate::params_dialog::{suggestions_for, word_before};
 use crate::theme::Tokens;
 
 #[derive(Clone)]
@@ -15,6 +16,9 @@ struct Popup {
     count: usize,
     accept: bool,
     dismissed: bool,
+    explicit: bool,
+    /// Where each suggestion was drawn, for a press on one (see [`complete`]).
+    rows: Vec<egui::Rect>,
 }
 
 fn popup_id() -> egui::Id {
@@ -25,6 +29,17 @@ fn popup_id() -> egui::Id {
 /// owns these keys. Raw events are removed too: several expression editors inspect raw Tab.
 pub(crate) fn begin_frame(ctx: &egui::Context) {
     let Some(mut popup) = ctx.data(|d| d.get_temp::<Popup>(popup_id())) else { return };
+    if ctx.memory(|m| m.has_focus(popup.editor))
+        && popup.frame.saturating_add(1) >= ctx.cumulative_frame_nr()
+        && ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, Key::Space))
+    {
+        ctx.input_mut(|i| {
+            i.raw.events.retain(|e| !matches!(e, egui::Event::Key { key: Key::Space, modifiers, .. } if modifiers.ctrl));
+        });
+        popup.explicit = true;
+        popup.dismissed = false;
+        ctx.data_mut(|d| d.insert_temp(popup_id(), popup.clone()));
+    }
     let escape_blurred = ctx.input(|i| i.key_pressed(Key::Escape)) && ctx.memory(|m| m.focused().is_none() && m.had_focus_last_frame(popup.editor));
     let focused = ctx.memory(|m| m.has_focus(popup.editor)) || escape_blurred;
     if popup.frame.saturating_add(1) < ctx.cumulative_frame_nr() || !focused || popup.dismissed || popup.count == 0 {
@@ -82,13 +97,26 @@ pub(crate) fn begin_frame(ctx: &egui::Context) {
 
 pub(crate) fn complete(ui: &mut egui::Ui, resp: &egui::Response, text: &mut String) -> bool {
     let ctx = ui.ctx().clone();
-    if !ctx.memory(|m| m.has_focus(resp.id)) {
+    // A press on a suggestion takes the focus from the editor before the list can see it
+    // clicked, and the editor then gives up what was typed (#3257). The press picks the
+    // suggestion under it, and the editor gets its focus back below.
+    let pressed_row = ctx
+        .input(|i| i.pointer.primary_pressed().then(|| i.pointer.interact_pos()).flatten())
+        .and_then(|at| ctx.data(|d| d.get_temp::<Popup>(popup_id())).filter(|p| p.editor == resp.id)?.rows.iter().position(|r| r.contains(at)));
+    // Its release is a click away from the editor, which gives up the focus again: take it back,
+    // and don't let the list take that release as a click on another row.
+    let picked_by_press = resp.id.with("completion_picked_by_press");
+    let released_after_press = ctx.data(|d| d.get_temp::<bool>(picked_by_press)).is_some() && ctx.input(|i| i.pointer.any_released());
+    if released_after_press {
+        ctx.data_mut(|d| d.remove::<bool>(picked_by_press));
+        resp.request_focus();
+    }
+    if !ctx.memory(|m| m.has_focus(resp.id)) && pressed_row.is_none() {
         return false;
     }
     let state = egui::TextEdit::load_state(&ctx, resp.id);
     let cursor = state.as_ref().and_then(|s| s.cursor.char_range()).map(|r| r.primary.index.0).unwrap_or_else(|| text.chars().count());
     let (start, word) = word_before(text, cursor);
-    let list = suggestions(&ctx, &word);
     let previous = ctx.data(|d| d.get_temp::<Popup>(popup_id()));
     let mut popup = previous.filter(|p| p.editor == resp.id && p.word == word && p.cursor == cursor).unwrap_or(Popup {
         editor: resp.id,
@@ -96,10 +124,13 @@ pub(crate) fn complete(ui: &mut egui::Ui, resp: &egui::Response, text: &mut Stri
         word,
         cursor,
         selected: 0,
-        count: list.len(),
+        count: 0,
         accept: false,
         dismissed: false,
+        explicit: false,
+        rows: Vec::new(),
     });
+    let list = suggestions_for(&ctx, &popup.word, popup.explicit);
     popup.frame = ctx.cumulative_frame_nr();
     popup.count = list.len();
     popup.selected = popup.selected.min(list.len().saturating_sub(1));
@@ -107,34 +138,46 @@ pub(crate) fn complete(ui: &mut egui::Ui, resp: &egui::Response, text: &mut Stri
         ctx.data_mut(|d| d.insert_temp(popup_id(), popup));
         return false;
     }
-    let mut pick = if popup.accept { list.get(popup.selected).map(|s| s.text.clone()) } else { None };
+    let mut pick = match pressed_row {
+        Some(row) => list.get(row).map(|s| s.text.clone()),
+        None if popup.accept => list.get(popup.selected).map(|s| s.text.clone()),
+        None => None,
+    };
     popup.accept = false;
     let t = Tokens::get();
-    crate::frame::area(resp.id.with("completions")).order(egui::Order::Tooltip).fixed_pos(resp.rect.left_bottom() + egui::vec2(0.0, 2.0)).show(
+    let options: Vec<_> = list
+        .iter()
+        .map(|suggestion| ui_kit::PopupOption {
+            text: &suggestion.text,
+            kind: match suggestion.kind.as_str() {
+                "parameter" => crate::i18n::tr_label("Parameter"),
+                "function" => crate::i18n::tr("ui.function"),
+                "unit" => crate::i18n::tr_label("Unit"),
+                "constant" => crate::i18n::tr("ui.constant"),
+                _ => &suggestion.kind,
+            },
+            detail: &suggestion.detail,
+            color: match suggestion.kind.as_str() {
+                "parameter" => t.form_ink,
+                "function" => t.form_primary,
+                _ => t.form_dim,
+            },
+        })
+        .collect();
+    let list_id = resp.id.with("completions");
+    if let Some(index) = ui_kit::popup_list(
         &ctx,
-        |ui| {
-            egui::Frame::popup(ui.style()).show(ui, |ui| {
-                ui.set_min_width(resp.rect.width().max(180.0));
-                for (i, suggestion) in list.iter().enumerate() {
-                    let colour = match suggestion.kind.as_str() {
-                        "parameter" => t.text,
-                        "function" => t.accent,
-                        _ => t.text_dim,
-                    };
-                    let r = ui
-                        .add(egui::Button::new(RichText::new(&suggestion.text).color(colour)).selected(i == popup.selected))
-                        .on_hover_text(&suggestion.detail);
-                    if i == popup.selected {
-                        ui.label(RichText::new(&suggestion.detail).small().color(t.text_dim));
-                    }
-                    if r.clicked() {
-                        pick = Some(suggestion.text.clone());
-                    }
-                }
-                ui.label(RichText::new("↑ ↓ choose · Enter / Tab complete · Esc dismiss").small().color(t.text_dim));
-            });
-        },
-    );
+        list_id,
+        resp.rect,
+        popup.selected,
+        &options,
+        crate::i18n::tr_label("↑ ↓ choose · Enter / Tab complete · Esc dismiss"),
+    ) && pick.is_none()
+        && !released_after_press
+    {
+        pick = list.get(index).map(|suggestion| suggestion.text.clone());
+    }
+    popup.rows = ctx.data(|d| d.get_temp::<Vec<egui::Rect>>(list_id.with("rows"))).unwrap_or_default();
     ctx.data_mut(|d| d.insert_temp(popup_id(), popup));
     let Some(pick) = pick else { return false };
     let chars: Vec<char> = text.chars().collect();
@@ -145,6 +188,9 @@ pub(crate) fn complete(ui: &mut egui::Ui, resp: &egui::Response, text: &mut Stri
     state.cursor.set_char_range(Some(egui::text::CCursorRange::one(egui::text::CCursor::new(start + pick.chars().count()))));
     state.store(&ctx, resp.id);
     resp.request_focus();
+    if pressed_row.is_some() {
+        ctx.data_mut(|d| d.insert_temp(picked_by_press, true));
+    }
     // Do not leave the accepted popup owning Enter on the next frame.
     ctx.data_mut(|d| d.remove::<Popup>(popup_id()));
     true
@@ -153,6 +199,7 @@ pub(crate) fn complete(ui: &mut egui::Ui, resp: &egui::Response, text: &mut Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::params_dialog::suggestions;
     use crate::{SolveApp, params_dialog};
     use serde_json::json;
 
@@ -167,7 +214,7 @@ mod tests {
 
     impl Editor {
         fn new(text: &str) -> Self {
-            let ctx = egui::Context::default();
+            let ctx = crate::fonts::test_context();
             let mut app = SolveApp::new(solidcraft_engine::Session::default(), Default::default());
             for (name, value) in [("width", 40), ("width_extra", 50), ("wing", 20), ("wire", 10)] {
                 app.run("parameters.add", json!({"name":name,"expression":format!("{value} mm")})).unwrap();
@@ -187,7 +234,7 @@ mod tests {
         fn frame(&mut self, events: Vec<egui::Event>) {
             self.accepted = false;
             self.leaked.clear();
-            let _ = self.ctx.run_ui(
+            let mut output = self.ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(600.0, 400.0))),
                     events,
@@ -210,6 +257,8 @@ mod tests {
                     });
                 },
             );
+            // Nothing paints these frames: drop their texture updates on purpose.
+            output.textures_delta.clear();
         }
 
         fn key(&mut self, key: Key) {
@@ -245,6 +294,26 @@ mod tests {
         assert!(e.leaked.is_empty());
         assert_eq!(e.cursor(), e.text.chars().count());
         assert!(e.ctx.memory(|m| m.has_focus(e.id)));
+    }
+
+    /// #3257: a click on a suggestion inserts it, though the press takes the focus from the
+    /// editor first; the editor keeps its focus and its caret goes after the inserted name.
+    #[test]
+    fn clicking_a_suggestion_inserts_it() {
+        let mut e = Editor::new("2 * wi");
+        let list = suggestions(&e.ctx, "wi");
+        let rows = e.ctx.data(|d| d.get_temp::<Popup>(popup_id())).unwrap().rows;
+        assert_eq!(rows.len(), list.len());
+        let at = rows[1].center();
+        let button =
+            |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+        e.frame(vec![egui::Event::PointerMoved(at)]);
+        e.frame(vec![button(true)]);
+        assert!(e.accepted, "the press picked the suggestion under it");
+        e.frame(vec![button(false)]);
+        assert_eq!(e.text, format!("2 * {}", list[1].text));
+        assert!(e.ctx.memory(|m| m.has_focus(e.id)), "the editor keeps the focus");
+        assert_eq!(e.cursor(), e.text.chars().count());
     }
 
     #[test]
@@ -306,6 +375,23 @@ mod tests {
         assert_eq!(e.text, "width");
         assert!(!e.accepted);
         assert!(e.leaked.contains(&Key::Enter));
+    }
+
+    #[test]
+    fn ctrl_space_opens_empty_expression_suggestions_and_reopens_dismissed_ones() {
+        for prefix in ["", "wi"] {
+            let mut e = Editor::new(prefix);
+            if !prefix.is_empty() {
+                e.key(Key::Escape);
+            }
+            e.frame(vec![egui::Event::Key { key: Key::Space, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::CTRL }]);
+            let popup = e.ctx.data(|d| d.get_temp::<Popup>(popup_id())).unwrap();
+            assert!(popup.explicit && !popup.dismissed && popup.count > 0);
+            assert_eq!(e.text, prefix, "Ctrl+Space does not add a space");
+            e.key(Key::Tab);
+            assert!(e.accepted);
+            assert!(!e.text.is_empty());
+        }
     }
 
     #[test]

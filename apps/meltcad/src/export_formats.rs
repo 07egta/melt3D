@@ -31,12 +31,26 @@ impl Format {
     pub fn label(self) -> &'static str {
         match self {
             Format::Stl => "STL",
-            Format::StlAscii => "STL(文字)",
+            Format::StlAscii => "STL (text)",
             Format::Obj => "OBJ",
             Format::ThreeMf => "3MF",
             Format::Ply => "PLY",
             Format::Glb => "GLB",
         }
+    }
+    /// The stable id kept in preferences.
+    pub fn id(self) -> &'static str {
+        match self {
+            Format::Stl => "stl",
+            Format::StlAscii => "stl-ascii",
+            Format::Obj => "obj",
+            Format::ThreeMf => "3mf",
+            Format::Ply => "ply",
+            Format::Glb => "glb",
+        }
+    }
+    pub fn from_id(id: &str) -> Option<Format> {
+        Format::ALL.iter().copied().find(|f| f.id() == id)
     }
     /// Can the file hold the colours of the model?
     pub fn has_colour(self) -> bool {
@@ -73,6 +87,24 @@ impl Units {
             Units::Cm => "cm",
             Units::M => "m",
             Units::Inch => "inch",
+        }
+    }
+    /// The stable id kept in preferences (`in`, not `inch`).
+    pub fn id(self) -> &'static str {
+        match self {
+            Units::Mm => "mm",
+            Units::Cm => "cm",
+            Units::M => "m",
+            Units::Inch => "in",
+        }
+    }
+    pub fn from_id(id: &str) -> Option<Units> {
+        match id {
+            "mm" => Some(Units::Mm),
+            "cm" => Some(Units::Cm),
+            "m" => Some(Units::M),
+            "in" | "inch" => Some(Units::Inch),
+            _ => None,
         }
     }
     /// The 3MF `unit` attribute.
@@ -152,6 +184,25 @@ fn num(x: f64, dec: usize) -> String {
     if s == "-0" { "0".into() } else { s }
 }
 
+/// Decimals that keep a model's corners apart: 6 for anything of a millimetre or more, more for
+/// a model so small (a 1 mm part exported at 0.01 % in metres) that 6 would round it flat.
+fn decimals(mesh: &TriMesh) -> usize {
+    let (mut lo, mut hi) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
+    for p in &mesh.positions {
+        for k in 0..3 {
+            let v = fin(p[k]);
+            lo[k] = lo[k].min(v);
+            hi[k] = hi[k].max(v);
+        }
+    }
+    let side = (0..3).map(|k| hi[k] - lo[k]).fold(0.0_f64, f64::max);
+    if !side.is_finite() || side <= 0.0 {
+        return 6;
+    }
+    let extra = (-side.log10()).ceil().clamp(0.0, 9.0) as usize;
+    6 + extra
+}
+
 fn tri_corners(mesh: &TriMesh) -> impl Iterator<Item = (usize, [[f64; 3]; 3])> + '_ {
     mesh.triangles.iter().enumerate().filter_map(|(i, t)| {
         let a = mesh.positions.get(t[0] as usize)?;
@@ -169,13 +220,17 @@ fn facet_normal(t: &[[f64; 3]; 3]) -> [f64; 3] {
     if l > 1e-30 { [c[0] / l, c[1] / l, c[2] / l] } else { [0.0, 0.0, 1.0] }
 }
 
-fn check(mesh: &TriMesh) -> Result<(), String> {
+/// Validate geometry once before any writer can drop or rewrite damaged faces.
+pub(crate) fn check(mesh: &TriMesh) -> Result<(), String> {
     if mesh.triangles.is_empty() || mesh.positions.is_empty() {
         return Err("there is nothing to write".into());
     }
     let n = mesh.positions.len();
     if n > u32::MAX as usize - 1 || mesh.triangles.len() > u32::MAX as usize / 4 {
         return Err("the model has too many triangles for this file".into());
+    }
+    if mesh.triangles.iter().any(|t| t.iter().any(|&i| i as usize >= n)) {
+        return Err("the model has a triangle with an invalid vertex index".into());
     }
     Ok(())
 }
@@ -235,8 +290,9 @@ pub fn obj_files(s: &Surface, name: &str, mtl_file: &str) -> Result<(String, Opt
         let _ = writeln!(out, "mtllib {mtl_file}");
     }
     let _ = writeln!(out, "o {}", name.replace(char::is_whitespace, "_"));
+    let dec = decimals(mesh);
     for p in &mesh.positions {
-        let _ = writeln!(out, "v {} {} {}", num(p[0], 6), num(p[1], 6), num(p[2], 6));
+        let _ = writeln!(out, "v {} {} {}", num(p[0], dec), num(p[1], dec), num(p[2], dec));
     }
     let n = mesh.positions.len() as u32;
     let ok = |t: &[u32; 3]| t.iter().all(|i| *i < n);
@@ -373,8 +429,9 @@ pub fn threemf(s: &Surface, name: &str, unit: Units) -> Result<Vec<u8>, String> 
         model.push_str("<object id=\"2\" type=\"model\">\n");
     }
     model.push_str("<mesh>\n<vertices>\n");
+    let dec = decimals(mesh);
     for p in &mesh.positions {
-        let _ = writeln!(model, "<vertex x=\"{}\" y=\"{}\" z=\"{}\"/>", num(p[0], 6), num(p[1], 6), num(p[2], 6));
+        let _ = writeln!(model, "<vertex x=\"{}\" y=\"{}\" z=\"{}\"/>", num(p[0], dec), num(p[1], dec), num(p[2], dec));
     }
     model.push_str("</vertices>\n<triangles>\n");
     let n = mesh.positions.len() as u32;
@@ -480,7 +537,8 @@ pub fn glb(s: &Surface, name: &str) -> Result<Vec<u8>, String> {
     let (mut lo, mut hi) = ([f32::INFINITY; 3], [f32::NEG_INFINITY; 3]);
     for p in &mesh.positions {
         for a in 0..3 {
-            let v = fin(p[a]) as f32;
+            // glTF is in metres; the model is in millimetres
+            let v = fin(p[a]) as f32 * 0.001;
             lo[a] = lo[a].min(v);
             hi[a] = hi[a].max(v);
             bin.extend_from_slice(&v.to_le_bytes());
@@ -773,7 +831,8 @@ pub mod tests {
         assert_eq!(doc["asset"]["version"], "2.0");
         let acc = &doc["accessors"];
         assert_eq!(acc[0]["count"], 4);
-        assert_eq!(acc[0]["max"], json!([10.0, 10.0, 10.0]));
+        // metres: the 10 mm part is 0.01 m
+        assert_eq!(acc[0]["max"], json!(vec![10.0f32 * 0.001; 3]));
         assert_eq!(acc[0]["min"], json!([0.0, 0.0, 0.0]));
         // two (roughness, metal) groups: two primitives and two materials sharing the vertices
         let prims = doc["meshes"][0]["primitives"].as_array().unwrap();
@@ -784,7 +843,7 @@ pub mod tests {
         assert_eq!(metal, 1);
         // read the third vertex position and the second vertex colour back from the binary chunk
         let f = |o: usize| f32::from_le_bytes([bin[o], bin[o + 1], bin[o + 2], bin[o + 3]]);
-        assert_eq!((f(2 * 12), f(2 * 12 + 4), f(2 * 12 + 8)), (0.0, 10.0, 0.0));
+        assert_eq!((f(2 * 12), f(2 * 12 + 4), f(2 * 12 + 8)), (0.0, 10.0f32 * 0.001, 0.0));
         let col = doc["bufferViews"][1]["byteOffset"].as_u64().unwrap() as usize;
         assert_eq!((f(col + 3 * 12), f(col + 3 * 12 + 4), f(col + 3 * 12 + 8)), (0.0, 0.0, 1.0));
         // the indices of both primitives together are the 4 triangles
@@ -799,10 +858,35 @@ pub mod tests {
     }
 
     #[test]
+    fn formats_reject_invalid_triangle_vertex_indices_instead_of_silently_losing_faces() {
+        let mut m = tetra(10.0);
+        m.triangles[0][2] = 12345;
+        let surface = Surface { mesh: m, look: Look::uniform(Mat8 { rgb: [255, 0, 0], rough: 128, metal: 0 }) };
+        assert!(check(&surface.mesh).is_err());
+        assert!(obj_files(&surface, "bad", "bad.mtl").is_err());
+        assert!(ply(&surface, "bad").is_err());
+        assert!(threemf(&surface, "bad", Units::Mm).is_err());
+        assert!(glb(&surface, "bad").is_err());
+    }
+
+    #[test]
     fn numbers_lose_their_trailing_zeros() {
         assert_eq!(num(10.0, 6), "10");
         assert_eq!(num(-0.0000001, 6), "0");
         assert_eq!(num(1.25, 6), "1.25");
         assert_eq!(num(f64::NAN, 6), "0");
+    }
+
+    /// #255: a 1 mm model written in metres at 0.01 % keeps its corners apart.
+    #[test]
+    fn tiny_models_keep_enough_decimals() {
+        let k = 1e-7;
+        let mesh = TriMesh { positions: vec![[0.0, 0.0, 0.0], [k, 0.0, 0.0], [0.0, k, 0.0]], triangles: vec![[0, 1, 2]] };
+        let dec = decimals(&mesh);
+        assert!(dec > 6);
+        assert_ne!(num(k, dec), "0");
+        assert_ne!(num(0.0, dec), num(k, dec));
+        let big = TriMesh { positions: vec![[0.0; 3], [50.0, 0.0, 0.0], [0.0, 50.0, 0.0]], triangles: vec![[0, 1, 2]] };
+        assert_eq!(decimals(&big), 6);
     }
 }

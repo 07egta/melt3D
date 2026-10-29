@@ -17,10 +17,18 @@ pub enum Axis {
 impl Axis {
     pub const ALL: [Axis; 3] = [Axis::X, Axis::Y, Axis::Z];
     pub fn label(self) -> &'static str {
-        match self { Axis::X => "X", Axis::Y => "Y", Axis::Z => "Z" }
+        match self {
+            Axis::X => "X",
+            Axis::Y => "Y",
+            Axis::Z => "Z",
+        }
     }
     pub fn index(self) -> usize {
-        match self { Axis::X => 0, Axis::Y => 1, Axis::Z => 2 }
+        match self {
+            Axis::X => 0,
+            Axis::Y => 1,
+            Axis::Z => 2,
+        }
     }
     pub fn transverse(self) -> (usize, usize) {
         // Cyclic ordering makes positive angles right-handed.
@@ -30,7 +38,6 @@ impl Axis {
             Axis::Z => (0, 1),
         }
     }
-    pub fn shader_id(self) -> f32 { self.index() as f32 + 1.0 }
 }
 
 /// An extensible modifier slot; other deformation types can share the same
@@ -43,21 +50,31 @@ pub enum Deformation {
 
 impl Deformation {
     pub fn sanitize(&mut self) {
-        match self { Deformation::Twist(t) => t.sanitize() }
+        match self {
+            Deformation::Twist(t) => t.sanitize(),
+        }
     }
     pub fn expanded_half(self, half: [f32; 3]) -> [f32; 3] {
-        match self { Deformation::Twist(t) => t.expanded_half(half) }
+        match self {
+            Deformation::Twist(t) => t.expanded_half(half),
+        }
     }
     pub fn inverse(self, q: [f32; 3], half: [f32; 3]) -> [f32; 3] {
-        match self { Deformation::Twist(t) => t.inverse(q, half) }
+        match self {
+            Deformation::Twist(t) => t.inverse(q, half),
+        }
     }
     /// A conservative signed-distance step for the non-isometric warp.
     /// Safety only for marching rays, never baked into the Boolean SDF.
     pub fn ray_step_safety(self, half: [f32; 3]) -> f32 {
-        match self { Deformation::Twist(t) => t.ray_step_safety(half) }
+        match self {
+            Deformation::Twist(t) => t.ray_step_safety(half),
+        }
     }
     pub fn gpu_parameters(self, half: [f32; 3]) -> ([f32; 4], [f32; 4]) {
-        match self { Deformation::Twist(t) => t.gpu_parameters(half) }
+        match self {
+            Deformation::Twist(t) => t.gpu_parameters(half),
+        }
     }
 }
 
@@ -90,9 +107,7 @@ impl Twist {
     }
 
     pub fn sanitize(&mut self) {
-        let valid = |v: f32, default: f32, lo: f32, hi: f32| -> f32 {
-            if v.is_finite() { v.clamp(lo, hi) } else { default }
-        };
+        let valid = |v: f32, default: f32, lo: f32, hi: f32| -> f32 { if v.is_finite() { v.clamp(lo, hi) } else { default } };
         self.degrees = valid(self.degrees, 90.0, 0.0, 1440.0);
         self.begin = valid(self.begin, 0.0, 0.0, 0.98);
         self.end = valid(self.end, 1.0, self.begin + 0.02, 1.0);
@@ -125,6 +140,7 @@ impl Twist {
         out
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn forward(self, q: [f32; 3], half: [f32; 3]) -> [f32; 3] {
         self.rotated(q, half, false)
     }
@@ -154,6 +170,7 @@ impl Twist {
         1.5 * self.degrees.to_radians().abs() * (self.upper - self.lower).abs() / height
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn distance_safety(self, q: [f32; 3], half: [f32; 3]) -> f32 {
         let (a, b) = self.axis.transverse();
         let max_original_radius = half[a].hypot(half[b]);
@@ -171,13 +188,23 @@ impl Twist {
         1.0 / (1.0 + self.max_radians_per_mm(half) * radius)
     }
 
-    /// Two extra vec4 entries in the existing GPU scene-list texture.
-    /// slot 0: axis ID (0 = disabled), signed degrees, begin, end
-    /// slot 1: lower/upper factors, original half-height, original max radius.
+    /// Two extra vec4 entries in the existing GPU scene-list texture, laid out so the shader
+    /// untwists with one dot product, one smoothstep and one Rodrigues rotation (no branches
+    /// on the axis):
+    /// slot 0: unit axis (x, y, z), ray step factor (`ray_step_safety`);
+    /// slot 1: `t = clamp(along * x + y, 0, 1)` coefficients, then the angle (radians,
+    /// signed) at t = 0 and its change up to t = 1.
     pub fn gpu_parameters(self, half: [f32; 3]) -> ([f32; 4], [f32; 4]) {
-        let (a, b) = self.axis.transverse();
-        ([self.axis.shader_id(), if self.reverse { -self.degrees } else { self.degrees }, self.begin, self.end],
-            [self.lower, self.upper, half[self.axis.index()].max(0.01), half[a].hypot(half[b])])
+        let axis = self.axis.index();
+        let mut unit = [0.0_f32; 3];
+        unit[axis] = 1.0;
+        let h = half[axis].max(0.01);
+        let span = (self.end - self.begin).max(0.02);
+        let turn = self.degrees.to_radians() * if self.reverse { -1.0 } else { 1.0 };
+        (
+            [unit[0], unit[1], unit[2], self.ray_step_safety(half)],
+            [1.0 / (2.0 * h * span), (0.5 - self.begin) / span, turn * self.lower, turn * (self.upper - self.lower)],
+        )
     }
 }
 
@@ -208,7 +235,9 @@ mod tests {
             for p in [[4.0, 7.0, -8.0], [12.0, -3.0, 6.0], [-5.0, 2.0, 3.0]] {
                 let q = t.forward(p, half);
                 let back = t.inverse(q, half);
-                for k in 0..3 { approx(back[k], p[k]); }
+                for k in 0..3 {
+                    approx(back[k], p[k]);
+                }
                 approx(q[a].hypot(q[b]), p[a].hypot(p[b]));
                 approx(q[axis.index()], p[axis.index()]);
             }
