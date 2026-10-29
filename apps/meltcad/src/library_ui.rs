@@ -321,9 +321,7 @@ pub fn insert(app: &mut App, ctx: &egui::Context, item: &Item) -> bool {
     app.scene.groups.push(item.placed(at));
     let gi = app.scene.groups.len() - 1;
     // A single parametric vase should open its size/wave controls immediately.
-    app.sel = if app.scene.groups[gi].shapes.len() == 1
-        && app.scene.groups[gi].shapes[0].vase.is_some()
-    {
+    app.sel = if app.scene.groups[gi].shapes.len() == 1 && app.scene.groups[gi].shapes[0].vase.is_some() {
         Some(Pick::Shape(gi, 0))
     } else {
         Some(Pick::Group(gi))

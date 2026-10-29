@@ -671,8 +671,7 @@ mod tests {
     #[test]
     fn organic_blob_preset_is_discoverable_in_japanese_and_english() {
         let e = entries();
-        let is_blob = |q: &str| search(&e, q, 10).iter()
-            .any(|i| matches!(e[*i].action, Action::OrganicBlob));
+        let is_blob = |q: &str| search(&e, q, 10).iter().any(|i| matches!(e[*i].action, Action::OrganicBlob));
         assert!(is_blob("Organic Blob"));
         assert!(is_blob("ぷっくり"));
         assert!(is_blob("メタボール") || is_blob("metaball"));
@@ -714,10 +713,13 @@ mod tests {
         let all = entries();
         for q in ["Smooth Fusion", "なめらか合体", "Smooth Union"] {
             let hits = search(&all, q, 40);
-            assert!(hits.iter().any(|&i| match all[i].action {
-                Action::Insert(c, _) => library::all().get(c).is_some_and(|cat| cat.name == "Fusion"),
-                _ => false,
-            }), "{q} is not searchable");
+            assert!(
+                hits.iter().any(|&i| match all[i].action {
+                    Action::Insert(c, _) => library::all().get(c).is_some_and(|cat| cat.name == "Fusion"),
+                    _ => false,
+                }),
+                "{q} is not searchable"
+            );
         }
     }
 

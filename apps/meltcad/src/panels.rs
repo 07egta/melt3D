@@ -7,8 +7,8 @@ use crate::app::{App, Tab};
 use crate::camera::Camera;
 use crate::materials::{self, Category};
 use crate::model::{BlendMode, Corner, Group, Kind, Light, MAX_LIGHTS, MAX_OUTLINE, MAX_SAVED, Material, Melt, Op, Pick, ROUND_MAX, Scene};
-use crate::sdf;
 use crate::ripple::{Ripple, RippleMode};
+use crate::sdf;
 use crate::{glyphs, i18n, style};
 
 /// (label, mode, amount, drip, ripple)

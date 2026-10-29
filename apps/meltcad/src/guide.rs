@@ -543,7 +543,7 @@ mod tests {
                 let start = Instant::now();
                 let input =
                     egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(960.0, 540.0))), ..Default::default() };
-                let out = ctx.run_ui(input, |ui| {
+                let mut out = ctx.run_ui(input, |ui| {
                     egui::CentralPanel::default().show(ui, |ui| {
                         if let Some(step) = step {
                             let _ = content(ui, step, 3, None);
@@ -552,6 +552,8 @@ mod tests {
                         }
                     });
                 });
+                // Headless timing never uploads textures; clear the delta so epaint's drop check passes.
+                out.textures_delta.clear();
                 let tess = ctx.tessellate(out.shapes, out.pixels_per_point);
                 triangles = tess
                     .iter()

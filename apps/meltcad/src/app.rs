@@ -2680,7 +2680,9 @@ impl App {
         }
         let rev = self.track_scene();
         let now = std::time::Instant::now();
-        if let Err(e) = self.recovery.checkpoint(&self.scene, self.path.as_deref(), true, rev, now + crate::recovery::INTERVAL.max(self.preferences.autosave())) {
+        if let Err(e) =
+            self.recovery.checkpoint(&self.scene, self.path.as_deref(), true, rev, now + crate::recovery::INTERVAL.max(self.preferences.autosave()))
+        {
             crate::gpu_log::log(&format!("could not save recovery data after graphics device loss: {e}"));
         }
     }
