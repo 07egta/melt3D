@@ -321,6 +321,7 @@ fn inlining_cost_report() {
     // (the parametric vase profile adds about 900 more, the rounded-square tube section about 3,200, the ripple modifier about 3,800,
     // the shell shortening through a private variable measured 164,754 before the pattern merge;
     // the Twist modifier, a branch-free untwist in each shape_dist copy plus its two gated loads in
-    // shape_at, was estimated (not measured) at about 900 more, hence the extra 1,000).
-    assert!(t.fs_expanded <= 166_000, "fs is {} expressions after inlining", t.fs_expanded);
+    // shape_at, was estimated (not measured) at about 900 more, hence the extra 1,000; measured
+    // in CI on the Twist preset branch it is 166,253 (the limit leaves a 47-expression margin).
+    assert!(t.fs_expanded <= 166_300, "fs is {} expressions after inlining", t.fs_expanded);
 }

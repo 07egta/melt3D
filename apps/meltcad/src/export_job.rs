@@ -371,8 +371,7 @@ impl export_mesh::Sdf for ExportField<'_> {
         self.field.distance(p)
     }
 
-    fn pruning_distance(&self, p: [f32; 3], cell_radius: f32) -> f32 {
-        let d = self.field.distance(p);
+    fn pruning_scale(&self, p: [f32; 3], cell_radius: f32) -> f32 {
         let mut factor = 1.0_f32;
         for t in &self.twists {
             let delta = [p[0] - t.center[0], p[1] - t.center[1], p[2] - t.center[2]];
@@ -384,7 +383,7 @@ impl export_mesh::Sdf for ExportField<'_> {
                 factor = factor.min(1.0 / (1.0 + t.rate * (distance + cell_radius + self.drip)));
             }
         }
-        d * factor
+        factor
     }
 }
 
