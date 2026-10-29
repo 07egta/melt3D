@@ -1,0 +1,39 @@
+name: Video V7 voice clarity
+on:
+  push:
+    branches: [video/source-rebuild-20261029]
+    paths:
+      - '.github/workflows/video-v7-clarity.yml'
+      - 'docs/promo-video/rebuild_20261029/voice_clarity_v7.py'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  voice:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Generate pronunciation-aware voice clips
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COLUMNS: '160'
+          LINES: '40'
+        run: python docs/promo-video/rebuild_20261029/voice_clarity_v7.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: melt3d-v7-clarity-voice
+          path: v7-clarity-assets/
+          retention-days: 7
+          if-no-files-found: warn
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: melt3d-v7-voice-runtime
+          path: vv-runtime/
+          retention-days: 1
+          if-no-files-found: error
