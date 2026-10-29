@@ -509,6 +509,14 @@ pub struct PackCache {
 }
 
 impl PackCache {
+    /// Drop the scene-specific CPU pack and its reuse snapshot as soon as the document is
+    /// replaced. Existing in-flight GPU callbacks keep their own Arc until they finish.
+    pub fn clear(&mut self) {
+        self.rev = None;
+        self.pack = None;
+        self.snapshot = None;
+    }
+
     /// The pack of `scene` (revision `rev`): the cached one, or a new one.
     pub fn get(&mut self, scene: &Scene, rev: u64) -> std::sync::Arc<crate::gpu::ScenePack> {
         if let (Some(r), Some(p)) = (self.rev, self.pack.as_ref())
@@ -526,13 +534,6 @@ impl PackCache {
         self.snapshot = Some(scene.clone());
         self.packs += 1;
         p
-    }
-
-    /// Drop retained shape inputs and GPU data when replacing or closing a document.
-    pub fn clear(&mut self) {
-        self.rev = None;
-        self.pack = None;
-        self.snapshot = None;
     }
 }
 

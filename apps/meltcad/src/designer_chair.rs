@@ -119,21 +119,15 @@ fn material(rgb: [f32; 3], roughness: f32, metallic: f32) -> Material {
 /// In the 3D canvas the front of the chair faces -Y and the vertical is +Z.
 fn parts_colors(style: Style) -> (Material, Material, Material) {
     match style {
-        Style::Shell => (
-            material([0.25, 0.60, 0.56], 0.34, 0.06),
-            material([0.25, 0.60, 0.56], 0.34, 0.06),
-            material([0.69, 0.49, 0.32], 0.30, 0.68),
-        ),
-        Style::FourLeg => (
-            material([0.78, 0.49, 0.29], 0.58, 0.0),
-            material([0.65, 0.38, 0.23], 0.58, 0.0),
-            material([0.28, 0.31, 0.36], 0.28, 0.70),
-        ),
-        Style::Monocoque => (
-            material([0.93, 0.87, 0.72], 0.40, 0.02),
-            material([0.93, 0.87, 0.72], 0.40, 0.02),
-            material([0.93, 0.87, 0.72], 0.40, 0.02),
-        ),
+        Style::Shell => {
+            (material([0.25, 0.60, 0.56], 0.34, 0.06), material([0.25, 0.60, 0.56], 0.34, 0.06), material([0.69, 0.49, 0.32], 0.30, 0.68))
+        }
+        Style::FourLeg => {
+            (material([0.78, 0.49, 0.29], 0.58, 0.0), material([0.65, 0.38, 0.23], 0.58, 0.0), material([0.28, 0.31, 0.36], 0.28, 0.70))
+        }
+        Style::Monocoque => {
+            (material([0.93, 0.87, 0.72], 0.40, 0.02), material([0.93, 0.87, 0.72], 0.40, 0.02), material([0.93, 0.87, 0.72], 0.40, 0.02))
+        }
     }
 }
 
@@ -154,10 +148,7 @@ fn rounded_outline(half_x: f32, half_y: f32, exponent: f32) -> Vec<[f32; 2]> {
         .map(|i| {
             let a = std::f32::consts::TAU * (i as f32) / n as f32;
             let (sn, cs) = a.sin_cos();
-            [
-                cs.signum() * cs.abs().powf(exponent) * half_x,
-                sn.signum() * sn.abs().powf(exponent) * half_y,
-            ]
+            [cs.signum() * cs.abs().powf(exponent) * half_x, sn.signum() * sn.abs().powf(exponent) * half_y]
         })
         .collect()
 }
@@ -167,10 +158,22 @@ fn back_outline(width: f32, height: f32) -> Vec<[f32; 2]> {
     let hw = width / 2.0;
     let hh = height / 2.0;
     [
-        [-0.34, -0.96], [-0.46, -0.82], [-0.49, -0.54], [-0.48, -0.08],
-        [-0.50,  0.38], [-0.43,  0.76], [-0.30,  0.96], [0.0, 1.0],
-        [0.30, 0.96], [0.43, 0.76], [0.50, 0.38], [0.48, -0.08],
-        [0.49, -0.54], [0.46, -0.82], [0.34, -0.96], [0.0, -1.0],
+        [-0.34, -0.96],
+        [-0.46, -0.82],
+        [-0.49, -0.54],
+        [-0.48, -0.08],
+        [-0.50, 0.38],
+        [-0.43, 0.76],
+        [-0.30, 0.96],
+        [0.0, 1.0],
+        [0.30, 0.96],
+        [0.43, 0.76],
+        [0.50, 0.38],
+        [0.48, -0.08],
+        [0.49, -0.54],
+        [0.46, -0.82],
+        [0.34, -0.96],
+        [0.0, -1.0],
     ]
     .into_iter()
     .map(|q| [q[0] * 2.0 * hw, q[1] * hh])
@@ -201,21 +204,26 @@ fn generated_shapes(p: Parameters) -> Vec<Shape> {
     let (seat_mat, back_mat, leg_mat) = parts_colors(p.style);
     let mono = p.style == Style::Monocoque;
     let shell = p.style == Style::Shell;
-    let seat_thickness = if mono { 6.4 } else if shell { 5.5 } else { 5.0 };
-    let shell_blend = if mono { 3.4 } else if shell { 2.2 } else { 0.55 };
+    let seat_thickness = if mono {
+        6.4
+    } else if shell {
+        5.5
+    } else {
+        5.0
+    };
+    let shell_blend = if mono {
+        3.4
+    } else if shell {
+        2.2
+    } else {
+        0.55
+    };
 
     let mut shapes = Vec::with_capacity(12);
 
     // Seat: a softly tapered Loft rather than a plain cube. It remains a single
     // independently editable shape, with two editable outlines.
-    let mut seat = part(
-        Kind::Loft,
-        "座面",
-        [0.0, 0.0, p.seat_height - seat_thickness / 2.0],
-        seat_mat,
-        p.roundness.min(seat_thickness * 0.35),
-        0.0,
-    );
+    let mut seat = part(Kind::Loft, "座面", [0.0, 0.0, p.seat_height - seat_thickness / 2.0], seat_mat, p.roundness.min(seat_thickness * 0.35), 0.0);
     seat.size[0] = seat_thickness;
     seat.outline = rounded_outline(p.seat_width * 0.47, p.seat_depth * 0.46, 0.73);
     seat.outline2 = rounded_outline(p.seat_width * 0.50, p.seat_depth * 0.50, 0.67);
@@ -227,14 +235,7 @@ fn generated_shapes(p: Parameters) -> Vec<Shape> {
     let bottom_y = p.seat_depth * 0.43;
     let centre_y = bottom_y + back_height / 2.0 * tilt.sin();
     let centre_z = p.seat_height - 2.0 + back_height / 2.0 * tilt.cos();
-    let mut back = part(
-        Kind::Extrude,
-        "背もたれ",
-        [0.0, centre_y, centre_z],
-        back_mat,
-        p.roundness.min(back_thickness * 0.32),
-        shell_blend,
-    );
+    let mut back = part(Kind::Extrude, "背もたれ", [0.0, centre_y, centre_z], back_mat, p.roundness.min(back_thickness * 0.32), shell_blend);
     back.outline = back_outline(p.seat_width * if shell { 0.93 } else { 0.88 }, back_height);
     back.size[0] = back_thickness;
     back.rot[0] = 90.0 - p.back_angle;
@@ -247,9 +248,9 @@ fn generated_shapes(p: Parameters) -> Vec<Shape> {
                 if side < 0.0 { "シェル左アーム" } else { "シェル右アーム" },
                 vec![
                     [side * p.seat_width * 0.42, -p.seat_depth * 0.10, p.seat_height + 0.7, 2.0],
-                    [side * p.seat_width * 0.48,  p.seat_depth * 0.11, p.seat_height + 9.0, 2.5],
-                    [side * p.seat_width * 0.44,  p.seat_depth * 0.38, p.seat_height + 13.0, 2.6],
-                    [side * p.seat_width * 0.40,  centre_y, p.seat_height + 20.0, 2.8],
+                    [side * p.seat_width * 0.48, p.seat_depth * 0.11, p.seat_height + 9.0, 2.5],
+                    [side * p.seat_width * 0.44, p.seat_depth * 0.38, p.seat_height + 13.0, 2.6],
+                    [side * p.seat_width * 0.40, centre_y, p.seat_height + 20.0, 2.8],
                 ],
                 seat_mat,
                 1.4,
@@ -260,14 +261,7 @@ fn generated_shapes(p: Parameters) -> Vec<Shape> {
 
     if p.style == Style::FourLeg {
         // Thin coordinated edge under the soft seat, editable separately.
-        let mut underseat = part(
-            Kind::Loft,
-            "座面下フレーム",
-            [0.0, 0.0, p.seat_height - seat_thickness - 1.0],
-            leg_mat,
-            1.0,
-            0.7,
-        );
+        let mut underseat = part(Kind::Loft, "座面下フレーム", [0.0, 0.0, p.seat_height - seat_thickness - 1.0], leg_mat, 1.0, 0.7);
         underseat.size[0] = 2.5;
         underseat.outline = rounded_outline(p.seat_width * 0.41, p.seat_depth * 0.41, 0.68);
         underseat.outline2 = rounded_outline(p.seat_width * 0.45, p.seat_depth * 0.45, 0.68);
@@ -298,14 +292,7 @@ fn generated_shapes(p: Parameters) -> Vec<Shape> {
     }
 
     if p.leg_count == 1 {
-        let mut foot = part(
-            Kind::Cylinder,
-            "台座",
-            [0.0, 0.0, 2.0],
-            leg_mat,
-            p.roundness.min(1.4),
-            if mono { 2.0 } else { 0.8 },
-        );
+        let mut foot = part(Kind::Cylinder, "台座", [0.0, 0.0, 2.0], leg_mat, p.roundness.min(1.4), if mono { 2.0 } else { 0.8 });
         foot.size = [p.seat_width * 0.30, 4.0, 1.0];
         shapes.push(foot);
     }
@@ -396,7 +383,10 @@ pub fn controls(ui: &mut Ui, group: &mut Group, other_shapes: usize) -> bool {
     let manual_parts = group.shapes.iter().filter(|s| s.source != GENERATOR_TAG).count();
     let total = other_shapes.saturating_add(manual_parts).saturating_add(generated_shapes(params).len());
     if total > crate::model::MAX_SHAPES {
-        ui.label(RichText::new(format!("これ以上パーツを増やせません（シーンは{}個まで）。不要な形を削除してください。", crate::model::MAX_SHAPES)).color(style::CUT));
+        ui.label(
+            RichText::new(format!("これ以上パーツを増やせません（シーンは{}個まで）。不要な形を削除してください。", crate::model::MAX_SHAPES))
+                .color(style::CUT),
+        );
         return false;
     }
     regenerate(group, params);
@@ -409,10 +399,7 @@ pub fn presets() -> Vec<crate::library::Item> {
         .into_iter()
         .map(|style| crate::library::Item {
             name: style.name().to_string(),
-            tags: vec![
-                "designer chair".into(), "chair".into(), "organic furniture".into(),
-                "椅子".into(), "いす".into(), style.label().into(),
-            ],
+            tags: vec!["designer chair".into(), "chair".into(), "organic furniture".into(), "椅子".into(), "いす".into(), style.label().into()],
             group: generate(Parameters::for_style(style)),
         })
         .collect()
@@ -421,11 +408,11 @@ pub fn presets() -> Vec<crate::library::Item> {
 #[cfg(test)]
 #[allow(clippy::field_reassign_with_default)]
 mod tests {
-    use crate::model::Op;
     use super::*;
     use crate::export_formats::Format;
     use crate::export_job::{self, Options, Scope};
     use crate::export_mesh::Progress;
+    use crate::model::Op;
     use crate::model::{Pick, Scene};
 
     fn scene(group: Group) -> Scene {
@@ -531,13 +518,16 @@ mod tests {
 
     #[test]
     fn three_presets_make_distinct_nonempty_thumbnails() {
-        let previews: Vec<Vec<u8>> = Style::ALL.iter().map(|&style| {
-            let rgba = crate::cpu_render::thumb(&scene(generate(Parameters::for_style(style))), 62);
-            assert_eq!(rgba.len(), 62 * 62 * 4);
-            let colours = rgba.as_chunks::<4>().0.iter().filter(|c| c[3] > 0 && c[0] != c[1]).count();
-            assert!(colours > 20, "{} did not render a useful thumbnail", style.label());
-            rgba
-        }).collect();
+        let previews: Vec<Vec<u8>> = Style::ALL
+            .iter()
+            .map(|&style| {
+                let rgba = crate::cpu_render::thumb(&scene(generate(Parameters::for_style(style))), 62);
+                assert_eq!(rgba.len(), 62 * 62 * 4);
+                let colours = rgba.as_chunks::<4>().0.iter().filter(|c| c[3] > 0 && c[0] != c[1]).count();
+                assert!(colours > 20, "{} did not render a useful thumbnail", style.label());
+                rgba
+            })
+            .collect();
         assert_ne!(previews[0], previews[1]);
         assert_ne!(previews[1], previews[2]);
     }
@@ -549,14 +539,9 @@ mod tests {
         for style in Style::ALL {
             let g = generate(Parameters::for_style(style));
             let sc = Scene::from_json(&scene(g).to_json()).unwrap();
-            let opts = Options {
-                format: Format::ThreeMf,
-                tolerance: 1.1,
-                scope: Scope::Selected,
-                ..Options::default()
-            };
-            let built = export_job::build(&sc, Some(Pick::Group(0)), &opts, &Progress::new())
-                .unwrap_or_else(|e| panic!("{} 3MF mesh: {e}", style.label()));
+            let opts = Options { format: Format::ThreeMf, tolerance: 1.1, scope: Scope::Selected, ..Options::default() };
+            let built =
+                export_job::build(&sc, Some(Pick::Group(0)), &opts, &Progress::new()).unwrap_or_else(|e| panic!("{} 3MF mesh: {e}", style.label()));
             assert!(!built.surface.mesh.triangles.is_empty());
             assert!(built.closed, "{} generated an open mesh", style.label());
             for format in [Format::ThreeMf, Format::Obj] {

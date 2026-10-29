@@ -18,7 +18,9 @@ fn spacing(contact: f32) -> f32 {
 pub fn set_radius(group: &mut Group, radius_mm: f32) {
     let Some(f) = &mut group.fusion else { return };
     let radius = if radius_mm.is_finite() { radius_mm.clamp(0.0, 80.0) } else { f.radius_mm };
-    if (radius - f.radius_mm).abs() <= f32::EPSILON { return; }
+    if (radius - f.radius_mm).abs() <= f32::EPSILON {
+        return;
+    }
     f.radius_mm = radius;
     for shape in &mut group.shapes {
         if shape.op == Op::Add {
@@ -32,9 +34,13 @@ pub fn set_radius(group: &mut Group, radius_mm: f32) {
 /// so user-moved shapes remain user-moved after an adjustment.
 pub fn set_contact(group: &mut Group, contact: f32) {
     let Some(f) = &mut group.fusion else { return };
-    if !contact.is_finite() || group.shapes.is_empty() { return; }
+    if !contact.is_finite() || group.shapes.is_empty() {
+        return;
+    }
     let contact = contact.clamp(0.0, 1.0);
-    if (f.contact - contact).abs() <= f32::EPSILON { return; }
+    if (f.contact - contact).abs() <= f32::EPSILON {
+        return;
+    }
     let ratio = spacing(contact) / spacing(f.contact);
     let n = group.shapes.len() as f32;
     let centre: [f32; 3] = [0, 1, 2].map(|a| group.shapes.iter().map(|s| f64::from(s.pos[a])).sum::<f64>() as f32 / n);
@@ -47,9 +53,14 @@ pub fn set_contact(group: &mut Group, contact: f32) {
 }
 
 const PALETTE: [[f32; 3]; 8] = [
-    [0.96, 0.66, 0.70], [0.94, 0.73, 0.50], [0.79, 0.68, 0.96],
-    [0.65, 0.82, 0.99], [0.66, 0.89, 0.77], [0.98, 0.79, 0.64],
-    [0.82, 0.77, 0.96], [0.73, 0.90, 0.98],
+    [0.96, 0.66, 0.70],
+    [0.94, 0.73, 0.50],
+    [0.79, 0.68, 0.96],
+    [0.65, 0.82, 0.99],
+    [0.66, 0.89, 0.77],
+    [0.98, 0.79, 0.64],
+    [0.82, 0.77, 0.96],
+    [0.73, 0.90, 0.98],
 ];
 
 fn add(group: &mut Group, kind: Kind, pos: [f32; 3], size: [f32; 3], round: f32) {
@@ -83,8 +94,8 @@ pub fn sample(count: usize) -> Option<Item> {
     match count {
         3 => {
             ball(&mut g, -23.0, 0.0, 20.0, 20.0);
-            ball(&mut g,   0.0, 0.0, 24.0, 22.0);
-            ball(&mut g,  23.0, 0.0, 20.0, 20.0);
+            ball(&mut g, 0.0, 0.0, 24.0, 22.0);
+            ball(&mut g, 23.0, 0.0, 20.0, 20.0);
         }
         4 => {
             for (x, y) in [(-12.5, -12.5), (12.5, -12.5), (-12.5, 12.5), (12.5, 12.5)] {
@@ -115,11 +126,18 @@ pub fn sample(count: usize) -> Option<Item> {
         }
         8 => {
             for (i, (x, y, z)) in [
-                (-22.0, -19.0, 18.0), (1.0, -20.0, 22.0),
-                (23.0, -16.0, 20.0), (-18.0, 2.0, 23.0),
-                (6.0, 4.0, 26.0), (27.0, 5.0, 20.0),
-                (-18.0, 24.0, 20.0), (8.0, 25.0, 19.0),
-            ].into_iter().enumerate() {
+                (-22.0, -19.0, 18.0),
+                (1.0, -20.0, 22.0),
+                (23.0, -16.0, 20.0),
+                (-18.0, 2.0, 23.0),
+                (6.0, 4.0, 26.0),
+                (27.0, 5.0, 20.0),
+                (-18.0, 24.0, 20.0),
+                (8.0, 25.0, 19.0),
+            ]
+            .into_iter()
+            .enumerate()
+            {
                 ball(&mut g, x, y, z, 18.0 + (i % 3) as f32);
             }
         }
@@ -128,18 +146,19 @@ pub fn sample(count: usize) -> Option<Item> {
     Some(Item {
         name: name.into(),
         tags: vec![
-            "Smooth Fusion".into(), "Smooth Union".into(), "スムーズフュージョン".into(),
-            "なめらか合体".into(), "ぷっくり".into(), format!("{count}個"),
+            "Smooth Fusion".into(),
+            "Smooth Union".into(),
+            "スムーズフュージョン".into(),
+            "なめらか合体".into(),
+            "ぷっくり".into(),
+            format!("{count}個"),
         ],
         group: g,
     })
 }
 
 pub fn library_category() -> Category {
-    Category {
-        name: "Fusion".into(),
-        items: COUNTS.into_iter().filter_map(sample).collect(),
-    }
+    Category { name: "Fusion".into(), items: COUNTS.into_iter().filter_map(sample).collect() }
 }
 
 #[cfg(test)]
@@ -196,7 +215,9 @@ mod tests {
         let soft = Field::new(&scene);
         let (_, join) = crate::sdf::smin(0.0, 0.0, 14.0, BlendMode::Smooth);
         assert!((join - 0.5).abs() < 1e-6);
-        for sh in &mut scene.groups[0].shapes { sh.blend = 0.0; }
+        for sh in &mut scene.groups[0].shapes {
+            sh.blend = 0.0;
+        }
         let hard = Field::new(&scene);
         let mut softened = 0;
         for x in -45..=45 {
@@ -205,7 +226,9 @@ mod tests {
                 let a = soft.distance(p);
                 let b = hard.distance(p);
                 assert!(a.is_finite() && b.is_finite());
-                if a + 0.01 < b { softened += 1; }
+                if a + 0.01 < b {
+                    softened += 1;
+                }
             }
         }
         assert!(softened > 10, "a broad smooth joint must change the original hard Union");

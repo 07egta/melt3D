@@ -1,10 +1,10 @@
 //! Parametric table lamps made of actual SDF solids, not thumbnail-only models.
 //! Three independent shapes: a closed revolved shade cross section, a stand, and a base.
 
-use serde::{Deserialize, Serialize};
 use crate::app::App;
-use crate::model::{Group, Kind, Material, Op, Pick, Scene, Shape, MAX_GROUPS};
+use crate::model::{Group, Kind, MAX_GROUPS, Material, Op, Pick, Scene, Shape};
 use crate::style;
+use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LampStyle {
@@ -47,8 +47,14 @@ pub struct LampParams {
 impl Default for LampParams {
     fn default() -> Self {
         Self {
-            style: LampStyle::Mushroom, height: 128.0, shade_diameter: 88.0,
-            curvature: 0.8, thickness: 2.2, hollow: true, glow: 1.6, offset: [0.0; 2],
+            style: LampStyle::Mushroom,
+            height: 128.0,
+            shade_diameter: 88.0,
+            curvature: 0.8,
+            thickness: 2.2,
+            hollow: true,
+            glow: 1.6,
+            offset: [0.0; 2],
         }
     }
 }
@@ -70,7 +76,9 @@ impl LampParams {
         safe(&mut self.thickness, 0.8, 4.0, 2.2);
         self.thickness = self.thickness.min(self.shade_diameter * 0.08);
         safe(&mut self.glow, 0.0, 4.0, 1.6);
-        for n in &mut self.offset { safe(n, -1500.0, 1500.0, 0.0); }
+        for n in &mut self.offset {
+            safe(n, -1500.0, 1500.0, 0.0);
+        }
     }
 }
 fn shade_material(style: LampStyle, glow: f32) -> Material {
@@ -188,9 +196,12 @@ fn stand(p: LampParams, base_x: f32, shade_x: f32, base_h: f32) -> Shape {
     }
 }
 fn base(p: LampParams, x: f32, h: f32) -> Shape {
-    let r = p.shade_diameter * match p.style {
-        LampStyle::Arch => 0.32, LampStyle::Globe => 0.245, LampStyle::Mushroom => 0.26,
-    };
+    let r = p.shade_diameter
+        * match p.style {
+            LampStyle::Arch => 0.32,
+            LampStyle::Globe => 0.245,
+            LampStyle::Mushroom => 0.26,
+        };
     let mut sh = Shape::new(Kind::Cylinder, [p.offset[0] + x, p.offset[1], h * 0.5], metal(p.style));
     sh.name = "土台 / Base".into();
     sh.size = [r, h, 1.0];
@@ -226,7 +237,9 @@ pub fn regenerate(g: &mut Group, mut next: LampParams) {
                     new.pos[axis] += old.pos[axis] - previous_base.shapes[i].pos[axis];
                 }
                 new.material = old.material;
-                if i == 0 { new.material.glow = next.glow; }
+                if i == 0 {
+                    new.material.glow = next.glow;
+                }
                 new.rot = old.rot;
                 new.scale = old.scale;
             }
@@ -269,13 +282,14 @@ fn bounds(s: &Shape) -> ([f32; 3], [f32; 3]) {
             ([-h[0], -h[1], -h[2]], h)
         }
     };
-    ([lo[0] + s.pos[0], lo[1] + s.pos[1], lo[2] + s.pos[2]],
-     [hi[0] + s.pos[0], hi[1] + s.pos[1], hi[2] + s.pos[2]])
+    ([lo[0] + s.pos[0], lo[1] + s.pos[1], lo[2] + s.pos[2]], [hi[0] + s.pos[0], hi[1] + s.pos[1], hi[2] + s.pos[2]])
 }
 
 /// Three groups = three selectable export scopes, each independently watertight.
 pub fn split_for_print(scene: &mut Scene, i: usize) -> Result<(), &'static str> {
-    let Some(source) = scene.groups.get(i) else { return Err("ランプが見つかりません"); };
+    let Some(source) = scene.groups.get(i) else {
+        return Err("ランプが見つかりません");
+    };
     if source.lamp.is_none() || source.shapes.len() != 3 {
         return Err("傘・支柱・土台の3部品が必要です");
     }
@@ -313,38 +327,42 @@ impl App {
         let Some(mut p) = self.scene.groups.get(gi).and_then(|g| g.lamp) else { return false };
         let old = p;
         let mut split = false;
-        egui::CollapsingHeader::new("Designer Lamp - パラメータ")
-            .default_open(true).id_salt(("designer_lamp", gi))
-            .show(ui, |ui| {
-                ui.horizontal_wrapped(|ui| {
-                    for v in LampStyle::ALL {
-                        if style::pill(ui, v.label(), p.style == v).clicked() { p.style = v; }
+        egui::CollapsingHeader::new("Designer Lamp - パラメータ").default_open(true).id_salt(("designer_lamp", gi)).show(ui, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                for v in LampStyle::ALL {
+                    if style::pill(ui, v.label(), p.style == v).clicked() {
+                        p.style = v;
                     }
-                });
-                style::labeled_slider(ui, "全高", &mut p.height, 75.0..=300.0, "ランプの高さ（mm）");
-                style::labeled_slider(ui, "傘の直径", &mut p.shade_diameter, 40.0..=160.0, "傘の外径（mm）");
-                style::labeled_slider(ui, "曲率", &mut p.curvature, 0.2..=1.8, "傘とアーチのカーブ");
-                style::labeled_slider(ui, "壁厚", &mut p.thickness, 0.8..=4.0, "傘の肉厚（mm）。強度保証ではありません");
-                ui.checkbox(&mut p.hollow, "傘を中空にする（下面に開口）");
-                style::labeled_slider(ui, "発光", &mut p.glow, 0.0..=4.0, "見た目の発光。電気部品は含まれません");
-                ui.horizontal_wrapped(|ui| {
-                    ui.label("部品を選択");
-                    for (i, label) in ["傘", "支柱", "土台"].iter().enumerate() {
-                        let selected = self.sel == Some(Pick::Shape(gi, i));
-                        if style::pill(ui, label, selected).clicked()
-                            && self.scene.shape(gi, i).is_some()
-                        {
-                            self.sel = Some(Pick::Shape(gi, i));
-                        }
-                    }
-                });
-                ui.label(egui::RichText::new("選択した部品は右側の位置・回転・材質・輪郭などを個別編集できます。寸法変更で断面は再生成されます。")
-                    .size(11.5).color(style::DIM));
-                if ui.button("3Dプリント用に3部品へ分割").clicked() { split = true; }
-                ui.label(egui::RichText::new("分割すると造形面に別々に並びます。個別選択してSTL/3MFで書き出せます。")
-                    .size(11.0).color(style::DIM));
+                }
             });
-        if p != old && let Some(group) = self.scene.groups.get_mut(gi) {
+            style::labeled_slider(ui, "全高", &mut p.height, 75.0..=300.0, "ランプの高さ（mm）");
+            style::labeled_slider(ui, "傘の直径", &mut p.shade_diameter, 40.0..=160.0, "傘の外径（mm）");
+            style::labeled_slider(ui, "曲率", &mut p.curvature, 0.2..=1.8, "傘とアーチのカーブ");
+            style::labeled_slider(ui, "壁厚", &mut p.thickness, 0.8..=4.0, "傘の肉厚（mm）。強度保証ではありません");
+            ui.checkbox(&mut p.hollow, "傘を中空にする（下面に開口）");
+            style::labeled_slider(ui, "発光", &mut p.glow, 0.0..=4.0, "見た目の発光。電気部品は含まれません");
+            ui.horizontal_wrapped(|ui| {
+                ui.label("部品を選択");
+                for (i, label) in ["傘", "支柱", "土台"].iter().enumerate() {
+                    let selected = self.sel == Some(Pick::Shape(gi, i));
+                    if style::pill(ui, label, selected).clicked() && self.scene.shape(gi, i).is_some() {
+                        self.sel = Some(Pick::Shape(gi, i));
+                    }
+                }
+            });
+            ui.label(
+                egui::RichText::new("選択した部品は右側の位置・回転・材質・輪郭などを個別編集できます。寸法変更で断面は再生成されます。")
+                    .size(11.5)
+                    .color(style::DIM),
+            );
+            if ui.button("3Dプリント用に3部品へ分割").clicked() {
+                split = true;
+            }
+            ui.label(egui::RichText::new("分割すると造形面に別々に並びます。個別選択してSTL/3MFで書き出せます。").size(11.0).color(style::DIM));
+        });
+        if p != old
+            && let Some(group) = self.scene.groups.get_mut(gi)
+        {
             regenerate(group, p);
         }
         if split {
@@ -456,8 +474,12 @@ mod tests {
             assert_eq!(scene.groups.len(), 3);
             assert!(scene.groups.iter().all(|g| g.shapes.len() == 1 && g.lamp.is_none()));
             let boxes: Vec<_> = scene.groups.iter().map(|g| bounds(&g.shapes[0])).collect();
-            for (lo, _) in &boxes { assert!(lo[2].abs() < 1e-3, "{style:?} {lo:?}"); }
-            for pair in boxes.windows(2) { assert!(pair[0].1[0] + 10.0 < pair[1].0[0]); }
+            for (lo, _) in &boxes {
+                assert!(lo[2].abs() < 1e-3, "{style:?} {lo:?}");
+            }
+            for pair in boxes.windows(2) {
+                assert!(pair[0].1[0] + 10.0 < pair[1].0[0]);
+            }
             for i in 0..scene.groups.len() {
                 let scoped = crate::export_job::prepare(&scene, Some(Pick::Group(i)), crate::export_job::Scope::Selected, false).unwrap();
                 assert_eq!(scoped.groups.iter().filter(|g| g.visible).count(), 1);
@@ -474,10 +496,8 @@ mod tests {
         let lower: [f64; 3] = lo.map(|n| f64::from(n - 2.0));
         let upper: [f64; 3] = hi.map(|n| f64::from(n + 2.0));
         let progress = crate::export_mesh::Progress::new();
-        let mesh = crate::export_mesh::mesh_sparse(
-            &|point: [f32; 3]| field.distance(point),
-            lower, upper, 0.9, 1, &progress.slice(0.0, 1.0),
-        ).expect("mesh an actual hollow shade");
+        let mesh = crate::export_mesh::mesh_sparse(&|point: [f32; 3]| field.distance(point), lower, upper, 0.9, 1, &progress.slice(0.0, 1.0))
+            .expect("mesh an actual hollow shade");
         assert!(!mesh.mesh.triangles.is_empty(), "no geometry in export");
         assert!(mesh.stats.complete, "mesher could not close the surface");
         assert!(solidcraft_geom::melt::is_watertight(&mesh.mesh), "mesh must have no open boundaries");

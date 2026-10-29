@@ -5,9 +5,9 @@
 //! copied into the project. All geometry is saved as ordinary shapes, so it remains
 //! renderable/printable even if a font disappears after the project is saved.
 
+use serde::{Deserialize, Serialize};
 use std::fmt::Write as _;
 use std::path::Path;
-use serde::{Deserialize, Serialize};
 use ttf_parser::{Face, GlyphId, OutlineBuilder};
 
 use crate::model::{Group, MAX_GROUPS, MAX_SHAPES, Op, Pick, Scene};
@@ -106,12 +106,17 @@ impl Settings {
         if self.font_path.len() > 1024 {
             return Err("フォントのパスが長すぎます".into());
         }
-        if !self.size_mm.is_finite() || !(4.0..=100.0).contains(&self.size_mm)
-            || !self.thickness_mm.is_finite() || !(0.8..=60.0).contains(&self.thickness_mm)
-            || !self.puff_mm.is_finite() || !(0.0..=3.0).contains(&self.puff_mm)
+        if !self.size_mm.is_finite()
+            || !(4.0..=100.0).contains(&self.size_mm)
+            || !self.thickness_mm.is_finite()
+            || !(0.8..=60.0).contains(&self.thickness_mm)
+            || !self.puff_mm.is_finite()
+            || !(0.0..=3.0).contains(&self.puff_mm)
             || self.puff_mm > self.size_mm * 0.08
-            || !self.corner_mm.is_finite() || !(0.0..=10.0).contains(&self.corner_mm)
-            || !self.tracking_mm.is_finite() || !(-3.0..=30.0).contains(&self.tracking_mm)
+            || !self.corner_mm.is_finite()
+            || !(0.0..=10.0).contains(&self.corner_mm)
+            || !self.tracking_mm.is_finite()
+            || !(-3.0..=30.0).contains(&self.tracking_mm)
             || self.anchor.iter().any(|n| !n.is_finite() || n.abs() > 900.0)
         {
             return Err("文字の大きさ・厚さ・ふくらみ・位置を安全な範囲にしてください".into());
@@ -137,7 +142,9 @@ impl LetterMeta {
         self.index = self.index.min(MAX_CHARS);
         self.settings.sanitize();
         for n in &mut self.base_centre {
-            if !n.is_finite() { *n = 0.0; }
+            if !n.is_finite() {
+                *n = 0.0;
+            }
             *n = (*n).clamp(-5000.0, 5000.0);
         }
     }
@@ -167,20 +174,26 @@ impl SvgPen {
 }
 
 impl OutlineBuilder for SvgPen {
-    fn move_to(&mut self, x: f32, y: f32) { self.cmd('M', &[x, y]); }
-    fn line_to(&mut self, x: f32, y: f32) { self.cmd('L', &[x, y]); }
-    fn quad_to(&mut self, x1: f32, y1: f32, x: f32, y: f32) { self.cmd('Q', &[x1, y1, x, y]); }
+    fn move_to(&mut self, x: f32, y: f32) {
+        self.cmd('M', &[x, y]);
+    }
+    fn line_to(&mut self, x: f32, y: f32) {
+        self.cmd('L', &[x, y]);
+    }
+    fn quad_to(&mut self, x1: f32, y1: f32, x: f32, y: f32) {
+        self.cmd('Q', &[x1, y1, x, y]);
+    }
     fn curve_to(&mut self, x1: f32, y1: f32, x2: f32, y2: f32, x: f32, y: f32) {
         self.cmd('C', &[x1, y1, x2, y2, x, y]);
     }
-    fn close(&mut self) { self.cmd('Z', &[]); }
+    fn close(&mut self) {
+        self.cmd('Z', &[]);
+    }
 }
 
 fn font_bytes(path: &str) -> Result<Vec<u8>, String> {
     let file = Path::new(path);
-    let allowed = file.extension().and_then(|s| s.to_str()).is_some_and(|s| {
-        ["ttf", "ttc", "otf"].iter().any(|a| s.eq_ignore_ascii_case(a))
-    });
+    let allowed = file.extension().and_then(|s| s.to_str()).is_some_and(|s| ["ttf", "ttc", "otf"].iter().any(|a| s.eq_ignore_ascii_case(a)));
     if !allowed {
         return Err("TTF / TTC / OTF のフォントを選んでください".into());
     }
@@ -228,11 +241,16 @@ fn mean_centre(group: &Group) -> V3 {
 /// A conservative inscribed-radius sample for each hole. We reject inflation that
 /// could fill a hole rather than silently changing the letter's reading.
 fn hole_clearance(poly: &[[f32; 2]]) -> f32 {
-    if poly.len() < 3 { return 0.0; }
+    if poly.len() < 3 {
+        return 0.0;
+    }
     let mut lo = [f32::INFINITY; 2];
     let mut hi = [f32::NEG_INFINITY; 2];
     for v in poly {
-        for k in 0..2 { lo[k] = lo[k].min(v[k]); hi[k] = hi[k].max(v[k]); }
+        for k in 0..2 {
+            lo[k] = lo[k].min(v[k]);
+            hi[k] = hi[k].max(v[k]);
+        }
     }
     let mut best = 0.0f32;
     for i in 1..20 {
@@ -307,11 +325,7 @@ fn keep_manual_transform(group: &mut Group, old: &Group) {
     for sh in &mut group.shapes {
         let relative = sdf::sub(sh.pos, new_mid);
         let scaled = [relative[0] * scale[0], relative[1] * scale[1], relative[2] * scale[2]];
-        sh.pos = sdf::add(sdf::add(new_mid, offset), [
-            sdf::dot(r[0], scaled),
-            sdf::dot(r[1], scaled),
-            sdf::dot(r[2], scaled),
-        ]);
+        sh.pos = sdf::add(sdf::add(new_mid, offset), [sdf::dot(r[0], scaled), sdf::dot(r[1], scaled), sdf::dot(r[2], scaled)]);
         sh.rot = rot;
         sh.scale = scale;
         if sh.op == Op::Add {
@@ -340,7 +354,9 @@ pub fn apply(scene: &mut Scene, settings: &Settings, editing_run: Option<u32>) -
         let advance = glyph.and_then(|id| face.glyph_hor_advance(id)).map_or(upm * 0.5, f32::from) * size;
         glyphs.push((ch, glyph, advance));
         total += advance;
-        if i + 1 < chars.len() { total += settings.tracking_mm; }
+        if i + 1 < chars.len() {
+            total += settings.tracking_mm;
+        }
     }
     if total <= 0.0 || total > 3000.0 {
         return Err("文字列の幅が大きすぎるか、小さすぎます".into());
@@ -351,9 +367,8 @@ pub fn apply(scene: &mut Scene, settings: &Settings, editing_run: Option<u32>) -
         Align::Right => -total,
     };
 
-    let old_ids: Vec<usize> = scene.groups.iter().enumerate().filter_map(|(i, g)| {
-        g.puffy_text.as_ref().filter(|m| Some(m.run_id) == editing_run).map(|_| i)
-    }).collect();
+    let old_ids: Vec<usize> =
+        scene.groups.iter().enumerate().filter_map(|(i, g)| g.puffy_text.as_ref().filter(|m| Some(m.run_id) == editing_run).map(|_| i)).collect();
     if editing_run.is_some() && old_ids.is_empty() {
         return Err("再編集する文字列が見つかりません".into());
     }
@@ -367,8 +382,14 @@ pub fn apply(scene: &mut Scene, settings: &Settings, editing_run: Option<u32>) -
 
     let new_run = match editing_run {
         Some(id) => id,
-        None => scene.groups.iter().filter_map(|g| g.puffy_text.as_ref().map(|m| m.run_id)).max()
-            .unwrap_or(0).checked_add(1).ok_or("文字列IDの上限です")?,
+        None => scene
+            .groups
+            .iter()
+            .filter_map(|g| g.puffy_text.as_ref().map(|m| m.run_id))
+            .max()
+            .unwrap_or(0)
+            .checked_add(1)
+            .ok_or("文字列IDの上限です")?,
     };
     let old: Vec<(usize, &Group)> = old_ids.iter().filter_map(|&i| scene.groups.get(i).map(|g| (i, g))).collect();
     let mut built = Vec::new();
@@ -390,12 +411,7 @@ pub fn apply(scene: &mut Scene, settings: &Settings, editing_run: Option<u32>) -
                     group.visible = previous.visible;
                     group.op = previous.op;
                 }
-                group.puffy_text = Some(LetterMeta {
-                    run_id: new_run,
-                    index,
-                    settings: settings.clone(),
-                    base_centre: baseline,
-                });
+                group.puffy_text = Some(LetterMeta { run_id: new_run, index, settings: settings.clone(), base_centre: baseline });
                 built.push(group);
             } else if !ch.is_whitespace() {
                 return Err(format!("「{ch}」に輪郭がありません"));
@@ -424,7 +440,9 @@ pub fn apply(scene: &mut Scene, settings: &Settings, editing_run: Option<u32>) -
 
 /// Return the text settings for either a glyph group or one of its constituent shapes.
 pub fn selected(scene: &Scene, pick: Option<Pick>) -> Option<&LetterMeta> {
-    let g = match pick? { Pick::Group(g) | Pick::Shape(g, _) => g };
+    let g = match pick? {
+        Pick::Group(g) | Pick::Shape(g, _) => g,
+    };
     scene.groups.get(g)?.puffy_text.as_ref()
 }
 
@@ -436,7 +454,10 @@ mod tests {
 
     #[test]
     fn ring_counter_survives_puffing_sdf_save_and_reopen() {
-        let art = svg::parse(r#"<svg viewBox="0 0 100 100"><path fill-rule="evenodd" d="M0 0 L100 0 L100 100 L0 100 Z M30 30 L70 30 L70 70 L30 70 Z"/></svg>"#).expect("SVG");
+        let art = svg::parse(
+            r#"<svg viewBox="0 0 100 100"><path fill-rule="evenodd" d="M0 0 L100 0 L100 100 L0 100 Z M30 30 L70 30 L70 70 L30 70 Z"/></svg>"#,
+        )
+        .expect("SVG");
         assert_eq!((art.solids(), art.holes()), (1, 1));
         let mut settings = Settings::default();
         settings.puff_mm = 0.8;
@@ -468,7 +489,10 @@ mod tests {
         let settings = Settings::default();
         assert!(apply(&mut scene, &settings, None).is_err(), "font choice is mandatory");
         assert_eq!(scene, original);
-        let art = svg::parse(r#"<svg viewBox="0 0 100 100"><path fill-rule="evenodd" d="M0 0 L100 0 L100 100 L0 100 Z M45 45 L55 45 L55 55 L45 55 Z"/></svg>"#).expect("SVG");
+        let art = svg::parse(
+            r#"<svg viewBox="0 0 100 100"><path fill-rule="evenodd" d="M0 0 L100 0 L100 100 L0 100 Z M45 45 L55 45 L55 55 L45 55 Z"/></svg>"#,
+        )
+        .expect("SVG");
         let mut opts = settings;
         opts.puff_mm = 3.0;
         assert!(glyph_group(&art, 'O', 0, &opts, [0.0, 0.0], 30.0).is_err(), "tiny counter must not silently close");
@@ -522,13 +546,24 @@ mod tests {
     #[test]
     #[ignore]
     fn inflated_ring_is_watertight_after_mesh_export() {
-        let art = svg::parse(r#"<svg viewBox="0 0 100 100"><path fill-rule="evenodd" d="M0 0 L100 0 L100 100 L0 100 Z M30 30 L70 30 L70 70 L30 70 Z"/></svg>"#).unwrap();
+        let art = svg::parse(
+            r#"<svg viewBox="0 0 100 100"><path fill-rule="evenodd" d="M0 0 L100 0 L100 100 L0 100 Z M30 30 L70 30 L70 70 L30 70 Z"/></svg>"#,
+        )
+        .unwrap();
         let settings = Settings::default();
         let mut scene = Scene::default();
         scene.groups = vec![glyph_group(&art, 'O', 0, &settings, [0.0, 0.0], 30.0).unwrap()];
         let field = Field::new(&scene);
         let progress = crate::export_mesh::Progress::new();
-        let mesh = crate::export_mesh::mesh_sparse(&|point| field.distance(point), [-19.0, -19.0, -3.0], [19.0, 19.0, 17.0], 0.6, 1, &progress.slice(0.0, 1.0)).expect("mesh");
+        let mesh = crate::export_mesh::mesh_sparse(
+            &|point| field.distance(point),
+            [-19.0, -19.0, -3.0],
+            [19.0, 19.0, 17.0],
+            0.6,
+            1,
+            &progress.slice(0.0, 1.0),
+        )
+        .expect("mesh");
         assert!(solidcraft_geom::melt::is_watertight(&mesh.mesh), "3D letter must export watertight");
     }
 }
