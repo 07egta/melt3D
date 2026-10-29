@@ -1449,7 +1449,7 @@ impl Scene {
                     fix(&mut s.size[2], 1.0, 2.0, 1.0);
                     fix(&mut s.params[2], 0.0, 1.0, 0.0);
                 }
-                fix(&mut s.shell, -500.0, 500.0, 0.0);
+                fix(&mut s.shell, 0.0, 500.0, 0.0);
                 if let Some(p) = &mut s.pattern {
                     p.sanitize();
                 }
@@ -1724,9 +1724,6 @@ mod tests {
         sc.groups[0].shapes[0].shell = f32::INFINITY;
         sc.sanitize();
         assert_eq!(sc.groups[0].shapes[0].shell, 0.0);
-        sc.groups[0].shapes[0].shell = -3.0;
-        sc.sanitize();
-        assert_eq!(sc.groups[0].shapes[0].shell, -3.0, "a minus shell (open top) is kept");
         let old = r#"{"groups":[{"name":"g","op":"Add","blend":0,"visible":true,"shapes":[{"name":"s","kind":"Sphere","size":[20,1,1],"round":0,"pos":[0,0,20],"rot":[0,0,0],"scale":[1,1,1],"op":"Add","blend":6,"material":{"color":[1,0,0],"roughness":0.3,"metallic":1},"visible":true,"outline":[]}]}]}"#;
         assert_eq!(Scene::from_json(old).unwrap().groups[0].shapes[0].shell, 0.0);
     }

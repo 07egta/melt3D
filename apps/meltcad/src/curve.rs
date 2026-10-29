@@ -677,7 +677,7 @@ pub fn distance(p: &Prepared, q: V3) -> f32 {
     let aspect = if p.size[1].is_finite() { p.size[1].clamp(0.45, 1.0) } else { 1.0 };
     let squircle = p.size[2].is_finite() && p.size[2] >= 1.5;
     let mut d = smooth_tube_grouped(&p.path, &p.curve_groups, p.curve_kmax, q, closed, aspect, squircle);
-    let wall = if p.shell.is_finite() { p.shell.abs() } else { 0.0 };
+    let wall = if p.shell.is_finite() { p.shell.max(0.0) } else { 0.0 };
     if wall > 0.0 {
         d = hollow(d, wall);
     }

@@ -1092,7 +1092,7 @@ impl App {
                         }
                     }
                 }
-                style::labeled_slider(ui, i18n::tr("inspector.shell"), &mut sh.shell, -40.0..=40.0, i18n::tr("inspector.shell.tip"));
+                style::labeled_slider(ui, i18n::tr("inspector.shell"), &mut sh.shell, 0.0..=40.0, i18n::tr("inspector.shell.tip"));
                 // melt just one face: no longer offered for new work, but a design that already
                 // uses it keeps the control so it can be changed or switched off
                 if sh.face_melt.face > 0 {

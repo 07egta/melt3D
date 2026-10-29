@@ -174,7 +174,7 @@ impl Prepared {
             curve_groups,
             curve_kmax,
             outline2: s.outline2.clone(),
-            shell: if s.shell.is_finite() { s.shell } else { 0.0 },
+            shell: if s.shell.is_finite() { s.shell.max(0.0) } else { 0.0 },
             face_melt: s.face_melt.parts(),
             poly_orient,
             poly_limit,
@@ -232,21 +232,12 @@ impl Prepared {
         // rounding, a face melt and a ripple) and through any distance-shortening the shape maths
         // applies, or the wall comes out too thick. (A curve hollows itself: its flat ends are cut
         // after the hollowing, see curve::distance.)
-        // A minus shell is the same wall with a round hole in the top (local +Z), like a hollowed
-        // print with its opening: see `top_hole`.
-        if self.shell != 0.0 && self.kind != Kind::Curve {
-            let wall = self.shell.abs() * self.min_scale() * self.shell_shortening(q, before_ripple);
-            let hollow = (d + wall * 0.5).abs() - wall * 0.5;
-            if self.shell < 0.0 { hollow.max(-self.top_hole(q)) } else { hollow }
+        if self.shell > 0.0 && self.kind != Kind::Curve {
+            let wall = self.shell * self.min_scale() * self.shell_shortening(q, before_ripple);
+            (d + wall * 0.5).abs() - wall * 0.5
         } else {
             d
         }
-    }
-    /// The cutter of a minus shell: a round hole a third as wide as the shape, from the middle
-    /// of the shape up through its top (a distance to the cutter, negative inside it).
-    fn top_hole(&self, q: V3) -> f32 {
-        let radius = self.half[0].min(self.half[1]) * 0.35;
-        (q[0].hypot(q[1]) - radius).max(-q[2]) * self.min_scale()
     }
     /// How much shorter than a true distance the shape maths makes this point's distance (1 =
     /// exact). Sweeps, lofts, wave-warped revolves, a face melt and a ripple all scale their
@@ -1241,25 +1232,26 @@ mod tests {
     }
 
     #[test]
-    fn a_minus_shell_is_the_same_wall_with_a_round_hole_in_the_top() {
-        let mut s = Shape::new(Kind::Box, [0.0; 3], Material::default());
-        s.size = [40.0, 40.0, 40.0, 0.0];
-        s.shell = 4.0;
-        let closed = Prepared::new(&s);
-        s.shell = -4.0;
-        let open = Prepared::new(&s);
-        let lid_middle = [0.0, 0.0, 19.0];
-        let lid_corner = [17.0, 17.0, 19.0]; // outside the hole (radius 7)
-        let side = [19.0, 0.0, 0.0];
-        let bottom = [0.0, 0.0, -19.0];
-        assert!(closed.distance(lid_middle) < 0.0, "a closed shell has a lid");
-        assert!(open.distance(lid_middle) > 0.0, "the minus shell has a hole in it");
-        assert!(open.distance(lid_corner) < 0.0, "the rest of the lid stays");
-        assert!(open.distance([0.0, 0.0, 30.0]) > 0.0, "and nothing above it");
-        assert!((open.distance(side) - closed.distance(side)).abs() < 1e-4, "the side wall is the same");
-        assert!((open.distance(bottom) - closed.distance(bottom)).abs() < 1e-4, "so is the floor");
-        s.shell = f32::NAN;
-        assert_eq!(Prepared::new(&s).distance(lid_middle), Prepared::new(&Shape::new(Kind::Box, [0.0; 3], Material::default())).distance(lid_middle));
+    fn a_shelled_shape_cut_by_a_minus_opens_into_a_cup() {
+        let mut shelled = ball(0.0, 20.0);
+        shelled.shell = 3.0;
+        let mut cutter = Shape::new(Kind::Box, [0.0, 0.0, 20.0], Material::default());
+        cutter.size = [60.0, 60.0, 20.0, 0.0];
+        cutter.blend = 0.0;
+        cutter.op = Op::Subtract;
+        let mut sc = Scene { groups: vec![], melt: Default::default(), env: Default::default(), saved: Vec::new(), anim: Default::default() };
+        sc.groups.push(group_of("cup", 0, vec![shelled.clone(), cutter.clone()]));
+        let f = Field::new(&sc);
+        assert!(f.distance([0.0, 0.0, 0.0]) > 0.0, "the middle is hollow");
+        assert!(f.distance([0.0, 0.0, 12.0]) > 0.0, "the cavity is open at the top");
+        assert!(f.distance([0.0, 0.0, 19.0]) > 0.0, "the cap is cut away");
+        assert!(f.distance([0.0, 0.0, -18.5]) < 0.0, "the floor stays");
+        assert!(f.distance([18.5, 0.0, 0.0]) < 0.0, "so do the side walls");
+        // without the cutter the cavity stays closed: no hole by itself
+        let mut closed = Scene { groups: vec![], melt: Default::default(), env: Default::default(), saved: Vec::new(), anim: Default::default() };
+        closed.groups.push(group_of("ball", 0, vec![shelled]));
+        let g = Field::new(&closed);
+        assert!(g.distance([0.0, 0.0, 18.5]) < 0.0, "the shell alone keeps its lid");
     }
 
     #[test]
