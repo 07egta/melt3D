@@ -1561,6 +1561,7 @@
   "nav.hfss.help": "Alt+kéo chuột trái để trượt, Shift+Alt+chuột trái để thu phóng, Ctrl+kéo chuột trái từ vùng trống để xoay",
   "nav.inventor.help": "Kéo chuột giữa để trượt, Shift + chuột giữa để xoay, Ctrl + chuột giữa để thu phóng, kéo chuột phải để xoay",
   "nav.maya.help": "Alt+kéo chuột trái để xoay, Alt+chuột giữa để trượt, Alt+chuột phải để thu phóng; kéo chuột giữa cũng trượt",
+  "nav.melt3d.help": "Kéo chuột giữa để xoay, Shift+chuột giữa hoặc kéo chuột phải để di chuyển, Ctrl+chuột giữa để thu phóng; kéo chuột trái để chọn theo khung",
   "nav.openscad.help": "Kéo chuột trái trên vùng trống để xoay, Shift + chuột trái để quét chọn vùng, kéo hình học phác thảo để chỉnh sửa; kéo chuột phải hoặc chuột giữa để trượt, Shift + kéo chuột phải hoặc chuột giữa để thu phóng",
   "nav.perspective.sketch": "Chế độ chỉnh sửa phác thảo sử dụng góc nhìn trực giao. Hãy hoàn tất phác thảo để chuyển sang góc nhìn phối cảnh.",
   "nav.solidworks.help": "Kéo chuột giữa để xoay, Ctrl + chuột giữa để trượt, Shift + chuột giữa để thu phóng, kéo chuột phải để xoay",
