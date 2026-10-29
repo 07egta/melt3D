@@ -563,7 +563,7 @@ fn pack_shape(
     let (start, count) = if s.kind.uses_outline() { pack_outline(&p.outline, poly) } else { (0, 0) };
     let (start2, count2) = if s.kind.uses_outline2() { pack_outline(&p.outline2, poly) } else { (0, 0) };
     let (pstart, pcount) = if s.kind == crate::model::Kind::Curve {
-        pack_curve(s, path)
+        pack_curve(s, &p.path, path)
     } else if s.kind.uses_path() && path.len() / 4 + s.path.len() <= PATH_V4 {
         let st = path.len() / 4;
         for pt in &s.path {
@@ -627,24 +627,26 @@ fn pack_shape(
 /// points always fit: the GPU and the CPU SDF measure exactly the same curve (#201). The old code
 /// thinned the points (or dropped the curve) when the pool was full, which made the viewport and
 /// the exports show different shapes.
-fn pack_curve(s: &crate::model::Shape, path: &mut Vec<f32>) -> (usize, usize) {
+///
+/// `pts` are the shape's prepared curve points (`Prepared::path`, which is exactly
+/// `curve::build_shape(s)`): borrowing them avoids sampling the same curve twice per pack.
+fn pack_curve(s: &crate::model::Shape, pts: &[[f32; 4]], path: &mut Vec<f32>) -> (usize, usize) {
     let used = path.len() / 4;
     let room = PATH_V4.saturating_sub(used + 2);
     let need = |n: usize| n + n.saturating_sub(1).div_ceil(crate::curve::GROUP_SEGMENTS);
-    let pts = crate::curve::build_shape(s);
     if pts.len() < 2 || need(pts.len()) > room {
         return (0, 0);
     }
     let squircle = s.size[2] >= 1.5;
-    let (lo, hi) = crate::curve::bounds_profile(&pts, squircle);
+    let (lo, hi) = crate::curve::bounds_profile(pts, squircle);
     let closed = s.params[0] > 0.5;
-    push(path, [lo[0], lo[1], lo[2], crate::curve::max_joint_blend(&pts, closed)]);
-    push(path, [hi[0], hi[1], hi[2], crate::curve::closed_joint_blend(&pts, closed)]);
+    push(path, [lo[0], lo[1], lo[2], crate::curve::max_joint_blend(pts, closed)]);
+    push(path, [hi[0], hi[1], hi[2], crate::curve::closed_joint_blend(pts, closed)]);
     let st = used + 2;
-    for pt in &pts {
+    for pt in pts {
         push(path, *pt);
     }
-    for g in crate::curve::group_spheres_profile(&pts, squircle) {
+    for g in crate::curve::group_spheres_profile(pts, squircle) {
         push(path, g);
     }
     (st, pts.len())
@@ -1921,6 +1923,35 @@ mod tests {
             original.resize(len.next_multiple_of(4) * 2, 0);
             assert_eq!(uploaded, original, "binary16 values and texel padding at {len} nodes");
             assert_eq!(visits, len.div_ceil(VOLUME_UPLOAD_CHUNK_NODES));
+        }
+    }
+
+    #[test]
+    fn packing_a_curve_from_its_prepared_points_is_byte_identical() {
+        let mut shape = Shape::new(crate::model::Kind::Curve, [0.0; 3], Material::default());
+        let paths = [
+            Vec::new(),
+            vec![[0.0, 0.0, 0.0, 2.0]],
+            vec![[0.0, 0.0, 0.0, 2.0], [0.1, 15.0, 0.0, 3.0], [20.0, 16.0, 8.0, 1.0], [21.0, -8.0, 2.0, 4.0], [-3.0, -0.0, 7.0, 2.0]],
+        ];
+        for nodes in paths {
+            shape.path = nodes;
+            for params in [[0.0, 0.0, 0.0, 1.0], [0.0, 0.8, 0.0, 1.75], [1.0, 1.0, 0.0, 0.7]] {
+                shape.params = params;
+                for squircle in [0.0, 2.0] {
+                    shape.size[2] = squircle;
+                    let prepared = crate::sdf::Prepared::new(&shape);
+                    let fresh = crate::curve::build_shape(&shape);
+                    for used in [0, 3, PATH_V4 - 48, PATH_V4 - 1, PATH_V4] {
+                        let mut expected = vec![-0.0; used * 4];
+                        let mut actual = expected.clone();
+                        let old_slots = pack_curve(&shape, &fresh, &mut expected);
+                        let new_slots = pack_curve(&shape, &prepared.path, &mut actual);
+                        assert_eq!(new_slots, old_slots, "same admission at {used} with {params:?}");
+                        assert_eq!(actual.iter().map(|v| v.to_bits()).collect::<Vec<_>>(), expected.iter().map(|v| v.to_bits()).collect::<Vec<_>>());
+                    }
+                }
+            }
         }
     }
 

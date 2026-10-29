@@ -19,6 +19,9 @@ const MAX_POINTS: usize = 400_000;
 const MAX_ELEMENTS: usize = 6_000;
 /// Includes empty groups and repeated references, which may generate no geometry at all.
 const MAX_VISITS: usize = MAX_ELEMENTS * 4;
+/// Bytes of referenced fragments scanned in one pass. Repeated `<use>` of a large definition
+/// (even one that is mostly comments or style text) is bounded by this, not only by tag visits.
+const MAX_REFERENCE_BYTES: usize = MAX_BYTES * 16;
 const MAX_DEPTH: usize = 64;
 /// Outlines kept after throwing out the tiniest ones.
 const MAX_CONTOURS: usize = 300;
@@ -108,9 +111,13 @@ pub fn parse(text: &str) -> Result<Artwork, String> {
     }
     let ids = collect_ids(text);
     let mut limited = false;
+    let mut unresolved = false;
     // pass 1: rough, only to learn the size of the picture
-    let rough = walk(text, None, &ids, &mut limited);
+    let rough = walk(text, None, &ids, &mut limited, &mut unresolved);
     let Some((lo, hi)) = bounds(rough.iter().flat_map(|r| r.polys.iter().flatten())) else {
+        if unresolved {
+            return Err("A referenced SVG shape is missing or refers to itself. Expand the references into shapes in your SVG editor".into());
+        }
         return Err("No filled shape found (line-only drawings can't be read)".into());
     };
     let side = (hi.0 - lo.0).max(hi.1 - lo.1);
@@ -119,11 +126,14 @@ pub fn parse(text: &str) -> Result<Artwork, String> {
     }
     // pass 2: curves flattened to ~0.05 mm for a 60 mm picture
     let tol = FLAT_TOL_MM / (REF_MM / side);
-    let raws = walk(text, Some(tol), &ids, &mut limited);
+    let raws = walk(text, Some(tol), &ids, &mut limited, &mut unresolved);
     let mut art = build_artwork(&raws, side)?;
     art.warnings = unsupported_features(text);
     if limited {
         art.warnings.push("SVG complexity limit reached; some details were not loaded".into());
+    }
+    if unresolved {
+        art.warnings.push("Skipped SVG references whose target is missing or refers to itself".into());
     }
     Ok(art)
 }
@@ -763,7 +773,11 @@ struct Budget {
     points: usize,
     elements: usize,
     visits: usize,
+    /// Bytes of referenced fragments entered so far (`MAX_REFERENCE_BYTES`).
+    reference_bytes: usize,
     limited: bool,
+    /// A local reference pointed at a missing id or back into itself.
+    unresolved: bool,
 }
 
 struct Raw {
@@ -1153,8 +1167,8 @@ fn collect_ids(src: &str) -> HashMap<&str, (usize, usize)> {
 
 /// Walk the document. Local #id references are expanded in the same paint order as <use>;
 /// external hrefs are never read or fetched.
-fn walk(src: &str, tol: Option<f64>, ids: &HashMap<&str, (usize, usize)>, limited: &mut bool) -> Vec<Raw> {
-    let mut budget = Budget { commands: 0, points: 0, elements: 0, visits: 0, limited: false };
+fn walk(src: &str, tol: Option<f64>, ids: &HashMap<&str, (usize, usize)>, limited: &mut bool, unresolved: &mut bool) -> Vec<Raw> {
+    let mut budget = Budget { commands: 0, points: 0, elements: 0, visits: 0, reference_bytes: 0, limited: false, unresolved: false };
     let mut out = Vec::new();
     let initial = State {
         xf: Affine::ID,
@@ -1169,6 +1183,7 @@ fn walk(src: &str, tol: Option<f64>, ids: &HashMap<&str, (usize, usize)>, limite
     };
     walk_part(src, src, tol, ids, &mut budget, &mut out, initial, None, &mut Vec::new());
     *limited |= budget.limited;
+    *unresolved |= budget.unresolved;
     out
 }
 
@@ -1184,6 +1199,15 @@ fn walk_part<'a>(
     reference_viewport: Option<[Option<f64>; 2]>,
     active: &mut Vec<String>,
 ) {
+    if reference_viewport.is_some() {
+        // Charge the whole referenced fragment before entering it. This also bounds the work of
+        // scanning repeated comments or style text, not just the geometry it emits.
+        if fragment.len() > MAX_REFERENCE_BYTES.saturating_sub(budget.reference_bytes) {
+            budget.limited = true;
+            return;
+        }
+        budget.reference_bytes += fragment.len();
+    }
     let mut stack = vec![inherited];
     let mut skip = 0usize;
     let mut over = 0usize;
@@ -1301,16 +1325,21 @@ fn walk_part<'a>(
             if !st.hidden
                 && active.len() < 16
                 && let Some(id) = tag.attr("href").or_else(|| tag.attr("xlink:href")).and_then(|v| v.strip_prefix('#'))
-                && let Some(&(begin, end)) = ids.get(id)
-                && !active.iter().any(|v| v == id)
-                && let Some(part) = document.get(begin..end)
             {
-                // x/y is a translation inside the use element's own transform.
-                st.xf = st.xf.mul(&Affine([1.0, 0.0, 0.0, 1.0, tag.len("x").unwrap_or(0.0), tag.len("y").unwrap_or(0.0)]));
-                if st.xf.ok() {
-                    active.push(id.to_owned());
-                    walk_part(document, part, tol, ids, budget, out, st, Some([tag.len("width"), tag.len("height")]), active);
-                    active.pop();
+                if active.iter().any(|v| v == id) {
+                    budget.unresolved = true;
+                } else if let Some(&(begin, end)) = ids.get(id)
+                    && let Some(part) = document.get(begin..end)
+                {
+                    // x/y is a translation inside the use element's own transform.
+                    st.xf = st.xf.mul(&Affine([1.0, 0.0, 0.0, 1.0, tag.len("x").unwrap_or(0.0), tag.len("y").unwrap_or(0.0)]));
+                    if st.xf.ok() {
+                        active.push(id.to_owned());
+                        walk_part(document, part, tol, ids, budget, out, st, Some([tag.len("width"), tag.len("height")]), active);
+                        active.pop();
+                    }
+                } else {
+                    budget.unresolved = true;
                 }
             }
             if active.len() >= 16 {
@@ -1945,6 +1974,40 @@ mod tests {
         let a = parse(&doc).unwrap();
         assert_eq!(a.solids(), 1);
         assert!(parse(&wrap(r##"<use href="file:///etc/passwd#s"/>"##)).is_err());
+    }
+
+    #[test]
+    fn missing_and_cyclic_references_report_partial_imports() {
+        for reference in
+            [r##"<use href="#missing"/>"##, r##"<defs><g id="a"><use href="#b"/></g><g id="b"><use href="#a"/></g></defs><use href="#a"/>"##]
+        {
+            assert!(parse(&wrap(reference)).unwrap_err().contains("refers to itself"));
+            let artwork = parse(&wrap(&format!(r#"{reference}<rect width="10" height="20"/>"#))).unwrap();
+            assert_eq!(artwork.solids(), 1);
+            assert_eq!(artwork.warnings.len(), 1, "one warning covers either omission: {:?}", artwork.warnings);
+            assert!(artwork.warnings[0].contains("missing or refers to itself"));
+        }
+        let unused =
+            wrap(r##"<defs><g id="unused"><use href="#missing"/></g><g id="empty"/></defs><use href="#empty"/><rect width="10" height="20"/>"##);
+        assert!(parse(&unused).unwrap().warnings.is_empty(), "unused definitions and valid empty groups omit no requested shape");
+    }
+
+    #[test]
+    fn reference_budget_counts_repeated_non_geometry_bytes() {
+        let source = wrap(&format!(
+            r##"<rect width="10" height="10"/><defs><g id="payload"><!-- {} --></g></defs>{}<rect x="40" width="10" height="10"/>"##,
+            "x".repeat(250_000),
+            r##"<use href="#payload"/>"##.repeat(180)
+        ));
+        let ids = collect_ids(&source);
+        let (mut limited, mut unresolved) = (false, false);
+        let raws = walk(&source, None, &ids, &mut limited, &mut unresolved);
+        assert_eq!(raws.len(), 2, "the shapes around the references still load");
+        assert!(limited, "180 copies of a 250 kB definition exceed the reference byte budget");
+        assert!(!unresolved);
+        let artwork = parse(&source).unwrap();
+        assert_eq!(artwork.solids(), 2);
+        assert!(artwork.warnings.iter().any(|warning| warning.contains("complexity limit")));
     }
 
     #[test]

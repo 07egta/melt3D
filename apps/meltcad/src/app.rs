@@ -95,6 +95,10 @@ pub struct App {
     queued_open: Option<QueuedOpen>,
     /// A Save-and-continue decision only runs after a complete successful save.
     after_save: Option<PendingFileAction>,
+    /// A save that finished during an unfinished edit (the mouse still down, or before the frame
+    /// settled it): its revision. Kept until the edit's Undo step is made, so the save neither
+    /// splits that step nor leaves the saved state looking changed.
+    saved_pending_revision: Option<u64>,
     close_approved: bool,
     status: (String, f64),
     pub renaming: Option<Pick>,
@@ -222,6 +226,7 @@ impl App {
             native_job: None,
             queued_open: None,
             after_save: None,
+            saved_pending_revision: None,
             close_approved: false,
             status: (String::new(), 0.0),
             renaming: None,
@@ -387,6 +392,7 @@ impl App {
                     self.redo.clear();
                     self.path = None;
                     self.dirty = true;
+                    self.saved_pending_revision = None;
                     self.sel = None;
                     self.frame_now();
                     self.say(
@@ -438,6 +444,11 @@ impl App {
                 }
                 self.redo.clear();
                 self.dirty = true;
+            }
+            if let Some(saved) = self.saved_pending_revision.take() {
+                // Saving midway through an edit does not split its Undo step. A return to the
+                // old committed scene can still differ from what that save wrote.
+                self.dirty = saved != rev;
             }
             self.committed_rev = rev;
         }
@@ -532,6 +543,7 @@ impl App {
             // Invalidate both CPU field and GPU pack before any further hit test/draw.
             self.track_scene();
             self.committed_rev = self.scene_rev;
+            self.saved_pending_revision = None;
         }
     }
 
@@ -558,6 +570,7 @@ impl App {
             self.animation_at_applied(self.an.frame);
             self.track_scene();
             self.committed_rev = self.scene_rev;
+            self.saved_pending_revision = None;
         }
     }
 
@@ -566,7 +579,12 @@ impl App {
     }
 
     fn has_unsaved_work(&self) -> bool {
-        self.dirty || self.scene != self.committed || self.sketch_has_draft() || (self.sk.on && self.sk.separate)
+        let edited = match self.saved_pending_revision {
+            // The file holds the scene of that revision, not the committed one.
+            Some(saved) => saved != self.scene_rev || self.scene != self.tracked,
+            None => self.scene != self.committed,
+        };
+        self.dirty || edited || self.sketch_has_draft() || (self.sk.on && self.sk.separate)
     }
 
     fn sketch_has_draft(&self) -> bool {
@@ -643,6 +661,7 @@ impl App {
         self.doc_title.clear();
         self.title_edit = None;
         self.dirty = false;
+        self.saved_pending_revision = None;
         // A different document must never inherit the old timeline's frame,
         // playback state or edit revision. Otherwise the next UI frame can
         // auto-record the new scene over one of its saved animation keys.
@@ -1563,6 +1582,9 @@ impl App {
                     self.path = Some(path);
                     let same = self.track_scene() == base_revision;
                     self.dirty = !same;
+                    // Saved before the frame made the edit's Undo step (or during a drag):
+                    // remember what is on disk until that step is made.
+                    self.saved_pending_revision = (same && self.scene != self.committed).then_some(base_revision);
                     if same {
                         self.doc_title.clear();
                         if let Err(e) = self.recovery.document_saved(base_revision) {
@@ -3252,6 +3274,103 @@ mod tests {
         assert_eq!(app.scene.shape_count(), 2);
         assert!(app.dirty);
         assert!(app.pending_file_action.is_some(), "failed save must not discard the pending action");
+    }
+
+    #[test]
+    fn undo_and_redo_with_no_history_keep_a_clean_scene_clean() {
+        let mut app = App::new(true, None);
+        let before = app.scene.clone();
+        app.undo();
+        app.redo();
+        assert_eq!(app.scene, before);
+        assert!(!app.has_unsaved_work());
+    }
+
+    #[test]
+    fn saved_pending_edit_stays_clean_after_settle_and_retains_undo() {
+        let path = std::env::temp_dir().join(format!("meltcad_save_boundary_guard_{}.meltcad", std::process::id()));
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        app.add_shape(&ctx, Kind::Box);
+        app.path = Some(path.clone());
+        assert!(app.try_save(&ctx, false), "Save may run before the frame settles its edit");
+        finish_file_jobs(&mut app, &ctx);
+        assert!(!app.has_unsaved_work(), "the exact scene on disk is already saved");
+        app.settle(&ctx);
+        assert!(!app.has_unsaved_work(), "settling the already-saved edit must not mark it changed again");
+        assert_eq!(app.undo_depth(), 1, "saving must not discard the pending Undo step");
+        app.undo();
+        assert_eq!(app.scene.shape_count(), 1);
+        assert!(app.has_unsaved_work(), "the following Undo differs from the saved document");
+        let (disk, _) = crate::recovery::read_project(&path).expect("reopen saved document");
+        assert_eq!(disk.shape_count(), 2);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn saving_during_a_drag_keeps_one_undo_and_protects_later_movement() {
+        let path = std::env::temp_dir().join(format!("meltcad_save_drag_guard_{}.meltcad", std::process::id()));
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        let before = app.scene.clone();
+        app.path = Some(path.clone());
+        let pointer = |pressed| egui::Event::PointerButton {
+            pos: egui::pos2(300.0, 200.0),
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let mut down = ctx.run_ui(egui::RawInput { events: vec![pointer(true)], ..Default::default() }, |_ui| {
+            app.scene.shape_mut(0, 0).expect("shape to drag").pos[0] += 8.0;
+            assert!(app.try_save(&ctx, false));
+            finish_file_jobs(&mut app, &ctx);
+            app.settle(&ctx);
+            assert_eq!(app.undo_depth(), 0, "Save must not split a drag into several Undo steps");
+            assert!(!app.has_unsaved_work());
+            app.scene.shape_mut(0, 0).expect("shape to drag").pos[0] += 5.0;
+            assert!(app.has_unsaved_work(), "movement after Save is still unsaved");
+        });
+        down.textures_delta.clear();
+        let mut up = ctx.run_ui(egui::RawInput { events: vec![pointer(false)], ..Default::default() }, |_ui| app.settle(&ctx));
+        up.textures_delta.clear();
+        assert_eq!(app.undo_depth(), 1);
+        assert!(app.has_unsaved_work() && app.dirty);
+        app.undo();
+        assert_eq!(app.scene, before, "one Undo restores the whole drag");
+        let (disk, _) = crate::recovery::read_project(&path).expect("reopen saved document");
+        assert_eq!(disk.shape(0, 0).expect("saved shape").pos[0], before.shape(0, 0).expect("original shape").pos[0] + 8.0);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn saving_mid_drag_then_returning_to_the_start_keeps_work_unsaved() {
+        let path = std::env::temp_dir().join(format!("meltcad_saved_drag_return_{}.meltcad", std::process::id()));
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        let before = app.scene.clone();
+        app.path = Some(path.clone());
+        let pointer = |pressed| egui::Event::PointerButton {
+            pos: egui::pos2(300.0, 200.0),
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let mut down = ctx.run_ui(egui::RawInput { events: vec![pointer(true)], ..Default::default() }, |_ui| {
+            app.scene.shape_mut(0, 0).expect("shape to drag").pos[0] += 8.0;
+            assert!(app.try_save(&ctx, false));
+            finish_file_jobs(&mut app, &ctx);
+            app.scene = before.clone();
+            assert!(app.has_unsaved_work(), "returning to the drag origin differs from the intermediate save");
+        });
+        down.textures_delta.clear();
+        let mut up = ctx.run_ui(egui::RawInput { events: vec![pointer(false)], ..Default::default() }, |_ui| app.settle(&ctx));
+        up.textures_delta.clear();
+        assert_eq!(app.scene, before);
+        assert_eq!(app.undo_depth(), 0, "the gesture still makes no net edit for Undo");
+        assert!(app.dirty, "the title must show that the saved intermediate position differs");
+        app.new_scene(Scene::default());
+        assert!(matches!(app.pending_file_action, Some(PendingFileAction::New(_))), "a new document asks first");
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]
