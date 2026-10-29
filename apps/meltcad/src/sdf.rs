@@ -517,14 +517,15 @@ impl Field {
             let src = *made.entry(rg.src).or_insert_with(|| {
                 let older = old_sources.get(&rg.src).copied();
                 let prior_group = previous.and_then(|(_, old)| old.groups.get(rg.src));
-                let same_melt = previous.is_some_and(|(_, old)| old.melt.mode == scene.melt.mode && old.melt.amount == scene.melt.amount);
+                let same_melt =
+                    previous.is_some_and(|(_, old)| old.melt.mode == scene.melt.mode && old.melt.amount.to_bits() == scene.melt.amount.to_bits());
                 // A shape pattern changes the number of measured shapes for the same shape list:
                 // older per-shape payloads cannot be reused by index any more.
                 let patterned = srcg.shapes.iter().any(|s| s.pattern.is_some());
                 if !patterned
                     && let (Some(old), Some(prior)) = (older, prior_group)
                     && same_melt
-                    && prior.shapes == srcg.shapes
+                    && crate::perf::same_shapes_for_cache(&prior.shapes, &srcg.shapes)
                 {
                     prepared_reused += old.shapes.len();
                     sources.push(Arc::clone(old));
@@ -546,7 +547,9 @@ impl Field {
                         rg.shape_insts.get(si).filter(|v| !v.is_empty()).cloned().unwrap_or_else(|| vec![crate::pattern::Inst::IDENTITY]);
                     for inst in insts {
                         let identity = inst == crate::pattern::Inst::IDENTITY;
-                        let same = !patterned && identity && prior_group.and_then(|old| old.shapes.get(si)).is_some_and(|old| old == s);
+                        let same = !patterned
+                            && identity
+                            && prior_group.and_then(|old| old.shapes.get(si)).is_some_and(|old| crate::perf::same_shape_for_cache(old, s));
                         let prep = if same { old_shapes.get(&si).map(|p| Arc::clone(p)) } else { None };
                         if prep.is_some() {
                             prepared_reused += 1;
@@ -565,7 +568,10 @@ impl Field {
                     }
                 }
                 let members: Vec<&Shape> = members_owned.iter().collect();
-                let info = crate::accel::group_info(&members, &scene.melt);
+                // Measure each member once (a curve's bound resamples its path) and build the
+                // same block and group records from that list.
+                let member_bounds: Vec<crate::accel::Bound> = members.iter().map(|s| crate::accel::shape_bound(s)).collect();
+                let info = crate::accel::group_info_with_bounds(&members, &member_bounds, &scene.melt);
                 sources.push(Arc::new(PreparedGroup { source_group: rg.src, shapes, origin, bounds, info }));
                 sources.len() - 1
             });

@@ -13,6 +13,121 @@ use std::time::Instant;
 use crate::camera::Camera;
 use crate::model::{Scene, Shape};
 
+/// Cache hits preserve float representations too: derived `PartialEq` alone treats -0.0
+/// and +0.0 as equal, but a freshly prepared or packed record can distinguish their bits.
+/// Keep the ordinary comparison first (including metadata and lengths), then check the
+/// geometry and material floats without allocating or inspecting the shared mesh volume.
+/// Nested option structs (ripple, guide plane, vase, pattern) keep their value equality.
+pub(crate) fn same_shape_for_cache(a: &Shape, b: &Shape) -> bool {
+    fn scalars(s: &Shape) -> [u32; 38] {
+        use crate::model::Material;
+        // Exhaustive patterns make an added Shape/Material field require a cache-key review.
+        let Shape {
+            ripple: _,
+            name: _,
+            kind: _,
+            size,
+            round,
+            pos,
+            rot,
+            scale,
+            op: _,
+            blend,
+            material,
+            visible: _,
+            guide: _,
+            guide_plane: _,
+            outline: _,
+            params,
+            path: _,
+            curve_handles: _,
+            outline2: _,
+            shell,
+            corner: _,
+            uid: _,
+            volume: _,
+            source: _,
+            vase: _,
+            mesh_source: _,
+            face_melt,
+            solid: _,
+            pattern: _,
+        } = s;
+        let Material {
+            color,
+            roughness,
+            metallic,
+            glow,
+            glass,
+            iridescence,
+            coat,
+            translucency,
+            color2,
+            gradient,
+            grad_axis: _,
+            grad_flip: _,
+            grad_local: _,
+            grad_soft,
+            grad_from,
+            grad_to,
+        } = material;
+        [
+            size[0],
+            size[1],
+            size[2],
+            *round,
+            pos[0],
+            pos[1],
+            pos[2],
+            rot[0],
+            rot[1],
+            rot[2],
+            scale[0],
+            scale[1],
+            scale[2],
+            *blend,
+            color[0],
+            color[1],
+            color[2],
+            *roughness,
+            *metallic,
+            *glow,
+            *glass,
+            *iridescence,
+            *coat,
+            *translucency,
+            color2[0],
+            color2[1],
+            color2[2],
+            *gradient,
+            *grad_soft,
+            *grad_from,
+            *grad_to,
+            params[0],
+            params[1],
+            params[2],
+            params[3],
+            *shell,
+            face_melt.amount,
+            face_melt.reach,
+        ]
+        .map(f32::to_bits)
+    }
+    fn points<const N: usize>(a: &[[f32; N]], b: &[[f32; N]]) -> bool {
+        a.len() == b.len() && a.iter().zip(b).all(|(a, b)| a.map(f32::to_bits) == b.map(f32::to_bits))
+    }
+    let handles = a.curve_handles.len() == b.curve_handles.len()
+        && a.curve_handles.iter().zip(&b.curve_handles).all(|(x, y)| {
+            x.incoming.map(f32::to_bits) == y.incoming.map(f32::to_bits) && x.outgoing.map(f32::to_bits) == y.outgoing.map(f32::to_bits)
+        });
+    a == b && scalars(a) == scalars(b) && points(&a.outline, &b.outline) && points(&a.path, &b.path) && points(&a.outline2, &b.outline2) && handles
+}
+
+/// `same_shape_for_cache` for whole shape lists (a group's shapes, in order).
+pub(crate) fn same_shapes_for_cache(a: &[Shape], b: &[Shape]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).all(|(a, b)| same_shape_for_cache(a, b))
+}
+
 // ---------------------------------------------------------------------------------------------
 // Start-up timing
 
@@ -190,11 +305,13 @@ pub enum Gate {
 pub struct HoverGate {
     last_pos: Option<[f32; 2]>,
     last_t: f64,
+    /// A changed scene/camera still needs a pick after the throttle delay, even once drawn.
+    pending_dirty: bool,
 }
 
 impl Default for HoverGate {
     fn default() -> Self {
-        HoverGate { last_pos: None, last_t: f64::NEG_INFINITY }
+        HoverGate { last_pos: None, last_t: f64::NEG_INFINITY, pending_dirty: false }
     }
 }
 
@@ -202,8 +319,9 @@ impl HoverGate {
     /// `dirty`: the picture under the mouse may have changed (camera or scene) even though the
     /// mouse has not.
     pub fn check(&mut self, pos: [f32; 2], now: f64, dirty: bool) -> Gate {
+        self.pending_dirty |= dirty;
         let moved = self.last_pos != Some(pos);
-        if !moved && !dirty {
+        if !moved && !self.pending_dirty {
             return Gate::Same;
         }
         let wait = self.last_t + HOVER_GAP - now;
@@ -212,13 +330,21 @@ impl HoverGate {
         }
         self.last_pos = Some(pos);
         self.last_t = now;
+        self.pending_dirty = false;
         Gate::Pick
+    }
+
+    /// Input after the hover check changed the picture. Keep the next pick pending while
+    /// preserving the same 30 Hz budget (unlike resetting the gate).
+    pub fn invalidate(&mut self) {
+        self.pending_dirty = true;
     }
 
     /// The mouse left or a button went down: pick at once next time.
     pub fn reset(&mut self) {
         self.last_pos = None;
         self.last_t = f64::NEG_INFINITY;
+        self.pending_dirty = false;
     }
 }
 
@@ -566,6 +692,77 @@ mod tests {
         assert_eq!(g.check([7.0, 5.0], 3.0, true), Gate::Pick, "camera moved under a still mouse");
         g.reset();
         assert_eq!(g.check([7.0, 5.0], 3.001, false), Gate::Pick, "after a reset the next look is at once");
+    }
+
+    #[test]
+    fn a_throttled_scene_change_is_picked_after_the_delay_without_mouse_motion() {
+        let mut gate = HoverGate::default();
+        let pos = [7.0, 5.0];
+        assert_eq!(gate.check(pos, 1.0, false), Gate::Pick);
+        assert!(matches!(gate.check(pos, 1.0 + HOVER_GAP * 0.5, true), Gate::Wait(_)));
+        // The viewport has drawn the new revision by the scheduled repaint, so `dirty`
+        // is false now. The waiting pick must still happen at the unchanged position.
+        assert_eq!(gate.check(pos, 1.0 + HOVER_GAP + 0.001, false), Gate::Pick);
+        assert_eq!(gate.check(pos, 1.0 + HOVER_GAP + 0.002, false), Gate::Same);
+        assert!(matches!(gate.check(pos, 1.0 + HOVER_GAP + 0.003, true), Gate::Wait(_)));
+        gate.reset();
+        assert_eq!(gate.check(pos, 1.0 + HOVER_GAP + 0.004, false), Gate::Pick);
+    }
+
+    #[test]
+    fn late_camera_or_scene_invalidation_preserves_the_hover_throttle() {
+        let mut gate = HoverGate::default();
+        let pos = [7.0, 5.0];
+        assert_eq!(gate.check(pos, 1.0, false), Gate::Pick);
+        gate.invalidate();
+        assert!(matches!(gate.check(pos, 1.001, false), Gate::Wait(_)));
+        assert_eq!(gate.check(pos, 1.0 + HOVER_GAP + 0.001, false), Gate::Pick);
+        assert_eq!(gate.check(pos, 1.0 + HOVER_GAP + 0.002, false), Gate::Same);
+    }
+
+    #[test]
+    fn clearing_the_pack_releases_it_and_allows_the_same_revision_again() {
+        let scene = Scene::default();
+        let mut cache = PackCache::default();
+        let weak = {
+            let packed = cache.get(&scene, 1);
+            for _ in 0..10 {
+                assert!(std::sync::Arc::ptr_eq(&packed, &cache.get(&scene, 1)));
+            }
+            std::sync::Arc::downgrade(&packed)
+        };
+        assert_eq!(cache.packs, 1);
+        cache.clear();
+        assert!(weak.upgrade().is_none(), "the cache must release the old document");
+        assert!(cache.snapshot.is_none(), "and its retained scene snapshot");
+        let _fresh = cache.get(&scene, 1);
+        assert_eq!(cache.packs, 2);
+    }
+
+    #[test]
+    fn cache_shape_keys_distinguish_signed_zero_in_scalar_and_variable_inputs() {
+        let mut original = Shape::new(Kind::Loft, [0.0; 3], Material::default());
+        original.outline = vec![[0.0; 2]];
+        original.outline2 = vec![[0.0; 2]];
+        original.path = vec![[0.0; 4]];
+        let edits: [fn(&mut Shape); 7] = [
+            |s| s.pos[0] = -0.0,
+            |s| s.rot[0] = -0.0,
+            |s| s.material.glow = -0.0,
+            |s| s.params[0] = -0.0,
+            |s| s.outline[0][0] = -0.0,
+            |s| s.outline2[0][0] = -0.0,
+            |s| s.path[0][0] = -0.0,
+        ];
+        assert!(same_shape_for_cache(&original, &original.clone()));
+        assert!(same_shapes_for_cache(std::slice::from_ref(&original), &[original.clone()]));
+        for edit in edits {
+            let mut changed = original.clone();
+            edit(&mut changed);
+            assert_eq!(original, changed, "ordinary equality intentionally keeps its old behaviour");
+            assert!(!same_shape_for_cache(&original, &changed));
+            assert!(!same_shapes_for_cache(std::slice::from_ref(&original), &[changed]));
+        }
     }
 
     #[test]

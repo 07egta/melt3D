@@ -231,7 +231,7 @@ impl ScenePack {
                     let reused = !patterned
                         && identity
                         && previous.is_some_and(|(old_scene, old_pack)| {
-                            old_scene.shape(gi, si).is_some_and(|old| old == s)
+                            old_scene.shape(gi, si).is_some_and(|old| crate::perf::same_shape_for_cache(old, s))
                                 && old_slots
                                     .get(&(gi, si))
                                     .is_some_and(|&slot| reuse_shape_pack(s, old_pack, slot, &vols, &mut shapes, &mut poly, &mut path))
@@ -270,14 +270,18 @@ impl ScenePack {
                     let same_admission =
                         old_pack.ranges.iter().any(|&(old_gi, old_first, old_count)| old_gi == gi && old_first == first && old_count == count);
                     (!patterned
-                        && old_group.shapes == g.shapes
+                        && crate::perf::same_shapes_for_cache(&old_group.shapes, &g.shapes)
                         && old_scene.melt.mode == scene.melt.mode
-                        && old_scene.melt.amount == scene.melt.amount
+                        && old_scene.melt.amount.to_bits() == scene.melt.amount.to_bits()
                         && same_admission)
                         .then(|| old_pack.source_infos.get(&gi).cloned())
                         .flatten()
                 })
-                .unwrap_or_else(|| Arc::new(crate::accel::group_info(&members.iter().collect::<Vec<_>>(), &scene.melt)));
+                .unwrap_or_else(|| {
+                    let refs: Vec<&crate::model::Shape> = members.iter().collect();
+                    let bounds: Vec<crate::accel::Bound> = refs.iter().map(|s| crate::accel::shape_bound(s)).collect();
+                    Arc::new(crate::accel::group_info_with_bounds(&refs, &bounds, &scene.melt))
+                });
             source_infos.insert(gi, Arc::clone(&info));
             for b in &info.blocks {
                 push(&mut blocks, [b.bound.c[0], b.bound.c[1], b.bound.c[2], b.bound.r]);
@@ -567,7 +571,7 @@ fn pack_shape(
     let (start, count) = if s.kind.uses_outline() { pack_outline(&p.outline, poly) } else { (0, 0) };
     let (start2, count2) = if s.kind.uses_outline2() { pack_outline(&p.outline2, poly) } else { (0, 0) };
     let (pstart, pcount) = if s.kind == crate::model::Kind::Curve {
-        pack_curve(s, path)
+        pack_curve(s, &p.path, path)
     } else if s.kind.uses_path() && path.len() / 4 + s.path.len() <= PATH_V4 {
         let st = path.len() / 4;
         for pt in &s.path {
@@ -638,24 +642,26 @@ fn pack_shape(
 /// points always fit: the GPU and the CPU SDF measure exactly the same curve (#201). The old code
 /// thinned the points (or dropped the curve) when the pool was full, which made the viewport and
 /// the exports show different shapes.
-fn pack_curve(s: &crate::model::Shape, path: &mut Vec<f32>) -> (usize, usize) {
+///
+/// `pts` are the shape's prepared curve points (`Prepared::path`, which is exactly
+/// `curve::build_shape(s)`): borrowing them avoids sampling the same curve twice per pack.
+fn pack_curve(s: &crate::model::Shape, pts: &[[f32; 4]], path: &mut Vec<f32>) -> (usize, usize) {
     let used = path.len() / 4;
     let room = PATH_V4.saturating_sub(used + 2);
     let need = |n: usize| n + n.saturating_sub(1).div_ceil(crate::curve::GROUP_SEGMENTS);
-    let pts = crate::curve::build_shape(s);
     if pts.len() < 2 || need(pts.len()) > room {
         return (0, 0);
     }
     let squircle = s.size[2] >= 1.5;
-    let (lo, hi) = crate::curve::bounds_profile(&pts, squircle);
+    let (lo, hi) = crate::curve::bounds_profile(pts, squircle);
     let closed = s.params[0] > 0.5;
-    push(path, [lo[0], lo[1], lo[2], crate::curve::max_joint_blend(&pts, closed)]);
-    push(path, [hi[0], hi[1], hi[2], crate::curve::closed_joint_blend(&pts, closed)]);
+    push(path, [lo[0], lo[1], lo[2], crate::curve::max_joint_blend(pts, closed)]);
+    push(path, [hi[0], hi[1], hi[2], crate::curve::closed_joint_blend(pts, closed)]);
     let st = used + 2;
-    for pt in &pts {
+    for pt in pts {
         push(path, *pt);
     }
-    for g in crate::curve::group_spheres_profile(&pts, squircle) {
+    for g in crate::curve::group_spheres_profile(pts, squircle) {
         push(path, g);
     }
     (st, pts.len())
@@ -1251,7 +1257,7 @@ fn ensure_volumes(res: &mut Resources, device: &wgpu::Device, queue: &wgpu::Queu
         if there {
             continue;
         }
-        for_each_volume_upload_chunk(&v.data, |node_offset, bytes| {
+        for_each_volume_upload_chunk(&v.arc().data, |node_offset, bytes| {
             res.vol.write_texels(queue, base / 4 + node_offset / 4, bytes);
         });
     }
@@ -1351,21 +1357,21 @@ fn globals_key(globals: &[f32]) -> u64 {
     h
 }
 
-/// Return whether a scene list needs a larger pool, or a much smaller one after
-/// a large document was closed. Hysteresis avoids thrashing during normal edits.
+/// Make the scene-list texture tall enough for `list` (a scene list from `ScenePack`).
+/// A large document must not keep a much larger texture and CPU mirror after it is closed.
+/// The fourfold threshold avoids repeated resizing around ordinary edit boundaries.
 fn pool_needs_resize(current_rows: Option<u32>, wanted_rows: u32) -> bool {
     current_rows.is_none_or(|old| old < wanted_rows || old >= wanted_rows.saturating_mul(4))
 }
 
-/// Make the scene-list texture large enough for `list`, but release oversized
-/// GPU textures *and* the CPU mirror after a large-to-small scene transition.
+/// Keep the scene-list texture capacity and its CPU mirror proportional to the live scene.
 fn ensure_pool(res: &mut Resources, device: &wgpu::Device, list_len: usize) {
     let used_rows = (list_len / 4).div_ceil(ROW).max(1) as u32;
+    // The rows `Pool::new` would allocate for this list.
     let wanted = used_rows.max(16).next_power_of_two().min(device.limits().max_texture_dimension_2d.max(16));
     if pool_needs_resize(res.pool.as_ref().map(|p| p.rows), wanted) {
         res.pool = Some(Pool::new(device, &res.buffer, &res.scene_layout, &res.vol.view, used_rows));
         res.pool_id = 0;
-        // Vec::clear would retain the old large allocation.
         res.pool_copy = Vec::new();
         invalidate_pics(res);
     }
@@ -1900,37 +1906,74 @@ mod tests {
     use crate::model::{Material, Shape};
 
     #[test]
-    fn volume_upload_chunks_match_the_original_bytes_exactly() {
-        let mut data = vec![0.0f32; VOLUME_UPLOAD_CHUNK_NODES + 7];
-        for (i, v) in data.iter_mut().enumerate() {
-            *v = (i as f32 * 0.00037).sin() * 100.0;
+    fn streamed_volume_bytes_match_whole_upload_at_texel_and_chunk_boundaries() {
+        for len in [
+            0,
+            1,
+            3,
+            4,
+            5,
+            VOL_W * 4 - 1,
+            VOL_W * 4 + 3,
+            VOLUME_UPLOAD_CHUNK_NODES - 1,
+            VOLUME_UPLOAD_CHUNK_NODES,
+            VOLUME_UPLOAD_CHUNK_NODES + 1,
+            VOLUME_UPLOAD_CHUNK_NODES + 7,
+        ] {
+            let data: Vec<f32> = (0..len)
+                .map(|i| match i % 13 {
+                    0 => f32::NAN,
+                    1 => f32::INFINITY,
+                    2 => f32::NEG_INFINITY,
+                    3 => -0.0,
+                    _ => (i as f32 * 0.0037).sin() * 100.0,
+                })
+                .collect();
+            let mut uploaded = Vec::new();
+            let mut visits = 0;
+            for_each_volume_upload_chunk(&data, |offset, bytes| {
+                assert_eq!(offset, uploaded.len() / 2, "chunks start at the next node");
+                assert_eq!(offset % 4, 0);
+                assert_eq!(bytes.len() % 8, 0);
+                assert!(bytes.len() <= data.len().min(VOLUME_UPLOAD_CHUNK_NODES).next_multiple_of(4) * 2);
+                uploaded.extend_from_slice(bytes);
+                visits += 1;
+            });
+            let volume = crate::sdf_volume::Volume { dims: [len as u32, 1, 1], origin: [0.0; 3], cell: 1.0, data };
+            let mut original: Vec<u8> = volume.to_f16_bits().iter().flat_map(|v| v.to_le_bytes()).collect();
+            original.resize(len.next_multiple_of(4) * 2, 0);
+            assert_eq!(uploaded, original, "binary16 values and texel padding at {len} nodes");
+            assert_eq!(visits, len.div_ceil(VOLUME_UPLOAD_CHUNK_NODES));
         }
-        data[0] = f32::NAN;
-        data[1] = f32::INFINITY;
-        data[2] = -0.0;
-        data[3] = f32::NEG_INFINITY;
+    }
 
-        let mut uploaded = Vec::new();
-        let mut next = 0;
-        let mut visits = 0;
-        for_each_volume_upload_chunk(&data, |offset, bytes| {
-            assert_eq!(offset, next, "chunks must be contiguous, not overlapping");
-            assert!(bytes.len() <= VOLUME_UPLOAD_CHUNK_NODES * 2);
-            assert_eq!(bytes.len() % 8, 0, "four half-floats per texel");
-            uploaded.extend_from_slice(bytes);
-            next += bytes.len() / 2;
-            visits += 1;
-        });
-        assert_eq!(visits, 2, "large volumes should stream in bounded chunks");
-        let mut expected = Vec::new();
-        for v in &data {
-            expected.extend_from_slice(&crate::sdf_volume::f32_to_f16_bits(*v).to_le_bytes());
+    #[test]
+    fn packing_a_curve_from_its_prepared_points_is_byte_identical() {
+        let mut shape = Shape::new(crate::model::Kind::Curve, [0.0; 3], Material::default());
+        let paths = [
+            Vec::new(),
+            vec![[0.0, 0.0, 0.0, 2.0]],
+            vec![[0.0, 0.0, 0.0, 2.0], [0.1, 15.0, 0.0, 3.0], [20.0, 16.0, 8.0, 1.0], [21.0, -8.0, 2.0, 4.0], [-3.0, -0.0, 7.0, 2.0]],
+        ];
+        for nodes in paths {
+            shape.path = nodes;
+            for params in [[0.0, 0.0, 0.0, 1.0], [0.0, 0.8, 0.0, 1.75], [1.0, 1.0, 0.0, 0.7]] {
+                shape.params = params;
+                for squircle in [0.0, 2.0] {
+                    shape.size[2] = squircle;
+                    let prepared = crate::sdf::Prepared::new(&shape);
+                    let fresh = crate::curve::build_shape(&shape);
+                    for used in [0, 3, PATH_V4 - 48, PATH_V4 - 1, PATH_V4] {
+                        let mut expected = vec![-0.0; used * 4];
+                        let mut actual = expected.clone();
+                        let old_slots = pack_curve(&shape, &fresh, &mut expected);
+                        let new_slots = pack_curve(&shape, &prepared.path, &mut actual);
+                        assert_eq!(new_slots, old_slots, "same admission at {used} with {params:?}");
+                        assert_eq!(actual.iter().map(|v| v.to_bits()).collect::<Vec<_>>(), expected.iter().map(|v| v.to_bits()).collect::<Vec<_>>());
+                    }
+                }
+            }
         }
-        expected.resize(data.len().next_multiple_of(4) * 2, 0);
-        assert_eq!(uploaded, expected, "streaming must not change mesh SDF precision");
-        let mut calls = 0;
-        for_each_volume_upload_chunk(&[], |_, _| calls += 1);
-        assert_eq!(calls, 0, "empty volumes issue no writes");
     }
 
     #[test]
@@ -1942,10 +1985,12 @@ mod tests {
     }
 
     #[test]
-    fn scene_pool_shrinks_only_when_the_old_allocation_is_wasteful() {
+    fn scene_pool_shrinks_with_hysteresis() {
         assert!(pool_needs_resize(None, 16));
         assert!(!pool_needs_resize(Some(16), 16));
         assert!(!pool_needs_resize(Some(32), 16));
+        assert!(!pool_needs_resize(Some(63), 16));
+        assert!(pool_needs_resize(Some(64), 16));
         assert!(pool_needs_resize(Some(128), 16));
         assert!(!pool_needs_resize(Some(32), 24));
         assert!(pool_needs_resize(Some(16), 32));
