@@ -628,6 +628,11 @@ impl App {
         }
         self.clear_document_gestures();
         self.document_generation = self.document_generation.wrapping_add(1);
+        // A document can hold large prepared SDF data, packed GPU records and a
+        // software-render worker snapshot. Release them *before* replacing it.
+        self.field_cache.get_mut().take();
+        self.perf.pack.clear();
+        self.gpu.easy_view.invalidate();
         self.scene = scene.clone();
         self.committed = scene;
         self.undo.clear();
@@ -2573,6 +2578,13 @@ impl App {
             }
             self.lib_open = false;
         }
+        // Memory QA: close the currently loaded model without terminating the
+        // process, so the same PID can be measured before and after release.
+        if dir.join("reset_scene").exists() && std::fs::remove_file(dir.join("reset_scene")).is_ok() {
+            self.new_scene(Scene::default());
+            let _ = std::fs::write(dir.join("reset_scene.done"), format!("{}\n", self.scene.shape_count()));
+            ctx.request_repaint();
+        }
         if dir.join("quit").exists() {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
@@ -3190,6 +3202,30 @@ mod tests {
 
         assert_eq!(app.scene.shape_count(), before, "Delete without a chosen outline point must not remove the solid");
         assert_eq!(app.sel, Some(Pick::Shape(g, s)));
+    }
+
+    #[test]
+    fn switching_documents_drops_old_scene_specific_memory_immediately() {
+        let mut app = App::new(true, None);
+        let rev = app.track_scene();
+        let field = app.field();
+        let old_field = std::rc::Rc::downgrade(&field);
+        drop(field);
+        let pack = app.perf.pack.get(&app.scene, rev);
+        let old_pack = std::sync::Arc::downgrade(&pack);
+        drop(pack);
+        assert!(old_field.upgrade().is_some());
+        assert!(old_pack.upgrade().is_some());
+
+        app.apply_file_action(PendingFileAction::New(Scene::default()));
+        assert!(old_field.upgrade().is_none(), "old picking SDF should not pin deleted meshes");
+        assert!(old_pack.upgrade().is_none(), "old shader pack should not pin deleted meshes");
+
+        let field = app.field();
+        assert_eq!(field.groups.len(), 1, "the new document is still pickable");
+        let rev = app.track_scene();
+        let pack = app.perf.pack.get(&app.scene, rev);
+        assert!(!pack.list.is_empty(), "the new document can still be rendered");
     }
 
     #[test]

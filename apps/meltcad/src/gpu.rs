@@ -1193,6 +1193,30 @@ impl VolTex {
     }
 }
 
+/// At most 1 MiB of temporary upload bytes, independent of the volume's resolution.
+/// Each chunk starts at a complete RGBA16F texel (four half-float values).
+const VOLUME_UPLOAD_CHUNK_NODES: usize = VOL_W * 4 * 64;
+
+/// Visit the exact little-endian half-float bytes the old whole-volume upload produced.
+/// The final chunk is padded to a whole texel, never changing any actual node.
+fn for_each_volume_upload_chunk(data: &[f32], mut upload: impl FnMut(usize, &[u8])) {
+    // Reserve only what this volume can use. Small imported meshes are common; allocating
+    // the 1 MiB ceiling for a 32³ node volume needlessly multiplies its upload scratch by 16.
+    let mut bytes = Vec::with_capacity(volume_upload_capacity(data.len()));
+    for (part, nodes) in data.chunks(VOLUME_UPLOAD_CHUNK_NODES).enumerate() {
+        bytes.clear();
+        for &node in nodes {
+            bytes.extend_from_slice(&crate::sdf_volume::f32_to_f16_bits(node).to_le_bytes());
+        }
+        bytes.resize(nodes.len().next_multiple_of(4) * 2, 0);
+        upload(part * VOLUME_UPLOAD_CHUNK_NODES, &bytes);
+    }
+}
+
+fn volume_upload_capacity(nodes: usize) -> usize {
+    nodes.min(VOLUME_UPLOAD_CHUNK_NODES).next_multiple_of(4) * 2
+}
+
 /// Make the volume texture hold exactly `set`: only volumes that are new or moved are uploaded
 /// (a frame that only moves a mesh uploads nothing). The picture must be drawn again afterwards.
 fn ensure_volumes(res: &mut Resources, device: &wgpu::Device, queue: &wgpu::Queue, set: &VolumeSet) -> bool {
@@ -1212,12 +1236,9 @@ fn ensure_volumes(res: &mut Resources, device: &wgpu::Device, queue: &wgpu::Queu
         if there {
             continue;
         }
-        let mut bytes: Vec<u8> = Vec::with_capacity(v.nodes().next_multiple_of(4) * 2);
-        for h in v.to_f16_bits() {
-            bytes.extend_from_slice(&h.to_le_bytes());
-        }
-        bytes.resize(v.nodes().next_multiple_of(4) * 2, 0);
-        res.vol.write_texels(queue, base / 4, &bytes);
+        for_each_volume_upload_chunk(&v.data, |node_offset, bytes| {
+            res.vol.write_texels(queue, base / 4 + node_offset / 4, bytes);
+        });
     }
     res.vol.resident = set.clone();
     res.vol_gen += 1;
@@ -1315,13 +1336,22 @@ fn globals_key(globals: &[f32]) -> u64 {
     h
 }
 
-/// Make the scene-list texture tall enough for `list` (a scene list from `ScenePack`).
+/// Return whether a scene list needs a larger pool, or a much smaller one after
+/// a large document was closed. Hysteresis avoids thrashing during normal edits.
+fn pool_needs_resize(current_rows: Option<u32>, wanted_rows: u32) -> bool {
+    current_rows.is_none_or(|old| old < wanted_rows || old >= wanted_rows.saturating_mul(4))
+}
+
+/// Make the scene-list texture large enough for `list`, but release oversized
+/// GPU textures *and* the CPU mirror after a large-to-small scene transition.
 fn ensure_pool(res: &mut Resources, device: &wgpu::Device, list_len: usize) {
     let used_rows = (list_len / 4).div_ceil(ROW).max(1) as u32;
-    if res.pool.as_ref().is_none_or(|p| p.rows < used_rows) {
+    let wanted = used_rows.max(16).next_power_of_two().min(device.limits().max_texture_dimension_2d.max(16));
+    if pool_needs_resize(res.pool.as_ref().map(|p| p.rows), wanted) {
         res.pool = Some(Pool::new(device, &res.buffer, &res.scene_layout, &res.vol.view, used_rows));
         res.pool_id = 0;
-        res.pool_copy.clear();
+        // Vec::clear would retain the old large allocation.
+        res.pool_copy = Vec::new();
         invalidate_pics(res);
     }
 }
@@ -1853,6 +1883,58 @@ pub(crate) mod offscreen {
 mod tests {
     use super::*;
     use crate::model::{Material, Shape};
+
+    #[test]
+    fn volume_upload_chunks_match_the_original_bytes_exactly() {
+        let mut data = vec![0.0f32; VOLUME_UPLOAD_CHUNK_NODES + 7];
+        for (i, v) in data.iter_mut().enumerate() {
+            *v = (i as f32 * 0.00037).sin() * 100.0;
+        }
+        data[0] = f32::NAN;
+        data[1] = f32::INFINITY;
+        data[2] = -0.0;
+        data[3] = f32::NEG_INFINITY;
+
+        let mut uploaded = Vec::new();
+        let mut next = 0;
+        let mut visits = 0;
+        for_each_volume_upload_chunk(&data, |offset, bytes| {
+            assert_eq!(offset, next, "chunks must be contiguous, not overlapping");
+            assert!(bytes.len() <= VOLUME_UPLOAD_CHUNK_NODES * 2);
+            assert_eq!(bytes.len() % 8, 0, "four half-floats per texel");
+            uploaded.extend_from_slice(bytes);
+            next += bytes.len() / 2;
+            visits += 1;
+        });
+        assert_eq!(visits, 2, "large volumes should stream in bounded chunks");
+        let mut expected = Vec::new();
+        for v in &data {
+            expected.extend_from_slice(&crate::sdf_volume::f32_to_f16_bits(*v).to_le_bytes());
+        }
+        expected.resize(data.len().next_multiple_of(4) * 2, 0);
+        assert_eq!(uploaded, expected, "streaming must not change mesh SDF precision");
+        let mut calls = 0;
+        for_each_volume_upload_chunk(&[], |_, _| calls += 1);
+        assert_eq!(calls, 0, "empty volumes issue no writes");
+    }
+
+    #[test]
+    fn small_volume_upload_buffer_scales_with_the_volume() {
+        assert_eq!(volume_upload_capacity(32 * 32 * 32), 32 * 32 * 32 * 2);
+        assert_eq!(volume_upload_capacity(VOLUME_UPLOAD_CHUNK_NODES), VOLUME_UPLOAD_CHUNK_NODES * 2);
+        assert_eq!(volume_upload_capacity(VOLUME_UPLOAD_CHUNK_NODES + 1), VOLUME_UPLOAD_CHUNK_NODES * 2);
+        assert_eq!(volume_upload_capacity(0), 0);
+    }
+
+    #[test]
+    fn scene_pool_shrinks_only_when_the_old_allocation_is_wasteful() {
+        assert!(pool_needs_resize(None, 16));
+        assert!(!pool_needs_resize(Some(16), 16));
+        assert!(!pool_needs_resize(Some(32), 16));
+        assert!(pool_needs_resize(Some(128), 16));
+        assert!(!pool_needs_resize(Some(32), 24));
+        assert!(pool_needs_resize(Some(16), 32));
+    }
 
     /// A reader for a packed frame: where each list starts.
     pub(super) struct Frame<'a> {
