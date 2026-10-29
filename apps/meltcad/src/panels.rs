@@ -118,6 +118,58 @@ const BACKDROPS: [[f32; 3]; 10] = [
     [0.18, 0.30, 0.50],
 ];
 
+/// One nesting level in the scene list. The chevron starts at `TREE_X0`, and each deeper level
+/// moves one full step right so a child cannot be mistaken for a sibling.
+const TREE_X0: f32 = 18.0;
+const TREE_STEP: f32 = 20.0;
+
+/// Where a row for `level` starts (the chevron or the icon).
+pub(crate) fn tree_indent(level: u8) -> f32 {
+    TREE_X0 + f32::from(level) * TREE_STEP
+}
+
+/// The vertical guide that joins a group at `level` to the rows inside it: under the chevron.
+pub(crate) fn tree_guide_x(level: u8) -> f32 {
+    tree_indent(level) + 9.0
+}
+
+/// Guides stay readable at every depth: a deep chain keeps a high enough alpha, and only loses
+/// a little strength so many parallel lines do not look like a solid block.
+pub(crate) fn tree_guide_color(level: u8) -> Color32 {
+    let alpha = 128u16.saturating_sub(u16::from(level.min(3)) * 8).max(96) as u8;
+    Color32::from_rgba_unmultiplied(176, 176, 182, alpha)
+}
+
+/// The names of the groups above `g`, from the outermost to the immediate parent.
+pub(crate) fn parent_trail(scene: &Scene, g: usize) -> Option<String> {
+    let mut names: Vec<String> = Vec::new();
+    let mut at = scene.parent_of(g);
+    // A malformed outline must not loop; the model caps nesting at MAX_DEPTH anyway.
+    for _ in 0..16 {
+        let Some(p) = at else { break };
+        let Some(parent) = scene.groups.get(p) else { break };
+        names.push(parent.name.clone());
+        at = scene.parent_of(p);
+    }
+    names.reverse();
+    (!names.is_empty()).then(|| names.join(" › "))
+}
+
+/// What a row's hover text says: the group chain it sits in. Equal sibling names stay
+/// distinguishable because the chain ends with the immediate parent's name.
+pub(crate) fn row_parent_tip(scene: &Scene, pick: Pick) -> Option<String> {
+    match pick {
+        Pick::Group(g) => parent_trail(scene, g).map(|path| format!("in {path}")),
+        Pick::Shape(g, _) => {
+            let name = &scene.groups.get(g)?.name;
+            match parent_trail(scene, g) {
+                Some(path) => Some(format!("in {path} › {name}")),
+                None => Some(format!("in {name}")),
+            }
+        }
+    }
+}
+
 impl App {
     pub fn side(&mut self, ui: &mut Ui) {
         // drag its left edge to make it wider or narrower
@@ -166,9 +218,15 @@ impl App {
         self.row_rects.clear();
         ui.spacing_mut().item_spacing.y = 2.0;
         let ngroups = self.scene.groups.len();
-        // "x12" after a patterned group, "link" after a linked copy (looked up once for the whole list)
+        // "x12" after a patterned group or shape, "link" after a linked copy (looked up once for the whole list)
         let fused = self.scene.groups.iter().any(|g| g.fusion.is_some());
-        let badges: Vec<String> = if fused || self.scene.groups.iter().any(|g| g.pattern.is_some() || g.is_linked() || g.piece.is_some()) {
+        let badges: Vec<String> = if fused
+            || self
+                .scene
+                .groups
+                .iter()
+                .any(|g| g.pattern.is_some() || g.is_linked() || g.piece.is_some() || g.shapes.iter().any(|s| s.pattern.is_some()))
+        {
             let resolved = crate::pattern::resolve(&self.scene);
             (0..ngroups)
                 .map(|gi| {
@@ -199,19 +257,19 @@ impl App {
                 }
                 hidden_below = None;
             }
-            let indent_px = f32::from(depth) * 14.0;
             let folded = self.folded.contains(&gi);
             if folded {
                 hidden_below = Some(depth);
             }
-            let sel = self.picks().contains(&Pick::Group(gi));
+            let sel = self.is_pick_selected(Pick::Group(gi));
             let (name, op, visible, nshapes) = {
                 let g = &self.scene.groups[gi];
                 (g.name.clone(), g.op, g.visible, g.shapes.len())
             };
+            let tip = row_parent_tip(&self.scene, Pick::Group(gi));
             let id = ui.id().with(("g", gi));
             let badge = badges.get(gi).cloned().unwrap_or_default();
-            let row = self.row(ui, id, sel, indent_px, name, Pick::Group(gi), op, visible, glyphs::group, !folded, true, &badge);
+            let row = self.row(ui, id, sel, depth, name, Pick::Group(gi), op, visible, glyphs::group, !folded, true, &badge, tip);
             if row.chevron {
                 if folded {
                     self.folded.remove(&gi);
@@ -242,15 +300,24 @@ impl App {
                 for si in 0..nshapes {
                     let Some(s) = self.scene.shape(gi, si) else { continue };
                     let (name, op, visible, material) = (s.name.clone(), s.op, s.visible, s.material);
-                    // a solid from SolidCraft says so (double click opens it there)
-                    let badge = if s.solid.is_some() { style::SOLID_BADGE } else { "" };
-                    let sel = self.picks().contains(&Pick::Shape(gi, si));
+                    // a solid from SolidCraft says so (double click opens it there); a patterned
+                    // shape shows how many copies it makes
+                    let badge: String = if s.solid.is_some() {
+                        style::SOLID_BADGE.to_string()
+                    } else if s.pattern.is_some() {
+                        format!("×{}", crate::pattern::describe_shape(&self.scene, gi, si).0)
+                    } else {
+                        String::new()
+                    };
+                    let sel = self.is_pick_selected(Pick::Shape(gi, si));
                     let id = ui.id().with(("s", gi, si));
+                    let level = depth.saturating_add(1);
+                    let tip = row_parent_tip(&self.scene, Pick::Shape(gi, si));
                     let row = self.row(
                         ui,
                         id,
                         sel,
-                        18.0 + indent_px,
+                        level,
                         name,
                         Pick::Shape(gi, si),
                         op,
@@ -258,7 +325,8 @@ impl App {
                         move |p, r, _| materials::swatch(p, r.center(), 8.5, &material),
                         false,
                         false,
-                        badge,
+                        &badge,
+                        tip,
                     );
                     if row.select {
                         let (shift, ctrl) = ui.input(|i| (i.modifiers.shift, i.modifiers.command || i.modifiers.ctrl));
@@ -290,10 +358,11 @@ impl App {
                             s.op = op.next();
                         }
                     }
-                    self.curve_ball_rows(ui, gi, si, 36.0 + indent_px);
+                    self.curve_ball_rows(ui, gi, si, level);
                 }
             }
         }
+        self.tree_guides(ui);
         if let Some(to) = range_to {
             let order: Vec<Pick> = self.row_rects.iter().map(|(k, _)| *k).collect();
             let from = self.sel.filter(|s| order.contains(s)).unwrap_or(to);
@@ -311,9 +380,36 @@ impl App {
         self.layer_drop(ui);
     }
 
+    /// Draw one vertical line per group, from its row down through every visible row in its
+    /// subtree. The per-row branches in [`Self::row`] meet these lines, so a child always points
+    /// at the group that owns it even when two groups have the same name.
+    fn tree_guides(&self, ui: &Ui) {
+        for (i, (pick, rect)) in self.row_rects.iter().enumerate() {
+            let Pick::Group(gi) = *pick else { continue };
+            let Some(group) = self.scene.groups.get(gi) else { continue };
+            let end = self.scene.subtree_end(gi);
+            let mut last = None;
+            for (next, r) in &self.row_rects[i + 1..] {
+                let g = match *next {
+                    Pick::Group(g) | Pick::Shape(g, _) => g,
+                };
+                if g >= end {
+                    break;
+                }
+                last = Some(*r);
+            }
+            let Some(last) = last else { continue };
+            let x = rect.left() + tree_guide_x(group.depth);
+            let (y0, y1) = (rect.center().y, last.center().y);
+            if y1 > y0 {
+                ui.painter().line_segment([egui::pos2(x, y0), egui::pos2(x, y1)], Stroke::new(1.5, tree_guide_color(group.depth)));
+            }
+        }
+    }
+
     /// A selected solid curve is a group of balls: one small row per ball, to pick it from the list.
     /// Saved sketches use Edit Sketch and do not expose their display stroke as radius-bearing balls.
-    fn curve_ball_rows(&mut self, ui: &mut Ui, gi: usize, si: usize, indent: f32) {
+    fn curve_ball_rows(&mut self, ui: &mut Ui, gi: usize, si: usize, level: u8) {
         if self.sel != Some(Pick::Shape(gi, si)) {
             return;
         }
@@ -323,10 +419,26 @@ impl App {
         }
         let radii: Vec<f32> = sh.path.iter().take(256).map(|p| p[3]).collect();
         let chosen = self.chosen_node(gi, si);
+        let indent = tree_indent(level);
         for (i, r) in radii.iter().enumerate() {
             let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 24.0), Sense::click());
             let on = chosen == Some(i);
             style::row_bg(ui, &resp, rect, on);
+            // scrolled out of the list: nothing of it would be drawn (see `row`)
+            if !ui.is_rect_visible(rect) {
+                if resp.clicked() {
+                    self.ct.node = Some((gi, si, i));
+                }
+                continue;
+            }
+            if level > 0 {
+                // The balls are still inside the shape's group: carry the tree line down.
+                let x = rect.left() + tree_guide_x(level - 1);
+                ui.painter().line_segment(
+                    [egui::pos2(x, rect.top() - 1.0), egui::pos2(x, rect.bottom() + 1.0)],
+                    Stroke::new(1.5, tree_guide_color(level - 1)),
+                );
+            }
             let c = egui::pos2(rect.left() + indent + 8.0, rect.center().y);
             let col = if on { style::ACCENT } else { style::DIM };
             ui.painter().circle_stroke(c, 5.0, Stroke::new(1.5, col));
@@ -369,7 +481,7 @@ impl App {
                     } else if p.y < rect.top() + q && g > 0 && !dragged.contains(&Pick::Group(g - 1)) {
                         // the line above a group row is the end of the group above: a shape lands in it,
                         // a group does when the pointer sits right of this row's own indent
-                        let own_indent = rect.left() + 18.0 + f32::from(self.scene.groups.get(g).map_or(0, |x| x.depth)) * 14.0 + 28.0;
+                        let own_indent = rect.left() + tree_indent(self.scene.groups.get(g).map_or(0, |x| x.depth)) + 28.0;
                         let shapes_only = dragged.iter().all(|d| matches!(d, Pick::Shape(..)));
                         (shapes_only || p.x > own_indent).then_some(g - 1)
                     } else {
@@ -421,7 +533,7 @@ impl App {
         ui: &mut Ui,
         id: egui::Id,
         selected: bool,
-        indent: f32,
+        level: u8,
         name: String,
         pick: Pick,
         op: Op,
@@ -430,14 +542,32 @@ impl App {
         chevron_open: bool,
         has_chevron: bool,
         badge: &str,
+        tip: Option<String>,
     ) -> RowResult {
         let locked = self.scene_structure_locked();
         let sense = if locked { Sense::click() } else { Sense::click_and_drag() };
         let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 30.0), sense);
-        let resp = if locked { resp.on_hover_text("Finish or cancel the active command before reordering") } else { resp };
+        let resp = match (locked.then_some("Finish or cancel the active command before reordering"), tip) {
+            (Some(finish), Some(parent)) => resp.on_hover_text(format!("{finish}\n{parent}")),
+            (Some(finish), None) => resp.on_hover_text(finish),
+            (None, Some(parent)) => resp.on_hover_text(parent),
+            (None, None) => resp,
+        };
         self.row_rects.push((pick, rect));
         let mut out = RowResult::default();
         style::row_bg(ui, &resp, rect, selected);
+        // A row that is scrolled out of the list lies outside the clip rectangle: painting it only
+        // produces shapes the painter throws away. A scene with hundreds of shapes made the list
+        // the slowest part of a frame, so the paint calls are skipped. The row keeps its space,
+        // its clicks and its `row_bg` above, so nothing it shows or does changes.
+        let seen = ui.is_rect_visible(rect);
+        if seen && level > 0 {
+            // The elbow from the parent group's vertical guide into this row.
+            let from = rect.left() + tree_guide_x(level - 1);
+            let to = rect.left() + tree_indent(level) - 3.0;
+            let y = rect.center().y;
+            ui.painter().line_segment([egui::pos2(from, y), egui::pos2(to, y)], Stroke::new(1.5, tree_guide_color(level - 1)));
+        }
         // the grip says "drag me"
         let grip = Color32::from_white_alpha(if locked {
             16
@@ -446,23 +576,29 @@ impl App {
         } else {
             44
         });
-        style::gfx::grip(ui.painter(), egui::pos2(rect.left() + 11.0, rect.center().y), grip);
-        let mut x = rect.left() + 18.0 + indent;
+        if seen {
+            style::gfx::grip(ui.painter(), egui::pos2(rect.left() + 11.0, rect.center().y), grip);
+        }
+        let mut x = rect.left() + tree_indent(level);
         if has_chevron {
             let cr = Rect::from_center_size(egui::pos2(x + 6.0, rect.center().y), vec2(16.0, 20.0));
             let r = ui.interact(cr, id.with("c"), Sense::click());
-            let c = cr.center();
-            let pts = if chevron_open {
-                vec![c + vec2(-4.0, -2.0), c + vec2(4.0, -2.0), c + vec2(0.0, 3.0)]
-            } else {
-                vec![c + vec2(-2.0, -4.0), c + vec2(-2.0, 4.0), c + vec2(3.0, 0.0)]
-            };
-            ui.painter().add(egui::Shape::convex_polygon(pts, if r.hovered() { Color32::WHITE } else { style::DIM }, Stroke::NONE));
+            if seen {
+                let c = cr.center();
+                let pts = if chevron_open {
+                    vec![c + vec2(-4.0, -2.0), c + vec2(4.0, -2.0), c + vec2(0.0, 3.0)]
+                } else {
+                    vec![c + vec2(-2.0, -4.0), c + vec2(-2.0, 4.0), c + vec2(3.0, 0.0)]
+                };
+                ui.painter().add(egui::Shape::convex_polygon(pts, if r.hovered() { Color32::WHITE } else { style::DIM }, Stroke::NONE));
+            }
             out.chevron = r.clicked();
             x += 16.0;
         }
         let ir = Rect::from_min_size(egui::pos2(x, rect.center().y - 10.0), vec2(20.0, 20.0));
-        icon(ui.painter(), ir, style::TEXT);
+        if seen {
+            icon(ui.painter(), ir, style::TEXT);
+        }
         x += 26.0;
         let eye = Rect::from_center_size(egui::pos2(rect.right() - 18.0, rect.center().y), vec2(22.0, 22.0));
         let opr = Rect::from_center_size(egui::pos2(rect.right() - 44.0, rect.center().y), vec2(22.0, 22.0));
@@ -492,7 +628,7 @@ impl App {
                 self.renaming = None;
                 ui.data_mut(|d| d.remove::<bool>(started));
             }
-        } else {
+        } else if seen {
             let col = if visible { style::TEXT } else { style::DIM };
             let clipped = ui.painter().with_clip_rect(name_rect);
             let used = clipped.text(egui::pos2(name_rect.left(), rect.center().y), Align2::LEFT_CENTER, &name, FontId::proportional(13.0), col);
@@ -505,20 +641,24 @@ impl App {
         }
         let er = ui.interact(eye, id.with("e"), Sense::click());
         let orr = ui.interact(opr, id.with("o"), Sense::click());
-        for r in [&er, &orr] {
-            if r.hovered() {
-                ui.painter().rect_filled(r.rect, 7.0, Color32::from_white_alpha(22));
+        if seen {
+            for r in [&er, &orr] {
+                if r.hovered() {
+                    ui.painter().rect_filled(r.rect, 7.0, Color32::from_white_alpha(22));
+                }
             }
         }
-        // a quiet list: the eye and the join/cut mark show on the row under the mouse or the
-        // picked one, and always when they say something unusual (hidden, cut, paint, overlap)
         let near = selected || resp.hovered() || er.hovered() || orr.hovered();
-        if near || !visible {
-            glyphs::eye(ui.painter(), eye, visible, if er.hovered() { Color32::WHITE } else { style::DIM });
-        }
-        if near || op != Op::Add {
-            let opcol = style::op_color(op);
-            glyphs::op(ui.painter(), opr, op, opcol.gamma_multiply(if orr.hovered() { 1.0 } else { 0.8 }));
+        if seen {
+            // a quiet list: the eye and the join/cut mark show on the row under the mouse or the
+            // picked one, and always when they say something unusual (hidden, cut, paint, overlap)
+            if near || !visible {
+                glyphs::eye(ui.painter(), eye, visible, if er.hovered() { Color32::WHITE } else { style::DIM });
+            }
+            if near || op != Op::Add {
+                let opcol = style::op_color(op);
+                glyphs::op(ui.painter(), opr, op, opcol.gamma_multiply(if orr.hovered() { 1.0 } else { 0.8 }));
+            }
         }
         out.eye = er.clicked();
         out.op = orr.clicked();
@@ -744,7 +884,8 @@ impl App {
                 reselect = self.scene.outdent_group(g);
             }
             if style::pill(ui, "Wrap in new group", false).on_hover_text("Make a new parent group around this one").clicked() {
-                let name = format!("Group {}", self.scene.groups.len() + 1);
+                let base = format!("Group {}", self.scene.groups.len() + 1);
+                let name = self.scene.unique_group_name(&base);
                 reselect = self.scene.wrap_in_group(g, name);
             }
         });
@@ -997,6 +1138,7 @@ impl App {
         if self.scene.shape(g, s).is_some_and(|x| x.kind.uses_path()) {
             self.curve_inspector(ui, g, s);
         }
+        self.shape_pattern_section(ui, g, s);
         ui.add_space(4.0);
         ui.horizontal(|ui| {
             if style::pill_enabled(ui, "↑", false, s > 0).on_hover_text("Move up one").clicked() {
@@ -1782,5 +1924,38 @@ mod tests {
         let mut moved = scene.clone();
         moved.groups[0].shapes[1].pos[0] += 4.0;
         assert_ne!(base, melt_preview_key(&moved, &both, &cam, size), "a moved shape must redraw the card");
+
+    /// Draw the scene list in a `height`-tall area; returns the painted shapes and the number of
+    /// rows it laid out.
+    fn list_frame(height: f32) -> (Vec<egui::Shape>, usize) {
+        let ctx = egui::Context::default();
+        crate::style::apply(&ctx);
+        let mut app = App::new(true, None);
+        app.new_scene(crate::bench::library_scene(60));
+        let mut rows = 0;
+        let mut out = ctx.run_ui(
+            egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(400.0, height))), time: Some(1.0), ..Default::default() },
+            |ui| {
+                app.layers(ui);
+                rows = app.row_rects.len();
+            },
+        );
+        out.textures_delta.clear();
+        (out.shapes.into_iter().map(|c| c.shape).collect(), rows)
+    }
+
+    /// A row scrolled out of the list is not painted (a scene of hundreds of shapes made that the
+    /// slowest part of a frame). What is left on the screen must be exactly what the same list
+    /// shows in an area tall enough for every row.
+    #[test]
+    fn the_scene_list_paints_only_what_can_be_seen_and_nothing_else_changes() {
+        let (tall, tall_rows) = list_frame(4000.0);
+        let (short, short_rows) = list_frame(400.0);
+        assert!(tall_rows > 40, "the test scene has many rows ({tall_rows})");
+        assert_eq!(short_rows, tall_rows, "every row is still laid out (space, clicks, drag and shift ranges)");
+        assert!(short.len() < tall.len(), "the scrolled-out rows painted nothing ({} vs {})", short.len(), tall.len());
+        for shape in &short {
+            assert!(tall.contains(shape), "a row that can be seen changed what it draws: {shape:?}");
+        }
     }
 }

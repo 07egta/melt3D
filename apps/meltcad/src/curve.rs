@@ -515,6 +515,96 @@ fn joint_min(a: f32, b: f32, k: f32) -> f32 {
     b + (a - b) * h - k * h * (1.0 - h)
 }
 
+/// The same distance as `smooth_tube_section`, but a run of spans whose bounding sphere (see
+/// `group_spheres_profile`) is farther than everything measured so far is never measured: the
+/// way a game skips far objects. Exact: a skipped span, and any soft join with it, can never
+/// be below the nearest answer found (`kmax` is the greatest joint reach, so a join pulls at
+/// most `kmax / 4` below its spans). The run nearest to the point is measured first, so the
+/// answer to beat is tight from the start.
+pub fn smooth_tube_grouped(points: &[[f32; 4]], groups: &[[f32; 4]], kmax: f32, q: V3, closed: bool, aspect: f32, squircle: bool) -> f32 {
+    const MAX_GROUPS: usize = 16;
+    let nseg = points.len().saturating_sub(1);
+    // (a rounded-square section is not bounded by the spheres' simple scaling: it measures plainly)
+    if squircle || groups.len() < 2 || groups.len() > MAX_GROUPS || groups.len() != nseg.div_ceil(GROUP_SEGMENTS) || !kmax.is_finite() {
+        return smooth_tube_section(points, q, closed, aspect, squircle);
+    }
+    let asp = if aspect.is_finite() { aspect.clamp(0.45, 1.0) } else { 1.0 };
+    // an oval section's distance is scaled by the aspect (inside, the sphere's bound still holds)
+    let plain = asp >= 0.9999;
+    let mut lb = [0.0_f32; MAX_GROUPS];
+    let mut ub = f32::MAX;
+    let mut nearest = 0;
+    let mut best = f32::MAX;
+    for (g, s) in groups.iter().enumerate() {
+        let dc = len(sub(q, [s[0], s[1], s[2]]));
+        // a lower bound of every span's distance in the run (negative when inside the sphere)
+        let l = if dc > s[3] { (dc - s[3]) * asp } else { dc - s[3] };
+        if let Some(slot) = lb.get_mut(g) {
+            *slot = l;
+        }
+        if plain {
+            ub = ub.min(dc + s[3]);
+        }
+        if l < best {
+            best = l;
+            nearest = g;
+        }
+    }
+    let cone_at = |i: usize| -> f32 {
+        match (points.get(i), points.get(i + 1)) {
+            (Some(a), Some(b)) => section_cone(q, [a[0], a[1], a[2]], a[3], [b[0], b[1], b[2]], b[3], aspect, squircle),
+            _ => 1.0e6,
+        }
+    };
+    // measure the nearest run first (its spans are kept, they are used again below)
+    let n_from = nearest * GROUP_SEGMENTS;
+    let n_to = (n_from + GROUP_SEGMENTS).min(nseg);
+    let mut cache = [1.0e6_f32; GROUP_SEGMENTS];
+    let mut known = 1.0e6_f32;
+    for i in n_from..n_to {
+        let c = cone_at(i);
+        if let Some(slot) = cache.get_mut(i - n_from) {
+            *slot = c;
+        }
+        known = known.min(c);
+    }
+    // the round tube has a point inside every sphere, so its distance cannot exceed `ub`
+    if plain {
+        known = known.min(ub + 0.01);
+    }
+    let mut d = 1.0e6_f32;
+    let mut first = None;
+    let mut prev: Option<(usize, f32)> = None;
+    for g in 0..groups.len() {
+        if g != nearest && lb.get(g).copied().unwrap_or(0.0) >= d.min(known) + kmax {
+            prev = None;
+            continue;
+        }
+        for i in g * GROUP_SEGMENTS..((g + 1) * GROUP_SEGMENTS).min(nseg) {
+            let one = if g == nearest { cache.get(i - n_from).copied().unwrap_or(1.0e6) } else { cone_at(i) };
+            d = d.min(one);
+            if let Some((pi, before)) = prev
+                && pi + 1 == i
+                && let (Some(pp), Some(a), Some(b)) = (points.get(i.wrapping_sub(1)), points.get(i), points.get(i + 1))
+            {
+                d = d.min(joint_min(before, one, joint_blend(*pp, *a, *b)));
+            }
+            if i == 0 {
+                first = Some(one);
+            }
+            prev = Some((i, one));
+        }
+    }
+    if closed
+        && let (Some((li, last)), Some(first)) = (prev, first)
+        && li + 1 == nseg
+    {
+        let k = closed_joint_blend(points, closed);
+        d = d.min(joint_min(last, first, k));
+    }
+    d
+}
+
 #[cfg(test)]
 /// The rounded path. Each adjacent pair is softened independently, so a long chain never grows
 /// with its number of nodes. Unrelated spans and straight joins keep their exact round-cone SDF.
@@ -575,8 +665,9 @@ fn hollow(d: f32, wall: f32) -> f32 {
 }
 
 /// Distance from `q` (local, unscaled) to the shape. Negative inside. A shell (wall thickness, in
-/// world mm) hollows the tube here rather than in `Prepared::distance`, so that a pipe with flat
-/// ends is cut open *after* it is hollowed: the bore shows at the ends.
+/// the shape's own mm; `Prepared::distance` scales it with the shape) hollows the tube here rather
+/// than in `Prepared::distance`, so that a pipe with flat ends is cut open *after* it is hollowed:
+/// the bore shows at the ends.
 pub fn distance(p: &Prepared, q: V3) -> f32 {
     let (closed, _, _, _) = settings(&p.params);
     if p.path.len() < 2 {
@@ -585,8 +676,8 @@ pub fn distance(p: &Prepared, q: V3) -> f32 {
     let flatness = if p.params[2].is_finite() { p.params[2].clamp(0.0, 1.0) } else { 0.0 };
     let aspect = if p.size[1].is_finite() { p.size[1].clamp(0.45, 1.0) } else { 1.0 };
     let squircle = p.size[2].is_finite() && p.size[2] >= 1.5;
-    let mut d = smooth_tube_section(&p.path, q, closed, aspect, squircle);
-    let wall = if p.shell.is_finite() { p.shell.max(0.0) / p.min_scale().max(1.0e-6) } else { 0.0 };
+    let mut d = smooth_tube_grouped(&p.path, &p.curve_groups, p.curve_kmax, q, closed, aspect, squircle);
+    let wall = if p.shell.is_finite() { p.shell.max(0.0) } else { 0.0 };
     if wall > 0.0 {
         d = hollow(d, wall);
     }
@@ -814,6 +905,19 @@ mod tests {
         assert!((tube(&pts, [20.0, 0.0, 0.0], true) + 5.0).abs() < 1e-4);
     }
 
+    #[test]
+    fn a_shelled_tube_scales_with_its_shape() {
+        let mut s = Shape::new(Kind::Curve, [0.0; 3], Material::default());
+        s.path = vec![[-10.0, 0.0, 0.0, 3.0], [10.0, 0.0, 0.0, 3.0]];
+        s.params = [0.0, 0.0, 0.0, 1.0];
+        s.shell = 2.0;
+        s.scale = [2.0; 3];
+        // Outer radius 6 and a wall that scales with the shape (2 * 2 = 4) leave the bore
+        // out to radius 2.
+        assert!(Prepared::new(&s).distance([0.0, 1.0, 0.0]) > 0.0, "the bore is empty");
+        assert!(Prepared::new(&s).distance([0.0, 3.0, 0.0]) < 0.0, "the 4 mm wall is solid");
+    }
+
     /// The grouped search the shader does (look at the spheres, measure only groups that can hold
     /// something nearer than what is known) gives exactly the distance of the plain loop over all
     /// the segments. This is that search on the CPU, on random tubes and random points.
@@ -854,6 +958,40 @@ mod tests {
                 assert!((d - want).abs() < 1e-4, "round {round}: grouped {d} vs plain {want}");
             }
         }
+    }
+
+    /// The skipping search (nearest run first, far runs never measured) answers exactly what the
+    /// plain loop over every span answers, for every section and for open and closed tubes.
+    #[test]
+    fn the_skipping_distance_equals_the_plain_distance() {
+        let mut seed = 7;
+        let mut skipped_any = false;
+        let mut worst = 0.0_f32;
+        for round in 0..60 {
+            let n = 3 + (lcg(&mut seed) * 40.0) as usize;
+            let nodes: Vec<[f32; 4]> = (0..n)
+                .map(|_| [lcg(&mut seed) * 120.0 - 60.0, lcg(&mut seed) * 120.0 - 60.0, lcg(&mut seed) * 60.0, 0.5 + lcg(&mut seed) * 6.0])
+                .collect();
+            let closed = round % 3 == 0;
+            let pts = build(&nodes, &[if closed { 1.0 } else { 0.0 }, 1.0, 0.0, 1.0]);
+            let groups_for = |squircle| group_spheres_profile(&pts, squircle);
+            let kmax = max_joint_blend(&pts, closed);
+            for (aspect, squircle) in [(1.0, false), (0.6, false), (0.45, false), (1.0, true), (0.7, true)] {
+                let groups = groups_for(squircle);
+                for _ in 0..80 {
+                    let q = [lcg(&mut seed) * 200.0 - 100.0, lcg(&mut seed) * 200.0 - 100.0, lcg(&mut seed) * 120.0 - 30.0];
+                    let want = smooth_tube_section(&pts, q, closed, aspect, squircle);
+                    let got = smooth_tube_grouped(&pts, &groups, kmax, q, closed, aspect, squircle);
+                    // (a soft join with a skipped span differs from it only by float rounding)
+                    let err = (want - got).abs() / (1.0 + want.abs());
+                    worst = worst.max(err);
+                    assert!(err < 2.0e-6, "round {round} aspect {aspect} squircle {squircle} closed {closed} at {q:?}: {want} vs {got}");
+                    skipped_any |= groups.len() > 1;
+                }
+            }
+        }
+        assert!(skipped_any);
+        eprintln!("worst relative difference between the skipping and the plain distance: {worst:e}");
     }
 
     #[test]

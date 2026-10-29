@@ -55,12 +55,18 @@ pub struct Prepared {
     /// Rows of the rotation's transpose (the inverse rotation).
     pub inv: [V3; 3],
     pub scale: V3,
+    /// `1 / scale`, so `local` multiplies instead of dividing (division costs several times more).
+    inv_scale: V3,
     pub op: Op,
     pub blend: f32,
     pub material: Material,
     pub outline: Vec<[f32; 2]>,
     pub params: [f32; 4],
     pub path: Vec<[f32; 4]>,
+    /// A pipe's bounding spheres, one per run of spans, and its greatest joint reach: the
+    /// distance skips far runs (see `curve::smooth_tube_grouped`). Empty for other shapes.
+    pub curve_groups: Vec<[f32; 4]>,
+    pub curve_kmax: f32,
     pub outline2: Vec<[f32; 2]>,
     /// Wall thickness of the hollowed-out shape (0 = solid).
     pub shell: f32,
@@ -140,6 +146,14 @@ impl Prepared {
             _ => (1.0, 0.0),
         };
         let grad_half = if s.material.has_gradient() { gradient_half(s, &r) } else { 0.0 };
+        let path: Vec<[f32; 4]> = if s.kind == Kind::Curve { crate::curve::build_shape(s) } else { s.path.clone() };
+        let (curve_groups, curve_kmax) = if s.kind == Kind::Curve && path.len() >= 2 {
+            let squircle = s.size[2].is_finite() && s.size[2] >= 1.5;
+            let closed = crate::curve::settings(&s.params).0;
+            (crate::curve::group_spheres_profile(&path, squircle), crate::curve::max_joint_blend(&path, closed))
+        } else {
+            (Vec::new(), 0.0)
+        };
         Prepared {
             kind: s.kind,
             ripple: s.ripple,
@@ -150,12 +164,15 @@ impl Prepared {
             pos: s.pos,
             inv,
             scale: s.scale,
+            inv_scale: [1.0 / s.scale[0], 1.0 / s.scale[1], 1.0 / s.scale[2]],
             op: s.op,
             blend: s.blend,
             material: s.material,
             outline,
             params: s.params,
-            path: if s.kind == Kind::Curve { crate::curve::build_shape(s) } else { s.path.clone() },
+            path,
+            curve_groups,
+            curve_kmax,
             outline2: s.outline2.clone(),
             shell: if s.shell.is_finite() { s.shell.max(0.0) } else { 0.0 },
             face_melt: s.face_melt.parts(),
@@ -165,11 +182,22 @@ impl Prepared {
             volume: if s.kind == Kind::Mesh { s.volume.clone() } else { None },
         }
     }
+    /// The same shape carried by a pattern instance: the copies of one shape are packed as shapes of
+    /// their own, so their inverse rotation, place and scale already hold the instance.
+    pub fn transformed(s: &Shape, inst: &crate::pattern::Inst) -> Prepared {
+        let mut p = Prepared::new(s);
+        p.inv = inst.combine_inverse(&p.inv);
+        p.pos = inst.apply(s.pos);
+        p.scale = [s.scale[0] * inst.s, s.scale[1] * inst.s, s.scale[2] * inst.s];
+        p.half = mul(p.half, inst.s);
+        p.grad_half *= inst.s;
+        p
+    }
     /// The point in the shape's own space.
     pub fn local(&self, p: V3) -> V3 {
         let d = sub(p, self.pos);
         let q = [dot(self.inv[0], d), dot(self.inv[1], d), dot(self.inv[2], d)];
-        [q[0] / self.scale[0], q[1] / self.scale[1], q[2] / self.scale[2]]
+        [q[0] * self.inv_scale[0], q[1] * self.inv_scale[1], q[2] * self.inv_scale[2]]
     }
     /// The surface colour at `p`: the material's colour, or its gradient (see `Material::gradient_weight`).
     // max/min deliberately maps a NaN coordinate to the first colour, unlike clamp.
@@ -195,12 +223,55 @@ impl Prepared {
             d = face_melt_distance(d, q, ax, sg, amount, reach, self.half[ax]);
         }
         let mut d = d * self.min_scale();
+        let before_ripple = d;
         if let Some(r) = self.ripple {
             d = r.adjust(d, q, self.half, self.min_scale());
         }
-        // hollow walls: the solid's skin of thickness `shell` (negative inside the wall)
-        // (a curve hollows itself: its flat ends are cut after the hollowing, see curve::distance)
-        if self.shell > 0.0 && self.kind != Kind::Curve { (d + self.shell * 0.5).abs() - self.shell * 0.5 } else { d }
+        // Hollow walls: the solid's skin of thickness `shell` (negative inside the wall). The
+        // shell is measured in the shape's own space (so it scales with `Shape::scale`, like
+        // rounding, a face melt and a ripple) and through any distance-shortening the shape maths
+        // applies, or the wall comes out too thick. (A curve hollows itself: its flat ends are cut
+        // after the hollowing, see curve::distance.)
+        if self.shell > 0.0 && self.kind != Kind::Curve {
+            let wall = self.shell * self.min_scale() * self.shell_shortening(q, before_ripple);
+            (d + wall * 0.5).abs() - wall * 0.5
+        } else {
+            d
+        }
+    }
+    /// How much shorter than a true distance the shape maths makes this point's distance (1 =
+    /// exact). Sweeps, lofts, wave-warped revolves, a face melt and a ripple all scale their
+    /// distance down so that marching cannot overshoot; a shell measured on that field must use
+    /// the same scale, or its wall is too thick. `base` is the scaled distance before the ripple.
+    fn shell_shortening(&self, q: V3, base: f32) -> f32 {
+        let mut shorten = match self.kind {
+            Kind::Sweep => crate::cad::SWEEP_SAFETY,
+            Kind::Loft => {
+                let h = self.size[0].max(1e-3);
+                crate::cad::loft_safety(polygon(&self.outline, [q[0], q[1]]), polygon(&self.outline2, [q[0], q[1]]), h)
+            }
+            Kind::Revolve => {
+                let r = q[0].hypot(q[1]);
+                crate::organic_vase::radial_warp(r, q, self.params[1], self.params[2], self.params[3]).1
+            }
+            _ => 1.0,
+        };
+        if let Some((ax, sg, amount, reach)) = self.face_melt {
+            // face_melt_distance divides by sqrt(1 + slope^2) inside the face's reach.
+            let t = sg * q[ax] - self.half[ax];
+            let k = 1.0 / reach;
+            if (1.0 - t.abs() * k).clamp(0.0, 1.0) > 0.0 {
+                // Match face_melt_distance exactly, including its 6.2832 literal.
+                #[allow(clippy::approx_constant)]
+                let f = 6.2832 / (reach * 1.6);
+                let slope = amount.abs() * (1.6 * k + 1.32 * f);
+                shorten /= (1.0 + slope * slope).sqrt();
+            }
+        }
+        if let Some(r) = &self.ripple {
+            shorten *= r.shell_shortening(base, self.half, self.min_scale());
+        }
+        shorten
     }
     #[cfg(test)]
     pub fn local_distance_for_test(&self, q: V3) -> f32 {
@@ -427,7 +498,11 @@ impl Field {
                 let older = old_sources.get(&rg.src).copied();
                 let prior_group = previous.and_then(|(_, old)| old.groups.get(rg.src));
                 let same_melt = previous.is_some_and(|(_, old)| old.melt.mode == scene.melt.mode && old.melt.amount == scene.melt.amount);
-                if let (Some(old), Some(prior)) = (older, prior_group)
+                // A shape pattern changes the number of measured shapes for the same shape list:
+                // older per-shape payloads cannot be reused by index any more.
+                let patterned = srcg.shapes.iter().any(|s| s.pattern.is_some());
+                if !patterned
+                    && let (Some(old), Some(prior)) = (older, prior_group)
                     && same_melt
                     && prior.shapes == srcg.shapes
                 {
@@ -440,25 +515,37 @@ impl Field {
                     .unwrap_or_default();
                 let mut shapes = Vec::new();
                 let mut origin = Vec::new();
-                let mut members: Vec<&Shape> = Vec::new();
+                let mut members_owned: Vec<Shape> = Vec::new();
+                let mut bounds = Vec::new();
                 for si in srcg.fold_order() {
                     let Some(s) = srcg.shapes.get(si) else { continue };
                     if !s.solid() {
                         continue;
                     }
-                    let same = prior_group.and_then(|old| old.shapes.get(si)).is_some_and(|old| old == s);
-                    let prep = if same { old_shapes.get(&si).map(|p| Arc::clone(p)) } else { None };
-                    if prep.is_some() {
-                        prepared_reused += 1;
-                    } else {
-                        prepared_built += 1;
+                    let insts: Vec<crate::pattern::Inst> =
+                        rg.shape_insts.get(si).filter(|v| !v.is_empty()).cloned().unwrap_or_else(|| vec![crate::pattern::Inst::IDENTITY]);
+                    for inst in insts {
+                        let identity = inst == crate::pattern::Inst::IDENTITY;
+                        let same = !patterned && identity && prior_group.and_then(|old| old.shapes.get(si)).is_some_and(|old| old == s);
+                        let prep = if same { old_shapes.get(&si).map(|p| Arc::clone(p)) } else { None };
+                        if prep.is_some() {
+                            prepared_reused += 1;
+                        } else {
+                            prepared_built += 1;
+                        }
+                        shapes.push(
+                            prep.unwrap_or_else(|| if identity { Arc::new(Prepared::new(s)) } else { Arc::new(Prepared::transformed(s, &inst)) }),
+                        );
+                        origin.push((rg.src, si));
+                        bounds.push(inst.bound(crate::accel::shape_bound(s)));
+                        let mut member = s.clone();
+                        member.pos = inst.apply(s.pos);
+                        member.scale = [s.scale[0] * inst.s, s.scale[1] * inst.s, s.scale[2] * inst.s];
+                        members_owned.push(member);
                     }
-                    shapes.push(prep.unwrap_or_else(|| Arc::new(Prepared::new(s))));
-                    origin.push((rg.src, si));
-                    members.push(s);
                 }
+                let members: Vec<&Shape> = members_owned.iter().collect();
                 let info = crate::accel::group_info(&members, &scene.melt);
-                let bounds = members.iter().map(|s| crate::accel::shape_bound(s)).collect();
                 sources.push(Arc::new(PreparedGroup { source_group: rg.src, shapes, origin, bounds, info }));
                 sources.len() - 1
             });
@@ -1160,6 +1247,94 @@ mod tests {
     }
 
     #[test]
+    fn a_shell_scales_with_the_shape_like_round_and_face_melt() {
+        let mut s = Shape::new(Kind::Sphere, [0.0; 3], Material::default());
+        s.size[0] = 20.0;
+        s.shell = 4.0;
+        let f = |s: &Shape, p: V3| Prepared::new(s).distance(p);
+        // Half the size: a 20 mm ball with a 4 mm wall becomes a 10 mm ball with a 2 mm wall,
+        // just as its rounding, face melt and ripple grow and shrink with the shape.
+        s.scale = [0.5; 3];
+        assert!(f(&s, [7.5, 0.0, 0.0]) > 0.0, "the cavity reaches radius 8");
+        assert!(f(&s, [9.0, 0.0, 0.0]) < 0.0, "the wall is solid");
+        // Twice the size: radius 40, wall 8, cavity out to 32.
+        s.scale = [2.0; 3];
+        assert!(f(&s, [31.0, 0.0, 0.0]) > 0.0, "the cavity reaches radius 32");
+        assert!(f(&s, [34.0, 0.0, 0.0]) < 0.0, "the wall is solid");
+    }
+
+    #[test]
+    fn a_shell_on_a_rippled_shape_keeps_the_requested_wall_thickness() {
+        let mut s = Shape::new(Kind::Sphere, [0.0; 3], Material::default());
+        s.size[0] = 20.0;
+        s.shell = 1.0;
+        // Lines along Y: on the +X axis the wave value is zero, so the surface stays at radius
+        // 20 and only the ripple's conservative distance scaling is in play.
+        s.ripple = Some(crate::ripple::Ripple {
+            mode: crate::ripple::RippleMode::Linear,
+            direction: 90.0,
+            height: 3.0,
+            spacing: 12.0,
+            count: 5,
+            detail: 1,
+            ..crate::ripple::Ripple::default()
+        });
+        let f = |p: V3| Prepared::new(&s).distance(p);
+        assert!(f([19.5, 0.0, 0.0]) < 0.0, "the 1 mm wall is solid");
+        assert!(f([18.0, 0.0, 0.0]) > 0.0, "2 mm inside the skin is the cavity");
+    }
+
+    #[test]
+    fn a_shell_on_a_face_melt_keeps_the_wall_near_the_requested_thickness() {
+        let mut s = Shape::new(Kind::Box, [0.0; 3], Material::default());
+        s.size = [20.0, 20.0, 20.0];
+        s.face_melt = crate::model::FaceMelt { face: 5, amount: 6.0, reach: 8.0 };
+        s.shell = 2.0;
+        let f = |z: f32| Prepared::new(&s).distance([0.0, 0.0, z]);
+        // The +Z face swells: the outer skin is between the original top (10) and the swell.
+        let (mut lo, mut hi) = (11.5, 12.5);
+        assert!(f(lo) < 0.0 && f(hi) > 0.0);
+        for _ in 0..40 {
+            let mid = (lo + hi) * 0.5;
+            if f(mid) > 0.0 {
+                hi = mid;
+            } else {
+                lo = mid;
+            }
+        }
+        let outer = (lo + hi) * 0.5;
+        assert!(outer > 11.0, "the face swells");
+        // A face melt's field is a conservative bound, not an exact distance, so the normal
+        // wall is a little under 2 mm; it must not be the old scaled-up wall (several mm).
+        assert!(f(outer - 1.0) < 0.0, "1 mm inside the outer skin is wall");
+        assert!(f(outer - 2.0) > 0.0, "2 mm inside the outer skin is the cavity");
+    }
+
+    #[test]
+    fn a_shell_of_a_sweep_or_loft_keeps_the_requested_wall_thickness() {
+        let f = |s: &Shape, p: V3| Prepared::new(s).distance(p);
+        // A straight sweep of a 10 x 10 profile: the side is 5 from the axis, so a 2 mm wall
+        // leaves the cavity up to 3.
+        let mut sweep = Shape::new(Kind::Sweep, [0.0; 3], Material::default());
+        sweep.outline = vec![[-5.0, -5.0], [5.0, -5.0], [5.0, 5.0], [-5.0, 5.0]];
+        sweep.path = vec![[0.0, 0.0, -20.0, 1.0], [0.0, 0.0, 20.0, 1.0]];
+        sweep.shell = 2.0;
+        sweep.blend = 0.0;
+        assert!(f(&sweep, [2.8, 0.0, 0.0]) > 0.0, "2.8 is inside the 2 mm wall's hollow");
+        assert!(f(&sweep, [3.6, 0.0, 0.0]) < 0.0, "3.6 is in the wall");
+        // A loft from a 40 x 40 square up to a 20 x 20 square: at mid height the side is at 15,
+        // so a 4 mm wall leaves the cavity up to 11.
+        let mut loft = Shape::new(Kind::Loft, [0.0; 3], Material::default());
+        loft.size[0] = 40.0;
+        loft.outline = vec![[-20.0, -20.0], [20.0, -20.0], [20.0, 20.0], [-20.0, 20.0]];
+        loft.outline2 = vec![[-10.0, -10.0], [10.0, -10.0], [10.0, 10.0], [-10.0, 10.0]];
+        loft.shell = 4.0;
+        loft.blend = 0.0;
+        assert!(f(&loft, [10.5, 0.0, 0.0]) > 0.0, "10.5 is inside the 4 mm wall's hollow");
+        assert!(f(&loft, [12.0, 0.0, 0.0]) < 0.0, "12 is in the wall");
+    }
+
+    #[test]
     fn intersect_keeps_only_the_overlap() {
         let m = Material::default();
         let mut a = Shape::new(Kind::Sphere, [-8.0, 0.0, 0.0], m);
@@ -1412,6 +1587,88 @@ mod tests {
             let wr = written_out(&s);
             compare(&field, &Field::new(&wr), &centres(&wr), name, 1500);
         }
+    }
+
+    #[test]
+    fn a_single_shape_pattern_measures_like_the_copies_written_out() {
+        use crate::pattern::{Pattern, euler_of};
+        fn written(sc: &Scene) -> Scene {
+            let mut out = sc.clone();
+            out.groups.clear();
+            for (gi, g) in sc.groups.iter().enumerate() {
+                let mut plain = Group::new(format!("{} plain", g.name));
+                plain.op = g.op;
+                plain.blend = g.blend;
+                plain.depth = g.depth;
+                for (si, s) in g.shapes.iter().enumerate() {
+                    if !s.solid() {
+                        continue;
+                    }
+                    let insts = crate::pattern::shape_instances(sc, gi, si, 256);
+                    for i in &insts {
+                        let mut t = s.clone();
+                        t.pattern = None;
+                        t.uid = 0;
+                        t.pos = i.apply(s.pos);
+                        let r = rotation(s.rot);
+                        let m = i.m;
+                        let mut mr = [[0.0_f32; 3]; 3];
+                        for a in 0..3 {
+                            for b in 0..3 {
+                                mr[a][b] = (0..3).map(|k| m[a][k] * r[k][b]).sum();
+                            }
+                        }
+                        let rm: [V3; 3] = if i.flips() {
+                            let mut o = [[0.0; 3]; 3];
+                            for a in 0..3 {
+                                for b in 0..3 {
+                                    o[a][b] = (0..3).map(|k| mr[a][k] * m[k][b]).sum();
+                                }
+                            }
+                            o
+                        } else {
+                            mr
+                        };
+                        t.rot = euler_of(&rm);
+                        plain.shapes.push(t);
+                    }
+                }
+                out.groups.push(plain);
+            }
+            out
+        }
+        let mut sc = Scene::default();
+        sc.groups[0].shapes[0].kind = Kind::Box;
+        sc.groups[0].shapes[0].size = [24.0, 18.0, 12.0];
+        sc.groups[0].shapes[0].pos = [0.0, 0.0, 20.0];
+        let mut other = Shape::new(Kind::Sphere, [90.0, 0.0, 20.0], Material::default());
+        other.size = [10.0; 3];
+        sc.groups[0].shapes.push(other);
+        for (name, p, copies) in [
+            ("rect", Pattern::Rect { counts: [3, 2, 1], spacing: [35.0, 30.0, 0.0] }, 7),
+            ("mirror xyz about its middle", Pattern::Mirror { axes: [true, true, true], centre: true }, 9),
+            ("circle", Pattern::Circular { count: 5, angle: 360.0, axis: 2, centre: [0.0, 0.0, 20.0], rotate: true }, 6),
+        ] {
+            let mut s = sc.clone();
+            s.groups[0].shapes[0].pattern = Some(p);
+            let field = Field::new(&s);
+            assert_eq!(field.sources[0].shapes.len(), copies, "{name}: every copy is a measured shape");
+            let wr = written(&s);
+            assert!(wr.groups[0].shapes.len() > s.groups[0].shapes.len(), "{name}");
+            compare(&field, &Field::new(&wr), &centres(&wr), name, 1200);
+        }
+        // removing the pattern restores just the one shape
+        sc.groups[0].shapes[0].pattern = None;
+        let field = Field::new(&sc);
+        assert_eq!(field.sources[0].shapes.len(), 2);
+        // an identity-only shape pattern is the same as no pattern
+        sc.groups[0].shapes[0].pattern = Some(Pattern::Rect { counts: [1, 1, 1], spacing: [50.0, 50.0, 50.0] });
+        let identity = Field::new(&sc);
+        assert_eq!(identity.sources[0].shapes.len(), 2);
+        assert!((identity.distance([0.0, 0.0, 20.0]) - field.distance([0.0, 0.0, 20.0])).abs() < 1e-4);
+        // the instance identity still names the source shape for picking
+        let hit = identity.sample([0.0, 0.0, 20.0]);
+        assert_eq!(hit.nearest, Some((0, 0)));
     }
 
     #[test]

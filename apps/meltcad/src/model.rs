@@ -446,7 +446,8 @@ pub struct Shape {
     /// The top profile of a `Loft`.
     #[serde(default)]
     pub outline2: Vec<[f32; 2]>,
-    /// Wall thickness in mm that hollows out any kind (0 = solid).
+    /// Wall thickness in the shape's own mm (it scales with `Shape::scale`, like `round`); it
+    /// hollows out any kind (0 = solid).
     #[serde(default)]
     pub shell: f32,
     /// How `round` treats the edges: a round fillet (default) or a flat 45-degree bevel.
@@ -476,6 +477,10 @@ pub struct Shape {
     /// A solid made in SolidCraft carries its design, so it can be opened there again and edited.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub solid: Option<SolidLink>,
+    /// Live copies of this one shape (mirror, grid, circle, along a path, on points): the shape
+    /// itself stays the first instance, and the copies use no shape slots. Old files have none.
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "crate::pattern::lenient_pattern")]
+    pub pattern: Option<Pattern>,
 }
 
 /// The SolidCraft design behind a shape that came from SolidCraft.
@@ -589,6 +594,7 @@ impl Shape {
             mesh_source: None,
             face_melt: FaceMelt::default(),
             solid: None,
+            pattern: None,
             vase: None,
         }
     }
@@ -1142,6 +1148,24 @@ impl Scene {
     }
     // ----- nested groups: `Group::depth` makes the flat list an outline -----
 
+    /// A default name no other group already has: `base`, else `base (2)`, `base (3)`, … Existing
+    /// groups are never renamed, so a new default group beside an equal name stays distinguishable.
+    pub fn unique_group_name(&self, base: &str) -> String {
+        if !self.groups.iter().any(|g| g.name == base) {
+            return base.to_owned();
+        }
+        let last = self.groups.len().saturating_add(2);
+        for n in 2..=last {
+            let candidate = format!("{base} ({n})");
+            if !self.groups.iter().any(|g| g.name == candidate) {
+                return candidate;
+            }
+        }
+        // At most `groups.len()` names are taken, so `last` above always finds a free number;
+        // this stays panic-free if that ever changes.
+        format!("{base} ({last})")
+    }
+
     /// Make the depths a valid outline: the first group is at the top, and no group sits more
     /// than one level below the one before it.
     pub fn normalize_depths(&mut self) {
@@ -1426,6 +1450,9 @@ impl Scene {
                     fix(&mut s.params[2], 0.0, 1.0, 0.0);
                 }
                 fix(&mut s.shell, 0.0, 500.0, 0.0);
+                if let Some(p) = &mut s.pattern {
+                    p.sanitize();
+                }
                 s.outline2.truncate(MAX_OUTLINE);
                 for p in &mut s.outline2 {
                     fix(&mut p[0], -2000.0, 2000.0, 0.0);
