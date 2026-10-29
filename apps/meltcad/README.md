@@ -45,13 +45,13 @@ cargo run --release -p meltcad -- 作品.yura
 
 ## SolidCraft で精密に作る
 
-上部の **SolidCraft** ボタン、または検索（F）で `Solid`・`SolidCraft`・`精密`・`ソリッド` を選ぶと開きます。SolidCraft v0.20.0 の通常の作業画面を使い、ツールバー、パネル、コマンド、設定がそろった標準UIを表示します。日本語で使えます。Melt 3D に戻るためのバーは、SolidCraft のUIとは別にMelt側が追加しています。
+上部の **SolidCraft** ボタン、または検索（F）で `Solid`・`SolidCraft`・`精密`・`ソリッド` を選ぶと開きます。SolidCraft v0.26.0 の通常の作業画面を使い、ツールバー、パネル、コマンド、設定がそろった標準UIを表示します。日本語で使えます。Melt 3D に戻るためのバーは、SolidCraft のUIとは別にMelt側が追加しています。
 
 SolidCraft でスケッチや立体を作り、**Melt 3D に戻る** を押すと、確定した立体をメッシュ形状に変換して Melt に取り込みます。元の位置と大きさを使い、すでに置いた形も残します。取り込みに失敗・キャンセルしたときはSolidCraftの設計を保ち、再試行できます。
 
 SolidCraft の設計と Melt のシーンは別々に保存します。寸法やフィーチャー履歴を残すには SolidCraft 側で **`.solidcraft`** を保存してください。Melt 側の **`.meltcad`** には受け渡したメッシュ形状が保存され、SolidCraft の編集履歴は含まれません。受け渡しはメッシュから距離ボリュームへの近似変換なので、小さな穴や薄い形は解像度の影響を受けます。
 
-SolidCraft v0.20.0 はリリースコミット [`a06bdf5cfc5b108126d774ae6f684c4c2b3764fc`](https://github.com/bherbruck/solidcraft/commit/a06bdf5cfc5b108126d774ae6f684c4c2b3764fc) から移植しています。この更新後のローカル検証はまだ行っていません。詳細は[SolidCraft 統合の操作メモ](../../docs/yuracad-solid-integration-20261020.md)を参照してください。
+SolidCraft v0.26.0 はリリースコミット [`409ab1ed45151bc503c8f0278c7d77cbf3bf0bdf`](https://github.com/bherbruck/solidcraft/commit/409ab1ed45151bc503c8f0278c7d77cbf3bf0bdf) から移植しています。この更新後のローカル検証はまだ行っていません。詳細は[SolidCraft 統合の操作メモ](../../docs/yuracad-solid-integration-20261020.md)を参照してください。
 
 ## 画面のならび
 
