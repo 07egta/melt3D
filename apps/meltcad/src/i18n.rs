@@ -131,6 +131,26 @@ const TABLE: &[Entry] = &[
     e!("menu.find", "検索", "Find", "查找", "찾기", "Suchen", "Rechercher", "Buscar"),
     e!("menu.find.tip", "形、ライブラリ、コマンドを検索 (F)", "Find shapes, library, commands (F)"),
     e!("menu.menu", "メニュー", "Menu"),
+    e!("menu.view.scene_dock", "シーン一覧", "Scene list"),
+    e!(
+        "menu.view.scene_dock.tip",
+        "形の一覧とライブラリを出す・しまう。狭い画面では右の設定としかわりばんこに出ます",
+        "Show or hide the shape list and library. A narrow window shows it or the settings, one at a time"
+    ),
+    e!("menu.view.inspector", "設定パネル", "Settings panel"),
+    e!(
+        "menu.view.inspector.tip",
+        "選んだ形の大きさ・素材などを出す・しまう。しまうと3Dの画面が広くなります",
+        "Show or hide the size, material and more of the selection. Hiding it makes the 3D view wider"
+    ),
+    e!("menu.view.simple", "かんたん表示", "Simple view"),
+    e!(
+        "menu.view.simple.tip",
+        "あまり使わない設定を「くわしく」の中にたたみます。機能はなくなりません",
+        "Fold less used settings under \"More\" headings. Nothing is removed"
+    ),
+    e!("menu.view.mouse", "マウスで操作", "Use a mouse"),
+    e!("menu.view.trackpad", "トラックパッドで操作", "Use a trackpad"),
     // ----- tool strip: operations and tools -----
     e!("tool.op.add", "追加", "Add", "添加", "추가", "Hinzufügen", "Ajouter", "Añadir"),
     e!("tool.op.cut", "削除", "Cut", "切除", "자르기", "Schneiden", "Couper", "Cortar"),
@@ -253,6 +273,11 @@ const TABLE: &[Entry] = &[
         "Use the active command card. Finish or cancel to edit other shapes."
     ),
     e!("inspector.title.shape", "形", "Shape", "形状", "셰이프", "Form", "Forme", "Forma"),
+    e!("inspector.more.kind", "くわしく: 別の形に入れかえる", "More: change to another kind"),
+    e!("inspector.more.details", "くわしく: 数値・丸め・溶かす・中抜き", "More: numbers, rounding, melt, shell"),
+    e!("inspector.more.order", "くわしく: 並べかえ・グループへ移す", "More: reorder, move to a group"),
+    e!("inspector.more.material", "くわしく: 金属・透明・光る・グラデーション", "More: metal, glass, glow, gradient"),
+    e!("inspector.more.room", "くわしく: 影・空・ライト", "More: shadow, sky, lights"),
     e!("inspector.title.group", "グループ", "Group", "组", "그룹", "Gruppe", "Groupe", "Grupo"),
     e!("inspector.title.material", "素材", "Material", "材质", "재질", "Material", "Matière", "Material"),
     e!("inspector.title.sketch", "スケッチ", "Sketch", "草图", "스케치", "Skizze", "Esquisse", "Boceto"),
@@ -485,6 +510,11 @@ const TABLE: &[Entry] = &[
     e!("status.about", "約", "about", "约", "약", "etwa", "environ", "aprox."),
     e!("status.group", "グループ", "Group", "组", "그룹", "Gruppe", "Groupe", "Grupo"),
     e!("status.hint.select", "クリックで選択", "Click to select"),
+    e!(
+        "status.hint.simple",
+        "左のボタンで形を足す → 形をクリック → 右で大きさや色を変える",
+        "Add a shape with the left buttons → click it → change its size and color on the right"
+    ),
     e!("status.hint.all", "矢印で移動 · 曲線で回転 · 箱で引き伸ばし", "Drag an arrow to move · a curve to turn · a box to stretch"),
     e!("status.hint.move", "矢印をドラッグして移動（Ctrl: 1mm刻み）", "Drag arrow to move (Ctrl: 1 mm steps)"),
     e!("status.hint.rotate", "リングをドラッグして回転（Ctrl: 15度刻み）", "Drag ring to rotate (Ctrl: 15 degree steps)"),

@@ -111,6 +111,7 @@ mod stroke;
 mod style;
 mod svg;
 mod svg_dialog;
+mod ui_layout;
 mod view;
 mod view_mode;
 mod work_budget;

@@ -371,18 +371,23 @@ impl App {
         if !(self.pt.on || (self.pt.card_open && self.pipe_last_selected())) {
             return;
         }
-        let rect = self.view_rect;
+        // centred over the view, or beside / below the tool strip when it would cover it
+        let bounds = self.view_rect.intersect(ctx.content_rect()).shrink(12.0);
+        let strip = ctx.data(|d| d.get_temp::<egui::Rect>(egui::Id::new("tool_strip_rect")));
+        let (at, width) = crate::ui_layout::card_slot(bounds, strip, 460.0, 240.0);
         let before = self.pt.cfg;
         let mut off = false;
         let mut done = false;
         egui::Area::new(egui::Id::new("pipe_card"))
             .order(egui::Order::Middle)
             .pivot(egui::Align2::CENTER_TOP)
-            .fixed_pos(pos2(rect.center().x, rect.top() + 12.0))
+            .fixed_pos(pos2(at.x + width * 0.5, at.y))
+            .constrain_to(bounds)
             .show(ctx, |ui| {
                 style::card().show(ui, |ui| {
+                    ui.set_max_width((width - 24.0).max(24.0));
                     let cfg = &mut self.pt.cfg;
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
                         ui.label(egui::RichText::new("Pipe").strong().color(style::ACCENT));
                         if self.pt.on {
                             ui.label(egui::RichText::new("Drag once to draw a pipe").size(11.0).color(style::DIM));
@@ -397,7 +402,7 @@ impl App {
                         }
                     });
                     style::labeled_slider(ui, "Outer radius", &mut cfg.radius, 0.5..=40.0, "Outer radius of the pipe (mm)");
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
                         style::color_edit(ui, &mut cfg.color);
                         let label = if self.pt.more { "Less" } else { "More…" };
                         if style::pill(ui, label, self.pt.more).on_hover_text("Wall, ends, closed loop").clicked() {
@@ -409,7 +414,7 @@ impl App {
                     }
                     let max_wall = (cfg.radius - 0.1).clamp(0.0, 20.0);
                     style::labeled_slider(ui, "Wall\nthickness", &mut cfg.wall, 0.0..=max_wall.max(0.1), "0 = solid rod / larger = hollow pipe (mm)");
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
                         if style::pill(ui, "Closed loop", cfg.closed).on_hover_text("Join the last and first node").clicked() {
                             cfg.closed = !cfg.closed;
                         }
@@ -422,7 +427,7 @@ impl App {
                         }
                     });
                     if self.pt.on {
-                        ui.horizontal(|ui| {
+                        ui.horizontal_wrapped(|ui| {
                             ui.label(egui::RichText::new("Trace plane").size(11.0).color(style::DIM));
                             for pl in Plane::ALL {
                                 if style::pill(ui, pl.label(), self.pt.plane == pl)

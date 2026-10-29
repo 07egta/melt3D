@@ -131,6 +131,12 @@ pub struct App {
     /// A left-drag that began on empty space is turning the view.
     pub orbiting: bool,
     pub show_keys: bool,
+    /// The docks the person wants open. A window narrower than `ui_layout::COMPACT_WINDOW`
+    /// shows only one of them (see `ui_layout::visible_docks`); closed docks leave the view wider.
+    pub show_scene_dock: bool,
+    pub show_properties: bool,
+    /// Simple view: the inspector folds its less used settings away. Nothing is removed.
+    pub simple_ui: bool,
     /// Pinned palette entries and custom shortcuts.
     pub prefs: crate::palette_prefs::Prefs,
     /// Language, display, snapping, navigation, autosave and export defaults.
@@ -249,6 +255,9 @@ impl App {
             fly: None,
             orbiting: false,
             show_keys: false,
+            show_scene_dock: true,
+            show_properties: true,
+            simple_ui: false,
             prefs: crate::palette_prefs::Prefs::load(),
             preferences: crate::prefs::Preferences::default(),
             tab: Tab::Shape,
@@ -2020,6 +2029,8 @@ impl App {
                             self.frame_view(true);
                             ui.close();
                         }
+                        ui.separator();
+                        self.layout_menu_items(ui);
                     });
                     style::vsep(ui);
                     if ui
@@ -2068,7 +2079,8 @@ impl App {
                             }
                         });
                         // Mouse or trackpad: Auto follows what the last scroll looked like
-                        {
+                        // (a narrow bar keeps it in the View menu instead)
+                        if bar.width() >= crate::ui_layout::NARROW_HEADER {
                             let eff = self.input_dev.device(self.input_seen);
                             let items = [
                                 ("Mouse", "Wheel zooms, middle-drag turns, right-drag slides"),
@@ -2331,7 +2343,7 @@ impl App {
         // drag its right edge to make it wider or narrower
         egui::Panel::left("dock")
             .default_size(272.0)
-            .size_range(220.0..=560.0)
+            .size_range(crate::ui_layout::dock_range(ui.available_width(), 220.0, 560.0))
             .resizable(true)
             .frame(egui::Frame::new().fill(style::PANEL_DARK).inner_margin(egui::Margin::symmetric(10, 10)))
             .show(ui, |ui| {
@@ -2390,7 +2402,9 @@ impl App {
             .fixed_pos(rect.right_bottom() - egui::vec2(16.0, 16.0))
             .show(&ctx, |ui| {
                 style::card().show(ui, |ui| {
-                    ui.set_width(300.0);
+                    // a narrow view gets a narrower card that scrolls instead of running off it
+                    let narrow = rect.width() < 260.0;
+                    ui.set_width((rect.width() - 56.0).clamp(94.0, 300.0));
                     ui.label(RichText::new("Controls").strong().size(14.0));
                     // the first-use box practice and the hidden status hints come back from here
                     ui.horizontal_wrapped(|ui| {
@@ -2403,31 +2417,38 @@ impl App {
                         }
                     });
                     ui.separator();
-                    for (k, v) in [
-                        ("Middle drag", "Orbit"),
-                        ("Right drag", "Pan"),
-                        ("Wheel", "Zoom to cursor"),
-                        ("Left drag (empty)", "Orbit"),
-                        ("Click", "Select  Ctrl: add/remove  Shift: add/remove"),
-                        ("Double click", "Focus on shape"),
-                        ("Drawing: left click → right click", "Place point → finish (all draw tools)"),
-                        ("F", "Find shapes, library, commands"),
-                        ("Shift+F / Home", "Frame selection / Frame all"),
-                        ("1 3 7 (Ctrl: opposite)", "Front / Right / Top"),
-                        ("5", "Perspective ⇄ Ortho"),
-                        ("Tab", "Add ⇄ Subtract"),
-                        ("Ctrl + drag", "1 mm / 15° steps"),
-                        ("Arrow keys", "Move 1 mm (Shift: 10 mm)"),
-                        ("Ctrl+C / X / V", "Copy / Cut / Paste"),
-                        ("Ctrl+D / Delete", "Duplicate / Delete"),
-                        ("Ctrl+G", "Group the selected shapes"),
-                        ("Ctrl+Z / Ctrl+Shift+Z", "Undo / Redo"),
-                    ] {
-                        ui.horizontal(|ui| {
-                            ui.add_sized([150.0, 18.0], egui::Label::new(RichText::new(style::keys(k)).size(12.0).color(style::ACCENT)));
-                            ui.label(RichText::new(v).size(12.0).color(style::TEXT));
-                        });
-                    }
+                    egui::ScrollArea::vertical().max_height((rect.height() - 96.0).max(64.0)).show(ui, |ui| {
+                        for (k, v) in [
+                            ("Middle drag", "Orbit"),
+                            ("Right drag", "Pan"),
+                            ("Wheel", "Zoom to cursor"),
+                            ("Left drag (empty)", "Orbit"),
+                            ("Click", "Select  Ctrl: add/remove  Shift: add/remove"),
+                            ("Double click", "Focus on shape"),
+                            ("Drawing: left click → right click", "Place point → finish (all draw tools)"),
+                            ("F", "Find shapes, library, commands"),
+                            ("Shift+F / Home", "Frame selection / Frame all"),
+                            ("1 3 7 (Ctrl: opposite)", "Front / Right / Top"),
+                            ("5", "Perspective ⇄ Ortho"),
+                            ("Tab", "Add ⇄ Subtract"),
+                            ("Ctrl + drag", "1 mm / 15° steps"),
+                            ("Arrow keys", "Move 1 mm (Shift: 10 mm)"),
+                            ("Ctrl+C / X / V", "Copy / Cut / Paste"),
+                            ("Ctrl+D / Delete", "Duplicate / Delete"),
+                            ("Ctrl+G", "Group the selected shapes"),
+                            ("Ctrl+Z / Ctrl+Shift+Z", "Undo / Redo"),
+                        ] {
+                            if narrow {
+                                ui.label(RichText::new(style::keys(k)).size(12.0).color(style::ACCENT));
+                                ui.label(RichText::new(v).size(11.0).color(style::TEXT));
+                            } else {
+                                ui.horizontal(|ui| {
+                                    ui.add_sized([150.0, 18.0], egui::Label::new(RichText::new(style::keys(k)).size(12.0).color(style::ACCENT)));
+                                    ui.label(RichText::new(v).size(12.0).color(style::TEXT));
+                                });
+                            }
+                        }
+                    });
                 });
             });
     }
@@ -2454,7 +2475,7 @@ impl App {
                         note.to_string()
                     } else if hidden {
                         // this kind of hint was hidden with ×: the plain tool hint stays
-                        crate::gizmo::hint(self.tool).to_string()
+                        if self.simple_ui { i18n::tr("status.hint.simple").to_string() } else { crate::gizmo::hint(self.tool).to_string() }
                     } else {
                         format!("{}: {}  |  {}", i18n::tr("guide.status.next"), info.action, info.controls)
                     };
@@ -2472,9 +2493,14 @@ impl App {
                     {
                         self.guide.dismiss(id);
                     }
+                    let roomy = ui.available_width() >= crate::ui_layout::NARROW_STATUS;
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui.selectable_label(self.an.open, i18n::tr("status.animation")).on_hover_text(i18n::tr("status.animation.tip")).clicked() {
                             self.an.open = !self.an.open;
+                        }
+                        // a narrow bar keeps the hint readable instead of overlapping it
+                        if !roomy {
+                            return;
                         }
                         let name = self
                             .path
@@ -2933,8 +2959,13 @@ impl App {
         self.top_bar(ui);
         self.status_bar(ui);
         self.anim_bar(ui);
-        self.left_dock(ui);
-        self.side(ui);
+        let (scene_dock, inspector) = crate::ui_layout::visible_docks(ui.available_width(), self.show_scene_dock, self.show_properties);
+        if scene_dock {
+            self.left_dock(ui);
+        }
+        if inspector {
+            self.side(ui);
+        }
         egui::CentralPanel::default().frame(egui::Frame::new().fill(Color32::from_rgb(52, 52, 56))).show(ui, |ui| {
             self.last_view_height = ui.available_height();
             self.viewport(ui);
