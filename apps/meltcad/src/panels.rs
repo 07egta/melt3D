@@ -1924,6 +1924,7 @@ mod tests {
         let mut moved = scene.clone();
         moved.groups[0].shapes[1].pos[0] += 4.0;
         assert_ne!(base, melt_preview_key(&moved, &both, &cam, size), "a moved shape must redraw the card");
+    }
 
     /// Draw the scene list in a `height`-tall area; returns the painted shapes and the number of
     /// rows it laid out.
