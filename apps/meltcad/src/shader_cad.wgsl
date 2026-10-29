@@ -141,11 +141,18 @@ fn revolve_dist(s: Shape, q: vec3<f32>) -> f32 {
         d = polygon_off_axis_d(i32(s.misc.z + 0.5), i32(s.misc.w + 0.5), pt);
     }
     d = d * warped.y;
+    shell_k = warped.y;
     let ang = clamp(s.params.x, 1.0, 360.0);
     if (ang < 359.99) { d = max(d, wedge_d(q.xy, ang)); }
     return d;
 }
 
+
+// How much shorter than a true distance the shape maths of a sweep, loft or wave-warped revolve
+// made the distance it just returned (`Prepared::shell_shortening` on the CPU). The distance
+// function leaves it here so that a shell can use it without measuring the profile a second time.
+// `shape_dist` sets it to 1 before it measures.
+var<private> shell_k: f32;
 
 fn loft_dist(s: Shape, q: vec3<f32>) -> f32 {
     let h = max(s.size.x, 1e-3);
@@ -156,7 +163,9 @@ fn loft_dist(s: Shape, q: vec3<f32>) -> f32 {
     let w = vec2<f32>(d1 + (d2 - d1) * t + rr, abs(q.z) - h * 0.5 + rr);
     var d = min(max(w.x, w.y), 0.0) + length(max(w, vec2<f32>(0.0))) - rr;
     if (s.extra.w > 0.5 && rr > 0.0) { d = cn_pair(d1 + (d2 - d1) * t, abs(q.z) - h * 0.5, rr); }
-    return d / (1.0 + abs(d2 - d1) / h);
+    let denom = 1.0 + abs(d2 - d1) / h;
+    shell_k = 1.0 / denom;
+    return d / denom;
 }
 
 fn sweep_dist(s: Shape, q: vec3<f32>) -> f32 {
@@ -200,6 +209,7 @@ fn sweep_dist(s: Shape, q: vec3<f32>) -> f32 {
     if (bi == 0 && bt <= 0.0) { axial = -dot(q - pa.xyz, tn); }
     if (bi == n - 2 && bt >= 1.0) { axial = max(axial, dot(q - pb.xyz, tn)); }
     let w = vec2<f32>(d2, axial);
+    shell_k = 0.7;
     return (min(max(w.x, w.y), 0.0) + length(max(w, vec2<f32>(0.0)))) * 0.7;
 }
 

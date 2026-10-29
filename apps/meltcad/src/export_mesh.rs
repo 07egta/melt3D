@@ -1084,6 +1084,20 @@ pub mod tests {
     }
 
     #[test]
+    fn a_shelled_sphere_exports_closed_walls_with_the_cavity_volume() {
+        let mut s = crate::model::Shape::new(crate::model::Kind::Sphere, [0.0; 3], crate::model::Material::default());
+        s.size[0] = 10.0;
+        s.shell = 2.0;
+        let prepared = crate::sdf::Prepared::new(&s);
+        let m = run(&|p| prepared.distance(p), 12.0, 0.2, 4);
+        assert!(melt::is_watertight(&m.mesh));
+        assert_eq!(euler(&m.mesh), 4, "the outer ball and the inner cavity are two closed shells");
+        let exact = ball(10.0) - ball(8.0);
+        let v = melt::volume(&m.mesh);
+        assert!((v / exact - 1.0).abs() < 0.02, "shell volume {v} vs {exact}");
+    }
+
+    #[test]
     fn a_rounded_box_is_closed_and_smooth_at_the_rim() {
         let rb = |p: [f32; 3]| {
             let r = 2.0;

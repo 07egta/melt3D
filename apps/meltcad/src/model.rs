@@ -446,7 +446,8 @@ pub struct Shape {
     /// The top profile of a `Loft`.
     #[serde(default)]
     pub outline2: Vec<[f32; 2]>,
-    /// Wall thickness in mm that hollows out any kind (0 = solid).
+    /// Wall thickness in the shape's own mm (it scales with `Shape::scale`, like `round`); it
+    /// hollows out any kind (0 = solid).
     #[serde(default)]
     pub shell: f32,
     /// How `round` treats the edges: a round fillet (default) or a flat 45-degree bevel.
