@@ -308,8 +308,8 @@ const TABLE: &[Entry] = &[
     e!("inspector.shell", "中抜き", "Shell", "抽壳", "속 비우기", "Aushöhlen", "Évider", "Vaciar"),
     e!(
         "inspector.shell.tip",
-        "内側をくり抜き、指定した厚さの壁を残します（mm）。0 = 中身が詰まったまま。マイナスにすると同じ厚さで、上に穴が開きます",
-        "Hollow out the inside, leaving walls this thick (mm). 0 = solid. A minus value gives the same wall with an opening at the top"
+        "内側をくり抜き、指定した厚さの壁を残します（mm）。0 = 中身が詰まったまま。マイナスにすると同じ厚さで、上に丸い穴が開きます（中空の出力用の穴）",
+        "Hollow out the inside, leaving walls this thick (mm). 0 = solid. A minus value gives the same wall with a round hole in the top"
     ),
     e!(
         "inspector.melt_face",

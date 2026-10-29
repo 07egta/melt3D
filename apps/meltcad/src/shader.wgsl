@@ -338,11 +338,14 @@ fn shape_dist(s: Shape, p: vec3<f32>) -> f32 {
     r = ripple_adjust(scaled, q, s);
     // Hollow walls of thickness `shell`, in the shape's own mm, through the same
     // distance-shortening the shape maths uses. (A curve hollows itself in curve_dist.)
-    // A minus shell is the same wall with the cap cut off the top (local +Z).
+    // A minus shell is the same wall with a round hole in the top (local +Z): `top_hole` in sdf.rs.
     if (s.extra.x != 0.0 && kind != 18) {
         let sh = abs(s.extra.x) * s.pos.w * shell_shortening(s, q, fc) * ripple_shorten;
         r = abs(r + sh * 0.5) - sh * 0.5;
-        if (s.extra.x < 0.0) { r = max(r, (q.z - (s.ripple_half.z + s.extra.x)) * s.pos.w); }
+        if (s.extra.x < 0.0) {
+            let hole = max(length(q.xy) - min(s.ripple_half.x, s.ripple_half.y) * 0.35, -q.z) * s.pos.w;
+            r = max(r, -hole);
+        }
     }
     return r;
 }

@@ -232,15 +232,21 @@ impl Prepared {
         // rounding, a face melt and a ripple) and through any distance-shortening the shape maths
         // applies, or the wall comes out too thick. (A curve hollows itself: its flat ends are cut
         // after the hollowing, see curve::distance.)
-        // A minus shell is the same wall with an opening at the top: everything above one wall
-        // thickness below the shape's top (local +Z) is cut away, which takes the cap off.
+        // A minus shell is the same wall with a round hole in the top (local +Z), like a hollowed
+        // print with its opening: see `top_hole`.
         if self.shell != 0.0 && self.kind != Kind::Curve {
             let wall = self.shell.abs() * self.min_scale() * self.shell_shortening(q, before_ripple);
             let hollow = (d + wall * 0.5).abs() - wall * 0.5;
-            if self.shell < 0.0 { hollow.max((q[2] - (self.half[2] - self.shell.abs())) * self.min_scale()) } else { hollow }
+            if self.shell < 0.0 { hollow.max(-self.top_hole(q)) } else { hollow }
         } else {
             d
         }
+    }
+    /// The cutter of a minus shell: a round hole a third as wide as the shape, from the middle
+    /// of the shape up through its top (a distance to the cutter, negative inside it).
+    fn top_hole(&self, q: V3) -> f32 {
+        let radius = self.half[0].min(self.half[1]) * 0.35;
+        (q[0].hypot(q[1]) - radius).max(-q[2]) * self.min_scale()
     }
     /// How much shorter than a true distance the shape maths makes this point's distance (1 =
     /// exact). Sweeps, lofts, wave-warped revolves, a face melt and a ripple all scale their
@@ -1235,23 +1241,25 @@ mod tests {
     }
 
     #[test]
-    fn a_minus_shell_is_the_same_wall_with_the_top_open() {
+    fn a_minus_shell_is_the_same_wall_with_a_round_hole_in_the_top() {
         let mut s = Shape::new(Kind::Box, [0.0; 3], Material::default());
         s.size = [40.0, 40.0, 40.0, 0.0];
         s.shell = 4.0;
         let closed = Prepared::new(&s);
         s.shell = -4.0;
         let open = Prepared::new(&s);
-        let top = [0.0, 0.0, 19.0]; // inside the top cap
-        let side = [19.0, 0.0, 0.0]; // inside a side wall
+        let lid_middle = [0.0, 0.0, 19.0];
+        let lid_corner = [17.0, 17.0, 19.0]; // outside the hole (radius 7)
+        let side = [19.0, 0.0, 0.0];
         let bottom = [0.0, 0.0, -19.0];
-        assert!(closed.distance(top) < 0.0, "a closed shell has a lid");
-        assert!(open.distance(top) > 0.0, "the minus shell has no lid");
+        assert!(closed.distance(lid_middle) < 0.0, "a closed shell has a lid");
+        assert!(open.distance(lid_middle) > 0.0, "the minus shell has a hole in it");
+        assert!(open.distance(lid_corner) < 0.0, "the rest of the lid stays");
         assert!(open.distance([0.0, 0.0, 30.0]) > 0.0, "and nothing above it");
         assert!((open.distance(side) - closed.distance(side)).abs() < 1e-4, "the side wall is the same");
         assert!((open.distance(bottom) - closed.distance(bottom)).abs() < 1e-4, "so is the floor");
         s.shell = f32::NAN;
-        assert_eq!(Prepared::new(&s).distance(top), Prepared::new(&Shape::new(Kind::Box, [0.0; 3], Material::default())).distance(top));
+        assert_eq!(Prepared::new(&s).distance(lid_middle), Prepared::new(&Shape::new(Kind::Box, [0.0; 3], Material::default())).distance(lid_middle));
     }
 
     #[test]
