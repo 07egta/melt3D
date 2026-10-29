@@ -1,0 +1,30 @@
+name: Video source assets
+on:
+  push:
+    branches: [video/source-rebuild-20261029]
+    paths:
+      - '.github/workflows/video-source-assets.yml'
+      - 'docs/promo-video/rebuild_20261029/prepare_assets.py'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  assets:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Prepare official narration and source assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python docs/promo-video/rebuild_20261029/prepare_assets.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: melt3d-film-source-assets
+          path: video-assets/
+          if-no-files-found: warn
+          retention-days: 7
