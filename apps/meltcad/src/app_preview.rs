@@ -261,6 +261,32 @@ fn app_preview() {
             }
         }
     }
+    // `YURA_TREE=1` previews the scene list's indentation and parent guides (the nesting report)
+    if std::env::var("YURA_TREE").is_ok() {
+        let group = |name: &str, depth: u8, kind: Kind| {
+            let mut g = Group::new(name);
+            g.depth = depth;
+            g.shapes.push(Shape::new(kind, [0.0; 3], Material::default()));
+            g
+        };
+        app.scene.groups = vec![
+            group("Body", 0, Kind::Box),
+            group("Group 3", 1, Kind::Sphere),
+            group("Details", 2, Kind::Cylinder),
+            group("Base", 0, Kind::Box),
+            group("Group 3", 1, Kind::Sphere),
+            group("Shell", 1, Kind::Torus),
+        ];
+        app.sel = Some(Pick::Group(2));
+        app.tab = Tab::Shape;
+        // A preview must show the list, not another session's recovery prompt.
+        for _ in 0..8 {
+            if app.recovery.pending_path().is_none() {
+                break;
+            }
+            app.recovery.postpone();
+        }
+    }
     // `YURA_GPU=compiling|failed|failed_easy|easy|ready_easy` previews the graphics path's cards over the simple CPU view
     let gpu_state = std::env::var("YURA_GPU").ok();
     if let Some(which) = gpu_state.as_deref() {

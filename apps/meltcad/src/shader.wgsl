@@ -228,6 +228,19 @@ fn ripple_adjust(base: f32, q: vec3<f32>, s: Shape) -> f32 {
     return (base + delta * s.pos.w) / safety;
 }
 
+// The factor `ripple_adjust` divides by where it bends the surface (Ripple::safety).
+fn ripple_safety(s: Shape) -> f32 {
+    let rr = s.ripple;
+    let r2 = s.ripple2;
+    let k = 6.283185307179586 / rr.z;
+    let linear = rr.x > 1.5 && rr.x < 2.5;
+    let support = rr.w * rr.z * select(1.0, 0.5, linear);
+    let fade_width = max(support * r2.y, 0.001);
+    let h = s.ripple_half.xyz;
+    let edge_slope = select(0.0, 6.0 / max(min(h.x, h.y), 0.01), r2.z > 0.5);
+    return 1.0 + rr.y * (3.0 * k + 2.0 / fade_width + edge_slope);
+}
+
 fn shape_dist(s: Shape, p: vec3<f32>) -> f32 {
     let d = p - s.pos.xyz;
     let q = vec3<f32>(dot(s.r0.xyz, d), dot(s.r1.xyz, d), dot(s.r2.xyz, d)) / s.scale.xyz;
@@ -235,6 +248,7 @@ fn shape_dist(s: Shape, p: vec3<f32>) -> f32 {
     let sz = s.size.xyz;
     let rd = s.size.w;
     let chamfer = s.extra.w > 0.5 && rd > 0.0;
+    shell_k = 1.0;
     var r = 0.0;
     if (kind == 0) {
         r = length(q) - sz.x;
@@ -316,10 +330,18 @@ fn shape_dist(s: Shape, p: vec3<f32>) -> f32 {
     }
     let fc = i32(s.r0.w + 0.5);
     if (fc > 0) { r = face_melt(s, q, r, fc); }
-    r = ripple_adjust(r * s.pos.w, q, s);
-    // hollow walls of thickness `shell`
-    let sh = s.extra.x;
-    if (sh > 0.0 && kind != 18) { r = abs(r + sh * 0.5) - sh * 0.5; }
+    let scaled = r * s.pos.w;
+    var ripple_shorten = 1.0;
+    if (s.ripple.x >= 0.5 && s.ripple.y > 0.0 && abs(scaled) <= s.ripple.y * s.pos.w * 2.0) {
+        ripple_shorten = 1.0 / ripple_safety(s);
+    }
+    r = ripple_adjust(scaled, q, s);
+    // Hollow walls of thickness `shell`, in the shape's own mm, through the same
+    // distance-shortening the shape maths uses. (A curve hollows itself in curve_dist.)
+    if (s.extra.x > 0.0 && kind != 18) {
+        let sh = s.extra.x * s.pos.w * shell_shortening(s, q, fc) * ripple_shorten;
+        r = abs(r + sh * 0.5) - sh * 0.5;
+    }
     return r;
 }
 
@@ -341,6 +363,31 @@ fn face_melt(s: Shape, q: vec3<f32>, d: f32, fc: i32) -> f32 {
     let wave = 0.5 + 0.5 * sin(u * f + sin(v * f * 1.3)) * cos(v * f * 0.8 + cos(u * f * 0.6));
     let slope = abs(amount) * (1.6 * k + 1.32 * f);
     return (d - amount * w * wave) / sqrt(1.0 + slope * slope);
+}
+
+// The factor `face_melt` divides by inside the face's reach (1 outside it).
+fn face_melt_shortening(s: Shape, q: vec3<f32>, fc: i32) -> f32 {
+    let ax = (fc - 1) / 2;
+    var sg = 1.0;
+    if (((fc - 1) % 2) == 1) { sg = -1.0; }
+    let amount = s.r1.w;
+    let reach = max(s.r2.w, 1.0);
+    let t = sg * q[ax] - s.mat2.w;
+    let k = 1.0 / reach;
+    if (clamp(1.0 - abs(t) * k, 0.0, 1.0) <= 0.0) { return 1.0; }
+    let f = 6.2832 / (reach * 1.6);
+    let slope = abs(amount) * (1.6 * k + 1.32 * f);
+    return 1.0 / sqrt(1.0 + slope * slope);
+}
+
+// How much shorter than a true distance the shape maths makes this point's distance
+// (`Prepared::shell_shortening`): sweeps, lofts and wave-warped revolves scale it down so that
+// marching cannot overshoot (they leave their factor in `shell_k`), and so do face melts; a shell
+// on that field must use the same scale.
+fn shell_shortening(s: Shape, q: vec3<f32>, fc: i32) -> f32 {
+    var shorten = shell_k;
+    if (fc > 0) { shorten = shorten * face_melt_shortening(s, q, fc); }
+    return shorten;
 }
 
 // The surface colour of a shape at p: its colour, or the gradient (Material::gradient_weight).

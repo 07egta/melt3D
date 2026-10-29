@@ -665,8 +665,9 @@ fn hollow(d: f32, wall: f32) -> f32 {
 }
 
 /// Distance from `q` (local, unscaled) to the shape. Negative inside. A shell (wall thickness, in
-/// world mm) hollows the tube here rather than in `Prepared::distance`, so that a pipe with flat
-/// ends is cut open *after* it is hollowed: the bore shows at the ends.
+/// the shape's own mm; `Prepared::distance` scales it with the shape) hollows the tube here rather
+/// than in `Prepared::distance`, so that a pipe with flat ends is cut open *after* it is hollowed:
+/// the bore shows at the ends.
 pub fn distance(p: &Prepared, q: V3) -> f32 {
     let (closed, _, _, _) = settings(&p.params);
     if p.path.len() < 2 {
@@ -676,7 +677,7 @@ pub fn distance(p: &Prepared, q: V3) -> f32 {
     let aspect = if p.size[1].is_finite() { p.size[1].clamp(0.45, 1.0) } else { 1.0 };
     let squircle = p.size[2].is_finite() && p.size[2] >= 1.5;
     let mut d = smooth_tube_grouped(&p.path, &p.curve_groups, p.curve_kmax, q, closed, aspect, squircle);
-    let wall = if p.shell.is_finite() { p.shell.max(0.0) / p.min_scale().max(1.0e-6) } else { 0.0 };
+    let wall = if p.shell.is_finite() { p.shell.max(0.0) } else { 0.0 };
     if wall > 0.0 {
         d = hollow(d, wall);
     }
@@ -902,6 +903,19 @@ mod tests {
         assert!((tube(&pts, [45.0, 0.0, 0.0], false)).abs() < 1e-4);
         assert!((tube(&pts, [45.0, 0.0, 0.0], true) - 5.0).abs() < 1e-4);
         assert!((tube(&pts, [20.0, 0.0, 0.0], true) + 5.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn a_shelled_tube_scales_with_its_shape() {
+        let mut s = Shape::new(Kind::Curve, [0.0; 3], Material::default());
+        s.path = vec![[-10.0, 0.0, 0.0, 3.0], [10.0, 0.0, 0.0, 3.0]];
+        s.params = [0.0, 0.0, 0.0, 1.0];
+        s.shell = 2.0;
+        s.scale = [2.0; 3];
+        // Outer radius 6 and a wall that scales with the shape (2 * 2 = 4) leave the bore
+        // out to radius 2.
+        assert!(Prepared::new(&s).distance([0.0, 1.0, 0.0]) > 0.0, "the bore is empty");
+        assert!(Prepared::new(&s).distance([0.0, 3.0, 0.0]) < 0.0, "the 4 mm wall is solid");
     }
 
     /// The grouped search the shader does (look at the spheres, measure only groups that can hold
