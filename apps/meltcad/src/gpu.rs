@@ -227,7 +227,7 @@ impl ScenePack {
                     let reused = !patterned
                         && identity
                         && previous.is_some_and(|(old_scene, old_pack)| {
-                            old_scene.shape(gi, si).is_some_and(|old| old == s)
+                            old_scene.shape(gi, si).is_some_and(|old| crate::perf::same_shape_for_cache(old, s))
                                 && old_slots
                                     .get(&(gi, si))
                                     .is_some_and(|&slot| reuse_shape_pack(s, old_pack, slot, &vols, &mut shapes, &mut poly, &mut path))
@@ -263,14 +263,18 @@ impl ScenePack {
                     let same_admission =
                         old_pack.ranges.iter().any(|&(old_gi, old_first, old_count)| old_gi == gi && old_first == first && old_count == count);
                     (!patterned
-                        && old_group.shapes == g.shapes
+                        && crate::perf::same_shapes_for_cache(&old_group.shapes, &g.shapes)
                         && old_scene.melt.mode == scene.melt.mode
-                        && old_scene.melt.amount == scene.melt.amount
+                        && old_scene.melt.amount.to_bits() == scene.melt.amount.to_bits()
                         && same_admission)
                         .then(|| old_pack.source_infos.get(&gi).cloned())
                         .flatten()
                 })
-                .unwrap_or_else(|| Arc::new(crate::accel::group_info(&members.iter().collect::<Vec<_>>(), &scene.melt)));
+                .unwrap_or_else(|| {
+                    let refs: Vec<&crate::model::Shape> = members.iter().collect();
+                    let bounds: Vec<crate::accel::Bound> = refs.iter().map(|s| crate::accel::shape_bound(s)).collect();
+                    Arc::new(crate::accel::group_info_with_bounds(&refs, &bounds, &scene.melt))
+                });
             source_infos.insert(gi, Arc::clone(&info));
             for b in &info.blocks {
                 push(&mut blocks, [b.bound.c[0], b.bound.c[1], b.bound.c[2], b.bound.r]);
@@ -1193,6 +1197,24 @@ impl VolTex {
     }
 }
 
+/// At most 1 MiB of temporary bytes; every chunk starts on an RGBA16F texel boundary.
+const VOLUME_UPLOAD_CHUNK_NODES: usize = VOL_W * 4 * 64;
+
+/// Stream the same little-endian binary16 values as a whole-volume conversion. Small
+/// volumes allocate only their own padded size, and the final chunk pads to one texel.
+fn for_each_volume_upload_chunk(data: &[f32], mut upload: impl FnMut(usize, &[u8])) {
+    let capacity = data.len().min(VOLUME_UPLOAD_CHUNK_NODES).next_multiple_of(4) * 2;
+    let mut bytes = Vec::with_capacity(capacity);
+    for (part, nodes) in data.chunks(VOLUME_UPLOAD_CHUNK_NODES).enumerate() {
+        bytes.clear();
+        for &node in nodes {
+            bytes.extend_from_slice(&crate::sdf_volume::f32_to_f16_bits(node).to_le_bytes());
+        }
+        bytes.resize(nodes.len().next_multiple_of(4) * 2, 0);
+        upload(part * VOLUME_UPLOAD_CHUNK_NODES, &bytes);
+    }
+}
+
 /// Make the volume texture hold exactly `set`: only volumes that are new or moved are uploaded
 /// (a frame that only moves a mesh uploads nothing). The picture must be drawn again afterwards.
 fn ensure_volumes(res: &mut Resources, device: &wgpu::Device, queue: &wgpu::Queue, set: &VolumeSet) -> bool {
@@ -1212,12 +1234,9 @@ fn ensure_volumes(res: &mut Resources, device: &wgpu::Device, queue: &wgpu::Queu
         if there {
             continue;
         }
-        let mut bytes: Vec<u8> = Vec::with_capacity(v.nodes().next_multiple_of(4) * 2);
-        for h in v.to_f16_bits() {
-            bytes.extend_from_slice(&h.to_le_bytes());
-        }
-        bytes.resize(v.nodes().next_multiple_of(4) * 2, 0);
-        res.vol.write_texels(queue, base / 4, &bytes);
+        for_each_volume_upload_chunk(&v.arc().data, |node_offset, bytes| {
+            res.vol.write_texels(queue, base / 4 + node_offset / 4, bytes);
+        });
     }
     res.vol.resident = set.clone();
     res.vol_gen += 1;
@@ -1316,12 +1335,21 @@ fn globals_key(globals: &[f32]) -> u64 {
 }
 
 /// Make the scene-list texture tall enough for `list` (a scene list from `ScenePack`).
+/// A large document must not keep a much larger texture and CPU mirror after it is closed.
+/// The fourfold threshold avoids repeated resizing around ordinary edit boundaries.
+fn pool_needs_resize(current_rows: Option<u32>, wanted_rows: u32) -> bool {
+    current_rows.is_none_or(|old| old < wanted_rows || old >= wanted_rows.saturating_mul(4))
+}
+
+/// Keep the scene-list texture capacity and its CPU mirror proportional to the live scene.
 fn ensure_pool(res: &mut Resources, device: &wgpu::Device, list_len: usize) {
     let used_rows = (list_len / 4).div_ceil(ROW).max(1) as u32;
-    if res.pool.as_ref().is_none_or(|p| p.rows < used_rows) {
+    // The rows `Pool::new` would allocate for this list.
+    let wanted = used_rows.max(16).next_power_of_two().min(device.limits().max_texture_dimension_2d.max(16));
+    if pool_needs_resize(res.pool.as_ref().map(|p| p.rows), wanted) {
         res.pool = Some(Pool::new(device, &res.buffer, &res.scene_layout, &res.vol.view, used_rows));
         res.pool_id = 0;
-        res.pool_copy.clear();
+        res.pool_copy = Vec::new();
         invalidate_pics(res);
     }
 }
@@ -1853,6 +1881,58 @@ pub(crate) mod offscreen {
 mod tests {
     use super::*;
     use crate::model::{Material, Shape};
+
+    #[test]
+    fn streamed_volume_bytes_match_whole_upload_at_texel_and_chunk_boundaries() {
+        for len in [
+            0,
+            1,
+            3,
+            4,
+            5,
+            VOL_W * 4 - 1,
+            VOL_W * 4 + 3,
+            VOLUME_UPLOAD_CHUNK_NODES - 1,
+            VOLUME_UPLOAD_CHUNK_NODES,
+            VOLUME_UPLOAD_CHUNK_NODES + 1,
+            VOLUME_UPLOAD_CHUNK_NODES + 7,
+        ] {
+            let data: Vec<f32> = (0..len)
+                .map(|i| match i % 13 {
+                    0 => f32::NAN,
+                    1 => f32::INFINITY,
+                    2 => f32::NEG_INFINITY,
+                    3 => -0.0,
+                    _ => (i as f32 * 0.0037).sin() * 100.0,
+                })
+                .collect();
+            let mut uploaded = Vec::new();
+            let mut visits = 0;
+            for_each_volume_upload_chunk(&data, |offset, bytes| {
+                assert_eq!(offset, uploaded.len() / 2, "chunks start at the next node");
+                assert_eq!(offset % 4, 0);
+                assert_eq!(bytes.len() % 8, 0);
+                assert!(bytes.len() <= data.len().min(VOLUME_UPLOAD_CHUNK_NODES).next_multiple_of(4) * 2);
+                uploaded.extend_from_slice(bytes);
+                visits += 1;
+            });
+            let volume = crate::sdf_volume::Volume { dims: [len as u32, 1, 1], origin: [0.0; 3], cell: 1.0, data };
+            let mut original: Vec<u8> = volume.to_f16_bits().iter().flat_map(|v| v.to_le_bytes()).collect();
+            original.resize(len.next_multiple_of(4) * 2, 0);
+            assert_eq!(uploaded, original, "binary16 values and texel padding at {len} nodes");
+            assert_eq!(visits, len.div_ceil(VOLUME_UPLOAD_CHUNK_NODES));
+        }
+    }
+
+    #[test]
+    fn scene_pool_shrinks_with_hysteresis() {
+        assert!(pool_needs_resize(None, 16));
+        assert!(!pool_needs_resize(Some(16), 16));
+        assert!(!pool_needs_resize(Some(32), 16));
+        assert!(!pool_needs_resize(Some(63), 16));
+        assert!(pool_needs_resize(Some(64), 16));
+        assert!(pool_needs_resize(Some(16), 32));
+    }
 
     /// A reader for a packed frame: where each list starts.
     pub(super) struct Frame<'a> {

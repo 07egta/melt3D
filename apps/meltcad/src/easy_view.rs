@@ -356,7 +356,7 @@ pub fn render_mode_with_grid(
 
 struct Job {
     id: u64,
-    scene: Scene,
+    scene: Arc<Scene>,
     cam: Camera,
     sizes: Vec<[usize; 2]>,
     moving: bool,
@@ -432,7 +432,7 @@ fn spawn_worker(ctx: Option<egui::Context>) -> Option<Worker> {
 /// What a request was made from.
 #[derive(Clone, Debug, PartialEq)]
 struct Key {
-    scene: Scene,
+    scene: Arc<Scene>,
     cam: [f32; 7],
     view: [u32; 2],
     moving: bool,
@@ -455,6 +455,18 @@ pub struct EasyView {
 }
 
 impl EasyView {
+    /// Drop the old document snapshot and picture; an in-flight worker sees the changed id
+    /// and cancels before publishing another obsolete picture.
+    pub fn invalidate(&mut self) {
+        if let Some(worker) = &self.worker {
+            worker.latest.store(u64::MAX, Ordering::Relaxed);
+            while worker.rx.try_recv().is_ok() {}
+        }
+        self.requested = None;
+        self.texture = None;
+        self.settled = false;
+    }
+
     /// Make sure the picture shows `scene` through `cam` at `view_px`; call every frame.
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn update(&mut self, ctx: &egui::Context, scene: &Scene, cam: &Camera, view_px: [u32; 2], moving: bool) {
@@ -487,21 +499,22 @@ impl EasyView {
                 self.settled = frame.last;
             }
         }
-        let key = Key {
-            scene: scene.clone_if_changed(self.requested.as_ref().map(|(_, k)| &k.scene)),
-            cam: crate::perf::cam_key(cam),
-            view: view_px,
-            moving,
-            mode: self.mode,
-            grid: grid.sanitized(),
-        };
-        if self.requested.as_ref().is_some_and(|(_, k)| *k == key) {
+        let cam_key = crate::perf::cam_key(cam);
+        let grid = grid.sanitized();
+        // Compare borrowed data before allocating. Camera/viewport changes reuse the immutable
+        // scene snapshot too; only an actual edit copies the Scene.
+        let same_scene = self.requested.as_ref().filter(|(_, key)| key.scene.as_ref() == scene);
+        if same_scene
+            .is_some_and(|(_, key)| key.cam == cam_key && key.view == view_px && key.moving == moving && key.mode == self.mode && key.grid == grid)
+        {
             return;
         }
+        let snapshot = same_scene.map_or_else(|| Arc::new(scene.clone()), |(_, key)| Arc::clone(&key.scene));
+        let key = Key { scene: snapshot, cam: cam_key, view: view_px, moving, mode: self.mode, grid };
         self.next_id += 1;
         let id = self.next_id;
         worker.latest.store(id, Ordering::Relaxed);
-        let job = Job { id, scene: key.scene.clone(), cam: *cam, sizes: sizes(view_px, moving), moving, mode: self.mode, grid: key.grid };
+        let job = Job { id, scene: Arc::clone(&key.scene), cam: *cam, sizes: sizes(view_px, moving), moving, mode: self.mode, grid: key.grid };
         if worker.tx.send(job).is_ok() {
             self.requested = Some((id, key));
             self.settled = false;
@@ -521,21 +534,6 @@ impl EasyView {
     #[cfg(test)]
     pub fn has_worker(&self) -> bool {
         self.worker.is_some()
-    }
-}
-
-/// `Scene` has no cheap "same as" check apart from `==`; this keeps the old copy when equal so
-/// that the common frame (nothing changed) clones nothing.
-trait CloneIfChanged {
-    fn clone_if_changed(&self, old: Option<&Scene>) -> Scene;
-}
-
-impl CloneIfChanged for Scene {
-    fn clone_if_changed(&self, old: Option<&Scene>) -> Scene {
-        match old {
-            Some(o) if o == self => o.clone(),
-            _ => self.clone(),
-        }
     }
 }
 
@@ -787,13 +785,41 @@ mod tests {
     }
 
     #[test]
-    fn the_key_clone_reuses_an_equal_scene() {
-        let a = Scene::default();
-        let b = a.clone_if_changed(Some(&a));
-        assert_eq!(a, b);
-        let mut c = a.clone();
-        c.env.exposure = 2.0;
-        assert_ne!(c.clone_if_changed(Some(&a)), a);
-        assert_eq!(c.clone_if_changed(None), c);
+    fn unchanged_and_camera_only_updates_do_not_copy_the_scene() {
+        let ctx = egui::Context::default();
+        let (tx, jobs) = channel();
+        let (_frames, rx) = channel();
+        let mut view = EasyView { worker: Some(Worker { tx, rx, latest: Arc::new(AtomicU64::new(0)) }), ..EasyView::default() };
+        let mut scene = Scene::default();
+        let mut cam = Camera::default();
+        view.update(&ctx, &scene, &cam, [120, 90], false);
+        let first = jobs.try_recv().expect("first render requested");
+        for _ in 0..20 {
+            view.update(&ctx, &scene, &cam, [120, 90], false);
+        }
+        assert!(jobs.try_recv().is_err(), "unchanged frames submit no work");
+        assert!(Arc::ptr_eq(&first.scene, &view.requested.as_ref().expect("snapshot").1.scene));
+
+        cam.orbit(30.0, 0.0);
+        view.update(&ctx, &scene, &cam, [120, 90], false);
+        let camera = jobs.try_recv().expect("camera render requested");
+        assert!(Arc::ptr_eq(&first.scene, &camera.scene), "camera motion shares the snapshot");
+        view.update(&ctx, &scene, &cam, [240, 180], true);
+        let resized = jobs.try_recv().expect("viewport render requested");
+        assert!(Arc::ptr_eq(&first.scene, &resized.scene));
+        assert_ne!(resized.sizes, camera.sizes);
+
+        scene.env.exposure = 2.0;
+        view.update(&ctx, &scene, &cam, [240, 180], true);
+        let edited = jobs.try_recv().expect("edited scene render requested");
+        assert!(!Arc::ptr_eq(&first.scene, &edited.scene), "edits get their own immutable snapshot");
+        assert_eq!(edited.scene.as_ref(), &scene);
+        assert_eq!(first.scene.env.exposure, Scene::default().env.exposure);
+        view.invalidate();
+        assert!(view.requested.is_none());
+        assert!(view.texture.is_none());
+        assert_eq!(view.worker.as_ref().expect("worker").latest.load(Ordering::Relaxed), u64::MAX);
+        view.update(&ctx, &scene, &cam, [240, 180], true);
+        assert!(jobs.try_recv().is_ok(), "document replacement can reuse the worker");
     }
 }

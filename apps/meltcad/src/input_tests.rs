@@ -1873,3 +1873,50 @@ fn control_animation_noop_seek_syncs_time_and_readonly_works_during_sketch() {
     assert_eq!(r.app.an.frame, 5, "a rejected pose command cannot move the playhead");
     let _ = std::fs::remove_file(path);
 }
+
+#[test]
+fn escape_without_a_gizmo_drag_still_clears_selection() {
+    let mut r = Rig::new();
+    let before = r.app.scene.clone();
+    assert!(r.app.sel.is_some());
+    r.key(egui::Key::Escape);
+    assert!(r.app.sel.is_none(), "idle Escape reaches the ordinary shortcut handler");
+    assert_eq!(r.app.scene, before);
+}
+
+#[test]
+fn escape_still_reaches_the_curve_tool() {
+    let mut r = Rig::new();
+    r.app.ct.drawing = true;
+    let selected = r.app.sel;
+    r.key(egui::Key::Escape);
+    assert!(!r.app.ct.drawing, "Escape ends an empty curve drawing gesture");
+    assert_eq!(r.app.sel, selected, "the curve tool owns its cancellation key");
+}
+
+#[test]
+fn zoom_past_a_foreground_shape_refreshes_hover_under_a_stationary_pointer() {
+    let mut r = Rig::new();
+    let mut front = Shape::new(Kind::Sphere, [0.0, 0.0, 100.0], Material::default());
+    front.size[0] = 10.0;
+    r.app.scene.groups[0].shapes.push(front);
+    r.app.sel = None;
+    r.app.cam.look(0.0, std::f32::consts::FRAC_PI_2);
+    r.app.cam.target = [0.0, 0.0, 0.0];
+    r.app.cam.dist = 140.0;
+    r.app.fly = None;
+    let pointer = r.app.view_rect.center();
+    r.mv(pointer);
+    r.frame(vec![]);
+    assert_eq!(r.app.hover, Some(Pick::Shape(0, 1)), "the foreground sphere is initially under the pointer");
+    r.frame(vec![Event::Zoom(2.0)]);
+    // The camera crosses the foreground sphere. No new pointer motion is sent; the hover
+    // throttle's requested follow-up frame becomes due.
+    for _ in 0..4 {
+        r.frame(vec![]);
+    }
+    assert!(r.app.cam.eye()[2] < 90.0, "the zoom moved the camera past the foreground sphere");
+    let expected = r.app.shape_at(r.app.view_rect, pointer).map(|(g, s)| crate::view::as_pick(g, s));
+    assert_eq!(expected, Some(Pick::Shape(0, 0)), "the original shape is now visible behind it");
+    assert_eq!(r.app.hover, expected, "zoom refreshes hover without a mouse move");
+}

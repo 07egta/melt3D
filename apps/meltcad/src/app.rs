@@ -630,6 +630,11 @@ impl App {
         self.document_generation = self.document_generation.wrapping_add(1);
         self.scene = scene.clone();
         self.committed = scene;
+        // A different document must release the old one's prepared geometry, packed GPU data
+        // and fallback picture instead of keeping them as reuse candidates.
+        self.field_cache.get_mut().take();
+        self.perf.pack.clear();
+        self.gpu.easy_view.invalidate();
         self.undo.clear();
         self.redo.clear();
         self.sel = if self.scene.shape(0, 0).is_some() { Some(Pick::Shape(0, 0)) } else { None };
@@ -3247,6 +3252,19 @@ mod tests {
         assert_eq!(app.scene.shape_count(), 2);
         assert!(app.dirty);
         assert!(app.pending_file_action.is_some(), "failed save must not discard the pending action");
+    }
+
+    #[test]
+    fn installing_another_document_releases_the_old_caches() {
+        let mut app = App::new(true, None);
+        let rev = app.track_scene();
+        let weak_field = std::rc::Rc::downgrade(&app.field());
+        let weak_pack = std::sync::Arc::downgrade(&app.perf.pack.get(&app.scene, rev));
+        assert!(weak_field.upgrade().is_some() && weak_pack.upgrade().is_some(), "both caches hold the first document");
+        app.install_scene(Scene::default(), None, Vec::new());
+        assert!(app.field_cache.borrow().is_none());
+        assert!(weak_field.upgrade().is_none(), "the old prepared field is released");
+        assert!(weak_pack.upgrade().is_none(), "the old GPU pack is released");
     }
 
     #[test]
