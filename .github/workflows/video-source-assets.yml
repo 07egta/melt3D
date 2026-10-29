@@ -20,7 +20,9 @@ jobs:
       - name: Prepare official narration and source assets
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python docs/promo-video/rebuild_20261029/prepare_assets.py
+          COLUMNS: '160'
+          LINES: '40'
+        run: echo y | python docs/promo-video/rebuild_20261029/prepare_assets.py
       - uses: actions/upload-artifact@v4
         if: always()
         with:
