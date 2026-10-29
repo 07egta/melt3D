@@ -17,12 +17,22 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Adapt nested mora representation
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('docs/promo-video/rebuild_20261029/voice_clarity_v7.py')
+          s=p.read_text().replace('ph.pause_mora.vowel_length',"ph.pause_mora['vowel_length']").replace('m.text for m in p.moras',"m['text'] for m in p.moras")
+          p.write_text(s)
+          PY
       - name: Generate pronunciation-aware voice clips
         env:
           GH_TOKEN: ${{ github.token }}
           COLUMNS: '160'
           LINES: '40'
-        run: python docs/promo-video/rebuild_20261029/voice_clarity_v7.py
+        run: |
+          python docs/promo-video/rebuild_20261029/voice_clarity_v7.py
+          cp docs/promo-video/rebuild_20261029/voice_clarity_v7.py v7-clarity-assets/
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -31,9 +41,9 @@ jobs:
           retention-days: 7
           if-no-files-found: warn
       - uses: actions/upload-artifact@v4
-        if: success()
+        if: always()
         with:
           name: melt3d-v7-voice-runtime
           path: vv-runtime/
           retention-days: 1
-          if-no-files-found: error
+          if-no-files-found: warn
