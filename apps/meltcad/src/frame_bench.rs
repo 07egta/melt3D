@@ -317,7 +317,12 @@ fn the_scene_list_scrolls_while_several_groups_are_picked() {
         let at = rect.center();
         r.frame(vec![Event::PointerMoved(at)]);
         for _ in 0..6 {
-            r.frame(vec![Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: vec2(0.0, -80.0), phase: egui::TouchPhase::Move, modifiers: Modifiers::NONE }]);
+            r.frame(vec![Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: vec2(0.0, -80.0),
+                phase: egui::TouchPhase::Move,
+                modifiers: Modifiers::NONE,
+            }]);
         }
         for _ in 0..4 {
             r.frame(vec![]);
@@ -352,7 +357,12 @@ fn the_wheel_zooms_while_several_groups_are_picked() {
     r.frame(vec![Event::PointerMoved(c)]);
     let d0 = r.app.cam.dist;
     for _ in 0..5 {
-        r.frame(vec![Event::MouseWheel { unit: egui::MouseWheelUnit::Line, delta: vec2(0.0, 3.0), phase: egui::TouchPhase::Move, modifiers: Modifiers::NONE }]);
+        r.frame(vec![Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Line,
+            delta: vec2(0.0, 3.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: Modifiers::NONE,
+        }]);
     }
     for _ in 0..5 {
         r.frame(vec![]);

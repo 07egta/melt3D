@@ -5,7 +5,7 @@
 use std::f32::consts::{PI, TAU};
 
 use crate::app::App;
-use crate::model::{Group, Kind, Material, Op, Pick, Shape, MAX_GROUPS, MAX_SHAPES};
+use crate::model::{Group, Kind, MAX_GROUPS, MAX_SHAPES, Material, Op, Pick, Shape};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Preset {
@@ -51,29 +51,35 @@ impl Preset {
         sh.size[1] = 1.0;
         sh.size[2] = 1.0;
         sh.path = match self {
-            Preset::Wave => (0..=8).map(|i| {
-                let t = i as f32 / 8.0;
-                let x = -65.0 + t * 130.0;
-                let y = 8.0 * (t * TAU).sin();
-                let z = 12.0 * (t * TAU * 1.5).sin();
-                let r = 5.5 + 1.3 * (t * TAU).sin();
-                [x, y, z, r]
-            }).collect(),
+            Preset::Wave => (0..=8)
+                .map(|i| {
+                    let t = i as f32 / 8.0;
+                    let x = -65.0 + t * 130.0;
+                    let y = 8.0 * (t * TAU).sin();
+                    let z = 12.0 * (t * TAU * 1.5).sin();
+                    let r = 5.5 + 1.3 * (t * TAU).sin();
+                    [x, y, z, r]
+                })
+                .collect(),
             Preset::Ring => {
                 sh.params[0] = 1.0;
-                (0..12).map(|i| {
-                    let a = i as f32 * TAU / 12.0;
-                    [37.0 * a.cos(), 37.0 * a.sin(), 6.0 * (2.0 * a).sin(), 5.0 + 1.2 * (3.0 * a).cos()]
-                }).collect()
+                (0..12)
+                    .map(|i| {
+                        let a = i as f32 * TAU / 12.0;
+                        [37.0 * a.cos(), 37.0 * a.sin(), 6.0 * (2.0 * a).sin(), 5.0 + 1.2 * (3.0 * a).cos()]
+                    })
+                    .collect()
             }
-            Preset::S => (0..=8).map(|i| {
-                let t = i as f32 / 8.0;
-                let y = -58.0 + t * 116.0;
-                let x = 29.0 * (2.0 * PI * t).sin();
-                let z = 10.0 * (t * PI).sin();
-                let r = 4.7 + 1.5 * (t * TAU).sin().powi(2);
-                [x, y, z, r]
-            }).collect(),
+            Preset::S => (0..=8)
+                .map(|i| {
+                    let t = i as f32 / 8.0;
+                    let y = -58.0 + t * 116.0;
+                    let x = 29.0 * (2.0 * PI * t).sin();
+                    let z = 10.0 * (t * PI).sin();
+                    let r = 4.7 + 1.5 * (t * TAU).sin().powi(2);
+                    [x, y, z, r]
+                })
+                .collect(),
         };
         sh
     }
