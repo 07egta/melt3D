@@ -688,7 +688,28 @@ impl App {
 
     // ----- inspector -----
 
+    /// The melt amount of a group and of its shapes is one shared setting: when either slider
+    /// moved, the group and every melting shape in it take the same value.
+    fn apply_melt_link(&mut self, ui: &Ui) {
+        let id = egui::Id::new("melt_amount_link");
+        let Some((g, v)) = ui.ctx().data_mut(|d| d.remove_temp::<(usize, f32)>(id)) else { return };
+        if !v.is_finite() {
+            return;
+        }
+        if let Some(gr) = self.scene.groups.get_mut(g) {
+            if gr.blend > 0.0 {
+                gr.blend = v;
+            }
+            for sh in &mut gr.shapes {
+                if sh.blend > 0.0 {
+                    sh.blend = v;
+                }
+            }
+        }
+    }
+
     fn inspector(&mut self, ui: &mut Ui) {
+        self.apply_melt_link(ui);
         match self.sel {
             Some(Pick::Shape(g, s)) if self.scene.shape(g, s).is_some() => self.shape_inspector(ui, g, s),
             Some(Pick::Group(g)) if g < self.scene.groups.len() => self.group_inspector(ui, g),
@@ -790,13 +811,15 @@ impl App {
                 let into = parent
                     .as_deref()
                     .map_or_else(|| i18n::tr("inspector.group.the_scene").to_string(), |p| format!("{} “{p}”", i18n::tr("inspector.group.label")));
-                style::labeled_slider(
+                if style::labeled_slider(
                     ui,
                     i18n::tr("inspector.melt_amount"),
                     &mut gr.blend,
                     0.0..=80.0,
                     &format!("{} ({into})", i18n::tr("inspector.melt.amount.group.tip")),
-                );
+                ) {
+                    ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("melt_amount_link"), (g, gr.blend)));
+                }
             }
         }
         if let Some(gr) = self.scene.groups.get_mut(g) {
@@ -1058,18 +1081,21 @@ impl App {
                         }
                     }
                     if sh.blend > 0.0 {
-                        style::labeled_slider(
+                        if style::labeled_slider(
                             ui,
                             i18n::tr("inspector.melt_amount"),
                             &mut sh.blend,
                             0.0..=80.0,
                             i18n::tr("inspector.melt.amount.shape.tip"),
-                        );
+                        ) {
+                            ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("melt_amount_link"), (g, sh.blend)));
+                        }
                     }
                 }
-                style::labeled_slider(ui, i18n::tr("inspector.shell"), &mut sh.shell, 0.0..=40.0, i18n::tr("inspector.shell.tip"));
-                // melt just one face: the rest keeps its exact size
-                {
+                style::labeled_slider(ui, i18n::tr("inspector.shell"), &mut sh.shell, -40.0..=40.0, i18n::tr("inspector.shell.tip"));
+                // melt just one face: no longer offered for new work, but a design that already
+                // uses it keeps the control so it can be changed or switched off
+                if sh.face_melt.face > 0 {
                     let fm = &mut sh.face_melt;
                     ui.label(RichText::new(i18n::tr("inspector.melt_face")).color(style::DIM).size(12.0));
                     let mut items: Vec<(&str, &str)> = vec![(i18n::tr("inspector.face.none"), i18n::tr("inspector.face.none.tip"))];

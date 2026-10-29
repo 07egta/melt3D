@@ -174,7 +174,7 @@ impl Prepared {
             curve_groups,
             curve_kmax,
             outline2: s.outline2.clone(),
-            shell: if s.shell.is_finite() { s.shell.max(0.0) } else { 0.0 },
+            shell: if s.shell.is_finite() { s.shell } else { 0.0 },
             face_melt: s.face_melt.parts(),
             poly_orient,
             poly_limit,
@@ -232,9 +232,12 @@ impl Prepared {
         // rounding, a face melt and a ripple) and through any distance-shortening the shape maths
         // applies, or the wall comes out too thick. (A curve hollows itself: its flat ends are cut
         // after the hollowing, see curve::distance.)
-        if self.shell > 0.0 && self.kind != Kind::Curve {
-            let wall = self.shell * self.min_scale() * self.shell_shortening(q, before_ripple);
-            (d + wall * 0.5).abs() - wall * 0.5
+        // A minus shell is the same wall with an opening at the top: everything above one wall
+        // thickness below the shape's top (local +Z) is cut away, which takes the cap off.
+        if self.shell != 0.0 && self.kind != Kind::Curve {
+            let wall = self.shell.abs() * self.min_scale() * self.shell_shortening(q, before_ripple);
+            let hollow = (d + wall * 0.5).abs() - wall * 0.5;
+            if self.shell < 0.0 { hollow.max((q[2] - (self.half[2] - self.shell.abs())) * self.min_scale()) } else { hollow }
         } else {
             d
         }
@@ -1229,6 +1232,26 @@ mod tests {
         }
         bad.normalize_depths();
         assert_eq!(bad.groups.iter().map(|g| g.depth).collect::<Vec<_>>(), vec![0, 1, 0, 1]);
+    }
+
+    #[test]
+    fn a_minus_shell_is_the_same_wall_with_the_top_open() {
+        let mut s = Shape::new(Kind::Box, [0.0; 3], Material::default());
+        s.size = [40.0, 40.0, 40.0, 0.0];
+        s.shell = 4.0;
+        let closed = Prepared::new(&s);
+        s.shell = -4.0;
+        let open = Prepared::new(&s);
+        let top = [0.0, 0.0, 19.0]; // inside the top cap
+        let side = [19.0, 0.0, 0.0]; // inside a side wall
+        let bottom = [0.0, 0.0, -19.0];
+        assert!(closed.distance(top) < 0.0, "a closed shell has a lid");
+        assert!(open.distance(top) > 0.0, "the minus shell has no lid");
+        assert!(open.distance([0.0, 0.0, 30.0]) > 0.0, "and nothing above it");
+        assert!((open.distance(side) - closed.distance(side)).abs() < 1e-4, "the side wall is the same");
+        assert!((open.distance(bottom) - closed.distance(bottom)).abs() < 1e-4, "so is the floor");
+        s.shell = f32::NAN;
+        assert_eq!(Prepared::new(&s).distance(top), Prepared::new(&Shape::new(Kind::Box, [0.0; 3], Material::default())).distance(top));
     }
 
     #[test]

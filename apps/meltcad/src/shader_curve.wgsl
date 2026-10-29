@@ -148,7 +148,7 @@ fn curve_dist(s: Shape, q: vec3<f32>) -> f32 {
     }
     // A shell hollows the tube first (shape_dist leaves curves alone), then flat ends cut it open.
     // The wall is in the shape's own mm; shape_dist scales it with the shape.
-    let wall = s.extra.x;
+    let wall = abs(s.extra.x);
     if (wall > 0.0) { d = abs(d + wall * 0.5) - wall * 0.5; }
     if (s.params.z > 0.0 && s.params.x < 0.5) {
         let p0 = path_pt(st);
