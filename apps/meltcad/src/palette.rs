@@ -368,6 +368,8 @@ impl App {
             Action::Insert(c, i) => {
                 if let Some(item) = library::all().get(c).and_then(|c| c.items.get(i)) {
                     crate::library_ui::insert(self, ctx, item);
+                } else {
+                    self.say(ctx, "This model could not be loaded");
                 }
             }
             Action::Undo => self.undo(),
@@ -646,6 +648,16 @@ static ENTRIES: std::sync::OnceLock<Vec<Entry>> = std::sync::OnceLock::new();
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_library_entry_that_cannot_be_loaded_says_so_and_changes_nothing() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(true, None);
+        let before = app.scene.clone();
+        app.run_action(&ctx, Action::Insert(usize::MAX, 0));
+        assert_eq!(app.scene, before);
+        assert!(app.status.0.contains("could not be loaded"), "{:?}", app.status.0);
+    }
 
     fn top(q: &str) -> Option<Action> {
         let all = entries();

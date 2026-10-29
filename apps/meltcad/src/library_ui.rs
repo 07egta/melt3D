@@ -239,13 +239,25 @@ fn cell(ui: &mut egui::Ui, ci: usize, ii: usize, name: &str, ctx: &egui::Context
         {
             ask(ctx, ci, ii, item);
         }
+        let mut problem = None;
         if let Some(texture) = texture {
             ui.painter().image(texture.id(), rect.shrink(4.0), egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)), Color32::WHITE);
         } else {
-            let indicator = if worker(ctx).is_none() || category.is_some_and(|c| c.is_err()) || failed(ctx, ci, ii) { "!" } else { "…" };
+            problem = if category.is_some_and(|c| c.is_err()) {
+                Some("This model could not be loaded.")
+            } else if worker(ctx).is_none() || failed(ctx, ci, ii) {
+                Some("The picture could not be made.")
+            } else {
+                None
+            };
+            let indicator = if problem.is_some() { "!" } else { "…" };
             ui.painter().text(rect.center(), Align2::CENTER_CENTER, indicator, egui::FontId::proportional(14.0), style::DIM);
         }
-        let tip = format!("Add {name} to the scene");
+        // Say why a card shows "!" instead of leaving the person to guess.
+        let tip = match problem {
+            Some(why) => format!("{why}\nAdd {name} to the scene"),
+            None => format!("Add {name} to the scene"),
+        };
         let mut clicked = response.on_hover_text(&tip).clicked();
         // the name works like the picture
         let label = ui.add(egui::Label::new(RichText::new(name).size(11.5)).truncate().sense(egui::Sense::click()));
