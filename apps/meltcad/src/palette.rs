@@ -59,6 +59,10 @@ pub enum Action {
     ShowAssets,
     ShowOutliner,
     Help,
+    /// The first-use box practice card.
+    Guide,
+    /// Show the status hints hidden with their ×.
+    GuideResetHints,
 }
 
 impl Action {
@@ -221,6 +225,8 @@ pub fn entries() -> Vec<Entry> {
         cmd("Show Library", "library assets らいぶらり あせっと ライブラリを開く", Action::ShowAssets),
         cmd("Show Outliner", "outliner scene しーん あうとらいなー シーン一覧を開く", Action::ShowOutliner),
         cmd("Keyboard Shortcuts", "help keys keyboard へるぷ ? 操作のしかた", Action::Help),
+        cmd("First Box Guide", "guide tutorial first box onboarding がいど ガイド はじめて 箱づくり 練習", Action::Guide),
+        cmd("Restore Hidden Hints", "hints restore reset tips ひんと ヒント 隠したヒントを戻す", Action::GuideResetHints),
     ]);
     v
 }
@@ -411,7 +417,17 @@ impl App {
             Action::ViewTop => self.fly_look(self.cam.yaw, pi / 2.0),
             Action::ShowAssets => self.lib_open = true,
             Action::ShowOutliner => self.lib_open = false,
-            Action::Help => self.show_keys = !self.show_keys,
+            Action::Help => {
+                self.show_keys = !self.show_keys;
+                if self.show_keys {
+                    self.guide.panel_open = false;
+                }
+            }
+            Action::Guide => {
+                self.guide.open();
+                self.show_keys = false;
+            }
+            Action::GuideResetHints => self.guide.reset_hints(),
         }
     }
 

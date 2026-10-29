@@ -455,6 +455,18 @@ pub struct EasyView {
 }
 
 impl EasyView {
+    /// Release the old software image and its full scene snapshot on document replacement.
+    /// A worker still rendering the old scene observes a changed request id and stops.
+    pub fn invalidate(&mut self) {
+        if let Some(worker) = &self.worker {
+            worker.latest.store(u64::MAX, Ordering::Relaxed);
+            while worker.rx.try_recv().is_ok() {}
+        }
+        self.requested = None;
+        self.texture = None;
+        self.settled = false;
+    }
+
     /// Make sure the picture shows `scene` through `cam` at `view_px`; call every frame.
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn update(&mut self, ctx: &egui::Context, scene: &Scene, cam: &Camera, view_px: [u32; 2], moving: bool) {
@@ -751,6 +763,14 @@ mod tests {
         v.update(&ctx, &sc, &cam2, [120, 90], true);
         assert_ne!(v.requested.as_ref().map(|(i, _)| *i), id);
         assert!(!v.settled);
+        v.invalidate();
+        assert!(v.requested.is_none(), "the worker's full scene snapshot must be released");
+        assert!(v.texture.is_none(), "the old software picture must be dropped");
+        assert!(!v.settled);
+        assert_eq!(v.worker.as_ref().map(|w| w.latest.load(Ordering::Relaxed)), Some(u64::MAX));
+        // The same worker may be reused for the next document.
+        v.update(&ctx, &sc, &cam, [120, 90], false);
+        assert!(v.requested.is_some());
     }
 
     #[test]

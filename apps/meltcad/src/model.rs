@@ -1212,6 +1212,35 @@ impl Scene {
         reach
     }
 
+    /// One melt amount for a whole tree: every group and every shape that melts (amount above 0)
+    /// under the same top group as `g` takes `amount`, so changing the amount on any of them,
+    /// the top group included, changes them all. Things with melt off stay off; 0 or a number
+    /// that is not finite changes nothing. Returns whether anything changed.
+    pub fn share_melt_amount(&mut self, g: usize, amount: f32) -> bool {
+        if !amount.is_finite() || amount <= 0.0 || g >= self.groups.len() {
+            return false;
+        }
+        let mut top = g;
+        while let Some(p) = self.parent_of(top) {
+            top = p;
+        }
+        let end = self.subtree_end(top).min(self.groups.len());
+        let mut changed = false;
+        for group in self.groups.get_mut(top..end).unwrap_or_default() {
+            if group.blend > 0.0 && group.blend != amount {
+                group.blend = amount;
+                changed = true;
+            }
+            for shape in &mut group.shapes {
+                if shape.blend > 0.0 && shape.blend != amount {
+                    shape.blend = amount;
+                    changed = true;
+                }
+            }
+        }
+        changed
+    }
+
     /// Put `g` (with what is nested in it) into the group just above it.
     pub fn indent_group(&mut self, g: usize) -> bool {
         let e = self.subtree_end(g);
@@ -1911,5 +1940,40 @@ mod tests {
         sh.scale = [2.0, 3.0, 4.0];
         sh.volume = Some(crate::mesh::SharedVolume::new(crate::mesh::tests::ball_volume(8)));
         assert_eq!(sh.mesh_cell_mm(), Some([2.0, 3.0, 4.0]));
+    }
+
+    #[test]
+    fn one_melt_amount_is_shared_by_the_whole_group_tree() {
+        let mut sc = Scene::default();
+        let mut top = Group::new("top");
+        top.blend = 6.0;
+        let mut child = Group::new("child");
+        child.depth = 1;
+        child.blend = 20.0;
+        let mut off = Group::new("off");
+        off.depth = 1;
+        off.blend = 0.0;
+        let mut other = Group::new("other tree");
+        other.blend = 9.0;
+        let mut ball = Shape::new(Kind::Sphere, [0.0; 3], Material::default());
+        ball.blend = 4.0;
+        child.shapes.push(ball.clone());
+        let mut hard = ball;
+        hard.blend = 0.0;
+        child.shapes.push(hard);
+        sc.groups = vec![top, child, off, other];
+        // the top group's own slider reaches the group inside it, even though that one was higher
+        assert!(sc.share_melt_amount(0, 12.0));
+        assert_eq!((sc.groups[0].blend, sc.groups[1].blend), (12.0, 12.0));
+        assert_eq!(sc.groups[1].shapes[0].blend, 12.0);
+        assert_eq!(sc.groups[1].shapes[1].blend, 0.0, "a shape with melt off stays hard");
+        assert_eq!(sc.groups[2].blend, 0.0, "a group with melt off stays off");
+        assert_eq!(sc.groups[3].blend, 9.0, "another tree is not touched");
+        // and a slider deep inside reaches the top
+        assert!(sc.share_melt_amount(1, 30.0));
+        assert_eq!((sc.groups[0].blend, sc.groups[1].blend), (30.0, 30.0));
+        assert_eq!(sc.group_melt_reach(1), 30.0);
+        // nothing to do for 0, NaN or a group that is not there
+        assert!(!sc.share_melt_amount(0, 0.0) && !sc.share_melt_amount(0, f32::NAN) && !sc.share_melt_amount(99, 5.0));
     }
 }

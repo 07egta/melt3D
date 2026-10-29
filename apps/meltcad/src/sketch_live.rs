@@ -188,6 +188,9 @@ impl App {
         }
         self.sk.frame = self.sketch_plane();
         self.say(ctx, format!("Created {} (use Edit Sketch to change the outline)", make.label()));
+        if make == Make::Extrude {
+            self.guide.extruded();
+        }
     }
 
     /// Remove the live solid again: the scene is as it was before the outline closed.

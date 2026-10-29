@@ -1231,6 +1231,29 @@ mod tests {
     }
 
     #[test]
+    fn a_shelled_shape_cut_by_a_minus_opens_into_a_cup() {
+        let mut shelled = ball(0.0, 20.0);
+        shelled.shell = 3.0;
+        let mut cutter = Shape::new(Kind::Box, [0.0, 0.0, 20.0], Material::default());
+        cutter.size = [60.0, 60.0, 20.0];
+        cutter.blend = 0.0;
+        cutter.op = Op::Subtract;
+        let mut sc = Scene { groups: vec![], melt: Default::default(), env: Default::default(), saved: Vec::new(), anim: Default::default() };
+        sc.groups.push(group_of("cup", 0, vec![shelled.clone(), cutter.clone()]));
+        let f = Field::new(&sc);
+        assert!(f.distance([0.0, 0.0, 0.0]) > 0.0, "the middle is hollow");
+        assert!(f.distance([0.0, 0.0, 12.0]) > 0.0, "the cavity is open at the top");
+        assert!(f.distance([0.0, 0.0, 19.0]) > 0.0, "the cap is cut away");
+        assert!(f.distance([0.0, 0.0, -18.5]) < 0.0, "the floor stays");
+        assert!(f.distance([18.5, 0.0, 0.0]) < 0.0, "so do the side walls");
+        // without the cutter the cavity stays closed: no hole by itself
+        let mut closed = Scene { groups: vec![], melt: Default::default(), env: Default::default(), saved: Vec::new(), anim: Default::default() };
+        closed.groups.push(group_of("ball", 0, vec![shelled]));
+        let g = Field::new(&closed);
+        assert!(g.distance([0.0, 0.0, 18.5]) < 0.0, "the shell alone keeps its lid");
+    }
+
+    #[test]
     fn a_shell_hollows_any_shape_into_a_wall() {
         let m = Material::default();
         let mut s = Shape::new(Kind::Sphere, [0.0; 3], m);

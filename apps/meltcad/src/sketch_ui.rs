@@ -671,6 +671,17 @@ impl App {
             self.sk.picking = true;
             self.sk.hover_frame = None;
             self.sk.plane_square = false;
+            // The first-use box practice: a rectangle on the floor that becomes a live
+            // extrusion right away (no plane pick, no separate "keep the sketch" step).
+            if self.guide.sketch_started() {
+                self.sk.plane = PlaneSel::Floor;
+                self.sk.pen = Pen::Rect;
+                self.sk.make = Make::Extrude;
+                self.sk.height = 20.0;
+                self.sk.keep_sketch = false;
+                self.sk.picking = false;
+                self.sk.frame = self.sketch_plane();
+            }
         } else {
             self.sk.plane_manual = false;
             self.sk.picking = false;
@@ -694,8 +705,8 @@ impl App {
     pub fn sketch_button(&mut self, ui: &mut Ui) {
         let on = self.sk.on && self.sk.keep_sketch;
         if style::wide_button(ui, crate::i18n::tr("tool.sketch"), crate::i18n::tr("tool.sketch.tip"), on, None, glyph).clicked() {
+            // `set_sketch_tool` sets `keep_sketch` itself (the first-use guide may clear it)
             self.set_sketch_tool(!on);
-            self.sk.keep_sketch = !on;
         }
     }
 
@@ -1036,6 +1047,9 @@ impl App {
                     if self.sk.make == Make::Revolve && !self.sk.pframe.is_vertical() {
                         self.sk.make = Make::Extrude;
                     }
+                    if !self.sk.keep_sketch && self.sk.pen == Pen::Rect && self.sk.make == Make::Extrude {
+                        self.guide.rectangle_finished();
+                    }
                     // the plain Sketch button: the outline stays a line (select it, then Extrude)
                     if self.sk.keep_sketch {
                         self.sk.stage = Stage::Ready;
@@ -1150,6 +1164,9 @@ impl App {
         }
         self.sk.frame = self.sketch_plane();
         self.say(ctx, format!("Created {} (use Edit Sketch to change the outline)", make.label()));
+        if make == Make::Extrude {
+            self.guide.extruded();
+        }
         true
     }
 
@@ -1221,6 +1238,9 @@ impl App {
                 && let Some(o) = ui.input(|i| i.pointer.press_origin()).or(pos).filter(|o| !over_gnomon(*o))
                 && let Some((q, _)) = self.sketch_resolve_snap(rect, o, step, &frame, None, None)
             {
+                if self.sk.stage == Stage::Draw && self.sk.active_pen() == Pen::Rect {
+                    self.guide.rectangle_gesture();
+                }
                 self.sk.press(q);
             }
             if self.sk.dragging {
@@ -1243,6 +1263,9 @@ impl App {
         if resp.clicked_by(egui::PointerButton::Primary)
             && let (Some(m), Some(q)) = (mouse, self.sk.cursor)
         {
+            if self.sk.stage == Stage::Draw && self.sk.active_pen() == Pen::Rect {
+                self.guide.rectangle_gesture();
+            }
             let first = self.sk.pts.first().and_then(|f| self.sketch_px(rect, &frame, *f));
             let close = self.sk.pts.len() >= 3 && first.is_some_and(|f| (f - m).length() <= CLOSE_PX);
             let a = self.sk.anchor;
@@ -2504,7 +2527,12 @@ impl App {
                 for pen in Pen::ALL {
                     let usable = !((stage == Stage::LoftTop || stage == Stage::Hole) && pen == Pen::Line);
                     let on = self.sk.pen == pen;
-                    let tip = format!("{}\n{}", pen.tip(), pen_hint(pen, stage));
+                    let tip = if usable {
+                        format!("{}\n{}", pen.tip(), pen_hint(pen, stage))
+                    } else {
+                        // say why it is off and what to use instead
+                        crate::i18n::tr("guide.why.closed_outline").to_string()
+                    };
                     let r = ui
                         .add_enabled_ui(usable, |ui| {
                             style::wide_button(ui, pen.label(), &tip, on, None, |p, r, ink| crate::sketch_icons::pen_tool(p, r, pen, ink))
@@ -2811,7 +2839,15 @@ impl App {
             let b = egui::Button::new(egui::RichText::new(format!("Make {}", make.label())).strong().color(Color32::WHITE))
                 .fill(style::ACCENT_SOFT)
                 .stroke(Stroke::new(1.0, style::ACCENT));
-            if ui.add_enabled(ready, b).clicked() {
+            let reason = crate::i18n::tr(match make {
+                Make::Sweep if !ready => "guide.why.sweep_path",
+                Make::Loft if !ready => "guide.why.loft_top",
+                Make::Extrude => "guide.make.extrude",
+                Make::Revolve => "guide.make.revolve",
+                Make::Loft => "guide.make.loft",
+                Make::Sweep => "guide.make.sweep",
+            });
+            if ui.add_enabled(ready, b).on_hover_text(reason).on_disabled_hover_text(reason).clicked() {
                 self.sketch_confirm(ctx);
             }
             if !self.sk.separate && style::pill(ui, "Redo", false).on_hover_text("Discard the outline and draw again (Esc)").clicked() {
