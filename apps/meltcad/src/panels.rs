@@ -688,24 +688,13 @@ impl App {
 
     // ----- inspector -----
 
-    /// The melt amount of a group and of its shapes is one shared setting: when either slider
-    /// moved, the group and every melting shape in it take the same value.
+    /// The melt amount is one shared setting for a whole tree of groups: when a slider moved,
+    /// every melting group and shape under the same top group takes the same value (see
+    /// `Scene::share_melt_amount`).
     fn apply_melt_link(&mut self, ui: &Ui) {
         let id = egui::Id::new("melt_amount_link");
         let Some((g, v)) = ui.ctx().data_mut(|d| d.remove_temp::<(usize, f32)>(id)) else { return };
-        if !v.is_finite() {
-            return;
-        }
-        if let Some(gr) = self.scene.groups.get_mut(g) {
-            if gr.blend > 0.0 {
-                gr.blend = v;
-            }
-            for sh in &mut gr.shapes {
-                if sh.blend > 0.0 {
-                    sh.blend = v;
-                }
-            }
-        }
+        self.scene.share_melt_amount(g, v);
     }
 
     fn inspector(&mut self, ui: &mut Ui) {
