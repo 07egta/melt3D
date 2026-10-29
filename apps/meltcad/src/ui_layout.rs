@@ -1,49 +1,75 @@
-//! Responsive UI rules for YuraCAD. These values describe docked chrome, not floating tools.
-//! Pure functions keep size rules testable without a GPU or an operating-system window.
+//! Responsive layout rules for the window: how much room the docks may take, which docks a
+//! narrow window shows, and where the floating tool cards go so they do not cover the tool strip.
+//! Pure functions keep the rules testable without a GPU or an operating-system window.
 
-pub const CLASSIC_DOCK: f32 = 272.0;
-pub const CLASSIC_INSPECTOR: f32 = 312.0;
-pub const SIMPLE_DOCK: f32 = 244.0;
-pub const SIMPLE_INSPECTOR: f32 = 276.0;
+use egui::{Pos2, Rangef, Rect, pos2};
+
+/// Below this window width only one dock is shown at a time, so the 3-D view keeps its room.
 pub const COMPACT_WINDOW: f32 = 960.0;
-pub const TINY_HEADER: f32 = 590.0;
-pub const COMPACT_TOOLS: f32 = 650.0;
+/// Below this width the status bar keeps only its hint and drops the file name and sizes.
+pub const NARROW_STATUS: f32 = 470.0;
+/// Below this width the top bar leaves out the mouse / trackpad switch (it stays in the keys card).
+pub const NARROW_HEADER: f32 = 900.0;
+/// A dock never takes more than this share of the width that is left for it.
+const DOCK_SHARE: f32 = 0.54;
+/// ...but it never gets narrower than this.
+const DOCK_FLOOR: f32 = 160.0;
+/// The gap between the tool strip and a floating card.
+const CARD_GAP: f32 = 12.0;
 
-/// At compact sizes only one dock can be visible; the user can always close it.
+/// A window this narrow shows at most one dock.
 pub fn compact(window_width: f32) -> bool {
     window_width < COMPACT_WINDOW
 }
 
-/// Resize a requested dock so a small window still has a useful 3-D surface.
-pub fn dock_width(remaining_width: f32, preferred: f32) -> f32 {
-    preferred.min((remaining_width * 0.54).max(160.0))
+/// The docks to draw this frame, as (scene list, inspector). A compact window that has both open
+/// shows only the inspector; the person's choice is kept, so a wider window shows both again.
+pub fn visible_docks(window_width: f32, scene: bool, inspector: bool) -> (bool, bool) {
+    if compact(window_width) && scene && inspector { (false, true) } else { (scene, inspector) }
 }
 
-/// The amount of horizontal space left for the central 3-D viewport, excluding
-/// its optional floating tools (which can be moved/closed independently).
-pub fn viewport_width(window_width: f32, left: bool, right: bool, simple: bool) -> f32 {
-    let mut remaining = window_width;
-    if left {
-        remaining -= dock_width(remaining, if simple { SIMPLE_DOCK } else { CLASSIC_DOCK });
+/// Open or close one dock, as (scene list, inspector). Opening one in a compact window closes
+/// the other, so the click always shows what was asked for.
+pub fn toggle_dock(window_width: f32, scene: bool, inspector: bool, which_scene: bool) -> (bool, bool) {
+    if which_scene {
+        let open = !scene;
+        (open, inspector && !(open && compact(window_width)))
+    } else {
+        let open = !inspector;
+        (scene && !(open && compact(window_width)), open)
     }
-    if right {
-        remaining -= dock_width(remaining, if simple { SIMPLE_INSPECTOR } else { CLASSIC_INSPECTOR });
-    }
-    remaining.max(0.0)
 }
 
-/// Horizontal center and width of a floating drawing card, relative to the viewport.
-/// Leave room for the left tool strip instead of covering its buttons on narrow screens.
-pub fn floating_card_area(view_width: f32, beginner: bool, max_width: f32) -> (f32, f32) {
-    // At very small widths the modelling card temporarily takes priority over
-    // the tool rail, which is hidden while drawing (see app::tool_strip).
-    let left = if view_width < 260.0 { 4.0 }
-        else if beginner {
-            if view_width < 430.0 { 105.0 } else { 144.0 }
-        } else { 62.0 };
-    let right = 12.0;
-    let free = (view_width - left - right).max(60.0);
-    (left + free * 0.5, free.min(max_width))
+/// The width range a resizable dock may take out of `remaining` pixels: its own `min..=max`,
+/// capped so that a small window still has a useful 3-D surface beside it.
+pub fn dock_range(remaining: f32, min: f32, max: f32) -> Rangef {
+    let remaining = if remaining.is_finite() { remaining.max(0.0) } else { 0.0 };
+    let cap = (remaining * DOCK_SHARE).max(DOCK_FLOOR);
+    let hi = max.min(cap).max(DOCK_FLOOR);
+    let lo = min.min(hi);
+    Rangef::new(lo, hi)
+}
+
+/// Where a floating card (curve, pipe) goes: the top-left corner of its slot and the slot's width.
+/// `bounds` is the visible viewport (already shrunk by the margin), `strip` the tool strip as it
+/// was laid out this frame. The card is centred in the viewport when that leaves the strip free;
+/// otherwise it moves beside the strip, or below it when even `min_width` does not fit beside.
+pub fn card_slot(bounds: Rect, strip: Option<Rect>, max_width: f32, min_width: f32) -> (Pos2, f32) {
+    let mut width = bounds.width().clamp(48.0, max_width.max(48.0));
+    let mut pos = pos2(bounds.center().x - width * 0.5, bounds.top());
+    if let Some(strip) = strip {
+        let beside = strip.right() + CARD_GAP;
+        if pos.x < beside && strip.intersects(bounds) {
+            let room = bounds.right() - beside;
+            if room >= min_width {
+                width = room.min(max_width);
+                pos.x = beside + ((room - width) * 0.5).max(0.0);
+            } else {
+                pos.y = (strip.bottom() + CARD_GAP).min(bounds.bottom() - 64.0).max(bounds.top());
+            }
+        }
+    }
+    (pos, width)
 }
 
 #[cfg(test)]
@@ -51,48 +77,56 @@ mod tests {
     use super::*;
 
     #[test]
-    fn beginner_layout_gives_the_viewport_more_width_than_the_original() {
-        for width in [960.0, 1280.0, 1440.0, 1920.0] {
-            let before = width - CLASSIC_DOCK - CLASSIC_INSPECTOR;
-            let novice = viewport_width(width, false, false, true);
-            let editing = viewport_width(width, false, true, true);
-            assert!(novice > before && editing > before, "{width}: {novice} {editing} {before}");
+    fn a_compact_window_never_shows_two_docks() {
+        for width in [320.0, 480.0, 800.0, 959.0] {
+            assert_eq!(visible_docks(width, true, true), (false, true));
+            assert_eq!(visible_docks(width, true, false), (true, false));
+            assert_eq!(visible_docks(width, false, false), (false, false));
         }
-        assert_eq!(viewport_width(1280.0, false, false, true), 1280.0);
-        assert_eq!(viewport_width(1280.0, false, true, true), 1004.0);
+        assert_eq!(visible_docks(960.0, true, true), (true, true));
     }
 
     #[test]
-    fn small_windows_leave_space_for_a_model_even_with_one_dock_open() {
-        for width in [320.0, 480.0, 590.0, 800.0, 959.0] {
-            assert!(compact(width));
-            for left in [false, true] {
-                for right in [false, true] {
-                    if left && right { continue; }
-                    let actual = viewport_width(width, left, right, true);
-                    assert!(actual >= width * 0.45, "{width} {left} {right}: {actual}");
-                }
-            }
-        }
-        assert!(!compact(960.0));
+    fn opening_a_dock_in_a_compact_window_closes_the_other() {
+        let (s, i) = toggle_dock(480.0, false, true, true);
+        assert!(s && !i);
+        let (s, i) = toggle_dock(480.0, s, i, false);
+        assert!(!s && i);
+        let (s, i) = toggle_dock(480.0, s, i, false);
+        assert!(!s && !i);
+        // a wide window keeps both
+        assert_eq!(toggle_dock(1280.0, false, true, true), (true, true));
     }
 
     #[test]
-    fn drawing_cards_do_not_cover_the_left_toolbar_in_common_small_windows() {
-        let (center, card_width) = floating_card_area(180.0, true, 440.0);
-        assert!((center - 86.0).abs() < 0.1 && card_width < 180.0);
-        for width in [320.0, 430.0, 640.0, 900.0] {
-            let (center, card_width) = floating_card_area(width, true, 440.0);
-            let card_left = center - card_width / 2.0;
-            assert!(card_left >= if width < 430.0 { 105.0 } else { 144.0 });
-            assert!(center + card_width * 0.5 <= width - 11.0);
+    fn docks_leave_room_for_the_model() {
+        for width in [320.0, 480.0, 800.0, 959.0] {
+            let r = dock_range(width, 280.0, 600.0);
+            assert!(r.min <= r.max);
+            assert!(width - r.max >= width * 0.45 || r.max <= DOCK_FLOOR, "{width}: {r:?}");
         }
+        let wide = dock_range(1920.0, 220.0, 560.0);
+        assert_eq!((wide.min, wide.max), (220.0, 560.0));
+        let odd = dock_range(f32::NAN, 220.0, 560.0);
+        assert!(odd.min <= odd.max && odd.max.is_finite());
     }
 
     #[test]
-    fn narrow_header_and_bottom_controls_switch_before_overflow() {
-        assert!(480.0 < TINY_HEADER && 480.0 < COMPACT_TOOLS);
-        assert!(TINY_HEADER < COMPACT_WINDOW);
-        assert!(COMPACT_TOOLS < COMPACT_WINDOW);
+    fn a_card_moves_beside_the_tool_strip_instead_of_covering_it() {
+        let strip = Rect::from_min_size(pos2(12.0, 12.0), egui::vec2(96.0, 400.0));
+        for width in [430.0, 640.0, 900.0] {
+            let bounds = Rect::from_min_size(pos2(12.0, 12.0), egui::vec2(width, 500.0));
+            let (pos, w) = card_slot(bounds, Some(strip), 430.0, 220.0);
+            assert!(pos.x >= strip.right() + CARD_GAP - 0.01 || pos.y > strip.bottom(), "{width}: {pos:?}");
+            assert!(pos.x + w <= bounds.right() + 0.01, "{width}: {pos:?} {w}");
+        }
+        // too narrow to sit beside: it goes below the strip
+        let bounds = Rect::from_min_size(pos2(12.0, 12.0), egui::vec2(250.0, 900.0));
+        let (pos, _) = card_slot(bounds, Some(strip), 430.0, 220.0);
+        assert!(pos.y > strip.bottom());
+        // a wide view keeps the card centred
+        let bounds = Rect::from_min_size(pos2(12.0, 12.0), egui::vec2(1600.0, 900.0));
+        let (pos, w) = card_slot(bounds, Some(strip), 430.0, 220.0);
+        assert!((pos.x + w * 0.5 - bounds.center().x).abs() < 0.01);
     }
 }

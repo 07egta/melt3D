@@ -92,7 +92,11 @@ impl Timer {
         if !period.is_finite() || period <= 0.0 {
             return None;
         }
-        let queries = device.create_query_set(&wgpu::QuerySetDescriptor { label: Some("meltcad timing"), ty: wgpu::QueryType::Timestamp, count: (SLOTS * 2) as u32 });
+        let queries = device.create_query_set(&wgpu::QuerySetDescriptor {
+            label: Some("meltcad timing"),
+            ty: wgpu::QueryType::Timestamp,
+            count: (SLOTS * 2) as u32,
+        });
         let resolve = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("meltcad timing resolve"),
             size: RESOLVE_STRIDE * SLOTS as u64,

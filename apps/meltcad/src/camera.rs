@@ -18,6 +18,10 @@ pub struct Camera {
 pub const TAN_HALF_FOV: f32 = 0.45;
 const ORTHO_BACK: f32 = 400.0;
 const MAX_PITCH: f32 = std::f32::consts::FRAC_PI_2 - 0.002;
+/// Mouse deltas are egui logical points; limiting one event prevents jumps on pointer re-entry.
+const MAX_DRAG_STEP: f32 = 160.0;
+const ORBIT_RAD_PER_POINT: f32 = 0.0065;
+const MAX_SCROLL_STEP: f32 = 400.0;
 
 impl Default for Camera {
     fn default() -> Self {
@@ -56,16 +60,26 @@ impl Camera {
         }
     }
     pub fn orbit(&mut self, dx: f32, dy: f32) {
-        self.yaw -= dx * 0.008;
-        self.pitch = (self.pitch + dy * 0.008).clamp(-MAX_PITCH, MAX_PITCH);
+        if !dx.is_finite() || !dy.is_finite() {
+            return;
+        }
+        self.yaw -= dx.clamp(-MAX_DRAG_STEP, MAX_DRAG_STEP) * ORBIT_RAD_PER_POINT;
+        self.pitch = (self.pitch + dy.clamp(-MAX_DRAG_STEP, MAX_DRAG_STEP) * ORBIT_RAD_PER_POINT).clamp(-MAX_PITCH, MAX_PITCH);
     }
     pub fn pan(&mut self, dx: f32, dy: f32, height_px: f32) {
+        if !dx.is_finite() || !dy.is_finite() || !height_px.is_finite() {
+            return;
+        }
         let (right, up, _) = self.basis();
         let k = self.mm_per_px(self.target, height_px);
-        self.target = add(self.target, add(mul(right, -dx * k), mul(up, dy * k)));
+        self.target =
+            add(self.target, add(mul(right, -dx.clamp(-MAX_DRAG_STEP, MAX_DRAG_STEP) * k), mul(up, dy.clamp(-MAX_DRAG_STEP, MAX_DRAG_STEP) * k)));
     }
     pub fn zoom(&mut self, scroll: f32) {
-        self.dist = (self.dist * (-scroll * 0.0015).exp()).clamp(4.0, 4000.0);
+        if !scroll.is_finite() {
+            return;
+        }
+        self.dist = (self.dist * (-scroll.clamp(-MAX_SCROLL_STEP, MAX_SCROLL_STEP) * 0.0015).exp()).clamp(4.0, 4000.0);
     }
     /// The point on the plane through the target (facing the viewer) that lies under screen point `p`.
     fn focus_point(&self, rect: Rect, p: Pos2) -> Option<V3> {
@@ -158,6 +172,37 @@ mod tests {
             let e = sub(q, p);
             assert!(dot(e, e).sqrt() < 0.05, "ortho={ortho} miss {e:?}");
         }
+    }
+
+    #[test]
+    fn wheel_zoom_keeps_the_point_under_the_cursor_in_both_projections() {
+        let rect = Rect::from_min_size(pos2(30.0, 50.0), egui::vec2(980.0, 610.0));
+        let mouse = pos2(790.0, 225.0);
+        for ortho in [false, true] {
+            let mut cam = Camera { ortho, ..Camera::default() };
+            let anchor = cam.focus_point(rect, mouse).expect("cursor has a focus point");
+            for amount in [120.0, 210.0, -310.0, -120.0] {
+                cam.zoom_at(rect, mouse, amount);
+                let after = cam.project(rect, anchor).expect("anchor remains visible");
+                assert!((after - mouse).length() < 0.15, "ortho={ortho} anchor moved: {after:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn bad_or_large_pointer_events_do_not_jump_the_camera() {
+        let mut cam = Camera::default();
+        let before = cam;
+        cam.orbit(f32::INFINITY, 20.0);
+        cam.pan(f32::NAN, 10.0, 600.0);
+        cam.zoom(f32::NAN);
+        assert_eq!(cam.target, before.target);
+        assert_eq!(cam.yaw, before.yaw);
+        assert_eq!(cam.dist, before.dist);
+        cam.orbit(100_000.0, -100_000.0);
+        assert!((cam.yaw - before.yaw).abs() <= MAX_DRAG_STEP * ORBIT_RAD_PER_POINT + 1e-4);
+        cam.zoom(100_000.0);
+        assert!(cam.dist >= 4.0 && cam.dist.is_finite());
     }
 
     #[test]

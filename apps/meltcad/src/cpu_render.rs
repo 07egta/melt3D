@@ -29,6 +29,51 @@ fn shade(f: &Field, o: [f32; 3], d: [f32; 3]) -> [f32; 3] {
     }
 }
 
+/// One picture of the scene from `cam`, `w` x `h` RGBA, for a single picture (tests); a run of
+/// pictures draws into a buffer it reuses with [`view_into`].
+#[cfg(test)]
+pub fn view(scene: &Scene, cam: &Camera, w: usize, h: usize) -> Vec<u8> {
+    let mut out = Vec::new();
+    view_into(scene, cam, w, h, &mut out);
+    out
+}
+
+/// Draw one picture into `out` (made `w` x `h` x 4 long). The rows are shared between the threads
+/// as one buffer, so a whole run of animation pictures can reuse the same allocation (#217).
+pub fn view_into(scene: &Scene, cam: &Camera, w: usize, h: usize, out: &mut Vec<u8>) {
+    let (w, h) = (w.clamp(16, 1200), h.clamp(16, 1200));
+    let f = Field::new(scene);
+    let aspect = w as f32 / h as f32;
+    out.clear();
+    out.resize(w * h * 4, 0);
+    std::thread::scope(|sc| {
+        let threads = std::thread::available_parallelism().map_or(2, |n| n.get()).clamp(1, 8);
+        let rows = h.div_ceil(threads).max(1);
+        for (k, part) in out.chunks_mut(rows * w * 4).enumerate() {
+            let f = &f;
+            sc.spawn(move || {
+                for (j, row) in part.chunks_mut(w * 4).enumerate() {
+                    let y = k * rows + j;
+                    for x in 0..w {
+                        let nx = (x as f32 + 0.5) / w as f32 * 2.0 - 1.0;
+                        let ny = 1.0 - (y as f32 + 0.5) / h as f32 * 2.0;
+                        let (o, d) = cam.ray([nx, ny], aspect);
+                        let col = shade(f, o, d);
+                        for (c, v) in col.iter().enumerate() {
+                            if let Some(slot) = row.get_mut(x * 4 + c) {
+                                *slot = (v.clamp(0.0, 1.0).powf(1.0 / 2.2) * 255.0) as u8;
+                            }
+                        }
+                        if let Some(slot) = row.get_mut(x * 4 + 3) {
+                            *slot = 255;
+                        }
+                    }
+                }
+            });
+        }
+    });
+}
+
 /// Render the four views into one RGBA sheet (2 x size wide and high).
 pub fn sheet(scene: &Scene, size: usize) -> (usize, Vec<u8>) {
     let size = size.clamp(40, 600);
@@ -88,7 +133,9 @@ pub fn thumb(scene: &Scene, size: usize) -> Vec<u8> {
     let (c, r) = if r > 0.0 { (c, r) } else { ([0.0, 0.0, 20.0], 40.0) };
     let mut cam = Camera::default();
     cam.look(0.6, 0.42);
-    cam.frame(c, r * 0.62);
+    // Include the geometry bounds in the thumbnail; the previous 0.62 factor
+    // cropped long limbs and thin appendages in several library models.
+    cam.frame(c, r);
     let mut img = vec![0u8; size * size * 4];
     for y in 0..size {
         for x in 0..size {
@@ -106,38 +153,265 @@ pub fn thumb(scene: &Scene, size: usize) -> Vec<u8> {
     img
 }
 
-/// Handles `--render in.yura out.png [size]`; true when it did (the caller then exits).
-pub fn cli(args: &[std::ffi::OsString]) -> bool {
+/// Keep headless image sizes within the same bounds as the automation API.
+fn render_cli_size(value: Option<&std::ffi::OsString>) -> usize {
+    value.and_then(|a| a.to_str()).and_then(|a| a.parse::<usize>().ok()).unwrap_or(220).clamp(40, 600)
+}
+
+/// Handles `--render in.yura out.png [size]`.
+/// None = another command; Some(true) = success; Some(false) = failure.
+pub fn cli(args: &[std::ffi::OsString]) -> Option<bool> {
     if args.get(1).and_then(|a| a.to_str()) != Some("--render") {
-        return false;
+        return None;
     }
     let (Some(input), Some(output)) = (args.get(2), args.get(3)) else {
         eprintln!("usage: meltcad --render in.yura out.png [size]");
-        return true;
+        return Some(false);
     };
-    let size = args.get(4).and_then(|a| a.to_str()).and_then(|a| a.parse().ok()).unwrap_or(220);
-    let scene = match std::fs::read_to_string(input).map_err(|e| e.to_string()).and_then(|t| Scene::from_json(&t)) {
-        Ok(s) => s,
+    let size = render_cli_size(args.get(4));
+    let scene = match crate::recovery::read_project(std::path::Path::new(input)) {
+        Ok((s, _)) => s,
         Err(e) => {
             eprintln!("cannot read the scene: {e}");
-            return true;
+            return Some(false);
         }
     };
     let (w, rgba) = sheet(&scene, size);
-    match crate::png::encode_rgba(w as u32, w as u32, &rgba) {
-        Ok(bytes) => {
-            if let Err(e) = std::fs::write(output, bytes) {
-                eprintln!("cannot write the picture: {e}");
-            }
+    let bytes = match crate::png::encode_rgba(w as u32, w as u32, &rgba) {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            eprintln!("cannot encode the picture: {e}");
+            return Some(false);
         }
-        Err(e) => eprintln!("cannot encode the picture: {e}"),
+    };
+    match std::fs::write(output, bytes) {
+        Ok(()) => Some(true),
+        Err(e) => {
+            eprintln!("cannot write the picture: {e}");
+            Some(false)
+        }
     }
-    true
+}
+
+/// The interval of stored GIF pictures. 240 frames must not be thinned at all.
+fn gif_frame_step(length: u32, fps: u32) -> u32 {
+    (length.saturating_sub(1) / 240 + 1).max(fps.max(1).div_ceil(50))
+}
+
+/// Encode `count` pictures as they are drawn. `draw` fills the single picture buffer for picture
+/// `i`; that picture is written to the GIF before the next one is drawn, so the loop keeps two
+/// full pictures at most (the one being drawn and the writer's 8-bit index picture) instead of
+/// all of them (#217). Returns the GIF and the most full pictures that were alive at once.
+fn encode_stream(
+    w: usize,
+    h: usize,
+    count: usize,
+    mut delay_of: impl FnMut(usize) -> u16,
+    mut draw: impl FnMut(usize, &mut Vec<u8>) -> Result<(), String>,
+    mut progress: impl FnMut(u32, u32) -> bool,
+) -> Result<(Vec<u8>, usize), String> {
+    let mut writer = crate::gif::Writer::new(w, h)?;
+    let mut pic = vec![0u8; writer.picture_len()];
+    let total = count.min(u32::MAX as usize) as u32;
+    for i in 0..count {
+        if !progress(i as u32, total) {
+            return Err("Stopped".into());
+        }
+        draw(i, &mut pic)?;
+        writer.push(&pic, delay_of(i))?;
+    }
+    if !progress(total, total) {
+        return Err("Stopped".into());
+    }
+    // the picture buffer above, plus the writer's index picture
+    let peak = 1 + writer.peak_pictures();
+    Ok((writer.finish(), peak))
+}
+
+/// The whole animation as a GIF: every frame (or every `step`-th) drawn from `cam`, or from a
+/// camera that fits the piece at all its poses. `size` is the width in pixels.
+pub fn animation_gif(
+    scene: &Scene,
+    cam: Option<Camera>,
+    size: usize,
+    use_gpu: bool,
+    mut progress: impl FnMut(u32, u32) -> bool,
+) -> Result<Vec<u8>, String> {
+    let a = &scene.anim;
+    if a.is_empty() {
+        return Err("No poses yet. Set a pose first".into());
+    }
+    let w = size.clamp(64, 640);
+    let h = (w * 3 / 4).max(48);
+    let cam = cam.unwrap_or_else(|| {
+        let keys = a.key_frames();
+        let spheres: Vec<([f32; 3], f32)> = keys
+            .iter()
+            .map(|&f| {
+                let mut s = scene.clone();
+                a.apply(&mut s, f);
+                crate::gpu::bounds(&s, None)
+            })
+            .filter(|(_, r)| *r > 0.0)
+            .collect();
+        let n = spheres.len().max(1) as f32;
+        let c = spheres.iter().fold([0.0f32; 3], |m, (c, _)| [m[0] + c[0] / n, m[1] + c[1] / n, m[2] + c[2] / n]);
+        let r =
+            spheres.iter().map(|(p, r)| ((p[0] - c[0]).powi(2) + (p[1] - c[1]).powi(2) + (p[2] - c[2]).powi(2)).sqrt() + r).fold(0.0f32, f32::max);
+        let (c, r) = if spheres.is_empty() { ([0.0, 0.0, 20.0], 40.0) } else { (c, r) };
+        let mut cam = Camera::default();
+        cam.look(0.6, 0.42);
+        cam.frame(c, r);
+        cam
+    });
+    // a GIF frame lasts 2 hundredths of a second at the least: above 50 fps, pictures are skipped
+    // (and the waits shared out evenly) so the animation still takes as long as it should
+    let step = gif_frame_step(a.length, a.fps);
+    let frames: Vec<u32> = (0..a.length).step_by(step as usize).collect();
+    let delays = crate::gif::delays(frames.len(), 100.0 * step as f32 / a.fps.max(1) as f32);
+    // the same picture as the window when there is a graphics card to ask (else the plain CPU one)
+    let mut gpu = if use_gpu { crate::gpu::offscreen::Offscreen::open_with(None, None).ok() } else { None };
+    let pic = gpu.as_ref().map(|g| g.picture([w as u32, h as u32]));
+    let (gif, _peak) = encode_stream(
+        w,
+        h,
+        frames.len(),
+        |i| delays.get(i).copied().unwrap_or(2),
+        |i, out| {
+            let Some(&f) = frames.get(i) else { return Err("Missing frame".into()) };
+            let mut s = scene.clone();
+            a.apply(&mut s, f);
+            match (gpu.as_mut(), pic.as_ref()) {
+                (Some(g), Some(pic)) => {
+                    let pack = crate::gpu::ScenePack::new(&s, crate::gpu::VolumeSet::of(&s));
+                    g.load(&pack);
+                    let mut globals = pack.globals(&s, &cam, [w as f32, h as f32], None, None, false);
+                    crate::gpu::set_view_flags(&mut globals, crate::perf::view_flags(false, false, pack.glow));
+                    g.frame(pic, &globals, false);
+                    if out.len() != (w * h * 4) {
+                        return Err("Bad picture size".into());
+                    }
+                    g.read_into(pic, out);
+                    Ok(())
+                }
+                _ => {
+                    view_into(&s, &cam, w, h, out);
+                    Ok(())
+                }
+            }
+        },
+        &mut progress,
+    )?;
+    // Encoding a complete set of frames may take time; cancellation can arrive
+    // while the palette/LZW encoder runs, before the caller writes a file.
+    if !progress(frames.len() as u32, frames.len() as u32) {
+        return Err("Stopped".into());
+    }
+    Ok(gif)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn render_cli_reports_read_and_write_errors_in_its_exit_status() {
+        let dir = std::env::temp_dir().join(format!("melt3d-render-cli-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let input = dir.join("scene.meltcad");
+        let png = dir.join("output.png");
+        let args = |inp: &std::path::Path, out: &std::path::Path| -> Vec<std::ffi::OsString> {
+            vec!["meltcad".into(), "--render".into(), inp.as_os_str().to_os_string(), out.as_os_str().to_os_string(), "40".into()]
+        };
+        assert_eq!(cli(&["meltcad".into(), "--other".into()]), None);
+        assert_eq!(cli(&args(&dir.join("missing.meltcad"), &png)), Some(false));
+        assert!(!png.exists());
+        std::fs::write(&input, Scene::default().try_to_json().unwrap()).unwrap();
+        assert_eq!(cli(&args(&input, &dir.join("nonexistent-parent").join("out.png"))), Some(false));
+        assert_eq!(cli(&args(&input, &png)), Some(true));
+        let bytes = std::fs::read(&png).unwrap();
+        assert!(bytes.starts_with(&[137, 80, 78, 71, 13, 10, 26, 10]));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn gif_240_frame_animation_is_not_halved() {
+        assert_eq!(gif_frame_step(239, 30), 1);
+        assert_eq!(gif_frame_step(240, 30), 1);
+        assert_eq!((0..240u32).step_by(gif_frame_step(240, 30) as usize).next_back(), Some(239));
+        assert_eq!(gif_frame_step(241, 30), 2);
+        assert_eq!(gif_frame_step(240, 60), 2, "60 fps needs >=2 centiseconds per GIF image");
+    }
+
+    #[test]
+    fn render_cli_reports_input_errors_and_clamps_untrusted_dimensions() {
+        let args = |v: &[&str]| -> Vec<std::ffi::OsString> { v.iter().copied().map(Into::into).collect() };
+        assert_eq!(cli(&args(&["meltcad"])), None);
+        assert_eq!(cli(&args(&["meltcad", "--render"])), Some(false));
+        assert_eq!(cli(&args(&["meltcad", "--render", "nonexistent-scene.yura", "out.png"])), Some(false));
+        assert_eq!(render_cli_size(Some(&"999999999".into())), 600);
+        assert_eq!(render_cli_size(Some(&"1".into())), 40);
+        assert_eq!(render_cli_size(Some(&"bad".into())), 220);
+    }
+
+    #[test]
+    fn view_into_fills_a_reused_buffer_like_view() {
+        // The animation draws into one buffer again and again; it must be the same picture.
+        let scene = Scene::default();
+        let cam = Camera::default();
+        let one = view(&scene, &cam, 24, 20);
+        let mut reused = vec![7u8; 100];
+        view_into(&scene, &cam, 24, 20, &mut reused);
+        assert_eq!(one, reused);
+    }
+
+    #[test]
+    fn a_long_gif_export_holds_two_pictures_at_most() {
+        // 72 pictures at 32 x 24: the run draws into one reused buffer and encodes each picture
+        // before drawing the next, so peak memory does not grow with the length (#217).
+        let (w, h, n) = (32usize, 24usize, 72usize);
+        let mut seen: Vec<usize> = Vec::new();
+        let (gif, peak) = encode_stream(
+            w,
+            h,
+            n,
+            |i| 2 + (i % 3) as u16,
+            |i, pic| {
+                seen.push(pic.as_ptr() as usize);
+                assert_eq!(pic.len(), w * h * 4);
+                for (k, px) in pic.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+                    *px = [(k % 251) as u8, i as u8, 40, 255];
+                }
+                Ok(())
+            },
+            |_, _| true,
+        )
+        .unwrap();
+        assert_eq!(peak, 2, "the picture being drawn and the writer's index picture");
+        assert_eq!(seen.len(), n);
+        assert!(seen.iter().all(|p| *p == seen[0]), "one picture buffer is reused for the whole run");
+        assert!(gif.starts_with(b"GIF89a"));
+        assert_eq!(gif.last(), Some(&0x3B));
+    }
+
+    #[test]
+    fn a_stopped_gif_export_keeps_no_pictures_and_no_output() {
+        let mut drawn = 0;
+        let r = encode_stream(
+            32,
+            24,
+            50,
+            |_| 4,
+            |_, pic| {
+                drawn += 1;
+                pic.fill(0);
+                Ok(())
+            },
+            |i, _| i < 5,
+        );
+        assert_eq!(r.err().as_deref(), Some("Stopped"));
+        assert_eq!(drawn, 5, "stops at the cancelled picture");
+    }
 
     #[test]
     fn the_default_scene_draws_something() {

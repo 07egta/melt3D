@@ -37,8 +37,11 @@ pub fn use_gpu(snap: &Snapshot, easy: bool) -> bool {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Card {
     None,
-    /// "描画の準備中…" (with the ways out after a while).
-    Compiling { secs: u64, ways_out: bool },
+    /// "Preparing graphics…" (with the ways out after a while).
+    Compiling {
+        secs: u64,
+        ways_out: bool,
+    },
     /// The big card with the error and the buttons.
     Failed,
     /// A thin line: the simple view is used because the graphics path failed.
@@ -57,13 +60,17 @@ pub fn card_for(snap: &Snapshot, easy: bool, details: bool, now: Instant) -> Car
         }
         (State::Failed { .. }, false) => Card::Failed,
         (State::Failed { .. }, true) => {
-            if details { Card::Failed } else { Card::FailedPill }
+            if details {
+                Card::Failed
+            } else {
+                Card::FailedPill
+            }
         }
         (_, true) => Card::EasyTag,
     }
 }
 
-/// What the "ログをコピー" button puts on the clipboard.
+/// What the "Copy log" button puts on the clipboard.
 pub fn report_text(snap: &Snapshot, log_tail: &str) -> String {
     let mut out = String::new();
     out.push_str(&format!("MELTCAD {} / {}\n", env!("CARGO_PKG_VERSION"), snap.info.short()));
@@ -71,13 +78,13 @@ pub fn report_text(snap: &Snapshot, log_tail: &str) -> String {
         out.push_str(&format!("driver: {}\n", snap.info.driver));
     }
     match &snap.state {
-        State::Failed { message } => out.push_str(&format!("状態: しっぱい\n{message}\n")),
-        State::Compiling { .. } => out.push_str("状態: 準備中\n"),
-        State::Ready { secs } => out.push_str(&format!("状態: できました ({secs:.1} 秒)\n")),
-        State::Off => out.push_str("状態: 使っていません\n"),
+        State::Failed { message } => out.push_str(&format!("Status: failed\n{message}\n")),
+        State::Compiling { .. } => out.push_str("Status: preparing\n"),
+        State::Ready { secs } => out.push_str(&format!("Status: done ({secs:.1} s)\n")),
+        State::Off => out.push_str("Status: not in use\n"),
     }
     if let Some(e) = &snap.last_error {
-        out.push_str(&format!("さいごのエラー: {e}\n"));
+        out.push_str(&format!("Last error: {e}\n"));
     }
     out.push_str("---- log ----\n");
     out.push_str(log_tail);
@@ -104,7 +111,7 @@ fn open_file(path: &Path) -> Result<(), String> {
         // (no flashing console window)
         cmd.creation_flags(0x0800_0000);
     }
-    cmd.spawn().map(|_| ()).map_err(|e| format!("開けませんでした: {e}"))
+    cmd.spawn().map(|_| ()).map_err(|e| format!("Could not open: {e}"))
 }
 
 impl App {
@@ -116,13 +123,13 @@ impl App {
         match &self.gpu.rs {
             None => {
                 let g = self.gpu.status.begin(Instant::now());
-                self.gpu.status.finish_err(g, "グラフィックスのデバイスを作れませんでした (wgpu のレンダーステートがありません)。くわしくはログを見てください。");
+                self.gpu.status.finish_err(g, "Could not create a graphics device (no wgpu render state). See the log for details.");
             }
             Some(rs) if !easy => crate::gpu::install(rs, ctx, &self.gpu.status),
             Some(rs) => {
                 // (still describe the adapter: the menu and the log say what would be used)
                 self.gpu.status.set_info(crate::gpu_status::AdapterInfo::from_wgpu(&rs.adapter.get_info()));
-                crate::gpu_log::log("かんたん表示が選ばれているので、GPU の準備はしません");
+                crate::gpu_log::log("Simple view is on, so GPU setup is skipped");
                 crate::gpu_log::log_adapter(&rs.adapter);
             }
         }
@@ -132,8 +139,7 @@ impl App {
     pub fn set_easy(&mut self, ctx: &egui::Context, on: bool) {
         self.gpu.easy = on;
         self.gpu.details = false;
-        crate::backend::update(|s| s.easy = on);
-        crate::gpu_log::log(&format!("かんたん表示: {}", if on { "ON" } else { "OFF" }));
+        crate::gpu_log::log(&format!("Simple view: {}", if on { "ON" } else { "OFF" }));
         // back to the GPU picture: build it if it was never started
         if !on && matches!(self.gpu.status.snapshot().state, State::Off) {
             self.retry_gpu(ctx);
@@ -163,7 +169,7 @@ impl App {
     /// Start the program again on another backend (`None` = let it choose) and close this window.
     pub fn restart_with(&mut self, ctx: &egui::Context, choice: Option<Backend>, current_failed: bool) {
         if self.restart_blocked() {
-            self.gpu.note = Some("保存していない変更があります。先に保存してください (Ctrl+S)。".into());
+            self.gpu.note = Some("You have unsaved changes. Save first (Ctrl+S).".into());
             return;
         }
         let current = self.current_backend();
@@ -177,7 +183,8 @@ impl App {
                 s.failed.clear();
             });
         }
-        let r = Relaunch { choice: choice.map(|b| b.name().to_string()), tried: Vec::new(), file: self.path.clone() };
+        let keep = crate::backend::kept_options(&std::env::args_os().collect::<Vec<_>>());
+        let r = Relaunch { choice: choice.map(|b| b.name().to_string()), tried: Vec::new(), file: self.path.clone(), keep };
         match crate::backend::relaunch(&r) {
             Ok(()) => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
             Err(e) => {
@@ -221,52 +228,67 @@ impl App {
             Card::Failed => self.failed_card(ctx, rect, &snap),
             Card::FailedPill => self.pill_card(ctx, rect),
             Card::EasyTag => {
-                egui::Area::new(egui::Id::new("easy_tag")).order(egui::Order::Middle).pivot(Align2::LEFT_BOTTOM).fixed_pos(rect.left_bottom() + egui::vec2(14.0, -12.0)).interactable(false).show(ctx, |ui| {
-                    ui.label(RichText::new("かんたん表示").size(12.0).color(style::DIM));
-                });
+                egui::Area::new(egui::Id::new("easy_tag"))
+                    .order(egui::Order::Middle)
+                    .pivot(Align2::LEFT_BOTTOM)
+                    .fixed_pos(rect.left_bottom() + egui::vec2(14.0, -12.0))
+                    .interactable(false)
+                    .show(ctx, |ui| {
+                        ui.label(RichText::new("Simple view").size(12.0).color(style::DIM));
+                    });
             }
         }
     }
 
     fn compiling_card(&mut self, ctx: &egui::Context, rect: egui::Rect, snap: &Snapshot, secs: u64, ways_out: bool) {
-        egui::Area::new(egui::Id::new("gpu_compiling")).order(egui::Order::Foreground).pivot(Align2::CENTER_TOP).fixed_pos(egui::pos2(rect.center().x, rect.top() + 16.0)).show(ctx, |ui| {
-            style::card().show(ui, |ui| {
-                ui.set_width(430.0);
-                ui.horizontal(|ui| {
-                    ui.add(egui::Spinner::new().size(16.0).color(style::ACCENT));
-                    ui.label(RichText::new(gpu_status::compiling_text(secs)).size(13.5).color(style::TEXT));
+        egui::Area::new(egui::Id::new("gpu_compiling"))
+            .order(egui::Order::Foreground)
+            .pivot(Align2::CENTER_TOP)
+            .fixed_pos(egui::pos2(rect.center().x, rect.top() + 16.0))
+            .show(ctx, |ui| {
+                style::card().show(ui, |ui| {
+                    ui.set_width(430.0);
+                    ui.horizontal(|ui| {
+                        ui.add(egui::Spinner::new().size(16.0).color(style::ACCENT));
+                        ui.label(RichText::new(gpu_status::compiling_text(secs)).size(13.5).color(style::TEXT));
+                    });
+                    ui.add_space(2.0);
+                    ui.label(RichText::new(format!("Using: {}", snap.info.short())).size(12.0).color(style::DIM));
+                    ui.label(
+                        RichText::new("Meanwhile you can work in Simple view. It switches over by itself when ready.").size(12.0).color(style::DIM),
+                    );
+                    if ways_out {
+                        ui.add_space(4.0);
+                        ui.label(RichText::new("If this takes too long, try a button below.").size(12.0).color(style::KEEP));
+                        self.way_out_buttons(ui, ctx, false);
+                    }
+                    self.note_line(ui);
                 });
-                ui.add_space(2.0);
-                ui.label(RichText::new(format!("つかっている機能: {}", snap.info.short())).size(12.0).color(style::DIM));
-                ui.label(RichText::new("そのあいだは「かんたん表示」で作業できます。できあがると自動で切りかわります。").size(12.0).color(style::DIM));
-                if ways_out {
-                    ui.add_space(4.0);
-                    ui.label(RichText::new("時間がかかりすぎるときは、下のボタンを試してください。").size(12.0).color(style::KEEP));
-                    self.way_out_buttons(ui, ctx, false);
-                }
-                self.note_line(ui);
             });
-        });
     }
 
     fn way_out_buttons(&mut self, ui: &mut Ui, ctx: &egui::Context, with_retry: bool) {
         ui.horizontal_wrapped(|ui| {
-            if with_retry && style::pill(ui, "もういちど", false).on_hover_text("描画の準備をやりなおします").clicked() {
+            if with_retry && style::pill(ui, "Try again", false).on_hover_text("Start the graphics setup again").clicked() {
                 self.retry_gpu(ctx);
             }
             let next = self.next_backend();
             let blocked = self.restart_blocked();
             let label = match next {
-                Some(b) => format!("べつの描画方式で再起動 ({})", b.label()),
-                None => "べつの描画方式で再起動".to_string(),
+                Some(b) => format!("Restart with another graphics mode ({})", b.label()),
+                None => "Restart with another graphics mode".to_string(),
             };
-            let tip = if blocked { "保存していない変更があります。先に保存してください (Ctrl+S)" } else { "プログラムを起動しなおして、ほかの描画方式 (Vulkan・DirectX 12・OpenGL) を使います" };
+            let tip = if blocked {
+                "You have unsaved changes. Save first (Ctrl+S)"
+            } else {
+                "Restarts the app and uses another graphics mode (Vulkan, DirectX 12, OpenGL)"
+            };
             if style::pill_enabled(ui, &label, false, next.is_some() && !blocked).on_hover_text(tip).clicked()
                 && let Some(b) = next
             {
                 self.restart_with(ctx, Some(b), true);
             }
-            if style::pill(ui, "かんたん表示を使う", false).on_hover_text("GPU を使わず、CPU で小さく描きます").clicked() {
+            if style::pill(ui, "Use Simple view", false).on_hover_text("Draw small on the CPU, without the GPU").clicked() {
                 self.set_easy(ctx, true);
             }
         });
@@ -285,60 +307,70 @@ impl App {
             _ => String::new(),
         };
         let log_path = crate::gpu_log::path();
-        egui::Area::new(egui::Id::new("gpu_failed")).order(egui::Order::Foreground).pivot(Align2::CENTER_CENTER).fixed_pos(rect.center()).show(ctx, |ui| {
-            style::card().show(ui, |ui| {
-                ui.set_width(520.0);
-                ui.label(RichText::new("描画の準備が できませんでした").strong().size(15.0).color(style::CUT));
-                ui.add_space(2.0);
-                ui.label(RichText::new("いまは「かんたん表示」で見ています。作業はそのまま続けられます。").size(12.5).color(style::TEXT));
-                ui.add_space(6.0);
-                ui.label(RichText::new(format!("つかっている機能: {}", snap.info.short())).size(12.0).color(style::DIM));
-                if !snap.info.driver.is_empty() {
-                    ui.label(RichText::new(format!("ドライバー: {}", snap.info.driver)).size(12.0).color(style::DIM));
-                }
-                ui.add_space(4.0);
-                ui.label(RichText::new("エラーの内容 (選んでコピーできます)").size(12.0).color(style::DIM));
-                egui::ScrollArea::vertical().max_height(150.0).auto_shrink([false, true]).show(ui, |ui| {
-                    let mut text: &str = &message;
-                    ui.add(egui::TextEdit::multiline(&mut text).font(egui::TextStyle::Monospace).desired_width(f32::INFINITY).desired_rows(3));
+        egui::Area::new(egui::Id::new("gpu_failed")).order(egui::Order::Foreground).pivot(Align2::CENTER_CENTER).fixed_pos(rect.center()).show(
+            ctx,
+            |ui| {
+                style::card().show(ui, |ui| {
+                    ui.set_width(520.0);
+                    ui.label(RichText::new("Graphics setup failed").strong().size(15.0).color(style::CUT));
+                    ui.add_space(2.0);
+                    ui.label(RichText::new("You are seeing Simple view for now. You can keep working.").size(12.5).color(style::TEXT));
+                    ui.add_space(6.0);
+                    ui.label(RichText::new(format!("Using: {}", snap.info.short())).size(12.0).color(style::DIM));
+                    if !snap.info.driver.is_empty() {
+                        ui.label(RichText::new(format!("Driver: {}", snap.info.driver)).size(12.0).color(style::DIM));
+                    }
+                    ui.add_space(4.0);
+                    ui.label(RichText::new("Error details (select to copy)").size(12.0).color(style::DIM));
+                    egui::ScrollArea::vertical().max_height(150.0).auto_shrink([false, true]).show(ui, |ui| {
+                        let mut text: &str = &message;
+                        ui.add(egui::TextEdit::multiline(&mut text).font(egui::TextStyle::Monospace).desired_width(f32::INFINITY).desired_rows(3));
+                    });
+                    ui.add_space(4.0);
+                    ui.label(RichText::new(format!("Log: {}", log_path.display())).size(12.0).color(style::DIM));
+                    ui.add_space(6.0);
+                    self.way_out_buttons(ui, ctx, true);
+                    ui.horizontal_wrapped(|ui| {
+                        if style::pill(ui, "Open log", false).clicked()
+                            && let Err(e) = open_file(&log_path)
+                        {
+                            self.gpu.note = Some(e);
+                        }
+                        if style::pill(ui, "Copy log", false)
+                            .on_hover_text("Copies the error and the end of the log. Paste it when you send it.")
+                            .clicked()
+                        {
+                            ctx.copy_text(report_text(snap, &crate::gpu_log::global().tail(200)));
+                            self.gpu.note = Some("Copied.".into());
+                        }
+                        if self.gpu.easy && style::pill(ui, "Close", false).clicked() {
+                            self.gpu.details = false;
+                        }
+                    });
+                    if self.restart_blocked() {
+                        ui.label(RichText::new("You have unsaved changes. Save first, then restart (Ctrl+S).").size(12.0).color(style::KEEP));
+                    }
+                    self.note_line(ui);
                 });
-                ui.add_space(4.0);
-                ui.label(RichText::new(format!("ログ: {}", log_path.display())).size(12.0).color(style::DIM));
-                ui.add_space(6.0);
-                self.way_out_buttons(ui, ctx, true);
-                ui.horizontal_wrapped(|ui| {
-                    if style::pill(ui, "ログを開く", false).clicked()
-                        && let Err(e) = open_file(&log_path)
-                    {
-                        self.gpu.note = Some(e);
-                    }
-                    if style::pill(ui, "ログをコピー", false).on_hover_text("エラーとログの終わりをコピーします。送るときに貼りつけてください").clicked() {
-                        ctx.copy_text(report_text(snap, &crate::gpu_log::global().tail(200)));
-                        self.gpu.note = Some("コピーしました。".into());
-                    }
-                    if self.gpu.easy && style::pill(ui, "とじる", false).clicked() {
-                        self.gpu.details = false;
-                    }
-                });
-                if self.restart_blocked() {
-                    ui.label(RichText::new("保存していない変更があるので、再起動するには先に保存してください (Ctrl+S)。").size(12.0).color(style::KEEP));
-                }
-                self.note_line(ui);
-            });
-        });
+            },
+        );
     }
 
     fn pill_card(&mut self, ctx: &egui::Context, rect: egui::Rect) {
-        egui::Area::new(egui::Id::new("gpu_pill")).order(egui::Order::Foreground).pivot(Align2::CENTER_TOP).fixed_pos(egui::pos2(rect.center().x, rect.top() + 12.0)).show(ctx, |ui| {
-            style::card().show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new("かんたん表示 (GPU の描画が使えません)").size(12.5).color(style::TEXT));
-                    if style::pill(ui, "くわしく", false).clicked() {
-                        self.gpu.details = true;
-                    }
+        egui::Area::new(egui::Id::new("gpu_pill"))
+            .order(egui::Order::Foreground)
+            .pivot(Align2::CENTER_TOP)
+            .fixed_pos(egui::pos2(rect.center().x, rect.top() + 12.0))
+            .show(ctx, |ui| {
+                style::card().show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new("Simple view (GPU drawing unavailable)").size(12.5).color(style::TEXT));
+                        if style::pill(ui, "Details", false).clicked() {
+                            self.gpu.details = true;
+                        }
+                    });
                 });
             });
-        });
     }
 
     // ----- the menu -----
@@ -348,30 +380,34 @@ impl App {
         let ctx = ui.ctx().clone();
         ui.separator();
         let mut easy = self.gpu.easy;
-        if ui.checkbox(&mut easy, "かんたん表示 (GPUを使わない)").on_hover_text("CPU で小さく描きます。画面が出ないときや、描画が重いときに").changed() {
+        if ui
+            .checkbox(&mut easy, "Simple view (no GPU)")
+            .on_hover_text("Draws small on the CPU. Use it when the screen stays blank or drawing is slow.")
+            .changed()
+        {
             self.set_easy(&ctx, easy);
         }
         let snap = self.gpu.status.snapshot();
         let state = match &snap.state {
-            State::Off => "使っていません",
-            State::Compiling { .. } => "準備中…",
-            State::Ready { .. } => "できました",
-            State::Failed { .. } => "使えません",
+            State::Off => "not in use",
+            State::Compiling { .. } => "preparing…",
+            State::Ready { .. } => "ready",
+            State::Failed { .. } => "unavailable",
         };
-        ui.label(RichText::new(format!("描画: {} ({state})", snap.info.short())).size(12.0).color(style::DIM));
+        ui.label(RichText::new(format!("Graphics: {} ({state})", snap.info.short())).size(12.0).color(style::DIM));
         if let State::Failed { .. } = snap.state
-            && ui.button("しっぱいの内容を見る").clicked()
+            && ui.button("See what failed").clicked()
         {
             self.gpu.details = true;
             ui.close();
         }
-        ui.menu_button("描画方式を変えて再起動", |ui| {
+        ui.menu_button("Restart with a different graphics mode", |ui| {
             let blocked = self.restart_blocked();
             if blocked {
-                ui.label(RichText::new("先に保存してください (Ctrl+S)").size(12.0).color(style::KEEP));
+                ui.label(RichText::new("Save first (Ctrl+S)").size(12.0).color(style::KEEP));
             }
             ui.add_enabled_ui(!blocked, |ui| {
-                if ui.button("じどう (おまかせ)").clicked() {
+                if ui.button("Auto (recommended)").clicked() {
                     self.restart_with(&ctx, None, false);
                     ui.close();
                 }
@@ -379,14 +415,14 @@ impl App {
                 let macos = cfg!(target_os = "macos");
                 for b in Backend::offered(windows, macos) {
                     let here = self.current_backend() == Some(b);
-                    if ui.selectable_label(here, format!("{}{}", b.label(), if here { "（いま）" } else { "" })).clicked() {
+                    if ui.selectable_label(here, format!("{}{}", b.label(), if here { "(now)" } else { "" })).clicked() {
                         self.restart_with(&ctx, Some(b), false);
                         ui.close();
                     }
                 }
             });
         });
-        if ui.button("ログを開く").on_hover_text(crate::gpu_log::path().display().to_string()).clicked() {
+        if ui.button("Open log").on_hover_text(crate::gpu_log::path().display().to_string()).clicked() {
             if let Err(e) = open_file(&crate::gpu_log::path()) {
                 self.gpu.note = Some(e);
             }
@@ -402,7 +438,12 @@ mod tests {
     use std::time::Duration;
 
     fn snap(state: State) -> Snapshot {
-        Snapshot { state, info: AdapterInfo { backend: "Dx12".into(), name: "Test GPU".into(), driver: "d 1".into(), device_type: "DiscreteGpu".into() }, runtime_errors: 0, last_error: None }
+        Snapshot {
+            state,
+            info: AdapterInfo { backend: "Dx12".into(), name: "Test GPU".into(), driver: "d 1".into(), device_type: "DiscreteGpu".into() },
+            runtime_errors: 0,
+            last_error: None,
+        }
     }
 
     #[test]
@@ -464,7 +505,7 @@ mod tests {
         let mut app = App::new(true, None);
         app.attach_gpu(None, &ctx, false);
         match app.gpu.status.snapshot().state {
-            State::Failed { message } => assert!(message.contains("デバイス"), "{message}"),
+            State::Failed { message } => assert!(message.contains("device"), "{message}"),
             other => panic!("{other:?}"),
         }
         assert!(!use_gpu(&app.gpu.status.snapshot(), false));
@@ -477,6 +518,6 @@ mod tests {
         app.dirty = true;
         app.restart_with(&ctx, Some(Backend::Gl), true);
         let note = app.gpu.note.clone().unwrap_or_default();
-        assert!(note.contains("保存"), "{note}");
+        assert!(note.contains("Save"), "{note}");
     }
 }

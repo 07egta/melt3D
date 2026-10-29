@@ -1,0 +1,36 @@
+name: Context toolbar checks
+on:
+  push:
+    branches: [feat/yuracad-context-toolbar-20261017]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  rust-linux:
+    name: Linux context toolbar and UI tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install egui Linux dependencies
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libx11-dev mesa-vulkan-drivers
+      - name: Check Rust compilation
+        run: cargo check --locked -p meltcad
+      - name: Measure selection and UI changes with 160 shapes
+        run: cargo test --locked -p meltcad context_toolbar -- --nocapture
+  rust-windows:
+    name: Windows compile and context toolbar tests
+    runs-on: windows-latest
+    timeout-minutes: 100
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Compile the Windows app
+        run: cargo check --locked -p meltcad
+      - name: Verify contextual actions without a GUI
+        run: cargo test --locked -p meltcad context_toolbar -- --nocapture

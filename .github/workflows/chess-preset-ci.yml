@@ -1,0 +1,27 @@
+name: Chess preset checks
+
+on:
+  push:
+    branches: [feat/meltcad-chess-set-20261017]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  chess-preset:
+    name: Compile and test Chess Set
+    runs-on: ubuntu-latest
+    timeout-minutes: 100
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Linux window dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-dev libwayland-dev libx11-dev mesa-vulkan-drivers
+      - name: Compile complete MeltCAD test target
+        run: cargo test --profile ci --locked -p meltcad --no-run
+      - name: Chess Set regressions
+        run: cargo test --profile ci --locked -p meltcad chess -- --nocapture

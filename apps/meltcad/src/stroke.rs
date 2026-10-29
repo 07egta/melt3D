@@ -51,9 +51,9 @@ impl Plane {
 
     pub fn label(self) -> &'static str {
         match self {
-            Plane::Floor => "ゆか",
-            Plane::Front => "まえ",
-            Plane::Side => "よこ",
+            Plane::Floor => "Floor",
+            Plane::Front => "Front",
+            Plane::Side => "Side",
         }
     }
 }
@@ -63,7 +63,7 @@ impl Plane {
 pub fn plane_point(o: V3, d: V3, plane: Plane, radius: f32) -> Option<V3> {
     let n = plane.normal();
     let den = dot(d, n);
-    if !(den.abs() > 1e-4) || !o.iter().chain(d.iter()).all(|v| v.is_finite()) {
+    if den.is_nan() || den.abs() <= 1e-4 || !o.iter().chain(d.iter()).all(|v| v.is_finite()) {
         return None;
     }
     let t = -dot(o, n) / den;
@@ -195,9 +195,9 @@ pub fn smooth(points: &[V3], passes: usize) -> Vec<V3> {
             break;
         }
         let prev = cur.clone();
-        for i in 1..prev.len() - 1 {
+        for (i, point) in cur.iter_mut().enumerate().take(prev.len() - 1).skip(1) {
             if let (Some(a), Some(b), Some(c)) = (prev.get(i - 1), prev.get(i), prev.get(i + 1)) {
-                cur[i] = [(a[0] + 2.0 * b[0] + c[0]) * 0.25, (a[1] + 2.0 * b[1] + c[1]) * 0.25, (a[2] + 2.0 * b[2] + c[2]) * 0.25];
+                *point = [(a[0] + 2.0 * b[0] + c[0]) * 0.25, (a[1] + 2.0 * b[1] + c[1]) * 0.25, (a[2] + 2.0 * b[2] + c[2]) * 0.25];
             }
         }
     }
@@ -281,7 +281,8 @@ pub struct Options {
 /// halves keep their corners; its last node is never a repeat of the first.
 pub fn pipe_nodes(raw: &[V3], o: &Options) -> Option<Vec<V3>> {
     let mut pts = clean(raw, 1e-3);
-    if pts.len() < 2 || !(path_length(&pts) >= o.min_len.max(1e-3)) {
+    let length = path_length(&pts);
+    if pts.len() < 2 || length.is_nan() || length < o.min_len.max(1e-3) {
         return None;
     }
     let max_nodes = o.max_nodes.clamp(2, MAX_PATH);
@@ -352,16 +353,17 @@ mod tests {
         s.blend = 0.0;
         let mut g = Group::new("g");
         g.shapes = vec![s];
-        Field::new(&Scene { groups: vec![g], melt: Default::default(), env: Default::default(), saved: Vec::new() })
+        Field::new(&Scene { groups: vec![g], melt: Default::default(), env: Default::default(), saved: Vec::new(), anim: Default::default() })
     }
 
     /// A sine wave drawn with many tiny steps.
     fn wave(n: usize) -> Vec<V3> {
-        (0..n).map(|i| {
-            let x = i as f32 * 100.0 / (n - 1) as f32;
-            [x, 10.0 * (x * 0.1).sin(), 0.0]
-        })
-        .collect()
+        (0..n)
+            .map(|i| {
+                let x = i as f32 * 100.0 / (n - 1) as f32;
+                [x, 10.0 * (x * 0.1).sin(), 0.0]
+            })
+            .collect()
     }
 
     #[test]
@@ -412,7 +414,8 @@ mod tests {
         right.size[0] = 10.0;
         let mut g = Group::new("two balls");
         g.shapes = vec![left, right];
-        let field = Field::new(&Scene { groups: vec![g], melt: Default::default(), env: Default::default(), saved: Vec::new() });
+        let field =
+            Field::new(&Scene { groups: vec![g], melt: Default::default(), env: Default::default(), saved: Vec::new(), anim: Default::default() });
         let mut points = Vec::new();
         let mut on_skin = Vec::new();
         let mut floor = Vec::new();
@@ -516,11 +519,12 @@ mod tests {
     #[test]
     fn a_closed_stroke_becomes_a_loop_without_a_repeated_node() {
         // a circle of radius 30 drawn once round, ending where it began
-        let raw: Vec<V3> = (0..=200).map(|i| {
-            let a = i as f32 / 200.0 * std::f32::consts::TAU;
-            [30.0 * a.cos(), 30.0 * a.sin(), 5.0]
-        })
-        .collect();
+        let raw: Vec<V3> = (0..=200)
+            .map(|i| {
+                let a = i as f32 / 200.0 * std::f32::consts::TAU;
+                [30.0 * a.cos(), 30.0 * a.sin(), 5.0]
+            })
+            .collect();
         let o = Options { closed: true, ..opts() };
         let n = pipe_nodes(&raw, &o).expect("a loop");
         assert!((4..=PIPE_NODES).contains(&n.len()), "{}", n.len());
