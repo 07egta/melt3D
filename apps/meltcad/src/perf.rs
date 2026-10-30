@@ -17,13 +17,14 @@ use crate::model::{Scene, Shape};
 /// and +0.0 as equal, but a freshly prepared or packed record can distinguish their bits.
 /// Keep the ordinary comparison first (including metadata and lengths), then check the
 /// geometry and material floats without allocating or inspecting the shared mesh volume.
-/// Nested option structs (ripple, guide plane, vase, pattern) keep their value equality.
+/// Nested option structs (ripple, deformation, guide plane, vase, pattern) keep their value equality.
 pub(crate) fn same_shape_for_cache(a: &Shape, b: &Shape) -> bool {
     fn scalars(s: &Shape) -> [u32; 38] {
         use crate::model::Material;
         // Exhaustive patterns make an added Shape/Material field require a cache-key review.
         let Shape {
             ripple: _,
+            deformation: _,
             name: _,
             kind: _,
             size,
