@@ -139,7 +139,9 @@ impl GpuPreview {
                     })],
                     depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                         view: &depth_view,
-                        depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(0.0), store: wgpu::StoreOp::Store }),
+                        // SolidCraft 0.26 reverses depth (far = 0) only for 32-bit float buffers; this 24-bit buffer
+                        // keeps 0 near, so it clears to 1 (far). Clearing to 0 made every solid fail the depth test.
+                        depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
                         stencil_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(0), store: wgpu::StoreOp::Store }),
                     }),
                     timestamp_writes: None,

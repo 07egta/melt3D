@@ -24,16 +24,27 @@ pub struct ToolbarCustom {
     /// `"<workspace>/<tab>/<panel>"` → the panel's buttons, in order (only panels the user
     /// changed).
     pub panels: BTreeMap<String, Vec<String>>,
+    /// `"<workspace>/<tab>"` → gallery commands moved to full-size buttons.
+    pub gallery_buttons: BTreeMap<String, Vec<String>>,
     /// The Customize Toolbar window is open (not kept).
     pub customizing: bool,
 }
 
 impl ToolbarCustom {
+    /// Whether a command still uses a compact gallery cell in this panel.
+    pub fn in_gallery(&self, tab: &str, panel: &str, id: &str) -> bool {
+        tab == "SKETCH"
+            && panel == "CONSTRAIN"
+            && crate::workspace::CONSTRAINT_GALLERY.contains(&id)
+            && !self.gallery_buttons.get(&format!("{WORKSPACE}/{tab}")).is_some_and(|ids| ids.iter().any(|c| c == id))
+    }
+
     pub fn prefs(&self) -> Value {
-        json!({"version": 2, "panels": self.panels})
+        json!({"version": 3, "panels": self.panels, "gallery_buttons": self.gallery_buttons})
     }
     pub fn load(&mut self, v: &Value) {
-        let current = v.get("version").and_then(Value::as_u64) == Some(2);
+        let version = v.get("version").and_then(Value::as_u64).unwrap_or(0);
+        let current = version >= 2;
         let panels = if current { v.get("panels").unwrap_or(&Value::Null) } else { v };
         self.panels = panels
             .as_object()
@@ -47,10 +58,73 @@ impl ToolbarCustom {
                     .collect()
             })
             .unwrap_or_default();
+        self.gallery_buttons = v
+            .get("gallery_buttons")
+            .and_then(Value::as_object)
+            .map(|o| {
+                o.iter()
+                    .take(500)
+                    .filter_map(|(k, v)| {
+                        let ids = v.as_array()?.iter().take(100).filter_map(|x| x.as_str().map(str::to_string)).collect();
+                        Some((k.clone(), ids))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
         if !current {
             self.migrate();
         }
+        if version < 3 {
+            self.migrate_render_tabs();
+        }
     }
+    /// Split the former six-section Render ribbon without losing personal pins or removals.
+    fn migrate_render_tabs(&mut self) {
+        let mut migrated_panels: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        for (old_tab, old, targets) in [
+            ("RENDER", "SCENE", &[("RENDER CAMERA", "SHOTS"), ("RENDER CAMERA", "VIEW"), ("RENDER SCENE", "STUDIO")][..]),
+            ("RENDER", "APPEARANCE", &[("RENDER APPEARANCE", "APPEARANCE")][..]),
+            ("RENDER", "LIGHTING", &[("RENDER SCENE", "STUDIO")][..]),
+            ("RENDER", "ENVIRONMENT", &[("RENDER SCENE", "STAGE")][..]),
+            ("RENDER", "CAMERA", &[("RENDER CAMERA", "LENS"), ("RENDER CAMERA", "FRAME"), ("RENDER CAMERA", "VIEW")][..]),
+            ("RENDER", "IMAGE", &[("RENDER", "IMAGE"), ("RENDER", "RENDER"), ("RENDER", "RESULT")][..]),
+            ("RENDER LIGHTING", "LIGHTING", &[("RENDER SCENE", "STUDIO"), ("RENDER SCENE", "LIGHTS")][..]),
+            ("RENDER LIGHTING", "ENVIRONMENT", &[("RENDER SCENE", "STAGE"), ("RENDER SCENE", "STUDIO")][..]),
+            ("RENDER", "OUTPUT", &[("RENDER", "RENDER"), ("RENDER", "IMAGE")][..]),
+            ("RENDER", "RESULTS", &[("RENDER", "RESULT"), ("RENDER", "IMAGE")][..]),
+        ] {
+            let Some(ids) = self.panels.remove(&key(old_tab, old)) else { continue };
+            for &(tab, panel) in targets {
+                let k = key(tab, panel);
+                let migrated: Vec<_> = ids
+                    .iter()
+                    .filter(|id| solidcraft_engine::find_command(id).and_then(crate::workspace::legacy_render_destination) == Some((tab, panel)))
+                    .cloned()
+                    .collect();
+                let list = migrated_panels.entry(k).or_default();
+                for id in migrated {
+                    if !list.contains(&id) {
+                        list.push(id);
+                    }
+                }
+            }
+            // Preserve deliberately cross-pinned commands with no destination in this split.
+            if let Some(&(tab, panel)) = targets.first() {
+                let list = migrated_panels.entry(key(tab, panel)).or_default();
+                for id in ids {
+                    let destination = solidcraft_engine::find_command(&id).and_then(crate::workspace::legacy_render_destination);
+                    if !targets.iter().any(|target| Some(*target) == destination) && !list.contains(&id) {
+                        list.push(id);
+                    }
+                }
+            }
+        }
+        for (k, ids) in migrated_panels {
+            // New-layout customisation is authoritative when both versions are present.
+            self.panels.entry(k).or_insert(ids);
+        }
+    }
+
     fn migrate(&mut self) {
         use std::collections::BTreeSet;
         let specs = command_specs();
@@ -167,12 +241,18 @@ fn home_panel(tab: &str, id: &str) -> Option<&'static str> {
     lists.iter().find(|(_, cmds, _)| cmds.iter().any(|c| c.id == id)).or(lists.first()).map(|(p, ..)| *p)
 }
 
+/// FINISH EDITING, shown only while a linked design is edited in place, keeps its one button:
+/// nothing moves into it, and Finish Edit moves nowhere else.
+fn fixed(tab: &str, panel: &str, id: &str) -> bool {
+    (tab == "MODEL" && panel == "FINISH EDITING") || id == "component.finish_edit"
+}
+
 /// Pin a command to the toolbar of a tab (as a button of its panel, at the end).
 pub fn pin(app: &mut SolveApp, tab: &str, id: &str) -> Result<(), String> {
     if solidcraft_engine::find_command(id).is_none() {
         return Err(format!("no command `{id}`"));
     }
-    if pinned_on(app, tab, id).is_some() {
+    if pinned_on(app, tab, id).is_some() || fixed(tab, "", id) {
         return Ok(());
     }
     let panel = home_panel(tab, id).ok_or_else(|| format!("the {tab} tab has no panels"))?;
@@ -184,7 +264,7 @@ pub fn pin(app: &mut SolveApp, tab: &str, id: &str) -> Result<(), String> {
 
 /// Remove a command's button from a tab (it stays in its panel's drop-down).
 pub fn remove(app: &mut SolveApp, tab: &str, id: &str) {
-    let Some(panel) = pinned_on(app, tab, id) else { return };
+    let Some(panel) = pinned_on(app, tab, id).filter(|panel| !fixed(tab, panel, id)) else { return };
     let mut ids = own(app, tab, panel);
     ids.retain(|x| x != id);
     app.toolbar_custom.panels.insert(key(tab, panel), ids);
@@ -192,6 +272,19 @@ pub fn remove(app: &mut SolveApp, tab: &str, id: &str) {
 
 /// Move a button before another one (`before`: None puts it at the end of `panel`).
 pub fn reorder(app: &mut SolveApp, tab: &str, id: &str, panel: &str, before: Option<&str>) {
+    if fixed(tab, panel, id) {
+        return;
+    }
+    // A gallery command dropped on a gallery cell goes (back) into the gallery; dropped anywhere
+    // else it becomes a full-size button.
+    if tab == "SKETCH" && crate::workspace::CONSTRAINT_GALLERY.contains(&id) {
+        let into_gallery = before.is_some_and(|b| app.toolbar_custom.in_gallery(tab, panel, b));
+        let ids = app.toolbar_custom.gallery_buttons.entry(format!("{WORKSPACE}/{tab}")).or_default();
+        ids.retain(|c| c != id);
+        if !into_gallery {
+            ids.push(id.to_string());
+        }
+    }
     if let Some(from) = pinned_on(app, tab, id) {
         let mut ids = own(app, tab, from);
         ids.retain(|x| x != id);
@@ -217,6 +310,7 @@ pub fn toggle(app: &mut SolveApp, tab: &str, id: &str) {
 pub fn reset(app: &mut SolveApp, tab: &str) {
     let prefix = format!("{WORKSPACE}/{tab}/");
     app.toolbar_custom.panels.retain(|k, _| !k.starts_with(&prefix));
+    app.toolbar_custom.gallery_buttons.remove(&format!("{WORKSPACE}/{tab}"));
 }
 
 /// The menu of a command (toolbar button, drop-down row, S box row).
@@ -263,15 +357,28 @@ pub fn run(app: &mut SolveApp, action: &str, p: &Value) {
     }
 }
 
-/// Shortcut keys, S box favourites and the toolbar as one file (Keyboard Shortcuts › Export).
+/// Shortcut keys, S box favourites, toolbar and navigation bar as one file (Keyboard Shortcuts › Export).
 pub fn export(app: &SolveApp) -> Value {
-    json!({ "format": "solidcraft-shortcuts/1", "shortcuts": app.keymap.prefs(), "favourites": app.sbox.pinned, "toolbar": app.toolbar_custom.prefs() })
+    json!({ "format": "solidcraft-shortcuts/1", "shortcuts": app.keymap.prefs(), "favourites": app.sbox.pinned, "toolbar": app.toolbar_custom.prefs(), "navigation_bar": app.preferences.navigation_bar })
 }
+
+/// The largest shortcuts file Import… reads (hostile input; an export is a few tens of KiB).
+pub const MAX_IMPORT_BYTES: usize = 1 << 20;
 
 pub fn import(app: &mut SolveApp, v: &Value) -> Result<(), String> {
     // "solvecraft-shortcuts/1": files exported before the rename (compatibility shim).
     if !matches!(v.get("format").and_then(Value::as_str), Some("solidcraft-shortcuts/1" | "solvecraft-shortcuts/1")) {
         return Err("not a SolidCraft shortcuts file".into());
+    }
+    let navigation_bar = v
+        .get("navigation_bar")
+        .map(|value| {
+            crate::navigation_bar::validate(value)?;
+            serde_json::from_value::<crate::navigation_bar::NavigationBar>(value.clone()).map_err(|e| e.to_string())
+        })
+        .transpose()?;
+    if let Some(bar) = navigation_bar {
+        app.preferences.navigation_bar = bar;
     }
     if let Some(s) = v.get("shortcuts") {
         app.keymap.load(s);

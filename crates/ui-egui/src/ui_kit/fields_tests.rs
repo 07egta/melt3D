@@ -203,6 +203,40 @@ fn growing_message_field_retains_its_id_and_does_not_consume_enter() {
     assert_eq!(message, "First\nSecond\n");
 }
 
+/// The value fields on the canvas keep their width for a number and grow with an expression typed
+/// into them (parameter names, a formula), up to three times that width, also in the area they
+/// float in on the canvas, whose space is last frame's size.
+#[test]
+fn canvas_value_fields_grow_with_an_expression_up_to_three_times_their_width() {
+    for case in ["canvas", "placement"] {
+        let ctx = crate::fonts::test_context();
+        let width = |value: &str| {
+            let mut value = value.to_owned();
+            let mut rect = egui::Rect::NOTHING;
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                egui::Area::new(egui::Id::new("grow")).fixed_pos(egui::pos2(10.0, 10.0)).show(ui.ctx(), |ui| {
+                    ui.horizontal(|ui| {
+                        let id = ui.id().with(case);
+                        rect = match case {
+                            "canvas" => canvas_value_field(ui, id, &mut value, false).rect,
+                            _ => placement_field(ui, id, &mut value, "").rect,
+                        };
+                    });
+                });
+            });
+            output.textures_delta.clear();
+            rect.width()
+        };
+        let number = width("12.5 mm");
+        assert!((width("4") - number).abs() < 0.5, "{case}: a number keeps the field's width");
+        let formula = width("CellWidth * X + 2 * Wall");
+        assert!(formula > number * 1.5, "{case}: {formula} for a formula, {number} for a number");
+        let long = width("CellWidth * X + 2 * WallThickness - Clearance / 2 + LipHeight * Y");
+        assert!(long > formula && long <= number * 3.0 + 1.0, "{case}: {long} capped at three times {number}");
+        assert!((width("4") - number).abs() < 0.5, "{case}: and back to a number's width");
+    }
+}
+
 #[test]
 fn placement_field_keeps_focus_for_owner_validation_on_enter() {
     let ctx = crate::fonts::test_context();
@@ -239,4 +273,119 @@ fn bounded_name_editor_keeps_unicode_character_cap() {
     frame(&ctx, pointer(at, false), &mut draw);
     frame(&ctx, vec![egui::Event::Text("åβ界d".into())], &mut draw);
     assert_eq!(value, "åβ界");
+}
+
+#[test]
+fn count_steps_stay_within_limits_and_keep_expressions() {
+    let eval = |text: &str| -> Option<f64> {
+        let text = text.trim();
+        match text {
+            "n" => Some(4.0),
+            "n + 2" => Some(6.0),
+            "n + 3" => Some(7.0),
+            "n + 1" => Some(5.0),
+            "n - 1" => Some(3.0),
+            "half" => Some(2.5),
+            _ => text.parse().ok(),
+        }
+    };
+    let limits = Count { min: 2, max: 10, eval: &eval };
+    let step = |text: &str, delta| super::step_count(text, delta, &limits);
+    assert_eq!(step("6", 1).as_deref(), Some("7"));
+    assert_eq!(step(" 6 ", -1).as_deref(), Some("5"));
+    assert_eq!(step("2", -1), None, "the minimum holds");
+    assert_eq!(step("10", 1), None, "the maximum holds");
+    assert_eq!(step("40", -1).as_deref(), Some("10"), "a typed count past the limit steps back inside it");
+    assert_eq!(step("0", 1).as_deref(), Some("2"));
+    assert_eq!(step("3.5", 1).as_deref(), Some("4"), "between whole numbers: the next one up");
+    assert_eq!(step("3.5", -1).as_deref(), Some("3"));
+    assert_eq!(step("n", 1).as_deref(), Some("n + 1"));
+    assert_eq!(step("n", -1).as_deref(), Some("n - 1"));
+    assert_eq!(step("n + 2", 1).as_deref(), Some("n + 3"));
+    assert_eq!(step("n + 1", -1).as_deref(), Some("n"));
+    assert_eq!(step("half", 1), None, "an expression between whole numbers is left alone");
+    for junk in ["", "abc", "1e400", "-1e300", "NaN"] {
+        assert_eq!(step(junk, 1), None, "{junk}");
+    }
+    let wide = Count { min: i64::MIN, max: i64::MAX, eval: &eval };
+    assert_eq!(super::step_count("1e16", 1, &wide), None, "values past what counts can be are refused");
+    assert_eq!(super::step_count("5", i64::MAX, &wide).as_deref(), Some("9223372036854775807"), "steps saturate rather than overflow");
+    assert_eq!(super::step_count("5", i64::MIN, &wide).as_deref(), Some("-9223372036854775803"));
+}
+
+#[test]
+fn selection_field_has_three_distinct_looks_in_every_theme() {
+    type Look = (Vec<(egui::Color32, egui::Color32)>, Option<egui::Color32>);
+    let look = |active: bool, filled: bool| -> Look {
+        let ctx = crate::fonts::test_context();
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            ui.set_width(280.0);
+            scope(ui, |ui| {
+                row(ui, "Profiles", |ui| {
+                    selection_field(ui, "1 selected", Selection { active, filled });
+                });
+            });
+        });
+        output.textures_delta.clear();
+        let field = scenario::rect_of("dialog:field:Profiles").unwrap();
+        let rects = output
+            .shapes
+            .iter()
+            .filter_map(|s| match &s.shape {
+                egui::Shape::Rect(r) if field.contains_rect(r.rect) => Some((r.fill, r.stroke.color)),
+                _ => None,
+            })
+            .collect();
+        let ink = output.shapes.iter().find_map(|s| match &s.shape {
+            egui::Shape::Text(text) if text.galley.job.text == "1 selected" => Some(text.fallback_color),
+            _ => None,
+        });
+        (rects, ink)
+    };
+    let mut palettes: Vec<(String, Option<crate::theme::Custom>, bool)> = vec![("dark".into(), None, true), ("light".into(), None, false)];
+    for theme in crate::theme_files::builtin() {
+        let dark = theme.base.is_dark();
+        palettes.push((theme.id.clone(), Some(crate::theme::Custom { dark, tokens: crate::theme_files::resolve(theme) }), dark));
+    }
+    let previous = crate::theme::is_dark();
+    for (name, custom, dark) in palettes {
+        crate::theme::set_dark(dark);
+        crate::theme::set_custom(custom);
+        let t = crate::theme::Tokens::get();
+        let [active_filled, active_empty, filled, empty] = [(true, true), (true, false), (false, true), (false, false)].map(|(a, f)| look(a, f));
+        let accented = |l: &Look| l.0.iter().any(|&(fill, stroke)| stroke == t.form_primary || fill == t.selected_bg);
+        assert!(accented(&active_filled) && accented(&active_empty), "{name}: the active input is accented");
+        assert!(!accented(&filled), "{name}: a filled inactive input is not accented: {filled:?}");
+        assert!(!accented(&empty), "{name}: an empty inactive input is not accented: {empty:?}");
+        let outline = |l: &Look| l.0.last().copied().unwrap();
+        // Two colours can't give filled and empty their own fill and border on top of the accent;
+        // in 1-bit and 1-bit Dark the text itself tells them apart (a count against the prompt).
+        if crate::theme_files::is_two_colour(&name) {
+            // Inactive inputs are the page with an ink border: white on black in 1-bit, the
+            // reverse in 1-bit Dark.
+            let (paper, ink) = if dark { (egui::Color32::BLACK, egui::Color32::WHITE) } else { (egui::Color32::WHITE, egui::Color32::BLACK) };
+            for look in [&active_filled, &active_empty, &filled, &empty] {
+                for &(fill, border) in &look.0 {
+                    for color in [fill, border] {
+                        assert!(matches!(color, egui::Color32::BLACK | egui::Color32::WHITE), "{name}: {look:?}");
+                    }
+                }
+            }
+            for look in [&active_filled, &active_empty] {
+                assert_eq!(outline(look).0, t.selected_bg, "{name}");
+                assert_eq!(outline(look).0, ink, "{name}: the active input is inverted");
+                assert_eq!(look.1, Some(t.selected_ink), "{name}");
+            }
+            for look in [&filled, &empty] {
+                assert_eq!(outline(look), (paper, ink), "{name}");
+            }
+        } else {
+            assert_ne!(outline(&filled).0, outline(&empty).0, "{name}: filled and empty fills differ");
+            assert_ne!(outline(&filled).1, outline(&empty).1, "{name}: filled and empty borders differ");
+        }
+        assert_eq!(filled.1, Some(t.form_ink), "{name}: a filled input's count is in text colour");
+        assert_eq!(empty.1, Some(t.form_dim), "{name}: an empty input's prompt is dim");
+    }
+    crate::theme::set_custom(None);
+    crate::theme::set_dark(previous);
 }
