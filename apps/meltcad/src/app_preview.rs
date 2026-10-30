@@ -332,9 +332,6 @@ fn app_preview() {
     let min_frames = if dialog_work { 60 } else { 12 };
     let began = std::time::Instant::now();
     let mut melt_framed_at: Option<usize> = None;
-    // SolidCraft 0.26 compiles its GPU body evaluation beside the window and builds bodies on the CPU
-    // until it is ready; the frame that switches over can be blank, so the picture waits for it.
-    let mut tess_at: Option<usize> = None;
     for frame in 0..1500 {
         if melt_transfer && melt_framed_at.is_none() && melt_transfer_ready(&app, &ctx, initial_shapes + 1) {
             check_melt_transfer(&app, &ctx, initial_shapes + 1);
@@ -357,9 +354,6 @@ fn app_preview() {
             out.textures_delta.clear();
         }
         last = Some(out);
-        if tess_at.is_none() && app.precise.as_ref().and_then(|p| p.app.viewport.gpu.as_ref()).is_some_and(|g| g.tess) {
-            tess_at = Some(frame);
-        }
         // Waiting for the still-quality picture also gives auto-sized panels and font textures
         // time to settle. Never silently publish a flat placeholder as a geometry preview.
         let ready = if melt_transfer {
@@ -368,7 +362,7 @@ fn app_preview() {
                 && app.gpu.easy_view.settled
                 && !app.perf.last_fast
         } else if precise.is_some() {
-            precise_viewport_ready(&app) && (gpu_preview.is_none() || tess_at.is_some_and(|at| frame >= at + 3))
+            precise_viewport_ready(&app)
         } else {
             app.gpu.easy_view.settled && !app.perf.last_fast
         };
