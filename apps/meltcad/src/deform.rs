@@ -102,6 +102,7 @@ impl Default for Twist {
 }
 
 impl Twist {
+    #[cfg(test)]
     pub fn preset(degrees: f32) -> Self {
         Self { degrees, ..Self::default() }
     }
