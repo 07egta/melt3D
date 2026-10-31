@@ -1,0 +1,36 @@
+name: Video English localization
+on:
+  push:
+    branches: [video/source-rebuild-20261029]
+    paths:
+      - '.github/workflows/video-english-localization.yml'
+      - 'docs/promo-video/english_20261031/synthesize_english.py'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  english:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install speech runtime
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y espeak-ng
+          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install 'kokoro==0.9.4' 'misaki[en]' soundfile
+      - name: Synthesize synchronized English narration
+        env:
+          HF_HUB_DISABLE_XET: '1'
+        run: python docs/promo-video/english_20261031/synthesize_english.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: melt3d-english-voice
+          path: english-voice-assets/
+          if-no-files-found: warn
+          retention-days: 7
