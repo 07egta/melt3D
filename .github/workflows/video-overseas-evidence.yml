@@ -1,0 +1,70 @@
+name: Video overseas evidence
+on:
+  push:
+    branches: [video/source-rebuild-20261029]
+    paths:
+      - '.github/workflows/video-overseas-evidence.yml'
+      - 'docs/promo-video/english_20261031/submission_narration.py'
+      - 'docs/promo-video/english_20261031/record_mcp_evidence.py'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  narration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y espeak-ng
+          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install 'kokoro==0.9.4' 'misaki[en]' soundfile
+      - name: Synthesize presentation and demo inserts
+        env:
+          HF_HUB_DISABLE_XET: '1'
+        run: python docs/promo-video/english_20261031/submission_narration.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: overseas-submission-narration
+          path: submission-narration/
+          retention-days: 7
+  mcp-evidence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          ref: 85d821532928e0efa8f19503da564bf3e5719468
+          path: native-app
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native-app
+          shared-key: melt3d-video-native
+      - name: Graphics dependencies
+        run: sudo apt-get update -qq && sudo apt-get install -y libxkbcommon-dev libwayland-dev libx11-dev mesa-vulkan-drivers
+      - name: Build unmodified app
+        run: cargo build --profile ci --locked -p meltcad
+        working-directory: native-app
+      - name: Execute real MCP requests and capture returned previews
+        run: python3 docs/promo-video/english_20261031/record_mcp_evidence.py native-app/target/ci/meltcad
+      - name: Preserve command-line and attribution evidence
+        if: always()
+        run: |
+          mkdir -p mcp-evidence/source
+          cp native-app/apps/meltcad/src/mcp.rs mcp-evidence/source/
+          cp native-app/apps/meltcad/README.md mcp-evidence/source/README-meltcad.md
+          cp native-app/README.md mcp-evidence/source/README-root.md
+          cp docs/promo-video/english_20261031/record_mcp_evidence.py mcp-evidence/
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: overseas-real-mcp-evidence
+          path: mcp-evidence/
+          retention-days: 7
