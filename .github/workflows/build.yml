@@ -118,10 +118,15 @@ jobs:
           s2=${PIPESTATUS[0]}
           cargo test --profile ci --locked -p meltcad 2>&1 | tee test3.log
           s3=${PIPESTATUS[0]}
+          # Timing tests compare how the cost grows with size: run them alone, after the suites
+          # above, so the other test binaries cannot slow one of the two measurements and make
+          # a linear operation look quadratic (they are #[ignore]d for this step).
+          cargo test --profile ci --locked -p solidcraft-engine --lib patterns_tests -- --ignored --test-threads=1 --nocapture 2>&1 | tee test4.log
+          s4=${PIPESTATUS[0]}
           # Show what failed as annotations, so the result can be read without the full log.
-          grep -hE "^test .* FAILED|panicked at|^error(\[|:)" test1.log test2.log test3.log | head -30 | while read -r line; do echo "::error::$line"; done
-          grep -hE "test result" test1.log test2.log test3.log | while read -r line; do echo "::notice::$line"; done
-          exit $((s1 + s2 + s3))
+          grep -hE "^test .* FAILED|panicked at|^error(\[|:)" test1.log test2.log test3.log test4.log | head -30 | while read -r line; do echo "::error::$line"; done
+          grep -hE "test result" test1.log test2.log test3.log test4.log | while read -r line; do echo "::notice::$line"; done
+          exit $((s1 + s2 + s3 + s4))
 
       - name: Render Melt3D workflow screenshots
         # Keep review evidence available after a test failure; the job still fails.

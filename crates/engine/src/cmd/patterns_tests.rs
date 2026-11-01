@@ -381,13 +381,11 @@ fn hole_pattern(count1: usize, count2: usize) -> (f64, std::time::Duration) {
 }
 
 /// Whether a job four times the size took at most about twice linear: `pair` times the small job,
-/// then the big one. Linear is 4×, the old quadratic costs 16× or more. The load of the other test
-/// binaries can rise between the two runs (on a 16-core Mac under `cargo xtask test`, 32 circles
-/// took 4.7 s and 128 took 42 s, though both together take 18 s alone), so a pair that misses is
+/// then the big one. Linear is 4×, the old quadratic costs 16× or more. A pair that misses is
 /// measured again, up to three times. Load only ever slows a run, so each size keeps its fastest
-/// time and the ratio is taken of those: a retry cannot pass a regression on a small run that a
-/// spike happened to slow, once an earlier small run was fast. (A spike on the very first small
-/// run can still hide one, as it could before the retries.)
+/// time; but the fastest small run can come from a quiet moment and the fastest big run from a
+/// loaded one, so this ratio is only trustworthy on an otherwise idle machine. The two timing
+/// tests below are therefore `#[ignore]`d and CI runs them alone with `--test-threads=1`.
 fn scales_linearly(mut pair: impl FnMut() -> (std::time::Duration, std::time::Duration)) -> Result<(), String> {
     let (mut small, mut big) = (f64::INFINITY, f64::INFINITY);
     let mut runs = Vec::new();
@@ -397,6 +395,8 @@ fn scales_linearly(mut pair: impl FnMut() -> (std::time::Duration, std::time::Du
         big = big.min(b.as_secs_f64());
         runs.push(format!("{s:?} then {b:?}"));
         if big < 8.0 * small + 2.0 {
+            // Keep the measured pairs in the log of the timing step (`--nocapture`).
+            eprintln!("timing pairs: {} (fastest {small:.2} s and {big:.2} s)", runs.join(", "));
             return Ok(());
         }
     }
@@ -420,9 +420,10 @@ fn scales_linearly_keeps_each_sizes_fastest_run() {
 
 /// 512 identical through-holes from a feature pattern of one cut (#261). 128 took 30 s and 512 did
 /// not finish in 150 s: each copy was cut into an ever more complex plate. The time must grow about
-/// linearly with the count. A ratio, not a time: CI runs every test binary at once and is many
-/// times slower than a machine running this alone (about 6 s for 512 holes there).
+/// linearly with the count. A ratio, not a time: CI runs this alone (about 6 s for 512 holes there)
+/// because sharing the runner let load slow one size more than the other (see `scales_linearly`).
 #[test]
+#[ignore = "timing: CI runs it alone (patterns_tests --ignored --test-threads=1)"]
 fn pattern_of_512_hole_cuts_finishes_in_reasonable_time() {
     if let Err(missed) = scales_linearly(|| (hole_pattern(16, 8).1, hole_pattern(32, 16).1)) {
         panic!("128 holes, then 512, took {missed}");
@@ -459,8 +460,10 @@ fn sketch_hole_cut(n: usize) -> std::time::Duration {
 
 /// Many holes drawn in one sketch and cut by one extrude (#368), the usual way to draw a vent
 /// field: 32 took 2 s and 128 took 60 s, though a feature pattern of the same holes is near
-/// linear since #261. Linear is 4×. A ratio, not a time (see the 512-hole pattern test).
+/// linear since #261. Linear is 4×. A ratio, not a time (see `scales_linearly`); this test flaked
+/// once while it shared the CI runner, so it too runs alone.
 #[test]
+#[ignore = "timing: CI runs it alone (patterns_tests --ignored --test-threads=1)"]
 fn one_extrude_of_many_sketch_circles_scales_linearly() {
     if let Err(missed) = scales_linearly(|| (sketch_hole_cut(32), sketch_hole_cut(128))) {
         panic!("32 circles, then 128, took {missed}");
