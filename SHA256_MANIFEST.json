@@ -1,0 +1,8 @@
+{
+  "patches/0001-docs-compare-Serpentine-commands-against-the-fixed-R.patch": "7b4cd375ff9126d9d2472be31a98559e948f57693382efe59cf17d83ebf50b10",
+  "patches/0002-slice-add-bounded-top-and-bottom-skins-with-per-laye.patch": "0ba837ae2e8cb0096b0ed565e8b7f4baefe7d39b58da6901f2992159a06e5fb8",
+  "patches/0003-feat-cad-add-curve-rebuild-and-continuity-quality-wo.patch": "68dc949fd0200f2bf6c0a2d25408a6cb8bf8454409e4356ecc95ef1f5b30353e",
+  "patches/0004-feat-app-add-standalone-Arclet-CAD-and-node-workspac.patch": "0f0b56d4b3a8bda3950ad59878c85c175f7b5bf55a72b37e40f4acf5002d72d1",
+  "patches/0005-stabilize-rational-curve-jets.patch": "c15f079ec551cc727b877d2ed2805cbecbb93365dd06e78af1dda7a65bde61e7",
+  "patches/0006-guard-node-close-and-recovery.patch": "551b0744dcb0161ba6a8fc8c90a7537d7b31df33118fc7c94b329b9f8b7aa1f9"
+}

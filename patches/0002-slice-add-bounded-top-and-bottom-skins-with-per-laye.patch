@@ -1,0 +1,1237 @@
+From e01783f187cd8287690a5f544a818d4d22d5450a Mon Sep 17 00:00:00 2001
+From: 07egta <249711875+07egta@users.noreply.github.com>
+Date: Sat, 31 Oct 2026 22:59:04 -0700
+Subject: [PATCH 2/4] slice: add bounded top and bottom skins with per-layer
+ infill density
+
+---
+ crates/slice/src/fill.rs    | 235 +++++++++++++
+ crates/slice/src/lib.rs     | 680 +++++++++++++++++++++++++++++++-----
+ docs/slice-skins-density.md |  69 ++++
+ 3 files changed, 906 insertions(+), 78 deletions(-)
+ create mode 100644 crates/slice/src/fill.rs
+ create mode 100644 docs/slice-skins-density.md
+
+diff --git a/crates/slice/src/fill.rs b/crates/slice/src/fill.rs
+new file mode 100644
+index 0000000..5769f97
+--- /dev/null
++++ b/crates/slice/src/fill.rs
+@@ -0,0 +1,235 @@
++//! Independent scanline set operations for solid skins and sparse infill.
++//!
++//! Every line is clipped against actual contours. A skin is the part of the current layer
++//! missing from at least one requested neighbour; the remaining region is sparse infill.
++
++use solidcraft_geom::Vec2;
++
++use crate::GcodeError;
++
++const MAX_SCANLINES: usize = 20_000;
++const MAX_WORK: usize = 200_000_000;
++const MAX_SEGMENTS: usize = 1_000_000;
++const MIN_SEGMENT: f64 = 1e-8;
++
++type Interval = (f64, f64);
++
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub(crate) enum FillKind {
++    Skin,
++    Infill,
++}
++
++/// Shared by all layers, so many individually small layers cannot evade the work limit.
++pub(crate) struct WorkBudget<'a> {
++    stop: &'a mut dyn FnMut() -> bool,
++    work: usize,
++    segments: usize,
++}
++
++impl<'a> WorkBudget<'a> {
++    pub(crate) fn new(stop: &'a mut dyn FnMut() -> bool) -> Self {
++        Self { stop, work: MAX_WORK, segments: MAX_SEGMENTS }
++    }
++
++    pub(crate) fn checkpoint(&mut self) -> Result<(), GcodeError> {
++        if (self.stop)() { Err(GcodeError::Cancelled) } else { Ok(()) }
++    }
++
++    pub(crate) fn spend(&mut self, amount: usize) -> Result<(), GcodeError> {
++        self.checkpoint()?;
++        self.work = self.work.checked_sub(amount).ok_or(GcodeError::TooComplex("scanline work"))?;
++        Ok(())
++    }
++
++    pub(crate) fn segment(&mut self) -> Result<(), GcodeError> {
++        self.segments = self.segments.checked_sub(1).ok_or(GcodeError::TooComplex("path segments"))?;
++        Ok(())
++    }
++}
++
++pub(crate) struct FillPlanner {
++    current: Vec<Vec<Vec2>>,
++    neighbours: Vec<Vec<Vec<Vec2>>>,
++    full_skin: bool,
++    sin: f64,
++    cos: f64,
++}
++
++impl FillPlanner {
++    pub(crate) fn new(
++        current: &[Vec<Vec2>],
++        neighbours: &[&[Vec<Vec2>]],
++        full_skin: bool,
++        angle: f64,
++        budget: &mut WorkBudget<'_>,
++    ) -> Result<Self, GcodeError> {
++        let (sin, cos) = angle.sin_cos();
++        let current = project(current, sin, cos, budget)?;
++        let neighbours =
++            if full_skin { Vec::new() } else { neighbours.iter().map(|loops| project(loops, sin, cos, budget)).collect::<Result<_, _>>()? };
++        Ok(Self { current, neighbours, full_skin, sin, cos })
++    }
++
++    pub(crate) fn paths(&self, spacing: f64, kind: FillKind, budget: &mut WorkBudget<'_>) -> Result<Vec<(Vec2, Vec2)>, GcodeError> {
++        if spacing == 0.0
++            || self.current.is_empty()
++            || (self.full_skin && kind == FillKind::Infill)
++            || (!self.full_skin && self.neighbours.is_empty() && kind == FillKind::Skin)
++        {
++            return Ok(Vec::new());
++        }
++        if !spacing.is_finite() || spacing <= 1e-3 {
++            return Err(GcodeError::BadSetting("fill spacing must exceed 0.001 mm"));
++        }
++        let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
++        for p in self.current.iter().flatten() {
++            lo = lo.min(p.y);
++            hi = hi.max(p.y);
++        }
++        if hi <= lo {
++            return Ok(Vec::new());
++        }
++        let rows = ((hi - lo) / spacing).ceil();
++        if rows > MAX_SCANLINES as f64 {
++            return Err(GcodeError::TooComplex("scanlines in one layer"));
++        }
++        // The same global lattice is used for skin and 100% infill. Their interval masks
++        // are complementary, so a fully solid layer is never extruded twice at their seam.
++        let mut first = (lo / spacing).floor() * spacing + spacing * 0.5;
++        if first < lo {
++            first += spacing;
++        }
++        let mut paths = Vec::new();
++        for row in 0..=rows as usize {
++            budget.checkpoint()?;
++            let y = first + row as f64 * spacing;
++            if y >= hi {
++                break;
++            }
++            let current = intervals_at(&self.current, y, budget)?;
++            let covered = if self.full_skin {
++                Vec::new()
++            } else {
++                let mut covered = current.clone();
++                for neighbour in &self.neighbours {
++                    if covered.is_empty() {
++                        break;
++                    }
++                    let next = intervals_at(neighbour, y, budget)?;
++                    budget.spend(covered.len().saturating_add(next.len()))?;
++                    covered = intersect(&covered, &next);
++                }
++                covered
++            };
++            let spans = match kind {
++                FillKind::Skin => subtract(&current, &covered),
++                FillKind::Infill => covered,
++            };
++            for (start, end) in spans {
++                if end - start > MIN_SEGMENT {
++                    budget.segment()?;
++                    let restore = |x: f64| Vec2::new(x * self.cos - y * self.sin, x * self.sin + y * self.cos);
++                    paths.push((restore(start), restore(end)));
++                }
++            }
++        }
++        Ok(paths)
++    }
++}
++
++fn project(loops: &[Vec<Vec2>], sin: f64, cos: f64, budget: &mut WorkBudget<'_>) -> Result<Vec<Vec<Vec2>>, GcodeError> {
++    let mut result = Vec::with_capacity(loops.len());
++    for contour in loops {
++        let mut projected = Vec::with_capacity(contour.len());
++        for chunk in contour.chunks(256) {
++            budget.spend(chunk.len())?;
++            projected.extend(chunk.iter().map(|p| Vec2::new(p.x * cos + p.y * sin, -p.x * sin + p.y * cos)));
++        }
++        result.push(projected);
++    }
++    Ok(result)
++}
++
++fn intervals_at(loops: &[Vec<Vec2>], y: f64, budget: &mut WorkBudget<'_>) -> Result<Vec<Interval>, GcodeError> {
++    let mut crossings = Vec::new();
++    for contour in loops {
++        for (index, (a, b)) in contour.iter().zip(contour.iter().cycle().skip(1)).take(contour.len()).enumerate() {
++            if index % 256 == 0 {
++                budget.spend((contour.len() - index).min(256))?;
++            }
++            if (a.y <= y) != (b.y <= y) {
++                let x = a.x + (y - a.y) / (b.y - a.y) * (b.x - a.x);
++                if !x.is_finite() {
++                    return Err(GcodeError::BadSetting("non-finite contour intersection"));
++                }
++                crossings.push(x);
++            }
++        }
++    }
++    crossings.sort_by(f64::total_cmp);
++    if crossings.len() % 2 != 0 {
++        return Err(GcodeError::BadSetting("unpaired contour intersections"));
++    }
++    Ok(crossings
++        .as_chunks::<2>()
++        .0
++        .iter()
++        .filter_map(|pair| match pair {
++            [a, b] if b - a > MIN_SEGMENT => Some((*a, *b)),
++            _ => None,
++        })
++        .collect())
++}
++
++fn intersect(a: &[Interval], b: &[Interval]) -> Vec<Interval> {
++    let (mut i, mut j) = (0, 0);
++    let mut result = Vec::new();
++    while let (Some(left), Some(right)) = (a.get(i), b.get(j)) {
++        let start = left.0.max(right.0);
++        let end = left.1.min(right.1);
++        if end - start > MIN_SEGMENT {
++            result.push((start, end));
++        }
++        if left.1 < right.1 {
++            i += 1;
++        } else {
++            j += 1;
++        }
++    }
++    result
++}
++
++fn subtract(current: &[Interval], covered: &[Interval]) -> Vec<Interval> {
++    let mut result = Vec::new();
++    let mut j = 0;
++    for (start, end) in current.iter().copied() {
++        let mut at = start;
++        while let Some(interval) = covered.get(j) {
++            if interval.1 <= at {
++                j += 1;
++            } else {
++                break;
++            }
++        }
++        let mut k = j;
++        while let Some(interval) = covered.get(k) {
++            if interval.0 >= end {
++                break;
++            }
++            if interval.0 > at + MIN_SEGMENT {
++                result.push((at, interval.0.min(end)));
++            }
++            at = at.max(interval.1);
++            if at >= end {
++                break;
++            }
++            k += 1;
++        }
++        if end > at + MIN_SEGMENT {
++            result.push((at, end));
++        }
++        j = k;
++    }
++    result
++}
+diff --git a/crates/slice/src/lib.rs b/crates/slice/src/lib.rs
+index 73c7e50..2ce3cd8 100644
+--- a/crates/slice/src/lib.rs
++++ b/crates/slice/src/lib.rs
+@@ -5,14 +5,18 @@
+ //!
+ //! Limits (stated, not hidden): walls use a mitre offset, so they suit shapes without very sharp
+ //! inner corners; solids that overlap each other are sliced with the even-odd rule, so overlapping
+-//! parts cancel; there are no supports, no bridges and no top/bottom skins (infill runs on every
+-//! layer).
++//! parts cancel; there are no supports or bridges. Solid top/bottom skins are detected from
++//! neighbouring cross-sections, including exposed shelves inside the model's height range.
+ 
+ use std::collections::HashMap;
+ use std::fmt::Write as _;
+ 
+ use solidcraft_geom::{Vec2, Vec3};
+ 
++mod fill;
++
++use fill::{FillKind, FillPlanner, WorkBudget};
++
+ /// One triangle.
+ pub type Tri = [Vec3; 3];
+ 
+@@ -22,6 +26,15 @@ pub const MAX_LAYERS: usize = 20_000;
+ pub const MAX_TRIANGLES: usize = 2_000_000;
+ /// Most perimeter walls.
+ pub const MAX_WALLS: u32 = 8;
++/// Most solid layers requested on either side of a surface.
++pub const MAX_SKIN_LAYERS: u32 = 64;
++/// Most vertices accepted across an already sliced model.
++pub const MAX_SLICE_POINTS: usize = 2_000_000;
++/// Largest absolute coordinate accepted by the G-code planner, in millimetres.
++pub const MAX_COORDINATE: f64 = 1_000_000.0;
++/// Maximum generated text size; exceeding it is an error, never a partial print file.
++pub const MAX_GCODE_BYTES: usize = 128 * 1024 * 1024;
++const GCODE_Z_STEP: f64 = 0.001;
+ 
+ #[derive(Debug, thiserror::Error, PartialEq)]
+ pub enum SliceError {
+@@ -33,6 +46,12 @@ pub enum SliceError {
+     TooManyTriangles,
+     #[error("too many layers (up to {MAX_LAYERS}); use a thicker layer height")]
+     TooManyLayers,
++    #[error("the slice exceeds the geometry planning limit")]
++    TooComplex,
++    #[error("a slice contour branches at an edge; repair the non-manifold mesh")]
++    BranchingContour,
++    #[error("stopped")]
++    Cancelled,
+ }
+ 
+ /// One layer: the outlines of the material at its middle height.
+@@ -67,6 +86,12 @@ fn finite3(v: Vec3) -> bool {
+ 
+ /// Cuts `tris` into layers `layer_height` thick, the shape's lowest point sitting at height 0.
+ pub fn slice(tris: &[Tri], layer_height: f64) -> Result<Sliced, SliceError> {
++    slice_until(tris, layer_height, || false)
++}
++
++/// Slices triangles while checking `stop` between layers and batches of geometry work.
++pub fn slice_until(tris: &[Tri], layer_height: f64, mut stop: impl FnMut() -> bool) -> Result<Sliced, SliceError> {
++    slice_checkpoint(&mut stop)?;
+     if !(layer_height > 1e-3) || !layer_height.is_finite() {
+         return Err(SliceError::BadNumber("layer height"));
+     }
+@@ -75,32 +100,59 @@ pub fn slice(tris: &[Tri], layer_height: f64) -> Result<Sliced, SliceError> {
+     }
+     let mut zmin = f64::INFINITY;
+     let mut zmax = f64::NEG_INFINITY;
+-    for t in tris {
++    for (i, t) in tris.iter().enumerate() {
++        if i % 256 == 0 {
++            slice_checkpoint(&mut stop)?;
++        }
+         for v in t {
+-            if !finite3(*v) {
++            if !finite3(*v) || v.x.abs() > MAX_COORDINATE || v.y.abs() > MAX_COORDINATE || v.z.abs() > MAX_COORDINATE {
+                 return Err(SliceError::BadNumber("coordinate"));
+             }
+             zmin = zmin.min(v.z);
+             zmax = zmax.max(v.z);
+         }
+     }
+-    let count = ((zmax - zmin) / layer_height).floor();
+-    if !(count >= 1.0) {
++    let height = zmax - zmin;
++    if !(height > 1e-9) || !height.is_finite() {
+         return Err(SliceError::Empty);
+     }
++    let mut count = (height / layer_height).ceil();
++    // A floating-point quotient can round just above an integer. Also merge a genuine
++    // remainder below the writer's Z quantum: it must not become an extra extrusion at
++    // the same serialized height. Preserve the actual model top in the final layer.
++    if count > 1.0 && height - (count - 1.0) * layer_height < GCODE_Z_STEP {
++        count -= 1.0;
++    }
+     if count > MAX_LAYERS as f64 {
+         return Err(SliceError::TooManyLayers);
+     }
+     let count = count as usize;
+     let mut layers = Vec::with_capacity(count);
++    let mut work = 200_000_000usize;
++    let mut points = 0usize;
+     for i in 0..count {
+-        let z = zmin + (i as f64 + 0.5) * layer_height;
+-        let (loops, open) = loops_at(tris, z);
+-        layers.push(Layer { top: (i as f64 + 1.0) * layer_height, loops, open });
++        slice_checkpoint(&mut stop)?;
++        work = work.checked_sub(tris.len()).ok_or(SliceError::TooComplex)?;
++        let bottom = i as f64 * layer_height;
++        let top = if i + 1 == count { height } else { ((i as f64 + 1.0) * layer_height).min(height) };
++        let z = zmin + (bottom + top) * 0.5;
++        let (loops, open) = loops_at(tris, z, &mut stop, &mut work)?;
++        for contour in &loops {
++            points = points.checked_add(contour.len()).ok_or(SliceError::TooComplex)?;
++            if points > MAX_SLICE_POINTS {
++                return Err(SliceError::TooComplex);
++            }
++        }
++        layers.push(Layer { top, loops, open });
+     }
++    slice_checkpoint(&mut stop)?;
+     Ok(Sliced { layer_height, layers })
+ }
+ 
++fn slice_checkpoint(stop: &mut impl FnMut() -> bool) -> Result<(), SliceError> {
++    if stop() { Err(SliceError::Cancelled) } else { Ok(()) }
++}
++
+ type Key = (i64, i64);
+ 
+ fn key(p: Vec2) -> Key {
+@@ -115,9 +167,12 @@ fn cross_edge(a: Vec3, b: Vec3, z: f64) -> Vec2 {
+     Vec2::new(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t)
+ }
+ 
+-fn loops_at(tris: &[Tri], z: f64) -> (Vec<Vec<Vec2>>, u32) {
++fn loops_at(tris: &[Tri], z: f64, stop: &mut impl FnMut() -> bool, work: &mut usize) -> Result<(Vec<Vec<Vec2>>, u32), SliceError> {
+     let mut segs: Vec<(Vec2, Vec2)> = Vec::new();
+-    for t in tris {
++    for (index, t) in tris.iter().enumerate() {
++        if index % 256 == 0 {
++            slice_checkpoint(stop)?;
++        }
+         // A vertex exactly on the cut counts as above it, so no triangle is cut twice at a corner.
+         let above = [t[0].z > z - 1e-9, t[1].z > z - 1e-9, t[2].z > z - 1e-9];
+         if above[0] == above[1] && above[1] == above[2] {
+@@ -137,13 +192,24 @@ fn loops_at(tris: &[Tri], z: f64) -> (Vec<Vec<Vec2>>, u32) {
+     }
+     let mut by_end: HashMap<Key, Vec<usize>> = HashMap::new();
+     for (i, (a, b)) in segs.iter().enumerate() {
+-        by_end.entry(key(*a)).or_default().push(i);
+-        by_end.entry(key(*b)).or_default().push(i);
++        if i % 256 == 0 {
++            slice_checkpoint(stop)?;
++        }
++        for endpoint in [key(*a), key(*b)] {
++            let incident = by_end.entry(endpoint).or_default();
++            if incident.len() >= 2 {
++                return Err(SliceError::BranchingContour);
++            }
++            incident.push(i);
++        }
+     }
+     let mut used = vec![false; segs.len()];
+     let mut loops: Vec<Vec<Vec2>> = Vec::new();
+     let mut open = 0u32;
+     for start in 0..segs.len() {
++        if start % 256 == 0 {
++            slice_checkpoint(stop)?;
++        }
+         if used[start] {
+             continue;
+         }
+@@ -151,7 +217,10 @@ fn loops_at(tris: &[Tri], z: f64) -> (Vec<Vec<Vec2>>, u32) {
+         let (first, mut at) = segs[start];
+         let mut pts = vec![first];
+         let mut closed = false;
+-        for _ in 0..=segs.len() {
++        for step in 0..=segs.len() {
++            if step % 256 == 0 {
++                slice_checkpoint(stop)?;
++            }
+             if key(at) == key(first) {
+                 closed = true;
+                 break;
+@@ -169,7 +238,7 @@ fn loops_at(tris: &[Tri], z: f64) -> (Vec<Vec<Vec2>>, u32) {
+             open = open.saturating_add(1);
+         }
+     }
+-    (orient(loops), open)
++    Ok((orient(loops, stop, work)?, open))
+ }
+ 
+ /// Signed area: positive when the loop runs counter-clockwise.
+@@ -182,36 +251,46 @@ pub fn area(l: &[Vec2]) -> f64 {
+     s * 0.5
+ }
+ 
+-fn contains(l: &[Vec2], p: Vec2) -> bool {
++fn contains(l: &[Vec2], p: Vec2, stop: &mut impl FnMut() -> bool) -> Result<bool, SliceError> {
+     let mut inside = false;
+     let mut j = l.len().wrapping_sub(1);
+     for (i, a) in l.iter().enumerate() {
++        if i % 256 == 0 {
++            slice_checkpoint(stop)?;
++        }
+         let b = l[j];
+         if (a.y > p.y) != (b.y > p.y) && p.x < (b.x - a.x) * (p.y - a.y) / (b.y - a.y) + a.x {
+             inside = !inside;
+         }
+         j = i;
+     }
+-    inside
++    Ok(inside)
+ }
+ 
+ /// Outer loops counter-clockwise, loops inside an odd number of others (holes) clockwise.
+-fn orient(mut loops: Vec<Vec<Vec2>>) -> Vec<Vec<Vec2>> {
+-    let depths: Vec<usize> = loops
+-        .iter()
+-        .enumerate()
+-        .map(|(i, l)| {
+-            let p = l.first().copied().unwrap_or(Vec2::ZERO);
+-            loops.iter().enumerate().filter(|(j, o)| *j != i && contains(o, p)).count()
+-        })
+-        .collect();
++fn orient(mut loops: Vec<Vec<Vec2>>, stop: &mut impl FnMut() -> bool, work: &mut usize) -> Result<Vec<Vec<Vec2>>, SliceError> {
++    let mut depths = Vec::with_capacity(loops.len());
++    for (i, contour) in loops.iter().enumerate() {
++        slice_checkpoint(stop)?;
++        let p = contour.first().copied().unwrap_or(Vec2::ZERO);
++        let mut depth = 0;
++        for (j, other) in loops.iter().enumerate() {
++            if i != j {
++                *work = work.checked_sub(other.len()).ok_or(SliceError::TooComplex)?;
++                if contains(other, p, stop)? {
++                    depth += 1;
++                }
++            }
++        }
++        depths.push(depth);
++    }
+     for (l, d) in loops.iter_mut().zip(depths) {
+         let ccw = area(l) > 0.0;
+         if ccw != (d % 2 == 0) {
+             l.reverse();
+         }
+     }
+-    loops
++    Ok(loops)
+ }
+ 
+ /// Moves a loop sideways by `d` into the material (positive) or out of it (negative).
+@@ -283,7 +362,7 @@ pub fn infill(loops: &[Vec<Vec2>], spacing: f64, angle: f64) -> Vec<(Vec2, Vec2)
+             }
+         }
+         xs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+-        for pair in xs.chunks_exact(2) {
++        for pair in xs.as_chunks::<2>().0 {
+             if pair[1] - pair[0] > 0.05 {
+                 out.push((rot(Vec2::new(pair[0], y), c, s), rot(Vec2::new(pair[1], y), c, s)));
+             }
+@@ -302,7 +381,15 @@ pub struct PrintConfig {
+     pub bed_temp: f64,
+     pub walls: u32,
+     /// Distance between infill lines; zero turns infill off.
++    /// Used when this layer has no density override in [`Self::layer_infill`].
+     pub infill_spacing: f64,
++    /// Solid layers below an exposed top surface. Zero disables top skins.
++    pub top_solid_layers: u32,
++    /// Solid layers above an exposed bottom surface. Zero disables bottom skins.
++    pub bottom_solid_layers: u32,
++    /// Optional density overrides, indexed from zero. Unlisted layers use `infill_spacing`.
++    /// Skin regions stay solid even when a layer's sparse infill density is zero.
++    pub layer_infill: Vec<LayerInfill>,
+     pub print_speed: f64,
+     pub travel_speed: f64,
+     pub retract: f64,
+@@ -325,6 +412,9 @@ impl Default for PrintConfig {
+             bed_temp: 60.0,
+             walls: 2,
+             infill_spacing: 3.0,
++            top_solid_layers: 3,
++            bottom_solid_layers: 3,
++            layer_infill: Vec::new(),
+             print_speed: 60.0,
+             travel_speed: 150.0,
+             retract: 0.8,
+@@ -336,6 +426,13 @@ impl Default for PrintConfig {
+     }
+ }
+ 
++/// Sparse infill density for one layer, expressed as a fraction from zero to one.
++#[derive(Clone, Copy, Debug, PartialEq)]
++pub struct LayerInfill {
++    pub layer: usize,
++    pub density: f64,
++}
++
+ #[derive(Debug, thiserror::Error, PartialEq)]
+ pub enum GcodeError {
+     #[error("{0} must be a number greater than zero")]
+@@ -344,10 +441,19 @@ pub enum GcodeError {
+     Empty,
+     #[error("the shape does not fit on the bed ({0:.0} x {1:.0} mm needed)")]
+     TooBig(f64, f64),
++    #[error("invalid print setting: {0}")]
++    BadSetting(&'static str),
++    #[error("the sliced model has open contours; repair the mesh before printing")]
++    OpenContours,
++    #[error("the sliced model or toolpath exceeds the planning limit: {0}")]
++    TooComplex(&'static str),
++    #[error("stopped")]
++    Cancelled,
+ }
+ 
+ struct Writer<'a> {
+     cfg: &'a PrintConfig,
++    centre: Vec2,
+     text: String,
+     at: Vec2,
+     e_per_mm: f64,
+@@ -361,68 +467,85 @@ impl Writer<'_> {
+         self.text.push('\n');
+     }
+     fn place(&self, p: Vec2) -> Vec2 {
+-        Vec2::new(p.x + self.cfg.bed_center.0, p.y + self.cfg.bed_center.1)
++        Vec2::new(p.x - self.centre.x + self.cfg.bed_center.0, p.y - self.centre.y + self.cfg.bed_center.1)
++    }
++    fn extrusion_position(&self, point: Vec2) -> Result<Vec2, GcodeError> {
++        let to = self.place(point);
++        let margin = self.cfg.line_width * 0.5;
++        let tolerance = GCODE_Z_STEP * 0.5;
++        if !to.x.is_finite()
++            || !to.y.is_finite()
++            || to.x < margin - tolerance
++            || to.x > self.cfg.bed_size.0 - margin + tolerance
++            || to.y < margin - tolerance
++            || to.y > self.cfg.bed_size.1 - margin + tolerance
++        {
++            return Err(GcodeError::BadSetting("planned extrusion lies outside the bed"));
++        }
++        Ok(to)
+     }
+-    fn travel(&mut self, to: Vec2) {
+-        let to = self.place(to);
++    fn travel(&mut self, to: Vec2) -> Result<(), GcodeError> {
++        let to = self.extrusion_position(to)?;
+         if !self.retracted {
+             let _ = writeln!(self.text, "G1 E-{:.3} F2400", self.cfg.retract);
+             self.retracted = true;
+         }
+         let _ = writeln!(self.text, "G0 X{:.3} Y{:.3} F{:.0}", to.x, to.y, self.cfg.travel_speed * 60.0);
+         self.at = to;
++        self.check_size()
+     }
+-    fn print_to(&mut self, to: Vec2) {
+-        let to = self.place(to);
++    fn print_to(&mut self, to: Vec2) -> Result<(), GcodeError> {
++        let to = self.extrusion_position(to)?;
+         if self.retracted {
+             let _ = writeln!(self.text, "G1 E{:.3} F2400", self.cfg.retract);
+             self.retracted = false;
+         }
+         let len = (to.x - self.at.x).hypot(to.y - self.at.y);
+         let e = len * self.cfg.line_width * self.layer_h * self.e_per_mm;
++        if !e.is_finite() {
++            return Err(GcodeError::BadSetting("extrusion is not finite"));
++        }
+         let _ = writeln!(self.text, "G1 X{:.3} Y{:.3} E{:.5} F{:.0}", to.x, to.y, e, self.cfg.print_speed * 60.0);
+         self.at = to;
++        self.check_size()
++    }
++    fn check_size(&self) -> Result<(), GcodeError> {
++        if self.text.len() > MAX_GCODE_BYTES { Err(GcodeError::TooComplex("G-code bytes")) } else { Ok(()) }
+     }
+-    fn path(&mut self, pts: &[Vec2], closed: bool) {
+-        let Some(first) = pts.first().copied() else { return };
+-        self.travel(first);
+-        for p in pts.iter().skip(1) {
+-            self.print_to(*p);
++    fn path(&mut self, pts: &[Vec2], closed: bool, budget: &mut WorkBudget<'_>) -> Result<(), GcodeError> {
++        let Some(first) = pts.first().copied() else { return Ok(()) };
++        budget.checkpoint()?;
++        self.travel(first)?;
++        for (i, p) in pts.iter().skip(1).enumerate() {
++            if i % 256 == 0 {
++                budget.checkpoint()?;
++            }
++            budget.segment()?;
++            self.print_to(*p)?;
+         }
+         if closed {
+-            self.print_to(first);
++            budget.segment()?;
++            self.print_to(first)?;
+         }
++        self.check_size()
+     }
+ }
+ 
+ /// Turns sliced layers into G-code text.
+ pub fn gcode(sliced: &Sliced, cfg: &PrintConfig) -> Result<String, GcodeError> {
+-    for (name, v) in [
+-        ("line width", cfg.line_width),
+-        ("filament diameter", cfg.filament_diameter),
+-        ("print speed", cfg.print_speed),
+-        ("travel speed", cfg.travel_speed),
+-    ] {
+-        if !(v > 0.0) || !v.is_finite() {
+-            return Err(GcodeError::BadNumber(name));
+-        }
+-    }
+-    let (mut lo, mut hi) = (Vec2::new(f64::INFINITY, f64::INFINITY), Vec2::new(f64::NEG_INFINITY, f64::NEG_INFINITY));
+-    for p in sliced.layers.iter().flat_map(|l| l.loops.iter().flatten()) {
+-        lo = Vec2::new(lo.x.min(p.x), lo.y.min(p.y));
+-        hi = Vec2::new(hi.x.max(p.x), hi.y.max(p.y));
+-    }
+-    if !(hi.x >= lo.x) {
+-        return Err(GcodeError::Empty);
+-    }
+-    let (w, d) = (hi.x - lo.x, hi.y - lo.y);
+-    if w > cfg.bed_size.0 || d > cfg.bed_size.1 {
+-        return Err(GcodeError::TooBig(w, d));
+-    }
+-    let centre = Vec2::new((lo.x + hi.x) * 0.5, (lo.y + hi.y) * 0.5);
++    gcode_until(sliced, cfg, || false)
++}
++
++/// Turns layers into G-code, checking `stop` during validation, layers and scanline planning.
++/// A cancellation or planning limit returns an error; incomplete G-code is never returned.
++pub fn gcode_until(sliced: &Sliced, cfg: &PrintConfig, mut stop: impl FnMut() -> bool) -> Result<String, GcodeError> {
++    let mut budget = WorkBudget::new(&mut stop);
++    let (centre, densities) = validate_print(sliced, cfg, &mut budget)?;
+     let area_filament = std::f64::consts::PI * (cfg.filament_diameter * 0.5).powi(2);
+-    let mut w_ = Writer { cfg, text: String::new(), at: Vec2::ZERO, e_per_mm: 1.0 / area_filament, layer_h: sliced.layer_height, retracted: false };
++    let mut w_ =
++        Writer { cfg, centre, text: String::new(), at: Vec2::ZERO, e_per_mm: 1.0 / area_filament, layer_h: sliced.layer_height, retracted: false };
+     w_.line("; generated by SolidCraft slice");
++    w_.line("; Generic printer output; Bambu hardware compatibility is unverified");
+     w_.line("G21 ; millimetres");
+     w_.line("G90 ; absolute moves");
+     w_.line("M83 ; relative extrusion");
+@@ -430,39 +553,198 @@ pub fn gcode(sliced: &Sliced, cfg: &PrintConfig) -> Result<String, GcodeError> {
+     let _ = writeln!(w_.text, "M104 S{:.0}", cfg.nozzle_temp);
+     let _ = writeln!(w_.text, "M190 S{:.0}", cfg.bed_temp);
+     let _ = writeln!(w_.text, "M109 S{:.0}", cfg.nozzle_temp);
+-    let start = cfg.start_gcode.clone();
+-    w_.line(&start);
+-    let walls = cfg.walls.min(MAX_WALLS);
++    w_.line(&cfg.start_gcode);
++    let mut previous_top = 0.0;
+     for (n, layer) in sliced.layers.iter().enumerate() {
++        budget.checkpoint()?;
++        let print_top = quantized_z(layer.top);
++        w_.layer_h = print_top - previous_top;
++        previous_top = print_top;
+         let _ = writeln!(w_.text, ";LAYER:{n}");
+-        let _ = writeln!(w_.text, "G1 Z{:.3} F600", layer.top);
+-        let shift = |l: &[Vec2]| -> Vec<Vec2> { l.iter().map(|p| Vec2::new(p.x - centre.x, p.y - centre.y)).collect() };
++        let _ = writeln!(w_.text, "G1 Z{print_top:.3} F600");
+         let mut inner: Vec<Vec<Vec2>> = Vec::new();
+-        for l in &layer.loops {
+-            let mut cur = shift(l);
+-            for k in 0..walls {
++        w_.line(";TYPE:WALL");
++        for contour in &layer.loops {
++            budget.spend(contour.len())?;
++            let mut cur = contour.clone();
++            for k in 0..cfg.walls {
++                budget.spend(cur.len())?;
+                 let Some(wall) = offset(&cur, if k == 0 { cfg.line_width * 0.5 } else { cfg.line_width }) else { break };
+-                w_.path(&wall, true);
++                w_.path(&wall, true, &mut budget)?;
+                 cur = wall;
+             }
+             if let Some(core) = offset(&cur, cfg.line_width * 0.5) {
+                 inner.push(core);
+             }
+         }
+-        if cfg.infill_spacing > 0.0 && !inner.is_empty() {
+-            let angle = if n % 2 == 0 { std::f64::consts::FRAC_PI_4 } else { -std::f64::consts::FRAC_PI_4 };
+-            for (a, b) in infill(&inner, cfg.infill_spacing, angle) {
+-                w_.path(&[a, b], false);
++        let (full_skin, neighbours) = skin_neighbours(sliced, cfg, n);
++        let angle = if n % 2 == 0 { std::f64::consts::FRAC_PI_4 } else { -std::f64::consts::FRAC_PI_4 };
++        let planner = FillPlanner::new(&inner, &neighbours, full_skin, angle, &mut budget)?;
++        let density = densities.get(n).copied().flatten();
++        let spacing = match density {
++            Some(0.0) => 0.0,
++            Some(value) => cfg.line_width / value,
++            None => cfg.infill_spacing,
++        };
++        for (kind, distance) in [(FillKind::Skin, cfg.line_width), (FillKind::Infill, spacing)] {
++            let paths = planner.paths(distance, kind, &mut budget)?;
++            if !paths.is_empty() {
++                w_.line(match kind {
++                    FillKind::Skin => ";TYPE:SKIN",
++                    FillKind::Infill => ";TYPE:INFILL",
++                });
++            }
++            for (a, b) in paths {
++                w_.path(&[a, b], false, &mut budget)?;
+             }
+         }
+     }
+-    let end = cfg.end_gcode.clone();
++    budget.checkpoint()?;
+     w_.line("M104 S0");
+     w_.line("M140 S0");
+-    w_.line(&end);
++    w_.line(&cfg.end_gcode);
++    w_.check_size()?;
+     Ok(w_.text)
+ }
+ 
++fn skin_neighbours<'a>(sliced: &'a Sliced, cfg: &PrintConfig, index: usize) -> (bool, Vec<&'a [Vec<Vec2>]>) {
++    let below = cfg.bottom_solid_layers as usize;
++    let above = cfg.top_solid_layers as usize;
++    let after = sliced.layers.len().saturating_sub(index.saturating_add(1));
++    if index < below || after < above {
++        return (true, Vec::new());
++    }
++    let mut neighbours = Vec::with_capacity(below + above);
++    for distance in 1..=below {
++        if let Some(layer) = sliced.layers.get(index.saturating_sub(distance)) {
++            neighbours.push(layer.loops.as_slice());
++        }
++    }
++    for distance in 1..=above {
++        if let Some(layer) = sliced.layers.get(index.saturating_add(distance)) {
++            neighbours.push(layer.loops.as_slice());
++        }
++    }
++    (false, neighbours)
++}
++
++fn quantized_z(top: f64) -> f64 {
++    (top / GCODE_Z_STEP).round() * GCODE_Z_STEP
++}
++
++fn validate_print(sliced: &Sliced, cfg: &PrintConfig, budget: &mut WorkBudget<'_>) -> Result<(Vec2, Vec<Option<f64>>), GcodeError> {
++    budget.checkpoint()?;
++    if sliced.layers.is_empty() {
++        return Err(GcodeError::Empty);
++    }
++    if sliced.layers.len() > MAX_LAYERS {
++        return Err(GcodeError::TooComplex("layer count"));
++    }
++    for (name, v) in [
++        ("line width", cfg.line_width),
++        ("filament diameter", cfg.filament_diameter),
++        ("print speed", cfg.print_speed),
++        ("travel speed", cfg.travel_speed),
++        ("layer height", sliced.layer_height),
++        ("bed width", cfg.bed_size.0),
++        ("bed depth", cfg.bed_size.1),
++    ] {
++        if !(v > 0.0) || !v.is_finite() || v > MAX_COORDINATE {
++            return Err(GcodeError::BadNumber(name));
++        }
++    }
++    for (name, v) in [
++        ("nozzle temperature", cfg.nozzle_temp),
++        ("bed temperature", cfg.bed_temp),
++        ("retraction", cfg.retract),
++        ("infill spacing", cfg.infill_spacing),
++    ] {
++        if !v.is_finite() || !(0.0..=MAX_COORDINATE).contains(&v) {
++            return Err(GcodeError::BadSetting(name));
++        }
++    }
++    if cfg.line_width <= 1e-3 || cfg.filament_diameter <= 1e-3 || (cfg.infill_spacing > 0.0 && cfg.infill_spacing <= 1e-3) {
++        return Err(GcodeError::BadSetting("line width, filament diameter and nonzero spacing must exceed 0.001 mm"));
++    }
++    if cfg.walls > MAX_WALLS || cfg.top_solid_layers > MAX_SKIN_LAYERS || cfg.bottom_solid_layers > MAX_SKIN_LAYERS {
++        return Err(GcodeError::BadSetting("wall or skin layer count"));
++    }
++    if cfg.start_gcode.len() > 1024 * 1024 || cfg.end_gcode.len() > 1024 * 1024 {
++        return Err(GcodeError::TooComplex("start/end G-code bytes"));
++    }
++    if cfg.layer_infill.len() > sliced.layers.len() {
++        return Err(GcodeError::BadSetting("too many layer density overrides"));
++    }
++    let mut densities = vec![None; sliced.layers.len()];
++    for override_ in &cfg.layer_infill {
++        budget.checkpoint()?;
++        if !override_.density.is_finite() || !(0.0..=1.0).contains(&override_.density) {
++            return Err(GcodeError::BadSetting("infill density must be in 0..=1"));
++        }
++        let entry = densities.get_mut(override_.layer).ok_or(GcodeError::BadSetting("density layer does not exist"))?;
++        if entry.is_some() {
++            return Err(GcodeError::BadSetting("duplicate layer density override"));
++        }
++        *entry = Some(override_.density);
++    }
++    let (mut lo, mut hi) = (Vec2::new(f64::INFINITY, f64::INFINITY), Vec2::new(f64::NEG_INFINITY, f64::NEG_INFINITY));
++    let mut points = 0usize;
++    let mut previous_top = 0.0;
++    let mut previous_print_top = 0.0;
++    for layer in &sliced.layers {
++        budget.checkpoint()?;
++        if !layer.top.is_finite() || layer.top <= previous_top || layer.top > MAX_COORDINATE {
++            return Err(GcodeError::BadSetting("layer heights must be finite and strictly increasing"));
++        }
++        previous_top = layer.top;
++        let print_top = quantized_z(layer.top);
++        if print_top <= previous_print_top {
++            return Err(GcodeError::BadSetting("layer heights collapse at 0.001 mm G-code precision"));
++        }
++        previous_print_top = print_top;
++        if layer.open != 0 {
++            return Err(GcodeError::OpenContours);
++        }
++        for contour in &layer.loops {
++            points = points.checked_add(contour.len()).ok_or(GcodeError::TooComplex("contour vertices"))?;
++            if points > MAX_SLICE_POINTS {
++                return Err(GcodeError::TooComplex("contour vertices"));
++            }
++            if contour.len() < 3 {
++                return Err(GcodeError::BadSetting("a contour needs at least three vertices"));
++            }
++            for chunk in contour.chunks(256) {
++                budget.spend(chunk.len())?;
++                for p in chunk {
++                    if !p.x.is_finite() || !p.y.is_finite() || p.x.abs() > MAX_COORDINATE || p.y.abs() > MAX_COORDINATE {
++                        return Err(GcodeError::BadSetting("contour coordinate"));
++                    }
++                    lo = Vec2::new(lo.x.min(p.x), lo.y.min(p.y));
++                    hi = Vec2::new(hi.x.max(p.x), hi.y.max(p.y));
++                }
++            }
++        }
++    }
++    if !(hi.x >= lo.x) {
++        return Err(GcodeError::Empty);
++    }
++    let (w, d) = (hi.x - lo.x, hi.y - lo.y);
++    if w > cfg.bed_size.0 || d > cfg.bed_size.1 {
++        return Err(GcodeError::TooBig(w, d));
++    }
++    if !cfg.bed_center.0.is_finite()
++        || !cfg.bed_center.1.is_finite()
++        || cfg.bed_center.0 - w * 0.5 < 0.0
++        || cfg.bed_center.0 + w * 0.5 > cfg.bed_size.0
++        || cfg.bed_center.1 - d * 0.5 < 0.0
++        || cfg.bed_center.1 + d * 0.5 > cfg.bed_size.1
++    {
++        return Err(GcodeError::BadSetting("centred shape lies outside the bed"));
++    }
++    let centre = Vec2::new((lo.x + hi.x) * 0.5, (lo.y + hi.y) * 0.5);
++    Ok((centre, densities))
++}
++
+ /// Slices `tris` and writes G-code in one step.
+ pub fn print_triangles(tris: &[Tri], layer_height: f64, cfg: &PrintConfig) -> Result<String, String> {
+     let sliced = slice(tris, layer_height).map_err(|e| e.to_string())?;
+@@ -557,4 +839,246 @@ mod tests {
+         let r = print_triangles(&cuboid(500.0, 20.0, 2.0, 0.0), 0.2, &PrintConfig::default());
+         assert!(r.unwrap_err().contains("does not fit"));
+     }
++
++    fn rectangle(x0: f64, x1: f64, y0: f64, y1: f64) -> Vec<Vec2> {
++        vec![Vec2::new(x0, y0), Vec2::new(x1, y0), Vec2::new(x1, y1), Vec2::new(x0, y1)]
++    }
++
++    fn path_length(paths: &[(Vec2, Vec2)]) -> f64 {
++        paths.iter().map(|(a, b)| (b.x - a.x).hypot(b.y - a.y)).sum()
++    }
++
++    fn planned_fill(sliced: &Sliced, cfg: &PrintConfig, layer: usize, spacing: f64, kind: FillKind) -> Vec<(Vec2, Vec2)> {
++        let mut stop = || false;
++        let mut budget = WorkBudget::new(&mut stop);
++        let (full, neighbours) = skin_neighbours(sliced, cfg, layer);
++        let planner = FillPlanner::new(&sliced.layers[layer].loops, &neighbours, full, 0.0, &mut budget).unwrap();
++        planner.paths(spacing, kind, &mut budget).unwrap()
++    }
++
++    fn sections(widths: &[f64]) -> Sliced {
++        Sliced {
++            layer_height: 0.2,
++            layers: widths
++                .iter()
++                .enumerate()
++                .map(|(i, width)| Layer { top: (i + 1) as f64 * 0.2, loops: vec![rectangle(0.0, *width, 0.0, 10.0)], open: 0 })
++                .collect(),
++        }
++    }
++
++    #[test]
++    fn skins_close_requested_terminal_layers_and_can_be_disabled() {
++        let sliced = slice(&cuboid(20.0, 20.0, 2.0, 0.0), 0.2).unwrap();
++        let mut cfg = PrintConfig { top_solid_layers: 2, bottom_solid_layers: 1, ..PrintConfig::default() };
++        let g = gcode(&sliced, &cfg).unwrap();
++        let layers: Vec<_> = g.split(";LAYER:").skip(1).collect();
++        assert_eq!(layers.len(), 10);
++        for (i, layer) in layers.iter().enumerate() {
++            assert_eq!(layer.contains(";TYPE:SKIN"), matches!(i, 0 | 8 | 9));
++            assert_eq!(layer.contains(";TYPE:INFILL"), (1..8).contains(&i));
++        }
++        cfg.top_solid_layers = 0;
++        cfg.bottom_solid_layers = 0;
++        let old_style = gcode(&sliced, &cfg).unwrap();
++        assert!(!old_style.contains(";TYPE:SKIN"));
++        assert_eq!(old_style.matches(";TYPE:INFILL").count(), 10);
++    }
++
++    #[test]
++    fn partial_top_roofs_get_skins_through_the_requested_depth() {
++        let sliced = sections(&[10.0, 10.0, 10.0, 5.0, 5.0, 5.0]);
++        let cfg = PrintConfig { top_solid_layers: 2, bottom_solid_layers: 0, ..PrintConfig::default() };
++        let skin = planned_fill(&sliced, &cfg, 1, 1.0, FillKind::Skin);
++        assert!((path_length(&skin) - 50.0).abs() < 1e-9);
++        assert!(skin.iter().all(|(a, b)| a.x >= 5.0 && b.x <= 10.0));
++        let core = planned_fill(&sliced, &cfg, 1, 2.0, FillKind::Infill);
++        assert!((path_length(&core) - 25.0).abs() < 1e-9);
++        assert!(core.iter().all(|(a, b)| a.x >= 0.0 && b.x <= 5.0));
++        assert!(planned_fill(&sliced, &cfg, 0, 1.0, FillKind::Skin).is_empty());
++    }
++
++    #[test]
++    fn local_bottom_surfaces_get_skins_without_filling_the_whole_layer() {
++        let sliced = sections(&[5.0, 10.0, 10.0, 10.0]);
++        let cfg = PrintConfig { top_solid_layers: 0, bottom_solid_layers: 2, ..PrintConfig::default() };
++        let skin = planned_fill(&sliced, &cfg, 2, 1.0, FillKind::Skin);
++        assert!((path_length(&skin) - 50.0).abs() < 1e-9);
++        assert!(skin.iter().all(|(a, b)| a.x >= 5.0 && b.x <= 10.0));
++        assert!(planned_fill(&sliced, &cfg, 3, 1.0, FillKind::Skin).is_empty());
++    }
++
++    #[test]
++    fn skins_leave_through_holes_open_and_do_not_double_fill() {
++        let mut hole = rectangle(4.0, 6.0, 4.0, 6.0);
++        hole.reverse();
++        let sliced = Sliced { layer_height: 0.2, layers: vec![Layer { top: 0.2, loops: vec![rectangle(0.0, 10.0, 0.0, 10.0), hole], open: 0 }] };
++        let cfg = PrintConfig::default();
++        let skin = planned_fill(&sliced, &cfg, 0, 1.0, FillKind::Skin);
++        assert!((path_length(&skin) - 96.0).abs() < 1e-9);
++        assert!(skin.iter().all(|(a, b)| !(a.y > 4.0 && a.y < 6.0) || b.x <= 4.0 || a.x >= 6.0));
++        assert!(planned_fill(&sliced, &cfg, 0, 1.0, FillKind::Infill).is_empty());
++        let g = gcode(&sliced, &cfg).unwrap();
++        assert_eq!(g.matches(";TYPE:SKIN").count(), 1);
++        assert!(!g.contains(";TYPE:INFILL"));
++    }
++
++    #[test]
++    fn solid_infill_and_partial_skin_form_a_single_coverage() {
++        let sliced = sections(&[10.0, 5.0]);
++        let cfg = PrintConfig { top_solid_layers: 1, bottom_solid_layers: 0, ..PrintConfig::default() };
++        let skin = planned_fill(&sliced, &cfg, 0, 1.0, FillKind::Skin);
++        let core = planned_fill(&sliced, &cfg, 0, 1.0, FillKind::Infill);
++        assert!((path_length(&skin) + path_length(&core) - 100.0).abs() < 1e-9);
++        for (a, b) in &skin {
++            for (c, d) in &core {
++                if (a.y - c.y).abs() < 1e-9 {
++                    assert!(a.x >= d.x || c.x >= b.x);
++                }
++            }
++        }
++    }
++
++    #[test]
++    fn density_overrides_are_per_layer_and_do_not_turn_off_skins() {
++        let sliced = sections(&[20.0; 7]);
++        let cfg = PrintConfig {
++            walls: 0,
++            top_solid_layers: 1,
++            bottom_solid_layers: 1,
++            layer_infill: vec![
++                LayerInfill { layer: 0, density: 0.0 },
++                LayerInfill { layer: 1, density: 0.0 },
++                LayerInfill { layer: 2, density: 0.25 },
++                LayerInfill { layer: 4, density: 1.0 },
++            ],
++            ..PrintConfig::default()
++        };
++        let g = gcode(&sliced, &cfg).unwrap();
++        let layers: Vec<_> = g.split(";LAYER:").skip(1).collect();
++        assert!(layers[0].contains(";TYPE:SKIN"));
++        assert!(!layers[1].contains("G1 X"));
++        let quarter = layers[2].matches("G1 X").count();
++        let solid = layers[4].matches("G1 X").count();
++        assert!(quarter > 0);
++        assert!(solid > quarter * 3, "quarter={quarter}, solid={solid}");
++        assert!(layers[3].contains(";TYPE:INFILL"));
++    }
++
++    #[test]
++    fn final_partial_layer_is_kept_and_uses_its_actual_thickness() {
++        let sliced = slice(&cuboid(10.0, 10.0, 0.45, 0.0), 0.2).unwrap();
++        assert_eq!(sliced.layers.len(), 3);
++        assert!((sliced.layers[2].top - 0.45).abs() < 1e-9);
++        let cfg = PrintConfig { top_solid_layers: 0, bottom_solid_layers: 0, infill_spacing: 0.0, walls: 1, ..PrintConfig::default() };
++        let g = gcode(&sliced, &cfg).unwrap();
++        let totals: Vec<f64> = g
++            .split(";LAYER:")
++            .skip(1)
++            .map(|layer| {
++                layer
++                    .lines()
++                    .filter(|line| line.starts_with("G1 X"))
++                    .map(|line| line.split(" E").nth(1).unwrap().split(' ').next().unwrap().parse::<f64>().unwrap())
++                    .sum()
++            })
++            .collect();
++        assert!((totals[2] / totals[0] - 0.25).abs() < 1e-4);
++        let thin = slice(&cuboid(10.0, 10.0, 0.05, 0.0), 0.2).unwrap();
++        assert_eq!(thin.layers.len(), 1);
++        assert!((thin.layers[0].top - 0.05).abs() < 1e-9);
++    }
++
++    #[test]
++    fn rounding_tails_do_not_create_duplicate_print_heights() {
++        for (height, offset, expected) in [(0.6000000000000001, 0.0, 3), (0.6, 100_000.0, 3), (0.4004, 0.0, 2)] {
++            let mut mesh = cuboid(10.0, 10.0, height, 0.0);
++            for vertex in mesh.iter_mut().flatten() {
++                vertex.z += offset;
++            }
++            let sliced = slice(&mesh, 0.2).unwrap();
++            assert_eq!(sliced.layers.len(), expected);
++            assert!((sliced.layers.last().unwrap().top - height).abs() < 1e-9);
++            let g = gcode(&sliced, &PrintConfig::default()).unwrap();
++            let heights: Vec<f64> =
++                g.lines().filter_map(|line| line.strip_prefix("G1 Z").and_then(|v| v.split(' ').next()).and_then(|v| v.parse().ok())).collect();
++            assert_eq!(heights.len(), expected);
++            assert!(heights.windows(2).all(|pair| pair[1] > pair[0]));
++        }
++        let mut sliced = sections(&[10.0, 10.0]);
++        sliced.layers[1].top = 0.2004;
++        assert!(matches!(gcode(&sliced, &PrintConfig::default()), Err(GcodeError::BadSetting(_))));
++    }
++
++    #[test]
++    fn invalid_densities_counts_and_non_finite_fields_are_errors() {
++        let sliced = sections(&[10.0; 8]);
++        for density in [f64::NAN, f64::INFINITY, -0.1, 1.01] {
++            let cfg = PrintConfig { layer_infill: vec![LayerInfill { layer: 2, density }], ..PrintConfig::default() };
++            assert!(matches!(gcode(&sliced, &cfg), Err(GcodeError::BadSetting(_))));
++        }
++        for overrides in [vec![LayerInfill { layer: 8, density: 0.5 }], vec![LayerInfill { layer: 2, density: 0.5 }; 2]] {
++            assert!(gcode(&sliced, &PrintConfig { layer_infill: overrides, ..PrintConfig::default() }).is_err());
++        }
++        assert!(gcode(&sliced, &PrintConfig { top_solid_layers: MAX_SKIN_LAYERS + 1, ..PrintConfig::default() }).is_err());
++        for value in [f64::NAN, f64::INFINITY, -1.0] {
++            assert!(gcode(&sliced, &PrintConfig { infill_spacing: value, ..PrintConfig::default() }).is_err());
++            assert!(gcode(&sliced, &PrintConfig { nozzle_temp: value, ..PrintConfig::default() }).is_err());
++        }
++        assert!(gcode(&sliced, &PrintConfig { bed_center: (0.0, 90.0), ..PrintConfig::default() }).is_err());
++        let mut malformed = sliced.clone();
++        malformed.layers[0].loops[0][0].x = f64::NAN;
++        assert!(gcode(&malformed, &PrintConfig::default()).is_err());
++        malformed = sliced;
++        malformed.layers[2].top = 0.1;
++        assert!(gcode(&malformed, &PrintConfig::default()).is_err());
++    }
++
++    #[test]
++    fn open_meshes_and_excessive_fill_are_refused_instead_of_partly_printed() {
++        let mut mesh = cuboid(10.0, 10.0, 2.0, 0.0);
++        mesh.truncate(mesh.len() - 2);
++        let sliced = slice(&mesh, 0.2).unwrap();
++        assert_eq!(gcode(&sliced, &PrintConfig::default()), Err(GcodeError::OpenContours));
++        let large = sections(&[100.0]);
++        let cfg = PrintConfig { walls: 0, line_width: 0.002, ..PrintConfig::default() };
++        assert!(matches!(gcode(&large, &cfg), Err(GcodeError::TooComplex(_))));
++    }
++
++    #[test]
++    fn planned_extrusion_is_checked_against_the_bed_after_offsets() {
++        let mut clockwise = rectangle(0.0, 180.0, 0.0, 180.0);
++        clockwise.reverse();
++        let malformed = Sliced { layer_height: 0.2, layers: vec![Layer { top: 0.2, loops: vec![clockwise], open: 0 }] };
++        assert_eq!(gcode(&malformed, &PrintConfig::default()), Err(GcodeError::BadSetting("planned extrusion lies outside the bed")));
++        let valid = slice(&cuboid(180.0, 180.0, 0.2, 0.0), 0.2).unwrap();
++        assert!(gcode(&valid, &PrintConfig::default()).is_ok());
++    }
++
++    #[test]
++    fn slicing_and_gcode_can_stop_inside_geometry_work() {
++        let mesh = cuboid(20.0, 20.0, 2.0, 0.0);
++        assert_eq!(slice_until(&mesh, 0.2, || true), Err(SliceError::Cancelled));
++        let mut calls = 0;
++        let cancelled = slice_until(&mesh, 0.2, || {
++            calls += 1;
++            calls > 12
++        });
++        assert_eq!(cancelled, Err(SliceError::Cancelled));
++        let sliced = slice(&mesh, 0.2).unwrap();
++        assert_eq!(gcode_until(&sliced, &PrintConfig::default(), || true), Err(GcodeError::Cancelled));
++        calls = 0;
++        let cancelled = gcode_until(&sliced, &PrintConfig::default(), || {
++            calls += 1;
++            calls > 100
++        });
++        assert_eq!(cancelled, Err(GcodeError::Cancelled));
++        assert_eq!(gcode_until(&sliced, &PrintConfig::default(), || false).unwrap(), gcode(&sliced, &PrintConfig::default()).unwrap());
++    }
++
++    #[test]
++    fn branching_contours_are_refused_before_adjacency_search_can_grow_quadratically() {
++        let mesh: Vec<Tri> = (1..=4).map(|i| [Vec3::new(2.0 * f64::from(i), 2.0, 1.0), Vec3::ZERO, Vec3::new(0.0, 0.0, 1.0)]).collect();
++        assert_eq!(slice(&mesh, 1.0), Err(SliceError::BranchingContour));
++    }
+ }
+diff --git a/docs/slice-skins-density.md b/docs/slice-skins-density.md
+new file mode 100644
+index 0000000..87e2553
+--- /dev/null
++++ b/docs/slice-skins-density.md
+@@ -0,0 +1,69 @@
++# Solid skins and per-layer infill
++
++## Decision
++
++Extend the existing Rust slicer without adding a dependency. A scanline is a sorted set of
++occupied intervals, so intersection and subtraction can identify exposed roofs and undersides
++without importing another CAD or slicer implementation. The same code builds for native and
++wasm targets. This is a geometry implementation from elementary line-intersection maths.
++
++`PrintConfig` now has:
++
++| Setting | Meaning | Default |
++|---|---|---|
++| `top_solid_layers` | Solid layers below each exposed top surface | 3 |
++| `bottom_solid_layers` | Solid layers above each exposed bottom surface | 3 |
++| `layer_infill` | `LayerInfill { layer, density }` overrides; layer is zero-based and density is a fraction in `0..=1` | Empty |
++| `infill_spacing` | Existing sparse-infill line spacing for layers without an override | Unchanged, 3 mm |
++
++**Changes a default:** top and bottom skins are enabled. Set both skin-layer counts to zero
++to retain the previous open-infill behavior. A density of zero disables only sparse infill;
++it does not remove a requested skin. An override of one uses the extrusion line width as its
++spacing. Duplicate layer indices, nonexistent layers, non-finite values and out-of-range
++densities are errors.
++
++## What the planner does
++
++For each layer, material present in every requested neighboring cross-section remains the
++sparse core. The rest of the current layer receives solid skin paths. This detects shelves,
++partial roofs and local undersides within the model, as well as its first and last layers.
++Holes remain holes under the existing even-odd contour rule. Skin and sparse paths are clipped
++to complementary intervals, including at 100% density, so the same region is not filled twice.
++Skin direction alternates by layer using the existing diagonal infill directions.
++
++The final fractional layer is retained. Its cutting plane is the midpoint of its actual
++thickness, and extrusion uses that thickness rather than the nominal layer height. A model
++thinner than one nominal layer therefore has one layer instead of being discarded.
++A final remainder smaller than the writer's 0.001 mm Z precision is merged into the previous
++layer, preserving the exact mesh height in the sliced geometry. Emitted Z positions are rounded
++to that precision, and extrusion uses those same rounded height increments. Already-sliced
++input whose rounded heights repeat is rejected instead of extruding twice at the same height.
++
++`slice_until(triangles, height, stop)` and `gcode_until(layers, config, stop)` accept a cancellation
++callback. The original `slice` and `gcode` entry points remain available. Cancellation is checked
++inside geometry batches and scanline planning. Cancellation and limit errors never return a
++partial G-code string.
++
++Planning is bounded: at most 64 solid layers in either direction, 2,000,000 stored contour
++vertices, 20,000 scanlines per fill pass, 200,000,000 geometry/scanline work units per operation,
++1,000,000 path-budget units, and 128 MiB of G-code. The path budget charges both planned fill
++segments and emitted extrusion segments. Exceeding a limit returns an error; it does not quietly
++drop remaining fill. Branching slice contours are rejected before adjacency searches can grow
++quadratically, and open contours are refused before G-code is generated. Coordinates and
++printer settings must be finite. Both the centered model and the final extrusion paths, including
++offset-induced excursions and bead width, are checked against the configured bed.
++
++## Verification and limits
++
++Regression tests cover the number of solid end layers, partial roofs at depth, local undersides,
++through-holes, complementary solid fill, per-layer overrides, fractional last layers, malformed
++input, open contours, planning bounds, and cancellation during work.
++
++**Bambu A1 / A1 mini 実機: 未確認 (not tested on hardware).** Start/end G-code remains the existing
++generic placeholder. This change does not add Bambu profiles, an AMS filament manifest, or a
++`.gcode.3mf` package. It does not make the output a verified Bambu print file.
++
++Supports, bridge-direction planning, seam placement and wipe/coasting remain unimplemented.
++A detected underside receives skin paths but may still need physical support. Overlapping
++solids still follow the existing even-odd rule, and the existing miter offset remains unsuitable
++for some sharp or narrow contours. Skin planning does not repair those geometric limits.

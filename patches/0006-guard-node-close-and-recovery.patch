@@ -1,0 +1,396 @@
+diff --git a/apps/arclet/src/app.rs b/apps/arclet/src/app.rs
+--- a/apps/arclet/src/app.rs
++++ b/apps/arclet/src/app.rs
+@@ -85,6 +85,11 @@
+     screenshot_reply: Option<Receiver<Value>>,
+     frame_count: u32,
+     last_title: String,
++    graph_close_pending: bool,
++    /// A discard acknowledgement is valid for exactly one graph snapshot. Editing it
++    /// while the CAD document's save prompt is open must cause a fresh graph prompt.
++    acknowledged_graph: Option<solidcraft_graph::Graph>,
++    awaiting_document_quit: bool,
+ }
+ 
+ impl ArcletApp {
+@@ -140,6 +145,9 @@
+         cad.confirm_on_right_click = true;
+         cad.home.open = false;
+         cad.nodes.enabled = true;
++        // The built-in starter is not a user edit. Persisted dirty graphs are restored
++        // later by load_prefs and keep their dirty state; user changes are still guarded.
++        cad.nodes.editor.mark_saved();
+         #[cfg(not(target_arch = "wasm32"))]
+         {
+             cad.apply_off_thread = Some(std::time::Duration::ZERO);
+@@ -159,6 +167,9 @@
+             screenshot_reply: None,
+             frame_count: 0,
+             last_title: String::new(),
++            graph_close_pending: false,
++            acknowledged_graph: None,
++            awaiting_document_quit: false,
+         }
+     }
+ 
+@@ -489,11 +500,27 @@
+         if let Err(error) = platform::set_unsaved(unsaved) {
+             self.command_error = Some(error);
+         }
++        // The shared document quit workflow covers CAD tabs, not the separate graph.
++        // Guard both the OS close event and quit requests originating inside that workflow.
++        if self.awaiting_document_quit
++            && !self.cad.quit_requested
++            && self.cad.docs.quitting.is_none()
++            && self.cad.docs.closing.is_none()
++        {
++            self.awaiting_document_quit = false;
++            self.acknowledged_graph = None;
++        }
+         if ctx.input(|input| input.viewport().close_requested()) && !self.cad.quit_requested {
+             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+-            solidcraft_ui_egui::documents::request_quit(&mut self.cad);
+-        }
+-        if self.cad.quit_requested {
++            self.request_close();
++        }
++        if self.cad.quit_requested && (!self.graph_allows_close() || self.cad.file_picker_busy()) {
++            self.cad.quit_requested = false;
++            self.graph_close_pending = true;
++            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
++        }
++        self.graph_close_dialog(&ctx);
++        if self.cad.quit_requested && self.graph_allows_close() && !self.cad.file_picker_busy() {
+             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+         }
+         let (name, dirty) = if self.cad.nodes.open {
+@@ -507,6 +534,96 @@
+             self.last_title = title;
+         }
+         self.capture(&ctx);
++    }
++
++    fn graph_allows_close(&self) -> bool {
++        if self.cad.nodes.file_busy() {
++            return false;
++        }
++        if !self.cad.nodes.editor.is_dirty() {
++            return true;
++        }
++        // Borrowed graph equality avoids serializing up to 4 MiB on every frame while
++        // a CAD save prompt is open. Snapshot values are immutable or copy-on-write.
++        self.acknowledged_graph.as_ref() == Some(self.cad.nodes.editor.graph())
++    }
++
++    fn request_close(&mut self) {
++        if self.cad.file_picker_busy() || !self.graph_allows_close() {
++            self.graph_close_pending = true;
++            return;
++        }
++        self.graph_close_pending = false;
++        solidcraft_ui_egui::documents::request_quit(&mut self.cad);
++        self.awaiting_document_quit = self.cad.quit_requested || self.cad.docs.quitting.is_some();
++    }
++
++    fn cancel_graph_close(&mut self) {
++        self.graph_close_pending = false;
++        self.acknowledged_graph = None;
++        self.awaiting_document_quit = false;
++    }
++
++    fn acknowledge_graph_close(&mut self) -> Result<(), String> {
++        if self.cad.nodes.file_busy() || self.cad.file_picker_busy() {
++            return Err(tr("arclet.close.busy").to_string());
++        }
++        self.acknowledged_graph = Some(self.cad.nodes.editor.graph().clone());
++        self.request_close();
++        Ok(())
++    }
++
++    fn graph_close_dialog(&mut self, ctx: &egui::Context) {
++        if !self.graph_close_pending {
++            return;
++        }
++        if self.graph_allows_close() && !self.cad.file_picker_busy() {
++            self.request_close();
++            return;
++        }
++        // A native save picker owns the user's choice until it resolves. A cancelled
++        // picker returns here with the graph still dirty, rather than silently quitting.
++        if self.cad.file_picker_busy() {
++            return;
++        }
++        let busy = self.cad.nodes.file_busy();
++        let mut action = 0;
++        let closed = ui_kit::Window::new(egui::Id::new("arclet_graph_close"), "save", tr("arclet.close.title"))
++            .cards(1.5)
++            .show_body(ctx, |ui| {
++                ui.set_max_width(440.0);
++                ui.label(tr(if busy { "arclet.close.busy" } else { "arclet.close.message" }));
++                ui.add_space(10.0);
++                ui.horizontal_wrapped(|ui| {
++                    if ui_kit::button(ui, tr("arclet.close.keep"), ui_kit::Button::Normal).clicked() {
++                        action = 1;
++                    }
++                    if ui_kit::button(ui, tr("arclet.close.save"), ui_kit::Button::Enabled(!busy)).clicked() {
++                        action = 2;
++                    }
++                    if ui_kit::button(ui, tr("arclet.close.without_save"), ui_kit::Button::Enabled(!busy)).clicked() {
++                        action = 3;
++                    }
++                });
++            });
++        match action {
++            1 => self.cancel_graph_close(),
++            2 => {
++                self.acknowledged_graph = None;
++                if let Err(error) = solidcraft_ui_egui::node_workspace::save_graph(&mut self.cad, ctx) {
++                    self.command_error = Some(error);
++                }
++                // Completion is observed on a later frame. Only an actually clean graph
++                // (not a clicked button, cancelled dialog or failed write) may continue.
++            }
++            3 => {
++                if let Err(error) = self.acknowledge_graph_close() {
++                    self.command_error = Some(error);
++                }
++            }
++            _ if closed => self.cancel_graph_close(),
++            _ => {}
++        }
+     }
+ 
+     fn capture(&mut self, ctx: &egui::Context) {
+@@ -752,4 +869,79 @@
+         assert!(!app.cad.nodes.open);
+         assert!(app.command_error.is_some());
+     }
++    #[test]
++    fn an_untouched_starter_graph_does_not_count_as_user_work() {
++        let app = ArcletApp::with_services(Default::default());
++        assert!(!app.cad.nodes.editor.is_dirty());
++        assert!(app.graph_allows_close());
++    }
++
++    fn change_graph(app: &mut ArcletApp, x: f32) {
++        let mut graph = app.cad.nodes.editor.graph().clone();
++        graph.add_node("Number", (x, 100.0)).unwrap();
++        app.cad.nodes.editor.replace_graph(graph).unwrap();
++    }
++
++    #[test]
++    fn a_dirty_graph_blocks_quit_even_with_a_saved_model() {
++        let mut app = ArcletApp::with_services(Default::default());
++        app.cad.session.mark_saved();
++        change_graph(&mut app, 100.0);
++        app.request_close();
++        assert!(app.graph_close_pending);
++        assert!(!app.cad.quit_requested);
++        assert!(app.cad.docs.quitting.is_none());
++    }
++
++    #[test]
++    fn cancelling_graph_close_keeps_edits_and_does_not_grant_later_discard() {
++        let mut app = ArcletApp::with_services(Default::default());
++        change_graph(&mut app, 100.0);
++        let text = app.cad.nodes.editor.to_json().unwrap();
++        app.request_close();
++        app.cancel_graph_close();
++        assert!(!app.graph_close_pending);
++        assert!(!app.cad.quit_requested);
++        assert_eq!(app.cad.nodes.editor.to_json().unwrap(), text);
++        assert!(app.cad.nodes.editor.is_dirty());
++        assert!(!app.graph_allows_close());
++    }
++
++    #[test]
++    fn graph_discard_acknowledges_only_the_exact_snapshot() {
++        let mut app = ArcletApp::with_services(Default::default());
++        app.cad.session.mark_saved();
++        change_graph(&mut app, 100.0);
++        app.acknowledge_graph_close().unwrap();
++        assert!(app.cad.quit_requested);
++        assert!(app.graph_allows_close());
++        change_graph(&mut app, 200.0);
++        assert!(!app.graph_allows_close(), "later edits require another user decision");
++    }
++
++    #[test]
++    fn a_completed_graph_save_continues_the_existing_model_quit_workflow() {
++        let mut app = ArcletApp::with_services(Default::default());
++        app.cad.session.mark_saved();
++        change_graph(&mut app, 100.0);
++        app.request_close();
++        let written = app.cad.nodes.editor.to_json().unwrap();
++        app.cad.nodes.editor.mark_saved_json(&written).unwrap();
++        app.graph_close_dialog(&egui::Context::default());
++        assert!(!app.graph_close_pending);
++        assert!(app.cad.quit_requested);
++    }
++
++    #[test]
++    fn graph_acknowledgement_does_not_discard_an_unsaved_cad_design() {
++        let mut app = ArcletApp::with_services(Default::default());
++        app.cad.run("solid.box", json!({"length":20,"width":30,"height":10})).unwrap();
++        change_graph(&mut app, 100.0);
++        app.acknowledge_graph_close().unwrap();
++        assert!(!app.cad.quit_requested);
++        assert!(app.cad.docs.quitting.is_some());
++        assert!(app.cad.docs.closing.is_some());
++        assert!(app.cad.session.is_dirty());
++    }
++
+ }
+diff --git a/crates/ui-egui/src/node_editor.rs b/crates/ui-egui/src/node_editor.rs
+--- a/crates/ui-egui/src/node_editor.rs
++++ b/crates/ui-egui/src/node_editor.rs
+@@ -127,6 +127,12 @@
+ 
+     pub fn mark_saved(&mut self) {
+         self.saved_graph = Some(self.graph.clone());
++    }
++
++    /// A recovery document or a newly adopted graph is explicitly unsaved, even when its
++    /// contents happen to equal the host's starter graph or a previous saved snapshot.
++    pub fn mark_unsaved(&mut self) {
++        self.saved_graph = None;
+     }
+ 
+     /// Mark the exact asynchronously saved snapshot, preserving dirty status for later edits.
+diff --git a/crates/ui-egui/src/node_editor/tests.rs b/crates/ui-egui/src/node_editor/tests.rs
+--- a/crates/ui-egui/src/node_editor/tests.rs
++++ b/crates/ui-egui/src/node_editor/tests.rs
+@@ -290,3 +290,16 @@
+     }
+     crate::theme::set_dark(previous);
+ }
++
++#[test]
++fn explicit_unsaved_state_survives_content_equality_and_can_be_saved_again() {
++    let mut editor = idle_editor();
++    let document = editor.to_json().unwrap();
++    editor.mark_saved();
++    assert!(!editor.is_dirty());
++    editor.mark_unsaved();
++    assert!(editor.is_dirty());
++    assert_eq!(editor.to_json().unwrap(), document);
++    editor.mark_saved_json(&document).unwrap();
++    assert!(!editor.is_dirty());
++}
+diff --git a/crates/ui-egui/src/node_workspace.rs b/crates/ui-egui/src/node_workspace.rs
+--- a/crates/ui-egui/src/node_workspace.rs
++++ b/crates/ui-egui/src/node_workspace.rs
+@@ -82,6 +82,12 @@
+ }
+ 
+ impl State {
++    /// A pending file operation must finish before a host closes its workspace. In
++    /// particular, dropping State cancels the worker, so a clean graph alone is not enough.
++    pub fn file_busy(&self) -> bool {
++        self.job.is_some() || self.preview_path.is_some()
++    }
++
+     /// Hosts already persist preferences on exit and periodically. Keep an independent graph
+     /// recovery snapshot there as well; ordinary CAD files retain their existing format.
+     pub(crate) fn saved_state(&self) -> Value {
+@@ -98,6 +104,8 @@
+             Ok(()) => {
+                 if saved.get("dirty").and_then(Value::as_bool) == Some(false) {
+                     self.editor.mark_saved();
++                } else {
++                    self.editor.mark_unsaved();
+                 }
+                 self.path = saved.get("path").and_then(Value::as_str).filter(|path| path.len() <= 4096).map(str::to_owned);
+             }
+@@ -343,6 +351,18 @@
+     }
+ }
+ 
++/// Use the same bounded, snapshot-aware save path as the node toolbar. A host's
++/// close guard may request this without accessing the editor's private actions.
++/// Cancellation or failure leaves the editor dirty; hosts must observe that state.
++pub fn save_graph(app: &mut SolveApp, ctx: &egui::Context) -> Result<(), String> {
++    if app.nodes.file_busy() || app.file_picker_busy() {
++        return Err(tr("node.workspace.file_busy").to_string());
++    }
++    let text = app.nodes.editor.to_json()?;
++    save(app, ctx, text, true);
++    Ok(())
++}
++
+ fn save(app: &mut SolveApp, ctx: &egui::Context, text: String, graph: bool) {
+     let (name, extension) = if graph { ("model.nodes.json", "json") } else { ("preview-unverified.gcode", "gcode") };
+     if let Some(download) = &app.services.download_design {
+@@ -389,6 +409,7 @@
+     }
+     if let Some(graph) = graph {
+         app.nodes.editor.replace_graph(graph)?;
++        app.nodes.editor.mark_unsaved();
+         app.nodes.path = None;
+         app.nodes.enabled = true;
+     }
+@@ -523,4 +544,48 @@
+         assert_eq!(bounds.min, Vec3::ZERO);
+         assert_eq!(bounds.max, Vec3::new(10.0, 10.0, 10.0));
+     }
+-}
++    #[test]
++    fn host_can_observe_pending_file_work_before_closing() {
++        let mut app = SolveApp::new(Default::default(), Default::default());
++        app.nodes.editor.mark_saved();
++        assert!(!app.nodes.file_busy());
++        let (_send, result) = std::sync::mpsc::channel();
++        app.nodes.job = Some(Job { result, cancel: Arc::new(AtomicBool::new(false)) });
++        assert!(app.nodes.file_busy());
++        assert!(save_graph(&mut app, &egui::Context::default()).is_err());
++        assert!(!app.nodes.editor.is_dirty());
++    }
++
++    #[test]
++    fn failed_close_save_never_marks_the_graph_saved() {
++        let services = crate::Services {
++            download_design: Some(Box::new(|_, _| Err("disk unavailable".into()))),
++            ..Default::default()
++        };
++        let mut app = SolveApp::new(Default::default(), services);
++        assert!(app.nodes.editor.is_dirty());
++        save_graph(&mut app, &egui::Context::default()).unwrap();
++        assert!(app.nodes.editor.is_dirty());
++    }
++
++    #[test]
++    fn recovered_dirty_flag_wins_even_when_contents_equal_a_saved_starter() {
++        let mut state = State { enabled: true, ..Default::default() };
++        let text = state.editor.to_json().unwrap();
++        state.editor.mark_saved();
++        state.restore_state(&json!({"graph":text, "path":"other.json", "dirty":true}));
++        assert!(state.editor.is_dirty());
++        assert_eq!(state.path.as_deref(), Some("other.json"));
++    }
++
++    #[test]
++    fn adopting_the_same_graph_without_a_file_is_still_unsaved() {
++        let mut app = SolveApp::new(Default::default(), Default::default());
++        app.nodes.editor.mark_saved();
++        let graph = app.nodes.editor.to_json().unwrap();
++        control(&mut app, &json!({"graph":graph})).unwrap();
++        assert!(app.nodes.editor.is_dirty());
++        assert!(app.nodes.path.is_none());
++    }
++
++}
+diff --git a/assets/locales/pending/arclet-close-guard.json b/assets/locales/pending/arclet-close-guard.json
+new file mode 100644
+--- /dev/null
++++ b/assets/locales/pending/arclet-close-guard.json
+@@ -0,0 +1,10 @@
++{
++  "en": {
++    "arclet.close.busy": "A node file operation is still running. Keep editing or wait for it to finish before closing.",
++    "arclet.close.keep": "Keep editing",
++    "arclet.close.message": "The node graph has unsaved changes. Save the graph before closing, or close without saving its file.",
++    "arclet.close.save": "Save graph",
++    "arclet.close.title": "Unsaved node graph",
++    "arclet.close.without_save": "Close without saving"
++  }
++}

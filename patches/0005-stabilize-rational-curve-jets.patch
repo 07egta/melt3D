@@ -1,0 +1,263 @@
+diff --git a/crates/geom/src/nurbs_curve.rs b/crates/geom/src/nurbs_curve.rs
+--- a/crates/geom/src/nurbs_curve.rs
++++ b/crates/geom/src/nurbs_curve.rs
+@@ -166,6 +166,16 @@
+         let count = basis.len();
+         let weights = &self.weights[first..first + count];
+         let points = &self.points[first..first + count];
++        // A constant local span has exactly zero derivatives, even when extreme weights
++        // or a tiny parameter interval would make individual basis derivatives overflow.
++        // All controls in the chosen one-sided span are checked, not only nonzero bases.
++        if let Some(point) = points.first().copied()
++            && points.iter().all(|control| *control == point)
++        {
++            let mut result = [Vec3::ZERO; 4];
++            result[0] = point;
++            return Ok(result);
++        }
+         // First normalize the weight sum, before multiplying any coordinates. Computing x*w
+         // and only then dividing by the weight sum loses small but representable endpoints
+         // when both x and w are tiny. The normalized coefficients avoid that underflow.
+@@ -178,18 +188,52 @@
+         if normalized_weights.iter().any(|w| !w.is_finite()) {
+             return invalid("curve evaluation needs an unrepresentable weight ratio");
+         }
++        // Evaluate the homogeneous numerator in a local coordinate system. Differentiating
++        // absolute coordinates subtracts enormous, nearly equal values when a small part is
++        // far from the origin. Even a constant rational curve then acquires a false tangent.
++        // Choose an actually contributing control, so tiny clamped endpoints stay exact.
++        let mut origin_index = 0;
++        let mut largest_coefficient = -1.0_f64;
++        for (index, (w, value)) in normalized_weights.iter().zip(&basis).enumerate() {
++            let coefficient = w * value;
++            if coefficient > largest_coefficient {
++                origin_index = index;
++                largest_coefficient = coefficient;
++            }
++        }
++        let origin = points[origin_index];
++        // A finite pair such as (-1e308, +1e308) can overflow on subtraction. Halving
++        // both first keeps the local difference finite; recombine the position before
++        // restoring that factor of two. Ordinary coordinates never take this path.
++        let half_scale = points.iter().any(|point| !(*point - origin).is_finite());
+         let mut weighted = [Vec3::ZERO; 4];
+         let mut weight = [0.0; 4];
+         for der in 0..=order {
+             let values = if der == 0 { basis.clone() } else { self.space.basis(t, der)?.1 };
++            let mut coordinates = [CompensatedSum::default(); 3];
++            let mut denominator = CompensatedSum::default();
+             for ((point, w), value) in points.iter().zip(&normalized_weights).zip(values) {
+                 let factor = w * value;
+-                weighted[der] += *point * factor;
+-                weight[der] += factor;
++                // A zero basis coefficient contributes nothing, including at a repeated
++                // endpoint. Avoid calculating a needless extreme local difference.
++                if factor == 0.0 {
++                    continue;
++                }
++                let local = if half_scale { *point * 0.5 - origin * 0.5 } else { *point - origin };
++                let contribution = local * factor;
++                coordinates[0].add(contribution.x);
++                coordinates[1].add(contribution.y);
++                coordinates[2].add(contribution.z);
++                denominator.add(factor);
+             }
++            weighted[der] = Vec3::new(coordinates[0].total(), coordinates[1].total(), coordinates[2].total());
++            weight[der] = denominator.total();
+             if !weighted[der].is_finite() || !weight[der].is_finite() {
+                 return invalid("curve evaluation overflowed");
+             }
++        }
++        if !(weight[0] > 0.0) {
++            return invalid("curve evaluation has no finite positive weight");
+         }
+         let mut result = [Vec3::ZERO; 4];
+         for k in 0..=order {
+@@ -204,12 +248,43 @@
+                 };
+                 numerator -= result[k - i] * (binomial * weight[i]);
+             }
+-            result[k] = numerator;
++            // Normalization makes this denominator close to one, not exactly one.
++            // Apply the quotient recurrence to the local curve before adding the origin.
++            result[k] = numerator / weight[0];
+             if !result[k].is_finite() {
+                 return invalid("curve derivatives overflowed");
+             }
+         }
++        result[0] = if half_scale { (origin * 0.5 + result[0]) * 2.0 } else { origin + result[0] };
++        if half_scale {
++            for derivative in result.iter_mut().take(order + 1).skip(1) {
++                *derivative *= 2.0;
++            }
++        }
++        if result.iter().take(order + 1).any(|value| !value.is_finite()) {
++            return invalid("curve derivatives overflowed while restoring coordinates");
++        }
+         Ok(result)
++    }
++}
++
++/// Neumaier compensated accumulation. A few positive and negative derivative terms can
++/// differ substantially in size; retaining their low-order parts costs no heap allocation.
++#[derive(Clone, Copy, Default)]
++struct CompensatedSum {
++    sum: f64,
++    correction: f64,
++}
++
++impl CompensatedSum {
++    fn add(&mut self, value: f64) {
++        let total = self.sum + value;
++        self.correction += if self.sum.abs() >= value.abs() { (self.sum - total) + value } else { (value - total) + self.sum };
++        self.sum = total;
++    }
++
++    fn total(self) -> f64 {
++        self.sum + self.correction
+     }
+ }
+ 
+@@ -838,6 +913,117 @@
+         assert!(matches!(result, Err(CurveError::Cancelled)));
+     }
+ 
++
++    #[test]
++    fn a_constant_rational_curve_never_acquires_a_tangent_from_translation() {
++        let point = Vec3::new(1e12, -2e12, 3e12);
++        let curve = NurbsCurve::new(
++            2,
++            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
++            vec![point; 3],
++            vec![1.0, std::f64::consts::FRAC_1_SQRT_2, 1.0],
++        )
++        .unwrap();
++        for index in 0..=100 {
++            let jet = curve.jet(f64::from(index) / 100.0).unwrap();
++            assert_eq!(jet.point, point);
++            assert_eq!(jet.d1, Vec3::ZERO);
++            assert_eq!(jet.d2, Vec3::ZERO);
++            assert_eq!(jet.d3, Vec3::ZERO);
++            assert!(jet.arc_length().is_err(), "a constant curve is not a regular G3 join");
++        }
++    }
++
++    #[test]
++    fn rational_derivatives_are_translation_invariant_at_large_world_coordinates() {
++        let circle = quarter_circle();
++        for offset in [Vec3::splat(1e9), Vec3::new(1e12, -1e12, 1e12), Vec3::splat(1e14)] {
++            let moved = NurbsCurve::new(
++                circle.degree(),
++                circle.knots().to_vec(),
++                circle.control_points().iter().map(|point| *point + offset).collect(),
++                circle.weights().to_vec(),
++            )
++            .unwrap();
++            for index in 0..=40 {
++                let parameter = f64::from(index) / 40.0;
++                let reference = circle.jet(parameter).unwrap();
++                let measured = moved.jet(parameter).unwrap();
++                near(measured.d1, reference.d1, 1e-12);
++                near(measured.d2, reference.d2, 1e-12);
++                near(measured.d3, reference.d3, 1e-11);
++                near(measured.arc_length().unwrap().curvature, reference.arc_length().unwrap().curvature, 1e-12);
++                near(measured.arc_length().unwrap().curvature_change, reference.arc_length().unwrap().curvature_change, 1e-11);
++            }
++        }
++    }
++
++    #[test]
++    fn common_weight_scaling_preserves_the_rational_jet() {
++        let circle = quarter_circle();
++        for scale in [1e-200, 1e200] {
++            let scaled = NurbsCurve::new(
++                circle.degree(),
++                circle.knots().to_vec(),
++                circle.control_points().to_vec(),
++                circle.weights().iter().map(|weight| *weight * scale).collect(),
++            )
++            .unwrap();
++            for index in 0..=40 {
++                let parameter = f64::from(index) / 40.0;
++                let a = circle.jet(parameter).unwrap();
++                let b = scaled.jet(parameter).unwrap();
++                near(a.point, b.point, 1e-13);
++                near(a.d1, b.d1, 1e-12);
++                near(a.d2, b.d2, 1e-12);
++                near(a.d3, b.d3, 1e-11);
++            }
++        }
++    }
++
++    #[test]
++    fn clamped_tiny_endpoints_are_exact_in_both_directions() {
++        let curve = NurbsCurve::new(
++            1,
++            vec![0.0, 0.0, 1.0, 1.0],
++            vec![Vec3::X * 1e-230, Vec3::X],
++            vec![1e-100, 1.0],
++        )
++        .unwrap();
++        let reversed = curve.reversed().unwrap();
++        assert_eq!(curve.eval(0.0).unwrap(), Vec3::X * 1e-230);
++        assert_eq!(reversed.eval(1.0).unwrap(), Vec3::X * 1e-230);
++        assert_eq!(curve.eval(1.0).unwrap(), Vec3::X);
++        assert_eq!(reversed.eval(0.0).unwrap(), Vec3::X);
++    }
++
++    #[test]
++    fn finite_extreme_coordinates_do_not_overflow_only_from_recentering() {
++        let curve = NurbsCurve::new(
++            1,
++            vec![0.0, 0.0, 4.0, 4.0],
++            vec![Vec3::X * -1e308, Vec3::X * 1e308],
++            vec![1.0; 2],
++        )
++        .unwrap();
++        let jet = curve.jet(2.0).unwrap();
++        assert_eq!(jet.point, Vec3::ZERO);
++        assert!((jet.d1.x / 5e307 - 1.0).abs() < 1e-14);
++        assert_eq!(jet.d2, Vec3::ZERO);
++        assert_eq!(jet.d3, Vec3::ZERO);
++        assert_eq!(curve.eval(0.0).unwrap(), curve.control_points()[0]);
++        assert_eq!(curve.eval(4.0).unwrap(), curve.control_points()[1]);
++    }
++
++    #[test]
++    fn compensated_accumulation_keeps_small_terms_between_large_opposites() {
++        let mut sum = CompensatedSum::default();
++        for value in [1e16, 1.0, -1e16] {
++            sum.add(value);
++        }
++        assert_eq!(sum.total(), 1.0);
++    }
++
+     #[test]
+     fn hostile_geometry_and_work_requests_are_refused_without_mutation() {
+         let source = quarter_circle();
+@@ -880,4 +1066,23 @@
+         let large = NurbsCurve::uniform(1, vec![Vec3::ZERO; MAX_CURVE_CONTROLS]).unwrap();
+         assert!(CurveChain::new(vec![large; MAX_CHAIN_CONTROLS / MAX_CURVE_CONTROLS + 1], false).is_err());
+     }
+-}
++    #[test]
++    fn a_constant_span_is_evaluable_on_a_tiny_parameter_domain() {
++        let point = Vec3::new(1e300, -1e300, 0.0);
++        let curve = NurbsCurve::new(
++            2,
++            vec![0.0, 0.0, 0.0, 1e-200, 1e-200, 1e-200],
++            vec![point; 3],
++            vec![1e-100, 1e100, 1.0],
++        )
++        .unwrap();
++        for parameter in [0.0, 0.5e-200, 1e-200] {
++            let jet = curve.jet(parameter).unwrap();
++            assert_eq!(jet.point, point);
++            assert_eq!(jet.d1, Vec3::ZERO);
++            assert_eq!(jet.d2, Vec3::ZERO);
++            assert_eq!(jet.d3, Vec3::ZERO);
++        }
++    }
++
++}

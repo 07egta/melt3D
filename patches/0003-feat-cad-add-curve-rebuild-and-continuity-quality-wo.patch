@@ -1,0 +1,3353 @@
+From b1317dd340f81a523e8e954a8229893dcae59d5f Mon Sep 17 00:00:00 2001
+From: 07egta <249711875+07egta@users.noreply.github.com>
+Date: Sat, 31 Oct 2026 23:47:48 -0700
+Subject: [PATCH 3/4] feat(cad): add curve rebuild and continuity quality
+ workflows
+
+---
+ assets/locales/pending/curve-quality.json     |  56 ++
+ crates/engine/src/cmd/mod.rs                  |   2 +
+ crates/engine/src/cmd/sketch_rebuild.rs       | 373 ++++++++
+ crates/engine/src/cmd/surface_match.rs        |   7 +-
+ crates/engine/src/schema/mod.rs               |   1 +
+ crates/engine/src/schema/sketch_rebuild.rs    | 217 +++++
+ crates/geom/src/lib.rs                        |   1 +
+ crates/geom/src/nurbs_curve.rs                | 883 ++++++++++++++++++
+ crates/kernel/src/fair.rs                     |  66 +-
+ crates/kernel/src/lib.rs                      |   2 +-
+ crates/kernel/src/matchsurf.rs                | 118 ++-
+ crates/kernel/src/matchsurf_tests.rs          |  58 +-
+ crates/kernel/src/watch.rs                    |   6 +
+ crates/ui-egui/src/dialogs.rs                 |   1 +
+ crates/ui-egui/src/dialogs_dense.rs           |   7 +-
+ crates/ui-egui/src/dialogs_surface.rs         | 153 ++-
+ crates/ui-egui/src/extrude_preview.rs         |   1 +
+ crates/ui-egui/src/length_input.rs            |   2 +-
+ crates/ui-egui/src/move_preview.rs            |   1 +
+ crates/ui-egui/src/preview.rs                 |  44 +-
+ crates/ui-egui/src/sketch_modify_ui.rs        | 211 ++++-
+ .../src/surface_quality_dialog_tests.rs       | 223 +++++
+ docs/arclet-surface-workflows.md              |  81 ++
+ 23 files changed, 2468 insertions(+), 46 deletions(-)
+ create mode 100644 assets/locales/pending/curve-quality.json
+ create mode 100644 crates/engine/src/cmd/sketch_rebuild.rs
+ create mode 100644 crates/engine/src/schema/sketch_rebuild.rs
+ create mode 100644 crates/geom/src/nurbs_curve.rs
+ create mode 100644 crates/ui-egui/src/surface_quality_dialog_tests.rs
+ create mode 100644 docs/arclet-surface-workflows.md
+
+diff --git a/assets/locales/pending/curve-quality.json b/assets/locales/pending/curve-quality.json
+new file mode 100644
+index 0000000..7c45c5c
+--- /dev/null
++++ b/assets/locales/pending/curve-quality.json
+@@ -0,0 +1,56 @@
++{
++  "en": {
++    "curve_quality.after": "After curve",
++    "curve_quality.angle": "Tangent angle",
++    "curve_quality.before": "Before curve",
++    "curve_quality.change": "Curvature change (1/mm²)",
++    "curve_quality.construction": "Create as construction curve",
++    "curve_quality.controls": "Control points",
++    "curve_quality.curvature": "Curvature jump (1/mm)",
++    "curve_quality.degree": "Degree",
++    "curve_quality.desktop_required": "Use the desktop app for this tool. Browser background geometry is not available yet.",
++    "curve_quality.deviation": "Estimated deviation",
++    "curve_quality.edit_sketch": "Open or create a sketch before rebuilding or checking its curves.",
++    "curve_quality.estimate": "Sampled two-way point-to-polyline estimate; details between samples can be missed.",
++    "curve_quality.gap": "Position gap",
++    "curve_quality.gap_failed": "Gap exceeds tolerance",
++    "curve_quality.invalid_rebuild": "Use degree 1–7 and more control points than the degree, up to 64.",
++    "curve_quality.invalid_tolerances": "Tolerances must be nonnegative, and the angle must be at most 180°.",
++    "curve_quality.join_hint": "Compare the end of Before with the start of After. Reverse either curve to choose the joining ends.",
++    "curve_quality.join_title": "Curve Continuity",
++    "curve_quality.local_only": "Local curve endpoints at the chosen tolerances. This does not certify an entire curve or a Class A surface.",
++    "curve_quality.measured": "Measured continuity",
++    "curve_quality.rebuild_hint": "Creates a new editable curve and keeps the source. Endpoints are fixed; tangency and curvature are not constrained.",
++    "curve_quality.rebuild_title": "Rebuild Curve",
++    "curve_quality.rebuilt_error": "Rebuilt → source",
++    "curve_quality.reverse_after": "Reverse after",
++    "curve_quality.reverse_before": "Reverse before",
++    "curve_quality.rms": "Parameter-fit RMS",
++    "curve_quality.select_pair": "Select a Before curve and an After curve",
++    "curve_quality.select_source": "Select one source curve first",
++    "curve_quality.source": "Source curve",
++    "curve_quality.source_error": "Source → rebuilt",
++    "curve_quality.tolerances": "Tolerances",
++    "ui.surface.fair.auto_tolerance": "Auto: 0.1% of body size",
++    "ui.surface.fair.hint": "Smooth B-spline faces within the tolerance. Boundaries stay fixed; Keep edge tangents also holds the adjacent control rows.",
++    "ui.surface.fair.invalid_iterations": "Iterations must be between 1 and 1000",
++    "ui.surface.fair.invalid_strength": "Strength must be greater than 0 and at most 1",
++    "ui.surface.fair.invalid_tolerance": "Tolerance must be a positive finite length",
++    "ui.surface.fair.iterations": "Iterations",
++    "ui.surface.fair.keep_edges": "Keep edge tangents",
++    "ui.surface.fair.strength": "Strength",
++    "ui.surface.fair.title": "FAIR SURFACE",
++    "ui.surface.invalid_pick": "A selected point has invalid coordinates",
++    "ui.surface.match.continuity": "Continuity",
++    "ui.surface.match.g1": "Tangent (G1)",
++    "ui.surface.match.g2": "Curvature (G2)",
++    "ui.surface.match.g3": "Curvature change (G3)",
++    "ui.surface.match.hint": "Select the source surface, then an edge chain on another body. The opposite boundary stays fixed.",
++    "ui.surface.match.invalid_order": "Choose G1, G2 or G3 continuity",
++    "ui.surface.match.same_body": "Select target edges on another body",
++    "ui.surface.match.title": "MATCH SURFACE",
++    "ui.surface.source": "Source surface",
++    "ui.surface.target_edges": "Target edges",
++    "ui.surface.too_many_picks": "The selection contains too many items"
++  }
++}
+diff --git a/crates/engine/src/cmd/mod.rs b/crates/engine/src/cmd/mod.rs
+index b1b06ef..def5f4e 100644
+--- a/crates/engine/src/cmd/mod.rs
++++ b/crates/engine/src/cmd/mod.rs
+@@ -95,6 +95,7 @@ mod sketch_import;
+ mod sketch_inspect;
+ mod sketch_modify;
+ mod sketch_project;
++mod sketch_rebuild;
+ mod sketch_store;
+ mod surface;
+ mod surface_analysis;
+@@ -282,6 +283,7 @@ pub fn command_specs() -> Vec<&'static CommandSpec> {
+     let mut v: Vec<&'static CommandSpec> = Vec::new();
+     v.extend(sketch::COMMANDS.iter());
+     v.extend(sketch_create::COMMANDS.iter());
++    v.extend(sketch_rebuild::COMMANDS.iter());
+     v.extend(sketch_constraints::COMMANDS.iter());
+     v.extend(sketch_import::COMMANDS.iter());
+     v.extend(sketch_inspect::COMMANDS.iter());
+diff --git a/crates/engine/src/cmd/sketch_rebuild.rs b/crates/engine/src/cmd/sketch_rebuild.rs
+new file mode 100644
+index 0000000..66529dd
+--- /dev/null
++++ b/crates/engine/src/cmd/sketch_rebuild.rs
+@@ -0,0 +1,373 @@
++//! Curve rebuilding and end-continuity inspection backed by the shared rational-curve maths.
++//! Fits retain their original cubic pieces exactly during measurement; only the explicitly
++//! requested rebuilt copy is approximated. No source point or constraint is removed or reused.
++
++use serde::Deserialize;
++use serde_json::Value;
++use solidcraft_geom::nurbs_curve::{self, GeometricContinuity, JoinTolerances, MAX_CURVE_CONTROLS, NurbsCurve, RebuildOptions};
++use solidcraft_geom::{Vec2, Vec3};
++use solidcraft_sketch::{CurveKind, Sketch};
++
++use super::{CommandSpec, sketch, sketch_store};
++use crate::params::bad;
++use crate::schema::sketch_rebuild::{
++    CurveContinuityOrder, CurveContinuityParams, CurveContinuityResult, CurveContinuityTolerances, SampledDeviationResult, SplineRebuildParams,
++    SplineRebuildResult,
++};
++use crate::schema::{TypedContract, output_schema_for};
++use crate::{EngineError, Result, Session};
++
++const REBUILD_CONTRACT: TypedContract<SplineRebuildParams> = TypedContract::new();
++const CONTINUITY_CONTRACT: TypedContract<CurveContinuityParams> = TypedContract::new();
++
++pub static COMMANDS: &[CommandSpec] = &[
++    CommandSpec::new("sketch.spline.rebuild", "Rebuild Curve", crate::checked!("sketch.spline.rebuild", rebuild))
++        .at("SKETCH", "MODIFY")
++        .icon("spline_cv")
++        .contract(&REBUILD_CONTRACT)
++        .output(output_schema_for::<SplineRebuildResult>)
++        .params(concat!("curve: non-periodic spline id; sketch?: id|name (default active); degree?: 1..7 (default 3); control_points?: 2..64, greater than degree (default 8); fit_samples?: at least control_points, at most 2049 (default 129); check_samples?: 2..1025 (default 257); construction?: bool (default true). Adds a new uniform-clamped control-point spline with fixed endpoints; retains the source and its constraints. Returns parameter RMS and both directed sampled geometric deviations, not a certified error bound", created_doc!())),
++    CommandSpec::new("inspect.curve_continuity", "Curve Continuity", crate::checked!("inspect.curve_continuity", continuity))
++        .at("SKETCH", "INSPECT")
++        .icon("continuity")
++        .noundo()
++        .contract(&CONTINUITY_CONTRACT)
++        .output(output_schema_for::<CurveContinuityResult>)
++        .params("before, after: line or non-periodic spline ids in one sketch; sketch?: id|name (default active); reverse_before?, reverse_after?: bool (default false); gap_tolerance_mm?: 0.000001, angle_tolerance_deg?: 0.01, curvature_tolerance_per_mm?: 0.000001, curvature_change_tolerance_per_mm2?: 0.000001. Measures the first curve's end against the second curve's start, using arc-length derivatives through G3. No geometry is changed; zero-speed endpoints are unmeasurable, and this is not a surface-quality certificate"),
++];
++
++fn rebuild(s: &mut Session, p: &Value) -> Result<Value> {
++    let cmd = "sketch.spline.rebuild";
++    let params = SplineRebuildParams::deserialize(p).map_err(|e| bad(cmd, e.to_string()))?;
++    let options = RebuildOptions {
++        degree: params.degree,
++        control_points: params.control_points,
++        fit_samples: params.fit_samples,
++        check_samples: params.check_samples,
++    };
++    options.validate().map_err(|e| bad(cmd, e.to_string()))?;
++    let watch = solidcraft_kernel::watch::current();
++    let cancelled = || watch.as_ref().is_some_and(|watch| watch.cancelled());
++    let degree = u8::try_from(params.degree).map_err(|e| bad(cmd, e.to_string()))?;
++    let ((curve, report), info) = sketch::edit(s, p, cmd, false, |sk, _| {
++        if cancelled() {
++            return Err(bad(cmd, "curve operation cancelled"));
++        }
++        if sk.points.len().saturating_add(options.control_points) > solidcraft_sketch::MAX_POINTS || sk.curves.len() >= solidcraft_sketch::MAX_CURVES
++        {
++            return Err(bad(cmd, "the sketch has no room for another rebuilt curve"));
++        }
++        let index = sk.curve_index(&params.curve).ok_or_else(|| bad(cmd, format!("unknown curve `{}`", params.curve)))?;
++        if !sk.curves.get(index).is_some_and(|curve| matches!(curve.kind, CurveKind::Spline { .. })) {
++            return Err(bad(cmd, "rebuild needs a non-periodic sketch spline"));
++        }
++        let source = curve_geometry(sk, &params.curve, cmd)?;
++        let report = nurbs_curve::rebuild(&source, options, cancelled).map_err(|e| bad(cmd, e.to_string()))?;
++        if cancelled() {
++            return Err(bad(cmd, "curve operation cancelled"));
++        }
++        let mut points = Vec::with_capacity(report.curve.control_points().len());
++        for point in report.curve.control_points() {
++            points.push(sk.add_point(Vec2::new(point.x, point.y), None)?);
++        }
++        let index = sk.add_curve(CurveKind::Spline { pts: points, control: true, degree, periodic: false }, None)?;
++        let made = sk.curves.get_mut(index).ok_or_else(|| bad(cmd, "the rebuilt curve is missing"))?;
++        made.construction = params.construction;
++        Ok((made.id.clone(), report))
++    })?;
++    let deviation = report.deviation;
++    let result = SplineRebuildResult {
++        source: params.curve,
++        curve,
++        degree: params.degree,
++        control_points: params.control_points,
++        construction: params.construction,
++        parameter_rms_mm: report.parameter_rms_mm,
++        deviation: SampledDeviationResult {
++            source_to_rebuilt_mm: deviation.source_to_rebuilt_mm,
++            rebuilt_to_source_mm: deviation.rebuilt_to_source_mm,
++            samples_per_curve: deviation.samples_per_curve,
++            max_mm: deviation.max_mm(),
++        },
++        estimate_note: "Deviation uses finite point-to-polyline samples in both directions; features between samples may be missed. It is not a certified Hausdorff bound. Endpoint positions are fixed; endpoint tangents are not constrained.".into(),
++        sketch: info,
++        created: None,
++        param_warnings: Vec::new(),
++    };
++    serde_json::to_value(result).map_err(|e| EngineError::Other(e.to_string()))
++}
++
++fn continuity(s: &mut Session, p: &Value) -> Result<Value> {
++    let cmd = "inspect.curve_continuity";
++    let params = CurveContinuityParams::deserialize(p).map_err(|e| bad(cmd, e.to_string()))?;
++    let tolerances = JoinTolerances {
++        gap_mm: params.gap_tolerance_mm,
++        tangent_angle_deg: params.angle_tolerance_deg,
++        curvature_per_mm: params.curvature_tolerance_per_mm,
++        curvature_change_per_mm2: params.curvature_change_tolerance_per_mm2,
++    };
++    tolerances.validate().map_err(|e| bad(cmd, e.to_string()))?;
++    let watch = solidcraft_kernel::watch::current();
++    if watch.as_ref().is_some_and(|watch| watch.cancelled()) {
++        return Err(bad(cmd, "curve operation cancelled"));
++    }
++    let target = sketch_store::target(s, p, cmd)?;
++    let sk = sketch_store::read(&s.doc, target)?;
++    let mut before = curve_geometry(sk, &params.before, cmd)?;
++    let mut after = curve_geometry(sk, &params.after, cmd)?;
++    if params.reverse_before {
++        before = before.reversed().map_err(|e| bad(cmd, e.to_string()))?;
++    }
++    if params.reverse_after {
++        after = after.reversed().map_err(|e| bad(cmd, e.to_string()))?;
++    }
++    let report = nurbs_curve::measure_join(&before, &after, tolerances).map_err(|e| bad(cmd, e.to_string()))?;
++    let measured_order = report.measured_order.map(|order| match order {
++        GeometricContinuity::G0 => CurveContinuityOrder::G0,
++        GeometricContinuity::G1 => CurveContinuityOrder::G1,
++        GeometricContinuity::G2 => CurveContinuityOrder::G2,
++        GeometricContinuity::G3 => CurveContinuityOrder::G3,
++    });
++    let result = CurveContinuityResult {
++        before: params.before,
++        after: params.after,
++        reverse_before: params.reverse_before,
++        reverse_after: params.reverse_after,
++        gap_mm: report.gap_mm,
++        tangent_angle_deg: report.tangent_angle_deg,
++        curvature_jump_per_mm: report.curvature_jump_per_mm,
++        curvature_change_jump_per_mm2: report.curvature_change_jump_per_mm2,
++        measured_order,
++        tolerances: CurveContinuityTolerances {
++            gap_mm: tolerances.gap_mm,
++            tangent_angle_deg: tolerances.tangent_angle_deg,
++            curvature_per_mm: tolerances.curvature_per_mm,
++            curvature_change_per_mm2: tolerances.curvature_change_per_mm2,
++        },
++        scope_note: "Local curve-end measurements with explicit tolerances and directions; not a surface-continuity or Class A certificate.".into(),
++        param_warnings: Vec::new(),
++    };
++    serde_json::to_value(result).map_err(|e| EngineError::Other(e.to_string()))
++}
++
++/// Exact conversion of supported sketch geometry, in sketch millimetres. A fit spline has
++/// equal parameter spans in `curves::spline_point`, so repeated cubic knots preserve that same
++/// parameterization while retaining every original Hermite/Bézier segment.
++fn curve_geometry(sk: &Sketch, id: &str, cmd: &str) -> Result<NurbsCurve> {
++    let index = sk.curve_index(id).ok_or_else(|| bad(cmd, format!("unknown curve `{id}`")))?;
++    let curve = sk.curves.get(index).ok_or_else(|| bad(cmd, "the source curve is missing"))?;
++    let point = |index| {
++        sk.point(index)
++            .filter(|point| point.is_finite())
++            .map(|point| point.extend(0.0))
++            .ok_or_else(|| bad(cmd, "the curve has a missing or non-finite point"))
++    };
++    match &curve.kind {
++        CurveKind::Line { a, b } if !curve.infinite => NurbsCurve::uniform(1, vec![point(*a)?, point(*b)?]).map_err(|e| bad(cmd, e.to_string())),
++        CurveKind::Spline { periodic: true, .. } => Err(bad(cmd, "periodic splines are not supported by this operation yet")),
++        CurveKind::Spline { pts, control, degree, periodic: false } => {
++            if !(2..=MAX_CURVE_CONTROLS).contains(&pts.len()) {
++                return Err(bad(cmd, "the spline has too few or too many control points"));
++            }
++            if !*control && 3 * (pts.len() - 1) + 1 > MAX_CURVE_CONTROLS {
++                return Err(bad(cmd, "the fit spline's exact cubic conversion exceeds 1024 controls"));
++            }
++            let points = pts.iter().map(|index| point(*index)).collect::<Result<Vec<_>>>()?;
++            if *control {
++                let degree = usize::from(*degree).clamp(1, solidcraft_geom::MAX_BEZIER_DEGREE).min(points.len() - 1);
++                return NurbsCurve::uniform(degree, points).map_err(|e| bad(cmd, e.to_string()));
++            }
++            let fit_points: Vec<Vec2> = points.iter().map(|point| Vec2::new(point.x, point.y)).collect();
++            let pieces = solidcraft_sketch::fit_beziers(&fit_points);
++            let Some(first) = pieces.first() else { return Err(bad(cmd, "the fit spline has no cubic pieces")) };
++            let count = pieces.len();
++            let mut controls: Vec<Vec3> = first.iter().map(|point| point.extend(0.0)).collect();
++            for piece in pieces.iter().skip(1) {
++                controls.extend(piece.iter().skip(1).map(|point| point.extend(0.0)));
++            }
++            let mut knots = vec![0.0; 4];
++            for index in 1..count {
++                knots.extend(std::iter::repeat_n(index as f64 / count as f64, 3));
++            }
++            knots.extend(std::iter::repeat_n(1.0, 4));
++            let weights = vec![1.0; controls.len()];
++            NurbsCurve::new(3, knots, controls, weights).map_err(|e| bad(cmd, e.to_string()))
++        }
++        _ => Err(bad(cmd, "this operation accepts finite lines and non-periodic fit/control-point splines")),
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use serde_json::json;
++    use solidcraft_doc::Document;
++    use std::sync::Arc;
++    use std::sync::atomic::{AtomicUsize, Ordering};
++
++    fn run(s: &mut Session, cmd: &str, params: Value) -> Value {
++        s.execute(cmd, &params).unwrap_or_else(|error| panic!("{cmd}: {error}"))
++    }
++
++    fn sketch_session() -> Session {
++        let mut session = Session::default();
++        run(&mut session, "sketch.create", json!({"plane":"XY", "name":"Curves"}));
++        session
++    }
++
++    fn spline(s: &mut Session, points: Value, control: bool) -> String {
++        let command = if control { "sketch.spline.control_point" } else { "sketch.spline.fit_point" };
++        run(s, command, json!({"points": points}))["curves"][0].as_str().unwrap().to_string()
++    }
++
++    #[test]
++    fn rebuild_adds_an_editable_copy_preserves_source_and_survives_undo_and_cold_load() {
++        let mut s = sketch_session();
++        let source = spline(&mut s, json!([[0, 0], [10, 20], [20, -10], [30, 0]]), true);
++        let target = sketch_store::target(&s, &json!({}), "test").unwrap();
++        let fixed_point = {
++            let sk = sketch_store::read(&s.doc, target).unwrap();
++            let CurveKind::Spline { pts, .. } = &sk.curves[sk.curve_index(&source).unwrap()].kind else { panic!("spline") };
++            sk.points[pts[1]].id.clone()
++        };
++        run(&mut s, "sketch.constraint.fix", json!({"entity":fixed_point,"fixed":true}));
++        let before = sketch_store::read(&s.doc, target).unwrap().clone();
++        assert!(!before.constraints.is_empty());
++        let before_json = s.doc.to_json();
++        let reply = run(&mut s, "sketch.spline.rebuild", json!({"curve": source, "degree":3,"control_points":4,"fit_samples":33,"check_samples":65}));
++        let made = reply["curve"].as_str().unwrap();
++        assert_ne!(made, source);
++        assert_eq!(reply["source"], source);
++        assert_eq!(reply["construction"], true);
++        assert!(reply["parameter_rms_mm"].as_f64().unwrap() < 1e-10);
++        assert!(reply["deviation"]["max_mm"].as_f64().unwrap() < 1e-10);
++        let after = sketch_store::read(&s.doc, target).unwrap();
++        assert_eq!(&after.points[..before.points.len()], before.points.as_slice());
++        assert_eq!(&after.curves[..before.curves.len()], before.curves.as_slice());
++        assert_eq!(after.constraints, before.constraints);
++        let rebuilt = &after.curves[after.curve_index(made).unwrap()];
++        assert!(rebuilt.construction);
++        let CurveKind::Spline { pts, control, degree, periodic } = &rebuilt.kind else { panic!("spline") };
++        assert!(*control && !*periodic);
++        assert_eq!((*degree, pts.len()), (3, 4));
++        assert!(pts.iter().all(|index| *index >= before.points.len()));
++        assert_eq!(reply["created"]["points"].as_array().unwrap().len(), 4);
++        assert_eq!(reply["created"]["constraints"], json!([]));
++        let after_json = s.doc.to_json();
++        run(&mut s, "edit.undo", json!({}));
++        assert_eq!(s.doc.to_json(), before_json);
++        run(&mut s, "edit.redo", json!({}));
++        assert_eq!(s.doc.to_json(), after_json);
++        let reopened = Session::new(Document::from_json(&after_json).unwrap());
++        let cold = sketch_store::read(&reopened.doc, target).unwrap();
++        assert_eq!(curve_geometry(cold, made, "test").unwrap(), curve_geometry(sketch_store::read(&s.doc, target).unwrap(), made, "test").unwrap());
++    }
++
++    #[test]
++    fn fit_spline_adapter_retains_the_exact_piecewise_curve_and_rebuilds_it() {
++        let mut s = sketch_session();
++        let points = [Vec2::new(0.0, 0.0), Vec2::new(2.0, 5.0), Vec2::new(9.0, -3.0), Vec2::new(20.0, 1.0)];
++        let source = spline(&mut s, json!(points), false);
++        let target = sketch_store::target(&s, &json!({}), "test").unwrap();
++        let curve = curve_geometry(sketch_store::read(&s.doc, target).unwrap(), &source, "test").unwrap();
++        for i in 0..=100 {
++            let t = f64::from(i) / 100.0;
++            let expected = solidcraft_sketch::spline_point(&points, false, 3, t).extend(0.0);
++            assert!(curve.eval(t).unwrap().dist(expected) < 1e-11);
++        }
++        let result =
++            run(&mut s, "sketch.spline.rebuild", json!({"curve":source,"control_points":8,"construction":false,"fit_samples":65,"check_samples":65}));
++        assert_eq!(result["construction"], false);
++        let made = result["curve"].as_str().unwrap();
++        let after = curve_geometry(sketch_store::read(&s.doc, target).unwrap(), made, "test").unwrap();
++        assert_eq!(after.eval(0.0).unwrap(), curve.eval(0.0).unwrap());
++        assert_eq!(after.eval(1.0).unwrap(), curve.eval(1.0).unwrap());
++    }
++
++    #[test]
++    fn continuity_uses_explicit_direction_and_does_not_mutate_geometry() {
++        let mut s = sketch_session();
++        let before = run(&mut s, "sketch.line", json!({"points":[[-10,0],[0,0]]}))["curves"][0].clone();
++        let after = spline(&mut s, json!([[0, 0], [10, 0]]), true);
++        let saved = s.doc.to_json();
++        let undo_count = s.undo.len();
++        let report = run(&mut s, "inspect.curve_continuity", json!({"before":before,"after":after}));
++        assert_eq!(report["measured_order"], "G3");
++        assert_eq!(report["gap_mm"], 0.0);
++        assert_eq!(s.doc.to_json(), saved);
++        assert_eq!(s.undo.len(), undo_count);
++        let report = run(&mut s, "inspect.curve_continuity", json!({"before":before,"after":after,"reverse_after":true}));
++        assert!(report["tangent_angle_deg"].as_f64().unwrap() > 179.9);
++        assert!(report["measured_order"].is_null());
++        assert_eq!(s.doc.to_json(), saved);
++    }
++
++    #[test]
++    fn invalid_counts_unsupported_sources_and_cancellation_are_atomic() {
++        let mut s = sketch_session();
++        let source = spline(&mut s, json!([[0, 0], [10, 5], [20, 0]]), false);
++        let periodic = run(&mut s, "sketch.spline.fit_point", json!({"points":[[0,0],[4,0],[2,3]],"periodic":true}))["curves"][0].clone();
++        let circle = run(&mut s, "sketch.circle.center", json!({"center":[30,0],"radius":2}))["curves"][0].clone();
++        let saved = s.doc.to_json();
++        let undo_count = s.undo.len();
++        for params in [
++            json!({"curve":source,"control_points":3,"degree":3}),
++            json!({"curve":source,"degree":8}),
++            json!({"curve":source,"fit_samples":2}),
++            json!({"curve":source,"check_samples":1026}),
++            json!({"curve":source,"degree":3.5}),
++            json!({"curve":source,"construction":"yes"}),
++            json!({"curve":periodic}),
++            json!({"curve":circle}),
++            json!({"curve":"missing"}),
++            json!({"curve":"x".repeat(257)}),
++            json!({"curve":"bad\u{0000}id"}),
++            json!({"curve":source,"sketch":null}),
++        ] {
++            assert!(s.execute("sketch.spline.rebuild", &params).is_err(), "{params}");
++            assert_eq!(s.doc.to_json(), saved);
++            assert_eq!(s.undo.len(), undo_count);
++        }
++        assert!(s.execute("inspect.curve_continuity", &json!({"before":source,"after":source,"gap_tolerance_mm":-1})).is_err());
++        struct Stop;
++        impl solidcraft_kernel::watch::Watch for Stop {
++            fn cancelled(&self) -> bool {
++                true
++            }
++            fn progress(&self, _: &'static str, _: usize, _: usize) {}
++        }
++        let result = solidcraft_kernel::watch::watching(Arc::new(Stop), || s.execute("sketch.spline.rebuild", &json!({"curve":source})));
++        assert!(result.is_err());
++        assert_eq!(s.doc.to_json(), saved);
++        assert_eq!(s.undo.len(), undo_count);
++    }
++
++    #[test]
++    fn cancellation_during_fit_leaves_points_constraints_and_history_untouched() {
++        struct StopLater(AtomicUsize);
++        impl solidcraft_kernel::watch::Watch for StopLater {
++            fn cancelled(&self) -> bool {
++                self.0.fetch_add(1, Ordering::Relaxed) >= 40
++            }
++            fn progress(&self, _: &'static str, _: usize, _: usize) {}
++        }
++        let mut s = sketch_session();
++        let source = spline(&mut s, json!([[0, 0], [10, 20], [20, -10], [30, 0]]), true);
++        let before = s.doc.to_json();
++        let undo_count = s.undo.len();
++        let watch = Arc::new(StopLater(AtomicUsize::new(0)));
++        let result = solidcraft_kernel::watch::watching(watch.clone(), || s.execute("sketch.spline.rebuild", &json!({"curve":source})));
++        assert!(result.is_err());
++        assert!(watch.0.load(Ordering::Relaxed) > 40);
++        assert_eq!(s.doc.to_json(), before);
++        assert_eq!(s.undo.len(), undo_count);
++    }
++
++    #[test]
++    fn exact_source_conversion_refuses_expansion_beyond_its_control_budget() {
++        let mut sketch = Sketch::new();
++        let points = (0..343).map(|i| sketch.add_point(Vec2::new(f64::from(i), 0.0), None).unwrap()).collect();
++        let index = sketch.add_curve(CurveKind::Spline { pts: points, control: false, degree: 3, periodic: false }, None).unwrap();
++        assert!(curve_geometry(&sketch, &sketch.curves[index].id, "test").is_err());
++    }
++}
+diff --git a/crates/engine/src/cmd/surface_match.rs b/crates/engine/src/cmd/surface_match.rs
+index 78f5b8e..ceb12a3 100644
+--- a/crates/engine/src/cmd/surface_match.rs
++++ b/crates/engine/src/cmd/surface_match.rs
+@@ -108,7 +108,7 @@ mod tests {
+     /// The seam of a matched skirt, measured back off the two bodies: how far the rebuilt boundary
+     /// is from the picked seam line, the angle between the two surfaces' normals across it, and
+     /// the continuity it holds.
+-    fn seam(s: &Session) -> (f64, f64, Continuity) {
++    fn seam(s: &Session) -> (f64, f64, Option<Continuity>) {
+         let st = s.world_state();
+         let made = st.body("Skirt").unwrap().body.clone();
+         let target = st.body("Boss").unwrap().body.clone();
+@@ -123,8 +123,9 @@ mod tests {
+         let mut s = Session::default();
+         boss_and_skirt(&mut s);
+         // Before the match the skirt's boundary is the 1 mm-wider line it was extruded at.
+-        let (gap, _, _) = seam(&s);
++        let (gap, _, before_order) = seam(&s);
+         assert!((gap - 1.0).abs() < 0.05, "the skirt starts a millimetre off the seam: {gap}");
++        assert!(before_order.is_none(), "a gap does not hold G0 or a higher order");
+         let chain = picks(&s);
+         run(&mut s, "surface.match", json!({"body": "Skirt", "target": "Boss", "edges": chain, "order": "g2"}));
+         let st = s.world_state();
+@@ -135,7 +136,7 @@ mod tests {
+         println!("engine: gap {gap:e} mm, normal {deg:e} deg, order {order:?}");
+         assert!(gap < 1e-6, "the seam is on the picked line: {gap:e} mm");
+         assert!(deg < 0.05, "the seam holds the wall's tangent plane: {deg} deg");
+-        assert!(order.conditions() >= Continuity::G1.conditions(), "{order:?}");
++        assert!(order.is_some_and(|order| order.conditions() >= Continuity::G1.conditions()), "{order:?}");
+         // Undo puts the boundary back, redo matches it again, and a cold reopen agrees.
+         run(&mut s, "edit.undo", json!({}));
+         assert!(seam(&s).0 > 0.5, "undo restores the original skirt");
+diff --git a/crates/engine/src/schema/mod.rs b/crates/engine/src/schema/mod.rs
+index 36c94c1..2cc1fb2 100644
+--- a/crates/engine/src/schema/mod.rs
++++ b/crates/engine/src/schema/mod.rs
+@@ -60,6 +60,7 @@ pub mod features;
+ pub mod inspect;
+ pub mod sketch_constraints;
+ pub mod sketch_create;
++pub mod sketch_rebuild;
+ pub mod view_navigation;
+ 
+ pub use check::{Contract, Issue, ParamCheck, TypedContract, input_schema_for, output_schema_for, run_checked, run_checked_as};
+diff --git a/crates/engine/src/schema/sketch_rebuild.rs b/crates/engine/src/schema/sketch_rebuild.rs
+new file mode 100644
+index 0000000..336a489
+--- /dev/null
++++ b/crates/engine/src/schema/sketch_rebuild.rs
+@@ -0,0 +1,217 @@
++//! Typed input/output contracts for curve rebuilding and geometric end continuity.
++
++use schemars::JsonSchema;
++use serde::{Deserialize, Serialize};
++use serde_json::Value;
++
++use super::types::{SketchRef, present};
++
++/// Rebuild one non-periodic sketch spline as a new editable control-point spline. The source
++/// and its constraints are retained; construction geometry is the default to avoid making a
++/// second, overlapping profile boundary.
++#[derive(Debug, Deserialize, JsonSchema)]
++#[schemars(deny_unknown_fields)]
++pub struct SplineRebuildParams {
++    #[serde(deserialize_with = "curve_id")]
++    #[schemars(length(min = 1, max = 256))]
++    pub curve: String,
++    /// Sketch id or name; omitted means the active sketch.
++    #[serde(default, deserialize_with = "present", skip_serializing_if = "Option::is_none")]
++    #[schemars(with = "SketchRef")]
++    pub sketch: Option<SketchRef>,
++    #[serde(default = "default_degree")]
++    #[schemars(range(min = 1, max = 7))]
++    pub degree: usize,
++    /// Must exceed degree; the aggregate work budget may impose a smaller useful combination.
++    #[serde(default = "default_controls")]
++    #[schemars(range(min = 2, max = 64))]
++    pub control_points: usize,
++    #[serde(default = "default_fit_samples")]
++    #[schemars(range(min = 2, max = 2049))]
++    pub fit_samples: usize,
++    #[serde(default = "default_check_samples")]
++    #[schemars(range(min = 2, max = 1025))]
++    pub check_samples: usize,
++    #[serde(default = "yes")]
++    pub construction: bool,
++}
++
++fn curve_id<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
++    let value = String::deserialize(d)?;
++    if value.is_empty() || value.len() > 256 || value.chars().any(char::is_control) {
++        return Err(serde::de::Error::custom("a curve id must contain 1..256 bytes without control characters"));
++    }
++    Ok(value)
++}
++
++fn default_degree() -> usize {
++    3
++}
++fn default_controls() -> usize {
++    8
++}
++fn default_fit_samples() -> usize {
++    129
++}
++fn default_check_samples() -> usize {
++    257
++}
++fn yes() -> bool {
++    true
++}
++fn default_gap() -> f64 {
++    1e-6
++}
++fn default_angle() -> f64 {
++    0.01
++}
++fn default_curvature() -> f64 {
++    1e-6
++}
++
++#[derive(Debug, Serialize, JsonSchema)]
++pub struct SampledDeviationResult {
++    pub source_to_rebuilt_mm: f64,
++    pub rebuilt_to_source_mm: f64,
++    pub samples_per_curve: usize,
++    /// Maximum of the two directed sampled estimates; not a certified Hausdorff bound.
++    pub max_mm: f64,
++}
++
++#[derive(Debug, Serialize, JsonSchema)]
++pub struct SplineRebuildResult {
++    pub source: String,
++    pub curve: String,
++    pub degree: usize,
++    pub control_points: usize,
++    pub construction: bool,
++    /// Difference at corresponding normalized parameters, not a closest-point distance.
++    pub parameter_rms_mm: f64,
++    pub deviation: SampledDeviationResult,
++    pub estimate_note: String,
++    /// The ordinary sketch solve report.
++    pub sketch: Value,
++    /// Added by the shared command path, with the new points/curve and no new constraints.
++    #[serde(skip_serializing_if = "Option::is_none")]
++    pub created: Option<Value>,
++    #[serde(default, skip_serializing_if = "Vec::is_empty")]
++    pub param_warnings: Vec<String>,
++}
++
++/// Compare the authored end of `before` with the authored start of `after` in one sketch.
++/// Reversal is explicit and affects measurement only; neither curve is edited or welded.
++#[derive(Debug, Deserialize, JsonSchema)]
++#[schemars(deny_unknown_fields)]
++pub struct CurveContinuityParams {
++    #[serde(deserialize_with = "curve_id")]
++    #[schemars(length(min = 1, max = 256))]
++    pub before: String,
++    #[serde(deserialize_with = "curve_id")]
++    #[schemars(length(min = 1, max = 256))]
++    pub after: String,
++    #[serde(default, deserialize_with = "present", skip_serializing_if = "Option::is_none")]
++    #[schemars(with = "SketchRef")]
++    pub sketch: Option<SketchRef>,
++    #[serde(default)]
++    pub reverse_before: bool,
++    #[serde(default)]
++    pub reverse_after: bool,
++    #[serde(default = "default_gap")]
++    #[schemars(range(min = 0))]
++    pub gap_tolerance_mm: f64,
++    #[serde(default = "default_angle")]
++    #[schemars(range(min = 0, max = 180))]
++    pub angle_tolerance_deg: f64,
++    #[serde(default = "default_curvature")]
++    #[schemars(range(min = 0))]
++    pub curvature_tolerance_per_mm: f64,
++    #[serde(default = "default_curvature")]
++    #[schemars(range(min = 0))]
++    pub curvature_change_tolerance_per_mm2: f64,
++}
++
++#[derive(Debug, Serialize, JsonSchema)]
++pub struct CurveContinuityTolerances {
++    pub gap_mm: f64,
++    pub tangent_angle_deg: f64,
++    pub curvature_per_mm: f64,
++    pub curvature_change_per_mm2: f64,
++}
++
++#[derive(Debug, Serialize, JsonSchema)]
++pub enum CurveContinuityOrder {
++    G0,
++    G1,
++    G2,
++    G3,
++}
++
++#[derive(Debug, Serialize, JsonSchema)]
++pub struct CurveContinuityResult {
++    pub before: String,
++    pub after: String,
++    pub reverse_before: bool,
++    pub reverse_after: bool,
++    pub gap_mm: f64,
++    pub tangent_angle_deg: f64,
++    pub curvature_jump_per_mm: f64,
++    pub curvature_change_jump_per_mm2: f64,
++    pub measured_order: Option<CurveContinuityOrder>,
++    pub tolerances: CurveContinuityTolerances,
++    pub scope_note: String,
++    #[serde(default, skip_serializing_if = "Vec::is_empty")]
++    pub param_warnings: Vec<String>,
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use crate::schema::{input_schema_for, tests::assert_keys};
++
++    #[test]
++    fn schema_keys_match_both_command_contracts() {
++        assert_keys(
++            input_schema_for::<SplineRebuildParams>(),
++            &["check_samples", "construction", "control_points", "curve", "degree", "fit_samples", "sketch"],
++        );
++        assert_keys(
++            input_schema_for::<CurveContinuityParams>(),
++            &[
++                "after",
++                "angle_tolerance_deg",
++                "before",
++                "curvature_change_tolerance_per_mm2",
++                "curvature_tolerance_per_mm",
++                "gap_tolerance_mm",
++                "reverse_after",
++                "reverse_before",
++                "sketch",
++            ],
++        );
++    }
++
++    #[test]
++    fn command_contracts_describe_success_and_strict_unknown_keys_are_atomic() {
++        use crate::schema::tests::conforms;
++        use crate::schema::{ParamCheck, output_schema_for};
++        use serde_json::json;
++
++        let mut s = crate::Session::default();
++        s.execute("sketch.create", &json!({"plane":"XY", "name":"Curves"})).unwrap();
++        let source =
++            s.execute("sketch.spline.control_point", &json!({"points":[[0, 0], [10, 0]]})).unwrap()["curves"][0].as_str().unwrap().to_string();
++        let after = s.execute("sketch.spline.fit_point", &json!({"points":[[10, 0], [20, 0]]})).unwrap()["curves"][0].as_str().unwrap().to_string();
++        s.param_check = ParamCheck::Strict;
++        let saved = s.doc.to_json();
++        assert!(s.execute("sketch.spline.rebuild", &json!({"curve":source,"unknown":true})).is_err());
++        assert_eq!(s.doc.to_json(), saved);
++        let report =
++            s.execute("sketch.spline.rebuild", &json!({"curve":source,"degree":1,"control_points":2,"fit_samples":17,"check_samples":17})).unwrap();
++        let schema = output_schema_for::<SplineRebuildResult>();
++        assert!(conforms(schema.as_value(), schema.as_value(), &report), "{report}");
++        let report = s.execute("inspect.curve_continuity", &json!({"before":source,"after":after})).unwrap();
++        let schema = output_schema_for::<CurveContinuityResult>();
++        assert!(conforms(schema.as_value(), schema.as_value(), &report), "{report}");
++        assert_eq!(report["measured_order"], "G3");
++    }
++}
+diff --git a/crates/geom/src/lib.rs b/crates/geom/src/lib.rs
+index 0656d30..ca88b96 100644
+--- a/crates/geom/src/lib.rs
++++ b/crates/geom/src/lib.rs
+@@ -28,6 +28,7 @@ pub mod hlr;
+ mod mesh;
+ pub mod mesh_distance;
+ pub mod network;
++pub mod nurbs_curve;
+ pub mod paper;
+ mod plane;
+ mod profile;
+diff --git a/crates/geom/src/nurbs_curve.rs b/crates/geom/src/nurbs_curve.rs
+new file mode 100644
+index 0000000..cb759d5
+--- /dev/null
++++ b/crates/geom/src/nurbs_curve.rs
+@@ -0,0 +1,883 @@
++//! Editable rational curves, measured geometric joins, and bounded curve rebuilding.
++//!
++//! The basis and its derivatives come from [`crate::spline_space::Space`]. Rational derivatives
++//! follow by differentiating `A = w C` three times. Join measurements use derivatives with
++//! respect to arc length, so changing a regular curve's parameter speed does not change its
++//! geometric continuity. These are local curve measurements, not a surface-quality certificate.
++//!
++//! Rebuilding fixes both endpoints and fits the remaining control points by Householder QR least
++//! squares, without forming normal equations. Its deviation report compares sampled points to
++//! the other sampled polyline in both directions. It is an estimate, not a Hausdorff bound: a
++//! feature between samples can be missed. Long operations take a cancellation callback and
++//! enforce shared work and allocation limits before allocating their dense matrices.
++
++use crate::Vec3;
++use crate::bspline::{MAX_SPLINE_DEGREE, SplineError};
++use crate::spline_space::Space;
++
++/// Most controls accepted in one editable curve.
++pub const MAX_CURVE_CONTROLS: usize = 1024;
++/// Most independently editable pieces in a curve chain.
++pub const MAX_CHAIN_SEGMENTS: usize = 256;
++/// A curve chain's aggregate control budget, including all of its pieces.
++pub const MAX_CHAIN_CONTROLS: usize = 16_384;
++/// Dense fitting is intentionally smaller than the editable-curve limit.
++pub const MAX_REBUILD_CONTROLS: usize = 64;
++pub const MAX_FIT_SAMPLES: usize = 2049;
++pub const MAX_CHECK_SAMPLES: usize = 1025;
++/// Conservative work units for QR sweeps, basis evaluation and directed distance pairs.
++/// This is an algorithmic budget, not an instruction count or a wall-clock guarantee.
++pub const MAX_REBUILD_WORK: usize = 8_000_000;
++
++#[derive(Clone, Debug, PartialEq, thiserror::Error)]
++pub enum CurveError {
++    #[error(transparent)]
++    Spline(#[from] SplineError),
++    #[error("curve operation cancelled")]
++    Cancelled,
++}
++
++pub type CurveResult<T> = Result<T, CurveError>;
++
++fn invalid<T>(message: impl Into<String>) -> CurveResult<T> {
++    Err(SplineError::Invalid(message.into()).into())
++}
++
++fn too_large<T>(message: impl Into<String>) -> CurveResult<T> {
++    Err(SplineError::TooLarge(message.into()).into())
++}
++
++fn check_cancelled(cancelled: &impl Fn() -> bool) -> CurveResult<()> {
++    if cancelled() { Err(CurveError::Cancelled) } else { Ok(()) }
++}
++
++/// A clamped, positive-weight rational B-spline. Construction validates its private storage.
++/// Control coordinates and weights remain available for an editor; rebuilds return a new curve.
++#[derive(Clone, Debug, PartialEq)]
++pub struct NurbsCurve {
++    space: Space,
++    points: Vec<Vec3>,
++    weights: Vec<f64>,
++}
++
++impl NurbsCurve {
++    pub fn new(degree: usize, knots: Vec<f64>, points: Vec<Vec3>, weights: Vec<f64>) -> CurveResult<Self> {
++        if points.len() > MAX_CURVE_CONTROLS || weights.len() > MAX_CURVE_CONTROLS || knots.len() > MAX_CURVE_CONTROLS + MAX_SPLINE_DEGREE + 1 {
++            return too_large(format!("at most {MAX_CURVE_CONTROLS} curve controls"));
++        }
++        let space = Space::new(degree, knots)?;
++        if points.len() != space.count() || weights.len() != points.len() {
++            return invalid("one point and positive weight per basis function are required");
++        }
++        if points.iter().any(|point| !point.is_finite()) || weights.iter().any(|w| !w.is_finite() || *w <= 0.0) {
++            return invalid("curve points must be finite and weights must be finite and positive");
++        }
++        let [a, b] = space.domain();
++        if !(b - a).is_finite() {
++            return invalid("the curve's parameter range is too large");
++        }
++        let max_weight = weights.iter().copied().fold(0.0_f64, f64::max);
++        if weights.iter().any(|weight| *weight / max_weight < f64::MIN_POSITIVE) {
++            return invalid("the ratio between curve weights is too large");
++        }
++        Ok(Self { space, points, weights })
++    }
++
++    /// A non-rational curve with uniform interior knots on `[0, 1]`.
++    pub fn uniform(degree: usize, points: Vec<Vec3>) -> CurveResult<Self> {
++        let knots = uniform_knots(degree, points.len())?;
++        let weights = vec![1.0; points.len()];
++        Self::new(degree, knots, points, weights)
++    }
++
++    pub fn degree(&self) -> usize {
++        self.space.degree()
++    }
++
++    pub fn knots(&self) -> &[f64] {
++        self.space.knots()
++    }
++
++    pub fn control_points(&self) -> &[Vec3] {
++        &self.points
++    }
++
++    pub fn weights(&self) -> &[f64] {
++        &self.weights
++    }
++
++    pub fn domain(&self) -> [f64; 2] {
++        self.space.domain()
++    }
++
++    /// A validated edit, leaving this curve unchanged if the edit is refused.
++    pub fn with_control_point(&self, index: usize, point: Vec3) -> CurveResult<Self> {
++        if !point.is_finite() || index >= self.points.len() {
++            return invalid("a control edit needs a valid index and a finite point");
++        }
++        let mut edited = self.clone();
++        edited.points[index] = point;
++        Ok(edited)
++    }
++
++    /// Preserve the curve's image and parameter range, reversing its direction explicitly.
++    pub fn reversed(&self) -> CurveResult<Self> {
++        let [a, b] = self.domain();
++        // Pin the repeated domain endpoints exactly. Reflecting every knot with a+(b-k)
++        // loses b when the range is much larger than |b|, and can move an ordinary endpoint
++        // by one ulp. For interior knots subtract the distance from the nearer endpoint.
++        let knots = self
++            .knots()
++            .iter()
++            .rev()
++            .map(|k| {
++                if *k == a {
++                    b
++                } else if *k == b {
++                    a
++                } else if *k - a <= b - *k {
++                    b - (*k - a)
++                } else {
++                    a + (b - *k)
++                }
++            })
++            .collect();
++        Self::new(self.degree(), knots, self.points.iter().rev().copied().collect(), self.weights.iter().rev().copied().collect())
++    }
++
++    /// Evaluate inside the domain; extrapolation and non-finite parameters are refused.
++    pub fn eval(&self, t: f64) -> CurveResult<Vec3> {
++        Ok(self.derivatives(t, 0)?[0])
++    }
++
++    /// Analytic derivatives through order three. Interior knots use the right-hand limit;
++    /// the last endpoint uses the left-hand limit. A repeated knot may have different limits.
++    pub fn jet(&self, t: f64) -> CurveResult<CurveJet> {
++        let [point, d1, d2, d3] = self.derivatives(t, 3)?;
++        Ok(CurveJet { point, d1, d2, d3 })
++    }
++
++    fn derivatives(&self, t: f64, order: usize) -> CurveResult<[Vec3; 4]> {
++        let [a, b] = self.domain();
++        if !t.is_finite() || t < a || t > b {
++            return invalid("the curve parameter must be finite and inside its domain");
++        }
++        let (first, basis) = self.space.basis(t, 0)?;
++        let count = basis.len();
++        let weights = &self.weights[first..first + count];
++        let points = &self.points[first..first + count];
++        // First normalize the weight sum, before multiplying any coordinates. Computing x*w
++        // and only then dividing by the weight sum loses small but representable endpoints
++        // when both x and w are tiny. The normalized coefficients avoid that underflow.
++        let max_weight = weights.iter().copied().fold(0.0_f64, f64::max);
++        let weight_sum = weights.iter().zip(&basis).map(|(w, value)| (w / max_weight) * value).sum::<f64>();
++        if !(weight_sum > 0.0 && weight_sum.is_finite()) {
++            return invalid("curve evaluation has no finite positive weight");
++        }
++        let normalized_weights: Vec<f64> = weights.iter().map(|w| (w / max_weight) / weight_sum).collect();
++        if normalized_weights.iter().any(|w| !w.is_finite()) {
++            return invalid("curve evaluation needs an unrepresentable weight ratio");
++        }
++        let mut weighted = [Vec3::ZERO; 4];
++        let mut weight = [0.0; 4];
++        for der in 0..=order {
++            let values = if der == 0 { basis.clone() } else { self.space.basis(t, der)?.1 };
++            for ((point, w), value) in points.iter().zip(&normalized_weights).zip(values) {
++                let factor = w * value;
++                weighted[der] += *point * factor;
++                weight[der] += factor;
++            }
++            if !weighted[der].is_finite() || !weight[der].is_finite() {
++                return invalid("curve evaluation overflowed");
++            }
++        }
++        let mut result = [Vec3::ZERO; 4];
++        for k in 0..=order {
++            let mut numerator = weighted[k];
++            for i in 1..=k {
++                let binomial = if k == 3 && i < 3 {
++                    3.0
++                } else if k == 2 && i == 1 {
++                    2.0
++                } else {
++                    1.0
++                };
++                numerator -= result[k - i] * (binomial * weight[i]);
++            }
++            result[k] = numerator;
++            if !result[k].is_finite() {
++                return invalid("curve derivatives overflowed");
++            }
++        }
++        Ok(result)
++    }
++}
++
++fn uniform_knots(degree: usize, count: usize) -> CurveResult<Vec<f64>> {
++    if degree == 0 || degree > MAX_SPLINE_DEGREE || count <= degree {
++        return invalid(format!("a curve needs degree 1..{MAX_SPLINE_DEGREE} and more controls than its degree"));
++    }
++    if count > MAX_CURVE_CONTROLS {
++        return too_large(format!("at most {MAX_CURVE_CONTROLS} curve controls"));
++    }
++    let spans = count - degree;
++    let mut knots = vec![0.0; degree + 1];
++    knots.extend((1..spans).map(|i| i as f64 / spans as f64));
++    knots.extend(std::iter::repeat_n(1.0, degree + 1));
++    Ok(knots)
++}
++
++/// Derivatives with respect to the curve's own parameter, with no implied parameter speed.
++#[derive(Clone, Copy, Debug, PartialEq)]
++pub struct CurveJet {
++    pub point: Vec3,
++    pub d1: Vec3,
++    pub d2: Vec3,
++    pub d3: Vec3,
++}
++
++/// Geometry invariant under a regular, orientation-preserving change of curve parameter.
++#[derive(Clone, Copy, Debug, PartialEq)]
++pub struct ArcLengthJet {
++    pub point: Vec3,
++    pub tangent: Vec3,
++    /// `d²C/ds²`, in inverse millimetres, including its direction.
++    pub curvature: Vec3,
++    /// `d³C/ds³`, in inverse square millimetres. This includes curvature direction changes.
++    pub curvature_change: Vec3,
++}
++
++impl CurveJet {
++    /// Convert a regular curve jet to arc length. Zero-speed/cusp jets are unmeasurable;
++    /// they are errors, not silently classified as smooth.
++    pub fn arc_length(self) -> CurveResult<ArcLengthJet> {
++        if [self.point, self.d1, self.d2, self.d3].iter().any(|v| !v.is_finite()) {
++            return invalid("curve derivatives must be finite");
++        }
++        let speed = norm(self.d1);
++        if !(speed > 0.0 && speed.is_finite()) {
++            return invalid("geometric continuity needs a nonzero finite tangent");
++        }
++        let tangent = self.d1 / speed;
++        let acceleration = (self.d2 / speed) / speed;
++        let jerk = ((self.d3 / speed) / speed) / speed;
++        let speed_change = tangent.dot(acceleration);
++        let curvature = acceleration - tangent * speed_change;
++        // a/v² = hT + K, j/v³ = (v''/v³)T + 3hK + dK/ds,
++        // and T·dK/ds = -K·K, giving v''/v³ = T·(j/v³) + K·K.
++        let curvature_change = jerk - curvature * (3.0 * speed_change) - tangent * (tangent.dot(jerk) + curvature.dot(curvature));
++        if [tangent, curvature, curvature_change].iter().any(|v| !v.is_finite()) {
++            return invalid("arc-length derivatives are outside the finite numerical range");
++        }
++        Ok(ArcLengthJet { point: self.point, tangent, curvature, curvature_change })
++    }
++}
++
++/// The highest measured local curve order satisfying all lower-order tolerances.
++#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
++pub enum GeometricContinuity {
++    G0,
++    G1,
++    G2,
++    G3,
++}
++
++#[derive(Clone, Copy, Debug, PartialEq)]
++pub struct JoinTolerances {
++    pub gap_mm: f64,
++    pub tangent_angle_deg: f64,
++    pub curvature_per_mm: f64,
++    pub curvature_change_per_mm2: f64,
++}
++
++impl Default for JoinTolerances {
++    fn default() -> Self {
++        Self { gap_mm: 1e-6, tangent_angle_deg: 0.01, curvature_per_mm: 1e-6, curvature_change_per_mm2: 1e-6 }
++    }
++}
++
++impl JoinTolerances {
++    /// Check tolerances before preparing geometry or starting an asynchronous job.
++    pub fn validate(self) -> CurveResult<()> {
++        if [self.gap_mm, self.tangent_angle_deg, self.curvature_per_mm, self.curvature_change_per_mm2].iter().any(|v| !v.is_finite() || *v < 0.0)
++            || self.tangent_angle_deg > 180.0
++        {
++            return invalid("join tolerances must be finite and nonnegative, with angle at most 180 degrees");
++        }
++        Ok(())
++    }
++}
++
++#[derive(Clone, Copy, Debug, PartialEq)]
++pub struct JoinReport {
++    pub gap_mm: f64,
++    pub tangent_angle_deg: f64,
++    pub curvature_jump_per_mm: f64,
++    pub curvature_change_jump_per_mm2: f64,
++    /// `None` means the position tolerance failed. This is a local, tolerance-based result,
++    /// not proof of exact equality and not a Class A surface designation.
++    pub measured_order: Option<GeometricContinuity>,
++}
++
++/// Compare the end of `before` with the start of `after`, in their authored directions.
++pub fn measure_join(before: &NurbsCurve, after: &NurbsCurve, tolerances: JoinTolerances) -> CurveResult<JoinReport> {
++    tolerances.validate()?;
++    let a = before.jet(before.domain()[1])?.arc_length()?;
++    let b = after.jet(after.domain()[0])?.arc_length()?;
++    let gap_mm = norm(b.point - a.point);
++    // atan2 retains precision near both zero and 180 degrees.
++    let tangent_angle_deg = norm(a.tangent.cross(b.tangent)).atan2(a.tangent.dot(b.tangent).clamp(-1.0, 1.0)).to_degrees();
++    let curvature_jump_per_mm = norm(b.curvature - a.curvature);
++    let curvature_change_jump_per_mm2 = norm(b.curvature_change - a.curvature_change);
++    if [gap_mm, tangent_angle_deg, curvature_jump_per_mm, curvature_change_jump_per_mm2].iter().any(|x| !x.is_finite()) {
++        return invalid("join measurement overflowed");
++    }
++    let mut measured_order = None;
++    for (passes, order) in [
++        (gap_mm <= tolerances.gap_mm, GeometricContinuity::G0),
++        (tangent_angle_deg <= tolerances.tangent_angle_deg, GeometricContinuity::G1),
++        (curvature_jump_per_mm <= tolerances.curvature_per_mm, GeometricContinuity::G2),
++        (curvature_change_jump_per_mm2 <= tolerances.curvature_change_per_mm2, GeometricContinuity::G3),
++    ] {
++        if !passes {
++            break;
++        }
++        measured_order = Some(order);
++    }
++    Ok(JoinReport { gap_mm, tangent_angle_deg, curvature_jump_per_mm, curvature_change_jump_per_mm2, measured_order })
++}
++
++/// An ordered collection of independently editable rational spline pieces. No automatic
++/// reordering, reversal, welding or smoothing is performed. Gaps remain observable in reports;
++/// `closed` requests measuring the final-to-first join as well, not silently closing a gap.
++#[derive(Clone, Debug, PartialEq)]
++pub struct CurveChain {
++    segments: Vec<NurbsCurve>,
++    closed: bool,
++}
++
++#[derive(Clone, Copy, Debug, PartialEq)]
++pub struct CurveChainJoin {
++    pub before: usize,
++    pub after: usize,
++    pub report: JoinReport,
++}
++
++impl CurveChain {
++    pub fn new(segments: Vec<NurbsCurve>, closed: bool) -> CurveResult<Self> {
++        if segments.is_empty() || segments.len() > MAX_CHAIN_SEGMENTS {
++            return too_large(format!("a curve chain needs 1..{MAX_CHAIN_SEGMENTS} segments"));
++        }
++        let controls = segments.iter().map(|curve| curve.control_points().len()).sum::<usize>();
++        if controls > MAX_CHAIN_CONTROLS {
++            return too_large(format!("a curve chain has at most {MAX_CHAIN_CONTROLS} controls in total"));
++        }
++        Ok(Self { segments, closed })
++    }
++
++    pub fn segments(&self) -> &[NurbsCurve] {
++        &self.segments
++    }
++
++    pub fn is_closed(&self) -> bool {
++        self.closed
++    }
++
++    pub fn joins(&self, tolerances: JoinTolerances, cancelled: impl Fn() -> bool) -> CurveResult<Vec<CurveChainJoin>> {
++        tolerances.validate()?;
++        check_cancelled(&cancelled)?;
++        let count = self.segments.len() - usize::from(!self.closed);
++        let mut joins = Vec::with_capacity(count);
++        for before in 0..count {
++            check_cancelled(&cancelled)?;
++            let after = (before + 1) % self.segments.len();
++            let report = measure_join(&self.segments[before], &self.segments[after], tolerances)?;
++            joins.push(CurveChainJoin { before, after, report });
++        }
++        Ok(joins)
++    }
++}
++
++/// Rebuilding outputs a non-rational uniform-clamped curve on `[0, 1]`. Both endpoint positions
++/// are fixed; endpoint tangents and higher derivatives are not constrained by this operation.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub struct RebuildOptions {
++    pub degree: usize,
++    pub control_points: usize,
++    pub fit_samples: usize,
++    pub check_samples: usize,
++}
++
++impl Default for RebuildOptions {
++    fn default() -> Self {
++        Self { degree: 3, control_points: 8, fit_samples: 129, check_samples: 257 }
++    }
++}
++
++impl RebuildOptions {
++    /// Validate counts and the combined work budget before preparing source geometry.
++    pub fn validate(self) -> CurveResult<()> {
++        if self.degree == 0 || self.degree > MAX_SPLINE_DEGREE || self.control_points <= self.degree {
++            return invalid("rebuild degree must be 1..7 with more controls than the degree");
++        }
++        if self.control_points > MAX_REBUILD_CONTROLS || self.fit_samples > MAX_FIT_SAMPLES {
++            return too_large(format!("rebuild supports at most {MAX_REBUILD_CONTROLS} controls and {MAX_FIT_SAMPLES} fit samples"));
++        }
++        if self.fit_samples < self.control_points {
++            return invalid("rebuild needs at least as many fit samples as control points");
++        }
++        check_sample_count(self.check_samples)?;
++        let columns = self.control_points - 2;
++        let rows = self.fit_samples - 2;
++        // Counts above are small before multiplying. Count matrix reflection and its right-
++        // hand side, all directed distances, and every basis evaluation in sampling, assembly
++        // and residuals. The input may be a degree-seven rational curve even for a linear
++        // rebuild, so source evaluation uses the maximum supported degree here.
++        let qr_work = rows * columns * (columns + 3);
++        let check_work = 2 * self.check_samples * (self.check_samples - 1);
++        let evaluation_cost = |degree: usize| (degree + 1) * (degree * (degree + 1) / 2 + degree + 17);
++        let sampled_points = self.fit_samples + self.check_samples;
++        let basis_work = sampled_points * evaluation_cost(MAX_SPLINE_DEGREE) + (sampled_points + rows) * evaluation_cost(self.degree);
++        if qr_work + check_work + basis_work > MAX_REBUILD_WORK {
++            return too_large("the requested rebuild exceeds its combined fitting and deviation work budget");
++        }
++        Ok(())
++    }
++}
++
++#[derive(Clone, Debug, PartialEq)]
++pub struct RebuildReport {
++    pub curve: NurbsCurve,
++    /// RMS difference at matching normalized parameters of the fit samples. This is not a
++    /// closest-point geometric error; the separate deviation estimate measures that differently.
++    pub parameter_rms_mm: f64,
++    pub deviation: SampledDeviation,
++}
++
++#[derive(Clone, Copy, Debug, PartialEq)]
++pub struct SampledDeviation {
++    pub source_to_rebuilt_mm: f64,
++    pub rebuilt_to_source_mm: f64,
++    pub samples_per_curve: usize,
++}
++
++impl SampledDeviation {
++    /// The larger directed sampled point-to-polyline distance, not a guaranteed error bound.
++    pub fn max_mm(self) -> f64 {
++        self.source_to_rebuilt_mm.max(self.rebuilt_to_source_mm)
++    }
++}
++
++pub fn rebuild(source: &NurbsCurve, options: RebuildOptions, cancelled: impl Fn() -> bool) -> CurveResult<RebuildReport> {
++    options.validate()?;
++    check_cancelled(&cancelled)?;
++    let source_points = sample(source, options.fit_samples, &cancelled)?;
++    let start = source_points[0];
++    let end = source_points[source_points.len() - 1];
++    // Center and scale the right-hand side, so an ordinary shape far from the origin does not
++    // lose its useful coordinates in the fitting arithmetic.
++    let mut scale = 0.0_f64;
++    for point in &source_points {
++        let p = *point - start;
++        if !p.is_finite() {
++            return invalid("the source curve spans too large a coordinate range");
++        }
++        scale = scale.max(p.x.abs()).max(p.y.abs()).max(p.z.abs());
++    }
++    if scale == 0.0 {
++        scale = 1.0;
++    }
++    let target = Space::new(options.degree, uniform_knots(options.degree, options.control_points)?)?;
++    let columns = options.control_points - 2;
++    let rows = options.fit_samples - 2;
++    let mut matrix = vec![0.0; rows * columns];
++    let mut rhs = Vec::with_capacity(rows);
++    let end_scaled = (end - start) / scale;
++    for row in 0..rows {
++        check_cancelled(&cancelled)?;
++        let t = (row + 1) as f64 / (options.fit_samples - 1) as f64;
++        let (first, values) = target.basis(t, 0)?;
++        let mut value = (source_points[row + 1] - start) / scale;
++        for (offset, coefficient) in values.into_iter().enumerate() {
++            let index = first + offset;
++            if index == options.control_points - 1 {
++                value -= end_scaled * coefficient;
++            } else if index > 0 {
++                matrix[row * columns + index - 1] = coefficient;
++            }
++        }
++        rhs.push(value);
++    }
++    let fitted = least_squares(matrix, rhs, rows, columns, &cancelled)?;
++    let mut controls = Vec::with_capacity(options.control_points);
++    controls.push(start);
++    controls.extend(fitted.into_iter().map(|point| start + point * scale));
++    controls.push(end);
++    let curve = NurbsCurve::uniform(options.degree, controls)?;
++    let mut residual_norm = 0.0_f64;
++    for (i, point) in source_points.iter().enumerate() {
++        check_cancelled(&cancelled)?;
++        let t = i as f64 / (options.fit_samples - 1) as f64;
++        let distance = norm(curve.eval(t)? - *point);
++        residual_norm = residual_norm.hypot(distance);
++    }
++    let parameter_rms_mm = residual_norm / (options.fit_samples as f64).sqrt();
++    if !parameter_rms_mm.is_finite() {
++        return invalid("rebuild residual is outside the finite numerical range");
++    }
++    let deviation = sampled_deviation(source, &curve, options.check_samples, &cancelled)?;
++    check_cancelled(&cancelled)?;
++    Ok(RebuildReport { curve, parameter_rms_mm, deviation })
++}
++
++/// Uniform-parameter samples against the other curve's sampled polyline, in both directions.
++/// Finite sampling can miss features; neither direction is a certified Hausdorff bound.
++pub fn sampled_deviation(source: &NurbsCurve, rebuilt: &NurbsCurve, samples: usize, cancelled: impl Fn() -> bool) -> CurveResult<SampledDeviation> {
++    check_sample_count(samples)?;
++    check_cancelled(&cancelled)?;
++    let a = sample(source, samples, &cancelled)?;
++    let b = sample(rebuilt, samples, &cancelled)?;
++    let source_to_rebuilt_mm = directed_distance(&a, &b, &cancelled)?;
++    let rebuilt_to_source_mm = directed_distance(&b, &a, &cancelled)?;
++    Ok(SampledDeviation { source_to_rebuilt_mm, rebuilt_to_source_mm, samples_per_curve: samples })
++}
++
++fn check_sample_count(samples: usize) -> CurveResult<()> {
++    if !(2..=MAX_CHECK_SAMPLES).contains(&samples) {
++        return too_large(format!("deviation measurement needs 2..{MAX_CHECK_SAMPLES} samples"));
++    }
++    Ok(())
++}
++
++fn sample(curve: &NurbsCurve, count: usize, cancelled: &impl Fn() -> bool) -> CurveResult<Vec<Vec3>> {
++    let [a, b] = curve.domain();
++    let mut points = Vec::with_capacity(count);
++    for i in 0..count {
++        check_cancelled(cancelled)?;
++        let t = if i + 1 == count { b } else { a + (b - a) * (i as f64 / (count - 1) as f64) };
++        points.push(curve.eval(t)?);
++    }
++    Ok(points)
++}
++
++/// In-place QR with normalized Householder reflectors; no normal equations and no n-by-n
++/// inverse. The validated caller caps rows, columns, and their combined work before allocation.
++fn least_squares(mut matrix: Vec<f64>, mut rhs: Vec<Vec3>, rows: usize, columns: usize, cancelled: &impl Fn() -> bool) -> CurveResult<Vec<Vec3>> {
++    for column in 0..columns {
++        check_cancelled(cancelled)?;
++        let mut reflector: Vec<f64> = (column..rows).map(|row| matrix[row * columns + column]).collect();
++        let length = reflector.iter().fold(0.0_f64, |total, x| total.hypot(*x));
++        if !length.is_finite() || length <= 1e-12 {
++            return invalid("rebuild samples do not determine stable control points");
++        }
++        let alpha = -length.copysign(reflector[0]);
++        reflector[0] -= alpha;
++        let length = reflector.iter().fold(0.0_f64, |total, x| total.hypot(*x));
++        for value in &mut reflector {
++            *value /= length;
++        }
++        for target in column..columns {
++            let dot = reflector.iter().enumerate().map(|(i, v)| v * matrix[(column + i) * columns + target]).sum::<f64>();
++            for (i, value) in reflector.iter().enumerate() {
++                matrix[(column + i) * columns + target] -= 2.0 * value * dot;
++            }
++        }
++        let dot = reflector.iter().enumerate().fold(Vec3::ZERO, |acc, (i, v)| acc + rhs[column + i] * *v);
++        for (i, value) in reflector.iter().enumerate() {
++            rhs[column + i] -= dot * (2.0 * value);
++        }
++        matrix[column * columns + column] = alpha;
++    }
++    let mut answer = vec![Vec3::ZERO; columns];
++    for row in (0..columns).rev() {
++        check_cancelled(cancelled)?;
++        let mut value = rhs[row];
++        for column in row + 1..columns {
++            value -= answer[column] * matrix[row * columns + column];
++        }
++        answer[row] = value / matrix[row * columns + row];
++        if !answer[row].is_finite() {
++            return invalid("rebuild did not produce finite control points");
++        }
++    }
++    Ok(answer)
++}
++
++fn directed_distance(points: &[Vec3], polyline: &[Vec3], cancelled: &impl Fn() -> bool) -> CurveResult<f64> {
++    let mut maximum = 0.0_f64;
++    for point in points {
++        check_cancelled(cancelled)?;
++        let mut minimum = f64::INFINITY;
++        for segment in polyline.windows(2) {
++            let a = segment[0];
++            let b = segment[1];
++            let ab = b - a;
++            let length = norm(ab);
++            let nearest = if length == 0.0 {
++                a
++            } else {
++                let unit = ab / length;
++                let projection = (*point - a).dot(unit);
++                if !length.is_finite() || !projection.is_finite() {
++                    return invalid("deviation measurement spans too large a coordinate range");
++                }
++                a + unit * projection.clamp(0.0, length)
++            };
++            let distance = norm(*point - nearest);
++            if !distance.is_finite() {
++                return invalid("deviation measurement overflowed");
++            }
++            minimum = minimum.min(distance);
++        }
++        maximum = maximum.max(minimum);
++    }
++    Ok(maximum)
++}
++
++fn norm(v: Vec3) -> f64 {
++    v.x.hypot(v.y).hypot(v.z)
++}
++
++#[cfg(test)]
++#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
++mod tests {
++    use super::*;
++    use std::cell::Cell;
++
++    fn line(a: Vec3, b: Vec3) -> NurbsCurve {
++        NurbsCurve::uniform(1, vec![a, b]).unwrap()
++    }
++
++    fn quarter_circle() -> NurbsCurve {
++        NurbsCurve::new(
++            2,
++            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
++            vec![Vec3::X, Vec3::new(1.0, 1.0, 0.0), Vec3::Y],
++            vec![1.0, std::f64::consts::FRAC_1_SQRT_2, 1.0],
++        )
++        .unwrap()
++    }
++
++    fn near(a: Vec3, b: Vec3, tolerance: f64) {
++        assert!(norm(a - b) <= tolerance, "{a:?} != {b:?}");
++    }
++
++    #[test]
++    fn rational_circle_has_analytic_third_order_geometry() {
++        let circle = quarter_circle();
++        for i in 0..=40 {
++            let jet = circle.jet(f64::from(i) / 40.0).unwrap().arc_length().unwrap();
++            assert!((norm(jet.point) - 1.0).abs() < 1e-13);
++            near(jet.curvature, -jet.point, 1e-12);
++            near(jet.curvature_change, -jet.tangent, 1e-11);
++        }
++        let jet = circle.jet(0.0).unwrap();
++        near(jet.d1, Vec3::Y * std::f64::consts::SQRT_2, 1e-12);
++        near(jet.d2, Vec3::new(-2.0, 2.0 * std::f64::consts::SQRT_2 - 2.0, 0.0), 1e-12);
++        let reversed = circle.reversed().unwrap();
++        for i in 0..=16 {
++            let t = f64::from(i) / 16.0;
++            near(circle.eval(t).unwrap(), reversed.eval(1.0 - t).unwrap(), 1e-13);
++        }
++    }
++
++    #[test]
++    fn geometric_order_ignores_positive_nonlinear_parameter_changes() {
++        // The same parabola on either side of the origin. On the right, x = 2t+t² and
++        // y = (2t+t²)², so both the first and second parameter derivatives change at the join.
++        let left = NurbsCurve::uniform(2, vec![Vec3::new(-1.0, 1.0, 0.0), Vec3::new(-0.5, 0.0, 0.0), Vec3::ZERO]).unwrap();
++        let right = NurbsCurve::uniform(
++            4,
++            vec![Vec3::ZERO, Vec3::new(0.5, 0.0, 0.0), Vec3::new(7.0 / 6.0, 2.0 / 3.0, 0.0), Vec3::new(2.0, 3.0, 0.0), Vec3::new(3.0, 9.0, 0.0)],
++        )
++        .unwrap();
++        assert!(norm(left.jet(1.0).unwrap().d1 - right.jet(0.0).unwrap().d1) > 0.5);
++        let report = measure_join(&left, &right, JoinTolerances::default()).unwrap();
++        assert_eq!(report.measured_order, Some(GeometricContinuity::G3));
++        assert!(report.curvature_change_jump_per_mm2 < 1e-12, "{report:?}");
++    }
++
++    #[test]
++    fn geometric_orders_distinguish_turn_curvature_and_curvature_change() {
++        let before = line(-Vec3::X, Vec3::ZERO);
++        let turn = line(Vec3::ZERO, Vec3::Y);
++        let parabola = NurbsCurve::uniform(2, vec![Vec3::ZERO, Vec3::X * 0.5, Vec3::new(1.0, 1.0, 0.0)]).unwrap();
++        let cubic = NurbsCurve::uniform(3, vec![Vec3::ZERO, Vec3::X / 3.0, Vec3::X * (2.0 / 3.0), Vec3::new(1.0, 1.0, 0.0)]).unwrap();
++        let straight = line(Vec3::ZERO, Vec3::X * 2.0);
++        for (after, order) in [
++            (&turn, GeometricContinuity::G0),
++            (&parabola, GeometricContinuity::G1),
++            (&cubic, GeometricContinuity::G2),
++            (&straight, GeometricContinuity::G3),
++        ] {
++            assert_eq!(measure_join(&before, after, JoinTolerances::default()).unwrap().measured_order, Some(order));
++        }
++        let gap = line(Vec3::X, Vec3::X * 2.0);
++        assert_eq!(measure_join(&before, &gap, JoinTolerances::default()).unwrap().measured_order, None);
++        let reversed = straight.reversed().unwrap();
++        assert!(measure_join(&straight, &reversed, JoinTolerances::default()).unwrap().tangent_angle_deg > 179.9);
++        let point = line(Vec3::ZERO, Vec3::ZERO);
++        assert!(measure_join(&before, &point, JoinTolerances::default()).is_err());
++    }
++
++    #[test]
++    fn curve_chain_preserves_authored_order_and_reports_closure_gap() {
++        let pieces = vec![line(Vec3::ZERO, Vec3::X), line(Vec3::X, Vec3::X * 2.0)];
++        let open = CurveChain::new(pieces.clone(), false).unwrap();
++        let closed = CurveChain::new(pieces, true).unwrap();
++        let joins = open.joins(JoinTolerances::default(), || false).unwrap();
++        assert_eq!(joins.len(), 1);
++        assert_eq!(joins[0].report.measured_order, Some(GeometricContinuity::G3));
++        let joins = closed.joins(JoinTolerances::default(), || false).unwrap();
++        assert_eq!(joins.len(), 2);
++        assert_eq!((joins[1].before, joins[1].after), (1, 0));
++        assert_eq!(joins[1].report.gap_mm, 2.0);
++        assert_eq!(joins[1].report.measured_order, None);
++        assert!(matches!(closed.joins(JoinTolerances::default(), || true), Err(CurveError::Cancelled)));
++    }
++
++    #[test]
++    fn rebuild_reproduces_cubic_and_keeps_endpoints_exact() {
++        let source = NurbsCurve::uniform(
++            3,
++            vec![Vec3::new(1000.0, 20.0, 3.0), Vec3::new(1010.0, 40.0, 5.0), Vec3::new(1020.0, -10.0, 7.0), Vec3::new(1030.0, 0.0, 9.0)],
++        )
++        .unwrap();
++        let report =
++            rebuild(&source, RebuildOptions { control_points: 4, fit_samples: 65, check_samples: 65, ..RebuildOptions::default() }, || false)
++                .unwrap();
++        assert_eq!(report.curve.eval(0.0).unwrap(), source.eval(0.0).unwrap());
++        assert_eq!(report.curve.eval(1.0).unwrap(), source.eval(1.0).unwrap());
++        assert!(report.parameter_rms_mm < 1e-10, "{report:?}");
++        assert!(report.deviation.max_mm() < 1e-10);
++        for (a, b) in report.curve.control_points().iter().zip(source.control_points()) {
++            near(*a, *b, 1e-10);
++        }
++    }
++
++    #[test]
++    fn more_controls_improve_rational_curve_fit_without_certifying_error() {
++        let source = quarter_circle();
++        let options = RebuildOptions { fit_samples: 129, check_samples: 257, ..RebuildOptions::default() };
++        let coarse = rebuild(&source, RebuildOptions { control_points: 4, ..options }, || false).unwrap();
++        let fine = rebuild(&source, options, || false).unwrap();
++        assert!(fine.parameter_rms_mm < coarse.parameter_rms_mm * 0.1, "{} vs {}", fine.parameter_rms_mm, coarse.parameter_rms_mm);
++        assert!(fine.deviation.max_mm() < 0.001, "{:?}", fine.deviation);
++        assert_eq!(fine.deviation.samples_per_curve, 257);
++        assert!(fine.curve.weights().iter().all(|w| *w == 1.0));
++        assert_eq!(fine.curve.control_points().first(), source.control_points().first());
++        assert_eq!(fine.curve.control_points().last(), source.control_points().last());
++    }
++
++    #[test]
++    fn two_way_deviation_detects_bulge_and_ignores_line_parameter_speed() {
++        let straight = line(Vec3::ZERO, Vec3::X);
++        let bulge = NurbsCurve::uniform(2, vec![Vec3::ZERO, Vec3::new(0.5, 1.0, 0.0), Vec3::X]).unwrap();
++        let report = sampled_deviation(&straight, &bulge, 65, || false).unwrap();
++        assert!(report.source_to_rebuilt_mm > 0.3);
++        assert!((report.rebuilt_to_source_mm - 0.5).abs() < 1e-12);
++        let rational_line = NurbsCurve::new(1, vec![0.0, 0.0, 1.0, 1.0], vec![Vec3::ZERO, Vec3::X], vec![1.0, 8.0]).unwrap();
++        let report = rebuild(&rational_line, RebuildOptions { degree: 1, control_points: 2, fit_samples: 33, check_samples: 33 }, || false).unwrap();
++        assert!(report.parameter_rms_mm > 0.1);
++        assert!(report.deviation.max_mm() < 1e-12);
++    }
++
++    #[test]
++    fn reversing_preserves_exact_domains_and_endpoint_geometry() {
++        for [a, b] in [[-1e16, 1.0], [-0.1, 0.2], [1e16, 1e16 + 8.0]] {
++            let original = NurbsCurve::new(1, vec![a, a, b, b], vec![Vec3::ZERO, Vec3::X], vec![1.0; 2]).unwrap();
++            let reversed = original.reversed().unwrap();
++            assert_eq!(reversed.domain(), [a, b]);
++            assert_eq!(reversed.knots(), original.knots());
++            near(reversed.eval(a).unwrap(), original.eval(b).unwrap(), 1e-14);
++            near(reversed.eval(b).unwrap(), original.eval(a).unwrap(), 1e-14);
++            assert_eq!(reversed.reversed().unwrap(), original);
++        }
++        let original = NurbsCurve::new(1, vec![-0.1, -0.1, 0.0, 0.2, 0.2], vec![Vec3::ZERO, Vec3::Y, Vec3::X], vec![1.0; 3]).unwrap();
++        let reversed = original.reversed().unwrap();
++        assert_eq!(reversed.domain(), original.domain());
++        for index in 0..=20 {
++            let t = -0.1 + 0.3 * f64::from(index) / 20.0;
++            near(original.eval(t).unwrap(), reversed.eval(0.1 - t).unwrap(), 1e-14);
++        }
++    }
++
++    #[test]
++    fn tiny_weighted_endpoints_do_not_silently_underflow() {
++        let curve = NurbsCurve::new(1, vec![0.0, 0.0, 1.0, 1.0], vec![Vec3::X * 1e-100, Vec3::X], vec![f64::MIN_POSITIVE, 1.0]).unwrap();
++        assert_eq!(curve.eval(0.0).unwrap(), curve.control_points()[0]);
++        assert_eq!(curve.eval(1.0).unwrap(), curve.control_points()[1]);
++        // The position is representable but third derivatives at this endpoint are not.
++        assert!(curve.jet(0.0).is_err());
++        let curve = NurbsCurve::new(1, vec![0.0, 0.0, 1.0, 1.0], vec![Vec3::X * 1e-230, Vec3::X], vec![1e-100, 1.0]).unwrap();
++        assert_eq!(curve.eval(0.0).unwrap(), curve.control_points()[0]);
++        assert_eq!(curve.jet(0.0).unwrap().point, curve.eval(0.0).unwrap());
++    }
++
++    #[test]
++    fn bounded_operations_cancel_before_or_during_their_work() {
++        let source = quarter_circle();
++        assert!(matches!(rebuild(&source, RebuildOptions::default(), || true), Err(CurveError::Cancelled)));
++        let checks = Cell::new(0);
++        let result = rebuild(&source, RebuildOptions::default(), || {
++            checks.set(checks.get() + 1);
++            checks.get() > 20
++        });
++        assert!(matches!(result, Err(CurveError::Cancelled)));
++        let checks = Cell::new(0);
++        let result = least_squares(vec![1.0, 0.0, 0.0, 1.0, 1.0, 1.0], vec![Vec3::X; 3], 3, 2, &|| {
++            checks.set(checks.get() + 1);
++            checks.get() > 1
++        });
++        assert!(matches!(result, Err(CurveError::Cancelled)));
++        let checks = Cell::new(0);
++        let result = sampled_deviation(&source, &source, 65, || {
++            checks.set(checks.get() + 1);
++            checks.get() > 140
++        });
++        assert!(matches!(result, Err(CurveError::Cancelled)));
++    }
++
++    #[test]
++    fn hostile_geometry_and_work_requests_are_refused_without_mutation() {
++        let source = quarter_circle();
++        let original = source.clone();
++        assert!(source.with_control_point(usize::MAX, Vec3::ZERO).is_err());
++        assert!(source.with_control_point(0, Vec3::new(f64::NAN, 0.0, 0.0)).is_err());
++        assert_eq!(source, original);
++        assert!(source.eval(f64::NAN).is_err());
++        assert!(source.jet(1.001).is_err());
++        assert!(NurbsCurve::uniform(usize::MAX, vec![Vec3::ZERO; 2]).is_err());
++        assert!(NurbsCurve::uniform(1, vec![Vec3::ZERO; MAX_CURVE_CONTROLS + 1]).is_err());
++        for weights in [vec![0.0, 1.0], vec![-1.0, 1.0], vec![f64::INFINITY, 1.0], vec![f64::MIN_POSITIVE, f64::MAX]] {
++            assert!(NurbsCurve::new(1, vec![0.0, 0.0, 1.0, 1.0], vec![Vec3::ZERO, Vec3::X], weights).is_err());
++        }
++        assert!(NurbsCurve::new(1, vec![-f64::MAX, -f64::MAX, f64::MAX, f64::MAX], vec![Vec3::ZERO, Vec3::X], vec![1.0; 2]).is_err());
++        let tiny_domain =
++            NurbsCurve::new(1, vec![0.0, 0.0, f64::MIN_POSITIVE, f64::MIN_POSITIVE], vec![Vec3::ZERO, Vec3::X * 4.0], vec![1.0; 2]).unwrap();
++        assert!(tiny_domain.jet(0.0).is_err());
++        for options in [
++            RebuildOptions { degree: usize::MAX, ..RebuildOptions::default() },
++            RebuildOptions { control_points: usize::MAX, ..RebuildOptions::default() },
++            RebuildOptions { fit_samples: usize::MAX, ..RebuildOptions::default() },
++            RebuildOptions { check_samples: usize::MAX, ..RebuildOptions::default() },
++            RebuildOptions { fit_samples: 3, ..RebuildOptions::default() },
++            // QR and distance pairs alone fit the budget; basis evaluation pushes it over.
++            RebuildOptions { degree: 7, control_points: 53, fit_samples: 2049, check_samples: 1025 },
++            RebuildOptions {
++                control_points: MAX_REBUILD_CONTROLS,
++                fit_samples: MAX_FIT_SAMPLES,
++                check_samples: MAX_CHECK_SAMPLES,
++                ..RebuildOptions::default()
++            },
++        ] {
++            assert!(rebuild(&source, options, || false).is_err());
++        }
++        assert!(sampled_deviation(&source, &source, 1, || false).is_err());
++        assert!(measure_join(&source, &source, JoinTolerances { gap_mm: f64::NAN, ..JoinTolerances::default() }).is_err());
++        assert!(CurveChain::new(Vec::new(), false).is_err());
++        assert!(CurveChain::new(vec![source.clone(); MAX_CHAIN_SEGMENTS + 1], false).is_err());
++        let large = NurbsCurve::uniform(1, vec![Vec3::ZERO; MAX_CURVE_CONTROLS]).unwrap();
++        assert!(CurveChain::new(vec![large; MAX_CHAIN_CONTROLS / MAX_CURVE_CONTROLS + 1], false).is_err());
++    }
++}
+diff --git a/crates/kernel/src/fair.rs b/crates/kernel/src/fair.rs
+index 95bbfa5..7d192ba 100644
+--- a/crates/kernel/src/fair.rs
++++ b/crates/kernel/src/fair.rs
+@@ -49,6 +49,7 @@ use truck_modeling as mt;
+ 
+ use crate::body::Body;
+ use crate::history::Change;
++use crate::watch::checkpoint;
+ use crate::{KernelError, Result, guard};
+ 
+ /// Most steps one fairing run takes (see [`FairOptions::iterations`]).
+@@ -212,6 +213,7 @@ impl Gram {
+     /// The Gram matrices of `count` basis functions of `degree` over `knots`, for orders 0, 1 and
+     /// 2 — the derivatives a thin-plate energy is built from.
+     fn new(degree: usize, knots: &[f64], count: usize) -> Result<Gram> {
++        checkpoint("fair")?;
+         let bw = degree;
+         let mut g: [Vec<f64>; 3] = std::array::from_fn(|_| vec![0.0; count * (bw + 1)]);
+         // On the span `[knots[s], knots[s + 1])` only the basis functions `i ∈ [s − degree, s]`
+@@ -219,6 +221,7 @@ impl Gram {
+         // limit gives the same value there.
+         let mut ders = [[0.0f64; 3]; MAX_SPLINE_DEGREE + 1];
+         for s in degree..count {
++            checkpoint("fair")?;
+             let (Some(&a), Some(&b)) = (knots.get(s), knots.get(s + 1)) else { continue };
+             if !(b > a) {
+                 continue;
+@@ -335,12 +338,15 @@ impl<'a, const N: usize> Net<'a, N> {
+ 
+     /// The fairness energy `Pᵀ·G·P` of the net `ctrl` (u fastest) and, in `grad`, `G·P`. One
+     /// banded sweep gives both, since `E = Σ Pₚ·(G·P)ₚ`.
+-    fn energy_gradient(&self, ctrl: &[[f64; N]], grad: &mut [[f64; N]]) -> f64 {
++    fn energy_gradient(&self, ctrl: &[[f64; N]], grad: &mut [[f64; N]]) -> Result<f64> {
+         let [cu, cv] = self.count();
+         let (pu, pv) = (self.degree[0], self.degree[1]);
+         let mut energy = 0.0;
+         for j in 0..cv {
+             for i in 0..cu {
++                if i % 64 == 0 {
++                    checkpoint("fair")?;
++                }
+                 let mut acc = [0.0f64; N];
+                 for &(ru, rv, w) in self.terms {
+                     for l in j.saturating_sub(pv)..=(j + pv).min(cv - 1) {
+@@ -366,7 +372,7 @@ impl<'a, const N: usize> Net<'a, N> {
+                 }
+             }
+         }
+-        energy
++        Ok(energy)
+     }
+ 
+     /// The energy matrix `G` over the interior control points, banded and already factorised (the
+@@ -379,6 +385,7 @@ impl<'a, const N: usize> Net<'a, N> {
+         let rows = if cv > 1 { interior.rows.saturating_sub(1).min(pv) } else { 0 };
+         let mut band = Band::new(interior.points.len(), pu + rows * interior.cols)?;
+         for (r, &at) in interior.points.iter().enumerate() {
++            checkpoint("fair")?;
+             let (i, j) = (at % cu, at / cu);
+             for &(ru, rv, w) in self.terms {
+                 for l in j.saturating_sub(pv)..=(j + pv).min(cv - 1) {
+@@ -395,6 +402,7 @@ impl<'a, const N: usize> Net<'a, N> {
+     /// Fair the net with checked `opts`: see the module docs. The result is the input with the
+     /// interior control points moved; the held ones are bit-identical.
+     fn fair(&self, opts: &FairOptions) -> Result<(Grid<[f64; N]>, FairReport)> {
++        checkpoint("fair")?;
+         let ctrl = self.ctrl.cells();
+         if ctrl.iter().flatten().any(|x| !x.is_finite()) {
+             return Err(KernelError::Invalid("a control point is not a finite number".into()));
+@@ -403,7 +411,7 @@ impl<'a, const N: usize> Net<'a, N> {
+         let system = self.system(&interior)?;
+         let mut current = self.ctrl.clone();
+         let mut grad = vec![[0.0; N]; self.total()];
+-        let energy_before = self.energy_gradient(ctrl, &mut grad);
++        let energy_before = self.energy_gradient(ctrl, &mut grad)?;
+         if !energy_before.is_finite() {
+             return Err(KernelError::Invalid("the fairness energy of this net is not a finite number".into()));
+         }
+@@ -416,7 +424,8 @@ impl<'a, const N: usize> Net<'a, N> {
+         let mut b = vec![0.0; interior.points.len()];
+         let mut report = FairReport { energy_before, energy_after: energy_before, steps: 0, movement: 0.0, energy_trace: Vec::new() };
+         for _ in 0..opts.iterations {
+-            let e_now = self.energy_gradient(current.cells(), &mut grad);
++            checkpoint("fair")?;
++            let e_now = self.energy_gradient(current.cells(), &mut grad)?;
+             if !e_now.is_finite() {
+                 break;
+             }
+@@ -450,8 +459,9 @@ impl<'a, const N: usize> Net<'a, N> {
+             }
+             let mut taken = false;
+             for _ in 0..MAX_HALVINGS {
++                checkpoint("fair")?;
+                 let candidate = interior.apply(&current, &step, s);
+-                let e = self.energy_gradient(candidate.cells(), &mut grad);
++                let e = self.energy_gradient(candidate.cells(), &mut grad)?;
+                 if e < e_now {
+                     current = candidate;
+                     report.steps += 1;
+@@ -472,6 +482,7 @@ impl<'a, const N: usize> Net<'a, N> {
+         }
+         report.energy_after = report.energy_trace.last().copied().unwrap_or(energy_before);
+         report.movement = interior.movement(ctrl, current.cells());
++        checkpoint("fair")?;
+         Ok((current, report))
+     }
+ }
+@@ -640,6 +651,7 @@ impl Band {
+             *v /= scale;
+         }
+         for r in 0..n {
++            checkpoint("fair")?;
+             let mut d = self.get(r, r);
+             for k in r.saturating_sub(bw)..r {
+                 let u = self.get(k, r);
+@@ -674,6 +686,7 @@ impl Band {
+         }
+         // Uᵀ·y = b, then U·x = y.
+         for r in 0..n {
++            checkpoint("fair")?;
+             let mut v = b.get(r).copied().unwrap_or(0.0);
+             for k in r.saturating_sub(bw)..r {
+                 v -= self.get(k, r) * b.get(k).copied().unwrap_or(0.0);
+@@ -683,6 +696,7 @@ impl Band {
+             }
+         }
+         for r in (0..n).rev() {
++            checkpoint("fair")?;
+             let mut v = b.get(r).copied().unwrap_or(0.0);
+             for s in r + 1..(r + bw + 1).min(n) {
+                 v -= self.get(r, s) * b.get(s).copied().unwrap_or(0.0);
+@@ -703,6 +717,7 @@ impl Band {
+ /// bending energy `∫‖C″‖² dt` in the curve's own parameter (see the module docs). `N` is 3 for a
+ /// wire in space, 2 for a sketch curve.
+ pub fn fair_curve<const N: usize>(degree: usize, knots: &[f64], ctrl: &[[f64; N]], opts: &FairOptions) -> Result<FairCurve<N>> {
++    checkpoint("fair")?;
+     let opts = opts.checked()?;
+     let row = Grid::row(ctrl.to_vec());
+     let (faired, report) = Net::new([degree, 0], [knots.to_vec(), TRIVIAL_KNOTS.to_vec()], &row, &CURVE_ENERGY)?.fair(&opts)?;
+@@ -715,6 +730,7 @@ pub fn fair_curve<const N: usize>(degree: usize, knots: &[f64], ctrl: &[[f64; N]
+ /// [`fair_surface`], [`fair_bspline_surface`] and their rational counterparts, for a caller with
+ /// its own control net.
+ pub fn fair_net<const N: usize>(degree: [usize; 2], knots: [&[f64]; 2], ctrl: &Grid<[f64; N]>, opts: &FairOptions) -> Result<FairNet<N>> {
++    checkpoint("fair")?;
+     let opts = opts.checked()?;
+     let (faired, report) = Net::new(degree, [knots[0].to_vec(), knots[1].to_vec()], ctrl, &SURFACE_ENERGY)?.fair(&opts)?;
+     Ok(FairNet { degree, knots: [knots[0].to_vec(), knots[1].to_vec()], ctrl: faired, report })
+@@ -842,6 +858,7 @@ pub fn fair_nurbs_surface(surface: &mt::NurbsSurface<mt::Vector4>, opts: &FairOp
+ /// control point, and the energy trace as the sum at each step (a face that stops early keeps its
+ /// last energy for the steps the others still take).
+ pub fn fair_faces(body: &Body, faces: &[usize], opts: &FairOptions) -> Result<(Body, FairReport)> {
++    checkpoint("fair")?;
+     let opts = opts.checked()?;
+     body.require_brep("fair")?;
+     let all: Vec<mt::Face> = body.solid.face_iter().cloned().collect();
+@@ -850,6 +867,7 @@ pub fn fair_faces(body: &Body, faces: &[usize], opts: &FairOptions) -> Result<(B
+     }
+     let mut picked: Vec<usize> = Vec::new();
+     for &i in faces {
++        checkpoint("fair")?;
+         if i >= all.len() {
+             return Err(KernelError::Invalid(format!("no face {i}: the body has {}", all.len())));
+         }
+@@ -864,6 +882,7 @@ pub fn fair_faces(body: &Body, faces: &[usize], opts: &FairOptions) -> Result<(B
+         let mut faired = all.clone();
+         let mut reports: Vec<FairReport> = Vec::with_capacity(picked.len());
+         for &i in &picked {
++            checkpoint("fair")?;
+             let Some(face) = all.get(i) else { continue };
+             let (surface, report) = match face.surface() {
+                 mt::Surface::BSplineSurface(s) => {
+@@ -904,6 +923,7 @@ pub fn fair_faces(body: &Body, faces: &[usize], opts: &FairOptions) -> Result<(B
+         let mut shells: Vec<mt::Shell> = Vec::with_capacity(body.solid.boundaries().len());
+         let mut index = 0usize;
+         for shell in body.solid.boundaries() {
++            checkpoint("fair")?;
+             let mut shell_faces = Vec::with_capacity(shell.face_iter().count());
+             for f in shell.face_iter() {
+                 let i = index;
+@@ -924,6 +944,7 @@ pub fn fair_faces(body: &Body, faces: &[usize], opts: &FairOptions) -> Result<(B
+         let faces: Vec<crate::history::FaceProv> =
+             (0..all.len()).map(|i| crate::record::from_face(0, i, if picked.contains(&i) { Change::Modified } else { Change::Kept })).collect();
+         let result = crate::record::attach(result, &[crate::record::Operand::new(body)], Some(faces), std::collections::HashMap::new())?;
++        checkpoint("fair")?;
+         Ok((result, report))
+     })
+ }
+@@ -1487,6 +1508,41 @@ mod tests {
+         assert!(fair_faces(&body, &[], &FairOptions::new(1.0, 1, false, 1.0).unwrap()).is_err(), "no face picked");
+     }
+ 
++    #[test]
++    fn cancellation_during_fairing_returns_no_partial_net() {
++        use std::sync::Arc;
++        use std::sync::atomic::{AtomicUsize, Ordering};
++
++        struct StopAfter {
++            checks: AtomicUsize,
++            limit: usize,
++        }
++        impl crate::watch::Watch for StopAfter {
++            fn cancelled(&self) -> bool {
++                self.checks.fetch_add(1, Ordering::Relaxed) >= self.limit
++            }
++            fn progress(&self, _: &'static str, _: usize, _: usize) {}
++        }
++        let knots = clamped(8, 3);
++        let mut controls = affine_curve(&knots, 3, [0.0, 0.0, 0.0], [1.0, 0.0, 0.0]);
++        controls[4][1] = 3.0;
++        controls[5][2] = -2.0;
++        let original = controls.clone();
++        let options = FairOptions::new(0.3, 20, true, 10.0).unwrap();
++        let completed = Arc::new(StopAfter { checks: AtomicUsize::new(0), limit: usize::MAX });
++        let expected = crate::watch::watching(completed.clone(), || fair_curve(3, &knots, &controls, &options)).unwrap();
++        let checks = completed.checks.load(Ordering::Relaxed);
++        assert!(checks > 40, "the long solve must contain internal cancellation checks");
++        let limit = checks / 2;
++        let stop = Arc::new(StopAfter { checks: AtomicUsize::new(0), limit });
++        let error = crate::watch::watching(stop.clone(), || fair_curve(3, &knots, &controls, &options)).unwrap_err();
++        assert!(error.to_string().contains("cancelled"), "{error}");
++        assert_eq!(stop.checks.load(Ordering::Relaxed), limit + 1, "stop at the next checkpoint");
++        assert_eq!(controls, original, "cancellation cannot modify the source net");
++        let retry = fair_curve(3, &knots, &controls, &options).unwrap();
++        assert_eq!(retry.ctrl, expected.ctrl, "no partial or cancelled result is cached");
++    }
++
+     #[test]
+     fn an_already_fair_curve_is_left_where_it_is() {
+         // Zero bending energy, no reason to move: nothing churns, and an input at the minimum
+diff --git a/crates/kernel/src/lib.rs b/crates/kernel/src/lib.rs
+index 25e8013..22f6ff6 100644
+--- a/crates/kernel/src/lib.rs
++++ b/crates/kernel/src/lib.rs
+@@ -186,7 +186,7 @@ pub use iges_in::{MAX_IGES_BYTES, iges_import, iges_to_step};
+ pub use iges_out::iges_export_bodies;
+ pub use lip::{raise_band, rim_band};
+ pub use loft_blend::loft_blend;
+-pub use matchsurf::{match_surface, seam_continuity};
++pub use matchsurf::{match_surface, seam_continuity, seam_continuity_with_tolerance};
+ pub use measure::{BodyMeasure, MassMeasure, measure, measure_mass};
+ pub use mesh_convert::convert_prismatic_mesh;
+ pub use meshbody::{MAX_TRIANGLES, mesh_body};
+diff --git a/crates/kernel/src/matchsurf.rs b/crates/kernel/src/matchsurf.rs
+index 8134ea3..d944d3d 100644
+--- a/crates/kernel/src/matchsurf.rs
++++ b/crates/kernel/src/matchsurf.rs
+@@ -24,6 +24,7 @@ use crate::body::{Body, from_p3, p3};
+ use crate::bridge::{self, Continuity, Frame};
+ use crate::record::Rebuild;
+ use crate::surfaces::surface_body;
++use crate::watch::checkpoint;
+ use crate::{KernelError, Result, guard};
+ 
+ /// Stations a match reads along the seam and along the boundary it keeps.
+@@ -63,6 +64,7 @@ const SUPPLY_BEND_REL: f64 = 1e-1;
+ /// opposite keeps its place and the original surface's own frame, and the middle is shaped to
+ /// stay as close to the original surface as the conditions allow.
+ pub fn match_surface(body: &Body, faces: &[Vec3], target: &Body, target_pick: &[Vec3], order: Continuity) -> Result<Body> {
++    checkpoint("surface match")?;
+     body.require_brep("match")?;
+     target.require_brep("match")?;
+     if !body.is_surface() {
+@@ -108,6 +110,7 @@ pub fn match_surface(body: &Body, faces: &[Vec3], target: &Body, target_pick: &[
+         let mut best: Option<(f64, mt::Face)> = None;
+         for crown_near in CROWNS {
+             for crown_far in CROWNS {
++                checkpoint("surface match")?;
+                 let made = bridge::bridge(&near_frames, &far_frames, [order, Continuity::G1], [crown_near, crown_far])?;
+                 let Some(made) = made.solid.face_iter().next().cloned() else {
+                     return Err(KernelError::Failed("match: the bridge made no face".into()));
+@@ -132,15 +135,35 @@ pub fn match_surface(body: &Body, faces: &[Vec3], target: &Body, target_pick: &[
+         }
+         let mut rec = Rebuild::default();
+         rec.face(&kept, &face);
+-        Ok(crate::record::rebuilt_body(surface_body(vec![kept]), &[&body.solid, &target.solid], &rec))
++        checkpoint("surface match")?;
++        let result = crate::record::rebuilt_body(surface_body(vec![kept]), &[&body.solid, &target.solid], &rec);
++        checkpoint("surface match")?;
++        Ok(result)
+     })
+ }
+ 
+ /// How well the rebuilt surface `made` meets `target` along the chain picked by `target_pick`:
+ /// the worst distance from the seam to that chain, the worst angle between the two surfaces'
+-/// normals across it (degrees), and the highest continuity the seam holds
+-/// ([`Continuity::G0`] when even the normals disagree).
+-pub fn seam_continuity(made: &Body, target: &Body, target_pick: &[Vec3]) -> Result<(f64, f64, Continuity)> {
++/// normals across it (degrees), and the highest continuity the sampled seam holds. The default
++/// position tolerance is 0.000001 mm. `None` means position failed, so no G0–G3 label is valid.
++/// Use [`seam_continuity_with_tolerance`] to choose a different position tolerance explicitly.
++pub fn seam_continuity(made: &Body, target: &Body, target_pick: &[Vec3]) -> Result<(f64, f64, Option<Continuity>)> {
++    seam_continuity_with_tolerance(made, target, target_pick, 1e-6)
++}
++
++/// The same sampled seam inspection with an explicit finite, nonnegative position tolerance
++/// in millimetres. G1–G3 require passing G0 first. Distance is measured against a sampled edge
++/// polyline, and derivatives use finite samples; the result is not a global quality proof.
++pub fn seam_continuity_with_tolerance(
++    made: &Body,
++    target: &Body,
++    target_pick: &[Vec3],
++    gap_tolerance_mm: f64,
++) -> Result<(f64, f64, Option<Continuity>)> {
++    if !gap_tolerance_mm.is_finite() || gap_tolerance_mm < 0.0 {
++        return Err(KernelError::Invalid("the seam position tolerance must be finite and nonnegative".into()));
++    }
++    checkpoint("surface match")?;
+     made.require_brep("match")?;
+     target.require_brep("match")?;
+     let chain = bridge::chain(target, target_pick)?;
+@@ -168,38 +191,48 @@ pub fn seam_continuity(made: &Body, target: &Body, target_pick: &[Vec3]) -> Resu
+     };
+     let frames = bridge::frames(target_face, &chain, leave, STATIONS)?;
+     let size = target.size();
++    if !size.is_finite() || size <= 0.0 {
++        return Err(KernelError::Invalid("the target must have a finite positive size".into()));
++    }
+     guard("surface match", || {
+         let surf = face.surface();
+         let (mut gap, mut deg, mut curv, mut bend) = (0.0f64, 0.0f64, 0.0f64, 0.0f64);
+         for i in 0..STATIONS {
++            checkpoint("surface match")?;
+             let t = i as f64 / (STATIONS - 1) as f64;
+             let p = Side::at(&surf, &ranges, near, t);
+-            gap = gap.max(chain_distance(&poly, p));
++            let point_gap = chain_distance(&poly, p)?;
+             // What the target says there, and what the rebuilt surface actually does there.
+             let Some(frame) = frames.iter().min_by(|a, b| a.p.dist(p).total_cmp(&b.p.dist(p))) else {
+                 return Err(KernelError::Failed("match: the target has no frames".into()));
+             };
+             let (_, t_made, bend_made, change_made) = seam_shape(&surf, &ranges, near, t)?;
+-            if let Some((n_made, _)) = normal_near(&face, p)
+-                && let Some((n_target, _)) = normal_near(target_face, p)
+-            {
+-                deg = deg.max(angle_deg(n_made, n_target));
+-            }
++            let (n_made, _) = normal_near(&face, p).ok_or_else(|| KernelError::Failed("match: a seam station has no source normal".into()))?;
++            let (n_target, _) =
++                normal_near(target_face, p).ok_or_else(|| KernelError::Failed("match: a seam station has no target normal".into()))?;
++            let point_angle = angle_deg(n_made, n_target);
+             let scale = frame.bend.len().max(bend_made.len()).max(1.0 / size);
+-            curv = curv.max((bend_made - frame.bend).len() / scale);
++            let point_curvature = (bend_made - frame.bend).len() / scale;
+             // The change of curvature is what a surface can hold: only its normal part counts,
+             // and it turns round with the direction of travel.
+             let change = if t_made.dot(frame.leave) < 0.0 { change_made * -1.0 } else { change_made };
+             let scale3 = frame.bend_change.len().max(change.len()).max(scale / size);
+-            bend = bend.max((change - frame.bend_change).len() / scale3);
++            let point_change = (change - frame.bend_change).len() / scale3;
++            if ![point_gap, point_angle, point_curvature, point_change].into_iter().all(f64::is_finite) {
++                return Err(KernelError::Failed("match: a seam measurement is not finite".into()));
++            }
++            gap = gap.max(point_gap);
++            deg = deg.max(point_angle);
++            curv = curv.max(point_curvature);
++            bend = bend.max(point_change);
+         }
+-        let mut order = Continuity::G0;
+-        if deg <= G1_DEG {
+-            order = Continuity::G1;
++        let mut order = (gap <= gap_tolerance_mm).then_some(Continuity::G0);
++        if order.is_some() && deg <= G1_DEG {
++            order = Some(Continuity::G1);
+             if curv <= G2_REL {
+-                order = Continuity::G2;
++                order = Some(Continuity::G2);
+                 if bend <= G3_REL {
+-                    order = Continuity::G3;
++                    order = Some(Continuity::G3);
+                 }
+             }
+         }
+@@ -294,11 +327,17 @@ fn face_near(body: &Body, picks: &[Vec3]) -> Result<mt::Face> {
+     let tol = body.size() * 0.05 + 1e-6;
+     let mut found: Option<mt::Face> = None;
+     for p in picks {
+-        let hit = body
+-            .solid
+-            .face_iter()
+-            .filter_map(|f| face_distance(f, *p).map(|d| (d, f)))
+-            .min_by(|a, b| a.0.total_cmp(&b.0))
++        checkpoint("surface match")?;
++        let mut nearest: Option<(f64, &mt::Face)> = None;
++        for face in body.solid.face_iter() {
++            checkpoint("surface match")?;
++            if let Some(distance) = face_distance(face, *p)
++                && nearest.is_none_or(|(best, _)| distance.total_cmp(&best).is_lt())
++            {
++                nearest = Some((distance, face));
++            }
++        }
++        let hit = nearest
+             .filter(|(d, _)| *d <= tol)
+             .map(|(_, f)| f.clone())
+             .ok_or_else(|| KernelError::Invalid(format!("no face of the body passes through {p:?}")))?;
+@@ -317,6 +356,7 @@ fn chain_polyline(chain: &[mt::Edge]) -> Result<Vec<Vec3>> {
+     }
+     let mut out = Vec::with_capacity(chain.len() * (PER_EDGE + 1));
+     for e in chain {
++        checkpoint("surface match")?;
+         let c = e.curve();
+         let (t0, t1) = c.range_tuple();
+         if !(t1 > t0) || ![t0, t1].into_iter().all(f64::is_finite) {
+@@ -334,7 +374,10 @@ fn chain_mid(chain: &[mt::Edge]) -> Result<Vec3> {
+     let poly = chain_polyline(chain)?;
+     let mut cum = Vec::with_capacity(poly.len());
+     cum.push(0.0);
+-    for w in poly.windows(2) {
++    for (index, w) in poly.windows(2).enumerate() {
++        if index % 256 == 0 {
++            checkpoint("surface match")?;
++        }
+         let (Some(a), Some(b)) = (w.first(), w.get(1)) else { continue };
+         let Some(last) = cum.last().copied() else { break };
+         cum.push(last + a.dist(*b));
+@@ -357,15 +400,18 @@ fn chain_mid(chain: &[mt::Edge]) -> Result<Vec3> {
+ }
+ 
+ /// How far `p` is from a polyline.
+-fn chain_distance(poly: &[Vec3], p: Vec3) -> f64 {
++fn chain_distance(poly: &[Vec3], p: Vec3) -> Result<f64> {
+     let mut best = f64::INFINITY;
+-    for w in poly.windows(2) {
++    for (index, w) in poly.windows(2).enumerate() {
++        if index % 256 == 0 {
++            checkpoint("surface match")?;
++        }
+         let (Some(a), Some(b)) = (w.first(), w.get(1)) else { continue };
+         let d = b.dist(*a);
+         let t = if d > 1e-12 { ((p - *a).dot(*b - *a) / (d * d)).clamp(0.0, 1.0) } else { 0.0 };
+         best = best.min(p.dist(*a + (*b - *a) * t));
+     }
+-    best
++    Ok(best)
+ }
+ 
+ /// The side of the face's own parameter rectangle the picked chain sits nearest.
+@@ -379,8 +425,9 @@ fn nearest_side(face: &mt::Face, chain: &[mt::Edge]) -> Result<Side> {
+     for side in Side::ALL {
+         let mut total = 0.0;
+         for k in 0..SAMPLES {
++            checkpoint("surface match")?;
+             let t = k as f64 / (SAMPLES - 1) as f64;
+-            total += chain_distance(&poly, Side::at(&surf, &ranges, side, t));
++            total += chain_distance(&poly, Side::at(&surf, &ranges, side, t))?;
+         }
+         let mean = total / SAMPLES as f64;
+         if best.is_none_or(|(b, _)| mean < b) {
+@@ -399,6 +446,7 @@ fn side_edges(face: &mt::Face, side: Side, tol: f64) -> Result<Vec<mt::Edge>> {
+     let band = (along.1 - along.0).abs().max(1e-12) * 1e-3;
+     let mut pool: Vec<mt::Edge> = Vec::new();
+     for e in face.edge_iter() {
++        checkpoint("surface match")?;
+         let c = e.curve();
+         let (t0, t1) = c.range_tuple();
+         let p = from_p3(c.subs(0.5 * (t0 + t1)));
+@@ -421,6 +469,7 @@ fn side_edges(face: &mt::Face, side: Side, tol: f64) -> Result<Vec<mt::Edge>> {
+         None => return Err(KernelError::Failed("match: chain".into())),
+     };
+     while let Some(k) = pool.iter().position(|e| e.front().id() == end.id() || e.back().id() == end.id()) {
++        checkpoint("surface match")?;
+         let e = pool.remove(k);
+         let e = if e.front().id() == end.id() { e } else { e.inverse() };
+         end = e.back().clone();
+@@ -431,6 +480,7 @@ fn side_edges(face: &mt::Face, side: Side, tol: f64) -> Result<Vec<mt::Edge>> {
+         None => return Err(KernelError::Failed("match: chain".into())),
+     };
+     while let Some(k) = pool.iter().position(|e| e.front().id() == start.id() || e.back().id() == start.id()) {
++        checkpoint("surface match")?;
+         let e = pool.remove(k);
+         let e = if e.back().id() == start.id() { e } else { e.inverse() };
+         start = e.front().clone();
+@@ -449,7 +499,16 @@ fn support_faces(target: &Body, chain: &[mt::Edge], leave: Vec3) -> Result<Vec<(
+     let tol = target.size() * 1e-6 + 1e-9;
+     let mut out: Vec<(mt::Face, f64)> = Vec::new();
+     for face in target.solid.face_iter() {
+-        if !chain.iter().all(|e| face.edge_iter().any(|f| f.id() == e.id())) {
++        checkpoint("surface match")?;
++        let mut holds_chain = true;
++        for edge in chain {
++            checkpoint("surface match")?;
++            if !face.edge_iter().any(|candidate| candidate.id() == edge.id()) {
++                holds_chain = false;
++                break;
++            }
++        }
++        if !holds_chain {
+             continue;
+         }
+         let Some((n, d)) = normal_near(face, mid) else { continue };
+@@ -485,6 +544,7 @@ fn supply_order(candidates: &[(mt::Face, f64)], chain: &[mt::Edge], leave: Vec3,
+     }
+     let primary: Vec<Frame> = bridge::frames(first, chain, leave, STATIONS)?;
+     for other in keep.iter().skip(1) {
++        checkpoint("surface match")?;
+         // A face that cannot be read along the whole chain says nothing here: the face the match
+         // is built on is the one that must be able to supply it.
+         let Ok(other_frames) = bridge::frames(other, chain, leave, STATIONS) else { continue };
+@@ -492,6 +552,7 @@ fn supply_order(candidates: &[(mt::Face, f64)], chain: &[mt::Edge], leave: Vec3,
+         let mut worst = 0.0f64;
+         let mut worst_change = 0.0f64;
+         for (a, b) in primary.iter().zip(&other_frames) {
++            checkpoint("surface match")?;
+             if let (Some((na, _)), Some((nb, _))) = (normal_near(first, a.p), normal_near(other, b.p)) {
+                 worst_deg = worst_deg.max(angle_deg(na, nb));
+             }
+@@ -579,6 +640,7 @@ fn deviation(made: &mt::Face, original: &mt::Face) -> Result<f64> {
+     let mut n = 0usize;
+     for i in 0..GRID {
+         for j in 0..GRID {
++            checkpoint("surface match")?;
+             let u = ranges[0].0 + (ranges[0].1 - ranges[0].0) * i as f64 / (GRID - 1) as f64;
+             let v = ranges[1].0 + (ranges[1].1 - ranges[1].0) * j as f64 / (GRID - 1) as f64;
+             let q = from_p3(surf.subs(u, v));
+diff --git a/crates/kernel/src/matchsurf_tests.rs b/crates/kernel/src/matchsurf_tests.rs
+index f99066b..5875b80 100644
+--- a/crates/kernel/src/matchsurf_tests.rs
++++ b/crates/kernel/src/matchsurf_tests.rs
+@@ -81,7 +81,7 @@ fn far_drift(made: &Body, sheet: &Body, far_mid: Vec3) -> f64 {
+     let mut worst = 0.0f64;
+     for k in 0..=8 {
+         let p = from_p3(surf.subs(u0 + (u1 - u0) * k as f64 / 8.0, v1));
+-        worst = worst.max(chain_distance(&poly, p));
++        worst = worst.max(chain_distance(&poly, p).unwrap());
+     }
+     worst
+ }
+@@ -111,7 +111,7 @@ fn a_g2_match_meets_a_cylinder_with_its_own_curvature() {
+     println!("g2: gap {gap:e} mm, normal {deg:e} deg, order {order:?}");
+     assert!(gap < 1e-6, "position gap {gap:e}");
+     assert!(deg < 0.01, "normal angle {deg}");
+-    assert!(order.conditions() >= Continuity::G2.conditions(), "{order:?}");
++    assert!(order.is_some_and(|order| order.conditions() >= Continuity::G2.conditions()), "{order:?}");
+     // The curvature the cylinder bends with along the seam: matched to a thousandth of itself.
+     let want = radial(SEAM_ANGLE) * (-1.0 / R_TARGET);
+     let mut worst = 0.0f64;
+@@ -145,7 +145,7 @@ fn a_g1_match_holds_the_tangent_and_leaves_the_curvature_free() {
+     let worst = stations().into_iter().map(|t| seam_at(&made, t).2.dist(want) * R_TARGET).fold(0.0f64, f64::max);
+     println!("g1: gap {gap:e} mm, normal {deg:e} deg, order {order:?}, curvature jump {worst:e}");
+     assert!(gap < 1e-6 && deg < 0.01, "position {gap:e}, normal {deg}");
+-    assert_eq!(order, Continuity::G1, "a tangent match leaves the curvature free");
++    assert_eq!(order, Some(Continuity::G1), "a tangent match leaves the curvature free");
+     assert!(worst > 1e-3, "a G1 match need not hold the curvature: {worst:e}");
+     // The far boundary is kept whatever the order.
+     let far = at(SEAM_ANGLE + SPAN, R_SHEET, HEIGHT * 0.5);
+@@ -169,13 +169,63 @@ fn a_g3_match_holds_the_change_of_curvature() {
+     }
+     println!("g3: gap {gap:e} mm, normal {deg:e} deg, order {order:?}, curvature jump {bend:e}, change {change:e}");
+     assert!(gap < 1e-6 && deg < 0.01, "position {gap:e}, normal {deg}");
+-    assert_eq!(order, Continuity::G3, "the seam holds the change of curvature");
++    assert_eq!(order, Some(Continuity::G3), "the seam holds the change of curvature");
+     assert!(bend < 1e-3, "curvature jump {bend:e}");
+     assert!(change < 1e-3, "change of curvature {change:e}");
+     let far = at(SEAM_ANGLE + SPAN, R_SHEET, HEIGHT * 0.5);
+     assert!(far_drift(&made, &sheet, far) < 1e-9);
+ }
+ 
++#[test]
++fn cancellation_during_matching_leaves_the_source_surface_intact() {
++    use std::sync::Arc;
++    use std::sync::atomic::{AtomicUsize, Ordering};
++
++    struct StopAfter(AtomicUsize);
++    impl crate::watch::Watch for StopAfter {
++        fn cancelled(&self) -> bool {
++            self.0.fetch_add(1, Ordering::Relaxed) >= 300
++        }
++        fn progress(&self, _: &'static str, _: usize, _: usize) {}
++    }
++    let (target, picks) = cylinder_and_picks();
++    let (sheet, face) = sheet_and_pick();
++    let source = sheet.solid.clone();
++    let stop = Arc::new(StopAfter(AtomicUsize::new(0)));
++    let error = crate::watch::watching(stop.clone(), || match_surface(&sheet, &face, &target, &picks, Continuity::G3)).unwrap_err();
++    assert!(error.to_string().contains("cancelled"), "{error}");
++    assert_eq!(stop.0.load(Ordering::Relaxed), 301, "stop at the next checkpoint");
++    assert!(Arc::ptr_eq(&source, &sheet.solid));
++    let made = match_surface(&sheet, &face, &target, &picks, Continuity::G3).unwrap();
++    let (gap, angle, order) = seam_continuity(&made, &target, &picks).unwrap();
++    assert!(gap < 1e-6 && angle < 0.05);
++    assert_eq!(order, Some(Continuity::G3));
++}
++
++#[test]
++fn separated_parallel_planes_fail_g0_before_any_higher_order_is_reported() {
++    let plane = |z: f64| {
++        let side = |x: f64, direction: f64| {
++            [0.0, 10.0].map(|y| Frame { p: Vec3::new(x, y, z), leave: Vec3::new(direction, 0.0, 0.0), bend: Vec3::ZERO, bend_change: Vec3::ZERO })
++        };
++        bridge::bridge(&side(0.0, 1.0), &side(10.0, -1.0), [Continuity::G1, Continuity::G1], [0.0, 0.0]).unwrap()
++    };
++    let target = plane(0.0);
++    let separated = plane(1.0);
++    let picks = [Vec3::new(0.0, 2.0, 0.0), Vec3::new(0.0, 8.0, 0.0)];
++    let (gap, angle, order) = seam_continuity(&separated, &target, &picks).unwrap();
++    assert!((gap - 1.0).abs() < 1e-9);
++    assert!(angle < G1_DEG);
++    assert_eq!(order, None, "parallel normals cannot hide a failed position tolerance");
++    let (_, _, relaxed) = seam_continuity_with_tolerance(&separated, &target, &picks, 1.1).unwrap();
++    assert!(relaxed.is_some(), "only an explicit looser tolerance can accept this gap");
++    let (_, _, joined) = seam_continuity(&target, &target, &picks).unwrap();
++    assert!(joined.is_some());
++    for tolerance in [-1.0, f64::NAN, f64::INFINITY] {
++        assert!(seam_continuity_with_tolerance(&separated, &target, &picks, tolerance).is_err());
++    }
++}
++
+ #[test]
+ fn a_match_refuses_what_it_cannot_hold() {
+     let (target, picks) = cylinder_and_picks();
+diff --git a/crates/kernel/src/watch.rs b/crates/kernel/src/watch.rs
+index 97f96fb..c220f3a 100644
+--- a/crates/kernel/src/watch.rs
++++ b/crates/kernel/src/watch.rs
+@@ -38,6 +38,12 @@ pub fn current() -> Option<Arc<dyn Watch>> {
+     CURRENT.with(|c| c.borrow().clone())
+ }
+ 
++/// Stop cooperative kernel work before its next bounded batch. A cloned watch keeps callbacks
++/// outside the thread-local borrow, so a caller's watcher can safely inspect its own context.
++pub(crate) fn checkpoint(what: &str) -> crate::Result<()> {
++    if current().is_some_and(|watch| watch.cancelled()) { Err(cancelled_error(what)) } else { Ok(()) }
++}
++
+ /// The error long work returns when its watch cancelled it.
+ pub(crate) fn cancelled_error(what: &str) -> crate::KernelError {
+     crate::KernelError::Failed(format!("{what} cancelled"))
+diff --git a/crates/ui-egui/src/dialogs.rs b/crates/ui-egui/src/dialogs.rs
+index 0a0c53f..9e80d9a 100644
+--- a/crates/ui-egui/src/dialogs.rs
++++ b/crates/ui-egui/src/dialogs.rs
+@@ -2803,6 +2803,7 @@ pub(crate) fn card_width(d: &Dialog) -> f32 {
+ pub(crate) fn action_labels(kind: &Kind) -> (&'static str, &'static str) {
+     match kind {
+         Kind::Measure { .. } => ("", "Close"),
++        Kind::SketchModify(crate::sketch_modify_ui::Mod::CurveContinuity { .. }) => ("", "Close"),
+         Kind::ConfirmDelete { .. } => ("Delete", "Cancel"),
+         Kind::SaveMesh(k) => (crate::dialogs_save_mesh::button(k), "Cancel"),
+         Kind::ViewDxf { .. } => ("Export DXF…", "Cancel"),
+diff --git a/crates/ui-egui/src/dialogs_dense.rs b/crates/ui-egui/src/dialogs_dense.rs
+index d77d28e..9975654 100644
+--- a/crates/ui-egui/src/dialogs_dense.rs
++++ b/crates/ui-egui/src/dialogs_dense.rs
+@@ -60,6 +60,8 @@ pub(super) fn command(kind: &Kind) -> Option<&'static str> {
+             crate::dialogs_surface::Surf::Blend { .. } => "surface.blend",
+             crate::dialogs_surface::Surf::Boundary { .. } => "surface.boundary",
+             crate::dialogs_surface::Surf::Patch { .. } => "surface.patch",
++            crate::dialogs_surface::Surf::Match { .. } => "surface.match",
++            crate::dialogs_surface::Surf::Fair { .. } => "surface.fair",
+             crate::dialogs_surface::Surf::Unstitch => "surface.unstitch",
+             crate::dialogs_surface::Surf::ReverseNormal => "surface.reverse_normal",
+             crate::dialogs_surface::Surf::Ruled { .. } => "surface.ruled",
+@@ -212,7 +214,10 @@ pub(super) fn rows(app: &mut SolveApp, ctx: &egui::Context, d: &mut Dialog, ui:
+                 }
+             }
+         }
+-        Kind::SketchModify(k) => enter |= crate::sketch_modify_ui::rows(ui, k, &app.session.doc),
++        Kind::SketchModify(k) => {
++            enter |= crate::sketch_modify_ui::rows(ui, k, &app.session.doc);
++            crate::sketch_modify_ui::quality_report(app, ui, k, &d.inputs, &d.extra);
++        }
+         Kind::Text(k) => enter |= crate::sketch_text::rows(ui, k, &mut d.inputs, &mut d.active),
+         Kind::TextMove(k) => enter |= crate::sketch_text_move::rows(ui, k),
+         Kind::EditParam { name, expr } => {
+diff --git a/crates/ui-egui/src/dialogs_surface.rs b/crates/ui-egui/src/dialogs_surface.rs
+index fa2fbad..d926883 100644
+--- a/crates/ui-egui/src/dialogs_surface.rs
++++ b/crates/ui-egui/src/dialogs_surface.rs
+@@ -1,8 +1,9 @@
+ //! Dialogs for the surface tools and face splitting (#19): Surface Extrude, Revolve, Sweep and
+-//! Loft, Offset and Ruled Surface, Blend and Boundary Surface, Patch, Stitch, Thicken, Extend, Trim, Untrim
++//! Loft, Offset and Ruled Surface, Blend and Boundary Surface, Match, Fair, Patch, Stitch, Thicken, Extend, Trim, Untrim
+ //! and Split Face. Each has a live preview and Edit Feature.
+ 
+ use crate::dialogs::put;
++use crate::i18n::tr;
+ use crate::ui_kit::{choice_row, expr_row, hint_row};
+ use serde_json::{Map, Value, json};
+ use solidcraft_engine::Sel;
+@@ -77,6 +78,18 @@ crate::dialog_descriptor::dialog_descriptors! {
+             Patch {
+                 continuity: usize,
+             },
++            /// The G1, G2 or G3 boundary conditions sent to the existing surface matcher.
++            Match {
++                continuity: usize,
++            },
++            /// Smooth the selected B-spline faces within a maximum control-point displacement.
++            /// An empty tolerance lets the engine choose a value from the body's size.
++            Fair {
++                strength: f64,
++                iterations: u32,
++                tolerance: String,
++                keep_edges: bool,
++            },
+             Unstitch,
+             ReverseNormal,
+             /// `mode`: an index into [`RULED_MODES`].
+@@ -114,6 +127,8 @@ impl Surf {
+             Surf::Blend { .. } => "BLEND SURFACE",
+             Surf::Boundary { .. } => "BOUNDARY SURFACE",
+             Surf::Patch { .. } => "PATCH",
++            Surf::Match { .. } => tr("ui.surface.match.title"),
++            Surf::Fair { .. } => tr("ui.surface.fair.title"),
+             Surf::Unstitch => "UNSTITCH",
+             Surf::ReverseNormal => "REVERSE NORMAL",
+             Surf::Ruled { .. } => "RULED SURFACE",
+@@ -145,6 +160,9 @@ const PATCH_CONTINUITY: [(&str, &str); 3] = [("Position (G0)", "g0"), ("Tangent
+ const BLEND_CONTINUITY: [(&str, &str); 4] =
+     [("Position (G0)", "g0"), ("Tangent (G1)", "g1"), ("Curvature (G2)", "g2"), ("Curvature change (G3)", "g3")];
+ 
++/// Match always holds position; its selectable orders add tangent, curvature and curvature change.
++const MATCH_CONTINUITY: [(&str, &str); 3] = [("ui.surface.match.g1", "g1"), ("ui.surface.match.g2", "g2"), ("ui.surface.match.g3", "g3")];
++
+ /// What a boundary surface becomes: a body of its own, or part of the body of its edges.
+ const BOUNDARY_OPS: [&str; 2] = ["New Body", "Join"];
+ 
+@@ -178,6 +196,10 @@ fn inputs(k: &Surf) -> Vec<SelInput> {
+         Surf::Blend { .. } => vec![SelInput::new("From edges", EDGES, true), SelInput::new("To edges", EDGES, true)],
+         Surf::Boundary { .. } => vec![SelInput::new("Curves", CURVES | EDGES, true), SelInput::new("Cross curves", CURVES | EDGES, true)],
+         Surf::Patch { .. } => vec![SelInput::new("Boundary", PROFILES | EDGES, true), SelInput::new("Pass through", VERTICES | FACES, true)],
++        Surf::Match { .. } => {
++            vec![SelInput::new(tr("ui.surface.source"), BODIES | FACES, true), SelInput::new(tr("ui.surface.target_edges"), EDGES, true)]
++        }
++        Surf::Fair { .. } => vec![SelInput::new(tr("ui.surface.source"), BODIES | FACES, true)],
+         Surf::Unstitch => vec![SelInput::new("Body, or faces to take out", BODIES | FACES, true)],
+         Surf::ReverseNormal => vec![SelInput::new("Surface, or faces to turn over", BODIES | FACES, true)],
+         Surf::Ruled { .. } => {
+@@ -206,6 +228,8 @@ pub fn start(app: &SolveApp, id: &str) -> Option<(Kind, Vec<SelInput>)> {
+         "surface.blend" => Surf::Blend { continuity: [1, 1], bulge: [0.0, 0.0], stitch: false },
+         "surface.boundary" => Surf::Boundary { continuity: 1, join: false },
+         "surface.patch" => Surf::Patch { continuity: 0 },
++        "surface.match" => Surf::Match { continuity: 1 },
++        "surface.fair" => Surf::Fair { strength: 1.0, iterations: 1, tolerance: String::new(), keep_edges: true },
+         "surface.unstitch" => Surf::Unstitch,
+         "surface.reverse_normal" => Surf::ReverseNormal,
+         "surface.ruled" => {
+@@ -279,6 +303,21 @@ pub fn rows(ui: &mut egui::Ui, k: &mut Surf) -> bool {
+                 ui_kit::segmented(ui, continuity, &PATCH_CONTINUITY.map(|(label, _)| label), Default::default());
+             });
+         }
++        Surf::Match { continuity } => {
++            choice_row(ui, tr("ui.surface.match.continuity"), "surface_match_order", continuity, &MATCH_CONTINUITY.map(|(label, _)| tr(label)));
++            ui.small(tr("ui.surface.match.hint"));
++        }
++        Surf::Fair { strength, iterations, tolerance, keep_edges } => {
++            form_row(ui, tr("ui.surface.fair.strength"), |ui| {
++                ui_kit::scalar_field(ui, strength, f64::from_bits(1)..=1.0);
++            });
++            form_row(ui, tr("ui.surface.fair.iterations"), |ui| {
++                ui_kit::number_field(ui, iterations, 1..=1000, 1.0, "");
++            });
++            enter |= hint_row(ui, "Tolerance", tolerance, tr("ui.surface.fair.auto_tolerance"));
++            ui_kit::options(ui, "surface_fair_options", &mut [(tr("ui.surface.fair.keep_edges"), keep_edges)]);
++            ui.small(tr("ui.surface.fair.hint"));
++        }
+         Surf::Blend { continuity, bulge, stitch } => {
+             let [from, to] = continuity;
+             let [from_bulge, to_bulge] = bulge;
+@@ -341,6 +380,21 @@ fn body_and_edges(picks: &[Sel]) -> Result<(String, Vec<Value>), String> {
+     Ok((body, edges))
+ }
+ 
++/// UI automation can supply picks too. Refuse oversized or non-finite coordinates before JSON
++/// converts a non-finite number to null and the engine could discard that intended selection.
++fn finite_surface_picks(picks: &[Sel], limit: usize) -> Result<(), String> {
++    if picks.len() > limit {
++        return Err(tr("ui.surface.too_many_picks").into());
++    }
++    if picks.iter().any(|pick| match pick {
++        Sel::Face { point, .. } | Sel::Edge { point, .. } => !point.is_finite(),
++        _ => false,
++    }) {
++        return Err(tr("ui.surface.invalid_pick").into());
++    }
++    Ok(())
++}
++
+ /// The sketch, profiles and curves of a surface builder's picks (all in one sketch).
+ fn sheet_picks(app: &SolveApp, picks: &[Sel]) -> Result<Value, String> {
+     let profiles: Vec<(u64, usize)> = picks.profiles();
+@@ -480,6 +534,9 @@ fn chains(app: &SolveApp, picks: &[Sel]) -> Result<Vec<Chain>, String> {
+ 
+ /// The command a surface dialog makes.
+ pub fn commands(app: &SolveApp, k: &Surf, inputs: &[SelInput], extra: &Map<String, Value>) -> Result<Vec<(String, Value)>, String> {
++    if cfg!(target_arch = "wasm32") && matches!(k, Surf::Match { .. } | Surf::Fair { .. }) {
++        return Err(tr("curve_quality.desktop_required").into());
++    }
+     let need = |i: usize, what: &str| if items(inputs, i).is_empty() { Err(format!("select {what} first")) } else { Ok(()) };
+     let (cmd, mut p) = match k {
+         Surf::Extrude { distance, direction } => {
+@@ -564,6 +621,39 @@ pub fn commands(app: &SolveApp, k: &Surf, inputs: &[SelInput], extra: &Map<Strin
+             }
+             ("surface.blend", p)
+         }
++        Surf::Match { continuity } => {
++            need(0, tr("ui.surface.source"))?;
++            need(1, tr("ui.surface.target_edges"))?;
++            finite_surface_picks(items(inputs, 0), 64)?;
++            finite_surface_picks(items(inputs, 1), 10_000)?;
++            let (body, faces) = body_and_faces(items(inputs, 0))?;
++            let (target, edges) = body_and_edges(items(inputs, 1))?;
++            if body == target {
++                return Err(tr("ui.surface.match.same_body").into());
++            }
++            let order = MATCH_CONTINUITY.get(*continuity).ok_or_else(|| tr("ui.surface.match.invalid_order").to_string())?.1;
++            ("surface.match", json!({"body": body, "faces": faces, "target": target, "edges": edges, "order": order}))
++        }
++        Surf::Fair { strength, iterations, tolerance, keep_edges } => {
++            need(0, tr("ui.surface.source"))?;
++            finite_surface_picks(items(inputs, 0), 10_000)?;
++            let (body, faces) = body_and_faces(items(inputs, 0))?;
++            if !strength.is_finite() || *strength <= 0.0 || *strength > 1.0 {
++                return Err(tr("ui.surface.fair.invalid_strength").into());
++            }
++            if !(1..=1000).contains(iterations) {
++                return Err(tr("ui.surface.fair.invalid_iterations").into());
++            }
++            let mut p = json!({"body": body, "faces": faces, "strength": strength, "iterations": iterations, "keep_edges": keep_edges});
++            if !tolerance.trim().is_empty() {
++                let value = crate::length_input::eval(&app.session.doc, tolerance, ValueKind::Length).map_err(|e| e.to_string())?;
++                if !value.is_finite() || value <= 0.0 {
++                    return Err(tr("ui.surface.fair.invalid_tolerance").into());
++                }
++                p["tolerance"] = json!(tolerance);
++            }
++            ("surface.fair", p)
++        }
+         Surf::Boundary { continuity, join } => {
+             need(0, "the curves (sketch curves or edges)")?;
+             let word = PATCH_CONTINUITY.get(*continuity).map_or("g0", |(_, w)| *w);
+@@ -802,12 +892,69 @@ fn tool_sel(app: &SolveApp, plane: &PlaneRef, tool: Option<&FaceAt>) -> Option<S
+     }
+ }
+ 
++/// Restore picks within their stored body. Coincident faces on another body must not silently
++/// become Match's source or target when a feature is opened for editing.
++fn stored_faces(app: &SolveApp, body: &str, faces: &[solidcraft_engine::doc::FacePick], frame: &Mat) -> Option<Vec<Sel>> {
++    let state = app.session.world_state();
++    let model = state.body(body)?;
++    if faces.is_empty() {
++        return Some(vec![Sel::Body { name: body.into() }]);
++    }
++    let frame = stored_body_frame(app, body, frame);
++    faces
++        .iter()
++        .map(|pick| {
++            let point = solidcraft_engine::doc::apply_point(&frame, pick.0);
++            let index = solidcraft_engine::doc::appearance::face_index_at(model, point)?;
++            Some(Sel::Face { body: body.into(), index, point })
++        })
++        .collect()
++}
++
++fn stored_edges(app: &SolveApp, body: &str, edges: &[Position], frame: &Mat) -> Option<Vec<Sel>> {
++    let state = app.session.world_state();
++    let model = state.body(body)?;
++    let mesh = model.mesh();
++    let frame = stored_body_frame(app, body, frame);
++    edges
++        .iter()
++        .map(|pick| {
++            let point = solidcraft_engine::doc::apply_point(&frame, pick.0);
++            let (index, distance) = mesh
++                .edges
++                .iter()
++                .enumerate()
++                .map(|(index, line)| {
++                    let distance = line.windows(2).map(|pair| point.dist_to_segment(pair[0], pair[1])).fold(f64::INFINITY, f64::min);
++                    (index, distance)
++                })
++                .min_by(|(_, a), (_, b)| a.total_cmp(b))?;
++            (distance <= model.display_tol() + 1e-6 * point.len()).then(|| Sel::Edge { body: body.into(), index, point })
++        })
++        .collect()
++}
++
++/// A target may belong to a different component from the matched feature. Its own placement
++/// moves its stored edge points; applying the source's frame would select unrelated geometry.
++fn stored_body_frame(app: &SolveApp, body: &str, fallback: &Mat) -> Mat {
++    let state = app.session.model.state();
++    app.session.doc.body_frames(&state).into_iter().find(|(name, _, _, _)| name == body).map_or(*fallback, |(_, _, _, frame)| frame)
++}
++
+ /// The dialog for editing a surface feature.
+ /// `frame` maps the feature's component frame to the world, for an axis stored as a line.
+ pub fn for_feature(app: &SolveApp, kind: &FeatureKind, frame: &Mat) -> Option<(Kind, Vec<SelInput>, Map<String, Value>)> {
+     let s = &app.session;
+     let edge = |p: &solidcraft_engine::doc::Position| crate::dialogs::edge_sel(s, p.0);
+     let (k, fill): (Surf, Vec<Vec<Sel>>) = match kind {
++        FeatureKind::SurfaceMatch { body, faces, target, edges, order } => (
++            Surf::Match { continuity: MATCH_CONTINUITY.iter().position(|(_, word)| *word == order.as_str())? },
++            vec![stored_faces(app, body, faces, frame)?, stored_edges(app, target, edges, frame)?],
++        ),
++        FeatureKind::SurfaceFair { body, faces, strength, iterations, tolerance, keep_edges } => (
++            Surf::Fair { strength: *strength, iterations: *iterations, tolerance: tolerance.to_string(), keep_edges: *keep_edges },
++            vec![stored_faces(app, body, faces, frame)?],
++        ),
+         FeatureKind::SurfaceRevolve { sketch, profiles, curves, axis, angle, angle2, symmetric } => {
+             let (pick, stored) = match axis {
+                 AxisRef::World { axis } => (Some(Sel::Axis { name: axis.to_ascii_uppercase() }), None),
+@@ -1090,3 +1237,7 @@ pub fn for_feature(app: &SolveApp, kind: &FeatureKind, frame: &Mat) -> Option<(K
+     }
+     Some((Kind::Surface(k), ins, Map::new()))
+ }
++
++#[cfg(test)]
++#[path = "surface_quality_dialog_tests.rs"]
++mod quality_tests;
+diff --git a/crates/ui-egui/src/extrude_preview.rs b/crates/ui-egui/src/extrude_preview.rs
+index 227daa4..c0185c2 100644
+--- a/crates/ui-egui/src/extrude_preview.rs
++++ b/crates/ui-egui/src/extrude_preview.rs
+@@ -148,6 +148,7 @@ impl StraightPreview {
+             sketches: Vec::new(),
+             applied: None,
+             stopped: None,
++            curve_quality: None,
+             tapered: Vec::new(),
+             replaced: Vec::new(),
+             error: crate::preview::extrusion_target_error(&app.session, commands, &app.session.model.state()),
+diff --git a/crates/ui-egui/src/length_input.rs b/crates/ui-egui/src/length_input.rs
+index 1fbd7e0..52d5c4c 100644
+--- a/crates/ui-egui/src/length_input.rs
++++ b/crates/ui-egui/src/length_input.rs
+@@ -125,7 +125,7 @@ pub(crate) fn fields<'a>(doc: &Document, kind: &'a mut crate::dialogs::Kind) ->
+                 vec![distance]
+             }
+             Surf::Thicken { thickness, .. } => vec![thickness],
+-            Surf::Stitch { tolerance } => vec![tolerance],
++            Surf::Stitch { tolerance } | Surf::Fair { tolerance, .. } => vec![tolerance],
+             _ => vec![],
+         },
+         D::Sheet(k) => match k {
+diff --git a/crates/ui-egui/src/move_preview.rs b/crates/ui-egui/src/move_preview.rs
+index f66ba78..9e4a63c 100644
+--- a/crates/ui-egui/src/move_preview.rs
++++ b/crates/ui-egui/src/move_preview.rs
+@@ -111,6 +111,7 @@ impl MovePreview {
+             sketches: Vec::new(),
+             applied: None,
+             stopped: None,
++            curve_quality: None,
+             tapered: Vec::new(),
+             replaced: if copy { Vec::new() } else { bodies },
+             error: None,
+diff --git a/crates/ui-egui/src/preview.rs b/crates/ui-egui/src/preview.rs
+index be5ffd4..0dd7f85 100644
+--- a/crates/ui-egui/src/preview.rs
++++ b/crates/ui-egui/src/preview.rs
+@@ -78,6 +78,8 @@ pub struct Built {
+     /// The reply of a previewed drive that stopped short of the asked values (the dialog says
+     /// where and why, in the UI's language).
+     pub stopped: Option<serde_json::Value>,
++    /// Rebuild and curve-join measurements produced by this exact preview job.
++    pub curve_quality: Option<serde_json::Value>,
+ }
+ 
+ type Job = Result<Built, String>;
+@@ -123,6 +125,8 @@ pub struct PreviewState {
+     pub applied: Option<(f64, f64)>,
+     /// The reply of a previewed drive that stopped short (see [`Built::stopped`]).
+     pub stopped: Option<serde_json::Value>,
++    /// Report for the current curve preview; hidden while its input is being recomputed.
++    pub curve_quality: Option<serde_json::Value>,
+     /// The radius splines the previewed fillet tapered its edges with.
+     pub tapered: Vec<(Vec3, solidcraft_engine::kernel::Taper)>,
+     straight: crate::extrude_preview::StraightPreview,
+@@ -157,6 +161,7 @@ impl PreviewState {
+         self.error = None;
+         self.applied = None;
+         self.stopped = None;
++        self.curve_quality = None;
+         self.tapered.clear();
+         self.sketches.clear();
+         self.busy = false;
+@@ -193,6 +198,7 @@ impl PreviewState {
+                 self.error = b.error;
+                 self.applied = b.applied;
+                 self.stopped = b.stopped;
++                self.curve_quality = b.curve_quality;
+                 self.tapered = b.tapered;
+                 self.set_scene(b.scene);
+             }
+@@ -204,6 +210,7 @@ impl PreviewState {
+                 self.error = Some(e);
+                 self.applied = None;
+                 self.stopped = None;
++                self.curve_quality = None;
+                 self.tapered.clear();
+             }
+         }
+@@ -215,6 +222,7 @@ impl PreviewState {
+         if self.shown_key != Some(key) {
+             self.sketches.clear();
+             self.error = None;
++            self.curve_quality = None;
+         }
+         if let Some((k, rx)) = &self.running {
+             let k = *k;
+@@ -406,6 +414,16 @@ fn job_key(cmds: &[(String, Value)], revision: u64, colors: Colors) -> u64 {
+     h.finish()
+ }
+ 
++/// Read a quality report only for the exact edited fields, even in the same frame that a
++/// field changed and before `update` has started the replacement worker.
++pub(crate) fn curve_quality<'a>(app: &'a SolveApp, commands: &[(String, Value)]) -> Option<&'a Value> {
++    let colors = Colors::for_tool(&Tokens::get(), &app.ui.tab, true);
++    if app.preview.busy || app.preview.error.is_some() || app.preview.shown_key != Some(job_key(commands, app.session.revision, colors)) {
++        return None;
++    }
++    app.preview.curve_quality.as_ref()
++}
++
+ /// Start computing the preview of `cmds`: for a tool feature (`tool`), only its tool.
+ #[cfg(not(target_arch = "wasm32"))]
+ fn spawn(pv: &mut PreviewState, key: u64, scratch: Session, cmds: Vec<(String, Value)>, colors: Colors, tool: bool, progress: Arc<Progress>) {
+@@ -454,6 +472,8 @@ pub fn compute(s: &Session, cmds: &[(String, Value)], colors: Colors) -> Job {
+                 | "sketch.chamfer.distance_angle"
+                 | "sketch.insert_svg"
+                 | "sketch.insert_dxf"
++                | "sketch.spline.rebuild"
++                | "inspect.curve_continuity"
+         ) || command == "construct.plane.along_path"
+             || params.get("command").and_then(Value::as_str) == Some("construct.plane.along_path")
+     }) {
+@@ -461,6 +481,9 @@ pub fn compute(s: &Session, cmds: &[(String, Value)], colors: Colors) -> Job {
+         return std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+             let mut built = build(&preview.before, &preview.after, colors);
+             built.bounds = state_bounds(&preview.after);
++            built.curve_quality = cmds.iter().zip(&preview.replies).find_map(|((command, _), reply)| {
++                matches!(command.as_str(), "sketch.spline.rebuild" | "inspect.curve_continuity").then(|| reply.clone())
++            });
+             built
+         }))
+         .map_err(|_| "the preview failed".to_string());
+@@ -601,6 +624,7 @@ fn build_tool(before: &ModelState, after: &ModelState, c: Colors, op: &str) -> B
+         applied: None,
+         tapered: Vec::new(),
+         stopped: None,
++        curve_quality: None,
+     }
+ }
+ 
+@@ -752,7 +776,7 @@ pub fn build(before: &ModelState, after: &ModelState, c: Colors) -> Built {
+             if indices.is_empty() && points.is_empty() { None } else { Some(SketchPreview { sketch: sketch.clone(), curves: indices, points }) }
+         })
+         .collect();
+-    Built { scene: sc, sketches, replaced, error: None, bounds: Aabb3::EMPTY, applied: None, tapered: Vec::new(), stopped: None }
++    Built { scene: sc, sketches, replaced, error: None, bounds: Aabb3::EMPTY, applied: None, tapered: Vec::new(), stopped: None, curve_quality: None }
+ }
+ 
+ /// Which of the `nf` faces of `m` are new surface, i.e. not on the old mesh? Each is decided by
+@@ -936,6 +960,23 @@ mod tests {
+         Colors { body: [1, 1, 1, 255], added: [2, 2, 2, 255], new_body: [4, 4, 4, 255], removed: [3, 3, 3, 100], edge: [0, 0, 0, 255], ghost: true }
+     }
+ 
++    #[test]
++    fn curve_quality_never_reports_previous_inputs_or_a_previous_document_revision() {
++        let mut app = SolveApp::new(Session::default(), Default::default());
++        let commands = vec![("sketch.spline.rebuild".to_owned(), json!({"curve":"s1", "control_points":8}))];
++        let colors = Colors::for_tool(&Tokens::get(), &app.ui.tab, true);
++        app.preview.shown_key = Some(job_key(&commands, app.session.revision, colors));
++        app.preview.curve_quality = Some(json!({"deviation":{"max_mm":0.01}}));
++        assert!(curve_quality(&app, &commands).is_some());
++        let changed = vec![("sketch.spline.rebuild".to_owned(), json!({"curve":"s1", "control_points":5}))];
++        assert!(curve_quality(&app, &changed).is_none(), "a same-frame edit cannot keep an old error estimate");
++        app.preview.busy = true;
++        assert!(curve_quality(&app, &commands).is_none());
++        app.preview.busy = false;
++        app.session.revision += 1;
++        assert!(curve_quality(&app, &commands).is_none(), "the selected curve may have changed");
++    }
++
+     #[test]
+     fn correcting_inputs_clears_old_errors_and_discards_late_old_jobs() {
+         let mut pv = PreviewState {
+@@ -983,6 +1024,7 @@ mod tests {
+             applied: None,
+             tapered: Vec::new(),
+             stopped: None,
++            curve_quality: None,
+         }
+     }
+ 
+diff --git a/crates/ui-egui/src/sketch_modify_ui.rs b/crates/ui-egui/src/sketch_modify_ui.rs
+index 230a63c..73e2fb8 100644
+--- a/crates/ui-egui/src/sketch_modify_ui.rs
++++ b/crates/ui-egui/src/sketch_modify_ui.rs
+@@ -87,6 +87,10 @@ pub(crate) fn offset_two_sides(mode: usize) -> bool {
+ /// A sketch modify tool window's values.
+ #[derive(Clone, Debug, PartialEq)]
+ pub enum Mod {
++    /// A new uniform-clamped spline fitted to the source; the source remains untouched.
++    Rebuild { degree: String, controls: String, construction: bool },
++    /// Read-only, oriented endpoint measurements with arc-length derivatives through G3.
++    CurveContinuity { reverse_before: bool, reverse_after: bool, gap: String, angle: String, curvature: String, curvature_change: String },
+     /// `sketch.scale`: the factor the picked entities scale by. The base point is the second
+     /// input; with none picked the command scales about the sketch origin, as its own default
+     /// already does.
+@@ -135,11 +139,22 @@ pub enum Mod {
+ 
+ impl Mod {
+     pub fn previews(&self) -> bool {
+-        matches!(self, Self::Mirror | Self::PatternRect { .. } | Self::PatternCirc { .. } | Self::Offset { .. } | Self::Corner { .. })
++        matches!(
++            self,
++            Self::Mirror
++                | Self::PatternRect { .. }
++                | Self::PatternCirc { .. }
++                | Self::Offset { .. }
++                | Self::Corner { .. }
++                | Self::Rebuild { .. }
++                | Self::CurveContinuity { .. }
++        )
+     }
+ 
+     pub fn title(&self) -> &'static str {
+         match self {
++            Mod::Rebuild { .. } => crate::i18n::tr("curve_quality.rebuild_title"),
++            Mod::CurveContinuity { .. } => crate::i18n::tr("curve_quality.join_title"),
+             Mod::Scale { .. } => "SKETCH SCALE",
+             Mod::Offset { .. } => "OFFSET",
+             Mod::Mirror => "MIRROR",
+@@ -155,6 +170,7 @@ impl Mod {
+     /// The value on the canvas.
+     pub fn primary(&mut self) -> Option<(&'static str, ValueKind, &mut String)> {
+         match self {
++            Mod::Rebuild { .. } | Mod::CurveContinuity { .. } => None,
+             Mod::Scale { factor } => Some(("Factor", ValueKind::Unitless, factor)),
+             Mod::Offset { distance, .. } => Some(("Distance", ValueKind::Length, distance)),
+             Mod::Move { x, .. } => Some(("X Distance", ValueKind::Length, x)),
+@@ -171,6 +187,11 @@ impl Mod {
+ 
+ fn inputs(k: &Mod) -> Vec<SelInput> {
+     match k {
++        Mod::Rebuild { .. } => vec![SelInput::new(crate::i18n::tr("curve_quality.source"), CURVES, false)],
++        Mod::CurveContinuity { .. } => vec![
++            SelInput::new(crate::i18n::tr("curve_quality.before"), CURVES, false),
++            SelInput::new(crate::i18n::tr("curve_quality.after"), CURVES, false),
++        ],
+         Mod::Scale { .. } => vec![SelInput::new("Entities", CURVES | SKETCH_POINTS, true), SelInput::new("Base point", SKETCH_POINTS, false)],
+         Mod::Offset { .. } => vec![SelInput::new("Curves", CURVES, true)],
+         // AXES is the mask that takes a straight sketch curve (`selection::SelInput::accepts`).
+@@ -205,6 +226,15 @@ pub fn start(app: &SolveApp, id: &str) -> Option<(Kind, Vec<SelInput>)> {
+         flip: false,
+     };
+     let k = match id {
++        "sketch.spline.rebuild" => Mod::Rebuild { degree: "3".into(), controls: "8".into(), construction: true },
++        "inspect.curve_continuity" => Mod::CurveContinuity {
++            reverse_before: false,
++            reverse_after: false,
++            gap: "0.001 mm".into(),
++            angle: "0.1 deg".into(),
++            curvature: "0.0001".into(),
++            curvature_change: "0.0001".into(),
++        },
+         "sketch.scale" => Mod::Scale { factor: "2".into() },
+         "sketch.offset" => Mod::Offset {
+             distance: crate::dialogs::length_default(&app.session, "2"),
+@@ -345,6 +375,8 @@ pub fn pick_position(d: &mut Dialog, session: &solidcraft_engine::Session, point
+ /// Command metadata for the active variant, including an explicitly chosen chamfer type.
+ pub(crate) fn command(k: &Mod) -> &'static str {
+     match k {
++        Mod::Rebuild { .. } => "sketch.spline.rebuild",
++        Mod::CurveContinuity { .. } => "inspect.curve_continuity",
+         Mod::Scale { .. } => "sketch.scale",
+         Mod::Offset { .. } => "sketch.offset",
+         Mod::Mirror => "sketch.mirror",
+@@ -413,6 +445,27 @@ fn pattern_hint(ui: &mut egui::Ui) {
+ pub fn rows(ui: &mut egui::Ui, k: &mut Mod, doc: &Document) -> bool {
+     let mut enter = false;
+     match k {
++        Mod::Rebuild { degree, controls, construction } => {
++            enter |= quantity(ui, doc, crate::i18n::tr("curve_quality.degree"), degree, 1, 7);
++            enter |= quantity(ui, doc, crate::i18n::tr("curve_quality.controls"), controls, 2, 64);
++            ui_kit::checkbox(ui, crate::i18n::tr("curve_quality.construction"), construction);
++            ui.label(crate::i18n::tr("curve_quality.rebuild_hint"));
++        }
++        Mod::CurveContinuity { reverse_before, reverse_after, gap, angle, curvature, curvature_change } => {
++            ui_kit::checkbox(ui, crate::i18n::tr("curve_quality.reverse_before"), reverse_before);
++            ui_kit::checkbox(ui, crate::i18n::tr("curve_quality.reverse_after"), reverse_after);
++            ui.label(crate::i18n::tr("curve_quality.join_hint"));
++            ui_kit::section(ui, "curve_tolerances", crate::i18n::tr("curve_quality.tolerances"), false, |ui| {
++                for (label, text) in [
++                    ("curve_quality.gap", gap),
++                    ("curve_quality.angle", angle),
++                    ("curve_quality.curvature", curvature),
++                    ("curve_quality.change", curvature_change),
++                ] {
++                    enter |= number(ui, crate::i18n::tr(label), text);
++                }
++            });
++        }
+         Mod::Scale { factor } => enter |= number(ui, "Factor", factor),
+         Mod::Offset { distance, distance2, mode, chain, flip } => {
+             icons(ui, "Direction", &OFFSET_MODES, &OFFSET_MODE_ICONS, mode);
+@@ -738,10 +791,46 @@ fn picked_point(session: &solidcraft_engine::Session, inputs: &[SelInput], i: us
+ /// numbers, except circular Quantity, which keeps its authored expression. Offset and Fillet
+ /// retain expressions in persistent driving dimensions.
+ pub fn commands(app: &SolveApp, k: &Mod, inputs: &[SelInput], extra: &Map<String, Value>) -> Result<Vec<(String, Value)>, String> {
++    if cfg!(target_arch = "wasm32") && matches!(k, Mod::Rebuild { .. } | Mod::CurveContinuity { .. }) {
++        return Err(crate::i18n::tr("curve_quality.desktop_required").into());
++    }
+     if inputs.iter().flat_map(|input| &input.items).any(|sel| matches!(sel, Sel::SketchPoint { .. }) && point_id(&app.session, sel).is_none()) {
+         return Err("Select points of the sketch being edited".into());
+     }
+     let (cmd, mut params) = match k {
++        Mod::Rebuild { degree, controls, construction } => {
++            let curves = curve_ids(inputs, 0);
++            let [curve] = curves.as_slice() else { return Err(crate::i18n::tr("curve_quality.select_source").into()) };
++            let degree = whole(app, "Degree", degree)?;
++            let controls = whole(app, "Control points", controls)?;
++            if !(1..=7).contains(&degree) || controls <= degree || controls > 64 {
++                return Err(crate::i18n::tr("curve_quality.invalid_rebuild").into());
++            }
++            (
++                "sketch.spline.rebuild",
++                json!({"curve": curve, "degree": degree, "control_points": controls,
++                "construction": construction, "fit_samples": 129, "check_samples": 257}),
++            )
++        }
++        Mod::CurveContinuity { reverse_before, reverse_after, gap, angle, curvature, curvature_change } => {
++            let (before, after) = (curve_ids(inputs, 0), curve_ids(inputs, 1));
++            let ([before], [after]) = (before.as_slice(), after.as_slice()) else {
++                return Err(crate::i18n::tr("curve_quality.select_pair").into());
++            };
++            let gap = value(app, gap, ValueKind::Length, "Gap")?;
++            let angle = value(app, angle, ValueKind::Angle, "Angle")?.to_degrees();
++            let curvature = value(app, curvature, ValueKind::Unitless, "Curvature jump")?;
++            let change = value(app, curvature_change, ValueKind::Unitless, "Curvature change")?;
++            if gap < 0.0 || !(0.0..=180.0).contains(&angle) || curvature < 0.0 || change < 0.0 {
++                return Err(crate::i18n::tr("curve_quality.invalid_tolerances").into());
++            }
++            (
++                "inspect.curve_continuity",
++                json!({"before": before, "after": after, "reverse_before": reverse_before, "reverse_after": reverse_after,
++                "gap_tolerance_mm": gap, "angle_tolerance_deg": angle,
++                "curvature_tolerance_per_mm": curvature, "curvature_change_tolerance_per_mm2": change}),
++            )
++        }
+         Mod::Scale { factor: text } => {
+             let entities = entity_ids(&app.session, inputs, 0);
+             if entities.is_empty() {
+@@ -928,3 +1017,123 @@ pub fn commands(app: &SolveApp, k: &Mod, inputs: &[SelInput], extra: &Map<String
+     }
+     Ok(vec![(cmd.to_string(), params)])
+ }
++
++/// Show only the current worker's numbers. An obsolete result cannot claim a new set of
++/// controls or tolerances passed while the replacement job is still being computed.
++pub(crate) fn quality_report(app: &SolveApp, ui: &mut egui::Ui, kind: &Mod, inputs: &[SelInput], extra: &Map<String, Value>) {
++    if !matches!(kind, Mod::Rebuild { .. } | Mod::CurveContinuity { .. }) {
++        return;
++    }
++    let Ok(commands) = commands(app, kind, inputs, extra) else { return };
++    let Some(report) = crate::preview::curve_quality(app, &commands) else { return };
++    ui.separator();
++    if matches!(kind, Mod::Rebuild { .. }) {
++        let deviation = &report["deviation"];
++        for (label, value) in [
++            ("curve_quality.deviation", deviation.get("max_mm")),
++            ("curve_quality.source_error", deviation.get("source_to_rebuilt_mm")),
++            ("curve_quality.rebuilt_error", deviation.get("rebuilt_to_source_mm")),
++            ("curve_quality.rms", report.get("parameter_rms_mm")),
++        ] {
++            metric_row(ui, label, value, "mm");
++        }
++        ui.label(crate::i18n::tr("curve_quality.estimate"));
++    } else {
++        let measured = report.get("measured_order").and_then(Value::as_str).unwrap_or(crate::i18n::tr("curve_quality.gap_failed"));
++        ui.strong(format!("{}: {measured}", crate::i18n::tr("curve_quality.measured")));
++        for (label, key, unit) in [
++            ("curve_quality.gap", "gap_mm", "mm"),
++            ("curve_quality.angle", "tangent_angle_deg", "°"),
++            ("curve_quality.curvature", "curvature_jump_per_mm", "1/mm"),
++            ("curve_quality.change", "curvature_change_jump_per_mm2", "1/mm²"),
++        ] {
++            metric_row(ui, label, report.get(key), unit);
++        }
++        ui.label(crate::i18n::tr("curve_quality.local_only"));
++    }
++}
++
++fn metric_row(ui: &mut egui::Ui, label: &str, value: Option<&Value>, unit: &str) {
++    if let Some(value) = value.and_then(Value::as_f64).filter(|value| value.is_finite()) {
++        ui_kit::row(ui, crate::i18n::tr(label), |ui| {
++            ui.label(format!("{value:.5e} {unit}"));
++        });
++    }
++}
++
++#[cfg(test)]
++mod curve_quality_tests {
++    use super::*;
++
++    fn workspace() -> SolveApp {
++        let mut app = SolveApp::new(Default::default(), Default::default());
++        app.run("sketch.create", json!({"plane":"XY"})).unwrap();
++        app
++    }
++
++    fn selected(app: &SolveApp, id: &Value) -> Sel {
++        Sel::SketchCurve { sketch: app.session.active_sketch, id: id.as_str().unwrap().to_string() }
++    }
++
++    #[test]
++    fn rebuild_dialog_previews_a_new_curve_and_reports_error_without_changing_the_source() {
++        let mut app = workspace();
++        let made = app.run("sketch.spline.control_point", json!({"points":[[0,0],[10,18],[20,-7],[30,15],[40,-5],[50,0]]})).unwrap();
++        let source = selected(&app, &made["curves"][0]);
++        let k = Mod::Rebuild { degree: "3".into(), controls: "4".into(), construction: true };
++        let mut picks = inputs(&k);
++        picks[0].items.push(source);
++        let commands = commands(&app, &k, &picks, &Map::new()).unwrap();
++        assert_eq!(commands[0].1["control_points"], 4);
++        assert_eq!(commands[0].1["construction"], true);
++        let before = app.session.doc.to_json();
++        let result = crate::preview::compute(&app.session, &commands, crate::preview::Colors::from_tokens(&crate::theme::Tokens::get())).unwrap();
++        let report = result.curve_quality.unwrap();
++        assert!(report["deviation"]["max_mm"].as_f64().unwrap() > 0.0);
++        assert!(report["deviation"]["source_to_rebuilt_mm"].as_f64().unwrap().is_finite());
++        assert!(report["deviation"]["rebuilt_to_source_mm"].as_f64().unwrap().is_finite());
++        assert_ne!(report["curve"], made["curves"][0]);
++        assert!(!result.sketches.is_empty());
++        assert_eq!(app.session.doc.to_json(), before, "preview must never adopt a scratch document");
++    }
++
++    #[test]
++    fn rebuild_dialog_rejects_bad_counts_and_requires_a_source() {
++        let mut app = workspace();
++        let source = app.run("sketch.spline.control_point", json!({"points":[[0,0],[10,10],[20,0],[30,0]]})).unwrap();
++        for (degree, controls) in [("3", "3"), ("8", "10"), ("3", "65"), ("3", "NaN"), ("3", "4.5")] {
++            let k = Mod::Rebuild { degree: degree.into(), controls: controls.into(), construction: true };
++            let mut picks = inputs(&k);
++            picks[0].items.push(selected(&app, &source["curves"][0]));
++            assert!(commands(&app, &k, &picks, &Map::new()).is_err());
++        }
++        let k = Mod::Rebuild { degree: "3".into(), controls: "8".into(), construction: true };
++        assert!(commands(&app, &k, &inputs(&k), &Map::new()).is_err());
++    }
++
++    #[test]
++    fn continuity_dialog_is_read_only_and_measures_oriented_g3_endpoints() {
++        let mut app = workspace();
++        let before = app.run("sketch.line", json!({"points":[[-10,0],[0,0]]})).unwrap();
++        let after = app.run("sketch.line", json!({"points":[[20,0],[0,0]]})).unwrap();
++        let k = Mod::CurveContinuity {
++            reverse_before: false,
++            reverse_after: true,
++            gap: "0.001 mm".into(),
++            angle: "0.1 deg".into(),
++            curvature: "0.0001".into(),
++            curvature_change: "0.0001".into(),
++        };
++        let mut picks = inputs(&k);
++        picks[0].items.push(selected(&app, &before["curves"][0]));
++        picks[1].items.push(selected(&app, &after["curves"][0]));
++        let commands = commands(&app, &k, &picks, &Map::new()).unwrap();
++        assert_eq!(commands[0].1["reverse_after"], true);
++        assert!((commands[0].1["gap_tolerance_mm"].as_f64().unwrap() - 0.001).abs() < 1e-12);
++        let original = app.session.doc.to_json();
++        let result = crate::preview::compute(&app.session, &commands, crate::preview::Colors::from_tokens(&crate::theme::Tokens::get())).unwrap();
++        assert_eq!(result.curve_quality.unwrap()["measured_order"], "G3");
++        assert_eq!(app.session.doc.to_json(), original);
++        assert_eq!(crate::dialogs::action_labels(&Kind::SketchModify(k)), ("", "Close"));
++    }
++}
+diff --git a/crates/ui-egui/src/surface_quality_dialog_tests.rs b/crates/ui-egui/src/surface_quality_dialog_tests.rs
+new file mode 100644
+index 0000000..690c309
+--- /dev/null
++++ b/crates/ui-egui/src/surface_quality_dialog_tests.rs
+@@ -0,0 +1,223 @@
++//! Match/Fair are real feature forms: chosen constraints become engine parameters, survive
++//! Edit Feature, and make geometry through the existing surface kernel.
++use super::*;
++use crate::dialogs::{Dialog, apply_commands};
++use crate::scenario::Harness;
++use solidcraft_engine::doc::{IDENTITY, kernel::Continuity};
++
++/// Stop inside the kernel, after command dispatch, so the feature transaction must roll back.
++struct StopAfter {
++    checks: std::sync::atomic::AtomicUsize,
++    progress: std::sync::Arc<solidcraft_engine::doc::progress::Progress>,
++}
++
++impl solidcraft_engine::kernel::watch::Watch for StopAfter {
++    fn cancelled(&self) -> bool {
++        if self.checks.fetch_add(1, std::sync::atomic::Ordering::Relaxed) >= 50 {
++            self.progress.cancel();
++        }
++        self.progress.is_cancelled()
++    }
++    fn progress(&self, _: &'static str, _: usize, _: usize) {}
++}
++
++fn cancelled_command_preserves_document(app: &mut SolveApp, command: &str, parameters: &Value) {
++    let before = app.session.doc.to_json();
++    // The real UI cancels the document Progress, which also tells the shared model cache not
++    // to retain an interrupted feature. Trigger that same signal at a deterministic checkpoint.
++    let progress = std::sync::Arc::new(solidcraft_engine::doc::progress::Progress::default());
++    let watcher = std::sync::Arc::new(StopAfter { checks: std::sync::atomic::AtomicUsize::new(0), progress: progress.clone() });
++    let error = solidcraft_engine::doc::progress::watch(progress.clone(), || {
++        solidcraft_engine::kernel::watch::watching(watcher, || app.run(command, parameters.clone()))
++    })
++    .unwrap_err();
++    assert!(progress.is_cancelled());
++    assert!(error.contains("cancelled"), "{error}");
++    assert_eq!(app.session.doc.to_json(), before, "a cancelled result must not enter the document");
++}
++
++fn app() -> SolveApp {
++    SolveApp::new(solidcraft_engine::Session::default(), crate::Services::default())
++}
++
++fn match_form(app: &SolveApp, order: usize) -> Dialog {
++    let mut dialog = Dialog::for_command(app, "surface.match").unwrap();
++    dialog.kind = Kind::Surface(Surf::Match { continuity: order });
++    dialog.inputs[0].items = vec![Sel::Face { body: "Source".into(), index: 0, point: Vec3::new(0.0, 1.0, 2.0) }];
++    dialog.inputs[1].items = vec![Sel::Edge { body: "Target".into(), index: 0, point: Vec3::new(0.0, 0.0, 2.0) }];
++    dialog
++}
++
++#[test]
++fn match_payload_preserves_source_target_and_all_three_orders() {
++    let app = app();
++    for (index, order) in ["g1", "g2", "g3"].into_iter().enumerate() {
++        let dialog = match_form(&app, index);
++        assert_eq!(dialog.command(), Some("surface.match"));
++        let commands = apply_commands(&app, &dialog).unwrap();
++        assert_eq!(commands.len(), 1);
++        assert_eq!(commands[0].0, "surface.match");
++        assert_eq!(commands[0].1, json!({"body":"Source", "faces":[[0.0,1.0,2.0]], "target":"Target", "edges":[[0.0,0.0,2.0]], "order":order}));
++    }
++    let mut dialog = match_form(&app, 3);
++    assert!(apply_commands(&app, &dialog).is_err(), "an unknown order must not silently become G1");
++    dialog.kind = Kind::Surface(Surf::Match { continuity: 1 });
++    dialog.inputs[1].items.clear();
++    assert!(apply_commands(&app, &dialog).is_err());
++    dialog.inputs[1].items = vec![Sel::Edge { body: "Source".into(), index: 0, point: Vec3::ZERO }];
++    assert!(apply_commands(&app, &dialog).is_err(), "the target must be a different body");
++    dialog.inputs[1].items = vec![Sel::Edge { body: "Target".into(), index: 0, point: Vec3::new(f64::NAN, 0.0, 0.0) }];
++    assert!(apply_commands(&app, &dialog).is_err(), "a malformed point must not disappear in JSON");
++}
++
++#[test]
++fn fair_payload_keeps_units_optional_tolerance_and_validates_limits() {
++    let mut app = app();
++    let mut dialog = Dialog::for_command(&app, "surface.fair").unwrap();
++    assert_eq!(dialog.command(), Some("surface.fair"));
++    dialog.inputs[0].items = vec![Sel::Body { name: "Sheet".into() }];
++    let parameters = &apply_commands(&app, &dialog).unwrap()[0].1;
++    assert!(parameters.get("tolerance").is_none(), "an untouched field uses the body's adaptive tolerance");
++    assert_eq!(parameters["keep_edges"], true);
++    std::sync::Arc::make_mut(&mut app.session.doc).units = "in".into();
++    dialog.kind = Kind::Surface(Surf::Fair { strength: 0.5, iterations: 4, tolerance: "0.02".into(), keep_edges: false });
++    let parameters = &apply_commands(&app, &dialog).unwrap()[0].1;
++    assert_eq!(parameters["strength"], 0.5);
++    assert_eq!(parameters["iterations"], 4);
++    assert_eq!(parameters["keep_edges"], false);
++    assert_eq!(parameters["tolerance"], "0.02 in");
++    for invalid in [
++        Surf::Fair { strength: 0.0, iterations: 1, tolerance: String::new(), keep_edges: true },
++        Surf::Fair { strength: f64::NAN, iterations: 1, tolerance: String::new(), keep_edges: true },
++        Surf::Fair { strength: 1.1, iterations: 1, tolerance: String::new(), keep_edges: true },
++        Surf::Fair { strength: 1.0, iterations: 0, tolerance: String::new(), keep_edges: true },
++        Surf::Fair { strength: 1.0, iterations: 1001, tolerance: String::new(), keep_edges: true },
++        Surf::Fair { strength: 1.0, iterations: 1, tolerance: "0 mm".into(), keep_edges: true },
++    ] {
++        dialog.kind = Kind::Surface(invalid);
++        assert!(apply_commands(&app, &dialog).is_err());
++    }
++}
++
++#[test]
++fn match_and_fair_open_visible_forms_and_expose_their_controls() {
++    let mut h = Harness::new();
++    h.step(&json!({"call":"ui.start", "params":{"command":"surface.match"}})).unwrap();
++    h.frames(3);
++    for label in ["Source surface", "Target edges", "Continuity"] {
++        assert!(h.widget(label).is_some(), "missing visible {label}");
++    }
++    h.step(&json!({"widget":"Curvature (G2)"})).unwrap();
++    h.step(&json!({"widget":"Curvature change (G3)"})).unwrap();
++    assert!(matches!(h.app.dialog.as_ref().unwrap().kind, Kind::Surface(Surf::Match { continuity: 2 })));
++    h.step(&json!({"widget":"Cancel"})).unwrap();
++    h.step(&json!({"call":"ui.start", "params":{"command":"surface.fair"}})).unwrap();
++    h.frames(3);
++    for label in ["Source surface", "Strength", "Iterations", "Tolerance", "Keep edge tangents"] {
++        assert!(h.widget(label).is_some(), "missing visible {label}");
++    }
++}
++
++fn matching_fixture(app: &mut SolveApp) -> Vec<Vec3> {
++    app.run("sketch.create", json!({"plane":"XY", "name":"Round"})).unwrap();
++    app.run("sketch.circle.center", json!({"center":[0,0], "radius":10})).unwrap();
++    app.run("sketch.finish", json!({})).unwrap();
++    app.run("solid.extrude", json!({"sketch":"Round", "distance":30, "body_name":"Target"})).unwrap();
++    let body = app.session.world_state().body("Target").unwrap().body.clone();
++    let edge = body
++        .edges(body.size() * 0.01)
++        .unwrap()
++        .into_iter()
++        .find(|edge| edge.length > 25.0 && (edge.mid.x.hypot(edge.mid.y) - 10.0).abs() < 0.05 && (5.0..25.0).contains(&edge.mid.z))
++        .unwrap();
++    let (a, b) = (*edge.points.first().unwrap(), *edge.points.last().unwrap());
++    let picks = vec![a + (b - a) * 0.25, a + (b - a) * 0.75];
++    let angle = picks[0].y.atan2(picks[0].x);
++    let at = |t: f64| json!([11.0 * t.cos(), 11.0 * t.sin()]);
++    app.run("sketch.create", json!({"plane":"XY", "name":"Sheet sketch"})).unwrap();
++    let arc = app
++        .run("sketch.arc.three_point", json!({"start":at(angle), "end":at(angle+60f64.to_radians()), "through":at(angle+30f64.to_radians())}))
++        .unwrap()["created"]["curves"][0]
++        .as_str()
++        .unwrap()
++        .to_string();
++    app.run("sketch.finish", json!({})).unwrap();
++    app.run("surface.extrude", json!({"sketch":"Sheet sketch", "curves":[arc], "distance":30, "body_name":"Source"})).unwrap();
++    picks
++}
++
++#[test]
++fn g3_match_form_builds_a_surface_and_restores_body_scoped_picks() {
++    let mut app = app();
++    let picks = matching_fixture(&mut app);
++    let mut dialog = match_form(&app, 2);
++    dialog.inputs[0].items = vec![Sel::Body { name: "Source".into() }];
++    dialog.inputs[1].items = picks.iter().enumerate().map(|(index, point)| Sel::Edge { body: "Target".into(), index, point: *point }).collect();
++    for (command, parameters) in apply_commands(&app, &dialog).unwrap() {
++        cancelled_command_preserves_document(&mut app, &command, &parameters);
++        app.run(&command, parameters).unwrap();
++    }
++    let state = app.session.world_state();
++    let result = &state.body("Source").unwrap().body;
++    let target = &state.body("Target").unwrap().body;
++    let (gap, angle, order) = solidcraft_engine::kernel::seam_continuity(result, target, &picks).unwrap();
++    assert!(gap < 1e-6 && angle < 0.05, "gap {gap}, angle {angle}");
++    assert_eq!(order, Some(Continuity::G3));
++    let feature = &app.session.doc.features.last().unwrap().kind;
++    let (kind, restored, _) = for_feature(&app, feature, &IDENTITY).unwrap();
++    assert!(matches!(kind, Kind::Surface(Surf::Match { continuity: 2 })));
++    assert!(
++        restored[1].items.iter().all(|pick| matches!(pick, Sel::Edge { body, .. } if body == "Target")),
++        "coincident edges must stay on the target body"
++    );
++}
++
++#[test]
++fn fair_form_runs_on_a_bspline_and_keeps_its_boundary_and_edit_values() {
++    let mut app = app();
++    app.run("solid.sphere", json!({"radius":20, "body_name":"Ball"})).unwrap();
++    app.run("surface.offset", json!({"faces":[[0,0,20]], "body":"Ball", "distance":2, "body_name":"Sheet"})).unwrap();
++    let boundary = |app: &SolveApp| -> Vec<Vec3> {
++        app.session.world_state().body("Sheet").unwrap().body.edges(0.1).unwrap().into_iter().flat_map(|edge| edge.points).collect()
++    };
++    let before = boundary(&app);
++    let mut dialog = Dialog::for_command(&app, "surface.fair").unwrap();
++    dialog.kind = Kind::Surface(Surf::Fair { strength: 0.75, iterations: 3, tolerance: "1 mm".into(), keep_edges: true });
++    dialog.inputs[0].items = vec![Sel::Body { name: "Sheet".into() }];
++    for (command, parameters) in apply_commands(&app, &dialog).unwrap() {
++        cancelled_command_preserves_document(&mut app, &command, &parameters);
++        app.run(&command, parameters).unwrap();
++    }
++    assert!(!before.is_empty());
++    assert_eq!(boundary(&app), before);
++    let feature = &app.session.doc.features.last().unwrap().kind;
++    let (kind, restored, _) = for_feature(&app, feature, &IDENTITY).unwrap();
++    let Kind::Surface(restored_kind) = kind else { panic!("restored a non-surface dialog") };
++    let Kind::Surface(expected_kind) = &dialog.kind else { panic!("fixture is not a surface dialog") };
++    assert_eq!(&restored_kind, expected_kind);
++    assert_eq!(restored[0].items, dialog.inputs[0].items);
++    assert!(matches!(feature, FeatureKind::SurfaceFair { strength: 0.75, iterations: 3, keep_edges: true, .. }));
++}
++
++#[test]
++fn match_restoration_uses_the_targets_own_component_frame() {
++    let mut app = app();
++    let source = app.run("component.create", json!({"name":"Source part", "grounded":false})).unwrap();
++    app.run("solid.box", json!({"corner":[0,0,0], "length":10, "width":10, "height":10, "body_name":"Source"})).unwrap();
++    app.run("component.activate", json!({"component":"root"})).unwrap();
++    let target = app.run("component.create", json!({"name":"Target part", "grounded":false})).unwrap();
++    app.run("solid.box", json!({"corner":[0,0,0], "length":10, "width":10, "height":10, "body_name":"Target"})).unwrap();
++    app.run("occurrence.move", json!({"occurrence":source["occurrence"], "translate":[20,0,0]})).unwrap();
++    app.run("occurrence.move", json!({"occurrence":target["occurrence"], "translate":[100,0,0]})).unwrap();
++    let mut source_frame = IDENTITY;
++    source_frame[3][0] = 20.0;
++    let feature = FeatureKind::SurfaceMatch {
++        body: "Source".into(),
++        faces: Vec::new(),
++        target: "Target".into(),
++        edges: vec![Position(Vec3::new(0.0, 0.0, 5.0))],
++        order: Continuity::G2,
++    };
++    let (_, inputs, _) = for_feature(&app, &feature, &source_frame).unwrap();
++    assert!(matches!(&inputs[1].items[0], Sel::Edge { body, point, .. } if body == "Target" && *point == Vec3::new(100.0, 0.0, 5.0)));
++}
+diff --git a/docs/arclet-surface-workflows.md b/docs/arclet-surface-workflows.md
+new file mode 100644
+index 0000000..02e32a3
+--- /dev/null
++++ b/docs/arclet-surface-workflows.md
+@@ -0,0 +1,81 @@
++# Arclet: 曲線・曲面の操作を決める根拠
++
++調査日: 2026-11-01。対象は独立した Rust CAD アプリ Arclet。既存の clean-room Rust コアを再利用し、Melt3D の画面に機能を足す方針には戻さない。
++
++Rhino の公開マニュアルは操作の目的と制約を確認するために読んだ。製品のコード、アイコン、説明文、作例データは使用していない。レビューは個人の使い勝手の意見として扱う。GPL / LGPL / AGPL の実装と、商用製品の実行・自動操作は調査対象にしていない。
++
++## 先に使える形にする操作
++
++| 優先 | 利用者がしたいこと | 公開資料から分かること | Arclet の判断と現在の範囲 |
++| --- | --- | --- | --- |
++| 1 | 少ない制御点で曲線を直す | [PointsOn](https://docs.mcneel.com/rhino/8/help/en-us/commands/pointson.htm) は制御点の表示と編集を分けている。結合済み曲面の点を無条件に動かすと継ぎ目が壊れるため、対象の取り扱いに制約がある。 | 既存スケッチの制御点編集を使う。新しい `NurbsCurve` コアは任意の有効なクランプ済みノット列と正の重みを保持し、点の編集を検証する。任意のノット・有理重みを編集して保存する専用画面や、曲面全体の自由な制御網編集は未実装。 |
++| 2 | 点数を減らし、形の変化を見比べる | [Rebuild](https://docs.mcneel.com/rhino/8/help/en-us/commands/rebuild.htm) は次数・点数・プレビュー・変化量を扱う。端の接線を保持する選択肢や、別曲線の構造にそろえる選択肢もある。 | 最初は端点固定、次数と点数の指定、元の曲線を残したプレビューを提供する。新しいコアは最小二乗法で近似し、両方向の標本偏差を返す。接線固定、閉曲線の周期再構築、マスター曲線への構造合わせは未実装。 |
++| 3 | つながりの悪い場所を数値で知る | [GCon](https://docs.mcneel.com/rhino/8/help/en-us/commands/gcon.htm) は曲線端同士を検査する。[Curvature / CurvatureGraph](https://docs.mcneel.com/rhino/8/help/en-us/commands/curvature.htm) は曲率の大きさ・変化を観察するための別の表示を提供する。 | 曲線端の距離、接線角度、曲率ベクトル差、弧長に対する曲率ベクトル変化の差を別々に表示し、許容値を指定できるようにする。サーフェスの継ぎ目検査と曲線端検査を同じ結果として表示しない。 |
++| 4 | 面を合わせる、隙間に面を張る | Rhino 8 の [MatchSrf](https://docs.mcneel.com/rhino/8/help/en-us/commands/matchsrf.htm) の記載は位置・接線・曲率。[BlendSrf](https://docs.mcneel.com/rhino/8/help/en-us/commands/blendsrf.htm) は各端の連続性に G3/G4 も用意する。両者の能力を同一視しない。 | 既存 `surface.match`、`surface.blend`、`surface.loft` を見えるメニューから呼ぶ。既存エンジンは G3 を入力できるが、一般の `inspect.continuity` が G3 を証明するわけではない。形状作成と独立した計測を必ず分ける。 |
++| 5 | 曲線や曲面の凸凹を減らす | [Fair](https://docs.mcneel.com/rhino/8/help/en-us/commands/fair.htm) は形の変更許容値と端部の保持を扱う。曲率表示と併用する。 | 今回の画面は曲面の Fair を対象とし、強さ、回数、移動許容値、境界の接線保持を指定できる。既存のエネルギー最小化を使うが、変更前後のエネルギー・移動量を比較表示する画面は未実装。「最小化したので Class A」とは表示しない。 |
++| 6 | 複数の曲線をまとめて扱い、必要なら分離する | [Join](https://docs.mcneel.com/rhino/8/help/en-us/commands/join.htm) は異なる次数の曲線をまとめても次数や制御点を統一しない。[Explode](https://docs.mcneel.com/rhino/8/help/en-us/commands/explode.htm) はポリカーブを構成曲線に戻す。 | 新しい `CurveChain` は順序と方向を明示した曲線の集合。結合、曲線の反転、連続性の測定を別操作にする。自動的に隙間を埋めたり滑らかにしたことにはしない。 |
++| 7 | 操作後の面のうねりを見つける | [Zebra](https://docs.mcneel.com/rhino/8/help/en-us/commands/zebra.htm) は縞を使った視覚検査。解析メッシュの密度も結果の見え方に影響する。 | 既存の Zebra、曲率表示、反射表示を独立したボタンにする。縞の見た目だけで寸法誤差や連続性の合格判定を出さない。 |
++
++[FitCrv](https://docs.mcneel.com/rhino/8/help/en-us/commands/fitcrv.htm) は、点数を指定する Rebuild と異なり、許容誤差を中心に近似し、曲率に応じたノット配置を使う。Arclet の最初の Rebuild は点数を指定する操作とし、許容誤差を保証する自動近似という名前では公開しない。
++
++## 既存コアと今回の追加
++
++既存部分の比較基準は `feature/node-graph-gcode` のコミット `a309790ac8e265b918da09474a02b069609ab3b5`。表の「ある」はコード・登録仕様を確認した意味で、すべての形状で成功したという意味ではない。
++
++| 能力 | 確認した場所 | 実装の範囲と残る差 |
++| --- | --- | --- |
++| B-spline 基底・微分・ノット挿入 | [bspline.rs](../crates/geom/src/bspline.rs)、[spline_space.rs](../crates/geom/src/spline_space.rs) | 再利用できる。対応次数は 1–7。新しい曲線にも同じ基底評価を使う。 |
++| 有理テンソル積曲面 | [NurbsSurface](../crates/geom/src/bspline.rs) | 重み付き制御網・点評価・ノット挿入がある。これだけで面の編集 UI や B-rep 継ぎ目保持が完成するわけではない。 |
++| 曲線作成・既存スケッチの点編集 | [sketch_create.rs](../crates/engine/src/cmd/sketch_create.rs)、[sketch.rs](../crates/engine/src/cmd/sketch.rs) | Fit Point / Control Point Spline、挿入、反転、点のドラッグがある。 |
++| 既存スケッチの保存形式 | [CurveKind](../crates/sketch/src/model.rs) | スプラインの点 ID・次数・制御点モード・周期フラグは保存するが、任意ノット列と有理重みの欄はない。新しい `NurbsCurve` をここに無損失で格納できるとは宣言しない。 |
++| 曲面のブレンド・ロフト・マッチ | [surface.rs](../crates/engine/src/cmd/surface.rs)、[surface_match.rs](../crates/engine/src/cmd/surface_match.rs)、[bridge.rs](../crates/kernel/src/bridge.rs)、[matchsurf.rs](../crates/kernel/src/matchsurf.rs) | G1/G2/G3 を指定する処理がある。参照面からの微分取得や継ぎ目の判定には標本・数値差分も使う。入力指定と厳密保証を同じ意味にしない。 |
++| 境界ネットワーク | [surface_boundary.rs](../crates/engine/src/cmd/surface_boundary.rs)、[boundary_network.rs](../crates/kernel/src/boundary_network.rs) | スケッチからのブリッジと、面のエッジを参照するネットワークでは範囲が違う。後者は G3 を明示的に拒否し、G2 まで扱う。 |
++| 曲面のうねりを抑える処理 | [fair.rs](../crates/kernel/src/fair.rs) | 曲線・曲面のパラメータ微分に基づく二次エネルギー、境界拘束、移動許容値がある。弧長に関して不変なすべての平滑性指標や、製品仕上げの認証ではない。 |
++| 継ぎ目の通常の検査 | [continuity.rs](../crates/kernel/src/continuity.rs)、[surface_analysis.rs](../crates/engine/src/cmd/surface_analysis.rs) | エッジ上の標本点で隙間・法線角・継ぎ目を横切る方向の法曲率差を測る。G3 の量は返さない。局所的に評価不能な標本がある場合のカバレッジ表示も今後の改善点。 |
++| 曲率と反射の表示 | [sketch_inspect.rs](../crates/engine/src/cmd/sketch_inspect.rs)、[surface_analysis.rs](../crates/engine/src/cmd/surface_analysis.rs) | `inspect.curvature_comb`、`inspect.curvature_map`、`inspect.zebra`、`inspect.environment_map` がある。 |
++| 今回追加した曲線基盤 | [nurbs_curve.rs](../crates/geom/src/nurbs_curve.rs) | `NurbsCurve`、3 階までの解析微分、弧長微分、`CurveChain`、端点固定 Rebuild、両方向の標本偏差。保存形式と一般曲面の G3 検査は別の仕事。 |
++| 今回追加したスケッチ接続 | [sketch_rebuild.rs](../crates/engine/src/cmd/sketch_rebuild.rs)、[入出力スキーマ](../crates/engine/src/schema/sketch_rebuild.rs) | `sketch.spline.rebuild` は非周期の Fit / CV Spline を読み、新しい CV Spline を作る。元の曲線・点・拘束は残す。出力は既存文書で保存できる等間隔ノット・重み 1 の表現。`inspect.curve_continuity` は有限線分と非周期スプラインの端を読み、形状を変えずに方向を指定して測る。 |
++
++### 計測で区別すること
++
++曲線の正則な端では、位置をそろえた後、単位接線 `dC/ds`、曲率ベクトル `d²C/ds²`、その弧長微分 `d³C/ds³` を比較する。ここで `s` は曲線の長さ。元のパラメータに関する `C'` の長さが違うだけで G1 不連続にはしない。3 次元では曲率の大きさだけが同じでも曲率の向きが違う場合があるため、ベクトルで比較する。
++
++新しい検査値は順に mm、degree、1/mm、1/mm²。上位の判定には下位の許容値をすべて満たす必要がある。接線がゼロの点や数値範囲外の結果は評価不能とする。これは曲線端の局所検査であり、サーフェス全面の G3・自己交差の不在・Class A 品質の証明には使わない。式と解析例は [新しい曲線モジュールのテスト](../crates/geom/src/nurbs_curve.rs) にある。
++
++比較基準の `kernel::seam_continuity` は次数を選ぶ条件に隙間を含めていなかった。今回この判定も修正し、位置の許容値を外れた場合は連続性を `None` として返す。明示的な位置許容値を指定する `seam_continuity_with_tolerance` を追加し、簡易 API の既定値は 1e-6 mm とした。離れた平行平面が、法線・曲率差がゼロという理由で G3 と判定されないことを回帰試験で確認する。評価不能な法線や曲率もゼロ扱いにせず、エラーを返す。
++
++Rebuild は入力の正規化パラメータで標本を取り、両端を固定した最小二乗問題を QR 分解で解く。出力は重み 1、等間隔の内部ノットを持つ曲線。戻り値の `parameter_rms_mm` は対応パラメータ間の RMS で、幾何学的な最近点距離ではない。
++
++`SampledDeviation` は「元の標本点 → 再構築した折れ線」と逆方向の最大距離を別々に返す。標本の間の細かい形状は見落とし得るため、Hausdorff 距離の認証値や絶対的な上限とは呼ばない。UI は `Estimated deviation` と両方向の推定偏差を表示し、標本間の細部を見落とし得る旨を伝える。今回の UI では近似用 129 点・検査用 257 点が固定値で、標本数の表示・変更欄は未実装。確定前に元の曲線と重ねて見比べる。
++
++## PolySplines と Curve chain を混同しない
++
++この追加の `CurveChain` は複数の曲線を扱うデータ型であり、メッシュから曲面を作る技術ではない。製品・研究の PolySplines と同等だとは表示しない。
++
++[Plasticity の公式 PolySplines マニュアル](https://doc.plasticity.xyz/solid/polyspline) は、メッシュからトリムされていない滑らかな B-spline パッチを作る操作と説明し、G2 連続性を掲げる。四角形中心の入力を推奨し、三角形・多角形も対象とする。現在のページには結果の制御点編集、パッチの統合、境界を正確に補間する選択肢もある。これは製品側の仕様説明であり、Arclet で同じ品質を検証したという意味ではない。
++
++一次研究 [Polyhedral Splines for Analysis, 2023](https://arxiv.org/abs/2304.12393) は、通常の格子だけでなく、星形・多角形・極・T 字接続を含む制御網から区分多項式の曲面を構成する。これは一列に曲線をつなぐデータ構造とは対象が異なる。製品の特定バージョンがこの論文のどのアルゴリズムを使うかは、この論文だけでは確定しない。
++
++再利用候補は既存 [T-spline モジュール](../crates/geom/src/tspline/mod.rs)、[Bézier 抽出](../crates/geom/src/tspline/extract.rs)、[spline_space](../crates/geom/src/spline_space.rs)。現在の T-spline は長方形のインデックス領域と奇数次数を扱い、任意トポロジーの extraordinary vertex を備えた入力メッシュ全般の変換器ではない。局所的な基底、ノットの細分、Bézier パッチの評価は部品として再利用できるが、多価頂点付近の構成、境界・稜線、パッチ間の連続性、B-rep への結合は別途設計と検証が必要。
++
++現段階ではこの研究課題を Rebuild の完成条件に混ぜない。まず実際に編集できる有理曲線と定量検査を完成させる。
++
++## 使い勝手のレビューから採る判断
++
++[Creative Bloq の Plasticity レビュー（2025-08-07）](https://www.creativebloq.com/3d/3d-software/forget-what-you-know-about-cad-plasticity-has-made-3d-modelling-fun-again) は、フィレット・ブーリアンなどの日常作業と検索パレットを評価する一方、選択に応じて変わる UI とショートカットへの依存は習得の障害にもなったと述べている。この使い勝手の意見を採り、Arclet では名前付きの入口を残し、キーボード操作を追加の近道にする。レビューを現在の機能一覧や数値精度の根拠にはしない。
++
++[Rhino フォーラムの利用者報告（2024-02-22）](https://discourse.mcneel.com/t/rhino-after-8-years-long/176370) は、押し出し・回転・ロフト・配列・ブーリアンの往復と、散在する操作を探す負担を挙げる。これも一人の体験であり性能比較ではない。Arclet は `Curve`、`Surface`、`Solid`、`Inspect` の見える入口と、現在使える操作の理由を優先する。NURBS 編集のために重いマテリアルやレンダリングを必須にしない。
++
++採用順は、制御点編集 → Rebuild の比較プレビュー → 曲線端の数値検査 → 既存の面作成・面解析への導線。コマンド数を増やす前に、この往復を保存・取り消し・中止まで含めて完結させる。
++
++## 最小の UI 接続
++
++以下は接続の設計方針であり、全項目が完成したという一覧ではない。今回接続したのは、既存スケッチの Rebuild と曲線端検査、既存面の Match / Fair のパネル。任意のノット・有理重みを直接編集して無損失保存する画面は後続の課題とする。
++
++1. 曲線の次数、ノット、点、重みを専用のデータとして保持し、読み込みと編集のたびに `NurbsCurve::new` / `with_control_point` で検証する。デシリアライズだけで検証を飛ばさない。
++2. 有限個の表示標本と制御多角形を描く。制御点の選択と座標編集は同じ曲線データを操作する。カメラ操作は既存のナビゲーション処理を通す。
++3. スケッチでは `sketch.spline.rebuild` を中止可能なジョブで実行し、プレビュー中は元の曲線を保持する。確定時だけ取り消し履歴に一つの変更を追加する。ブラウザでも長い処理を UI フレーム内で一括実行しない。出力の `construction` は標準で `true` とし、重なった輪郭がプロファイル選択に混ざることを防ぐ。
++4. 曲線を二つ選んだら `inspect.curve_continuity` を呼び、向きを明示する。順序のある複数曲線はコアの `CurveChain::joins` で一括検査できる。反転は測定の設定または `reversed` で明示的に行う。
++5. 既存スケッチへの変換で重みやノットが失われる場合は拒否するか、明示的な近似として偏差を表示する。保存と再読込の無損失試験を通すまでは、一般 NURBS の CAD 文書保存が完成したとは報告しない。
++
++新規コアの上限は曲線 1 本 1,024 制御点、鎖 256 本・合計 16,384 制御点、Rebuild 64 制御点・2,049 近似用標本・1,025 検査標本。加えて基底評価・QR・距離計算の合計仕事量を制限する。既存の Fit Spline は三次 Bézier 区間を正確に並べた NURBS に変換して測る。変換後が 1,024 制御点を超える場合、周期スプライン、対応範囲外の次数は明示的に拒否する。これらは軽い初期実装の上限であり、商用製品の上限を模したものではない。
