@@ -1,0 +1,13 @@
+[package]
+name = "solidcraft-slice"
+description = "SolidCraft slicer: triangles to layers, walls, infill and G-code for FDM printers"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+solidcraft-geom = { workspace = true }
+thiserror = { workspace = true }

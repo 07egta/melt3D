@@ -1,0 +1,14 @@
+[package]
+name = "solidcraft-graph"
+description = "SolidCraft node graph: wires, data trees and components that build geometry and G-code"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+solidcraft-geom = { workspace = true }
+solidcraft-slice = { workspace = true }
+thiserror = { workspace = true }

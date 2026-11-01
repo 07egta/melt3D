@@ -45,7 +45,11 @@ pub const TABLE: &[(&str, Class)] = &[
     ("sketch", Class::Layer(1)),
     ("kernel", Class::Layer(1)),
     ("render", Class::Layer(1)),
+    // triangles to layers and G-code (depends on geom only)
+    ("slice", Class::Layer(1)),
     ("doc", Class::Layer(2)),
+    // node graph: components that build geometry and call the slicer
+    ("graph", Class::Layer(2)),
     ("io", Class::Layer(3)),
     ("engine", Class::Layer(4)),
     ("ui-egui", Class::Layer(5)),
