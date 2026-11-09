@@ -37,10 +37,10 @@ jobs:
             os: ubuntu-22.04   # older Linux, so the download also runs on older distributions
             target: x86_64-unknown-linux-gnu
           - name: macos-arm64
-            os: macos-14
+            os: macos-latest   # macos-14 runners were retired ("configuration is not supported")
             target: aarch64-apple-darwin
           - name: macos-intel
-            os: macos-14   # cross-built: Apple Silicon runners also make the Intel build
+            os: macos-latest   # cross-built: Apple Silicon runners also make the Intel build
             target: x86_64-apple-darwin
     steps:
       - uses: actions/checkout@v4
@@ -162,7 +162,7 @@ jobs:
 
           **Windows:** unzip, double-click \`Melt3D.exe\`. If "Windows protected your PC" appears: More info, then Run anyway.
 
-          **Linux:** `tar -xzf` it and run `./Melt3D`.
+          **Linux:** \`tar -xzf\` it and run \`./Melt3D\`.
 
           **Mac:** unzip, drag "Melt 3D" to Applications. The first time, right-click it, choose Open, then Open again (the app is not notarized yet).
 
