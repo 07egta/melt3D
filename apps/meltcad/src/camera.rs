@@ -109,6 +109,13 @@ impl Camera {
         self.target = centre;
         self.dist = (radius.max(1.0) / TAN_HALF_FOV * 1.35).clamp(4.0, 4000.0);
     }
+    /// Fit both dimensions of a viewport. In a portrait view the horizontal field is narrower.
+    pub fn frame_aspect(&mut self, centre: V3, radius: f32, aspect: f32) {
+        self.frame(centre, radius);
+        if aspect.is_finite() && aspect > 0.0 {
+            self.dist = (self.dist / aspect.min(1.0)).clamp(4.0, 4000.0);
+        }
+    }
     /// The ray through a point of the view: ndc in -1..1 (y up).
     pub fn ray(&self, ndc: [f32; 2], aspect: f32) -> (V3, V3) {
         let (right, up, fwd) = self.basis();

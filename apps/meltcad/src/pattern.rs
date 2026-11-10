@@ -823,12 +823,36 @@ pub fn describe(scene: &Scene, gi: usize) -> (usize, bool) {
 /// A visible shape of a visible group is held by its sphere (`view::radius_of`), moved by the
 /// group's instances. Groups without instances give one sphere per shape.
 pub fn world_spheres(scene: &Scene) -> Vec<Bound> {
+    world_spheres_for(scene, None)
+}
+
+/// Bounds of the selected objects as actually drawn: linked placement, shape/group patterns
+/// and descendants included. Resolve the whole scene first so selection does not change budgets.
+pub fn selected_world_spheres(scene: &Scene, picks: &[crate::model::Pick]) -> Vec<Bound> {
+    world_spheres_for(scene, Some(picks))
+}
+
+fn world_spheres_for(scene: &Scene, picks: Option<&[crate::model::Pick]>) -> Vec<Bound> {
+    use crate::model::Pick;
+    let ranges: Vec<_> = picks
+        .into_iter()
+        .flatten()
+        .filter_map(|p| match *p {
+            Pick::Group(g) if g < scene.groups.len() => Some(g..scene.subtree_end(g)),
+            _ => None,
+        })
+        .collect();
     let mut out = Vec::new();
     for rg in resolve(scene) {
+        let whole = picks.is_none() || ranges.iter().any(|r| r.contains(&rg.gi));
         let Some(src) = scene.groups.get(rg.src) else { continue };
         let mut parts: Vec<Bound> = Vec::new();
         for (si, s) in src.shapes.iter().enumerate() {
-            if !s.solid() {
+            if !whole && !picks.is_some_and(|p| p.contains(&Pick::Shape(rg.gi, si))) {
+                continue;
+            }
+            // Saved sketch guides can be framed explicitly too; Frame All keeps its solid bounds.
+            if !s.solid() && !(picks.is_some() && s.visible && s.guide) {
                 continue;
             }
             let b = Bound { c: s.pos, r: crate::view::radius_of(s) };

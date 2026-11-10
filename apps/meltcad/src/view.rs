@@ -743,16 +743,14 @@ impl App {
 
     pub fn frame_view(&mut self, only_selected: bool) {
         let spheres: Vec<crate::accel::Bound> = if only_selected && self.sel.is_some() {
-            let t = targets(&self.scene, self.sel);
-            t.iter()
-                .filter_map(|(g, s)| self.scene.shape(*g, *s))
-                .filter(|s| s.visible)
-                .map(|s| crate::accel::Bound { c: s.pos, r: radius_of(s) })
-                .collect()
+            crate::pattern::selected_world_spheres(&self.scene, &self.picks())
         } else {
             crate::pattern::world_spheres(&self.scene)
         };
         if spheres.is_empty() {
+            if only_selected && self.sel.is_some() {
+                return;
+            }
             self.fly = Some(Camera { ortho: self.cam.ortho, ..Camera::default() });
             return;
         }
@@ -763,7 +761,7 @@ impl App {
         let c = mul(c, 1.0 / spheres.len() as f32);
         let r = spheres.iter().map(|b| len(sub(b.c, c)) + b.r).fold(1.0_f32, f32::max);
         let mut goal = self.cam;
-        goal.frame(c, r);
+        goal.frame_aspect(c, r, self.view_rect.width() / self.view_rect.height().max(1.0));
         self.fly = Some(goal);
     }
 
@@ -779,6 +777,133 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn frame_selection_follows_linked_copies_and_shape_patterns() {
+        use crate::model::Group;
+        use crate::pattern::Pattern;
+        let mut app = App::new(true, None);
+        app.scene.groups.truncate(1);
+        app.scene.groups[0].shapes.truncate(1);
+        let uid = app.scene.ensure_group_uid(0).expect("source identity");
+        let mut link = Group::new("placed copy");
+        link.instance_of = Some(uid);
+        link.xform.pos = [300.0, -200.0, 80.0];
+        app.scene.groups.push(link);
+        app.sel = Some(Pick::Group(1));
+        app.frame_view(true);
+        let framed = app.fly.expect("linked copy is framed");
+        let expected = add(app.scene.groups[0].shapes[0].pos, [300.0, -200.0, 80.0]);
+        assert!(len(sub(framed.target, expected)) < 0.01);
+
+        app.scene.groups[0].shapes[0].pattern = Some(Pattern::Rect { counts: [4, 1, 1], spacing: [100.0, 0.0, 0.0] });
+        app.sel = Some(Pick::Shape(0, 0));
+        app.frame_view(true);
+        let patterned = app.fly.expect("shape pattern is framed");
+        assert!((patterned.target[0] - app.scene.groups[0].shapes[0].pos[0] - 150.0).abs() < 0.01);
+        assert!(patterned.dist > framed.dist, "all four instances need room");
+    }
+
+    #[test]
+    fn frame_selection_includes_group_patterns_without_framing_other_groups() {
+        use crate::pattern::Pattern;
+        let mut app = App::new(true, None);
+        app.scene.groups.truncate(1);
+        app.scene.groups[0].shapes.truncate(1);
+        app.scene.groups[0].pattern = Some(Pattern::Rect { counts: [3, 1, 1], spacing: [120.0, 0.0, 0.0] });
+        let mut distant = app.scene.groups[0].clone();
+        distant.pattern = None;
+        distant.shapes[0].pos = [2000.0, 0.0, 20.0];
+        app.scene.groups.push(distant);
+        app.sel = Some(Pick::Group(0));
+        app.frame_view(true);
+        let cam = app.fly.expect("patterned group");
+        assert!((cam.target[0] - app.scene.groups[0].shapes[0].pos[0] - 120.0).abs() < 0.01);
+        assert!(cam.dist < 1000.0, "the unrelated distant object is outside this frame");
+    }
+
+    /// Real CPU viewport evidence for Frame Selected; no mock geometry or screenshot overlays.
+    /// MELTCAD_FRAME_PREVIEW=/tmp/framing.png cargo test -p meltcad frame_selection_preview -- --ignored
+    #[test]
+    #[ignore]
+    fn frame_selection_preview() {
+        use crate::model::{Group, Material, Shape};
+        let mut app = App::new(true, None);
+        let mut source = Group::new("source");
+        let mut shape = Shape::new(Kind::Box, [0.0, 0.0, 20.0], Material::default());
+        shape.size = [35.0, 25.0, 40.0];
+        source.shapes.push(shape);
+        source.visible = false;
+        app.scene.groups = vec![source];
+        let uid = app.scene.ensure_group_uid(0).expect("source uid");
+        let mut link = Group::new("selected copy");
+        link.instance_of = Some(uid);
+        link.xform.pos = [300.0, -200.0, 80.0];
+        app.scene.groups.push(link);
+        app.sel = Some(Pick::Group(1));
+        app.view_rect = Rect::from_min_size(Pos2::ZERO, vec2(320.0, 700.0));
+        app.frame_view(true);
+        app.cam = app.fly.take().expect("frame goal");
+        let rgba = crate::easy_view::render(&app.scene, &app.cam, [320, 700], true, 4, &|| false).expect("CPU viewport");
+        let png = crate::png::encode_rgba(320, 700, &rgba).expect("PNG");
+        let path = std::env::var("MELTCAD_FRAME_PREVIEW").expect("evidence destination");
+        std::fs::write(path, png).expect("write evidence");
+    }
+
+    #[test]
+    fn frame_selection_includes_every_pick_and_ignores_hidden_selections() {
+        let mut app = App::new(true, None);
+        app.scene.groups.truncate(1);
+        app.scene.groups[0].shapes.truncate(1);
+        app.scene.groups[0].shapes[0].pos = [-200.0, 0.0, 20.0];
+        let mut second = app.scene.groups[0].shapes[0].clone();
+        second.pos[0] = 200.0;
+        app.scene.groups[0].shapes.push(second);
+        app.select_pick(Some(Pick::Shape(0, 0)), false);
+        app.select_pick(Some(Pick::Shape(0, 1)), true);
+        app.frame_view(true);
+        assert!(app.fly.expect("both picks").target[0].abs() < 0.01);
+        app.fly = None;
+        app.scene.groups[0].visible = false;
+        app.frame_view(true);
+        assert!(app.fly.is_none(), "hidden picks should not send the camera home");
+    }
+
+    #[test]
+    fn frame_selection_keeps_parent_descendants_and_saved_sketches() {
+        use crate::model::Group;
+        let mut app = App::new(true, None);
+        let mut child = Group::new("child");
+        child.depth = 1;
+        let mut guide = app.scene.groups[0].shapes[0].clone();
+        guide.guide = true;
+        guide.pos = [400.0, 40.0, 20.0];
+        child.shapes.push(guide);
+        app.scene.groups = vec![Group::new("parent"), child];
+        app.sel = Some(Pick::Group(0));
+        app.frame_view(true);
+        assert_eq!(app.fly.expect("child guide is included").target, [400.0, 40.0, 20.0]);
+    }
+
+    #[test]
+    fn frame_view_fits_portrait_viewports_in_both_projections() {
+        for ortho in [false, true] {
+            let mut app = App::new(true, None);
+            app.cam.ortho = ortho;
+            app.view_rect = Rect::from_min_size(Pos2::ZERO, vec2(240.0, 900.0));
+            app.frame_view(false);
+            let cam = app.fly.expect("frame goal");
+            let (right, up, _) = cam.basis();
+            for b in crate::pattern::world_spheres(&app.scene) {
+                for axis in [right, up] {
+                    for sign in [-1.0, 1.0] {
+                        let p = cam.project(app.view_rect, add(b.c, mul(axis, sign * b.r))).expect("in front");
+                        assert!(app.view_rect.contains(p), "ortho={ortho}, point={p:?}");
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn a_parent_pick_covers_its_child_groups() {
