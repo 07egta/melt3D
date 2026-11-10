@@ -1626,9 +1626,18 @@ pub fn tr(key: &str) -> &str {
 /// A translated sentence with values put in: `{0}`, `{1}`, ... in the text are replaced by `args`
 /// in that order of number, so a translation may move them around.
 pub fn fill(key: &str, args: &[&dyn std::fmt::Display]) -> String {
-    let mut text = tr(key).to_owned();
-    for (i, arg) in args.iter().enumerate() {
-        text = text.replace(&format!("{{{i}}}"), &arg.to_string());
+    let mut parts = tr(key).split('{');
+    let mut text = parts.next().unwrap_or_default().to_owned();
+    for part in parts {
+        if let Some((number, tail)) = part.split_once('}')
+            && let Some(arg) = number.parse::<usize>().ok().and_then(|i| args.get(i))
+        {
+            text.push_str(&arg.to_string());
+            text.push_str(tail);
+        } else {
+            text.push('{');
+            text.push_str(part);
+        }
     }
     text
 }
@@ -1793,6 +1802,8 @@ mod tests {
     fn fill_puts_every_value_in_and_every_language_names_the_same_places() {
         let _en = lang("en");
         assert_eq!(fill("anim.frame", &[&3, &12]), "Frame 3 / 12");
+        assert_eq!(fill("anim.frame", &[&"{1}", &"{0}"]), "Frame {1} / {0}", "values must remain literal text");
+        assert_eq!(fill("anim.frame", &[&"first"]), "Frame first / {1}", "missing values remain placeholders");
         let _ja = lang("ja");
         assert_eq!(fill("anim.frame", &[&3, &12]), "コマ 3 / 12");
         // a translation may reorder the places, never drop or invent one
