@@ -249,7 +249,7 @@ impl App {
             Action::EndSketchEdit => self.sk.edit.is_none().then_some("輪郭を編集中ではありません"),
             Action::Extrude => {
                 if self.sk.on && self.sk.keep_sketch {
-                    Some("Finish Sketch first to save the guide before choosing a solid operation")
+                    Some(crate::i18n::tr("sketch.finish_first"))
                 } else if !(self.sk.on && self.sk.stage == Stage::Ready && !self.sk.profile.is_empty()) {
                     Some("2D輪郭を完成させてください")
                 } else if self.scene.shape_count().saturating_add(1 + self.sk.holes.len()) > MAX_SHAPES {
@@ -421,10 +421,10 @@ impl App {
                 .horizontal(|ui| {
                     let (logo, _) = ui.allocate_exact_size(vec2(16.0, 18.0), egui::Sense::hover());
                     style::solidcraft_logo(ui.painter(), logo);
-                    ui.button(RichText::new("Edit").color(style::ACCENT))
+                    ui.button(RichText::new(crate::i18n::tr("menu.edit")).color(style::ACCENT))
                 })
                 .inner;
-            if r.on_hover_text("Open this solid in SolidCraft").clicked() {
+            if r.on_hover_text(crate::i18n::tr("solid.open")).clicked() {
                 let ctx = ui.ctx().clone();
                 if let Err(e) = self.edit_in_solidcraft(&ctx, g, s) {
                     self.say(&ctx, e);

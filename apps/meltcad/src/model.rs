@@ -157,20 +157,20 @@ impl Kind {
     /// What the size numbers mean, for the inspector.
     pub fn size_labels(self) -> [&'static str; 3] {
         match self {
-            Kind::Sphere => ["Radius", "", ""],
-            Kind::Box => ["Width", "Depth", "Height"],
-            Kind::Cylinder => ["Radius", "Height", ""],
-            Kind::Torus => ["Major radius", "Minor radius", ""],
-            Kind::Cone => ["Radius", "Height", ""],
-            Kind::Extrude => ["Height", "", ""],
-            Kind::Prism3 | Kind::PrismN | Kind::Star => ["Outer radius", "Height", ""],
-            Kind::Octa | Kind::Tetra | Kind::Hemi => ["Radius", "", ""],
-            Kind::Pyramid => ["Base radius", "Height", ""],
-            Kind::Capsule => ["Radius", "Length", ""],
-            Kind::Tube => ["Outer radius", "Wall", "Height"],
-            Kind::Wedge => ["Width", "Depth", "Height"],
+            Kind::Sphere => [crate::i18n::tr("size.radius"), "", ""],
+            Kind::Box => [crate::i18n::tr("size.width"), crate::i18n::tr("size.depth"), crate::i18n::tr("size.height")],
+            Kind::Cylinder => [crate::i18n::tr("size.radius"), crate::i18n::tr("size.height"), ""],
+            Kind::Torus => [crate::i18n::tr("size.major_radius"), crate::i18n::tr("size.minor_radius"), ""],
+            Kind::Cone => [crate::i18n::tr("size.radius"), crate::i18n::tr("size.height"), ""],
+            Kind::Extrude => [crate::i18n::tr("size.height"), "", ""],
+            Kind::Prism3 | Kind::PrismN | Kind::Star => [crate::i18n::tr("size.outer_radius"), crate::i18n::tr("size.height"), ""],
+            Kind::Octa | Kind::Tetra | Kind::Hemi => [crate::i18n::tr("size.radius"), "", ""],
+            Kind::Pyramid => [crate::i18n::tr("size.base_radius"), crate::i18n::tr("size.height"), ""],
+            Kind::Capsule => [crate::i18n::tr("size.radius"), crate::i18n::tr("size.length"), ""],
+            Kind::Tube => [crate::i18n::tr("size.outer_radius"), crate::i18n::tr("size.wall"), crate::i18n::tr("size.height")],
+            Kind::Wedge => [crate::i18n::tr("size.width"), crate::i18n::tr("size.depth"), crate::i18n::tr("size.height")],
             Kind::Revolve => ["", "", ""],
-            Kind::Loft => ["Height", "", ""],
+            Kind::Loft => [crate::i18n::tr("size.height"), "", ""],
             Kind::Curve => ["", "", ""],
             Kind::Sweep => ["", "", ""],
             // (the size is the model's size in mm, shown by the mesh inspector, not edited)
@@ -207,10 +207,10 @@ impl Kind {
     /// Labels of the four extra numbers (`Shape::params`); empty = unused.
     pub fn param_labels(self) -> [&'static str; 4] {
         match self {
-            Kind::PrismN => ["Sides", "", "", ""],
-            Kind::Pyramid => ["Sides", "", "", ""],
-            Kind::Star => ["Points", "Inner ratio", "", ""],
-            Kind::Revolve => ["Angle", "", "", ""],
+            Kind::PrismN => [crate::i18n::tr("size.sides"), "", "", ""],
+            Kind::Pyramid => [crate::i18n::tr("size.sides"), "", "", ""],
+            Kind::Star => [crate::i18n::tr("size.points"), crate::i18n::tr("size.inner_ratio"), "", ""],
+            Kind::Revolve => [crate::i18n::tr("size.angle"), "", "", ""],
             _ => ["", "", "", ""],
         }
     }

@@ -772,18 +772,20 @@ impl App {
                 style::card().show(ui, |ui| {
                     ui.set_max_width((width - 24.0).max(24.0));
                     ui.horizontal_wrapped(|ui| {
-                        ui.label(egui::RichText::new("Curve").strong().color(style::ACCENT));
-                        style::labeled_slider(ui, "Thickness", &mut self.ct.draw_radius, 0.5..=40.0, "Radius of new nodes (mm)");
-                        if style::pill(ui, "Done", false).on_hover_text("Finish this curve and leave the tool (Esc)").clicked() {
+                        ui.label(egui::RichText::new(crate::i18n::tr("tool.curve")).strong().color(style::ACCENT));
+                        style::labeled_slider(
+                            ui,
+                            crate::i18n::tr("curve.thickness"),
+                            &mut self.ct.draw_radius,
+                            0.5..=40.0,
+                            crate::i18n::tr("curve.thickness.tip"),
+                        );
+                        if style::pill(ui, crate::i18n::tr("action.done"), false).on_hover_text(crate::i18n::tr("curve.done.tip")).clicked() {
                             self.finish_drawing();
                             self.ct.drawing = false;
                         }
                     });
-                    ui.label(
-                        egui::RichText::new("Left-click: add node   Right-click / Enter: done   Backspace: undo one node")
-                            .size(11.0)
-                            .color(style::DIM),
-                    );
+                    ui.label(egui::RichText::new(crate::i18n::tr("curve.hint")).size(11.0).color(style::DIM));
                 });
             });
     }
@@ -906,15 +908,16 @@ impl App {
         let chosen = self.chosen_node(g, s);
         let Some(sh) = self.scene.shape_mut(g, s) else { return };
         let is_curve = sh.kind == Kind::Curve;
-        style::title(ui, if is_curve { "Curve nodes" } else { "Path nodes" });
+        style::title(ui, if is_curve { crate::i18n::tr("curve.nodes") } else { crate::i18n::tr("curve.path_nodes") });
         ui.horizontal(|ui| {
-            if style::pill(ui, "Edit nodes", self.ct.edit_nodes).on_hover_text("Drag nodes on screen to move them").clicked() {
+            if style::pill(ui, crate::i18n::tr("curve.edit_nodes"), self.ct.edit_nodes)
+                .on_hover_text(crate::i18n::tr("curve.edit_nodes.tip"))
+                .clicked()
+            {
                 self.ct.edit_nodes = !self.ct.edit_nodes;
             }
         });
-        ui.add(
-            egui::Label::new(egui::RichText::new("Drag the + at an end to extend, the + between nodes to add").size(10.5).color(style::DIM)).wrap(),
-        );
+        ui.add(egui::Label::new(egui::RichText::new(crate::i18n::tr("curve.extend.tip")).size(10.5).color(style::DIM)).wrap());
         if is_curve {
             // Populate the optional handle array on first inspection so a
             // legacy shape can enter Smooth/Corner mode without any migration.
@@ -926,8 +929,12 @@ impl App {
                 && let Some(h) = sh.curve_handles.get_mut(i)
             {
                 ui.horizontal(|ui| {
-                    ui.label("Tangent");
-                    for (mode, label) in [(CurveNodeMode::Auto, "Auto"), (CurveNodeMode::Smooth, "Smooth"), (CurveNodeMode::Corner, "Corner")] {
+                    ui.label(crate::i18n::tr("curve.tangent"));
+                    for (mode, label) in [
+                        (CurveNodeMode::Auto, crate::i18n::tr("curve.auto")),
+                        (CurveNodeMode::Smooth, crate::i18n::tr("curve.smooth")),
+                        (CurveNodeMode::Corner, crate::i18n::tr("curve.corner")),
+                    ] {
                         if ui.selectable_label(h.mode == mode, label).clicked() {
                             if h.mode == CurveNodeMode::Auto && mode != CurveNodeMode::Auto {
                                 let direction = if i > 0 && i + 1 < sh.path.len() {
@@ -949,17 +956,17 @@ impl App {
                     }
                 });
             }
-            style::labeled_slider(ui, "Smoothness", &mut sh.params[1], 0.0..=1.0, "0 = sharp / 1 = smooth");
+            style::labeled_slider(ui, crate::i18n::tr("curve.smoothness"), &mut sh.params[1], 0.0..=1.0, "0 = sharp / 1 = smooth");
             ui.horizontal(|ui| {
                 let mut closed = sh.params[0] > 0.5;
-                if ui.checkbox(&mut closed, "Closed loop").on_hover_text("Join the last and first node").changed() {
+                if ui.checkbox(&mut closed, crate::i18n::tr("pipe.loop")).on_hover_text(crate::i18n::tr("pipe.loop.tip")).changed() {
                     sh.params[0] = if closed { 1.0 } else { 0.0 };
                 }
             });
             if sh.params[0] < 0.5 {
                 let mut roundness = 1.0 - sh.params[2].clamp(0.0, 1.0);
                 if ui
-                    .add(egui::Slider::new(&mut roundness, 0.0..=1.0).text("End roundness"))
+                    .add(egui::Slider::new(&mut roundness, 0.0..=1.0).text(crate::i18n::tr("curve.end_round")))
                     .on_hover_text("1 = round like a ball / 0 = cut flat. Values in between work too")
                     .changed()
                 {
@@ -968,11 +975,15 @@ impl App {
             }
             // A Curve uses only size[1..=2] for the section.
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("Section").color(style::DIM).size(12.0));
-                if style::pill(ui, "Round", sh.size[2] < 1.5).on_hover_text("丸いSection。幅の比率で楕円にもできます").clicked() {
+                ui.label(egui::RichText::new(crate::i18n::tr("curve.section")).color(style::DIM).size(12.0));
+                if style::pill(ui, crate::i18n::tr("inspector.round"), sh.size[2] < 1.5)
+                    .on_hover_text("丸いSection。幅の比率で楕円にもできます")
+                    .clicked()
+                {
                     sh.size[2] = 1.0;
                 }
-                if style::pill(ui, "Soft square", sh.size[2] >= 1.5).on_hover_text("四隅が滑らかな角丸状のSection").clicked() {
+                if style::pill(ui, crate::i18n::tr("curve.soft_square"), sh.size[2] >= 1.5).on_hover_text("四隅が滑らかな角丸状のSection").clicked()
+                {
                     sh.size[2] = 2.0;
                 }
             });
@@ -981,10 +992,10 @@ impl App {
                 sh.params[3] = 1.0;
             }
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("Overall thickness").color(style::DIM).size(12.0));
+                ui.label(egui::RichText::new(crate::i18n::tr("curve.overall")).color(style::DIM).size(12.0));
                 ui.add(egui::DragValue::new(&mut sh.params[3]).speed(0.01).range(0.1..=5.0).suffix(" ×").max_decimals(2));
             });
-            if style::pill(ui, "Same thickness", false).on_hover_text("Match the selected node's thickness (or the first)").clicked() {
+            if style::pill(ui, crate::i18n::tr("curve.same"), false).on_hover_text(crate::i18n::tr("curve.same.tip")).clicked() {
                 let r = sh.path.get(chosen.unwrap_or(0)).map(|p| p[3]).unwrap_or(5.0);
                 set_all_radii(&mut sh.path, r);
             }
@@ -995,7 +1006,7 @@ impl App {
         egui::ScrollArea::vertical().id_salt("curve_nodes").max_height(170.0).show(ui, |ui| {
             for (i, node) in sh.path.iter_mut().enumerate() {
                 ui.horizontal(|ui| {
-                    if ui.selectable_label(chosen == Some(i), format!("Node {}", i + 1)).clicked() {
+                    if ui.selectable_label(chosen == Some(i), crate::i18n::fill("curve.node_n", &[&(i + 1)])).clicked() {
                         pick = Some(i);
                     }
                     ui.add(
@@ -1005,7 +1016,7 @@ impl App {
                             .prefix(if is_curve { "thickness " } else { "x " })
                             .max_decimals(1),
                     );
-                    if ui.add_enabled(n > 2, egui::Button::new("×").small()).on_hover_text("Delete this node").clicked() {
+                    if ui.add_enabled(n > 2, egui::Button::new("×").small()).on_hover_text(crate::i18n::tr("curve.node.delete")).clicked() {
                         del = Some(i);
                     }
                 });
@@ -1015,13 +1026,13 @@ impl App {
             && let Some(node) = sh.path.get_mut(i)
         {
             let mut v = [node[0], node[1], node[2]];
-            if style::xyz(ui, "Node", &mut v, 0.5, -5000.0..=5000.0, "") {
+            if style::xyz(ui, crate::i18n::tr("curve.node"), &mut v, 0.5, -5000.0..=5000.0, "") {
                 node[0] = v[0];
                 node[1] = v[1];
                 node[2] = v[2];
             }
         }
-        if ui.add_enabled(n < MAX_PATH, egui::Button::new("+ Add node")).on_hover_text("Add at the end").clicked() {
+        if ui.add_enabled(n < MAX_PATH, egui::Button::new("+ Add node")).on_hover_text(crate::i18n::tr("curve.add_end")).clicked() {
             let (a, b) = (sh.path.get(n.wrapping_sub(1)).copied(), sh.path.get(n.wrapping_sub(2)).copied());
             if let (Some(a), Some(b)) = (a, b) {
                 let d = sub([a[0], a[1], a[2]], [b[0], b[1], b[2]]);

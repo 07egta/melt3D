@@ -199,7 +199,7 @@ impl App {
             return;
         }
         let Some(target) = self.pattern_target() else {
-            self.say(ctx, "Select a group or shape first");
+            self.say(ctx, crate::i18n::tr("pattern.select_first"));
             return;
         };
         self.set_pattern_kind_on(ctx, target, kind);
@@ -223,7 +223,7 @@ impl App {
                 match found.and_then(|(gi, si)| self.scene.ensure_shape_uid(gi, si)) {
                     Some(uid) => *source = uid,
                     None => {
-                        self.say(ctx, "No path to follow (make a line, sweep or extrusion first)");
+                        self.say(ctx, crate::i18n::tr("pattern.no_path"));
                         return;
                     }
                 }
@@ -240,7 +240,7 @@ impl App {
                 match found.and_then(|(gi, si)| self.scene.ensure_shape_uid(gi, si)) {
                     Some(uid) => *source = Source::Shape(uid),
                     None => {
-                        self.say(ctx, "No other shape to borrow points from");
+                        self.say(ctx, crate::i18n::tr("pattern.no_source"));
                         return;
                     }
                 }
@@ -260,7 +260,7 @@ impl App {
             return;
         }
         let Some(target) = self.pattern_target() else {
-            self.say(ctx, "Select a group or shape first");
+            self.say(ctx, crate::i18n::tr("pattern.select_first"));
             return;
         };
         self.toggle_mirror_on(ctx, target, axis);
@@ -286,7 +286,7 @@ impl App {
                 self.write_pattern(target, next);
             }
             Some(_) => {
-                self.say(ctx, "Another pattern is already on. Turn it off first");
+                self.say(ctx, crate::i18n::tr("pattern.already"));
             }
         }
     }
@@ -307,11 +307,11 @@ impl App {
             return;
         }
         let Some(g) = self.selected_group() else {
-            self.say(ctx, "Select a group or shape first");
+            self.say(ctx, crate::i18n::tr("pattern.select_first"));
             return;
         };
         if self.scene.groups.len() >= MAX_GROUPS {
-            self.say(ctx, format!("Up to {MAX_GROUPS} groups"));
+            self.say(ctx, crate::i18n::fill("limit.groups", &[&MAX_GROUPS]));
             return;
         }
         // a copy of a copy is a copy of the original
@@ -330,7 +330,7 @@ impl App {
         let at = self.scene.subtree_end(g);
         self.scene.groups.insert(at, copy);
         self.sel = Some(Pick::Group(at));
-        self.say(ctx, "Made a linked copy. Edits to the original also change this one");
+        self.say(ctx, crate::i18n::tr("link.made"));
     }
 
     /// Make a linked copy a group of its own again (its shapes are copied, placed where the copy stood).
@@ -387,13 +387,13 @@ impl App {
         {
             self.link_box(ui, g);
         }
-        style::title(ui, "Pattern");
+        style::title(ui, crate::i18n::tr("tool.pattern"));
         let current = self.pattern_of(target);
         let anchor = target.anchor(&self.scene);
         // the kind: nothing, or one of five
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
-            if style::icon_button(ui, 34.0, "No pattern", current.is_none(), |p, r, ink| {
+            if style::icon_button(ui, 34.0, crate::i18n::tr("inspector.pattern.none"), current.is_none(), |p, r, ink| {
                 let f = frame(r);
                 p.line_segment([at(f, 0.2, 0.2), at(f, 0.8, 0.8)], Stroke::new(2.0, ink));
                 p.line_segment([at(f, 0.8, 0.2), at(f, 0.2, 0.8)], Stroke::new(2.0, ink));
@@ -417,12 +417,12 @@ impl App {
         };
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
-            style::row_label(ui, "Mirror");
+            style::row_label(ui, crate::i18n::tr("inspector.pattern.mirror"));
             let free = current.is_none() || mirror_axes.is_some();
             for (i, name) in ["X", "Y", "Z"].iter().enumerate() {
                 let on = mirror_axes.is_some_and(|a| a[i]);
                 if style::pill_enabled(ui, name, on, free)
-                    .on_hover_text(["Mirror across X (left/right)", "Mirror across Y (front/back)", "Mirror across Z (up/down)"][i])
+                    .on_hover_text([crate::i18n::tr("pattern.mirror.x"), crate::i18n::tr("pattern.mirror.y"), crate::i18n::tr("pattern.mirror.z")][i])
                     .clicked()
                 {
                     self.toggle_mirror_on(&ctx, target, i);
@@ -434,18 +434,24 @@ impl App {
                 PatternTarget::Group(_) => "group",
                 PatternTarget::Shape(_, _) => "shape",
             };
-            ui.label(RichText::new(format!("Repeat this {what} many times, or mirror it left and right")).size(12.0).color(style::DIM));
+            ui.label(RichText::new(crate::i18n::fill("pattern.intro", &[&what])).size(12.0).color(style::DIM));
             return;
         };
         let mut chosen: Option<Chosen> = None;
         match &mut pat {
             Pattern::Mirror { centre: about, .. } => {
                 ui.horizontal(|ui| {
-                    style::row_label(ui, "Mirror plane");
-                    if style::pill(ui, "Origin", !*about).on_hover_text("The plane through the world origin").clicked() {
+                    style::row_label(ui, crate::i18n::tr("inspector.pattern.mirror_plane"));
+                    if style::pill(ui, crate::i18n::tr("inspector.pattern.origin"), !*about)
+                        .on_hover_text(crate::i18n::tr("pattern.origin.tip"))
+                        .clicked()
+                    {
                         *about = false;
                     }
-                    if style::pill(ui, "Own center", *about).on_hover_text("The plane through this group's or shape's own center").clicked() {
+                    if style::pill(ui, crate::i18n::tr("pattern.own_center"), *about)
+                        .on_hover_text(crate::i18n::tr("pattern.own_center.tip"))
+                        .clicked()
+                    {
                         *about = true;
                     }
                 });
@@ -454,27 +460,33 @@ impl App {
                 for (i, c) in counts.iter_mut().enumerate() {
                     slider_row_u32(
                         ui,
-                        &format!("Count {}", ["X", "Y", "Z"][i]),
+                        &crate::i18n::fill("pattern.count_axis", &[&(["X", "Y", "Z"][i])]),
                         c,
                         1..=pattern::MAX_SIDE,
-                        "Copies along this axis (1 = just this one)",
+                        crate::i18n::tr("pattern.count_axis.tip"),
                     );
                 }
                 for (i, s) in spacing.iter_mut().enumerate() {
                     slider_row_f32(
                         ui,
-                        &format!("Spacing {}", ["X", "Y", "Z"][i]),
+                        &crate::i18n::fill("pattern.spacing_axis", &[&(["X", "Y", "Z"][i])]),
                         s,
                         -1000.0..=1000.0,
-                        "Distance between copies along this axis (mm; a minus goes the other way)",
+                        crate::i18n::tr("pattern.spacing_axis.tip"),
                     );
                 }
             }
             Pattern::Circular { count, angle, axis, centre: c, rotate } => {
-                slider_row_u32(ui, "Count", count, 1..=pattern::MAX_INSTANCES as u32, "Copies around the circle");
-                slider_row_f32(ui, "Angle", angle, -360.0..=360.0, "How much of a turn the copies cover (degrees)");
+                slider_row_u32(
+                    ui,
+                    crate::i18n::tr("inspector.pattern.count"),
+                    count,
+                    1..=pattern::MAX_INSTANCES as u32,
+                    crate::i18n::tr("pattern.count_circle.tip"),
+                );
+                slider_row_f32(ui, crate::i18n::tr("inspector.twist.angle"), angle, -360.0..=360.0, crate::i18n::tr("pattern.angle.tip"));
                 ui.horizontal(|ui| {
-                    style::row_label(ui, "Rotation axis");
+                    style::row_label(ui, crate::i18n::tr("inspector.pattern.rotation_axis"));
                     for (i, name) in ["X", "Y", "Z"].iter().enumerate() {
                         if style::pill(ui, name, usize::from(*axis) == i).clicked() {
                             *axis = i as u8;
@@ -482,25 +494,25 @@ impl App {
                     }
                 });
                 let mut radius = pattern::circular_radius(anchor, *c, *axis);
-                if slider_row_f32(ui, "Radius", &mut radius, 0.0..=1000.0, "How far from the middle the copies go (mm)") {
+                if slider_row_f32(ui, crate::i18n::tr("pattern.radius"), &mut radius, 0.0..=1000.0, crate::i18n::tr("pattern.radius.tip")) {
                     pattern::set_circular_radius(anchor, c, *axis, radius);
                 }
-                style::xyz(ui, "Center", c, 0.5, -5000.0..=5000.0, "");
+                style::xyz(ui, crate::i18n::tr("inspector.pattern.center"), c, 0.5, -5000.0..=5000.0, "");
                 ui.horizontal(|ui| {
                     ui.add_space(style::LABEL_W);
-                    if style::pill(ui, "Origin", false).clicked() {
+                    if style::pill(ui, crate::i18n::tr("inspector.pattern.origin"), false).clicked() {
                         *c = [0.0; 3];
                     }
-                    if style::pill(ui, "Own center", false).clicked() {
+                    if style::pill(ui, crate::i18n::tr("pattern.own_center"), false).clicked() {
                         *c = anchor;
                     }
                 });
-                style::checkbox(ui, rotate, "Rotate copies too");
+                style::checkbox(ui, rotate, crate::i18n::tr("inspector.pattern.rotate_copies"));
             }
             Pattern::Path { source, count, mode, step, align } => {
                 let label = self.source_label(Source::Shape(*source));
                 ui.horizontal(|ui| {
-                    style::row_label(ui, "Path");
+                    style::row_label(ui, crate::i18n::tr("pattern.path_label"));
                     egui::ComboBox::from_id_salt("pattern_path_source").selected_text(label).width(150.0).show_ui(ui, |ui| {
                         for (gi, gr) in self.scene.groups.iter().enumerate() {
                             for (si, s) in gr.shapes.iter().enumerate() {
@@ -514,37 +526,43 @@ impl App {
                     });
                 });
                 ui.horizontal(|ui| {
-                    style::row_label(ui, "Layout");
-                    if style::pill(ui, "Even", *mode == PathMode::Even).on_hover_text("Evenly from one end of the line to the other").clicked() {
+                    style::row_label(ui, crate::i18n::tr("pattern.layout"));
+                    if style::pill(ui, crate::i18n::tr("pattern.even"), *mode == PathMode::Even)
+                        .on_hover_text(crate::i18n::tr("pattern.even.tip"))
+                        .clicked()
+                    {
                         *mode = PathMode::Even;
                     }
-                    if style::pill(ui, "Distance", *mode == PathMode::Step).on_hover_text("Every set length").clicked() {
+                    if style::pill(ui, crate::i18n::tr("pattern.distance"), *mode == PathMode::Step)
+                        .on_hover_text(crate::i18n::tr("pattern.distance.tip"))
+                        .clicked()
+                    {
                         *mode = PathMode::Step;
                     }
                 });
                 slider_row_u32(
                     ui,
-                    if *mode == PathMode::Even { "Count" } else { "At most" },
+                    if *mode == PathMode::Even { crate::i18n::tr("inspector.pattern.count") } else { crate::i18n::tr("pattern.at_most") },
                     count,
                     1..=pattern::MAX_INSTANCES as u32,
-                    "Most copies to put along the path",
+                    crate::i18n::tr("pattern.at_most.tip"),
                 );
                 if *mode == PathMode::Step {
-                    slider_row_f32(ui, "Gap", step, 0.1..=500.0, "Distance from one copy to the next along the path (mm)");
+                    slider_row_f32(ui, crate::i18n::tr("pattern.gap"), step, 0.1..=500.0, crate::i18n::tr("pattern.gap.tip"));
                 }
-                style::checkbox(ui, align, "Align to the line's direction");
+                style::checkbox(ui, align, crate::i18n::tr("pattern.align_line"));
             }
             Pattern::Geometry { source, orient } => {
                 let label = self.source_label(*source);
                 ui.horizontal(|ui| {
-                    style::row_label(ui, "Borrow points");
+                    style::row_label(ui, crate::i18n::tr("pattern.borrow"));
                     egui::ComboBox::from_id_salt("pattern_geometry_source").selected_text(label).width(150.0).show_ui(ui, |ui| {
                         for (gi, gr) in self.scene.groups.iter().enumerate() {
                             if !gr.shapes.is_empty()
                                 && ui
                                     .selectable_label(
                                         matches!(source, Source::Group(u) if gr.uid != 0 && *u == gr.uid),
-                                        format!("Group: {}", gr.name),
+                                        crate::i18n::fill("pattern.group_name", &[&gr.name]),
                                     )
                                     .clicked()
                             {
@@ -564,12 +582,8 @@ impl App {
                         }
                     });
                 });
-                style::checkbox(ui, orient, "Align to the point's direction");
-                ui.label(
-                    RichText::new("Lines, sweeps and extrusions use nodes and corners, boxes use 8 corners, others use the center")
-                        .size(11.5)
-                        .color(style::DIM),
-                );
+                style::checkbox(ui, orient, crate::i18n::tr("pattern.align_point"));
+                ui.label(RichText::new(crate::i18n::tr("pattern.borrow.note")).size(11.5).color(style::DIM));
             }
         }
         // what was picked from a list: give that shape or group a number to be found by
@@ -599,21 +613,17 @@ impl App {
         };
         let missing = pat.follows().is_some() && pattern::natural_count(&pat, &self.scene) == 0;
         ui.horizontal(|ui| {
-            style::row_label(ui, "Current count");
+            style::row_label(ui, crate::i18n::tr("pattern.current_count"));
             ui.label(RichText::new(format!("{n} copies (up to {})", pattern::MAX_INSTANCES)).strong().size(13.0));
         });
         if capped {
             ui.label(RichText::new(pattern::TOO_MANY).size(12.0).color(style::CUT));
         }
         if missing {
-            ui.label(RichText::new("No path found (line or shape)").size(12.0).color(style::CUT));
+            ui.label(RichText::new(crate::i18n::tr("pattern.path_missing")).size(12.0).color(style::CUT));
         }
         self.write_pattern(target, Some(pat));
-        ui.label(
-            RichText::new("The shape frame is not used. Choosing a copy selects the shape or group the pattern was made from")
-                .size(11.5)
-                .color(style::DIM),
-        );
+        ui.label(RichText::new(crate::i18n::tr("pattern.frame_note")).size(11.5).color(style::DIM));
     }
 
     fn source_label(&self, s: Source) -> String {
@@ -623,7 +633,7 @@ impl App {
                 None => "(choose one)".into(),
             },
             Source::Group(uid) => match self.scene.group_by_uid(uid).and_then(|g| self.scene.groups.get(g)) {
-                Some(gr) => format!("Group: {}", gr.name),
+                Some(gr) => crate::i18n::fill("pattern.group_name", &[&gr.name]),
                 None => "(choose one)".into(),
             },
         }
@@ -631,21 +641,21 @@ impl App {
 
     /// The box for a linked copy: whose shapes it shows, and where it stands.
     fn link_box(&mut self, ui: &mut Ui, g: usize) {
-        style::title(ui, "Linked copy");
+        style::title(ui, crate::i18n::tr("link.copy"));
         let src = pattern::link_source(&self.scene, g);
         let src_name = src.and_then(|s| self.scene.groups.get(s)).map(|s| s.name.clone());
         ui.horizontal_wrapped(|ui| {
-            ui.label(RichText::new("Source").color(style::DIM).size(12.0));
+            ui.label(RichText::new(crate::i18n::tr("link.source")).color(style::DIM).size(12.0));
             match &src_name {
                 Some(n) => ui.label(RichText::new(n).strong().size(13.0)),
-                None => ui.label(RichText::new("No source group").color(style::CUT).size(12.0)),
+                None => ui.label(RichText::new(crate::i18n::tr("link.no_source")).color(style::CUT).size(12.0)),
             };
         });
         if let Some(gr) = self.scene.groups.get_mut(g) {
-            style::xyz(ui, "Position", &mut gr.xform.pos, 0.5, -5000.0..=5000.0, "");
-            style::xyz(ui, "Rotation", &mut gr.xform.rot, 1.0, -3600.0..=3600.0, "°");
+            style::xyz(ui, crate::i18n::tr("inspector.position"), &mut gr.xform.pos, 0.5, -5000.0..=5000.0, "");
+            style::xyz(ui, crate::i18n::tr("inspector.rotation"), &mut gr.xform.rot, 1.0, -3600.0..=3600.0, "°");
             ui.horizontal(|ui| {
-                style::row_label(ui, "Scale");
+                style::row_label(ui, crate::i18n::tr("inspector.scale"));
                 style::field_sized(
                     ui,
                     [74.0, 22.0],
@@ -654,19 +664,19 @@ impl App {
             });
         }
         ui.horizontal(|ui| {
-            if style::pill_enabled(ui, "Pick source", false, src.is_some()).clicked()
+            if style::pill_enabled(ui, crate::i18n::tr("link.pick_source"), false, src.is_some()).clicked()
                 && let Some(s) = src
             {
                 self.sel = Some(Pick::Group(s));
             }
-            if style::pill_enabled(ui, "Unlink", false, src.is_some())
-                .on_hover_text("Copies it as a plain shape (no longer linked to the source)")
+            if style::pill_enabled(ui, crate::i18n::tr("link.unlink"), false, src.is_some())
+                .on_hover_text(crate::i18n::tr("link.unlink.tip"))
                 .clicked()
             {
                 self.unlink_group(g);
             }
         });
-        ui.label(RichText::new("Edits to the source also change the linked copy").size(11.5).color(style::DIM));
+        ui.label(RichText::new(crate::i18n::tr("link.note")).size(11.5).color(style::DIM));
     }
 }
 
