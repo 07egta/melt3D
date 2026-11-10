@@ -969,6 +969,63 @@ fn navigation_preset_and_orbit_speed_change_the_middle_drag() {
 }
 
 #[test]
+fn dragging_a_shape_by_its_body_selects_it_and_slides_it_over_the_floor() {
+    let mut r = Rig::new();
+    r.app.scene.groups[0].shapes[0].pos = [-35.0, 0.0, 20.0];
+    r.app.scene.groups[0].shapes.push(Shape::new(Kind::Box, [45.0, 0.0, 20.0], Material::default()));
+    r.app.sel = None;
+    r.frame(vec![]);
+    let rect = r.app.view_rect;
+    let on = |r: &Rig, at: [f32; 3]| r.app.cam.project(rect, at).expect("visible");
+    // a little off the middle, where no handle sits
+    let grab = on(&r, [45.0, 0.0, 20.0]) + vec2(0.0, 14.0);
+    let cam = (r.app.cam.yaw, r.app.cam.pitch, r.app.cam.target);
+
+    // one gesture: the drag selects the shape under it and moves it
+    assert!(r.app.body_drag_moves(rect, grab));
+    let undo = r.app.undo_depth();
+    r.drag(grab, grab + vec2(70.0, 10.0));
+    let p = r.app.scene.groups[0].shapes[1].pos;
+    assert!((p[0] - 45.0).abs() + p[1].abs() > 3.0, "the selected shape follows the drag: {p:?}");
+    assert!((p[2] - 20.0).abs() < 1.0e-3, "it stays at its height: {p:?}");
+    assert!(p.iter().all(|v| v.is_finite()));
+    assert_eq!(r.app.sel, Some(Pick::Shape(0, 1)), "the dragged shape is selected");
+    assert_eq!((r.app.cam.yaw, r.app.cam.pitch, r.app.cam.target), cam, "the view does not turn while a shape is dragged");
+    assert_eq!(r.app.scene.groups[0].shapes[0].pos, [-35.0, 0.0, 20.0], "other shapes stay");
+    assert_eq!(r.app.undo_depth(), undo + 1, "one drag is one undo step");
+
+    // Shift lifts it straight up or down
+    let grab = on(&r, p) + vec2(0.0, 14.0);
+    r.mods = egui::Modifiers::SHIFT;
+    r.drag(grab, grab + vec2(0.0, -60.0));
+    r.mods = egui::Modifiers::NONE;
+    let q = r.app.scene.groups[0].shapes[1].pos;
+    assert!(q[2] > p[2] + 3.0, "Shift+drag up raises the shape: {q:?}");
+    assert!((q[0] - p[0]).abs() + (q[1] - p[1]).abs() < 1.0e-3, "and only its height changes: {p:?} -> {q:?}");
+    let p = q;
+
+    // with Ctrl held a drag on an unselected shape is still a box selection: nothing moves
+    let other = on(&r, [-35.0, 0.0, 20.0]) + vec2(0.0, 6.0);
+    r.mods = egui::Modifiers::CTRL;
+    r.drag(other, other + vec2(30.0, 20.0));
+    r.mods = egui::Modifiers::NONE;
+    assert_eq!(r.app.scene.groups[0].shapes[0].pos, [-35.0, 0.0, 20.0], "Ctrl+drag never moves a shape");
+    r.app.sel = Some(Pick::Shape(0, 1));
+    r.app.multi.clear();
+    r.frame(vec![]);
+
+    // the preference brings the old behaviour back
+    r.app.preferences.drag_moves = false;
+    r.app.apply_preferences();
+    let grab = on(&r, p) + vec2(0.0, 14.0);
+    assert!(!r.app.body_drag_moves(rect, grab));
+    r.app.sel = None;
+    r.frame(vec![]);
+    r.drag(grab, grab + vec2(-60.0, 0.0));
+    assert_eq!(r.app.scene.groups[0].shapes[1].pos, p, "with the preference off the drag is a box selection again");
+}
+
+#[test]
 fn sketch_alt_primary_drag_still_controls_the_camera() {
     let mut r = Rig::new();
     r.sketch(Pen::Polygon);
