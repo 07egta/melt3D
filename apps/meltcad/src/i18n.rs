@@ -515,7 +515,7 @@ const TABLE: &[Entry] = &[
         "左のボタンで形を足す → 形をクリック → 右で大きさや色を変える",
         "Add a shape with the left buttons → click it → change its size and color on the right"
     ),
-    e!("status.hint.all", "矢印で移動 · 曲線で回転 · 箱で引き伸ばし", "Drag an arrow to move · a curve to turn · a box to stretch"),
+    e!("status.hint.all", "形をドラッグで移動 · 曲線で回転 · 箱で引き伸ばし", "Drag the shape to move · a curve to turn · a box to stretch"),
     e!("status.hint.move", "矢印をドラッグして移動（Ctrl: 1mm刻み）", "Drag arrow to move (Ctrl: 1 mm steps)"),
     e!("status.hint.rotate", "リングをドラッグして回転（Ctrl: 15度刻み）", "Drag ring to rotate (Ctrl: 15 degree steps)"),
     e!("status.hint.scale", "中央で全体を拡大 · 箱で一方向に引き伸ばし", "Drag the middle to grow all · a box to stretch one way"),
@@ -538,8 +538,12 @@ const TABLE: &[Entry] = &[
     ),
     e!("guide.extrude.note", "高さは20mmのままで大丈夫。", "20 mm is fine as it is."),
     e!("guide.extrude.title", "押し出して箱にする", "Extrude it into a box"),
-    e!("guide.hint.all", "矢印・リング・箱から操作を選ぶ", "Pick an arrow, a ring or a box to edit"),
-    e!("guide.hint.all.keys", "左ドラッグ: 形を編集 / ホイール: ズーム", "Left drag: edit the shape / Wheel: zoom"),
+    e!("guide.hint.all", "形をつかんで動かす（矢印・リング・箱でも操作できる）", "Drag the shape to move it (arrows, rings and boxes work too)"),
+    e!(
+        "guide.hint.all.keys",
+        "左ドラッグ: 動かす（Shift: 上下） / 中ドラッグ: 回して見る / ホイール: ズーム",
+        "Left drag: move (Shift: up/down) / Middle drag: look around / Wheel: zoom"
+    ),
     e!("guide.hint.circle", "中心からドラッグして円を描く", "Drag from the centre to draw a circle"),
     e!("guide.hint.curve", "3D画面で線の節点を置く", "Place the line's nodes in the 3D view"),
     e!("guide.hint.curve.keys", "左クリック: 点を追加 / Enter: 確定 / Esc: 終了", "Left-click: add point / Enter: finish / Esc: stop"),
@@ -926,6 +930,26 @@ const TABLE: &[Entry] = &[
         "Glisser avec le bouton du milieu pour déplacer, Shift+milieu pour orbiter, Ctrl+milieu pour zoomer. Le glisser droit déplace aussi.",
         "Arrastrar con el botón central desplaza, Shift+central orbita, Ctrl+central acerca. Arrastrar con el derecho también desplaza."
     ),
+    e!(
+        "settings.drag_moves",
+        "形をドラッグで動かす",
+        "Drag a shape to move it",
+        "拖动形状来移动",
+        "도형을 드래그해 이동",
+        "Form durch Ziehen bewegen",
+        "Glisser une forme pour la déplacer",
+        "Arrastrar una forma para moverla"
+    ),
+    e!(
+        "settings.drag_moves_help",
+        "形そのものを左ドラッグすると、選んで床の上をすべらせる（Shift: 上下）。オフにすると、そのドラッグは範囲選択に戻る。",
+        "A left drag on a shape selects it and slides it over the floor (Shift: up/down). Off: that drag is a box selection, as before.",
+        "在形状上按住左键拖动会选中它并沿地面移动（Shift：上下）。关闭后，该拖动恢复为框选。",
+        "도형 위에서 왼쪽 드래그하면 선택하고 바닥 위로 이동합니다(Shift: 위아래). 끄면 그 드래그는 다시 영역 선택이 됩니다.",
+        "Linkes Ziehen auf einer Form wählt sie aus und schiebt sie über den Boden (Shift: hoch/runter). Aus: Dieses Ziehen ist wieder eine Rahmenauswahl.",
+        "Un glisser gauche sur une forme la sélectionne et la fait glisser sur le sol (Shift : haut/bas). Désactivé : ce glisser redevient une sélection par cadre.",
+        "Arrastrar con el botón izquierdo sobre una forma la selecciona y la desliza por el suelo (Shift: arriba/abajo). Desactivado: ese arrastre vuelve a ser una selección por recuadro."
+    ),
     e!("settings.orbit", "回転の速さ", "Orbit speed", "旋转速度", "회전 속도", "Drehgeschwindigkeit", "Vitesse d'orbite", "Velocidad de giro"),
     e!("settings.saving", "保存", "Saving", "保存", "저장", "Speichern", "Enregistrement", "Guardado"),
     e!(
@@ -1154,7 +1178,7 @@ mod tests {
     fn every_language_translates_the_settings_window() {
         // The settings window asks for `settings.*` keys; every one must exist in every catalog.
         let keys: Vec<&str> = TABLE.iter().filter(|entry| entry.key.starts_with("settings.")).map(|entry| entry.key).collect();
-        assert_eq!(keys.len(), 50);
+        assert_eq!(keys.len(), 52);
         for code in SUPPORTED {
             let _language = lang(code);
             for key in &keys {

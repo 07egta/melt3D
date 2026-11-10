@@ -2444,12 +2444,16 @@ impl App {
                         }
                     });
                     ui.separator();
-                    egui::ScrollArea::vertical().max_height((rect.height() - 96.0).max(64.0)).show(ui, |ui| {
+                    // as tall as the list needs when the view has the room (the Area alone would keep its small first height)
+                    let list_h = (rect.height() - 128.0).max(64.0);
+                    egui::ScrollArea::vertical().max_height(list_h).min_scrolled_height(list_h).show(ui, |ui| {
                         for (k, v) in [
                             ("Middle drag", "Orbit"),
                             ("Right drag", "Pan"),
                             ("Wheel", "Zoom to cursor"),
-                            ("Left drag (empty)", "Orbit"),
+                            ("Left drag (empty)", "Box select"),
+                            ("Left drag (on a shape)", "Move on the floor  Shift: up/down"),
+                            ("Alt + left drag", "Orbit"),
                             ("Click", "Select  Ctrl: add/remove  Shift: add/remove"),
                             ("Double click", "Focus on shape"),
                             ("Drawing: left click → right click", "Place point → finish (all draw tools)"),
