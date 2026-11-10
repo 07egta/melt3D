@@ -245,6 +245,7 @@ fn main() -> eframe::Result {
             let srgb = rs.as_ref().is_none_or(|rs| rs.target_format.is_srgb());
             let all: Vec<std::ffi::OsString> = std::env::args_os().collect();
             let mut app = app::App::new(srgb, control::file_arg(&all));
+            app.gpu.easy = settings.easy;
             app.load_preferences(cc.storage);
             app.attach_font_job(font_job);
             app.precise_services = Some(precise_services::services(rfd::AsyncFileDialog::new().set_parent(cc)));
@@ -281,7 +282,7 @@ fn main() -> eframe::Result {
                 app.open_precise(&cc.egui_ctx);
             }
             if !app.precise_on {
-                app.attach_gpu(rs, &cc.egui_ctx, false);
+                app.attach_gpu(rs, &cc.egui_ctx, settings.easy);
             }
             perf::mark("app created");
             Ok(Box::new(app))
