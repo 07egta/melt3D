@@ -18,7 +18,9 @@ struct Shape {
     gpar: vec4<f32>,    // gradient: direction (0 x, 1 y, 2 z; +3 = along the shape's own box), softness, from, to
     ripple: vec4<f32>,  // mode, amplitude, wavelength, number
     ripple2: vec4<f32>, // angle, edge fade, preserve, detail
-    ripple_half: vec4<f32>, // local bounding half extents
+    ripple_half: vec4<f32>, // local bounding half extents (before a Twist), w = 1: a Twist follows
+    twist_a: vec4<f32>, // Twist (deform.rs gpu_parameters): unit axis, ray step factor ((0, 0, 0, 1) = none)
+    twist_b: vec4<f32>, // t = clamp(along * x + y, 0, 1); angle at t = 0, its change up to t = 1
 };
 
 // Everything per frame and small is in the uniform buffer; the scene itself (groups, blocks,
@@ -36,7 +38,7 @@ struct Globals {
     hover: vec4<f32>,     // first hovered shape (-1 none), count
     selsph: vec4<f32>,    // bounding sphere of the selected shapes (centre, radius)
     offs: vec4<f32>,      // first vec4 of the group table, the block table, the instance table, the shapes
-    offs2: vec4<f32>,     // first vec4 of the outline points, the path nodes, 1 = something keeps only an overlap (nothing may be left out of the march)
+    offs2: vec4<f32>,     // polygon start, path start, overlap flag, ray step factor (1 without modifiers)
     env: array<vec4<f32>, 11>,      // exposure/ambient/shadow/flags, backdrop+lights, 3 sky colours, 3 x (light dir+power, light colour)
 };
 
@@ -50,11 +52,11 @@ fn D(i: i32) -> vec4<f32> { return textureLoad(DT, vec2<i32>(i & 1023, i >> 10),
 //   group  (3 vec4): [first block, block count, op sign, blend] [first instance, instance count, first item (see cand), 0] [bounding sphere]
 //   block  (2 vec4): [bounding sphere] [largest blend, 1 = never skip, first shape, shape count]
 //   instance (4 vec4): three rows (x y z, offset) taking a world point back into the group's own space, then [world centre of the group's sphere, scale]
-//   shape (19 vec4): [bounding sphere = position, radius] then the 18 vec4 of struct Shape
+//   shape (21 vec4): [bounding sphere = position, radius] then the 20 vec4 of struct Shape
 fn group_at(gi: i32) -> i32 { return i32(G.offs.x + 0.5) + gi * 3; }
 fn block_at(bi: i32) -> i32 { return i32(G.offs.y + 0.5) + bi * 2; }
 fn inst_at(i: i32) -> i32 { return i32(G.offs.z + 0.5) + i * 4; }
-fn shape_rec(i: i32) -> i32 { return i32(G.offs.w + 0.5) + i * 19; }
+fn shape_rec(i: i32) -> i32 { return i32(G.offs.w + 0.5) + i * 21; }
 fn path_pt(i: i32) -> vec4<f32> { return D(i32(G.offs2.y + 0.5) + i); }
 
 fn shape_at(i: i32) -> Shape {
@@ -78,11 +80,32 @@ fn shape_at(i: i32) -> Shape {
     s.ripple = D(b + 15);
     s.ripple2 = D(b + 16);
     s.ripple_half = D(b + 17);
+    // Most shapes have no Twist: its two vec4 are read only when ripple_half.w says so.
+    s.twist_a = vec4<f32>(0.0, 0.0, 0.0, 1.0);
+    s.twist_b = vec4<f32>(0.0);
+    if (s.ripple_half.w > 0.5) {
+        s.twist_a = D(b + 18);
+        s.twist_b = D(b + 19);
+    }
     return s;
 }
 
 fn flag(bit: i32) -> bool { return (i32(G.view.w + 0.5) & bit) != 0; }
 fn is_fast() -> bool { return flag(2); }
+
+// Inverse (sample-point) Twist, the same map as Twist::inverse in deform.rs: every slice across
+// the axis turns rigidly back by the angle at its height (a smoothstep between the range ends).
+// One dot product and one Rodrigues rotation, no branch on the axis, so the copies of shape_dist
+// stay small; shapes without a Twist return at once.
+fn untwist_shape(s: Shape, q: vec3<f32>) -> vec3<f32> {
+    if (s.ripple_half.w < 0.5) { return q; }
+    let k = s.twist_a.xyz;
+    let along = dot(k, q);
+    let t = clamp(along * s.twist_b.x + s.twist_b.y, 0.0, 1.0);
+    let a = -(s.twist_b.z + s.twist_b.w * (t * t * (3.0 - 2.0 * t)));
+    let c = cos(a);
+    return q * c + cross(k, q) * sin(a) + k * (along * (1.0 - c));
+}
 
 // How far away a shape must be (at least) for a blend with value `a` to ignore it: beyond that
 // the soft minimum returns `a` exactly. Round blends also feel any shape closer than their radius.
@@ -243,7 +266,8 @@ fn ripple_safety(s: Shape) -> f32 {
 
 fn shape_dist(s: Shape, p: vec3<f32>) -> f32 {
     let d = p - s.pos.xyz;
-    let q = vec3<f32>(dot(s.r0.xyz, d), dot(s.r1.xyz, d), dot(s.r2.xyz, d)) / s.scale.xyz;
+    let source_q = vec3<f32>(dot(s.r0.xyz, d), dot(s.r1.xyz, d), dot(s.r2.xyz, d)) / s.scale.xyz;
+    let q = untwist_shape(s, source_q);
     let kind = i32(s.scale.w + 0.5);
     let sz = s.size.xyz;
     let rd = s.size.w;
@@ -406,7 +430,8 @@ fn shape_color(s: Shape, p: vec3<f32>) -> vec3<f32> {
     let d = p - s.pos.xyz;
     var c = d[ax];
     if (code >= 3) {
-        let q = vec3<f32>(dot(s.r0.xyz, d), dot(s.r1.xyz, d), dot(s.r2.xyz, d)) / s.scale.xyz;
+        let sample_q = vec3<f32>(dot(s.r0.xyz, d), dot(s.r1.xyz, d), dot(s.r2.xyz, d)) / s.scale.xyz;
+        let q = untwist_shape(s, sample_q);
         c = q[ax];
     }
     let t = clamp(c * s.mat2.z + 0.5, 0.0, 1.0);
@@ -599,6 +624,8 @@ var<private> cs: array<u32, 24>;
 var<private> ncs: i32;
 var<private> ovf: bool;
 var<private> use_cand: bool;
+// Conservative marching step for twisted shapes that affect this ray.
+var<private> candidate_step_safety: f32;
 
 fn is_cand(i: i32) -> bool {
     if (!use_cand || i >= 256) { return true; }
@@ -640,6 +667,7 @@ fn curve_far(rec: i32, o: vec3<f32>, d: vec3<f32>, t0: f32, t1: f32, scl: f32, m
 // The items and shapes near the ray `ro + rd * t` for t in [t0, t1]; `slack` is added to every reach
 // (the drip moves the point the shapes are measured at, and the selection outline looks a few pixels out).
 fn find_candidates(ro: vec3<f32>, rd: vec3<f32>, t0: f32, t1: f32, slack: f32) {
+    candidate_step_safety = 1.0;
     for (var w = 0; w < 8; w = w + 1) { cand[w] = 0u; }
     ncs = 0;
     ovf = false;
@@ -708,7 +736,13 @@ fn find_candidates(ro: vec3<f32>, rd: vec3<f32>, t0: f32, t1: f32, slack: f32) {
                     if (op > -0.5 && op < 0.5) { continue; }   // a stain changes no distance
                     let reach = rm * misc.y * amount + slack;
                     if (op < 1.5 && seg_sphere(o, d, dd, t0, t1, D(rec)) * scl >= reach) { continue; }
-                    if (op < 1.5 && i32(D(rec + 5).w + 0.5) == 18 && curve_far(rec, o, d, t0, t1, scl, reach)) { continue; }
+                    // This quick segment reject tests the source curve's path: a twisted curve
+                    // (ripple_half.w, rec + 18) is not where its unwarped segment spheres are
+                    // (the shape sphere above is safe).
+                    if (op < 1.5 && i32(D(rec + 5).w + 0.5) == 18 && D(rec + 18).w < 0.5 && curve_far(rec, o, d, t0, t1, scl, reach)) { continue; }
+                    // Boolean distances stay unscaled; only the ray steps near a Twist shorten
+                    // (rec + 19 = twist_a, w = the ray step factor, 1 without a Twist).
+                    candidate_step_safety = min(candidate_step_safety, clamp(D(rec + 19).w, 0.01, 1.0));
                     if (ncs < MAXC) {
                         cs[ncs] = (key << 9u) | u32(first + si);
                         ncs = ncs + 1;
@@ -1145,12 +1179,14 @@ fn soft_shadow(ro: vec3<f32>, rd: vec3<f32>, maxt: f32, nsteps: i32) -> f32 {
     // Only the shapes near the shadow ray are read (as for the primary march). The penumbra is
     // 10 h / t, so a shape farther than tend / 10 from the ray cannot darken any point of it.
     var list_ok = false;
+    var shadow_step_safety = max(G.offs2.w, 0.01);
     use_cand = false;
     if (G.offs2.z < 0.5) {
         find_candidates(ro, rd, t, tend, 1.0 + G.melt.z + 0.1 * tend);
         if (ncs == 0 && !ovf) { return 1.0; }
         use_cand = true;
         list_ok = !ovf;
+        shadow_step_safety = candidate_step_safety;
     }
     let max_step = select(6.0, 14.0, nsteps < 20);
     for (var i = 0; i < nsteps; i = i + 1) {
@@ -1161,7 +1197,8 @@ fn soft_shadow(ro: vec3<f32>, rd: vec3<f32>, maxt: f32, nsteps: i32) -> f32 {
             h = map_d(ro + rd * t);
         }
         res = min(res, 10.0 * h / t);
-        t = t + clamp(h, 0.4, max_step);
+        // (a factor of 1, no Twist near the ray, keeps the plain steps exactly)
+        t = t + clamp(h * shadow_step_safety, max(0.4 * shadow_step_safety, 0.05), max_step);
         if (res < 0.001 || t > tend) { break; }
     }
     use_cand = false;
@@ -1361,6 +1398,7 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
     // The modelling floor is a shadow receiver and grid overlay, never a ray-march clip plane.
     let t_cut = t_max;
     var last = false;
+    var trace_safety = max(G.offs2.w, 0.01);
     // a little per-pixel jitter turns banding in the lamp glow into fine noise
     t = t + fract(sin(dot(in.pos.xy, vec2<f32>(12.9898, 78.233))) * 43758.5453) * 1.5;
     // groups and pattern copies far from this ray are left out of the march (not with lamps: their glow reaches far)
@@ -1370,6 +1408,7 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
         // (the selection outline looks a few pixels out from the ray)
         let slack = 1.0 + G.melt.z + 3.0 * select(t_cut * foot, foot, tanh <= 0.0);
         find_candidates(ro, rd, t, t_cut, slack);
+        trace_safety = candidate_step_safety;
         use_cand = true;
         list_ok = !ovf;
         // nothing near the ray: it cannot hit anything
@@ -1381,7 +1420,8 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
     var relax = select(1.1, select(1.5, 1.3, list_ok), fast);
     if (glow_scene || (has_sel && sel_carving)) { relax = 0.9; }
     var max_it = select(128, 48, fast);
-    if (glow_scene) { max_it = 200; }
+    if (trace_safety < 0.95) { max_it = select(240, 120, fast); }
+    if (glow_scene) { max_it = select(200, 240, trace_safety < 0.95); }
     var prev_r = 0.0;
     var stp = 0.0;
     for (var i = 0; i < max_it; i = i + 1) {
@@ -1401,7 +1441,7 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
             d = map_d(p);
         }
         let pix = select(t * foot, foot, tanh <= 0.0);
-        var step = d * relax;
+        var step = d * relax * trace_safety;
         if (glow_scene && h.glow > 0.0) {
             // small steps near lamps keep their glow smooth (no rings)
             step = min(step, max(3.0, d * 0.25));

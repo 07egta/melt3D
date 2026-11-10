@@ -28,7 +28,25 @@ const MAX_AXIS_CELLS: f64 = 1_000_000.0;
 
 /// A signed distance: negative inside, a lower bound of the distance to the surface.
 pub trait Sdf: Sync {
+    /// Exact field value for mesh vertices, Hermite root finding and normals.
     fn dist(&self, p: [f32; 3]) -> f32;
+
+    /// A safe estimate for deciding whether a whole octree cell can be skipped.
+    /// Most SDFs are 1-Lipschitz and can use the exact value. Inverse-mapped
+    /// deformations preserve the zero surface but may have Lipschitz > 1,
+    /// so the caller may return a smaller magnitude to avoid pruning a surface.
+    /// `radius` is the world-space radius of the enclosing octree cell.
+    fn pruning_distance(&self, p: [f32; 3], radius: f32) -> f32 {
+        self.dist(p) * self.pruning_scale(p, radius)
+    }
+
+    /// The factor (0 < f <= 1) that turns an exact field value into a safe lower bound of the
+    /// distance for a cell of this `radius` around `p`. 1 for true distances; a twisted field
+    /// is not one, so it returns 1 / (its Lipschitz bound). Every pruning test, at any octree
+    /// level, must use it, or a surface cell is skipped and the mesh is left open.
+    fn pruning_scale(&self, _p: [f32; 3], _radius: f32) -> f32 {
+        1.0
+    }
 }
 
 impl<F> Sdf for F
@@ -549,7 +567,8 @@ pub fn mesh_sparse(sdf: &dyn Sdf, lo: V, hi: V, cell: f64, threads: usize, prog:
                         (nd[2] as usize * side_blocks * B) as i64 + (side_cells as i64) / 2,
                     ];
                     st.1 += 1;
-                    let d = clean(sdf.dist(grid.pos32(c)), h);
+                    let cell_radius = (side_cells * h * 0.866_025_4) as f32;
+                    let d = clean(sdf.pruning_distance(grid.pos32(c), cell_radius), h);
                     if near(d, side_cells, h) {
                         st.0.push(*nd);
                     }
@@ -798,6 +817,8 @@ fn process_block(sdf: &dyn Sdf, grid: &Grid, b: [u32; 3], sc: &mut Scratch) -> B
     for o4 in 0..8usize {
         let (ox, oy, oz) = (o4 & 1, (o4 >> 1) & 1, (o4 >> 2) & 1);
         let d = corner!(ox * 4 + 2, oy * 4 + 2, oz * 4 + 2);
+        let at = [c0[0] + (ox * 4 + 2) as i64, c0[1] + (oy * 4 + 2) as i64, c0[2] + (oz * 4 + 2) as i64];
+        let d = d * sdf.pruning_scale(grid.pos32(at), (4.0 * h * 0.866_025_4) as f32);
         if !near(d, 4.0, h) {
             continue;
         }
@@ -805,6 +826,8 @@ fn process_block(sdf: &dyn Sdf, grid: &Grid, b: [u32; 3], sc: &mut Scratch) -> B
             let (px, py, pz) = (o2 & 1, (o2 >> 1) & 1, (o2 >> 2) & 1);
             let (ni, nj, nk) = (ox * 2 + px, oy * 2 + py, oz * 2 + pz);
             let d = corner!(ni * 2 + 1, nj * 2 + 1, nk * 2 + 1);
+            let at = [c0[0] + (ni * 2 + 1) as i64, c0[1] + (nj * 2 + 1) as i64, c0[2] + (nk * 2 + 1) as i64];
+            let d = d * sdf.pruning_scale(grid.pos32(at), (2.0 * h * 0.866_025_4) as f32);
             if near(d, 2.0, h)
                 && let Some(f) = near2.get_mut((nk * 4 + nj) * 4 + ni)
             {

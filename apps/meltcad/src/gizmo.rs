@@ -10,7 +10,7 @@ use crate::app::App;
 use crate::camera::Camera;
 use crate::i18n;
 use crate::model::{Kind, Pick, Scene};
-use crate::sdf::{Prepared, V3, add, cross, dot, mul, sub};
+use crate::sdf::{V3, add, cross, dot, mul, sub};
 use crate::style;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -152,6 +152,12 @@ fn arc_points(cam: &Camera, rect: Rect, c: V3, axis: usize, r: f32, span: (f32, 
         .collect()
 }
 
+/// Rows of the inverse (transposed) rotation: a shape's own axes in world space.
+fn local_axes(rot: V3) -> [V3; 3] {
+    let r = crate::sdf::rotation(rot);
+    [[r[0][0], r[1][0], r[2][0]], [r[0][1], r[1][1], r[2][1]], [r[0][2], r[1][2], r[2][2]]]
+}
+
 /// The handles for the current selection, placed on screen.
 #[cfg(test)]
 pub fn build(cam: &Camera, rect: Rect, scene: &Scene, sel: Option<Pick>, tool: Tool) -> Option<Geom> {
@@ -185,7 +191,10 @@ pub fn build_multi_node(cam: &Camera, rect: Rect, scene: &Scene, picks: &[Pick],
         Some(Pick::Shape(g, s)) => scene.shape(g, s),
         _ => None,
     };
-    let local = shape.map(|s| Prepared::new(s).inv).unwrap_or(WORLD);
+    // The shape's local frame is the transpose of its rotation, exactly as `Prepared::new`
+    // computes it. Preparing the whole SDF here copied profiles and resampled curves on every
+    // viewport frame.
+    let local = shape.map(|s| local_axes(s.rot)).unwrap_or(WORLD);
     let ext = match (node_shape, shape) {
         (Some((_, r)), Some(s)) => {
             let m = s.scale[0].max(s.scale[1]).max(s.scale[2]);
@@ -740,6 +749,16 @@ pub fn hint(tool: Tool) -> &'static str {
 mod tests {
     use super::*;
     use egui::pos2;
+
+    #[test]
+    fn handle_axes_match_the_prepared_shape_frame_bit_for_bit() {
+        for rot in [[0.0, -0.0, 0.0], [25.0, 35.0, 55.0], [-10.0, 179.0, -80.0], [f32::NAN, 1.0e30, -0.0]] {
+            let mut s = crate::model::Shape::new(Kind::Box, [3.0, -4.0, 5.0], crate::model::Material::default());
+            s.rot = rot;
+            let prepared = crate::sdf::Prepared::new(&s).inv;
+            assert_eq!(local_axes(s.rot).map(|axis| axis.map(f32::to_bits)), prepared.map(|axis| axis.map(f32::to_bits)), "{rot:?}");
+        }
+    }
 
     #[test]
     fn rotating_about_z_turns_x_into_y() {

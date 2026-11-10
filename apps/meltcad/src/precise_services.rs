@@ -1,4 +1,4 @@
-//! Native host services for the embedded SolidCraft v0.20 UI.
+//! Native host services for the embedded SolidCraft v0.26 UI.
 //!
 //! The implementation follows the SolidCraft desktop host (`apps/solidcraft/src/main.rs`),
 //! adapted to the Melt 3D process and its parented file dialog. SolidCraft updater downloads are
@@ -52,7 +52,8 @@ pub fn services(parent: AsyncFileDialog) -> Services {
                     "Designs, CAD files and meshes",
                     &[
                         io::DESIGN_EXT,
-                        io::LEGACY_DESIGN_EXT,
+                        io::LEGACY_DESIGN_EXTS[0],
+                        io::LEGACY_DESIGN_EXTS[1],
                         "json",
                         "step",
                         "stp",
@@ -78,7 +79,8 @@ pub fn services(parent: AsyncFileDialog) -> Services {
                         "GLTF",
                     ],
                 )
-                .add_filter("SolidCraft design (container or JSON)", &[io::DESIGN_EXT, io::LEGACY_DESIGN_EXT, "json"])
+                .add_filter("SolidCraft design (container or JSON)", &[io::DESIGN_EXT, io::LEGACY_DESIGN_EXTS[0],
+                        io::LEGACY_DESIGN_EXTS[1], "json"])
                 .add_filter("STEP", &["step", "stp", "STEP", "STP"])
                 .add_filter("IGES", &["igs", "iges", "IGS", "IGES"])
                 .add_filter("FreeCAD and Rhino", &["FCStd", "fcstd", "3dm", "3DM"])

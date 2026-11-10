@@ -35,6 +35,29 @@ mod tests {
     }
 
     #[test]
+    fn twisted_box_export_is_closed_and_preserves_volume() {
+        use crate::deform::{Deformation, Twist};
+        let mut box_shape = Shape::new(Kind::Box, [0.0, 0.0, 16.0], Material::default());
+        box_shape.size = [20.0, 14.0, 32.0];
+        box_shape.blend = 0.0;
+        let expected_volume = 20.0 * 14.0 * 32.0;
+        for degrees in [90.0, 180.0, 360.0] {
+            let mut sh = box_shape.clone();
+            sh.deformation = Some(Deformation::Twist(Twist::preset(degrees)));
+            let sc = scene_of(vec![sh]);
+            let o = Options { lighten: Lighten::Off, ..opts(0.6) };
+            let built = build(&sc, None, &o, &Progress::new()).unwrap();
+            assert!(built.closed, "{degrees} degrees produced an open mesh");
+            assert!(built.tris > 100, "{degrees} produced too few triangles: {}", built.tris);
+            let v = melt::volume(&built.surface.mesh).abs();
+            assert!((v / expected_volume - 1.0).abs() < 0.12, "{degrees} degrees altered volume too much: {v} vs {expected_volume}");
+            let file = std::env::temp_dir().join(format!("meltcad_twist_{degrees}.stl"));
+            let serialized = crate::export_job::serialize(&built, &o, &file).unwrap();
+            assert!(!serialized.is_empty() && serialized.iter().all(|(_, bytes)| bytes.len() > 84), "{degrees}: STL writer returned empty data");
+        }
+    }
+
+    #[test]
     fn a_blended_pair_holds_less_than_two_and_more_than_one_and_a_cut_takes_material_away() {
         let ball = |x: f32| {
             let mut s = Shape::new(Kind::Sphere, [x, 0.0, 20.0], Material::default());

@@ -36,9 +36,16 @@ pub struct VaseParams {
 impl Default for VaseParams {
     fn default() -> Self {
         Self {
-            height: 132.0, diameter: 92.0, mouth_diameter: 49.0,
-            base_diameter: 54.0, wall: 2.4, side_wave: 0.16,
-            waist: 0.20, roundness: 0.78, waves: 5, wave_strength: 1.4,
+            height: 132.0,
+            diameter: 92.0,
+            mouth_diameter: 49.0,
+            base_diameter: 54.0,
+            wall: 2.4,
+            side_wave: 0.16,
+            waist: 0.20,
+            roundness: 0.78,
+            waves: 5,
+            wave_strength: 1.4,
         }
     }
 }
@@ -65,14 +72,28 @@ impl Design {
         match self {
             Self::Flow => VaseParams::default(),
             Self::Ripple => VaseParams {
-                height: 155.0, diameter: 102.0, mouth_diameter: 46.0,
-                base_diameter: 51.0, wall: 2.8, side_wave: 0.53,
-                waist: 0.52, roundness: 0.52, waves: 8, wave_strength: 2.7,
+                height: 155.0,
+                diameter: 102.0,
+                mouth_diameter: 46.0,
+                base_diameter: 51.0,
+                wall: 2.8,
+                side_wave: 0.53,
+                waist: 0.52,
+                roundness: 0.52,
+                waves: 8,
+                wave_strength: 2.7,
             },
             Self::Pebble => VaseParams {
-                height: 104.0, diameter: 115.0, mouth_diameter: 71.0,
-                base_diameter: 76.0, wall: 2.8, side_wave: 0.33,
-                waist: 0.26, roundness: 0.95, waves: 6, wave_strength: 1.6,
+                height: 104.0,
+                diameter: 115.0,
+                mouth_diameter: 71.0,
+                base_diameter: 76.0,
+                wall: 2.8,
+                side_wave: 0.33,
+                waist: 0.26,
+                roundness: 0.95,
+                waves: 6,
+                wave_strength: 1.6,
             },
         }
     }
@@ -117,14 +138,10 @@ impl VaseParams {
         let mouth = self.mouth_diameter * 0.5;
         let max_radius = self.diameter * 0.5;
         let envelope = (std::f32::consts::PI * t).sin().powi(2);
-        let belly = (max_radius - (floor + mouth) * 0.5).max(0.0)
-            * envelope.powf(1.0 + 0.9 * (1.0 - self.roundness));
-        let neck = self.waist * max_radius * 0.22
-            * (-((t - 0.74) / 0.14).powi(2)).exp() * envelope;
-        let ripple = self.side_wave * max_radius * 0.065
-            * (std::f32::consts::TAU * 2.5 * t).sin() * envelope;
-        ((1.0 - ease) * floor + ease * mouth + belly - neck + ripple)
-            .max(self.wall + 2.0)
+        let belly = (max_radius - (floor + mouth) * 0.5).max(0.0) * envelope.powf(1.0 + 0.9 * (1.0 - self.roundness));
+        let neck = self.waist * max_radius * 0.22 * (-((t - 0.74) / 0.14).powi(2)).exp() * envelope;
+        let ripple = self.side_wave * max_radius * 0.065 * (std::f32::consts::TAU * 2.5 * t).sin() * envelope;
+        ((1.0 - ease) * floor + ease * mouth + belly - neck + ripple).max(self.wall + 2.0)
     }
 
     /// The outer/inner vertical outline is one CCW/CW simple polygon, including the
@@ -167,14 +184,11 @@ impl VaseParams {
         for i in 2..=62 {
             let t = i as f32 / 64.0;
             let delta = 0.0005;
-            let slope_z = (self.radius((t + delta).min(1.0)) -
-                self.radius((t - delta).max(0.0))) / (2.0 * delta * self.height);
+            let slope_z = (self.radius((t + delta).min(1.0)) - self.radius((t - delta).max(0.0))) / (2.0 * delta * self.height);
             let envelope = angular_envelope(t);
-            let az_slope = self.wave_strength * (self.waves as f32) * envelope
-                / (self.radius(t) - self.wall).max(4.0);
+            let az_slope = self.wave_strength * (self.waves as f32) * envelope / (self.radius(t) - self.wall).max(4.0);
             let z_slope = self.wave_strength * (16.0 / self.height);
-            let thickness = self.wall / (1.0 + slope_z.powi(2)
-                + az_slope.powi(2) + z_slope.powi(2)).sqrt();
+            let thickness = self.wall / (1.0 + slope_z.powi(2) + az_slope.powi(2) + z_slope.powi(2)).sqrt();
             if thickness < report.minimum_mm {
                 report = ThicknessReport { minimum_mm: thickness, height_mm: t * self.height };
             }
@@ -253,7 +267,6 @@ pub fn new(design: Design) -> Shape {
     shape
 }
 
-
 /// The inspector edits the parametric source rather than directly mutating a dense
 /// vertex mesh. Changes regenerate at most 63 profile points; viewport quality
 /// adapts independently and final STL export always samples the full SDF.
@@ -305,8 +318,7 @@ pub fn inspector(ui: &mut egui::Ui, shape: &mut Shape) {
     // Non-uniform object scaling can only reduce physical wall thickness:
     // the smallest scale is a conservative lower bound for print warnings.
     let thickness = v.wall_report();
-    let minimum = thickness.minimum_mm
-        * shape.scale.into_iter().fold(f32::INFINITY, f32::min).max(0.01);
+    let minimum = thickness.minimum_mm * shape.scale.into_iter().fold(f32::INFINITY, f32::min).max(0.01);
     if minimum < FDM_WALL_WARNING_MM {
         ui.colored_label(
             egui::Color32::from_rgb(237, 174, 78),
@@ -365,8 +377,7 @@ mod tests {
             let z = v.height * 0.5;
             // At theta=0 the wall is radially shifted by the same wave as the
             // SDF. Sample its actual middle, not the unwarped revolution radius.
-            let shift = v.wave_strength * angular_envelope(0.5)
-                * (std::f32::consts::TAU * 0.4 * 0.5).sin();
+            let shift = v.wave_strength * angular_envelope(0.5) * (std::f32::consts::TAU * 0.4 * 0.5).sin();
             assert!(f.distance([r - v.wall * 0.5 + shift, 0.0, z]) < 0.0, "solid wall {design:?}");
         }
     }
@@ -407,7 +418,9 @@ mod tests {
         for _ in 0..2 {
             ctx.run_ui(egui::RawInput::default(), |ui| {
                 inspector(ui, &mut shape);
-            }).textures_delta.clear();
+            })
+            .textures_delta
+            .clear();
         }
         assert_eq!(shape.vase, before);
         assert!(shape.outline.len() <= crate::model::MAX_OUTLINE);
@@ -432,9 +445,9 @@ mod tests {
     #[test]
     #[ignore]
     fn organic_vase_stl_is_watertight() {
+        use crate::export_formats::Format;
         use crate::export_job::{self, Options};
         use crate::export_mesh::Progress;
-        use crate::export_formats::Format;
         for design in Design::ALL {
             let mut sh = new(design);
             let mut v = sh.vase.unwrap();

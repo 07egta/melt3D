@@ -9,7 +9,7 @@ use egui::{RichText, Ui};
 use serde::{Deserialize, Serialize};
 
 use crate::app::{App, Tab};
-use crate::model::{Group, Kind, Material, MAX_GROUPS, MAX_SHAPES, Pick, Shape};
+use crate::model::{Group, Kind, MAX_GROUPS, MAX_SHAPES, Material, Pick, Shape};
 use crate::sdf::{V3, rotation};
 use crate::style;
 
@@ -50,10 +50,18 @@ pub enum Legs {
 impl Legs {
     pub const ALL: [Legs; 3] = [Legs::Three, Legs::Four, Legs::Centre];
     pub fn count(self) -> usize {
-        match self { Self::Three => 3, Self::Four => 4, Self::Centre => 1 }
+        match self {
+            Self::Three => 3,
+            Self::Four => 4,
+            Self::Centre => 1,
+        }
     }
     pub fn label(self) -> &'static str {
-        match self { Self::Three => "3本", Self::Four => "4本", Self::Centre => "中央1本" }
+        match self {
+            Self::Three => "3本",
+            Self::Four => "4本",
+            Self::Centre => "中央1本",
+        }
     }
 }
 
@@ -85,16 +93,37 @@ impl Settings {
     pub fn preset(design: Design) -> Settings {
         match design {
             Design::Stool => Settings {
-                design, legs: Legs::Three, width: 180.0, depth: 170.0, height: 175.0,
-                leg_diameter: 30.0, roundness: 0.8, puff: 5.0, symmetric: true,
+                design,
+                legs: Legs::Three,
+                width: 180.0,
+                depth: 170.0,
+                height: 175.0,
+                leg_diameter: 30.0,
+                roundness: 0.8,
+                puff: 5.0,
+                symmetric: true,
             },
             Design::SideTable => Settings {
-                design, legs: Legs::Four, width: 210.0, depth: 165.0, height: 220.0,
-                leg_diameter: 22.0, roundness: 0.62, puff: 3.0, symmetric: true,
+                design,
+                legs: Legs::Four,
+                width: 210.0,
+                depth: 165.0,
+                height: 220.0,
+                leg_diameter: 22.0,
+                roundness: 0.62,
+                puff: 3.0,
+                symmetric: true,
             },
             Design::Pedestal => Settings {
-                design, legs: Legs::Centre, width: 175.0, depth: 175.0, height: 210.0,
-                leg_diameter: 62.0, roundness: 0.95, puff: 7.0, symmetric: false,
+                design,
+                legs: Legs::Centre,
+                width: 175.0,
+                depth: 175.0,
+                height: 210.0,
+                leg_diameter: 62.0,
+                roundness: 0.95,
+                puff: 7.0,
+                symmetric: false,
             },
         }
     }
@@ -109,7 +138,11 @@ impl Settings {
         self.depth = safe(self.depth, MIN_WIDTH, MAX_WIDTH, def.depth);
         self.height = safe(self.height, 65.0, 1000.0, def.height);
         // Limit radii relative to seat span so the 3/4 supports remain distinguishable.
-        let share = match self.legs { Legs::Four => 0.20, Legs::Three => 0.28, Legs::Centre => 0.40 };
+        let share = match self.legs {
+            Legs::Four => 0.20,
+            Legs::Three => 0.28,
+            Legs::Centre => 0.40,
+        };
         let max_d = (self.width.min(self.depth) * share).min(self.height * 0.42).max(8.0);
         self.leg_diameter = safe(self.leg_diameter, 8.0, max_d, def.leg_diameter.min(max_d));
         self.roundness = safe(self.roundness, 0.0, 1.0, def.roundness);
@@ -222,8 +255,7 @@ fn generate(mut p: Settings) -> Vec<Shape> {
 /// shapes somebody added afterward. If components were reordered/deleted, refuse to
 /// regenerate and keep the user's geometry intact.
 pub fn is_generated_group(g: &Group, p: &Settings) -> bool {
-    g.shapes.len() >= p.part_count() &&
-        g.shapes.iter().take(p.part_count()).enumerate().all(|(i, s)| s.source == format!("{PART_PREFIX}{i}"))
+    g.shapes.len() >= p.part_count() && g.shapes.iter().take(p.part_count()).enumerate().all(|(i, s)| s.source == format!("{PART_PREFIX}{i}"))
 }
 
 fn transformed_parts(old: Settings, new: Settings, previous: &Shape) -> Vec<Shape> {
@@ -236,9 +268,11 @@ fn transformed_parts(old: Settings, new: Settings, previous: &Shape) -> Vec<Shap
     let rot = rotation(previous.rot);
     let scale = previous.scale;
     let rotate = |q: V3| -> V3 {
-        [rot[0][0] * q[0] + rot[0][1] * q[1] + rot[0][2] * q[2],
-         rot[1][0] * q[0] + rot[1][1] * q[1] + rot[1][2] * q[2],
-         rot[2][0] * q[0] + rot[2][1] * q[1] + rot[2][2] * q[2]]
+        [
+            rot[0][0] * q[0] + rot[0][1] * q[1] + rot[0][2] * q[2],
+            rot[1][0] * q[0] + rot[1][1] * q[1] + rot[1][2] * q[2],
+            rot[2][0] * q[0] + rot[2][1] * q[1] + rot[2][2] * q[2],
+        ]
     };
     let z_shift = rotate([0.0, 0.0, (new_seat_z - old_seat_z) * scale[2]]);
     let new_pivot = [pivot[0] + z_shift[0], pivot[1] + z_shift[1], pivot[2] + z_shift[2]];
@@ -259,7 +293,9 @@ pub fn update_group(g: &mut Group, mut settings: Settings) -> Result<(), &'stati
         return Err("パーツの順序や数が変わっています。もとの形を残すため、自動更新はしません");
     }
     settings.sanitize();
-    if settings == old { return Ok(()); }
+    if settings == old {
+        return Ok(());
+    }
     let seat = g.shapes[0].clone();
     let mut made = transformed_parts(old, settings, &seat);
     for (index, sh) in made.iter_mut().enumerate() {
@@ -348,8 +384,7 @@ pub fn inspector(app: &mut App, ui: &mut Ui, g: usize) {
 
     p.sanitize();
     if p != before {
-        let resulting_shapes = app.scene.shape_count()
-            .saturating_sub(before.part_count()).saturating_add(p.part_count());
+        let resulting_shapes = app.scene.shape_count().saturating_sub(before.part_count()).saturating_add(p.part_count());
         if resulting_shapes > MAX_SHAPES {
             app.notice = Some(format!("形は{MAX_SHAPES}個までです。ほかの形を減らしてください"));
         } else if let Some(group) = app.scene.groups.get_mut(g)
@@ -358,8 +393,11 @@ pub fn inspector(app: &mut App, ui: &mut Ui, g: usize) {
             app.notice = Some(e.to_string());
         }
     }
-    ui.label(RichText::new("3Dプリントした形や実物の強度・転倒安全性は保証しません。家具として使う前に別途構造検証が必要です。")
-        .size(11.0).color(style::DIM));
+    ui.label(
+        RichText::new("3Dプリントした形や実物の強度・転倒安全性は保証しません。家具として使う前に別途構造検証が必要です。")
+            .size(11.0)
+            .color(style::DIM),
+    );
 }
 
 #[cfg(test)]
@@ -414,7 +452,10 @@ mod tests {
     fn edits_move_existing_gizmos_and_survive_save_reload() {
         let old = Settings::preset(Design::Stool);
         let mut g = sample_group(old);
-        for s in &mut g.shapes { s.pos[0] += 55.0; s.pos[1] -= 18.0; }
+        for s in &mut g.shapes {
+            s.pos[0] += 55.0;
+            s.pos[1] -= 18.0;
+        }
         let moved_seat = g.shapes[0].pos;
         let p = Settings { width: 210.0, height: 195.0, legs: Legs::Four, symmetric: false, ..old };
         update_group(&mut g, p).unwrap();
@@ -486,8 +527,15 @@ mod tests {
 
     #[test]
     fn invalid_import_settings_are_clamped() {
-        let mut p = Settings { width: f32::NAN, depth: -12.0, height: f32::INFINITY,
-            leg_diameter: 999_999.0, roundness: f32::NAN, puff: -5.0, ..Settings::default() };
+        let mut p = Settings {
+            width: f32::NAN,
+            depth: -12.0,
+            height: f32::INFINITY,
+            leg_diameter: 999_999.0,
+            roundness: f32::NAN,
+            puff: -5.0,
+            ..Settings::default()
+        };
         p.sanitize();
         assert!(p.width.is_finite() && p.width >= MIN_WIDTH);
         assert!(p.depth >= MIN_WIDTH && p.height <= 1000.0);
@@ -523,14 +571,13 @@ mod tests {
             let p = Settings::preset(design);
             let g = sample_group(p);
             let scene = Scene { groups: vec![g], ..Scene::default() };
-            let selected = crate::export_job::prepare(&scene, Some(Pick::Group(0)),
-                crate::export_job::Scope::Selected, false).unwrap();
+            let selected = crate::export_job::prepare(&scene, Some(Pick::Group(0)), crate::export_job::Scope::Selected, false).unwrap();
             let field = Field::new(&selected);
             let prog = Progress::new();
             let span = (p.width.max(p.depth).max(p.height) + 45.0) * 0.5;
             // Centre the slice of the world to include Z=0..height.
             let lo = [-f64::from(span), -f64::from(span), -20.0];
-            let hi = [ f64::from(span),  f64::from(span), f64::from(p.height + 30.0)];
+            let hi = [f64::from(span), f64::from(span), f64::from(p.height + 30.0)];
             let meshed = mesh_sparse(&|q| field.distance(q), lo, hi, 3.0, 1, &prog.slice(0.0, 1.0)).unwrap();
             assert!(!meshed.mesh.triangles.is_empty(), "{design:?}: no triangles");
             assert!(melt::is_watertight(&meshed.mesh), "{design:?}: non-watertight mesh");
@@ -538,7 +585,10 @@ mod tests {
             let n = meshed.mesh.positions.len();
             let mut parent: Vec<usize> = (0..n).collect();
             fn root(p: &mut [usize], mut k: usize) -> usize {
-                while p[k] != k { p[k] = p[p[k]]; k = p[k]; }
+                while p[k] != k {
+                    p[k] = p[p[k]];
+                    k = p[k];
+                }
                 k
             }
             for tri in &meshed.mesh.triangles {
@@ -548,16 +598,14 @@ mod tests {
                     parent[b] = a;
                 }
             }
-            let active: std::collections::HashSet<usize> = meshed.mesh.triangles.iter().flat_map(|t| t.iter().copied())
-                .map(|v| root(&mut parent, v as usize)).collect();
+            let active: std::collections::HashSet<usize> =
+                meshed.mesh.triangles.iter().flat_map(|t| t.iter().copied()).map(|v| root(&mut parent, v as usize)).collect();
             assert_eq!(active.len(), 1, "{design:?}: disconnected exported shells");
 
             // Real file encoders + importers; not only a mesh preview.
             let surf = crate::export_formats::Surface {
                 mesh: meshed.mesh.clone(),
-                look: crate::export_formats::Look::uniform(crate::export_formats::Mat8 {
-                    rgb: [210, 160, 130], rough: 125, metal: 0,
-                }),
+                look: crate::export_formats::Look::uniform(crate::export_formats::Mat8 { rgb: [210, 160, 130], rough: 125, metal: 0 }),
             };
             let bytes = crate::export_formats::threemf(&surf, "Organic Furniture", crate::export_formats::Units::Mm).unwrap();
             let back = crate::import_3mf::read_3mf(&bytes).unwrap();

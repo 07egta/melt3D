@@ -183,7 +183,6 @@ impl App {
         let clean = self.capture.is_some();
         let now = ui.input(|i| i.time);
         let rev = self.track_scene();
-        let scene_changed = self.perf.drawn.scene_changed(rev);
 
         let mods = ui.input(|i| i.modifiers);
         let pos = resp.hover_pos().or_else(|| ui.input(|i| i.pointer.interact_pos()));
@@ -196,6 +195,10 @@ impl App {
         } else {
             self.curve_input(ui, &resp, rect, pos, mods)
         };
+        // Tool input can add or reshape geometry before hover picking. Keep the first revision
+        // for idle and camera-only frames, and look again only after a handled gesture.
+        let hover_rev = if ct.taken || ct.busy { self.track_scene() } else { rev };
+        let scene_changed = self.perf.drawn.scene_changed(hover_rev);
 
         // The handles
         let tool = self.tool;
@@ -439,6 +442,12 @@ impl App {
         // Input can change geometry *after* the revision noted at the start of this frame.
         // Use the resulting revision for the scene pack, so a drag/Undo never renders stale data.
         let render_rev = self.track_scene();
+        if render_rev != hover_rev || moved_camera {
+            // Camera and click input run after the hover pick. Keep their pick pending so a
+            // stationary pointer is refreshed once the throttle allows it.
+            self.perf.hover_gate.invalidate();
+            ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(crate::perf::HOVER_GAP));
+        }
         // The picture itself. It is made after the input above so that it shows this frame's state.
         // Fast mode (cheap shading, fewer pixels) runs while the view or a handle moves, and for a
         // moment after; then one full-quality frame follows.

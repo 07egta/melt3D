@@ -42,7 +42,9 @@ const FAMILIES: [(&str, &str, &str); 7] = [
 ];
 
 /// ISO metric coarse: (size, d, pitch).
-const METRIC: [(&str, f64, f64); 9] = [
+const METRIC: [(&str, f64, f64); 14] = [
+    ("M2", 2.0, 0.4),
+    ("M2.5", 2.5, 0.45),
     ("M3", 3.0, 0.5),
     ("M4", 4.0, 0.7),
     ("M5", 5.0, 0.8),
@@ -50,12 +52,17 @@ const METRIC: [(&str, f64, f64); 9] = [
     ("M8", 8.0, 1.25),
     ("M10", 10.0, 1.5),
     ("M12", 12.0, 1.75),
+    ("M14", 14.0, 2.0),
     ("M16", 16.0, 2.0),
     ("M20", 20.0, 2.5),
+    ("M24", 24.0, 3.0),
+    ("M30", 30.0, 3.5),
 ];
 
 /// ISO 4762: (size, head diameter dk, head height k, socket s, socket depth t).
-const SHCS: [(&str, f64, f64, f64, f64); 9] = [
+const SHCS: [(&str, f64, f64, f64, f64); 14] = [
+    ("M2", 3.8, 2.0, 1.5, 1.0),
+    ("M2.5", 4.5, 2.5, 2.0, 1.1),
     ("M3", 5.5, 3.0, 2.5, 1.3),
     ("M4", 7.0, 4.0, 3.0, 2.0),
     ("M5", 8.5, 5.0, 4.0, 2.5),
@@ -63,12 +70,17 @@ const SHCS: [(&str, f64, f64, f64, f64); 9] = [
     ("M8", 13.0, 8.0, 6.0, 4.0),
     ("M10", 16.0, 10.0, 8.0, 5.0),
     ("M12", 18.0, 12.0, 10.0, 6.0),
+    ("M14", 21.0, 14.0, 12.0, 7.0),
     ("M16", 24.0, 16.0, 14.0, 8.0),
     ("M20", 30.0, 20.0, 17.0, 10.0),
+    ("M24", 36.0, 24.0, 19.0, 12.0),
+    ("M30", 45.0, 30.0, 22.0, 15.5),
 ];
 
 /// ISO 4014/4017 hex head: (size, across flats s, head height k).
-const HEX_BOLT: [(&str, f64, f64); 9] = [
+const HEX_BOLT: [(&str, f64, f64); 14] = [
+    ("M2", 4.0, 1.4),
+    ("M2.5", 5.0, 1.7),
     ("M3", 5.5, 2.0),
     ("M4", 7.0, 2.8),
     ("M5", 8.0, 3.5),
@@ -76,12 +88,17 @@ const HEX_BOLT: [(&str, f64, f64); 9] = [
     ("M8", 13.0, 5.3),
     ("M10", 16.0, 6.4),
     ("M12", 18.0, 7.5),
+    ("M14", 21.0, 8.8),
     ("M16", 24.0, 10.0),
     ("M20", 30.0, 12.5),
+    ("M24", 36.0, 15.0),
+    ("M30", 46.0, 18.7),
 ];
 
 /// ISO 4032: (size, across flats s, height m).
-const HEX_NUT: [(&str, f64, f64); 9] = [
+const HEX_NUT: [(&str, f64, f64); 14] = [
+    ("M2", 4.0, 1.6),
+    ("M2.5", 5.0, 2.0),
     ("M3", 5.5, 2.4),
     ("M4", 7.0, 3.2),
     ("M5", 8.0, 4.7),
@@ -89,12 +106,17 @@ const HEX_NUT: [(&str, f64, f64); 9] = [
     ("M8", 13.0, 6.8),
     ("M10", 16.0, 8.4),
     ("M12", 18.0, 10.8),
+    ("M14", 21.0, 12.8),
     ("M16", 24.0, 14.8),
     ("M20", 30.0, 18.0),
+    ("M24", 36.0, 21.5),
+    ("M30", 46.0, 25.6),
 ];
 
 /// ISO 7089: (size, inner d1, outer d2, thickness h).
-const WASHER: [(&str, f64, f64, f64); 9] = [
+const WASHER: [(&str, f64, f64, f64); 14] = [
+    ("M2", 2.2, 5.0, 0.3),
+    ("M2.5", 2.7, 6.0, 0.5),
     ("M3", 3.2, 7.0, 0.5),
     ("M4", 4.3, 9.0, 0.8),
     ("M5", 5.3, 10.0, 1.0),
@@ -102,8 +124,11 @@ const WASHER: [(&str, f64, f64, f64); 9] = [
     ("M8", 8.4, 16.0, 1.6),
     ("M10", 10.5, 20.0, 2.0),
     ("M12", 13.0, 24.0, 2.5),
+    ("M14", 15.0, 28.0, 2.5),
     ("M16", 17.0, 30.0, 3.0),
     ("M20", 21.0, 37.0, 3.0),
+    ("M24", 25.0, 44.0, 4.0),
+    ("M30", 31.0, 56.0, 4.0),
 ];
 
 /// ISO 4026: (size, socket s, socket depth t).
@@ -217,6 +242,7 @@ fn run(s: &mut Session, id: &str, p: Value) -> Result<Value> {
 fn hex(s: &mut Session, af: f64, z0: f64, z1: f64, op: &str) -> Result<()> {
     run(s, "sketch.create", json!({"plane": "XY", "offset": format!("{z0} mm")}))?;
     run(s, "sketch.polygon.circumscribed", json!({"center": [0, 0], "radius": af / 2.0, "sides": 6}))?;
+    fix_all(s)?;
     run(s, "sketch.finish", json!({}))?;
     let (dist, dir) = if z1 >= z0 { (z1 - z0, "positive") } else { (z0 - z1, "negative") };
     run(s, "solid.extrude", json!({"distance": format!("{dist} mm"), "direction": dir, "operation": op}))?;
@@ -237,8 +263,21 @@ fn revolve(s: &mut Session, pts: &[(f64, f64)], op: &str) -> Result<()> {
     run(s, "sketch.create", json!({"plane": "XZ"}))?;
     let points: Vec<[f64; 2]> = pts.iter().map(|(r, z)| [*r, -*z]).collect();
     run(s, "sketch.line", json!({"points": points, "closed": true}))?;
+    fix_all(s)?;
     run(s, "sketch.finish", json!({}))?;
     run(s, "solid.revolve", json!({"axis": "y", "operation": op}))?;
+    Ok(())
+}
+
+/// Fix every point and curve of the sketch being drawn: a standard part's outline is its size, so
+/// its sketches are fully defined and a check of the design finds nothing left free in them.
+fn fix_all(s: &mut Session) -> Result<()> {
+    let sketch = super::sketch_store::active(s).and_then(|id| super::sketch_store::read(&s.doc, id).ok());
+    let entities: Vec<String> =
+        sketch.map(|sk| sk.points.iter().map(|p| p.id.clone()).chain(sk.curves.iter().map(|c| c.id.clone())).collect()).unwrap_or_default();
+    if !entities.is_empty() {
+        run(s, "sketch.constraint.fix", json!({"entities": entities, "fixed": true}))?;
+    }
     Ok(())
 }
 
@@ -293,7 +332,7 @@ fn build(s: &mut Session, sh: &Shape) -> Result<()> {
 
 fn library(_s: &mut Session, p: &Value) -> Result<Value> {
     let fam = |id: &str| -> Value {
-        let sizes: Vec<Value> = match id {
+        let mut sizes: Vec<Value> = match id {
             "socket_head_cap_screw" => SHCS.iter().map(|r| json!({"size": r.0, "d": metric(r.0).map(|m| m.0), "pitch": metric(r.0).map(|m| m.1), "head_diameter": r.1, "head_height": r.2, "socket": r.3, "socket_depth": r.4})).collect(),
             "hex_bolt" => HEX_BOLT.iter().map(|r| json!({"size": r.0, "d": metric(r.0).map(|m| m.0), "pitch": metric(r.0).map(|m| m.1), "across_flats": r.1, "head_height": r.2})).collect(),
             "hex_nut" => HEX_NUT.iter().map(|r| json!({"size": r.0, "d": metric(r.0).map(|m| m.0), "pitch": metric(r.0).map(|m| m.1), "across_flats": r.1, "height": r.2})).collect(),
@@ -305,6 +344,15 @@ fn library(_s: &mut Session, p: &Value) -> Result<Value> {
         };
         let (_, name, standard) = FAMILIES.iter().find(|f| f.0 == id).copied().unwrap_or(("", "", ""));
         let lengths = matches!(id, "socket_head_cap_screw" | "hex_bolt" | "set_screw" | "dowel_pin").then_some(LENGTHS.to_vec());
+        if lengths.is_some() {
+            for row in &mut sizes {
+                let Some(size) = row.get("size").and_then(Value::as_str).map(str::to_string) else { continue };
+                let Some(l) = shape(id, &size, None).ok().as_ref().and_then(shape_len) else { continue };
+                if let Value::Object(m) = row {
+                    m.insert("default_length".into(), json!(l));
+                }
+            }
+        }
         json!({"family": id, "name": name, "standard": standard, "sizes": sizes, "lengths": lengths})
     };
     match str_(p, "family") {
@@ -345,12 +393,12 @@ fn identity(family: &str, size: &str, sh: &Shape) -> (String, String) {
 /// Give a standard part its part number and description; a field someone changed since the last
 /// size (`was`) is theirs and stays.
 fn set_identity(s: &mut Session, comp: u64, now: (String, String), was: Option<(String, String)>) {
-    use solidcraft_doc::metadata::{DESCRIPTION, PART_NUMBER};
+    use solidcraft_doc::metadata::{DESCRIPTION, Owner, PART_NUMBER};
     let Some(c) = s.doc.components.iter().find(|c| c.id == comp) else { return };
     let mut m = c.metadata.clone();
     for (k, new, old) in [(PART_NUMBER, now.0, was.as_ref().map(|w| w.0.as_str())), (DESCRIPTION, now.1, was.as_ref().map(|w| w.1.as_str()))] {
         if m.text(k).is_none_or(|cur| Some(cur) == old) {
-            let _ = m.set(k, Value::String(new));
+            let _ = m.set(Owner::Component, k, Value::String(new));
         }
     }
     if m != c.metadata
@@ -396,7 +444,8 @@ fn insert(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let name = str_(p, "name").map(str::to_string).unwrap_or_else(|| part_name(&family, &size, &sh));
     let active = s.active_component;
-    let c = run(s, "component.create", json!({"name": name}))?;
+    // Hardware is fitted to other parts: it starts free even as the design's first part (#2804).
+    let c = run(s, "component.create", json!({"name": name, "grounded": false}))?;
     let (comp, occ) = (c["component"].as_u64().unwrap_or(0), c["occurrence"].as_u64().unwrap_or(0));
     build(s, &sh)?;
     s.doc_mut().parts.insert(comp, solidcraft_doc::StandardPart { family: family.clone(), size: size.clone(), length: shape_len(&sh) });
@@ -556,6 +605,63 @@ mod tests {
         assert!(b.execute("parts.insert", &json!({"family": "hex_nut", "size": "M7"})).is_err());
     }
 
+    /// The Length list of a dialog opens on the length an insert gets when none is asked for,
+    /// so the library reports that length for every size of every family that has lengths. The
+    /// rule differs by family, so the reported value is the one the part is actually built to.
+    #[test]
+    fn the_library_reports_the_default_length_of_every_size() {
+        let all = run(&mut Session::default(), "parts.library", json!({}));
+        let families = all["families"].as_array().cloned().unwrap_or_default();
+        assert!(!families.is_empty(), "{all}");
+        for fam in families {
+            let id = fam["family"].as_str().unwrap_or_default().to_string();
+            let standard: Vec<f64> = fam["lengths"].as_array().map(|a| a.iter().filter_map(Value::as_f64).collect()).unwrap_or_default();
+            for row in fam["sizes"].as_array().cloned().unwrap_or_default() {
+                let size = row["size"].as_str().unwrap_or_default().to_string();
+                let reported = row["default_length"].as_f64();
+                if standard.is_empty() {
+                    assert!(reported.is_none(), "{id} {size} has no lengths of its own but reports a default");
+                    continue;
+                }
+                // What an insert that asks for no length is actually built to.
+                let mut s = Session::default();
+                let out = run(&mut s, "parts.insert", json!({"family": id, "size": size}));
+                let built = s.doc.parts.get(&out["component"].as_u64().unwrap_or(0)).and_then(|p| p.length);
+                assert_eq!(reported, built, "{id} {size}: reported default is not what an insert builds");
+                assert!(standard.iter().any(|l| Some(*l) == reported), "{id} {size}: {reported:?} is not one of the standard lengths");
+            }
+        }
+    }
+
+    /// #2091: the second and larger ISO sizes, M2, M2.5, M14, M24 and M30, are in the screw, bolt,
+    /// nut and washer tables (they stopped at M3 and M20).
+    #[test]
+    fn small_and_large_iso_sizes_insert() {
+        for family in ["socket_head_cap_screw", "hex_bolt", "hex_nut", "washer"] {
+            let l = run(&mut Session::default(), "parts.library", json!({"family": family}));
+            let sizes: Vec<&str> = l["sizes"].as_array().unwrap().iter().filter_map(|x| x["size"].as_str()).collect();
+            for size in ["M2", "M2.5", "M14", "M24", "M30"] {
+                assert!(sizes.contains(&size), "{family} has {size}: {sizes:?}");
+            }
+        }
+        // An M2.5 x 8 cap screw: head Ø4.5 x 2.5, shank 8 long.
+        let mut s = Session::default();
+        run(&mut s, "parts.insert", json!({"family": "socket_head_cap_screw", "size": "M2.5", "length": 8}));
+        let (lo, hi) = bbox(&s, "SHCS M2.5x8");
+        assert!((hi.x - lo.x - 4.5).abs() < 1e-6 && (lo.z + 8.0).abs() < 1e-6 && (hi.z - 2.5).abs() < 1e-6, "{lo:?} {hi:?}");
+        // An M24 nut: 36 across flats, 21.5 high.
+        let mut n = Session::default();
+        run(&mut n, "parts.insert", json!({"family": "hex_nut", "size": "M24"}));
+        let (lo, hi) = bbox(&n, "Hex Nut M24");
+        let (w, h) = ((hi.x - lo.x).max(hi.y - lo.y), hi.z - lo.z);
+        assert!((w - 36.0 / (std::f64::consts::PI / 6.0).cos()).abs() < 1e-6 && (h - 21.5).abs() < 1e-6, "{w} {h}");
+        // An M30 washer: Ø56 x 4.
+        let mut w = Session::default();
+        run(&mut w, "parts.insert", json!({"family": "washer", "size": "M30"}));
+        let (lo, hi) = bbox(&w, "Washer M30");
+        assert!((hi.x - lo.x - 56.0).abs() < 1e-6 && (hi.z - lo.z - 4.0).abs() < 1e-6, "{lo:?} {hi:?}");
+    }
+
     #[test]
     fn a_screw_seats_in_a_hole_and_resizes() {
         let mut s = Session::default();
@@ -574,6 +680,30 @@ mod tests {
         let (lo, hi) = bbox(&s, "SHCS M8x25");
         assert!((hi.z - 18.0).abs() < 1e-6 && (lo.z + 15.0).abs() < 1e-6, "{lo:?} {hi:?}");
         assert!(s.model.state().threads.iter().any(|t| t.designation == "M8" && (t.pitch - 1.25).abs() < 1e-9));
+    }
+
+    #[test]
+    fn every_sketch_of_a_standard_part_is_fully_defined() {
+        for (family, size, resized) in [
+            ("socket_head_cap_screw", "M6", "M8"),
+            ("hex_bolt", "M6", "M8"),
+            ("hex_nut", "M6", "M8"),
+            ("washer", "M6", "M8"),
+            ("set_screw", "M6", "M8"),
+            ("dowel_pin", "6", "8"),
+            ("bearing", "608", "6200"),
+        ] {
+            let mut s = Session::default();
+            let part = run(&mut s, "parts.insert", json!({"family": family, "size": size}));
+            for step in ["inserted", "resized"] {
+                let st = s.model.state();
+                let free: Vec<_> =
+                    st.sketches.iter().filter(|k| k.report.dof != 0 || !k.report.fully_constrained()).map(|k| (&k.name, k.report.dof)).collect();
+                assert!(!st.sketches.is_empty() && free.is_empty(), "{family} {step}: {free:?}");
+                assert!(s.model.results.iter().all(|r| r.error.is_none()), "{family} {step}");
+                run(&mut s, "parts.resize", json!({"component": part["component"], "size": resized}));
+            }
+        }
     }
 
     #[test]

@@ -12,7 +12,16 @@ use egui::{Ui, vec2};
 /// Text segments retain mixed states and optional compact clipping instead of dropdown fallback.
 #[derive(Default)]
 pub(crate) struct Segments<'a> {
+    /// Optional stable scenario targets, independent of translated option labels.
+    pub targets: &'a [&'a str],
+    /// Optional leading icons retain the same text-segment geometry and accessibility.
+    pub icons: &'a [&'a str],
+    pub workspace_accent: bool,
+    pub dense: bool,
+    pub small: bool,
     pub states: &'a [bool],
+    /// Per-segment disabled explanation; unavailable choices remain visible.
+    pub disabled_reasons: &'a [Option<&'a str>],
     pub compact: bool,
     pub primary: bool,
     pub intrinsic: bool,
@@ -20,30 +29,56 @@ pub(crate) struct Segments<'a> {
 }
 
 pub(crate) fn segmented(ui: &mut Ui, selected: &mut usize, options: &[&str], config: Segments<'_>) -> bool {
-    let Segments { states, compact, primary, intrinsic, proportional } = config;
+    if crate::prefs_search::suppress_chrome(ui) && !crate::prefs_search::texts_hit(ui, options) {
+        return false;
+    }
+    if crate::prefs_search::querying(ui) && !crate::prefs_search::shows_all(ui) {
+        crate::prefs_search::reveal(ui);
+    }
+    let Segments { targets, icons, workspace_accent, dense, small, states, disabled_reasons, compact, primary, intrinsic, proportional } = config;
+    let accent = crate::theme::TabAccent::current(ui.ctx());
     let t = Tokens::get();
+    let catalog = super::layout::in_catalog(ui);
+    let font_size = if small || catalog { t.font_small } else { t.font_label };
+    let natural: Vec<_> = options
+        .iter()
+        .enumerate()
+        .map(|(index, option)| {
+            ui.painter().layout_no_wrap((*option).to_owned(), crate::fonts::semibold(font_size), t.form_ink).size().x.ceil()
+                + t.space_16
+                + if icons.get(index).is_some() { t.space_14 + t.space_6 + t.space_4 } else { 0.0 }
+        })
+        .collect();
+    let total = natural.iter().sum::<f32>();
     let segment_width = dimension(ui.available_width()) / options.len().max(1) as f32;
     let widest = options
         .iter()
-        .map(|option| {
-            ui.painter().layout_no_wrap(crate::i18n::tr_label(option).to_string(), crate::fonts::semibold(t.font_label), t.form_ink).size().x
-        })
+        .map(|option| ui.painter().layout_no_wrap(crate::i18n::tr_label(option).to_string(), crate::fonts::semibold(font_size), t.form_ink).size().x)
         .fold(0.0, f32::max);
-    if !intrinsic && !proportional && !compact && widest + 2.0 * t.space_8 > segment_width {
+    // Judged on the whole row, which is what a scrollbar narrows, not on one segment.
+    let need = if intrinsic { total } else { (widest + 2.0 * t.space_8) * options.len() as f32 };
+    if disabled_reasons.is_empty() && !proportional && !compact && !super::fits_steadily(ui, label(ui), need, segment_width * options.len() as f32) {
         let before = *selected;
         let id = format!("segments_fallback_{}", label(ui));
         dropdown(ui, &id, selected, options);
         return *selected != before;
     }
-    let natural: Vec<_> = options
-        .iter()
-        .map(|option| {
-            ui.painter().layout_no_wrap((*option).to_owned(), crate::fonts::semibold(t.font_label), t.form_ink).size().x.ceil() + t.space_16
-        })
-        .collect();
-    let total = natural.iter().sum::<f32>();
     let desired = if intrinsic { total.min(dimension(ui.available_width())) } else { dimension(ui.available_width()) };
-    let (rect, _) = ui.allocate_exact_size(vec2(desired, row_height()), egui::Sense::hover());
+    let (rect, _) = ui.allocate_exact_size(
+        vec2(
+            desired,
+            if catalog {
+                t.space_16
+            } else if small {
+                t.control_height - t.space_4
+            } else if dense {
+                t.control_height - t.space_2
+            } else {
+                row_height()
+            },
+        ),
+        egui::Sense::hover(),
+    );
     ui.painter().rect_filled(rect, t.control_radius, t.control_fill);
     let equal_width = rect.width() / options.len().max(1) as f32;
     let mut clicked = false;
@@ -53,7 +88,14 @@ pub(crate) fn segmented(ui: &mut Ui, selected: &mut usize, options: &[&str], con
             if (intrinsic || proportional) && total > 0.0 { natural.get(index).copied().unwrap_or(0.0) * rect.width() / total } else { equal_width };
         let segment = egui::Rect::from_min_size(egui::pos2(x, rect.top()), vec2(width, rect.height()));
         x += width;
-        let response = ui.interact(segment, ui.make_persistent_id(("segment", index)), egui::Sense::click());
+        let reason = disabled_reasons.get(index).copied().flatten();
+        let enabled = ui.is_enabled() && reason.is_none();
+        let id = ui.make_persistent_id(("segment", index));
+        let response = if reason.is_some() {
+            ui.add_enabled_ui(false, |ui| ui.interact(segment, id, egui::Sense::click())).inner
+        } else {
+            ui.interact(segment, id, egui::Sense::click())
+        };
         let on = states.get(index).copied().unwrap_or(*selected == index);
         let rounding = egui::CornerRadius {
             nw: if index == 0 { t.control_radius } else { 0 },
@@ -67,6 +109,8 @@ pub(crate) fn segmented(ui: &mut Ui, selected: &mut usize, options: &[&str], con
                 rounding,
                 if on && primary {
                     t.form_primary
+                } else if on && workspace_accent {
+                    accent.soft
                 } else if on {
                     t.selected_bg
                 } else {
@@ -75,20 +119,34 @@ pub(crate) fn segmented(ui: &mut Ui, selected: &mut usize, options: &[&str], con
             );
         }
         if index > 0 {
-            ui.painter().vline(segment.left(), segment.y_range(), egui::Stroke::new(1.0, t.control_border));
+            ui.painter().vline(segment.left(), segment.y_range(), t.control_border_stroke(t.control_border));
         }
-        let font = if on { crate::fonts::semibold(t.font_label) } else { egui::FontId::proportional(t.font_label) };
+        let font = if on { crate::fonts::semibold(font_size) } else { egui::FontId::proportional(font_size) };
         let galley = ui.painter().layout_no_wrap((*option).to_string(), font.clone(), t.form_ink);
-        let text_rect =
-            egui::Rect::from_min_size(egui::pos2(segment.center().x - galley.size().x / 2.0, segment.top()), vec2(galley.size().x, segment.height()));
+        let icon_width = if icons.get(index).is_some() { t.space_14 + t.space_6 } else { 0.0 };
+        let text_rect = egui::Rect::from_min_size(
+            egui::pos2(segment.center().x - (galley.size().x + icon_width) / 2.0 + icon_width, segment.top()),
+            vec2(galley.size().x, segment.height()),
+        );
+        if let Some(icon) = icons.get(index) {
+            let icon_rect = egui::Rect::from_center_size(
+                egui::pos2(text_rect.left() - t.space_6 - t.space_14 / 2.0, segment.center().y),
+                vec2(t.space_14, t.space_14),
+            );
+            crate::icons::paint_ink(ui.painter(), icon_rect, icon, if on && workspace_accent { accent.ink } else { t.form_ink });
+        }
         let text_rect = if compact { text_rect.intersect(segment.shrink2(vec2(t.space_4, 0.0))) } else { text_rect };
         paint_text(
             ui,
             text_rect,
             option,
             font,
-            if on && primary {
+            if reason.is_some() {
+                t.form_dim
+            } else if on && primary {
                 t.on_accent
+            } else if on && workspace_accent {
+                accent.ink
             } else if on {
                 t.selected_ink
             } else {
@@ -96,14 +154,24 @@ pub(crate) fn segmented(ui: &mut Ui, selected: &mut usize, options: &[&str], con
             },
             false,
         );
-        response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, ui.is_enabled(), on, *option));
-        scenario::publish_handle(&format!("dialog:{}:{option}", label(ui)), segment.center());
-        if response.on_hover_text(*option).clicked() {
+        t.button_bevel_with_radius(ui, &response, on, rounding);
+        response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, enabled, on, *option));
+        scenario::publish_target(&format!("dialog:{}:{option}", label(ui)), segment);
+        if let Some(target) = targets.get(index) {
+            let visible = segment.intersect(ui.clip_rect());
+            if visible.is_positive() {
+                scenario::publish_target(target, visible);
+            }
+        }
+        let response = if let Some(reason) = reason { response.on_disabled_hover_text(reason) } else { response.on_hover_text(*option) };
+        if response.clicked() && enabled {
             *selected = index;
             clicked = true;
         }
     }
-    ui.painter().rect_stroke(rect, t.control_radius, egui::Stroke::new(1.0, t.control_border), egui::StrokeKind::Inside);
+    if t.borders.bevel.is_none() {
+        ui.painter().rect_stroke(rect, t.control_radius, t.control_border_stroke(t.control_border), egui::StrokeKind::Inside);
+    }
     scenario::publish_target_as(&format!("dialog:{}", label(ui)), &format!("dialog:segments:{}", label(ui)), rect);
     clicked
 }
@@ -122,8 +190,13 @@ pub(crate) struct IconSegment {
 /// Equal icon choices with mixed state. Tokens: `segmented tokens, space_4/12, icon/fill, accent; icon palette`.
 pub(crate) fn segmented_icons(ui: &mut Ui, selected: &mut usize, options: &[IconSegment], states: &[bool]) -> bool {
     let t = Tokens::get();
-    let (rect, _) = ui.allocate_exact_size(vec2(dimension(ui.available_width()), row_height()), egui::Sense::hover());
-    ui.painter().rect_filled(rect, t.control_radius, t.control_fill);
+    let catalog = super::layout::in_catalog(ui);
+    let accent = crate::theme::TabAccent::current(ui.ctx());
+    let (rect, _) =
+        ui.allocate_exact_size(vec2(dimension(ui.available_width()), if catalog { t.space_24 } else { row_height() }), egui::Sense::hover());
+    if !catalog {
+        ui.painter().rect_filled(rect, t.control_radius, t.control_fill);
+    }
     let width = rect.width() / options.len().max(1) as f32;
     let mut clicked = false;
     for (index, option) in options.iter().enumerate() {
@@ -137,24 +210,43 @@ pub(crate) fn segmented_icons(ui: &mut Ui, selected: &mut usize, options: &[Icon
             se: if index + 1 == options.len() { t.control_radius } else { 0 },
         };
         if on || response.hovered() {
-            ui.painter().rect_filled(segment, rounding, if on { t.selected_bg } else { t.hover });
+            ui.painter().rect_filled(
+                segment,
+                rounding,
+                if on && catalog {
+                    accent.soft
+                } else if on {
+                    t.selected_bg
+                } else {
+                    t.hover
+                },
+            );
         }
-        if index > 0 {
-            ui.painter().vline(segment.left(), segment.y_range(), egui::Stroke::new(1.0, t.control_border));
+        if index > 0 && !catalog {
+            ui.painter().vline(segment.left(), segment.y_range(), t.control_border_stroke(t.control_border));
         }
         // A square icon area inside the segment: dash gaps and dots need the room to read apart.
         let side = (segment.width().min(segment.height()) - t.space_4).max(t.space_12);
         let icon_rect = egui::Rect::from_center_size(segment.center(), vec2(side, side));
-        crate::icons::paint_icon(ui.painter(), icon_rect, option.icon, f32::from(t.icon.a()) / 255.0);
+        if catalog {
+            let icon_rect = egui::Rect::from_center_size(segment.center(), vec2(t.space_14, t.space_14));
+            crate::icons::paint_ink(ui.painter(), icon_rect, option.icon, if on { accent.ink } else { t.form_dim });
+        } else {
+            crate::icons::paint_icon(ui.painter(), icon_rect, option.icon, f32::from(t.icon.a()) / 255.0);
+        }
+        t.button_bevel_with_radius(ui, &response, on, rounding);
         response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, ui.is_enabled(), on, option.key));
         scenario::publish_handle(&format!("dialog:{}:{}", label(ui), option.key), segment.center());
+        scenario::publish_target(option.key, segment);
         let response = response.on_hover_text(&option.tip);
         if response.clicked() {
             *selected = index;
             clicked = true;
         }
     }
-    ui.painter().rect_stroke(rect, t.control_radius, egui::Stroke::new(1.0, t.control_border), egui::StrokeKind::Inside);
+    if !catalog && t.borders.bevel.is_none() {
+        ui.painter().rect_stroke(rect, t.control_radius, t.control_border_stroke(t.control_border), egui::StrokeKind::Inside);
+    }
     scenario::publish_target_as(&format!("dialog:{}", label(ui)), &format!("dialog:segments:{}", label(ui)), rect);
     clicked
 }
@@ -250,11 +342,12 @@ pub(crate) fn tool_choices<'a>(ui: &mut Ui, label: &str, current: &str, choices:
                 enabled,
                 egui::Button::new("")
                     .fill(fill)
-                    .stroke(egui::Stroke::new(if on { t.sketch_mode_border } else { 1.0 }, if on { t.sketch_accent } else { t.control_border }))
+                    .stroke(if on { egui::Stroke::new(t.sketch_mode_border, t.sketch_accent) } else { t.control_border_stroke(t.control_border) })
                     .corner_radius(t.sketch_mode_radius)
                     .min_size(vec2(t.sketch_mode_size, t.sketch_mode_size)),
             );
             crate::icons::paint_icon(ui.painter(), response.rect.shrink(t.space_6), choice.icon, f32::from(t.icon.a()) / 255.0);
+            t.button_bevel(ui, &response, on);
             scenario::publish_target(&format!("sketch_palette:feature:{}", choice.key), response.rect);
             response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, enabled, on, choice.label));
             if response.on_hover_text(choice.label).clicked() && enabled {
@@ -274,6 +367,7 @@ pub(crate) fn toggle_icon(ui: &mut Ui, row: &str, label: &str, selected: &mut bo
         ui.add(egui::Button::new("").selected(*selected).min_size(vec2(t.space_24 + t.space_4, t.control_height)).sense(egui::Sense::CLICK));
     crate::icons::paint_icon(ui.painter(), response.rect.shrink(t.space_3), icon, f32::from(t.icon.a()) / 255.0);
     response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, *selected, crate::i18n::tr_label(label)));
+    t.button_bevel(ui, &response, *selected);
     crate::scenario::publish_handle(&format!("dialog:{row}:{label}"), response.rect.center());
     if response.clone().on_hover_text(crate::i18n::tr_label(label)).clicked() {
         *selected = !*selected;
@@ -293,6 +387,127 @@ pub(crate) fn list_picker(ui: &mut Ui, key: &str, text: &str, selected: bool) ->
         ui.add_sized(egui::vec2(super::metrics::dimension(ui.available_width()), super::row_height()), egui::Button::selectable(selected, text));
     crate::scenario::publish_target(&format!("dialog:list:{key}"), response.rect);
     response
+}
+
+/// Intrinsic-width selection chip for horizontal lists, sharing list-picker styling.
+pub(crate) fn choice_chip(ui: &mut Ui, key: &str, text: &str, selected: bool) -> egui::Response {
+    let t = Tokens::get();
+    if super::layout::in_catalog(ui) {
+        let accent = crate::theme::TabAccent::current(ui.ctx());
+        let width = ui.painter().layout_no_wrap(text.to_string(), crate::fonts::semibold(t.font_small), t.form_ink).size().x + t.space_16;
+        let (rect, response) = ui.allocate_exact_size(vec2(width, t.space_16 + t.space_4), egui::Sense::click());
+        ui.painter().rect_filled(rect, t.radius_xl, if selected { accent.soft } else { t.control_fill });
+        paint_text(
+            ui,
+            rect.shrink2(vec2(t.space_8, 0.0)),
+            text,
+            if selected { crate::fonts::semibold(t.font_small) } else { egui::FontId::proportional(t.font_small) },
+            if selected { accent.ink } else { t.form_ink },
+            false,
+        );
+        response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, ui.is_enabled(), selected, text));
+        crate::scenario::publish_target(&format!("dialog:list:{key}"), rect);
+        return response;
+    }
+    let width = (ui.painter().layout_no_wrap(text.to_owned(), crate::fonts::semibold(t.font_label), t.text).size().x + t.space_24)
+        .clamp(t.control_height * 2.0, t.form_card_width);
+    let response = ui.add_sized(vec2(width, super::row_height()), egui::Button::selectable(selected, text).truncate());
+    crate::scenario::publish_target(&format!("dialog:list:{key}"), response.rect);
+    response
+}
+
+/// Thumbnail variant of the shared selection chip. No document or render-job ownership.
+#[derive(Default)]
+pub(crate) struct ThumbnailChoice {
+    pub texture: Option<egui::TextureId>,
+    pub selected: bool,
+    pub modified: bool,
+    pub progress: Option<f32>,
+}
+
+pub(crate) fn thumbnail_choice(ui: &mut Ui, key: &str, text: &str, state: ThumbnailChoice) -> egui::Response {
+    let t = Tokens::get();
+    let thumb_size = vec2(t.control_height + t.space_24, t.control_height + t.space_2);
+    let height = thumb_size.y + t.space_8;
+    let font = crate::fonts::semibold(t.font_small);
+    let width = ui.painter().layout_no_wrap(text.to_owned(), font.clone(), t.form_ink).size().x.min(t.form_label_width * 2.0)
+        + thumb_size.x
+        + t.space_8
+        + t.space_14;
+    let (rect, response) = ui.allocate_exact_size(vec2(width, height), egui::Sense::click());
+    let accent = crate::theme::TabAccent::current(ui.ctx());
+    let ink = if state.selected { accent.ink } else { t.form_ink };
+    ui.painter().rect(
+        rect,
+        t.control_radius,
+        if state.selected {
+            accent.soft
+        } else if response.hovered() {
+            t.hover
+        } else {
+            t.control_fill
+        },
+        egui::Stroke::new(if state.selected { 1.5 } else { 1.0 }, if state.selected { accent.ink } else { t.control_border }),
+        egui::StrokeKind::Inside,
+    );
+    let thumb = egui::Rect::from_min_size(rect.min + vec2(t.space_4, t.space_4), thumb_size);
+    ui.painter().rect_filled(thumb, t.radius_sm, t.dialog_footer);
+    if let Some(texture) = state.texture {
+        egui::Image::new((texture, thumb.size())).corner_radius(t.radius_sm).paint_at(ui, thumb);
+    } else {
+        // Deterministic placeholder while loading, or when a worker is unavailable.
+        ui.painter().hline(thumb.shrink(t.space_8).x_range(), thumb.center().y, t.control_border_stroke(t.control_border));
+    }
+    super::text::paint_text(
+        ui,
+        egui::Rect::from_min_max(egui::pos2(thumb.right() + t.space_8, rect.top()), rect.max - vec2(t.space_10, 0.0)),
+        text,
+        font,
+        ink,
+        false,
+    );
+    if state.modified {
+        let dot = egui::pos2(rect.right() - t.space_6, rect.top() + t.space_6);
+        ui.painter().circle_filled(dot, t.space_3, t.warning);
+        crate::scenario::publish_rect(&format!("dialog:list:{key}:modified"), egui::Rect::from_center_size(dot, vec2(t.space_6, t.space_6)));
+    }
+    if let Some(progress) = state.progress {
+        let center = thumb.center();
+        let radius = t.space_8;
+        ui.painter().circle_filled(center, radius + t.space_3, t.dialog_body);
+        ui.painter().circle_stroke(center, radius, egui::Stroke::new(t.space_2, t.control_border));
+        let fraction = if progress.is_finite() { progress.clamp(0.0, 1.0) } else { 0.0 };
+        let points: Vec<_> = (0..=32)
+            .map(|i| {
+                let angle = -std::f32::consts::FRAC_PI_2 + std::f32::consts::TAU * fraction.max(0.03) * i as f32 / 32.0;
+                center + radius * vec2(angle.cos(), angle.sin())
+            })
+            .collect();
+        ui.painter().add(egui::Shape::line(points, egui::Stroke::new(t.space_2, accent.ink)));
+        crate::scenario::publish_rect(&format!("dialog:list:{key}:progress"), thumb);
+    }
+    response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, ui.is_enabled(), state.selected, text));
+    crate::scenario::publish_target(&format!("dialog:list:{key}"), response.rect);
+    response.on_hover_text(text)
+}
+
+/// Dashed add variant for thumbnail strips, sharing control tokens and button semantics.
+pub(crate) fn add_choice(ui: &mut Ui, label: &str) -> egui::Response {
+    let t = Tokens::get();
+    let side = t.control_height + t.space_8;
+    let (rect, response) = ui.allocate_exact_size(vec2(side, side), egui::Sense::click());
+    if response.hovered() {
+        ui.painter().rect_filled(rect, t.control_radius, t.hover);
+    }
+    let r = rect.shrink(t.space_2);
+    let mut outline = super::preferences::rounded_perimeter(r, f32::from(t.control_radius));
+    if let Some(first) = outline.first().copied() {
+        outline.push(first);
+    }
+    ui.painter().add(egui::Shape::dashed_line(&outline, egui::Stroke::new(1.0, t.control_border), t.space_3, t.space_3));
+    ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, "+", egui::FontId::proportional(t.font_subtitle), t.form_dim);
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label));
+    response.on_hover_text(label)
 }
 
 /// A reusable draggable document-colour sample; caller supplies the existing domain payload.
@@ -329,7 +544,7 @@ pub(crate) fn color_swatch<T: Send + Sync + 'static>(
                     }
                 }
             }
-            ui.painter().rect(rect, t.control_radius, color, egui::Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
+            ui.painter().rect(rect, t.control_radius, color, t.control_border_stroke(t.border), egui::StrokeKind::Inside);
         })
         .response;
     let response = ui.interact(response.rect, id.with("click"), egui::Sense::click()).on_hover_text(tip);
@@ -363,15 +578,16 @@ pub(crate) struct PopupOption<'a> {
     pub color: egui::Color32,
 }
 
-/// Focus-neutral suggestion popup. The owner handles navigation and completion semantics. Its
-/// rows take no focus, and where they were drawn is kept under `id.with("rows")`, so an owner
-/// can act on a press before the click lands (#3257).
+/// Focus-neutral suggestion popup. The owner handles navigation and completion semantics;
+/// `selected` is the highlighted row, or `None` when no row is picked yet (#3663). Its rows
+/// take no focus, and where they were drawn is kept under `id.with("rows")`, so an owner can
+/// act on a press before the click lands (#3257).
 /// Tokens: space_2, form_label_width, control_height, text_dim, scope control/font tokens.
 pub(crate) fn popup_list(
     ctx: &egui::Context,
     id: egui::Id,
     anchor: egui::Rect,
-    selected: usize,
+    selected: Option<usize>,
     options: &[PopupOption<'_>],
     hint: &str,
 ) -> Option<usize> {
@@ -382,7 +598,7 @@ pub(crate) fn popup_list(
     let area = popup.order(egui::Order::Tooltip).fixed_pos(anchor.left_bottom() + egui::vec2(0.0, t.space_2)).show(ctx, |ui| {
         Container::popup_frame(ui.style())
             .fill(t.control_fill)
-            .stroke(egui::Stroke::new(1.0, t.dialog_border))
+            .stroke(t.primary_border(t.dialog_border))
             .corner_radius(t.radius_lg)
             .inner_margin(t.space_4)
             .show(ui, |ui| {
@@ -391,7 +607,7 @@ pub(crate) fn popup_list(
                     for (index, option) in options.iter().enumerate() {
                         let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), t.control_height), egui::Sense::CLICK);
                         rows.push(rect);
-                        let picked = index == selected;
+                        let picked = selected == Some(index);
                         if picked || response.hovered() {
                             ui.painter().rect_filled(rect, t.control_radius, if picked { t.selected_bg } else { t.hover });
                         }
@@ -425,7 +641,7 @@ pub(crate) fn popup_list(
                         }
                     }
                     super::divider(ui, "completion_detail");
-                    if let Some(option) = options.get(selected) {
+                    if let Some(option) = selected.and_then(|index| options.get(index)) {
                         super::text(ui, option.detail, super::Text::Note("completion_detail"));
                     }
                     super::text(ui, hint, super::Text::Note("completion_hint"));
@@ -444,7 +660,7 @@ pub(crate) fn color_thumbnail<T: Send + Sync + 'static>(ui: &mut Ui, id: egui::I
     let t = Tokens::get();
     ui.dnd_drag_source(id, payload, |ui| {
         let (rect, _) = ui.allocate_exact_size(vec2(t.space_16, t.space_16), egui::Sense::hover());
-        ui.painter().rect(rect, t.radius_sm, color, egui::Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
+        ui.painter().rect(rect, t.radius_sm, color, t.control_border_stroke(t.border), egui::StrokeKind::Inside);
     })
     .response
     .on_hover_text(tip)

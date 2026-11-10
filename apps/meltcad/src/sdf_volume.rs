@@ -894,7 +894,9 @@ pub fn f32_to_f16_bits(x: f32) -> u16 {
 }
 
 impl Volume {
-    /// All distances as half floats (`data` order), for uploading to a 3-D texture.
+    /// All distances as half floats (`data` order). The GPU upload streams them in bounded
+    /// chunks instead (gpu.rs); this whole-volume form stays for tests.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn to_f16_bits(&self) -> Vec<u16> {
         self.data.iter().map(|v| f32_to_f16_bits(*v)).collect()
     }

@@ -37,10 +37,10 @@ jobs:
             os: ubuntu-22.04   # older Linux, so the download also runs on older distributions
             target: x86_64-unknown-linux-gnu
           - name: macos-arm64
-            os: macos-14
+            os: macos-latest   # macos-14 runners were retired ("configuration is not supported")
             target: aarch64-apple-darwin
           - name: macos-intel
-            os: macos-14   # cross-built: Apple Silicon runners also make the Intel build
+            os: macos-latest   # cross-built: Apple Silicon runners also make the Intel build
             target: x86_64-apple-darwin
     steps:
       - uses: actions/checkout@v4
@@ -81,6 +81,15 @@ jobs:
           out="Melt3D-${{ inputs.version }}-linux-x64"
           mkdir "$out"
           cp "target/${{ matrix.target }}/release/meltcad" "$out/Melt3D"
+          # The debug data was three quarters of the file (0.2.0: 706 MB, 171 MB to download).
+          # Keep it beside the build as its own artifact, for reading crash reports, and ship
+          # the program without it. Windows and macOS builds never carried theirs.
+          objcopy --only-keep-debug "$out/Melt3D" "$out.debug"
+          strip --strip-debug "$out/Melt3D"
+          objcopy --add-gnu-debuglink="$out.debug" "$out/Melt3D"
+          # the stripped program still starts (no window: runs one command and exits)
+          echo '[{"cmd":"scene.summary"}]' > strip-check.json
+          "$out/Melt3D" --run strip-check.json > /dev/null
           cat > "$out/README.txt" <<TXT
           Melt 3D ${{ inputs.version }} (Linux, 64-bit)
           Run ./Melt3D (if it does not start: chmod +x Melt3D).
@@ -128,6 +137,15 @@ jobs:
             Melt3D-*.tar.gz
             Melt3D-*.sha256
 
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'Linux'
+        with:
+          # not "melt3d-*": the release job must not pick this up
+          name: debug-symbols-${{ matrix.name }}
+          if-no-files-found: error
+          retention-days: 30
+          path: Melt3D-*.debug
+
   release:
     name: Draft release
     needs: build
@@ -162,7 +180,7 @@ jobs:
 
           **Windows:** unzip, double-click \`Melt3D.exe\`. If "Windows protected your PC" appears: More info, then Run anyway.
 
-          **Linux:** `tar -xzf` it and run `./Melt3D`.
+          **Linux:** \`tar -xzf\` it and run \`./Melt3D\`.
 
           **Mac:** unzip, drag "Melt 3D" to Applications. The first time, right-click it, choose Open, then Open again (the app is not notarized yet).
 

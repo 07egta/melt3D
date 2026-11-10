@@ -457,11 +457,7 @@ pub fn section_cone(q: V3, a: V3, ra: f32, b: V3, rb: f32, aspect: f32, squircle
     let v = sub(q, a);
     let x = dot(v, side) / aspect;
     let y = dot(v, up);
-    let transverse = if squircle {
-        (x.powi(4) + y.powi(4)).sqrt().sqrt()
-    } else {
-        x.hypot(y)
-    };
+    let transverse = if squircle { (x.powi(4) + y.powi(4)).sqrt().sqrt() } else { x.hypot(y) };
     let q2 = add(a, add(mul(tangent, dot(v, tangent)), mul(side, transverse)));
     round_cone(q2, a, ra, b, rb) * aspect
 }
@@ -709,11 +705,7 @@ mod tests {
         let path = [[-16.0, 0.0, 0.0, 5.0], [0.0, 6.0, 0.0, 7.0], [15.0, -2.0, 0.0, 4.0]];
         let mut seed = 47;
         for _ in 0..250 {
-            let q = [
-                lcg(&mut seed) * 75.0 - 37.5,
-                lcg(&mut seed) * 75.0 - 37.5,
-                lcg(&mut seed) * 40.0 - 20.0,
-            ];
+            let q = [lcg(&mut seed) * 75.0 - 37.5, lcg(&mut seed) * 75.0 - 37.5, lcg(&mut seed) * 40.0 - 20.0];
             let original = smooth_tube(&path, q, false, false);
             let profiled = smooth_tube_section(&path, q, false, 1.0, false);
             assert_eq!(original, profiled, "default sections must keep old curves exactly");

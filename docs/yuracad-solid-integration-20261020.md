@@ -1,6 +1,6 @@
 # Melt 3D に組み込まれた SolidCraft
 
-Melt 3D には SolidCraft v0.20.0 の通常の作業画面を組み込んでいます。独自の簡易CAD画面に置き換えず、SolidCraft の標準のツールバー、パネル、コマンド、設定、テーマを使います。表示言語は日本語です。Melt に戻るための細いバーだけは、SolidCraft の画面の外側に Melt が追加します。
+Melt 3D には SolidCraft v0.26.0 の通常の作業画面を組み込んでいます。独自の簡易CAD画面に置き換えず、SolidCraft の標準のツールバー、パネル、コマンド、設定、テーマを使います。表示言語は日本語です。Melt に戻るための細いバーだけは、SolidCraft の画面の外側に Melt が追加します。
 
 ## 開く・戻る
 
@@ -30,7 +30,7 @@ SolidCraft の自動保存・復旧機能を組み込み画面でも使います
 
 ## 移植元と確認状況
 
-SolidCraft v0.20.0 の移植元はリリースコミット [`a06bdf5cfc5b108126d774ae6f684c4c2b3764fc`](https://github.com/bherbruck/solidcraft/commit/a06bdf5cfc5b108126d774ae6f684c4c2b3764fc) です。このコミットは v0.20.0 のリリースコミットです。取り込みは、その後の GitHub main `edf57cec293dcea301201f1d5173b33e16351466` まで進めています。UI・エンジン・カーネルはこの main のソースをそのまま使用します。Melt のホストサービスと `geom::melt` の追加は別に保持します。
+SolidCraft v0.26.0 の移植元はリリースコミット [`409ab1ed45151bc503c8f0278c7d77cbf3bf0bdf`](https://github.com/bherbruck/solidcraft/commit/409ab1ed45151bc503c8f0278c7d77cbf3bf0bdf) です（以前の v0.20.0 は `a06bdf5cfc5b108126d774ae6f684c4c2b3764fc`、その後の main `edf57cec293dcea301201f1d5173b33e16351466` まで取り込んでいました）。UI・エンジン・カーネルはこのリリースのソースをそのまま使用します。Melt のホストサービスと `geom::melt` の追加は別に保持します。v0.26.0 では「SolidWorks 等の Y 上げファイルを自動で立てる」設定は上流で廃止され、確認ダイアログ／通知のみになりました。
 
 2026-10-23 の確認では、Melt の通常テスト 839 件、描画デバイス喪失時の復元テスト 2 件が成功しました。実 GPU の SolidCraft 作成済み立体・標準 UI の描画と、Melt の床越し表示・色混合の描画テストも成功しました。配布用ビルド・デスクトップ差し替えと全体品質検査の最終結果はリリース記録に記載します。
 

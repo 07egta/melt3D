@@ -759,14 +759,19 @@ impl App {
         if !self.ct.drawing {
             return;
         }
-        let rect = self.view_rect;
+        // centred over the view, or beside / below the tool strip when it would cover it
+        let bounds = self.view_rect.intersect(ctx.content_rect()).shrink(12.0);
+        let strip = ctx.data(|d| d.get_temp::<egui::Rect>(egui::Id::new("tool_strip_rect")));
+        let (at, width) = crate::ui_layout::card_slot(bounds, strip, 520.0, 220.0);
         egui::Area::new(egui::Id::new("curve_card"))
             .order(egui::Order::Middle)
             .pivot(egui::Align2::CENTER_TOP)
-            .fixed_pos(pos2(rect.center().x, rect.top() + 12.0))
+            .fixed_pos(pos2(at.x + width * 0.5, at.y))
+            .constrain_to(bounds)
             .show(ctx, |ui| {
                 style::card().show(ui, |ui| {
-                    ui.horizontal(|ui| {
+                    ui.set_max_width((width - 24.0).max(24.0));
+                    ui.horizontal_wrapped(|ui| {
                         ui.label(egui::RichText::new("Curve").strong().color(style::ACCENT));
                         style::labeled_slider(ui, "Thickness", &mut self.ct.draw_radius, 0.5..=40.0, "Radius of new nodes (mm)");
                         if style::pill(ui, "Done", false).on_hover_text("Finish this curve and leave the tool (Esc)").clicked() {

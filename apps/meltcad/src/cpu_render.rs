@@ -76,8 +76,13 @@ pub fn view_into(scene: &Scene, cam: &Camera, w: usize, h: usize, out: &mut Vec<
 
 /// Render the four views into one RGBA sheet (2 x size wide and high).
 pub fn sheet(scene: &Scene, size: usize) -> (usize, Vec<u8>) {
-    let size = size.clamp(40, 600);
     let f = Field::new(scene);
+    sheet_with_field(scene, &f, size)
+}
+
+/// Shared by the public cold renderer and the exact incremental-field image tests.
+fn sheet_with_field(scene: &Scene, f: &Field, size: usize) -> (usize, Vec<u8>) {
+    let size = size.clamp(40, 600);
     let (c, r) = crate::gpu::bounds(scene, None);
     let (c, r) = if r > 0.0 { (c, r) } else { ([0.0, 0.0, 20.0], 40.0) };
     let views = [(0.6_f32, 0.42_f32), (0.0, 0.0), (std::f32::consts::FRAC_PI_2, 0.0), (0.0, std::f32::consts::FRAC_PI_2)];
@@ -87,7 +92,6 @@ pub fn sheet(scene: &Scene, size: usize) -> (usize, Vec<u8>) {
         let hs: Vec<_> = views
             .iter()
             .map(|&(yaw, pitch)| {
-                let f = &f;
                 sc.spawn(move || {
                     let mut cam = Camera::default();
                     cam.look(yaw, pitch);
@@ -313,6 +317,61 @@ pub fn animation_gif(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn incremental_field_four_view_pixels_match_cold_geometry_materials_and_undo() {
+        use crate::model::{BlendMode, Group, Kind, Material, Op, Shape};
+        let mut original = Scene::default();
+        original.groups.clear();
+        let mut hollow = Group::new("thin curved vessel with cut");
+        let mut wall = Shape::new(Kind::Sphere, [0.0, 0.0, 14.0], Material::default());
+        wall.size = [13.0; 3];
+        wall.shell = 0.8;
+        wall.material.color = [0.9, 0.3, 0.1];
+        let mut cut = Shape::new(Kind::Sphere, [9.0, 0.0, 16.0], Material::default());
+        cut.size = [10.0; 3];
+        cut.op = Op::Subtract;
+        cut.blend = 1.0;
+        hollow.shapes.extend([wall, cut]);
+        let mut profile = Group::new("rounded profile");
+        let mut extrude = Shape::new(Kind::Extrude, [25.0, 1.0, 10.0], Material::default());
+        extrude.outline = vec![[-6.0, -8.0], [7.0, -8.0], [10.0, 5.0], [0.0, 10.0], [-8.0, 4.0]];
+        extrude.round = 1.2;
+        extrude.material.color = [0.15, 0.35, 0.9];
+        profile.shapes.push(extrude);
+        let mut tube = Group::new("spline");
+        let mut curve = Shape::new(Kind::Curve, [0.0, 25.0, 8.0], Material::default());
+        curve.path = vec![[0.0, 0.0, 0.0, 2.0], [8.0, -4.0, 2.0, 2.0], [16.0, 5.0, 4.0, 2.0], [24.0, 0.0, 6.0, 2.0]];
+        tube.shapes.push(curve);
+        original.groups.extend([hollow, profile, tube]);
+        original.sanitize();
+        let mut previous = (Field::reusing(&original, None), original.clone());
+        let mut scene = original.clone();
+        for phase in ["geometry", "material_blend", "undo"] {
+            match phase {
+                "geometry" => {
+                    scene.groups[0].shapes[1].pos[0] += 1.3;
+                    scene.groups[2].shapes[0].path[1][1] += 2.5;
+                }
+                "material_blend" => {
+                    scene.groups[0].shapes[0].material.color = [0.1, 0.85, 0.3];
+                    scene.groups[1].shapes[0].material.gradient = 0.8;
+                    scene.groups[1].shapes[0].material.color2 = [0.9, 0.65, 0.1];
+                    scene.melt.mode = BlendMode::Round;
+                    scene.melt.amount = 1.4;
+                    scene.groups[1].blend = 3.0;
+                }
+                _ => scene = original.clone(),
+            }
+            let reused = Field::reusing(&scene, Some((&previous.0, &previous.1)));
+            let cold = Field::new(&scene);
+            let (width, expected) = sheet_with_field(&scene, &cold, 160);
+            let (actual_width, actual) = sheet_with_field(&scene, &reused, 160);
+            assert_eq!(width, actual_width);
+            assert!(actual == expected, "all four views must match exactly after {phase}");
+            previous = (reused, scene.clone());
+        }
+    }
 
     #[test]
     fn render_cli_reports_read_and_write_errors_in_its_exit_status() {

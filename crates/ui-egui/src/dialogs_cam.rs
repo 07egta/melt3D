@@ -46,7 +46,7 @@ pub struct CamForm {
 
 /// Joints of a kind: (id, label).
 fn joints_of(s: &Session, kinds: &[JointKind]) -> Vec<(u64, String)> {
-    s.doc.assembly.joints.iter().filter(|j| kinds.contains(&j.kind)).map(|j| (j.id, format!("{} ({:?})", j.name, j.kind))).collect()
+    s.doc.assembly.joints.iter().filter(|j| kinds.contains(&j.kind)).map(|j| (j.id, crate::dialogs_assembly::joint_choice(&j.name, j.kind))).collect()
 }
 
 pub fn start(app: &SolveApp) -> (Asm, Vec<SelInput>) {
@@ -56,7 +56,16 @@ pub fn start(app: &SolveApp) -> (Asm, Vec<SelInput>) {
     let a = cams.first().map(|j| j.0).unwrap_or(0);
     // A slider first, else another revolute than the cam's.
     let b = followers.iter().find(|j| j.0 != a).map(|j| j.0).unwrap_or(0);
-    let f = CamForm { a, b, follower: 0, radius: "5 mm".into(), flip: false, picked: None, animate: false, phase: 0.0 };
+    let f = CamForm {
+        a,
+        b,
+        follower: 0,
+        radius: crate::dialogs::length_default(&app.session, "5"),
+        flip: false,
+        picked: None,
+        animate: false,
+        phase: 0.0,
+    };
     let inputs = vec![
         SelInput::new("Profile", PROFILES | EDGES, true),
         SelInput::new("Roller (optional)", ROUND, false),
@@ -124,7 +133,7 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, f: &mut CamForm, inputs: &[Se
     }
     crate::ui_kit::options(ui, "cam_options", &mut [("Other side", &mut f.flip)]);
     form_row(ui, "Animate", |ui| {
-        let label = if f.animate { "■ Stop" } else { "▶ Play" };
+        let label = crate::i18n::tr(if f.animate { "ui.joint_stop" } else { "ui.joint_play" });
         let r = crate::ui_kit::button(ui, label, crate::ui_kit::Button::Normal)
             .on_hover_text(crate::i18n::tr_label("Play the joint's motion in the view"));
         crate::scenario::publish_handle("dialog:Animate", r.rect.center());
