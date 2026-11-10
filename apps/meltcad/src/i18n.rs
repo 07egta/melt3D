@@ -539,7 +539,11 @@ const TABLE: &[Entry] = &[
     e!("guide.extrude.note", "高さは20mmのままで大丈夫。", "20 mm is fine as it is."),
     e!("guide.extrude.title", "押し出して箱にする", "Extrude it into a box"),
     e!("guide.hint.all", "形をつかんで動かす（矢印・リング・箱でも操作できる）", "Drag the shape to move it (arrows, rings and boxes work too)"),
-    e!("guide.hint.all.keys", "左ドラッグ: 動かす（Shift: 上下） / 中ドラッグ: 回して見る / ホイール: ズーム", "Left drag: move (Shift: up/down) / Middle drag: look around / Wheel: zoom"),
+    e!(
+        "guide.hint.all.keys",
+        "左ドラッグ: 動かす（Shift: 上下） / 中ドラッグ: 回して見る / ホイール: ズーム",
+        "Left drag: move (Shift: up/down) / Middle drag: look around / Wheel: zoom"
+    ),
     e!("guide.hint.circle", "中心からドラッグして円を描く", "Drag from the centre to draw a circle"),
     e!("guide.hint.curve", "3D画面で線の節点を置く", "Place the line's nodes in the 3D view"),
     e!("guide.hint.curve.keys", "左クリック: 点を追加 / Enter: 確定 / Esc: 終了", "Left-click: add point / Enter: finish / Esc: stop"),
@@ -1174,7 +1178,7 @@ mod tests {
     fn every_language_translates_the_settings_window() {
         // The settings window asks for `settings.*` keys; every one must exist in every catalog.
         let keys: Vec<&str> = TABLE.iter().filter(|entry| entry.key.starts_with("settings.")).map(|entry| entry.key).collect();
-        assert_eq!(keys.len(), 50);
+        assert_eq!(keys.len(), 52);
         for code in SUPPORTED {
             let _language = lang(code);
             for key in &keys {

@@ -203,11 +203,8 @@ impl App {
         // The handles
         let tool = self.tool;
         let handles_off = clean || self.ct.drawing || self.pt.on || self.sketch_active();
-        let mut geom = if handles_off {
-            None
-        } else {
-            gizmo::build_multi_node(&self.cam, rect, &self.scene, &self.picks(), self.picked_node(), tool)
-        };
+        let mut geom =
+            if handles_off { None } else { gizmo::build_multi_node(&self.cam, rect, &self.scene, &self.picks(), self.picked_node(), tool) };
         let over_gnomon = !clean && pos.is_some_and(|p| Self::gnomon_disc_hit(rect, p) || Self::home_hit(rect, p));
         let hover_handle = match (&geom, pos, &self.drag) {
             (Some(g), Some(p), None) if resp.hovered() && !over_gnomon && !ct.over => gizmo::hit(g, tool, p),
@@ -334,7 +331,14 @@ impl App {
         // A drag that starts on the body of a shape slides it over the floor: no need to select it
         // first or to aim at an arrow. (Looked up once, when the drag starts.) With Shift, Ctrl or
         // Cmd held a drag on an unselected shape stays a box selection that adds or removes.
-        let body_target = if resp.drag_started_by(PointerButton::Primary) && !mods.alt && !handles_off && !press_on_handle && !press_on_gnomon && !ct.taken && !ct.over {
+        let body_target = if resp.drag_started_by(PointerButton::Primary)
+            && !mods.alt
+            && !handles_off
+            && !press_on_handle
+            && !press_on_gnomon
+            && !ct.taken
+            && !ct.over
+        {
             press.and_then(|o| self.body_drag_target(rect, o))
         } else {
             None
@@ -744,6 +748,7 @@ impl App {
     /// A left drag that starts at `p` moves a shape: the preference is on, a shape is under the
     /// pointer, and the view is not so flat to the floor that a small mouse move would throw the
     /// shape far away.
+    #[cfg(test)]
     pub(crate) fn body_drag_moves(&self, rect: Rect, p: Pos2) -> bool {
         self.body_drag_target(rect, p).is_some()
     }
