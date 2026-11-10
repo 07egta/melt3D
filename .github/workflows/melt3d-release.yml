@@ -81,6 +81,15 @@ jobs:
           out="Melt3D-${{ inputs.version }}-linux-x64"
           mkdir "$out"
           cp "target/${{ matrix.target }}/release/meltcad" "$out/Melt3D"
+          # The debug data was three quarters of the file (0.2.0: 706 MB, 171 MB to download).
+          # Keep it beside the build as its own artifact, for reading crash reports, and ship
+          # the program without it. Windows and macOS builds never carried theirs.
+          objcopy --only-keep-debug "$out/Melt3D" "$out.debug"
+          strip --strip-debug "$out/Melt3D"
+          objcopy --add-gnu-debuglink="$out.debug" "$out/Melt3D"
+          # the stripped program still starts (no window: runs one command and exits)
+          echo '[{"cmd":"scene.summary"}]' > strip-check.json
+          "$out/Melt3D" --run strip-check.json > /dev/null
           cat > "$out/README.txt" <<TXT
           Melt 3D ${{ inputs.version }} (Linux, 64-bit)
           Run ./Melt3D (if it does not start: chmod +x Melt3D).
@@ -127,6 +136,15 @@ jobs:
             Melt3D-*.zip
             Melt3D-*.tar.gz
             Melt3D-*.sha256
+
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'Linux'
+        with:
+          # not "melt3d-*": the release job must not pick this up
+          name: debug-symbols-${{ matrix.name }}
+          if-no-files-found: error
+          retention-days: 30
+          path: Melt3D-*.debug
 
   release:
     name: Draft release
