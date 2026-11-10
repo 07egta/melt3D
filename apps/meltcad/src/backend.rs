@@ -254,7 +254,29 @@ pub fn config_dir_from(os: &str, var: &dyn Fn(&str) -> Option<OsString>) -> Opti
     Some(base.join("meltcad"))
 }
 
+#[cfg(test)]
+thread_local! {
+    static TEST_SETTINGS_PATH: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Isolate real settings-file round trips without changing process-wide environment variables.
+#[cfg(test)]
+pub fn with_settings_path<T>(path: PathBuf, test: impl FnOnce() -> T) -> T {
+    struct Restore(Option<PathBuf>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            TEST_SETTINGS_PATH.with(|p| *p.borrow_mut() = self.0.take());
+        }
+    }
+    let _restore = Restore(TEST_SETTINGS_PATH.with(|p| p.replace(Some(path))));
+    test()
+}
+
 pub fn settings_path() -> Option<PathBuf> {
+    #[cfg(test)]
+    if let Some(path) = TEST_SETTINGS_PATH.with(|p| p.borrow().clone()) {
+        return Some(path);
+    }
     config_dir_from(std::env::consts::OS, &|k| std::env::var_os(k)).map(|d| d.join("settings.json"))
 }
 

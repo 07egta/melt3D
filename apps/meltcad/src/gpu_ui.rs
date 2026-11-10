@@ -138,6 +138,7 @@ impl App {
     /// Switch the simple view on or off (and remember it).
     pub fn set_easy(&mut self, ctx: &egui::Context, on: bool) {
         self.gpu.easy = on;
+        crate::backend::update(|settings| settings.easy = on);
         self.gpu.details = false;
         crate::gpu_log::log(&format!("Simple view: {}", if on { "ON" } else { "OFF" }));
         // back to the GPU picture: build it if it was never started
@@ -509,6 +510,29 @@ mod tests {
             other => panic!("{other:?}"),
         }
         assert!(!use_gpu(&app.gpu.status.snapshot(), false));
+    }
+
+    #[test]
+    fn simple_view_choice_survives_restart_and_preserves_backend_history() {
+        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).expect("clock").as_nanos();
+        let path = std::env::temp_dir().join(format!("meltcad_simple_view_{}_{stamp}.json", std::process::id()));
+        crate::backend::with_settings_path(path.clone(), || {
+            let settings = crate::backend::Settings { last_ok: Some(Backend::Gl), failed: vec![Backend::Vulkan], easy: false };
+            crate::backend::save_to(&path, &settings).expect("initial settings");
+            let ctx = egui::Context::default();
+            let mut first = App::new(true, None);
+            first.set_easy(&ctx, true);
+            let restored = crate::backend::load();
+            assert!(restored.easy, "the next launch must remember Simple view");
+            assert_eq!(restored.last_ok, settings.last_ok);
+            assert_eq!(restored.failed, settings.failed);
+            let mut restarted = App::new(true, None);
+            restarted.attach_gpu(None, &ctx, restored.easy);
+            assert!(restarted.gpu.easy, "restoring the choice must keep the CPU picture active");
+            restarted.set_easy(&ctx, false);
+            assert!(!crate::backend::load().easy, "switching back to GPU is remembered too");
+        });
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]
