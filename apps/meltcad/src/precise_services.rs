@@ -79,8 +79,7 @@ pub fn services(parent: AsyncFileDialog) -> Services {
                         "GLTF",
                     ],
                 )
-                .add_filter("SolidCraft design (container or JSON)", &[io::DESIGN_EXT, io::LEGACY_DESIGN_EXTS[0],
-                        io::LEGACY_DESIGN_EXTS[1], "json"])
+                .add_filter("SolidCraft design (container or JSON)", &[io::DESIGN_EXT, io::LEGACY_DESIGN_EXTS[0], io::LEGACY_DESIGN_EXTS[1], "json"])
                 .add_filter("STEP", &["step", "stp", "STEP", "STP"])
                 .add_filter("IGES", &["igs", "iges", "IGS", "IGES"])
                 .add_filter("FreeCAD and Rhino", &["FCStd", "fcstd", "3dm", "3DM"])
