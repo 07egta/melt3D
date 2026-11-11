@@ -4157,6 +4157,38 @@ mod tests {
         assert_eq!(crate::panels::row_parent_tip(&scene, Pick::Shape(2, 0)).as_deref(), Some("in Root › Child › Grandchild"));
     }
 
+    /// The window can be tiny for its first frames (it is still being placed, or starts minimised).
+    /// The tool strip must grow back to show every tool once the window has its real size.
+    #[test]
+    fn tool_strip_recovers_its_full_height_after_a_tiny_first_window() {
+        type StripTailLayout = (Option<(egui::Rect, egui::Rect)>, f32, f32);
+        let ctx = egui::Context::default();
+        crate::fonts::setup(&ctx);
+        style::apply(&ctx);
+        ctx.set_pixels_per_point(1.0);
+        let mut app = App::new(false, None);
+        let mut run = |size: egui::Vec2, frames: usize| {
+            for frame in 0..frames {
+                let input = egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                    time: Some(2.0 + frame as f64 / 30.0),
+                    ..Default::default()
+                };
+                let _ = ctx.run_ui(input, |ui| app.frame_body(ui));
+            }
+        };
+        for tiny in [egui::vec2(1.0, 1.0), egui::vec2(160.0, 28.0), egui::vec2(400.0, 150.0)] {
+            run(tiny, 3);
+        }
+        run(egui::vec2(1380.0, 860.0), 6);
+        let layout = ctx.data(|d| d.get_temp::<StripTailLayout>(egui::Id::new("tool_strip_tail_layout")));
+        let Some((Some((button, clip)), content_height, max_height)) = layout else { panic!("the tool strip was laid out: {layout:?}") };
+        assert!(content_height <= max_height + 0.5, "a 1380 x 860 window has room for every tool: {content_height} / {max_height}");
+        assert!(clip.expand(0.5).contains_rect(button), "the last tool must be visible after the window grows: {button:?} / {clip:?}");
+        let strip = ctx.data(|d| d.get_temp::<egui::Rect>(egui::Id::new("tool_strip_rect"))).expect("the tool strip was laid out");
+        assert!(strip.height() + 0.5 >= content_height, "the strip must not stay at its small first height: {strip:?} / {content_height}");
+    }
+
     #[test]
     fn three_level_scene_tree_indents_and_draws_a_guide_per_level() {
         for level in 0..8u8 {

@@ -29,10 +29,7 @@ fn twist_section(ui: &mut Ui, shape: &mut crate::model::Shape) {
     ui.separator();
     style::title(ui, i18n::tr("inspector.twist.title"));
     ui.label(RichText::new(i18n::tr("inspector.twist.hint")).color(style::DIM).size(12.0));
-    let mut twist = match shape.deformation {
-        Some(Deformation::Twist(t)) => Some(t),
-        None => None,
-    };
+    let mut twist = shape.deformation.map(|Deformation::Twist(t)| t);
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing = vec2(5.0, 4.0);
         for degrees in [90.0_f32, 180.0, 360.0] {
