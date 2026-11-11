@@ -50,7 +50,7 @@ pub fn paste_text(app: &mut App, text: &str) -> Result<String, String> {
     let _guard = crate::mesh::LoadGuard::begin();
     if let Ok(clip) = serde_json::from_str::<Clip>(text) {
         if clip.yuracad_clip != 1 {
-            return Err("This copy is from a newer version".into());
+            return Err(crate::i18n::tr("clip.newer").into());
         }
         // the top group stands at depth 0 and what was inside it keeps its place below it
         let mut top = clip.group;
@@ -66,17 +66,17 @@ pub fn paste_text(app: &mut App, text: &str) -> Result<String, String> {
         let mut sc = Scene { groups, ..Scene::default() };
         sc.sanitize();
         if !clip.whole {
-            let group = sc.groups.into_iter().next().ok_or("It was empty")?;
+            let group = sc.groups.into_iter().next().ok_or(crate::i18n::tr("clip.empty"))?;
             return add_shapes(app, group.shapes);
         }
-        return add_block(app, sc.groups, "Pasted", true);
+        return add_block(app, sc.groups, crate::i18n::tr("clip.pasted"), true);
     }
     // a whole scene file pasted as text: its groups are added
     if let Ok(sc) = Scene::from_json(text) {
         let n = sc.groups.len();
-        return add_block(app, sc.groups, &format!("Pasted {n} groups"), false);
+        return add_block(app, sc.groups, &crate::i18n::fill("clip.pasted_groups", &[&n]), false);
     }
-    Err("Nothing to paste".into())
+    Err(crate::i18n::tr("clip.nothing").into())
 }
 
 fn shifted(shapes: &mut [Shape], d: f32) {
@@ -88,10 +88,10 @@ fn shifted(shapes: &mut [Shape], d: f32) {
 
 fn add_shapes(app: &mut App, mut shapes: Vec<Shape>) -> Result<String, String> {
     if shapes.is_empty() {
-        return Err("It was empty".into());
+        return Err(crate::i18n::tr("clip.empty").into());
     }
     if app.scene.shape_count() + shapes.len() > MAX_SHAPES {
-        return Err(format!("Up to {MAX_SHAPES} shapes"));
+        return Err(crate::i18n::fill("limit.shapes", &[&MAX_SHAPES]));
     }
     if app.scene.groups.is_empty() {
         app.scene.groups.push(Group::new("Group 1"));
@@ -101,7 +101,7 @@ fn add_shapes(app: &mut App, mut shapes: Vec<Shape>) -> Result<String, String> {
         _ => app.scene.groups.len() - 1,
     };
     if app.scene.groups[g].is_linked() {
-        return Err("This is a linked copy. Select its source or Unlink it before pasting shapes".into());
+        return Err(crate::i18n::tr("link.no_paste").into());
     }
     crate::mesh::can_add(&app.scene, shapes.iter())?;
     shifted(&mut shapes, STEP);
@@ -111,14 +111,14 @@ fn add_shapes(app: &mut App, mut shapes: Vec<Shape>) -> Result<String, String> {
     let group = &mut app.scene.groups[g];
     group.shapes.extend(shapes);
     app.sel = Some(Pick::Shape(g, group.shapes.len() - 1));
-    Ok("Pasted".into())
+    Ok(crate::i18n::tr("clip.pasted").into())
 }
 
 /// Put a block of groups (a group with the groups nested in it, or a whole scene) into the scene
 /// after the selection, keeping how they nest. All of it goes in, or none of it does.
 fn add_block(app: &mut App, mut block: Vec<Group>, done: &str, from_clipboard: bool) -> Result<String, String> {
     if block.is_empty() {
-        return Err("It was empty".into());
+        return Err(crate::i18n::tr("clip.empty").into());
     }
     // Pasted letter contours stay usable solids but must not keep the source text identity,
     // or editing the original text would regenerate the pasted copy as well.
@@ -126,10 +126,10 @@ fn add_block(app: &mut App, mut block: Vec<Group>, done: &str, from_clipboard: b
         g.puffy_text = None;
     }
     if app.scene.groups.len() + block.len() > MAX_GROUPS {
-        return Err(format!("Up to {MAX_GROUPS} groups"));
+        return Err(crate::i18n::fill("limit.groups", &[&MAX_GROUPS]));
     }
     if app.scene.shape_count() + block.iter().map(|g| g.shapes.len()).sum::<usize>() > MAX_SHAPES {
-        return Err(format!("Up to {MAX_SHAPES} shapes"));
+        return Err(crate::i18n::fill("limit.shapes", &[&MAX_SHAPES]));
     }
     crate::mesh::can_add(&app.scene, block.iter().flat_map(|g| g.shapes.iter()))?;
     // Copied scenes may reuse IDs from the destination. Rebase group IDs,
@@ -146,7 +146,7 @@ fn add_block(app: &mut App, mut block: Vec<Group>, done: &str, from_clipboard: b
         incoming.groups.iter().flat_map(|g| g.shapes.iter().map(|s| s.uid)).filter(|u| *u != 0).collect();
     let by = crate::add_file::max_uid(&app.scene);
     if by.checked_add(crate::add_file::max_uid(&incoming)).is_none() {
-        return Err("Too many identifiers to paste safely".into());
+        return Err(crate::i18n::tr("clip.too_many").into());
     }
     crate::add_file::shift_uids(&mut incoming, by);
     if let Some(original) = original {
@@ -201,12 +201,12 @@ impl App {
                 ctx.copy_text(t.clone());
                 self.clipboard = Some(t);
                 if many > 1 {
-                    self.say(ctx, format!("Copied the first of {many} selected (a copy holds one thing)"));
+                    self.say(ctx, crate::i18n::fill("clip.copied_first", &[&many]));
                 } else {
-                    self.say(ctx, "Copied");
+                    self.say(ctx, crate::i18n::tr("clip.copied"));
                 }
             }
-            None => self.say(ctx, "Select something to copy"),
+            None => self.say(ctx, crate::i18n::tr("clip.select_first")),
         }
     }
 
@@ -216,7 +216,7 @@ impl App {
         }
         // A copy holds one thing. Deleting several after copying one would lose the rest.
         if self.picks().len() > 1 {
-            self.say(ctx, "Cut takes one thing at a time. Select one, or press Delete to remove several");
+            self.say(ctx, crate::i18n::tr("clip.cut_one"));
             return;
         }
         if self.sel.is_some() {
@@ -228,7 +228,7 @@ impl App {
     /// Paste the given text (a Ctrl+V), or the app's own copy when `text` is None (the menu).
     pub fn paste(&mut self, ctx: &egui::Context, text: Option<String>) {
         let Some(t) = text.or_else(|| self.clipboard.clone()) else {
-            self.say(ctx, "Nothing copied yet");
+            self.say(ctx, crate::i18n::tr("clip.none_yet"));
             return;
         };
         match paste_text(self, &t) {

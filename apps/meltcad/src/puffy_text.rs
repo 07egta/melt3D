@@ -30,9 +30,9 @@ pub enum Align {
 impl Align {
     pub fn label(self) -> &'static str {
         match self {
-            Align::Left => "左揃え",
-            Align::Center => "中央揃え",
-            Align::Right => "右揃え",
+            Align::Left => crate::i18n::tr("puffy_text.align_left"),
+            Align::Center => crate::i18n::tr("puffy_text.align_center"),
+            Align::Right => crate::i18n::tr("puffy_text.align_right"),
         }
     }
 }
@@ -95,16 +95,16 @@ impl Settings {
 
     pub fn validate(&self) -> Result<(), String> {
         if self.text.is_empty() || self.text.chars().count() > MAX_CHARS || self.text.chars().all(char::is_whitespace) {
-            return Err(format!("空白だけの文字列は使えません（最大{MAX_CHARS}文字）"));
+            return Err(crate::i18n::fill("puffy_text.spaces_only_error", &[&MAX_CHARS]));
         }
         if self.text.chars().any(|c| c.is_control()) {
-            return Err("改行や制御文字には対応していません".into());
+            return Err(crate::i18n::tr("puffy_text.control_chars_error").into());
         }
         if self.font_path.is_empty() {
-            return Err("日本語・英語を含むフォント（TTF/OTF/TTC）を選んでください".into());
+            return Err(crate::i18n::tr("puffy_text.font_needed_error").into());
         }
         if self.font_path.len() > 1024 {
-            return Err("フォントのパスが長すぎます".into());
+            return Err(crate::i18n::tr("puffy_text.font_path_too_long").into());
         }
         if !self.size_mm.is_finite()
             || !(4.0..=100.0).contains(&self.size_mm)
@@ -119,7 +119,7 @@ impl Settings {
             || !(-3.0..=30.0).contains(&self.tracking_mm)
             || self.anchor.iter().any(|n| !n.is_finite() || n.abs() > 900.0)
         {
-            return Err("文字の大きさ・厚さ・ふくらみ・位置を安全な範囲にしてください".into());
+            return Err(crate::i18n::tr("puffy_text.size_limits_error").into());
         }
         Ok(())
     }
@@ -195,13 +195,13 @@ fn font_bytes(path: &str) -> Result<Vec<u8>, String> {
     let file = Path::new(path);
     let allowed = file.extension().and_then(|s| s.to_str()).is_some_and(|s| ["ttf", "ttc", "otf"].iter().any(|a| s.eq_ignore_ascii_case(a)));
     if !allowed {
-        return Err("TTF / TTC / OTF のフォントを選んでください".into());
+        return Err(crate::i18n::tr("puffy_text.font_type_error").into());
     }
-    let len = std::fs::metadata(file).map_err(|_| "フォントが見つかりません。以前の輪郭はそのまま利用できます".to_string())?.len();
+    let len = std::fs::metadata(file).map_err(|_| crate::i18n::tr("puffy_text.font_not_found").to_string())?.len();
     if len == 0 || len > MAX_FONT_BYTES {
-        return Err("フォントが大きすぎるか空です（40MBまで）".into());
+        return Err(crate::i18n::tr("puffy_text.font_too_large").into());
     }
-    std::fs::read(file).map_err(|_| "フォントを読み込めませんでした".to_string())
+    std::fs::read(file).map_err(|_| crate::i18n::tr("puffy_text.font_read_failed").to_string())
 }
 
 fn outlined(face: &Face<'_>, id: GlyphId) -> Result<Artwork, String> {
@@ -209,20 +209,20 @@ fn outlined(face: &Face<'_>, id: GlyphId) -> Result<Artwork, String> {
     // ttf-parser may produce partial segments before rejecting a malformed glyph.
     // Require an actual successful outline result, not just some pen commands.
     if face.outline_glyph(id, &mut pen).is_none() {
-        return Err("フォントの文字輪郭を安全に読み込めませんでした".into());
+        return Err(crate::i18n::tr("puffy_text.font_outline_read_failed").into());
     }
     if pen.count == 0 {
-        return Err("この文字には閉じた輪郭がありません".into());
+        return Err(crate::i18n::tr("puffy_text.no_closed_outline").into());
     }
     if pen.invalid || pen.count >= MAX_PEN_COMMANDS || pen.d.len() > MAX_GLYPH_SVG_BYTES {
-        return Err("文字の輪郭が複雑すぎます（上限を超えました）".into());
+        return Err(crate::i18n::tr("puffy_text.outline_too_complex").into());
     }
     // Even-odd parity keeps O, B, 田, 日 etc. hollow regardless of font winding.
     // The SVG importer does adaptive curve flattening and bounded contour simplification.
     let svg = format!(r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 1000"><path fill-rule="evenodd" d="{}"/></svg>"#, pen.d);
     let art = svg::parse(&svg)?;
     if art.dropped != 0 {
-        return Err(format!("細かい輪郭を{}個省略するため、このフォント・文字は安全に立体化できません", art.dropped));
+        return Err(crate::i18n::fill("puffy_text.dropped_outlines", &[&art.dropped]));
     }
     Ok(art)
 }
@@ -264,7 +264,7 @@ fn hole_clearance(poly: &[[f32; 2]]) -> f32 {
 
 /// Group of 3D contours for one glyph; existing extrusions handle all graphics and export.
 fn glyph_group(art: &Artwork, ch: char, index: usize, settings: &Settings, center: [f32; 2], glyph_mm: f32) -> Result<Group, String> {
-    let name = format!("Puffy {ch} ({})", index + 1);
+    let name = crate::i18n::fill("puffy_text.group_name", &[&ch, &(index + 1)]);
     let options = BuildOpts {
         target_mm: 60.0, // normalize first: avoids SVG import's minimum sizing of tiny glyphs
         height_mm: settings.thickness_mm,
@@ -276,13 +276,13 @@ fn glyph_group(art: &Artwork, ch: char, index: usize, settings: &Settings, cente
     // one letter is one group: the solids and the counters of a glyph go together
     let mut parts = parts.drain(..);
     let Some(mut group) = parts.next() else {
-        return Err(format!("「{ch}」の輪郭を立体にできませんでした"));
+        return Err(crate::i18n::fill("puffy_text.solid_failed", &[&ch]));
     };
     for part in parts {
         group.shapes.extend(part.shapes);
     }
     if note.is_some() || group.shapes.is_empty() {
-        return Err(format!("「{ch}」の輪郭を立体にできませんでした"));
+        return Err(crate::i18n::fill("puffy_text.solid_failed", &[&ch]));
     }
     let factor = glyph_mm / 60.0;
     for sh in &mut group.shapes {
@@ -290,12 +290,12 @@ fn glyph_group(art: &Artwork, ch: char, index: usize, settings: &Settings, cente
             pt[0] *= factor;
             pt[1] *= factor;
             if !pt.iter().all(|n| n.is_finite() && n.abs() <= 2000.0) {
-                return Err(format!("「{ch}」の輪郭が大きすぎます"));
+                return Err(crate::i18n::fill("puffy_text.outline_too_large", &[&ch]));
             }
         }
         let hole = sh.op == Op::Subtract;
         if hole && hole_clearance(&sh.outline) <= settings.puff_mm + settings.corner_mm * 0.5 + 0.15 {
-            return Err(format!("「{ch}」の穴がつぶれます。ふくらみを小さくしてください"));
+            return Err(crate::i18n::fill("puffy_text.holes_close", &[&ch]));
         }
         sh.pos[2] = settings.thickness_mm * 0.5 + settings.puff_mm;
         if hole {
@@ -339,7 +339,7 @@ fn keep_manual_transform(group: &mut Group, old: &Group) {
 pub fn apply(scene: &mut Scene, settings: &Settings, editing_run: Option<u32>) -> Result<Pick, String> {
     settings.validate()?;
     let bytes = font_bytes(&settings.font_path)?;
-    let face = Face::parse(&bytes, settings.face_index).map_err(|_| "このフォントを読み込めません（TTCの番号も確認してください）".to_string())?;
+    let face = Face::parse(&bytes, settings.face_index).map_err(|_| crate::i18n::tr("puffy_text.font_load_failed").to_string())?;
     let upm = f32::from(face.units_per_em()).max(1.0);
     let size = settings.size_mm / upm;
 
@@ -349,7 +349,7 @@ pub fn apply(scene: &mut Scene, settings: &Settings, editing_run: Option<u32>) -
     for (i, &ch) in chars.iter().enumerate() {
         let glyph = face.glyph_index(ch);
         if glyph.is_none() && !ch.is_whitespace() {
-            return Err(format!("選択したフォントに「{ch}」がありません。日本語対応フォントを選んでください"));
+            return Err(crate::i18n::fill("puffy_text.missing_glyph", &[&ch]));
         }
         let advance = glyph.and_then(|id| face.glyph_hor_advance(id)).map_or(upm * 0.5, f32::from) * size;
         glyphs.push((ch, glyph, advance));
@@ -359,7 +359,7 @@ pub fn apply(scene: &mut Scene, settings: &Settings, editing_run: Option<u32>) -
         }
     }
     if total <= 0.0 || total > 3000.0 {
-        return Err("文字列の幅が大きすぎるか、小さすぎます".into());
+        return Err(crate::i18n::tr("puffy_text.text_width_error").into());
     }
     let base = match settings.align {
         Align::Left => 0.0,
@@ -370,14 +370,14 @@ pub fn apply(scene: &mut Scene, settings: &Settings, editing_run: Option<u32>) -
     let old_ids: Vec<usize> =
         scene.groups.iter().enumerate().filter_map(|(i, g)| g.puffy_text.as_ref().filter(|m| Some(m.run_id) == editing_run).map(|_| i)).collect();
     if editing_run.is_some() && old_ids.is_empty() {
-        return Err("再編集する文字列が見つかりません".into());
+        return Err(crate::i18n::tr("puffy_text.edit_text_not_found").into());
     }
     // References to group UIDs must not be invalidated by replacement.
     if old_ids.iter().any(|&i| {
         let uid = scene.groups[i].uid;
         uid != 0 && scene.groups.iter().any(|g| g.instance_of == Some(uid))
     }) {
-        return Err("リンクされた文字グループは、リンクを解除してから再編集してください".into());
+        return Err(crate::i18n::tr("puffy_text.linked_group_edit").into());
     }
 
     let new_run = match editing_run {
@@ -389,7 +389,7 @@ pub fn apply(scene: &mut Scene, settings: &Settings, editing_run: Option<u32>) -
             .max()
             .unwrap_or(0)
             .checked_add(1)
-            .ok_or("文字列IDの上限です")?,
+            .ok_or(crate::i18n::tr("puffy_text.text_id_limit"))?,
     };
     let old: Vec<(usize, &Group)> = old_ids.iter().filter_map(|&i| scene.groups.get(i).map(|g| (i, g))).collect();
     let mut built = Vec::new();
@@ -414,19 +414,19 @@ pub fn apply(scene: &mut Scene, settings: &Settings, editing_run: Option<u32>) -
                 group.puffy_text = Some(LetterMeta { run_id: new_run, index, settings: settings.clone(), base_centre: baseline });
                 built.push(group);
             } else if !ch.is_whitespace() {
-                return Err(format!("「{ch}」に輪郭がありません"));
+                return Err(crate::i18n::fill("puffy_text.no_outline_char", &[&ch]));
             }
         }
         cursor += advance + if index + 1 < chars.len() { settings.tracking_mm } else { 0.0 };
     }
     if built.is_empty() {
-        return Err("立体化できる文字がありません".into());
+        return Err(crate::i18n::tr("puffy_text.no_solid_chars").into());
     }
     let removed_shapes: usize = old.iter().map(|(_, g)| g.shapes.len()).sum();
     let remaining_shapes = scene.shape_count().saturating_sub(removed_shapes);
     let new_shapes: usize = built.iter().map(|g| g.shapes.len()).sum();
     if scene.groups.len() - old_ids.len() + built.len() > MAX_GROUPS || remaining_shapes + new_shapes > MAX_SHAPES {
-        return Err(format!("形・グループの上限を超えます（形{MAX_SHAPES}、グループ{MAX_GROUPS}まで）。文字数を減らしてください"));
+        return Err(crate::i18n::fill("puffy_text.shape_group_limit", &[&MAX_SHAPES, &MAX_GROUPS]));
     }
     let insertion = old_ids.first().copied().unwrap_or(scene.groups.len());
     let mut next = scene.clone();

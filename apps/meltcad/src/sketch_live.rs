@@ -98,7 +98,7 @@ impl App {
     /// The outline is closed (or the sweep path is drawn): put the solid into the scene.
     pub(crate) fn live_begin(&mut self) -> bool {
         if self.scene.shape_count() >= MAX_SHAPES {
-            self.sk.msg = format!("Up to {MAX_SHAPES} shapes");
+            self.sk.msg = crate::i18n::fill("sketch_live.max_shapes", &[&MAX_SHAPES]);
             return false;
         }
         let built = match self.build_shape() {
@@ -187,7 +187,7 @@ impl App {
             self.sk.stage = Stage::SweepPath;
         }
         self.sk.frame = self.sketch_plane();
-        self.say(ctx, format!("Created {} (use Edit Sketch to change the outline)", make.label()));
+        self.say(ctx, crate::i18n::fill("sketch_live.created_hint", &[&make.label()]));
         if make == Make::Extrude {
             self.guide.extruded();
         }
@@ -419,14 +419,11 @@ impl App {
         let mut changed = false;
         let (mut accept, mut discard, mut hole, mut top) = (false, false, false, false);
         ui.label(egui::RichText::new(make.label()).strong().color(style::ACCENT));
-        ui.add(
-            egui::Label::new(egui::RichText::new("Adjust the preview  ·  Right-click / Enter: confirm  ·  Esc: cancel").size(11.0).color(style::DIM))
-                .wrap(),
-        );
+        ui.add(egui::Label::new(egui::RichText::new(crate::i18n::tr("sketch_live.adjust_hint")).size(11.0).color(style::DIM)).wrap());
         changed |= self.saved_sketch_inputs(ui);
         let saved_loft = make == Make::Loft && self.sk.secondary_sketch.is_some();
         if saved_loft {
-            ui.label(format!("{:.2} mm between sketch planes", self.sk.height));
+            ui.label(crate::i18n::fill("sketch_live.plane_gap", &[&format!("{:.2}", self.sk.height)]));
         }
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
@@ -436,7 +433,7 @@ impl App {
                 let mut h = if self.sk.height.is_finite() { self.sk.height } else { 10.0 };
                 if ui
                     .add(egui::DragValue::new(&mut h).speed(0.5).range(0.1..=2000.0).suffix(" mm"))
-                    .on_hover_text("Height. Drag the arrow in the view, or type a number")
+                    .on_hover_text(crate::i18n::tr("sketch_live.height_hint"))
                     .changed()
                 {
                     self.sk.height = h;
@@ -447,7 +444,7 @@ impl App {
                 let mut s = if self.sk.loft_scale.is_finite() { self.sk.loft_scale } else { 0.5 };
                 if ui
                     .add(egui::DragValue::new(&mut s).speed(0.01).range(0.1..=3.0).prefix("x "))
-                    .on_hover_text("Top size (1 = as big as the bottom)")
+                    .on_hover_text(crate::i18n::tr("sketch_live.top_size_hint"))
                     .changed()
                 {
                     self.sk.loft_scale = s;
@@ -458,7 +455,7 @@ impl App {
                 let mut r = if self.sk.sweep_scale.is_finite() { self.sk.sweep_scale * SWEEP_RADIUS } else { SWEEP_RADIUS };
                 if ui
                     .add(egui::DragValue::new(&mut r).speed(0.1).range(0.4..=SWEEP_RADIUS * 4.0).prefix("r ").suffix(" mm"))
-                    .on_hover_text("Radius of the tube")
+                    .on_hover_text(crate::i18n::tr("sketch_live.tube_radius_hint"))
                     .changed()
                 {
                     self.sk.sweep_scale = r / SWEEP_RADIUS;
@@ -466,7 +463,7 @@ impl App {
                 }
             }
             if make == Make::Sweep && !self.sk.sweep_round {
-                ui.label("Profile scale");
+                ui.label(crate::i18n::tr("sketch_live.profile_scale"));
                 if ui.add(egui::DragValue::new(&mut self.sk.sweep_scale).speed(0.01).range(0.2..=4.0).suffix(" ×")).changed() {
                     changed = true;
                 }
@@ -474,8 +471,8 @@ impl App {
             if make == Make::Loft && !self.sk.separate {
                 top = style::wide_button(
                     ui,
-                    "Top outline",
-                    "Draw the top outline yourself",
+                    crate::i18n::tr("sketch_live.top_outline"),
+                    crate::i18n::tr("sketch_live.top_outline_hint"),
                     self.sk.loft_top == LoftTop::Drawn,
                     None,
                     crate::sketch_icons::pencil_top,
@@ -485,8 +482,8 @@ impl App {
             if make == Make::Extrude {
                 let both = style::wide_button(
                     ui,
-                    "Both sides",
-                    "Grow equally to both sides of the plane",
+                    crate::i18n::tr("sketch_live.both_sides"),
+                    crate::i18n::tr("sketch_live.both_sides_hint"),
                     self.sk.both,
                     None,
                     crate::sketch_icons::both_sides,
@@ -497,12 +494,27 @@ impl App {
                     changed = true;
                 }
                 if !self.sk.separate {
-                    hole = style::wide_button(ui, "Holes", "Cut holes into this solid", false, None, crate::sketch_icons::hole).clicked();
+                    hole = style::wide_button(
+                        ui,
+                        crate::i18n::tr("sketch_live.holes_button"),
+                        crate::i18n::tr("sketch_live.holes_hint"),
+                        false,
+                        None,
+                        crate::sketch_icons::hole,
+                    )
+                    .clicked();
                 }
             }
-            accept =
-                style::wide_button(ui, "Confirm", "Keep it (Enter or right-click)", false, Some(style::ACCENT), crate::sketch_icons::check).clicked();
-            discard = style::wide_button(ui, "Cancel", "Cancel this operation (Esc)", false, None, crate::sketch_icons::cross).clicked();
+            accept = style::wide_button(
+                ui,
+                crate::i18n::tr("sketch_live.confirm_button"),
+                crate::i18n::tr("sketch_live.confirm_hint"),
+                false,
+                Some(style::ACCENT),
+                crate::sketch_icons::check,
+            )
+            .clicked();
+            discard = style::wide_button(ui, "Cancel", crate::i18n::tr("sketch_live.cancel_hint"), false, None, crate::sketch_icons::cross).clicked();
         });
         if !self.sk.msg.is_empty() {
             ui.label(egui::RichText::new(&self.sk.msg).size(11.5).color(style::CUT));

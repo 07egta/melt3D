@@ -33,42 +33,42 @@ enum Action {
 impl Action {
     fn label(self) -> &'static str {
         match self {
-            Self::Move => "移動",
-            Self::Rotate => "回転",
-            Self::Scale => "拡大",
-            Self::Duplicate => "複製",
-            Self::Delete => "削除",
-            Self::EditSketch => "輪郭を編集",
-            Self::EndSketchEdit => "編集を終了",
-            Self::Extrude => "押し出し",
-            Self::ExtrudeSettings => "押し出し設定",
-            Self::AlignX => "X整列",
-            Self::AlignY => "Y整列",
-            Self::AlignZ => "Z整列",
-            Self::Group => "グループ化",
-            Self::Frame => "選択を見る",
-            Self::Rename => "名前を変更",
-            Self::Flip => "足す/削る",
+            Self::Move => crate::i18n::tr("context_toolbar.move"),
+            Self::Rotate => crate::i18n::tr("context_toolbar.rotate"),
+            Self::Scale => crate::i18n::tr("context_toolbar.scale"),
+            Self::Duplicate => crate::i18n::tr("context_toolbar.duplicate"),
+            Self::Delete => crate::i18n::tr("context_toolbar.delete"),
+            Self::EditSketch => crate::i18n::tr("context_toolbar.edit_sketch"),
+            Self::EndSketchEdit => crate::i18n::tr("context_toolbar.end_sketch_edit"),
+            Self::Extrude => crate::i18n::tr("context_toolbar.extrude"),
+            Self::ExtrudeSettings => crate::i18n::tr("context_toolbar.extrude_settings"),
+            Self::AlignX => crate::i18n::tr("context_toolbar.align_x"),
+            Self::AlignY => crate::i18n::tr("context_toolbar.align_y"),
+            Self::AlignZ => crate::i18n::tr("context_toolbar.align_z"),
+            Self::Group => crate::i18n::tr("context_toolbar.group"),
+            Self::Frame => crate::i18n::tr("context_toolbar.frame"),
+            Self::Rename => crate::i18n::tr("context_toolbar.rename"),
+            Self::Flip => crate::i18n::tr("context_toolbar.flip"),
         }
     }
     fn hint(self) -> &'static str {
         match self {
-            Self::Move => "ギズモで移動 (W)",
-            Self::Rotate => "ギズモで回転 (E)",
-            Self::Scale => "ギズモで拡大縮小 (R)",
-            Self::Duplicate => "8mmずらして複製 (Ctrl+D)",
-            Self::Delete => "選択した形を削除 (Delete)",
-            Self::EditSketch => "元の輪郭を点で編集",
-            Self::EndSketchEdit => "編集を終了。形は残ります",
-            Self::Extrude => "完成した2D輪郭を現在の高さで押し出す",
-            Self::ExtrudeSettings => "右の形パネルで押し出しの高さを変更",
-            Self::AlignX => "ほかの形を主選択のX座標へそろえる",
-            Self::AlignY => "ほかの形を主選択のY座標へそろえる",
-            Self::AlignZ => "ほかの形を主選択のZ座標へそろえる",
-            Self::Group => "選んだ形を新しいグループに移す（メルト結果が変わる場合があります）",
-            Self::Frame => "選んだ形を画面の中央に表示 (Shift+F)",
-            Self::Rename => "左のシーンで名前を編集",
-            Self::Flip => "足す/削るを切り替える (Tab)",
+            Self::Move => crate::i18n::tr("context_toolbar.tip_move"),
+            Self::Rotate => crate::i18n::tr("context_toolbar.tip_rotate"),
+            Self::Scale => crate::i18n::tr("context_toolbar.tip_scale"),
+            Self::Duplicate => crate::i18n::tr("context_toolbar.tip_duplicate"),
+            Self::Delete => crate::i18n::tr("context_toolbar.tip_delete"),
+            Self::EditSketch => crate::i18n::tr("context_toolbar.tip_edit_sketch"),
+            Self::EndSketchEdit => crate::i18n::tr("context_toolbar.tip_end_sketch_edit"),
+            Self::Extrude => crate::i18n::tr("context_toolbar.tip_extrude"),
+            Self::ExtrudeSettings => crate::i18n::tr("context_toolbar.tip_extrude_settings"),
+            Self::AlignX => crate::i18n::tr("context_toolbar.tip_align_x"),
+            Self::AlignY => crate::i18n::tr("context_toolbar.tip_align_y"),
+            Self::AlignZ => crate::i18n::tr("context_toolbar.tip_align_z"),
+            Self::Group => crate::i18n::tr("context_toolbar.tip_group"),
+            Self::Frame => crate::i18n::tr("context_toolbar.tip_frame"),
+            Self::Rename => crate::i18n::tr("context_toolbar.tip_rename"),
+            Self::Flip => crate::i18n::tr("context_toolbar.tip_flip"),
         }
     }
 }
@@ -129,38 +129,38 @@ impl App {
     /// The UI asks this every frame. Check selection in O(k) without sorting or allocating.
     fn quick_group_check(&self) -> Result<(usize, usize), &'static str> {
         let Some(Pick::Shape(group, first)) = self.sel else {
-            return Err("形をCtrl＋クリックで複数選んでください");
+            return Err(crate::i18n::tr("context_toolbar.err_select_multiple"));
         };
         if self.scene.shape(group, first).is_none() {
-            return Err("選択した形が見つかりません");
+            return Err(crate::i18n::tr("context_toolbar.err_selection_missing"));
         }
         let mut count = 1;
         for &pick in &self.multi {
             let Pick::Shape(g, s) = pick else {
-                return Err("形とグループを混ぜて選択できません");
+                return Err(crate::i18n::tr("context_toolbar.err_mixed_selection"));
             };
             if g != group {
-                return Err("別のグループの形は一緒に操作できません");
+                return Err(crate::i18n::tr("context_toolbar.err_different_groups"));
             }
             if self.scene.shape(g, s).is_none() {
-                return Err("選択した形が見つかりません");
+                return Err(crate::i18n::tr("context_toolbar.err_selection_missing"));
             }
             count += 1;
         }
         if count < 2 {
-            return Err("形を2個以上選んでください");
+            return Err(crate::i18n::tr("context_toolbar.err_select_two_or_more"));
         }
         Ok((group, count))
     }
 
     fn same_group_shapes(&self) -> Result<(usize, Vec<usize>), &'static str> {
-        let keys = self.selected_shape_keys().ok_or("形をCtrl＋クリックで複数選んでください")?;
+        let keys = self.selected_shape_keys().ok_or(crate::i18n::tr("context_toolbar.err_select_multiple"))?;
         if keys.len() < 2 {
-            return Err("形を2個以上選んでください");
+            return Err(crate::i18n::tr("context_toolbar.err_select_two_or_more"));
         }
         let group = keys[0].0;
         if keys.iter().any(|(g, _)| *g != group) {
-            return Err("別のグループの形は一緒に操作できません");
+            return Err(crate::i18n::tr("context_toolbar.err_different_groups"));
         }
         Ok((group, keys.into_iter().map(|(_, s)| s).collect()))
     }
@@ -191,18 +191,18 @@ impl App {
     /// A reason makes the action disabled rather than silently ignoring it.
     fn disabled_reason(&self, action: Action) -> Option<&'static str> {
         if self.sel.is_none() && !(action == Action::Extrude && self.sk.on) {
-            return Some("形を選択してください");
+            return Some(crate::i18n::tr("context_toolbar.err_select_shape"));
         }
         if self.drag.is_some() && !matches!(action, Action::Frame) {
-            return Some("ドラッグを終えてから操作してください");
+            return Some(crate::i18n::tr("context_toolbar.err_finish_drag"));
         }
         if self.scene_structure_locked() && !matches!(action, Action::Frame | Action::Rename | Action::EndSketchEdit) {
-            return Some("アクティブなスケッチまたはソリッドを先に終了してください");
+            return Some(crate::i18n::tr("context_toolbar.err_finish_active_sketch_or_solid"));
         }
         match action {
             Action::Move | Action::Rotate | Action::Scale => {
                 if self.sketch_active() {
-                    Some("スケッチ編集中はギズモを使えません")
+                    Some(crate::i18n::tr("context_toolbar.err_gizmo_in_sketch"))
                 } else {
                     None
                 }
@@ -210,21 +210,23 @@ impl App {
             Action::Duplicate => {
                 if !self.multi.is_empty() {
                     let Ok((_, count)) = self.quick_group_check() else {
-                        return Some("同じグループ内の形だけ複製できます");
+                        return Some(crate::i18n::tr("context_toolbar.err_duplicate_same_group"));
                     };
                     if self.scene.shape_count().saturating_add(count) > MAX_SHAPES {
-                        return Some("形の上限に達します");
+                        return Some(crate::i18n::tr("context_toolbar.err_shape_limit_would_reach"));
                     }
                 } else {
                     match self.sel {
-                        Some(Pick::Shape(..)) if self.scene.shape_count() >= MAX_SHAPES => return Some("形の上限に達しました"),
+                        Some(Pick::Shape(..)) if self.scene.shape_count() >= MAX_SHAPES => {
+                            return Some(crate::i18n::tr("context_toolbar.err_shape_limit_reached"));
+                        }
                         Some(Pick::Group(g)) => {
                             if self.scene.groups.len() >= MAX_GROUPS {
-                                return Some("グループ数の上限に達しました");
+                                return Some(crate::i18n::tr("context_toolbar.err_group_limit_reached"));
                             }
                             let count = self.scene.groups.get(g).map_or(0, |gr| gr.shapes.len());
                             if self.scene.shape_count().saturating_add(count) > MAX_SHAPES {
-                                return Some("形の上限に達します");
+                                return Some(crate::i18n::tr("context_toolbar.err_shape_limit_would_reach"));
                             }
                         }
                         _ => {}
@@ -234,56 +236,56 @@ impl App {
             }
             Action::Delete => {
                 if self.sk.edit.is_some() {
-                    return Some("輪郭の編集中です。先に編集を終了してください");
+                    return Some(crate::i18n::tr("context_toolbar.err_outline_editing"));
                 }
                 if self.multi.is_empty() || (matches!(self.sel, Some(Pick::Shape(..))) && self.multi.iter().all(|p| matches!(p, Pick::Shape(..)))) {
                     None
                 } else {
-                    Some("グループと形の混在選択は削除できません")
+                    Some(crate::i18n::tr("context_toolbar.err_delete_mixed"))
                 }
             }
             Action::EditSketch => match self.sel {
                 Some(Pick::Shape(g, s)) if self.scene.shape(g, s).is_some_and(crate::sketch::editable) => None,
-                _ => Some("スケッチから作った形を選んでください"),
+                _ => Some(crate::i18n::tr("context_toolbar.err_select_sketch_shape")),
             },
-            Action::EndSketchEdit => self.sk.edit.is_none().then_some("輪郭を編集中ではありません"),
+            Action::EndSketchEdit => self.sk.edit.is_none().then_some(crate::i18n::tr("context_toolbar.err_not_editing_outline")),
             Action::Extrude => {
                 if self.sk.on && self.sk.keep_sketch {
-                    Some("Finish Sketch first to save the guide before choosing a solid operation")
+                    Some(crate::i18n::tr("sketch.finish_first"))
                 } else if !(self.sk.on && self.sk.stage == Stage::Ready && !self.sk.profile.is_empty()) {
-                    Some("2D輪郭を完成させてください")
+                    Some(crate::i18n::tr("context_toolbar.err_complete_2d_outline"))
                 } else if self.scene.shape_count().saturating_add(1 + self.sk.holes.len()) > MAX_SHAPES {
-                    Some("形の上限に達しました")
+                    Some(crate::i18n::tr("context_toolbar.err_shape_limit_reached"))
                 } else if !self.sk.holes.is_empty() && self.scene.groups.len() >= MAX_GROUPS {
-                    Some("穴付きスケッチを作るためのグループが足りません")
+                    Some(crate::i18n::tr("context_toolbar.err_group_needed_for_hole_sketch"))
                 } else {
                     None
                 }
             }
             Action::ExtrudeSettings => match self.sel {
                 Some(Pick::Shape(g, s)) if self.scene.shape(g, s).is_some_and(|s| s.kind == Kind::Extrude) => None,
-                _ => Some("押し出した形を選んでください"),
+                _ => Some(crate::i18n::tr("context_toolbar.err_select_extruded_shape")),
             },
             Action::AlignX | Action::AlignY | Action::AlignZ => self.quick_group_check().err(),
             Action::Group => {
                 let Ok((g, _)) = self.quick_group_check() else {
-                    return Some("同じグループ内の形を2個以上選んでください");
+                    return Some(crate::i18n::tr("context_toolbar.err_select_two_same_group"));
                 };
                 if self.scene.groups.len() >= MAX_GROUPS {
-                    return Some("グループ数の上限に達しました");
+                    return Some(crate::i18n::tr("context_toolbar.err_group_limit_reached"));
                 }
                 let src = &self.scene.groups[g];
                 if src.pattern.is_some() || src.instance_of.is_some() || src.sketch_holes {
-                    return Some("パターン・リンク・穴付きスケッチのグループは分割できません");
+                    return Some(crate::i18n::tr("context_toolbar.err_cannot_split_pattern"));
                 }
                 if src.uid != 0 && self.scene.groups.iter().any(|gr| gr.instance_of == Some(src.uid)) {
-                    return Some("リンクコピーの元グループは分割できません");
+                    return Some(crate::i18n::tr("context_toolbar.err_cannot_split_link_source"));
                 }
                 None
             }
             Action::Frame | Action::Rename | Action::Flip => {
                 if !self.multi.is_empty() && matches!(action, Action::Flip | Action::Frame) {
-                    Some("複数選択中は主選択だけに適用されるため、1つ選択してください")
+                    Some(crate::i18n::tr("context_toolbar.err_select_one_multi"))
                 } else {
                     None
                 }
@@ -342,7 +344,7 @@ impl App {
         }
         let Ok((g, keys)) = self.same_group_shapes() else { return };
         if self.scene.shape_count().saturating_add(keys.len()) > MAX_SHAPES {
-            self.notice = Some("形の上限に達します".into());
+            self.notice = Some(crate::i18n::tr("context_toolbar.err_shape_limit_would_reach").into());
             return;
         }
         let copies: Vec<_> = keys.iter().filter_map(|s| self.scene.shape(g, *s).cloned()).collect();
@@ -356,7 +358,7 @@ impl App {
             copy.uid = 0;
             copy.pos[0] += 8.0;
             copy.pos[1] += 8.0;
-            copy.name.push_str(" コピー");
+            copy.name.push_str(crate::i18n::tr("context_toolbar.copy_suffix"));
             self.scene.groups[g].shapes.insert(index + 1, copy);
         }
         self.sel = Some(Pick::Shape(g, keys[0] + 1));
@@ -369,18 +371,18 @@ impl App {
             return;
         }
         self.group_selected();
-        self.say(ctx, "グループ化しました。メルトや削りの結果が変わる場合はCtrl+Zで戻せます");
+        self.say(ctx, crate::i18n::tr("context_toolbar.grouped_message"));
     }
 
     fn button_action(&mut self, ui: &mut Ui, action: Action, menu: bool) {
         let why = self.disabled_reason(action);
         let label = if menu {
             match action {
-                Action::Move => "移動　W",
-                Action::Rotate => "回転　E",
-                Action::Scale => "拡大縮小　R",
-                Action::Duplicate => "複製　Ctrl+D",
-                Action::Delete => "削除　Delete",
+                Action::Move => crate::i18n::tr("context_toolbar.label_move"),
+                Action::Rotate => crate::i18n::tr("context_toolbar.label_rotate"),
+                Action::Scale => crate::i18n::tr("context_toolbar.label_scale"),
+                Action::Duplicate => crate::i18n::tr("context_toolbar.label_duplicate"),
+                Action::Delete => crate::i18n::tr("context_toolbar.label_delete"),
                 _ => action.label(),
             }
         } else {
@@ -410,7 +412,7 @@ impl App {
     /// One dispatcher provides identical actions in the floating toolbar and right click.
     pub(crate) fn context_actions(&mut self, ui: &mut Ui) {
         if self.sel.is_none() && !(self.sk.on && self.sk.stage == Stage::Ready) {
-            ui.label(RichText::new("形を選ぶと編集できます").color(style::DIM));
+            ui.label(RichText::new(crate::i18n::tr("context_toolbar.hint_select_to_edit")).color(style::DIM));
             return;
         }
         // a solid made in SolidCraft: open its design there again
@@ -421,10 +423,10 @@ impl App {
                 .horizontal(|ui| {
                     let (logo, _) = ui.allocate_exact_size(vec2(16.0, 18.0), egui::Sense::hover());
                     style::solidcraft_logo(ui.painter(), logo);
-                    ui.button(RichText::new("Edit").color(style::ACCENT))
+                    ui.button(RichText::new(crate::i18n::tr("menu.edit")).color(style::ACCENT))
                 })
                 .inner;
-            if r.on_hover_text("Open this solid in SolidCraft").clicked() {
+            if r.on_hover_text(crate::i18n::tr("solid.open")).clicked() {
                 let ctx = ui.ctx().clone();
                 if let Err(e) = self.edit_in_solidcraft(&ctx, g, s) {
                     self.say(&ctx, e);

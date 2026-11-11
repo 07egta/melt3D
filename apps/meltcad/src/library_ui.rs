@@ -244,9 +244,9 @@ fn cell(ui: &mut egui::Ui, ci: usize, ii: usize, name: &str, ctx: &egui::Context
             ui.painter().image(texture.id(), rect.shrink(4.0), egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)), Color32::WHITE);
         } else {
             problem = if category.is_some_and(|c| c.is_err()) {
-                Some("This model could not be loaded.")
+                Some(crate::i18n::tr("library.model_failed"))
             } else if worker(ctx).is_none() || failed(ctx, ci, ii) {
-                Some("The picture could not be made.")
+                Some(crate::i18n::tr("library.thumb_failed"))
             } else {
                 None
             };
@@ -256,7 +256,7 @@ fn cell(ui: &mut egui::Ui, ci: usize, ii: usize, name: &str, ctx: &egui::Context
         // Say why a card shows "!" instead of leaving the person to guess.
         let tip = match problem {
             Some(why) => format!("{why}\nAdd {name} to the scene"),
-            None => format!("Add {name} to the scene"),
+            None => crate::i18n::fill("library.add", &[&name]),
         };
         let mut clicked = response.on_hover_text(&tip).clicked();
         // the name works like the picture
@@ -304,7 +304,11 @@ pub fn insert(app: &mut App, ctx: &egui::Context, item: &Item) -> bool {
         return false;
     }
     if !item.fits(app.scene.groups.len(), app.scene.shape_count()) {
-        let why = if app.scene.groups.len() >= MAX_GROUPS { format!("Up to {MAX_GROUPS} groups") } else { format!("Up to {MAX_SHAPES} shapes") };
+        let why = if app.scene.groups.len() >= MAX_GROUPS {
+            crate::i18n::fill("limit.groups", &[&MAX_GROUPS])
+        } else {
+            crate::i18n::fill("limit.shapes", &[&MAX_SHAPES])
+        };
         app.say(ctx, why);
         return false;
     }
@@ -349,9 +353,9 @@ pub fn insert(app: &mut App, ctx: &egui::Context, item: &Item) -> bool {
     }
     app.frame_view(false);
     if item.group.fusion.is_some() {
-        app.say(ctx, format!("Added {}; the whole scene's Melt is now Smooth", item.name));
+        app.say(ctx, crate::i18n::fill("library.added_smooth", &[&item.name]));
     } else {
-        app.say(ctx, format!("Added {}", item.name));
+        app.say(ctx, crate::i18n::fill("library.added", &[&item.name]));
     }
     true
 }
@@ -365,7 +369,7 @@ pub fn panel(app: &mut App, ui: &mut egui::Ui) {
     if let Some(w) = worker(&ctx) {
         w.epoch.fetch_add(1, Ordering::Relaxed);
     }
-    ui.add(egui::TextEdit::singleline(&mut app.lib_query).hint_text("Search by name").desired_width(f32::INFINITY));
+    ui.add(egui::TextEdit::singleline(&mut app.lib_query).hint_text(crate::i18n::tr("library.search")).desired_width(f32::INFINITY));
     ui.add_space(2.0);
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing = Vec2::new(4.0, 4.0);
@@ -389,11 +393,11 @@ pub fn panel(app: &mut App, ui: &mut egui::Ui) {
                 }
             }
             if index.failed_files > 0 {
-                ui.label(RichText::new(format!("Could not read search data for {} categories", index.failed_files)).color(style::DIM));
+                ui.label(RichText::new(crate::i18n::fill("library.search_partial", &[&index.failed_files])).color(style::DIM));
             }
         } else {
             let ok = library::request_search(&ctx);
-            ui.label(if ok { "Preparing search data…" } else { "Could not load search data" });
+            ui.label(if ok { crate::i18n::tr("library.search_preparing") } else { crate::i18n::tr("library.search_failed") });
             return;
         }
     } else {
@@ -402,18 +406,18 @@ pub fn panel(app: &mut App, ui: &mut egui::Ui) {
                 hits.extend(cat.items.iter().enumerate().map(|(i, item)| (app.lib_cat, i, item.name.as_str())));
             }
             Some(Err(error)) => {
-                ui.label(RichText::new(format!("Could not open this category: {error}")).color(style::DIM));
+                ui.label(RichText::new(crate::i18n::fill("library.category_failed", &[&error])).color(style::DIM));
                 return;
             }
             None => {
                 let ok = library::request_category(app.lib_cat, &ctx);
-                ui.label(if ok { "Loading models…" } else { "Could not load models" });
+                ui.label(if ok { crate::i18n::tr("library.loading") } else { crate::i18n::tr("library.load_failed") });
                 return;
             }
         }
     }
     if hits.is_empty() {
-        ui.label(RichText::new("No results").color(style::DIM));
+        ui.label(RichText::new(crate::i18n::tr("library.none")).color(style::DIM));
         return;
     }
 
@@ -445,9 +449,9 @@ pub fn panel(app: &mut App, ui: &mut egui::Ui) {
                 insert(app, &ctx, item);
             }
         } else if let Some(Err(error)) = library::loaded(ci) {
-            app.say(&ctx, format!("Could not load this model: {error}"));
+            app.say(&ctx, crate::i18n::fill("library.model_error", &[&error]));
         } else {
-            app.say(&ctx, "The model is still loading; add it once it has loaded");
+            app.say(&ctx, crate::i18n::tr("library.still_loading"));
         }
     }
 }

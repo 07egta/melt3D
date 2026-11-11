@@ -98,13 +98,13 @@ impl App {
         }
         let copies = d.count.clamp(1, 64) - 1;
         if copies == 0 {
-            return Err("Please use 2 or more".into());
+            return Err(crate::i18n::tr("array.min").into());
         }
         match self.sel {
             Some(Pick::Shape(g, s)) => {
-                let base = self.scene.shape(g, s).cloned().ok_or("No shape")?;
+                let base = self.scene.shape(g, s).cloned().ok_or(crate::i18n::tr("array.no_shape"))?;
                 if self.scene.shape_count() + copies as usize > MAX_SHAPES {
-                    return Err(format!("Up to {MAX_SHAPES} shapes"));
+                    return Err(crate::i18n::fill("limit.shapes", &[&MAX_SHAPES]));
                 }
                 let more: Vec<Shape> = (0..copies).map(|_| base.clone()).collect();
                 crate::mesh::can_add(&self.scene, more.iter())?;
@@ -124,11 +124,11 @@ impl App {
             Some(Pick::Group(g)) => {
                 // the whole outline under the group: its child groups come along
                 let end = self.scene.subtree_end(g);
-                let tree: Vec<Group> = self.scene.groups.get(g..end).ok_or("No group")?.to_vec();
+                let tree: Vec<Group> = self.scene.groups.get(g..end).ok_or(crate::i18n::tr("array.no_group"))?.to_vec();
                 let n = tree.len();
                 let shapes: usize = tree.iter().map(|t| t.shapes.len()).sum();
                 if self.scene.groups.len() + n * copies as usize > MAX_GROUPS || self.scene.shape_count() + shapes * copies as usize > MAX_SHAPES {
-                    return Err("That goes over the limit".into());
+                    return Err(crate::i18n::tr("array.over_limit").into());
                 }
                 crate::mesh::can_add(&self.scene, (0..copies).flat_map(|_| tree.iter().flat_map(|t| t.shapes.iter())))?;
                 // a linked copy turns about the middle of the group it shows
@@ -165,7 +165,7 @@ impl App {
                 self.sel = Some(Pick::Group(end + (copies as usize - 1) * n));
                 Ok(copies as usize)
             }
-            None => Err("Select something to arrange".into()),
+            None => Err(crate::i18n::tr("array.select_first").into()),
         }
     }
 }
@@ -176,31 +176,33 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
     egui::Area::new(egui::Id::new("array_area")).order(egui::Order::Foreground).anchor(Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
         style::card().show(ui, |ui| {
             ui.set_width(300.0);
-            ui.label(RichText::new("Array copy").strong().size(15.0));
-            ui.label(RichText::new("Repeats the selected shape (group) many times").size(11.5).color(style::DIM));
+            ui.label(RichText::new(crate::i18n::tr("array.title")).strong().size(15.0));
+            ui.label(RichText::new(crate::i18n::tr("array.tip")).size(11.5).color(style::DIM));
             ui.add_space(4.0);
             ui.horizontal(|ui| {
-                if style::pill(ui, "Straight", d.mode == Mode::Line).clicked() {
+                if style::pill(ui, crate::i18n::tr("array.straight"), d.mode == Mode::Line).clicked() {
                     d.mode = Mode::Line;
                 }
-                if style::pill(ui, "Circle (around Z)", d.mode == Mode::Circle).clicked() {
+                if style::pill(ui, crate::i18n::tr("array.circle"), d.mode == Mode::Circle).clicked() {
                     d.mode = Mode::Circle;
                 }
             });
             egui::Grid::new("array_grid").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
-                ui.label(RichText::new("Total").color(style::DIM));
+                ui.label(RichText::new(crate::i18n::tr("array.total")).color(style::DIM));
                 ui.add(egui::DragValue::new(&mut d.count).range(2..=64).suffix(" pcs"));
                 ui.end_row();
                 match d.mode {
                     Mode::Line => {
-                        for (i, n) in ["Width X", "Depth Y", "Height Z"].iter().enumerate() {
+                        for (i, n) in
+                            [crate::i18n::tr("array.width"), crate::i18n::tr("array.depth"), crate::i18n::tr("array.height")].iter().enumerate()
+                        {
                             ui.label(RichText::new(*n).color(style::DIM));
                             ui.add(egui::DragValue::new(&mut d.step[i]).speed(0.5).range(-1000.0..=1000.0).suffix(" mm").max_decimals(1));
                             ui.end_row();
                         }
                     }
                     Mode::Circle => {
-                        ui.label(RichText::new("Angle").color(style::DIM));
+                        ui.label(RichText::new(crate::i18n::tr("inspector.twist.angle")).color(style::DIM));
                         ui.add(egui::DragValue::new(&mut d.angle).speed(1.0).range(10.0..=360.0).suffix(" °"));
                         ui.end_row();
                     }
@@ -211,7 +213,7 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
                 if ui
                     .add_enabled(
                         !app.scene_structure_locked(),
-                        egui::Button::new(RichText::new("Array").strong().color(egui::Color32::WHITE))
+                        egui::Button::new(RichText::new(crate::i18n::tr("array.button")).strong().color(egui::Color32::WHITE))
                             .fill(style::ACCENT_SOFT)
                             .stroke(egui::Stroke::new(1.0, style::ACCENT)),
                     )
@@ -219,7 +221,7 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
                 {
                     go = true;
                 }
-                if ui.button("Cancel").clicked() {
+                if ui.button(crate::i18n::tr("prefs.cancel")).clicked() {
                     close = true;
                 }
             });
@@ -232,7 +234,7 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
     if go {
         match app.make_array(&d) {
             Ok(n) => {
-                app.say(ctx, format!("Added {n} copies"));
+                app.say(ctx, crate::i18n::fill("array.added", &[&n]));
                 close = true;
             }
             Err(e) => app.say(ctx, e),

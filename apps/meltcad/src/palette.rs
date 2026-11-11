@@ -145,16 +145,16 @@ pub fn entries() -> Vec<Entry> {
     let mut v = Vec::new();
     for k in Kind::ALL {
         v.push(Entry {
-            label: format!("Add {}", k.label()),
-            tag: "Shape",
+            label: crate::i18n::fill("palette.cmd_add_item", &[&k.label()]),
+            tag: crate::i18n::tr("palette.tag_shape"),
             words: format!("{} {}", k.label(), kind_words(k)).to_lowercase(),
             action: Action::AddShape(k),
         });
     }
     for preset in crate::organic_tube::Preset::ALL {
         v.push(Entry {
-            label: format!("Organic Tube・{}を作る", preset.label()),
-            tag: "プリセット",
+            label: crate::i18n::fill("palette.make_organic_tube", &[&preset.label()]),
+            tag: crate::i18n::tr("palette.preset_tag"),
             words: preset.search_words().to_owned(),
             action: Action::OrganicTube(preset),
         });
@@ -163,70 +163,106 @@ pub fn entries() -> Vec<Entry> {
         for (ii, it) in c.items.iter().enumerate() {
             v.push(Entry {
                 label: it.name.clone(),
-                tag: "Library",
+                tag: crate::i18n::tr("palette.tag_library"),
                 words: format!("{} {}", c.name, it.tags.join(" ")).to_lowercase(),
                 action: Action::Insert(ci, ii),
             });
         }
     }
     v.extend([
-        cmd("Ripple: Concentric", "ripple 波打つ 表面 同心円 リップル concentric", Action::Ripple(crate::ripple::RippleMode::Concentric)),
-        cmd("Ripple: Linear", "ripple wave 直線 波紋 リップル linear", Action::Ripple(crate::ripple::RippleMode::Linear)),
-        cmd("Ripple: Random", "ripple random 波 ランダム リップル", Action::Ripple(crate::ripple::RippleMode::Random)),
-        cmd("Melt (dripping shape)", "melt preset syrup dripping viscous blob みずあめ とろける たれる", Action::MeltPreset),
-        cmd("Group", "group new まとめる グループを作る", Action::AddGroup),
-        cmd("Undo", "undo もどす 元に戻す", Action::Undo),
-        cmd("Redo", "redo やり直し", Action::Redo),
-        cmd("Copy", "copy コピー", Action::Copy),
-        cmd("Cut", "cut 切り取り", Action::Cut),
-        cmd("Paste", "paste はりつけ 貼りつけ", Action::Paste),
-        cmd("Duplicate", "duplicate clone ふくせい 複製", Action::Duplicate),
-        cmd("Mirror Copy", "mirror symmetric みらー 左右コピー", Action::MirrorCopy),
-        cmd("Delete", "delete remove けす さくじょ 削除", Action::Delete),
-        cmd("Array", "array pattern repeat はいれつ ならべてコピー", Action::Array),
-        cmd("Pattern: Rectangular", "pattern rectangular grid くけいじょう パターン 矩形状 ならべる", Action::Pattern(PatternKind::Rect)),
-        cmd("Pattern: Circular", "pattern circular polar circle えんけいじょう パターン 円形状 ぐるっと", Action::Pattern(PatternKind::Circular)),
-        cmd("Pattern: Along Path", "pattern path along curve ぱすじょう パターン パス上 線にそって", Action::Pattern(PatternKind::Path)),
-        cmd("Pattern: Points", "pattern geometry points vertices じおめとり パターン ジオメトリ 点ごと", Action::Pattern(PatternKind::Geometry)),
-        cmd("Mirror X", "mirror symmetry live x みらー さゆう ミラー 左右にうつす", Action::MirrorAxis(0)),
-        cmd("Mirror Y", "mirror symmetry live y みらー ぜんご ミラー 前後にうつす", Action::MirrorAxis(1)),
-        cmd("Mirror Z", "mirror symmetry live z みらー じょうげ ミラー 上下にうつす", Action::MirrorAxis(2)),
-        cmd("Clear Pattern", "pattern remove clear off やめる パターンをやめる", Action::ClearPattern),
-        cmd("Make Instance", "instance linked copy いんすたんす りんく インスタンス リンクコピー", Action::MakeInstance),
-        cmd("New Scene", "new あたらしく 新しく作る", Action::NewScene),
-        cmd("Open", "open load ひらく 開く", Action::Open),
-        cmd("Save", "save ほぞん 保存", Action::Save),
-        cmd("Save As", "save as なまえ 名前をつけて保存", Action::SaveAs),
-        cmd("Export STL", "export stl print 3dぷりんと かきだし STLで書き出す", Action::Export(ExportFormat::Stl)),
-        cmd("Export 3MF", "export 3mf slicer すらいさー 3MFで書き出す", Action::Export(ExportFormat::ThreeMf)),
-        cmd("Export OBJ", "export obj OBJで書き出す", Action::Export(ExportFormat::Obj)),
-        cmd("Export PNG", "export png image screenshot がぞう 画像で書き出す", Action::ExportPng),
-        cmd("Print Check", "print check volume size 体積 おおきさ プリントチェック", Action::PrintCheck),
-        cmd("Import SVG", "svg import いんぽーと SVGを読み込む", Action::ImportSvg),
-        cmd("Organic Blob", "organic blob metaball soft smooth puffy ぷっくり ぶろぶ ぼこぼこ 有機 生成 preset プリセット", Action::OrganicBlob),
-        cmd("Import Mesh", "mesh stl obj 3mf ply glb import めっしゅ よみこむ とりこむ 取り込み メッシュを読み込む", Action::ImportMesh),
-        cmd("SolidCraft で精密に作る", "solid solidcraft precise cad 精密 ソリッド", Action::OpenPrecise),
-        cmd("Frame All", "frame all home ぜんたい 全体を見る", Action::FrameAll),
-        cmd("Frame Selection", "frame focus selection みる えらんだものを見る", Action::FrameSelection),
-        cmd("Toggle Perspective / Ortho", "perspective orthographic ortho えんきん へいこう 遠近 平行を切りかえ", Action::TogglePerspective),
-        cmd("Toggle Add / Subtract", "flip boolean subtract add tab 足す 削る を切りかえ", Action::FlipOp),
-        cmd("Next: Add", "add union つぎは足す", Action::SetOp(Op::Add)),
-        cmd("Next: Subtract", "subtract difference cut けずる つぎは削る", Action::SetOp(Op::Subtract)),
-        cmd("Next: Paint", "paint stain ぬる つぎはぬる", Action::SetOp(Op::Paint)),
-        cmd("Next: Intersect", "intersect かさねる つぎは重ねる", Action::SetOp(Op::Intersect)),
-        cmd("Tool: Select", "tool select q えらぶ 道具 選ぶ", Action::SetTool(Tool::Select)),
-        cmd("Tool: All", "tool all gizmo a ぜんぶ 道具 ぜんぶ", Action::SetTool(Tool::All)),
-        cmd("Tool: Move", "tool move translate w うごかす 道具 動かす", Action::SetTool(Tool::Move)),
-        cmd("Tool: Rotate", "tool rotate e まわす 道具 回す", Action::SetTool(Tool::Rotate)),
-        cmd("Tool: Scale", "tool scale r おおきさ 道具 大きさ", Action::SetTool(Tool::Scale)),
-        cmd("View Front", "view front 1 しょうめん 正面から見る", Action::ViewFront),
-        cmd("View Right", "view right 3 みぎ 右から見る", Action::ViewRight),
-        cmd("View Top", "view top 7 うえ 真上から見る", Action::ViewTop),
-        cmd("Show Library", "library assets らいぶらり あせっと ライブラリを開く", Action::ShowAssets),
-        cmd("Show Outliner", "outliner scene しーん あうとらいなー シーン一覧を開く", Action::ShowOutliner),
-        cmd("Keyboard Shortcuts", "help keys keyboard へるぷ ? 操作のしかた", Action::Help),
-        cmd("First Box Guide", "guide tutorial first box onboarding がいど ガイド はじめて 箱づくり 練習", Action::Guide),
-        cmd("Restore Hidden Hints", "hints restore reset tips ひんと ヒント 隠したヒントを戻す", Action::GuideResetHints),
+        cmd(
+            crate::i18n::tr("palette.cmd_ripple_concentric"),
+            "ripple 波打つ 表面 同心円 リップル concentric",
+            Action::Ripple(crate::ripple::RippleMode::Concentric),
+        ),
+        cmd(crate::i18n::tr("palette.cmd_ripple_linear"), "ripple wave 直線 波紋 リップル linear", Action::Ripple(crate::ripple::RippleMode::Linear)),
+        cmd(crate::i18n::tr("palette.cmd_ripple_random"), "ripple random 波 ランダム リップル", Action::Ripple(crate::ripple::RippleMode::Random)),
+        cmd(crate::i18n::tr("palette.cmd_melt_preset"), "melt preset syrup dripping viscous blob みずあめ とろける たれる", Action::MeltPreset),
+        cmd(crate::i18n::tr("palette.cmd_group"), "group new まとめる グループを作る", Action::AddGroup),
+        cmd(crate::i18n::tr("palette.cmd_undo"), "undo もどす 元に戻す", Action::Undo),
+        cmd(crate::i18n::tr("palette.cmd_redo"), "redo やり直し", Action::Redo),
+        cmd(crate::i18n::tr("palette.cmd_copy"), "copy コピー", Action::Copy),
+        cmd(crate::i18n::tr("palette.cmd_cut"), "cut 切り取り", Action::Cut),
+        cmd(crate::i18n::tr("palette.cmd_paste"), "paste はりつけ 貼りつけ", Action::Paste),
+        cmd(crate::i18n::tr("palette.cmd_duplicate"), "duplicate clone ふくせい 複製", Action::Duplicate),
+        cmd(crate::i18n::tr("palette.cmd_mirror_copy"), "mirror symmetric みらー 左右コピー", Action::MirrorCopy),
+        cmd(crate::i18n::tr("palette.cmd_delete"), "delete remove けす さくじょ 削除", Action::Delete),
+        cmd(crate::i18n::tr("palette.cmd_array"), "array pattern repeat はいれつ ならべてコピー", Action::Array),
+        cmd(
+            crate::i18n::tr("palette.cmd_pattern_rect"),
+            "pattern rectangular grid くけいじょう パターン 矩形状 ならべる",
+            Action::Pattern(PatternKind::Rect),
+        ),
+        cmd(
+            crate::i18n::tr("palette.cmd_pattern_circular"),
+            "pattern circular polar circle えんけいじょう パターン 円形状 ぐるっと",
+            Action::Pattern(PatternKind::Circular),
+        ),
+        cmd(
+            crate::i18n::tr("palette.cmd_pattern_path"),
+            "pattern path along curve ぱすじょう パターン パス上 線にそって",
+            Action::Pattern(PatternKind::Path),
+        ),
+        cmd(
+            crate::i18n::tr("palette.cmd_pattern_points"),
+            "pattern geometry points vertices じおめとり パターン ジオメトリ 点ごと",
+            Action::Pattern(PatternKind::Geometry),
+        ),
+        cmd(crate::i18n::tr("palette.cmd_mirror_x"), "mirror symmetry live x みらー さゆう ミラー 左右にうつす", Action::MirrorAxis(0)),
+        cmd(crate::i18n::tr("palette.cmd_mirror_y"), "mirror symmetry live y みらー ぜんご ミラー 前後にうつす", Action::MirrorAxis(1)),
+        cmd(crate::i18n::tr("palette.cmd_mirror_z"), "mirror symmetry live z みらー じょうげ ミラー 上下にうつす", Action::MirrorAxis(2)),
+        cmd(crate::i18n::tr("palette.cmd_clear_pattern"), "pattern remove clear off やめる パターンをやめる", Action::ClearPattern),
+        cmd(crate::i18n::tr("palette.cmd_make_instance"), "instance linked copy いんすたんす りんく インスタンス リンクコピー", Action::MakeInstance),
+        cmd(crate::i18n::tr("palette.cmd_new_scene"), "new あたらしく 新しく作る", Action::NewScene),
+        cmd(crate::i18n::tr("palette.cmd_open"), "open load ひらく 開く", Action::Open),
+        cmd(crate::i18n::tr("palette.cmd_save"), "save ほぞん 保存", Action::Save),
+        cmd(crate::i18n::tr("palette.cmd_save_as"), "save as なまえ 名前をつけて保存", Action::SaveAs),
+        cmd(crate::i18n::tr("palette.cmd_export_stl"), "export stl print 3dぷりんと かきだし STLで書き出す", Action::Export(ExportFormat::Stl)),
+        cmd(crate::i18n::tr("palette.cmd_export_3mf"), "export 3mf slicer すらいさー 3MFで書き出す", Action::Export(ExportFormat::ThreeMf)),
+        cmd(crate::i18n::tr("palette.cmd_export_obj"), "export obj OBJで書き出す", Action::Export(ExportFormat::Obj)),
+        cmd(crate::i18n::tr("palette.cmd_export_png"), "export png image screenshot がぞう 画像で書き出す", Action::ExportPng),
+        cmd(crate::i18n::tr("palette.cmd_print_check"), "print check volume size 体積 おおきさ プリントチェック", Action::PrintCheck),
+        cmd(crate::i18n::tr("palette.cmd_import_svg"), "svg import いんぽーと SVGを読み込む", Action::ImportSvg),
+        cmd(
+            crate::i18n::tr("palette.cmd_organic_blob"),
+            "organic blob metaball soft smooth puffy ぷっくり ぶろぶ ぼこぼこ 有機 生成 preset プリセット",
+            Action::OrganicBlob,
+        ),
+        cmd(
+            crate::i18n::tr("palette.cmd_import_mesh"),
+            "mesh stl obj 3mf ply glb import めっしゅ よみこむ とりこむ 取り込み メッシュを読み込む",
+            Action::ImportMesh,
+        ),
+        cmd(crate::i18n::tr("palette.open_solidcraft_label"), "solid solidcraft precise cad 精密 ソリッド", Action::OpenPrecise),
+        cmd(crate::i18n::tr("palette.cmd_frame_all"), "frame all home ぜんたい 全体を見る", Action::FrameAll),
+        cmd(crate::i18n::tr("palette.cmd_frame_selection"), "frame focus selection みる えらんだものを見る", Action::FrameSelection),
+        cmd(
+            crate::i18n::tr("palette.cmd_toggle_perspective"),
+            "perspective orthographic ortho えんきん へいこう 遠近 平行を切りかえ",
+            Action::TogglePerspective,
+        ),
+        cmd(crate::i18n::tr("palette.cmd_toggle_add_subtract"), "flip boolean subtract add tab 足す 削る を切りかえ", Action::FlipOp),
+        cmd(crate::i18n::tr("palette.cmd_next_add"), "add union つぎは足す", Action::SetOp(Op::Add)),
+        cmd(crate::i18n::tr("palette.cmd_next_subtract"), "subtract difference cut けずる つぎは削る", Action::SetOp(Op::Subtract)),
+        cmd(crate::i18n::tr("palette.cmd_next_paint"), "paint stain ぬる つぎはぬる", Action::SetOp(Op::Paint)),
+        cmd(crate::i18n::tr("palette.cmd_next_intersect"), "intersect かさねる つぎは重ねる", Action::SetOp(Op::Intersect)),
+        cmd(crate::i18n::tr("palette.cmd_tool_select"), "tool select q えらぶ 道具 選ぶ", Action::SetTool(Tool::Select)),
+        cmd(crate::i18n::tr("palette.cmd_tool_all"), "tool all gizmo a ぜんぶ 道具 ぜんぶ", Action::SetTool(Tool::All)),
+        cmd(crate::i18n::tr("palette.cmd_tool_move"), "tool move translate w うごかす 道具 動かす", Action::SetTool(Tool::Move)),
+        cmd(crate::i18n::tr("palette.cmd_tool_rotate"), "tool rotate e まわす 道具 回す", Action::SetTool(Tool::Rotate)),
+        cmd(crate::i18n::tr("palette.cmd_tool_scale"), "tool scale r おおきさ 道具 大きさ", Action::SetTool(Tool::Scale)),
+        cmd(crate::i18n::tr("palette.cmd_view_front"), "view front 1 しょうめん 正面から見る", Action::ViewFront),
+        cmd(crate::i18n::tr("palette.cmd_view_right"), "view right 3 みぎ 右から見る", Action::ViewRight),
+        cmd(crate::i18n::tr("palette.cmd_view_top"), "view top 7 うえ 真上から見る", Action::ViewTop),
+        cmd(crate::i18n::tr("palette.cmd_show_library"), "library assets らいぶらり あせっと ライブラリを開く", Action::ShowAssets),
+        cmd(crate::i18n::tr("palette.cmd_show_outliner"), "outliner scene しーん あうとらいなー シーン一覧を開く", Action::ShowOutliner),
+        cmd(crate::i18n::tr("palette.cmd_keyboard_shortcuts"), "help keys keyboard へるぷ ? 操作のしかた", Action::Help),
+        cmd(
+            crate::i18n::tr("palette.cmd_first_box_guide"),
+            "guide tutorial first box onboarding がいど ガイド はじめて 箱づくり 練習",
+            Action::Guide,
+        ),
+        cmd(crate::i18n::tr("palette.cmd_restore_hints"), "hints restore reset tips ひんと ヒント 隠したヒントを戻す", Action::GuideResetHints),
     ]);
     v
 }
@@ -234,7 +270,7 @@ pub fn entries() -> Vec<Entry> {
 /// How well `q` matches an entry: None = no match, lower is better.
 fn score(e: &Entry, q: &str) -> Option<u32> {
     // library parts rank after commands: a growing library must not push a command (「たま」= sphere) down
-    let base = if e.tag == "Library" { 10 } else { 0 };
+    let base = if e.tag == crate::i18n::tr("palette.tag_library") { 10 } else { 0 };
     score_raw(e, q).map(|s| s + base)
 }
 
@@ -270,7 +306,7 @@ fn score_raw(e: &Entry, q: &str) -> Option<u32> {
 pub fn search(all: &[Entry], query: &str, limit: usize) -> Vec<usize> {
     let q = query.trim().to_lowercase();
     if q.is_empty() {
-        return all.iter().enumerate().filter(|(_, e)| e.tag != "Library").map(|(i, _)| i).take(limit).collect();
+        return all.iter().enumerate().filter(|(_, e)| e.tag != crate::i18n::tr("palette.tag_library")).map(|(i, _)| i).take(limit).collect();
     }
     let mut hits: Vec<(u32, usize)> = all.iter().enumerate().filter_map(|(i, e)| score(e, &q).map(|s| (s, i))).collect();
     hits.sort_by_key(|(s, i)| (*s, *i));
@@ -375,7 +411,7 @@ impl App {
                 if let Some(item) = library::all().get(c).and_then(|c| c.items.get(i)) {
                     crate::library_ui::insert(self, ctx, item);
                 } else {
-                    self.say(ctx, "This model could not be loaded");
+                    self.say(ctx, crate::i18n::tr("palette.model_not_loaded"));
                 }
             }
             Action::Undo => self.undo(),
@@ -482,10 +518,10 @@ impl App {
                     st.msg.clear();
                     changed = true;
                 }
-                Err(Conflict::BuiltIn(name)) => st.msg = format!("{} is already used by {name}", sc.badge()),
+                Err(Conflict::BuiltIn(name)) => st.msg = crate::i18n::fill("palette.shortcut_taken", &[&sc.badge(), &name]),
                 Err(Conflict::Custom(other)) => {
                     let name = other.split_once(':').map_or(other.as_str(), |(_, l)| l);
-                    st.msg = format!("{} is already used by {name}", sc.badge());
+                    st.msg = crate::i18n::fill("palette.shortcut_taken", &[&sc.badge(), &name]);
                 }
             }
         }
@@ -502,21 +538,21 @@ impl App {
                     ui.set_width(460.0);
                     if let Some(aid) = st.assign.clone() {
                         let name = all.iter().find(|e| e.id() == aid).map_or("", |e| e.label.as_str());
-                        ui.label(RichText::new(format!("Set shortcut: {name}")).color(style::TEXT));
+                        ui.label(RichText::new(crate::i18n::fill("palette.set_shortcut", &[&name])).color(style::TEXT));
                         ui.add_space(4.0);
-                        ui.label(RichText::new("Press a key combo (Esc to cancel)").color(style::DIM));
+                        ui.label(RichText::new(crate::i18n::tr("palette.press_key_combo")).color(style::DIM));
                         if !st.msg.is_empty() {
                             ui.label(RichText::new(&st.msg).color(style::CUT));
                         }
                         ui.add_space(6.0);
                         ui.horizontal(|ui| {
-                            if style::pill(ui, "Clear", false).clicked() {
+                            if style::pill(ui, crate::i18n::tr("palette.clear_shortcut"), false).clicked() {
                                 prefs.clear_shortcut(&aid);
                                 changed = true;
                                 st.assign = None;
                                 st.msg.clear();
                             }
-                            if style::pill(ui, "Cancel", false).clicked() {
+                            if style::pill(ui, crate::i18n::tr("palette.cancel"), false).clicked() {
                                 st.assign = None;
                                 st.msg.clear();
                             }
@@ -525,7 +561,7 @@ impl App {
                     }
                     let r = ui.add(
                         egui::TextEdit::singleline(&mut st.query)
-                            .hint_text("Search shapes, library, commands (Japanese also works)")
+                            .hint_text(crate::i18n::tr("palette.search_hint"))
                             .desired_width(f32::INFINITY)
                             .font(egui::FontId::proportional(15.0)),
                     );
@@ -541,7 +577,8 @@ impl App {
                             for pid in prefs.pins.clone() {
                                 let Some(i) = all.iter().position(|e| e.id() == pid) else { continue };
                                 let Some(e) = all.get(i) else { continue };
-                                let resp = style::pill_enabled(ui, &e.label, false, enabled(e.action)).on_hover_text("Run  (right-click to unpin)");
+                                let resp =
+                                    style::pill_enabled(ui, &e.label, false, enabled(e.action)).on_hover_text(crate::i18n::tr("palette.run_tip"));
                                 if resp.clicked() {
                                     run = Some(i);
                                 }
@@ -554,7 +591,7 @@ impl App {
                         ui.add_space(4.0);
                     }
                     if hits.is_empty() {
-                        ui.label(RichText::new("No results").color(style::DIM));
+                        ui.label(RichText::new(crate::i18n::tr("palette.no_results")).color(style::DIM));
                     }
                     egui::ScrollArea::vertical().max_height(340.0).auto_shrink([false, true]).show(ui, |ui| {
                         for (n, &i) in hits.iter().enumerate() {
@@ -576,11 +613,13 @@ impl App {
                             let more = egui::Rect::from_center_size(egui::pos2(rc.right() - 14.0, rc.center().y), Vec2::splat(22.0));
                             let pin = more.translate(Vec2::new(-24.0, 0.0));
                             let pinned = prefs.is_pinned(&eid);
-                            let more_r = ui.interact(more, egui::Id::new(("pal_more", i)), egui::Sense::click()).on_hover_text("Set shortcut");
+                            let more_r = ui
+                                .interact(more, egui::Id::new(("pal_more", i)), egui::Sense::click())
+                                .on_hover_text(crate::i18n::tr("palette.set_shortcut"));
                             let pin_r = ui.interact(pin, egui::Id::new(("pal_pin", i)), egui::Sense::click()).on_hover_text(if pinned {
-                                "Unpin"
+                                crate::i18n::tr("palette.unpin")
                             } else {
-                                "Pin to the top"
+                                crate::i18n::tr("palette.pin_top")
                             });
                             let dim = |hover: bool| if hover { style::TEXT } else { style::DIM };
                             if hot || pinned {
@@ -669,6 +708,7 @@ mod tests {
     fn a_library_entry_that_cannot_be_loaded_says_so_and_changes_nothing() {
         let ctx = egui::Context::default();
         let mut app = App::new(true, None);
+        crate::i18n::set_language("en");
         let before = app.scene.clone();
         app.run_action(&ctx, Action::Insert(usize::MAX, 0));
         assert_eq!(app.scene, before);
@@ -746,6 +786,7 @@ mod tests {
 
     #[test]
     fn best_matches_come_first() {
+        crate::i18n::set_language("en");
         let all = entries();
         let hits = search(&all, "コピー", 20);
         let labels: Vec<&str> = hits.iter().filter_map(|i| all.get(*i)).map(|e| e.label.as_str()).collect();

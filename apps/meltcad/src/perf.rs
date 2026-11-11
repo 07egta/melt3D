@@ -184,19 +184,19 @@ impl Quality {
 
     pub fn label(self) -> &'static str {
         match self {
-            Quality::Light => "Light",
-            Quality::Normal => "Normal",
-            Quality::Fine => "Sharp",
-            Quality::Auto => "Auto",
+            Quality::Light => crate::i18n::tr("quality.light"),
+            Quality::Normal => crate::i18n::tr("quality.normal"),
+            Quality::Fine => crate::i18n::tr("quality.sharp"),
+            Quality::Auto => crate::i18n::tr("quality.auto"),
         }
     }
 
     pub fn hint(self) -> &'static str {
         match self {
-            Quality::Light => "Lightest (half the screen detail)",
-            Quality::Normal => "Medium (three-quarters detail)",
-            Quality::Fine => "Always full detail",
-            Quality::Auto => "Sharp when still; lighter while moving to keep up the speed",
+            Quality::Light => crate::i18n::tr("quality.light.tip"),
+            Quality::Normal => crate::i18n::tr("quality.normal.tip"),
+            Quality::Fine => crate::i18n::tr("quality.sharp.tip"),
+            Quality::Auto => crate::i18n::tr("quality.auto.tip"),
         }
     }
 
@@ -583,14 +583,13 @@ pub struct MenuState {
 /// The 'がしつ' menu of the top bar.
 /// `extra` adds entries below the quality choices (the graphics path's: simple view, backend, log).
 pub fn quality_menu(ui: &mut egui::Ui, menu: &mut MenuState, extra: impl FnOnce(&mut egui::Ui)) {
-    ui.menu_button(egui::RichText::new(format!("Quality: {}", menu.quality.label())).size(13.0), |ui| {
+    ui.menu_button(egui::RichText::new(crate::i18n::fill("quality.menu", &[&menu.quality.label()])).size(13.0), |ui| {
         for q in Quality::ALL {
             ui.selectable_value(&mut menu.quality, q, q.label()).on_hover_text(q.hint());
         }
         ui.separator();
-        ui.checkbox(&mut menu.hud, "Show frame time (F3)")
-            .on_hover_text("Shows frames per second, CPU and GPU time, and the draw scale over the view");
-        if ui.button("Speed test…").on_hover_text("Draws a few scenes and shows this machine's speed in a table").clicked() {
+        ui.checkbox(&mut menu.hud, crate::i18n::tr("quality.hud")).on_hover_text(crate::i18n::tr("perf.tip_overlay"));
+        if ui.button(crate::i18n::tr("quality.speed_test")).on_hover_text(crate::i18n::tr("perf.tip_speed_test")).clicked() {
             menu.bench = true;
             ui.close();
         }

@@ -34,11 +34,11 @@ impl ViewMode {
 
     pub fn label(self) -> &'static str {
         match self {
-            ViewMode::Normal => "Normal",
-            ViewMode::ZebraH => "Zebra (horizontal stripes)",
-            ViewMode::ZebraV => "Zebra (vertical stripes)",
-            ViewMode::Rings => "Rings (contour bands)",
-            ViewMode::UpDown => "Up / Down (green up, red down, blue = vertical wall)",
+            ViewMode::Normal => crate::i18n::tr("quality.normal"),
+            ViewMode::ZebraH => crate::i18n::tr("viewmode.zebra_h"),
+            ViewMode::ZebraV => crate::i18n::tr("viewmode.zebra_v"),
+            ViewMode::Rings => crate::i18n::tr("viewmode.rings"),
+            ViewMode::UpDown => crate::i18n::tr("viewmode.updown"),
         }
     }
 }

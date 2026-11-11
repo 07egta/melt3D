@@ -31,7 +31,7 @@ impl Format {
     pub fn label(self) -> &'static str {
         match self {
             Format::Stl => "STL",
-            Format::StlAscii => "STL (text)",
+            Format::StlAscii => crate::i18n::tr("export_formats.stl_ascii"),
             Format::Obj => "OBJ",
             Format::ThreeMf => "3MF",
             Format::Ply => "PLY",

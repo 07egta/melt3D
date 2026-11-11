@@ -48,14 +48,14 @@ fn do_action(app: &mut App, ctx: &egui::Context, s: Settings, action: Action) ->
             let g = chess::insert_piece(&mut app.scene, s, at)?;
             app.sel = Some(Pick::Group(g));
             app.frame_view(false);
-            app.say(ctx, format!("{}（{}）を追加しました", s.piece.name(), s.design.name()));
+            app.say(ctx, crate::i18n::fill("chess_dialog.added_piece", &[&s.piece.name(), &s.design.name()]));
         }
         Action::ReplaceSelected => {
-            let g = selected_group(app).ok_or("作り直す駒を選択してください")?;
+            let g = selected_group(app).ok_or(crate::i18n::tr("chess_dialog.select_piece_rebuild"))?;
             chess::rebuild_piece(&mut app.scene, g, s)?;
             app.sel = Some(Pick::Group(g));
             app.frame_view(false);
-            app.say(ctx, format!("選択した駒を{}で作り直しました", s.design.name()));
+            app.say(ctx, crate::i18n::fill("chess_dialog.rebuilt_selected", &[&s.design.name()]));
         }
         Action::FullSet => {
             let at = if app.scene == Scene::default() {
@@ -67,7 +67,7 @@ fn do_action(app: &mut App, ctx: &egui::Context, s: Settings, action: Action) ->
             let first = chess::insert_set(&mut app.scene, s, at)?;
             app.sel = Some(Pick::Group(first + 1)); // select the first piece, not the board
             app.frame_view(false);
-            app.say(ctx, "チェス盤と32個の駒を配置しました。各駒は独立したグループです");
+            app.say(ctx, crate::i18n::tr("chess_dialog.board_placed"));
         }
     }
     Ok(())
@@ -81,10 +81,10 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
     egui::Area::new(egui::Id::new("chess_set_area")).order(egui::Order::Foreground).anchor(Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
         style::card().show(ui, |ui| {
             ui.set_width(352.0);
-            ui.label(RichText::new("Chess Set · チェスの駒").strong().size(16.0));
-            ui.label(RichText::new("駒の形を作り、編集できる3Dモデルとして配置します").size(11.5).color(style::DIM));
+            ui.label(RichText::new(crate::i18n::tr("chess_dialog.title")).strong().size(16.0));
+            ui.label(RichText::new(crate::i18n::tr("chess_dialog.intro")).size(11.5).color(style::DIM));
             ui.add_space(5.0);
-            ui.label(RichText::new("駒の種類").color(style::DIM));
+            ui.label(RichText::new(crate::i18n::tr("chess_dialog.piece_type_label")).color(style::DIM));
             ui.horizontal_wrapped(|ui| {
                 for piece in Piece::ALL {
                     if style::pill(ui, piece.name(), d.settings.piece == piece).clicked() {
@@ -93,7 +93,7 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
                 }
             });
             ui.add_space(4.0);
-            ui.label(RichText::new("デザイン").color(style::DIM));
+            ui.label(RichText::new(crate::i18n::tr("chess_dialog.design_label")).color(style::DIM));
             ui.horizontal_wrapped(|ui| {
                 for design in Design::ALL {
                     if style::pill(ui, design.name(), d.settings.design == design).clicked() {
@@ -102,7 +102,7 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
                 }
             });
             ui.add_space(4.0);
-            ui.label(RichText::new("駒の色").color(style::DIM));
+            ui.label(RichText::new(crate::i18n::tr("chess_dialog.piece_color_label")).color(style::DIM));
             ui.horizontal(|ui| {
                 for side in Side::ALL {
                     if style::pill(ui, side.name(), d.settings.side == side).clicked() {
@@ -112,43 +112,50 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
             });
             ui.add_space(5.0);
             egui::Grid::new("chess_set_values").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
-                ui.label("高さ");
+                ui.label(crate::i18n::tr("chess_dialog.height_label"));
                 ui.add(egui::DragValue::new(&mut d.settings.height_mm).range(24.0..=110.0).speed(0.5).suffix(" mm").max_decimals(1))
-                    .on_hover_text("単体の高さ。32個セットではキングの高さ");
+                    .on_hover_text(crate::i18n::tr("chess_dialog.height_hover"));
                 ui.end_row();
-                ui.label("底面直径");
+                ui.label(crate::i18n::tr("chess_dialog.base_diameter_label"));
                 ui.add(egui::DragValue::new(&mut d.settings.diameter_mm).range(14.0..=48.0).speed(0.25).suffix(" mm").max_decimals(1));
                 ui.end_row();
-                ui.label("装飾量");
+                ui.label(crate::i18n::tr("chess_dialog.decoration_label"));
                 ui.add(egui::Slider::new(&mut d.settings.ornament, 0.0..=1.0).show_value(true));
                 ui.end_row();
             });
             ui.add_space(4.0);
-            ui.label(RichText::new(format!("32駒の並び：8×8マス / 盤の幅 約{:.0} mm", chess::board_width(d.settings))).size(11.0).color(style::DIM));
-            ui.label(RichText::new("各駒は独立グループ。選択・複製・パーツ編集・保存できます。").size(11.0).color(style::DIM));
-            ui.label(RichText::new("3Dプリント：選択した駒ごとに書き出し、プリントチェックを実行してください。").size(11.0).color(style::DIM));
+            ui.label(
+                RichText::new(crate::i18n::fill("chess_dialog.board_width_note", &[&format!("{:.0}", chess::board_width(d.settings))]))
+                    .size(11.0)
+                    .color(style::DIM),
+            );
+            ui.label(RichText::new(crate::i18n::tr("chess_dialog.group_note")).size(11.0).color(style::DIM));
+            ui.label(RichText::new(crate::i18n::tr("chess_dialog.print_note")).size(11.0).color(style::DIM));
             ui.add_space(8.0);
             ui.horizontal_wrapped(|ui| {
-                let create = egui::Button::new(RichText::new("駒を1個追加").strong().color(Color32::WHITE))
+                let create = egui::Button::new(RichText::new(crate::i18n::tr("chess_dialog.add_one_piece")).strong().color(Color32::WHITE))
                     .fill(style::ACCENT_SOFT)
                     .stroke(Stroke::new(1.0, style::ACCENT));
                 if ui.add(create).clicked() {
                     action = Some(Action::AddOne);
                 }
                 if ui
-                    .add_enabled(can_replace, egui::Button::new("選択した駒を再編集"))
-                    .on_hover_text("選択中のチェス駒を、この設定の形状で置き換えます")
+                    .add_enabled(can_replace, egui::Button::new(crate::i18n::tr("chess_dialog.reedit_selected")))
+                    .on_hover_text(crate::i18n::tr("chess_dialog.reedit_hover"))
                     .clicked()
                 {
                     action = Some(Action::ReplaceSelected);
                 }
             });
             ui.horizontal(|ui| {
-                if ui.button("盤面＋32駒を配置").on_hover_text("初期配置。別々の駒として作り、盤面も編集できます").clicked()
+                if ui
+                    .button(crate::i18n::tr("chess_dialog.place_board_and_pieces"))
+                    .on_hover_text(crate::i18n::tr("chess_dialog.place_hover"))
+                    .clicked()
                 {
                     action = Some(Action::FullSet);
                 }
-                if ui.button("閉じる").clicked() {
+                if ui.button(crate::i18n::tr("chess_dialog.close")).clicked() {
                     close = true;
                 }
             });

@@ -136,14 +136,14 @@ impl App {
             return Ok(());
         }
         if self.precise.as_ref().is_some_and(|p| p.export.is_some()) {
-            return Err("立体の取り込みが終わるか、取り消してから画面を切り替えてください".into());
+            return Err(crate::i18n::tr("precise.import_in_progress_switch").into());
         }
         if crate::mesh_dialog::is_open(ctx) {
-            return Err("取り込みが終わるか、取り消してから画面を切り替えてください".into());
+            return Err(crate::i18n::tr("precise.import_finish_switch").into());
         }
         if on {
             if self.scene_edit_in_progress() {
-                return Err("今の操作を確定するか、取り消してから精密ソリッドを開いてください".into());
+                return Err(crate::i18n::tr("precise.open_confirm").into());
             }
             self.settle(ctx);
             crate::fonts::ensure(ctx);
@@ -156,7 +156,7 @@ impl App {
             theme::apply(ctx);
         } else {
             if self.precise.as_ref().is_some_and(Precise::editing) {
-                return Err("スケッチや立体の操作を完了するか、取り消してから戻ってください".into());
+                return Err(crate::i18n::tr("precise.back_blocked").into());
             }
             self.send_precise_solid(ctx)?;
             if self.gpu.rs.is_some() && !self.gpu.easy && matches!(self.gpu.status.snapshot().state, crate::gpu_status::State::Off) {
@@ -190,7 +190,7 @@ impl App {
                 }
             }
             Err(e) => {
-                let message = format!("{e} 精密ソリッドの形は残っています。戻り直すと再び取り込めます");
+                let message = crate::i18n::fill("precise.error_keep_shape", &[&e]);
                 p.message = Some(message.clone());
                 self.say(ctx, message);
             }
@@ -217,7 +217,7 @@ impl App {
             }
             // Stopping always wins, even when the worker finished first (as for a re-bake).
             let result = if stopped {
-                Err("取り込みを取り消しました".to_string())
+                Err(crate::i18n::tr("precise.import_cancelled").to_string())
             } else if replaced {
                 Err(crate::mesh_dialog::DOCUMENT_REPLACED.to_string())
             } else {
@@ -234,11 +234,11 @@ impl App {
                             p.pending = Some((prepared.hash, completion));
                             p.message = None;
                         }
-                        Err(e) => p.message = Some(format!("{e} 精密ソリッドの形は残っています。戻り直すと再び取り込めます")),
+                        Err(e) => p.message = Some(crate::i18n::fill("precise.error_keep_shape", &[&e])),
                     }
                 }
                 Err(e) => {
-                    let message = format!("{e} 精密ソリッドの形は残っています。戻り直すと再び取り込めます");
+                    let message = crate::i18n::fill("precise.error_keep_shape", &[&e]);
                     p.message = Some(message.clone());
                     say = Some(message);
                 }
@@ -265,8 +265,8 @@ impl App {
             |ui| {
                 ui.horizontal_wrapped(|ui| {
                     if ui
-                        .add_enabled(!p.editing(), egui::Button::new(RichText::new("Melt 3D に戻る").color(style::ACCENT)))
-                        .on_hover_text("作った立体を寸法・位置を保って自動で取り込みます。スケッチや操作は先に完了してください")
+                        .add_enabled(!p.editing(), egui::Button::new(RichText::new(crate::i18n::tr("precise.back_button")).color(style::ACCENT)))
+                        .on_hover_text(crate::i18n::tr("precise.back_hover"))
                         .clicked()
                     {
                         back = true;
@@ -297,13 +297,13 @@ impl App {
         let generation = self.document_generation();
         let Some(p) = self.precise.as_mut() else { return Ok(()) };
         if let Some(a) = p.app.autosave.as_mut() {
-            a.save(&p.app.session).map_err(|e| format!("精密データの自動保存に失敗しました: {e}"))?;
+            a.save(&p.app.session).map_err(|e| crate::i18n::fill("precise.autosave_failed", &[&e]))?;
         }
         if p.app.session.model.state().bodies.is_empty() {
             return Ok(());
         }
         if p.pending.is_some() || p.export.is_some() {
-            return Err("前の立体を取り込み中です".into());
+            return Err(crate::i18n::tr("precise.previous_importing").into());
         }
         let file = ExportFile::new()?;
         // the export's name only reaches the STEP header; an STL ignores it
@@ -346,12 +346,12 @@ fn prepare_work(
         &snapshot.name,
         &snapshot.metadata,
     )
-    .map_err(|e| format!("立体を書き出せませんでした: {e}"))?;
+    .map_err(|e| crate::i18n::fill("precise.export_failed", &[&e]))?;
     progress.store(500, Ordering::Relaxed);
     if stopped() {
         return Err(cancelled());
     }
-    solidcraft_engine::io::vfs::write(&file.path().to_string_lossy(), &bytes).map_err(|e| format!("立体を書き出せませんでした: {e}"))?;
+    solidcraft_engine::io::vfs::write(&file.path().to_string_lossy(), &bytes).map_err(|e| crate::i18n::fill("precise.export_failed", &[&e]))?;
     progress.store(700, Ordering::Relaxed);
     if stopped() {
         return Err(cancelled());
@@ -360,7 +360,7 @@ fn prepare_work(
     let mut read = Vec::new();
     std::fs::File::open(file.path())
         .and_then(|f| f.take(MAX_STL_BYTES).read_to_end(&mut read))
-        .map_err(|e| format!("立体を読み取れませんでした: {e}"))?;
+        .map_err(|e| crate::i18n::fill("precise.read_failed", &[&e]))?;
     progress.store(850, Ordering::Relaxed);
     if stopped() {
         return Err(cancelled());
@@ -368,7 +368,8 @@ fn prepare_work(
     let hash = fingerprint(&read);
     let imported = crate::import_mesh::import_bytes(&read, "SolidCraft.stl", &crate::import_mesh::ImportOptions { y_up: Some(false) })?;
     let size = imported.mesh.size();
-    let loaded = crate::mesh_import::Loaded { file_name: "SolidCraft".into(), stem: snapshot.design.name.clone(), imported, size };
+    let loaded =
+        crate::mesh_import::Loaded { file_name: crate::i18n::tr("precise.file_name").into(), stem: snapshot.design.name.clone(), imported, size };
     let design = String::from_utf8(solidcraft_engine::io::write_design(&snapshot.design)).ok().filter(|d| d.len() <= crate::model::MAX_SOLID_DESIGN);
     progress.store(1000, Ordering::Relaxed);
     Ok(Prepared { hash, loaded, design })
@@ -387,16 +388,16 @@ pub(crate) fn transfer_card(app: &mut App, ctx: &egui::Context) {
         |ui| {
             style::card().show(ui, |ui| {
                 ui.set_width(360.0);
-                ui.label(RichText::new("SolidCraft の立体を Melt に取り込み中").strong().size(15.0));
-                ui.label(RichText::new("形を書き出して読み込んでいます。大きさと位置はそのままです").size(11.5).color(style::DIM));
+                ui.label(RichText::new(crate::i18n::tr("precise.importing_title")).strong().size(15.0));
+                ui.label(RichText::new(crate::i18n::tr("precise.importing_note")).size(11.5).color(style::DIM));
                 ui.add_space(4.0);
                 ui.add(egui::ProgressBar::new(fraction).show_percentage());
                 if stopped {
-                    ui.label(RichText::new("取り消しています。書き出しが終わるまでお待ちください…").size(11.5).color(style::DIM));
+                    ui.label(RichText::new(crate::i18n::tr("precise.cancelling_note")).size(11.5).color(style::DIM));
                 } else {
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new(format!("{elapsed:.0} 秒")).size(11.5).color(style::DIM));
-                        if style::pill(ui, "中止", false).clicked() {
+                        ui.label(RichText::new(crate::i18n::fill("precise.elapsed", &[&format!("{:.0}", elapsed)])).size(11.5).color(style::DIM));
+                        if style::pill(ui, crate::i18n::tr("precise.abort"), false).clicked() {
                             stop = true;
                         }
                     });
@@ -447,21 +448,20 @@ impl App {
     /// "Edit in SolidCraft": open the design behind this shape in SolidCraft; coming back puts the
     /// changed solid in its place.
     pub(crate) fn edit_in_solidcraft(&mut self, ctx: &egui::Context, g: usize, s: usize) -> Result<(), String> {
-        let design =
-            self.scene.shape(g, s).and_then(|sh| sh.solid.as_ref()).map(|l| l.design.clone()).ok_or("この形には SolidCraft のデータがありません")?;
+        let design = self.scene.shape(g, s).and_then(|sh| sh.solid.as_ref()).map(|l| l.design.clone()).ok_or(crate::i18n::tr("precise.no_data"))?;
         if self.precise.as_ref().is_some_and(|p| p.pending.is_some() || p.export.is_some() || p.editing()) {
-            return Err("SolidCraft の作業を先に終えてください".into());
+            return Err(crate::i18n::tr("precise.finish_solidcraft_first").into());
         }
-        let uid = self.scene.ensure_shape_uid(g, s).ok_or("この形を編集できません")?;
+        let uid = self.scene.ensure_shape_uid(g, s).ok_or(crate::i18n::tr("precise.cannot_edit"))?;
         // a fresh workspace: whatever was there was sent already or is put aside
         if let Some(p) = self.precise.take() {
             self.precise_prefs = Some(p.app.prefs());
         }
         self.set_precise_mode(ctx, true)?;
         let file = ExportFile::named("design.solidcraft")?;
-        std::fs::write(file.path(), design.as_bytes()).map_err(|e| format!("データを用意できません: {e}"))?;
-        let Some(p) = self.precise.as_mut() else { return Err("SolidCraft を開けませんでした".into()) };
-        let path = file.path().to_str().ok_or("一時ファイルの場所を読み取れません")?.to_owned();
+        std::fs::write(file.path(), design.as_bytes()).map_err(|e| crate::i18n::fill("precise.prepare_data_failed", &[&e]))?;
+        let Some(p) = self.precise.as_mut() else { return Err(crate::i18n::tr("precise.open_failed").into()) };
+        let path = file.path().to_str().ok_or(crate::i18n::tr("precise.temp_path_unreadable"))?.to_owned();
         p.app.open_path(&path);
         p.edit = Some(uid);
         p.opened = Some(file);
@@ -487,10 +487,10 @@ impl ExportFile {
             match std::fs::create_dir(&dir) {
                 Ok(()) => return Ok(Self(dir.join(name))),
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-                Err(e) => return Err(format!("一時ファイルを用意できません: {e}")),
+                Err(e) => return Err(crate::i18n::fill("precise.temp_prepare_failed", &[&e])),
             }
         }
-        Err("一時ファイルを用意できませんでした".into())
+        Err(crate::i18n::tr("precise.temp_prepare_failed_plain").into())
     }
 
     fn path(&self) -> &std::path::Path {

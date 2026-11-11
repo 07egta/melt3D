@@ -202,11 +202,9 @@ impl App {
 
         // The handles
         let tool = self.tool;
-        let geom = if clean || self.ct.drawing || self.pt.on || self.sketch_active() {
-            None
-        } else {
-            gizmo::build_multi_node(&self.cam, rect, &self.scene, &self.picks(), self.picked_node(), tool)
-        };
+        let handles_off = clean || self.ct.drawing || self.pt.on || self.sketch_active();
+        let mut geom =
+            if handles_off { None } else { gizmo::build_multi_node(&self.cam, rect, &self.scene, &self.picks(), self.picked_node(), tool) };
         let over_gnomon = !clean && pos.is_some_and(|p| Self::gnomon_disc_hit(rect, p) || Self::home_hit(rect, p));
         let hover_handle = match (&geom, pos, &self.drag) {
             (Some(g), Some(p), None) if resp.hovered() && !over_gnomon && !ct.over => gizmo::hit(g, tool, p),
@@ -330,7 +328,31 @@ impl App {
         let press = ui.input(|i| i.pointer.press_origin());
         let press_on_handle = matches!((&geom, press), (Some(g), Some(o)) if gizmo::hit(g, tool, o).is_some());
         let press_on_gnomon = press.is_some_and(|o| Self::gnomon_disc_hit(rect, o) || Self::home_hit(rect, o));
-        let marquee_free = hover_handle.is_none() && !press_on_handle && !press_on_gnomon && !ct.taken && !ct.over;
+        // A drag that starts on the body of a shape slides it over the floor: no need to select it
+        // first or to aim at an arrow. (Looked up once, when the drag starts.) With Shift, Ctrl or
+        // Cmd held a drag on an unselected shape stays a box selection that adds or removes.
+        let body_target = if resp.drag_started_by(PointerButton::Primary)
+            && !mods.alt
+            && !handles_off
+            && !press_on_handle
+            && !press_on_gnomon
+            && !ct.taken
+            && !ct.over
+        {
+            press.and_then(|o| self.body_drag_target(rect, o))
+        } else {
+            None
+        };
+        let body_press = match body_target {
+            Some((_, true)) => geom.is_some(),
+            Some((pick, false)) if !(mods.shift || mods.ctrl || mods.command) => {
+                self.select_pick(Some(pick), false);
+                geom = gizmo::build_multi_node(&self.cam, rect, &self.scene, &self.picks(), self.picked_node(), tool);
+                geom.is_some()
+            }
+            _ => false,
+        };
+        let marquee_free = hover_handle.is_none() && !press_on_handle && !press_on_gnomon && !ct.taken && !ct.over && !body_press;
         let marquee_taken = self.marquee_input(ui, &resp, rect, marquee_free, mods.shift);
         // A drag that starts on a handle moves the thing; a drag that starts anywhere else turns the view
         if resp.drag_started_by(PointerButton::Primary) && !mods.alt && !ct.taken && !marquee_taken && !self.sketch_active() {
@@ -343,8 +365,18 @@ impl App {
                 (Some(g), Some(o)) => gizmo::hit(g, tool, o).map(|h| (g, o, h)),
                 _ => None,
             };
+            let body = match (&geom, origin) {
+                (Some(g), Some(o)) if body_press && grabbed.is_none() => Some((g, o)),
+                _ => None,
+            };
             if let Some((g, o, h)) = grabbed {
                 self.drag = Some(self.begin_drag(h, g, rect, o, tool, mods.shift));
+                self.orbiting = false;
+            } else if let Some((g, o)) = body {
+                // Shift lifts or lowers it instead (where an arrow means "move": not in the rotate and scale tools)
+                let lift = mods.shift && !matches!(tool, gizmo::Tool::Rotate | gizmo::Tool::Scale);
+                let handle = if lift { gizmo::Handle::Axis(2) } else { gizmo::Handle::Plane(2) };
+                self.drag = Some(self.begin_drag(handle, g, rect, o, tool, mods.shift));
                 self.orbiting = false;
             } else if on_gnomon {
                 // A drag that starts anywhere on the disc (its background or an axis ball)
@@ -713,6 +745,32 @@ impl App {
     }
 
     /// The shape under a screen point, if any.
+    /// A left drag that starts at `p` moves a shape: the preference is on, a shape is under the
+    /// pointer, and the view is not so flat to the floor that a small mouse move would throw the
+    /// shape far away.
+    #[cfg(test)]
+    pub(crate) fn body_drag_moves(&self, rect: Rect, p: Pos2) -> bool {
+        self.body_drag_target(rect, p).is_some()
+    }
+
+    /// What a left drag starting at `p` would move, and whether it is already selected.
+    /// `None`: nothing (the preference is off, no shape is there, a sketch line is nearer, or the
+    /// view is too flat to the floor).
+    fn body_drag_target(&self, rect: Rect, p: Pos2) -> Option<(Pick, bool)> {
+        if !self.preferences.drag_moves || Self::home_hit(rect, p) {
+            return None;
+        }
+        let (_, dir) = self.cam.ray_at(rect, p);
+        if !dir[2].is_finite() || dir[2].abs() < 0.2 || self.guide_at(rect, p).is_some() {
+            return None;
+        }
+        let (g, s) = self.shape_at(rect, p)?;
+        // the same pick a click makes: a puffy letter is one thing
+        let want = if self.scene.groups.get(g).is_some_and(|gr| gr.puffy_text.is_some()) { Pick::Group(g) } else { as_pick(g, s) };
+        let selected = self.is_pick_selected(want) || self.is_pick_selected(Pick::Group(g));
+        Some((want, selected))
+    }
+
     pub fn shape_at(&self, rect: Rect, p: Pos2) -> Option<(usize, usize)> {
         let (o, d) = self.cam.ray_at(rect, p);
         self.field().ray(o, d, 5000.0).and_then(|(_, s)| s.nearest)

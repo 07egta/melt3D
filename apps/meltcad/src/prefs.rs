@@ -220,6 +220,8 @@ pub struct Preferences {
     pub nav: String,
     /// Multiplies the orbit angle, 0.25..=2.
     pub orbit_sensitivity: f32,
+    /// Dragging a selected shape by its body slides it over the floor (off: that drag turns the view, as before).
+    pub drag_moves: bool,
     /// Minutes between recovery checkpoints, 0.5..=60.
     pub autosave_minutes: f32,
     /// Export format id (`stl`, `stl-ascii`, `obj`, `3mf`, `ply`, `glb`).
@@ -242,6 +244,7 @@ impl Default for Preferences {
             snap_vertex: true,
             nav: Navigation::Melt.id().to_owned(),
             orbit_sensitivity: 1.0,
+            drag_moves: true,
             autosave_minutes: DEFAULT_AUTOSAVE_MINUTES,
             export_format: "stl".to_owned(),
             export_units: "mm".to_owned(),

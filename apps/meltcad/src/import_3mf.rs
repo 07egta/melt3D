@@ -237,7 +237,7 @@ fn parse_doc(src: &[u8], total_verts: &mut usize, total_tris: &mut usize) -> Res
                     cur = Some((id, obj));
                 }
                 if doc.objects.len() > MAX_OBJECTS {
-                    return Err("Too many shapes in the 3MF".into());
+                    return Err(crate::i18n::tr("import_3mf.too_many_shapes").into());
                 }
             }
             (b"object", true) => {
@@ -269,7 +269,7 @@ fn parse_doc(src: &[u8], total_verts: &mut usize, total_tris: &mut usize) -> Res
             (b"component", false) => {
                 if let Some((_, obj)) = cur.as_mut() {
                     if obj.comps.len() >= 100_000 {
-                        return Err("Too many parts in the 3MF".into());
+                        return Err(crate::i18n::tr("import_3mf.too_many_parts").into());
                     }
                     let m = match t.attr("transform") {
                         Some(s) => parse_transform(s)?,
@@ -286,7 +286,7 @@ fn parse_doc(src: &[u8], total_verts: &mut usize, total_tris: &mut usize) -> Res
                     None => Affine::IDENTITY,
                 };
                 if doc.build.len() >= 100_000 {
-                    return Err("Too many placements in the 3MF".into());
+                    return Err(crate::i18n::tr("import_3mf.too_many_placements").into());
                 }
                 doc.build.push((id_attr(&t, "objectid")?, t.attr("p:path").map(str::to_string), m));
             }
@@ -316,9 +316,9 @@ impl Package<'_> {
             return Ok(());
         }
         if self.docs.len() >= MAX_DOCS {
-            return Err("Too many model files in the 3MF".into());
+            return Err(crate::i18n::tr("import_3mf.too_many_model_files").into());
         }
-        let e = self.zip.find(path).ok_or_else(|| format!("The 3MF has no model file {path}"))?.clone();
+        let e = self.zip.find(path).ok_or_else(|| crate::i18n::fill("import_3mf.no_model_file", &[&path]))?.clone();
         if self.xml_bytes + e.size() > MAX_TOTAL_XML {
             return Err(crate::import_inflate::InflateError::TooBig.to_string());
         }
@@ -331,18 +331,18 @@ impl Package<'_> {
 
     fn emit(&mut self, file: &str, id: u32, m: &Affine, depth: usize, out: &mut ImportedMesh) -> Result<(), String> {
         if depth > MAX_DEPTH {
-            return Err("The 3MF parts are nested too deeply".into());
+            return Err(crate::i18n::tr("import_3mf.parts_nested_deep").into());
         }
         self.visits += 1;
         if self.visits > MAX_VISITS {
-            return Err("Too many parts in the 3MF".into());
+            return Err(crate::i18n::tr("import_3mf.too_many_parts").into());
         }
         self.load(file)?;
         let key = file.trim_start_matches('/').to_ascii_lowercase();
         // copy what is needed so that the package can be borrowed again for the components
         let (unit, comps, part) = {
             let Some(doc) = self.docs.get(&key) else { return Ok(()) };
-            let Some(obj) = doc.objects.get(&id) else { return Err(format!("The 3MF has no shape with number {id}")) };
+            let Some(obj) = doc.objects.get(&id) else { return Err(crate::i18n::fill("import_3mf.no_shape_number", &[&id])) };
             if obj.skip {
                 return Ok(());
             }
@@ -408,7 +408,7 @@ fn model_path(zip: &Zip) -> Result<String, String> {
         .iter()
         .find(|e| e.name.to_ascii_lowercase().ends_with(".model"))
         .map(|e| e.name.clone())
-        .ok_or_else(|| "No model (3D/3dmodel.model) found in the 3MF".to_string())
+        .ok_or_else(|| crate::i18n::tr("import_3mf.no_model_found").to_string())
 }
 
 /// Inspect base materials without affecting the safety-critical geometry reader.
@@ -564,10 +564,10 @@ pub(crate) fn appearance_3mf(bytes: &[u8]) -> crate::import_mesh::AppearanceInfo
     }
     out.material = distinct.first().copied();
     if unsupported {
-        out.notes.push("The 3MF has unsupported or invalid colour/material settings. Some looks will not be kept".into());
+        out.notes.push(crate::i18n::tr("import_3mf.colour_material_unsupported").into());
     }
     if textures {
-        out.notes.push("Image textures in the 3MF can't be loaded".into());
+        out.notes.push(crate::i18n::tr("import_3mf.image_texture_failed").into());
     }
     out
 }

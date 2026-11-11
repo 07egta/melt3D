@@ -350,7 +350,7 @@ pub fn controls(ui: &mut Ui, group: &mut Group, other_shapes: usize) -> bool {
     let Some(mut params) = group.designer_chair else { return false };
     let before = params;
     ui.separator();
-    ui.label(RichText::new("Designer Chair").strong().color(style::ACCENT));
+    ui.label(RichText::new(crate::i18n::tr("designer_chair.ui_title")).strong().color(style::ACCENT));
     ui.horizontal_wrapped(|ui| {
         for style_id in Style::ALL {
             if style::pill(ui, style_id.label(), params.style == style_id).clicked() {
@@ -365,17 +365,14 @@ pub fn controls(ui: &mut Ui, group: &mut Group, other_shapes: usize) -> bool {
             }
         }
     });
-    ui.add(egui::Slider::new(&mut params.seat_height, 30.0..=85.0).text("座面の高さ mm"));
-    ui.add(egui::Slider::new(&mut params.seat_width, 35.0..=95.0).text("座面の幅 mm"));
-    ui.add(egui::Slider::new(&mut params.seat_depth, 30.0..=85.0).text("座面の奥行き mm"));
-    ui.add(egui::Slider::new(&mut params.back_angle, -5.0..=35.0).text("背もたれ角度 °"));
-    ui.add(egui::Slider::new(&mut params.leg_count, 1..=4).text("脚の本数"));
-    ui.add(egui::Slider::new(&mut params.leg_radius, 1.8..=9.0).text("脚の太さ (半径) mm"));
-    ui.add(egui::Slider::new(&mut params.roundness, 0.8..=7.0).text("全体の丸み mm"));
-    ui.label(
-        RichText::new("座面・背もたれ・脚は左のシーン一覧から個別編集できます。全体のスライダーを動かすと自動生成パーツの形状を再計算します（手動で追加したパーツは残ります）。")
-            .size(11.0).color(style::DIM),
-    );
+    ui.add(egui::Slider::new(&mut params.seat_height, 30.0..=85.0).text(crate::i18n::tr("designer_chair.slider_seat_height")));
+    ui.add(egui::Slider::new(&mut params.seat_width, 35.0..=95.0).text(crate::i18n::tr("designer_chair.slider_seat_width")));
+    ui.add(egui::Slider::new(&mut params.seat_depth, 30.0..=85.0).text(crate::i18n::tr("designer_chair.slider_seat_depth")));
+    ui.add(egui::Slider::new(&mut params.back_angle, -5.0..=35.0).text(crate::i18n::tr("designer_chair.slider_back_angle")));
+    ui.add(egui::Slider::new(&mut params.leg_count, 1..=4).text(crate::i18n::tr("designer_chair.slider_leg_count")));
+    ui.add(egui::Slider::new(&mut params.leg_radius, 1.8..=9.0).text(crate::i18n::tr("designer_chair.slider_leg_radius")));
+    ui.add(egui::Slider::new(&mut params.roundness, 0.8..=7.0).text(crate::i18n::tr("designer_chair.slider_roundness")));
+    ui.label(RichText::new(crate::i18n::tr("designer_chair.help_text")).size(11.0).color(style::DIM));
     params.sanitize();
     if params == before {
         return false;
@@ -383,10 +380,7 @@ pub fn controls(ui: &mut Ui, group: &mut Group, other_shapes: usize) -> bool {
     let manual_parts = group.shapes.iter().filter(|s| s.source != GENERATOR_TAG).count();
     let total = other_shapes.saturating_add(manual_parts).saturating_add(generated_shapes(params).len());
     if total > crate::model::MAX_SHAPES {
-        ui.label(
-            RichText::new(format!("これ以上パーツを増やせません（シーンは{}個まで）。不要な形を削除してください。", crate::model::MAX_SHAPES))
-                .color(style::CUT),
-        );
+        ui.label(RichText::new(crate::i18n::fill("designer_chair.ui_too_many", &[&crate::model::MAX_SHAPES])).color(style::CUT));
         return false;
     }
     regenerate(group, params);

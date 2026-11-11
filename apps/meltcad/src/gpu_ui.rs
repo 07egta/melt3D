@@ -78,13 +78,13 @@ pub fn report_text(snap: &Snapshot, log_tail: &str) -> String {
         out.push_str(&format!("driver: {}\n", snap.info.driver));
     }
     match &snap.state {
-        State::Failed { message } => out.push_str(&format!("Status: failed\n{message}\n")),
-        State::Compiling { .. } => out.push_str("Status: preparing\n"),
-        State::Ready { secs } => out.push_str(&format!("Status: done ({secs:.1} s)\n")),
-        State::Off => out.push_str("Status: not in use\n"),
+        State::Failed { message } => out.push_str(&crate::i18n::fill("gpu_ui.report_failed", &[&message])),
+        State::Compiling { .. } => out.push_str(crate::i18n::tr("gpu_ui.report_preparing")),
+        State::Ready { secs } => out.push_str(&crate::i18n::fill("gpu_ui.report_done", &[&format!("{:.1}", secs)])),
+        State::Off => out.push_str(crate::i18n::tr("gpu_ui.report_off")),
     }
     if let Some(e) = &snap.last_error {
-        out.push_str(&format!("Last error: {e}\n"));
+        out.push_str(&crate::i18n::fill("gpu_ui.report_error", &[&e]));
     }
     out.push_str("---- log ----\n");
     out.push_str(log_tail);
@@ -111,7 +111,7 @@ fn open_file(path: &Path) -> Result<(), String> {
         // (no flashing console window)
         cmd.creation_flags(0x0800_0000);
     }
-    cmd.spawn().map(|_| ()).map_err(|e| format!("Could not open: {e}"))
+    cmd.spawn().map(|_| ()).map_err(|e| crate::i18n::fill("gpu_ui.open_failed", &[&e]))
 }
 
 impl App {
@@ -123,7 +123,7 @@ impl App {
         match &self.gpu.rs {
             None => {
                 let g = self.gpu.status.begin(Instant::now());
-                self.gpu.status.finish_err(g, "Could not create a graphics device (no wgpu render state). See the log for details.");
+                self.gpu.status.finish_err(g, crate::i18n::tr("gpu_ui.device_failed"));
             }
             Some(rs) if !easy => crate::gpu::install(rs, ctx, &self.gpu.status),
             Some(rs) => {
@@ -169,7 +169,7 @@ impl App {
     /// Start the program again on another backend (`None` = let it choose) and close this window.
     pub fn restart_with(&mut self, ctx: &egui::Context, choice: Option<Backend>, current_failed: bool) {
         if self.restart_blocked() {
-            self.gpu.note = Some("You have unsaved changes. Save first (Ctrl+S).".into());
+            self.gpu.note = Some(crate::i18n::tr("gpu_ui.note_unsaved").into());
             return;
         }
         let current = self.current_backend();
@@ -234,7 +234,7 @@ impl App {
                     .fixed_pos(rect.left_bottom() + egui::vec2(14.0, -12.0))
                     .interactable(false)
                     .show(ctx, |ui| {
-                        ui.label(RichText::new("Simple view").size(12.0).color(style::DIM));
+                        ui.label(RichText::new(crate::i18n::tr("gpu_ui.simple_view")).size(12.0).color(style::DIM));
                     });
             }
         }
@@ -253,13 +253,11 @@ impl App {
                         ui.label(RichText::new(gpu_status::compiling_text(secs)).size(13.5).color(style::TEXT));
                     });
                     ui.add_space(2.0);
-                    ui.label(RichText::new(format!("Using: {}", snap.info.short())).size(12.0).color(style::DIM));
-                    ui.label(
-                        RichText::new("Meanwhile you can work in Simple view. It switches over by itself when ready.").size(12.0).color(style::DIM),
-                    );
+                    ui.label(RichText::new(crate::i18n::fill("gpu_ui.using", &[&snap.info.short()])).size(12.0).color(style::DIM));
+                    ui.label(RichText::new(crate::i18n::tr("gpu_ui.meanwhile")).size(12.0).color(style::DIM));
                     if ways_out {
                         ui.add_space(4.0);
-                        ui.label(RichText::new("If this takes too long, try a button below.").size(12.0).color(style::KEEP));
+                        ui.label(RichText::new(crate::i18n::tr("gpu_ui.too_long")).size(12.0).color(style::KEEP));
                         self.way_out_buttons(ui, ctx, false);
                     }
                     self.note_line(ui);
@@ -269,26 +267,24 @@ impl App {
 
     fn way_out_buttons(&mut self, ui: &mut Ui, ctx: &egui::Context, with_retry: bool) {
         ui.horizontal_wrapped(|ui| {
-            if with_retry && style::pill(ui, "Try again", false).on_hover_text("Start the graphics setup again").clicked() {
+            if with_retry
+                && style::pill(ui, crate::i18n::tr("gpu_ui.try_again"), false).on_hover_text(crate::i18n::tr("gpu_ui.try_again_tip")).clicked()
+            {
                 self.retry_gpu(ctx);
             }
             let next = self.next_backend();
             let blocked = self.restart_blocked();
             let label = match next {
-                Some(b) => format!("Restart with another graphics mode ({})", b.label()),
-                None => "Restart with another graphics mode".to_string(),
+                Some(b) => crate::i18n::fill("gpu_ui.restart_with_mode", &[&b.label()]),
+                None => crate::i18n::tr("gpu_ui.restart_auto").to_string(),
             };
-            let tip = if blocked {
-                "You have unsaved changes. Save first (Ctrl+S)"
-            } else {
-                "Restarts the app and uses another graphics mode (Vulkan, DirectX 12, OpenGL)"
-            };
+            let tip = if blocked { crate::i18n::tr("gpu_ui.unsaved_save_first") } else { crate::i18n::tr("gpu_ui.restart_tip") };
             if style::pill_enabled(ui, &label, false, next.is_some() && !blocked).on_hover_text(tip).clicked()
                 && let Some(b) = next
             {
                 self.restart_with(ctx, Some(b), true);
             }
-            if style::pill(ui, "Use Simple view", false).on_hover_text("Draw small on the CPU, without the GPU").clicked() {
+            if style::pill(ui, crate::i18n::tr("gpu_ui.use_simple"), false).on_hover_text(crate::i18n::tr("gpu_ui.use_simple_tip")).clicked() {
                 self.set_easy(ctx, true);
             }
         });
@@ -312,43 +308,41 @@ impl App {
             |ui| {
                 style::card().show(ui, |ui| {
                     ui.set_width(520.0);
-                    ui.label(RichText::new("Graphics setup failed").strong().size(15.0).color(style::CUT));
+                    ui.label(RichText::new(crate::i18n::tr("gpu_ui.failed_title")).strong().size(15.0).color(style::CUT));
                     ui.add_space(2.0);
-                    ui.label(RichText::new("You are seeing Simple view for now. You can keep working.").size(12.5).color(style::TEXT));
+                    ui.label(RichText::new(crate::i18n::tr("gpu_ui.failed_body")).size(12.5).color(style::TEXT));
                     ui.add_space(6.0);
-                    ui.label(RichText::new(format!("Using: {}", snap.info.short())).size(12.0).color(style::DIM));
+                    ui.label(RichText::new(crate::i18n::fill("gpu_ui.using", &[&snap.info.short()])).size(12.0).color(style::DIM));
                     if !snap.info.driver.is_empty() {
-                        ui.label(RichText::new(format!("Driver: {}", snap.info.driver)).size(12.0).color(style::DIM));
+                        ui.label(RichText::new(crate::i18n::fill("gpu_ui.driver", &[&snap.info.driver])).size(12.0).color(style::DIM));
                     }
                     ui.add_space(4.0);
-                    ui.label(RichText::new("Error details (select to copy)").size(12.0).color(style::DIM));
+                    ui.label(RichText::new(crate::i18n::tr("gpu_ui.error_details")).size(12.0).color(style::DIM));
                     egui::ScrollArea::vertical().max_height(150.0).auto_shrink([false, true]).show(ui, |ui| {
                         let mut text: &str = &message;
                         ui.add(egui::TextEdit::multiline(&mut text).font(egui::TextStyle::Monospace).desired_width(f32::INFINITY).desired_rows(3));
                     });
                     ui.add_space(4.0);
-                    ui.label(RichText::new(format!("Log: {}", log_path.display())).size(12.0).color(style::DIM));
+                    ui.label(RichText::new(crate::i18n::fill("gpu_ui.log_path", &[&log_path.display()])).size(12.0).color(style::DIM));
                     ui.add_space(6.0);
                     self.way_out_buttons(ui, ctx, true);
                     ui.horizontal_wrapped(|ui| {
-                        if style::pill(ui, "Open log", false).clicked()
+                        if style::pill(ui, crate::i18n::tr("gpu_ui.open_log"), false).clicked()
                             && let Err(e) = open_file(&log_path)
                         {
                             self.gpu.note = Some(e);
                         }
-                        if style::pill(ui, "Copy log", false)
-                            .on_hover_text("Copies the error and the end of the log. Paste it when you send it.")
-                            .clicked()
+                        if style::pill(ui, crate::i18n::tr("gpu_ui.copy_log"), false).on_hover_text(crate::i18n::tr("gpu_ui.copy_log_tip")).clicked()
                         {
                             ctx.copy_text(report_text(snap, &crate::gpu_log::global().tail(200)));
-                            self.gpu.note = Some("Copied.".into());
+                            self.gpu.note = Some(crate::i18n::tr("gpu_ui.copied").into());
                         }
                         if self.gpu.easy && style::pill(ui, "Close", false).clicked() {
                             self.gpu.details = false;
                         }
                     });
                     if self.restart_blocked() {
-                        ui.label(RichText::new("You have unsaved changes. Save first, then restart (Ctrl+S).").size(12.0).color(style::KEEP));
+                        ui.label(RichText::new(crate::i18n::tr("gpu_ui.unsaved_restart")).size(12.0).color(style::KEEP));
                     }
                     self.note_line(ui);
                 });
@@ -364,8 +358,8 @@ impl App {
             .show(ctx, |ui| {
                 style::card().show(ui, |ui| {
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new("Simple view (GPU drawing unavailable)").size(12.5).color(style::TEXT));
-                        if style::pill(ui, "Details", false).clicked() {
+                        ui.label(RichText::new(crate::i18n::tr("gpu_ui.simple_no_gpu_draw")).size(12.5).color(style::TEXT));
+                        if style::pill(ui, crate::i18n::tr("gpu_ui.details"), false).clicked() {
                             self.gpu.details = true;
                         }
                     });
@@ -380,11 +374,7 @@ impl App {
         let ctx = ui.ctx().clone();
         ui.separator();
         let mut easy = self.gpu.easy;
-        if ui
-            .checkbox(&mut easy, "Simple view (no GPU)")
-            .on_hover_text("Draws small on the CPU. Use it when the screen stays blank or drawing is slow.")
-            .changed()
-        {
+        if ui.checkbox(&mut easy, crate::i18n::tr("gpu_ui.simple_checkbox")).on_hover_text(crate::i18n::tr("gpu_ui.simple_checkbox_tip")).changed() {
             self.set_easy(&ctx, easy);
         }
         let snap = self.gpu.status.snapshot();
@@ -394,20 +384,20 @@ impl App {
             State::Ready { .. } => "ready",
             State::Failed { .. } => "unavailable",
         };
-        ui.label(RichText::new(format!("Graphics: {} ({state})", snap.info.short())).size(12.0).color(style::DIM));
+        ui.label(RichText::new(crate::i18n::fill("gpu_ui.graphics_state", &[&snap.info.short(), &state])).size(12.0).color(style::DIM));
         if let State::Failed { .. } = snap.state
-            && ui.button("See what failed").clicked()
+            && ui.button(crate::i18n::tr("gpu_ui.see_failed")).clicked()
         {
             self.gpu.details = true;
             ui.close();
         }
-        ui.menu_button("Restart with a different graphics mode", |ui| {
+        ui.menu_button(crate::i18n::tr("gpu_ui.restart_menu"), |ui| {
             let blocked = self.restart_blocked();
             if blocked {
-                ui.label(RichText::new("Save first (Ctrl+S)").size(12.0).color(style::KEEP));
+                ui.label(RichText::new(crate::i18n::tr("gpu_ui.save_first")).size(12.0).color(style::KEEP));
             }
             ui.add_enabled_ui(!blocked, |ui| {
-                if ui.button("Auto (recommended)").clicked() {
+                if ui.button(crate::i18n::tr("gpu_ui.auto_mode")).clicked() {
                     self.restart_with(&ctx, None, false);
                     ui.close();
                 }
@@ -422,7 +412,7 @@ impl App {
                 }
             });
         });
-        if ui.button("Open log").on_hover_text(crate::gpu_log::path().display().to_string()).clicked() {
+        if ui.button(crate::i18n::tr("gpu_ui.open_log")).on_hover_text(crate::gpu_log::path().display().to_string()).clicked() {
             if let Err(e) = open_file(&crate::gpu_log::path()) {
                 self.gpu.note = Some(e);
             }
@@ -503,6 +493,7 @@ mod tests {
     fn a_window_without_a_graphics_device_says_so() {
         let ctx = egui::Context::default();
         let mut app = App::new(true, None);
+        crate::i18n::set_language("en");
         app.attach_gpu(None, &ctx, false);
         match app.gpu.status.snapshot().state {
             State::Failed { message } => assert!(message.contains("device"), "{message}"),
@@ -515,6 +506,7 @@ mod tests {
     fn a_restart_with_unsaved_work_is_refused_with_a_reason() {
         let ctx = egui::Context::default();
         let mut app = App::new(true, None);
+        crate::i18n::set_language("en");
         app.dirty = true;
         app.restart_with(&ctx, Some(Backend::Gl), true);
         let note = app.gpu.note.clone().unwrap_or_default();

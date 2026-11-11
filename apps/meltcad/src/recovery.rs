@@ -46,7 +46,7 @@ pub fn default_directory() -> PathBuf {
 }
 
 fn size_error() -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidData, "The file is over the 128 MiB safety limit")
+    io::Error::new(io::ErrorKind::InvalidData, crate::i18n::tr("recovery.file_too_big"))
 }
 
 fn read_limited(path: &Path) -> io::Result<Vec<u8>> {
@@ -64,7 +64,7 @@ fn read_limited(path: &Path) -> io::Result<Vec<u8>> {
 
 fn parse_scene(text: &str) -> Result<(Scene, Vec<String>), String> {
     // A damaged design must never unwind through the event loop.
-    std::panic::catch_unwind(|| Scene::from_json_notes(text)).map_err(|_| "Reading the damaged design data was stopped".to_owned())?
+    std::panic::catch_unwind(|| Scene::from_json_notes(text)).map_err(|_| crate::i18n::tr("recovery.damaged_read_stopped").to_owned())?
 }
 
 pub fn read_project(path: &Path) -> Result<(Scene, Vec<String>), String> {
@@ -87,7 +87,7 @@ fn write_temp(path: &Path, bytes: &[u8]) -> io::Result<PathBuf> {
         return Err(size_error());
     }
     let parent = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or_else(|| Path::new("."));
-    let name = path.file_name().ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "The save location has no file name"))?;
+    let name = path.file_name().ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, crate::i18n::tr("recovery.no_file_name")))?;
     for _ in 0..16 {
         let mut tmp_name = OsString::from(".");
         tmp_name.push(name);
@@ -109,7 +109,7 @@ fn write_temp(path: &Path, bytes: &[u8]) -> io::Result<PathBuf> {
         }
         return Ok(tmp);
     }
-    Err(io::Error::new(io::ErrorKind::AlreadyExists, "Could not create a temp file"))
+    Err(io::Error::new(io::ErrorKind::AlreadyExists, crate::i18n::tr("recovery.temp_file_failed")))
 }
 
 fn atomic_write_with<F: FnOnce(&Path) -> io::Result<()>>(path: &Path, bytes: &[u8], before_rename: F) -> io::Result<()> {
@@ -159,10 +159,10 @@ pub fn read_snapshot(path: &Path) -> Result<(Scene, Vec<String>, Option<String>)
     let bytes = read_limited(path).map_err(|e| e.to_string())?;
     let snapshot: Snapshot = serde_json::from_slice(&bytes).map_err(|e| format!("Recovery file format is invalid: {e}"))?;
     if snapshot.version != FORMAT_VERSION {
-        return Err(format!("Unsupported recovery data format: {}", snapshot.version));
+        return Err(crate::i18n::fill("recovery.unsupported_format", &[&snapshot.version]));
     }
     if checksum(snapshot.payload.as_bytes()) != snapshot.checksum {
-        return Err("Recovery data checksum does not match (may be damaged)".into());
+        return Err(crate::i18n::tr("recovery.checksum_mismatch").into());
     }
     let (scene, notes) = parse_scene(&snapshot.payload)?;
     Ok((scene, notes, snapshot.source))
@@ -248,7 +248,7 @@ fn write_checkpoint(own: &Path, scene: &Scene, source: Option<&str>, rev: u64, c
     let snapshot = Snapshot { version: FORMAT_VERSION, source: source.map(str::to_owned), checksum: checksum(payload.as_bytes()), payload };
     let bytes = serde_json::to_vec(&snapshot).map_err(|e| e.to_string())?;
     if cancel.load(Ordering::Acquire) {
-        return Err("Stopped".into());
+        return Err(crate::i18n::tr("recovery.stopped").into());
     }
     let temp = write_temp(own, &bytes).map_err(|e| e.to_string())?;
     Ok(CheckpointDone { temp, rev })
@@ -313,7 +313,7 @@ impl Store {
     /// the recovered work has been explicitly saved or discarded.
     pub fn recover_pending(&mut self) -> Result<(Scene, Vec<String>, Option<String>), String> {
         let Some(path) = self.pending.first() else {
-            return Err("Recovery file not found".into());
+            return Err(crate::i18n::tr("recovery.file_not_found").into());
         };
         let restored = read_snapshot(path)?;
         self.restored_from = Some(path.clone());
@@ -369,10 +369,10 @@ impl Store {
         let result = match job.rx.try_recv() {
             Ok(result) => result,
             Err(TryRecvError::Empty) => return None,
-            Err(TryRecvError::Disconnected) => Err("The recovery checkpoint stopped unexpectedly".into()),
+            Err(TryRecvError::Disconnected) => Err(crate::i18n::tr("recovery.checkpoint_unexpected_stop").into()),
         };
         let Some(job) = self.in_flight.take() else {
-            return Some(Err("The recovery checkpoint disappeared".into()));
+            return Some(Err(crate::i18n::tr("recovery.checkpoint_disappeared").into()));
         };
         Some(self.finish_checkpoint(&job, result))
     }
@@ -394,7 +394,7 @@ impl Store {
         let job = self.spawn_checkpoint(scene.clone(), source.map(|p| p.to_string_lossy().into_owned()), rev)?;
         let result = match job.rx.recv() {
             Ok(result) => result,
-            Err(_) => return Err("The recovery checkpoint stopped unexpectedly".to_owned()),
+            Err(_) => return Err(crate::i18n::tr("recovery.checkpoint_unexpected_stop").to_owned()),
         };
         self.finish_checkpoint(&job, result)
     }
@@ -418,11 +418,11 @@ impl Store {
                     }
                     write_checkpoint(&own, &scene, source.as_deref(), rev, &worker_cancel)
                 }))
-                .unwrap_or_else(|_| Err("The recovery checkpoint stopped partway through".to_owned()));
+                .unwrap_or_else(|_| Err(crate::i18n::tr("recovery.checkpoint_partway_stop").to_owned()));
                 let result = match result {
                     Ok(done) if worker_cancel.load(Ordering::Acquire) => {
                         let _ = fs::remove_file(&done.temp);
-                        Err("Stopped".into())
+                        Err(crate::i18n::tr("recovery.stopped").into())
                     }
                     other => other,
                 };
@@ -432,7 +432,7 @@ impl Store {
                     let _ = fs::remove_file(&done.temp);
                 }
             })
-            .map_err(|e| format!("Could not start the recovery checkpoint: {e}"))?;
+            .map_err(|e| crate::i18n::fill("recovery.checkpoint_start_failed", &[&e]))?;
         Ok(CheckpointJob { rx, epoch, cancel })
     }
 

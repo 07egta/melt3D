@@ -121,7 +121,7 @@ impl Huff {
         for c in count.iter().skip(1) {
             left = (left << 1) - i64::from(*c);
             if left < 0 {
-                return Err(InflateError::Corrupt("Too many codes"));
+                return Err(InflateError::Corrupt(crate::i18n::tr("import_inflate.too_many_codes")));
             }
         }
         let bits = max.max(1) as u32;
@@ -227,7 +227,7 @@ fn dynamic_tables(b: &mut Bits) -> Result<(Huff, Huff), InflateError> {
         i += rep;
     }
     if lens.get(256).copied().unwrap_or(0) == 0 {
-        return Err(InflateError::Corrupt("No end code"));
+        return Err(InflateError::Corrupt(crate::i18n::tr("import_inflate.no_end_code")));
     }
     let lit = Huff::build(lens.get(..hlit).ok_or(InflateError::Corrupt("code"))?)?;
     let dist = Huff::build(lens.get(hlit..total).ok_or(InflateError::Corrupt("code"))?)?;
@@ -431,10 +431,10 @@ impl<'a> Zip<'a> {
         let cd_size = u32at(data, eocd + 12).ok_or_else(|| BAD_ZIP.to_string())? as usize;
         let cd_off = u32at(data, eocd + 16).ok_or_else(|| BAD_ZIP.to_string())? as usize;
         if count == 0xFFFF || cd_size == 0xFFFF_FFFF || cd_off == 0xFFFF_FFFF {
-            return Err("Large ZIP64 files are not supported".into());
+            return Err(crate::i18n::tr("import_inflate.zip64_unsupported").into());
         }
         if count > MAX_ZIP_ENTRIES {
-            return Err("Too many files in the ZIP".into());
+            return Err(crate::i18n::tr("import_inflate.too_many_zip_files").into());
         }
         let mut entries = Vec::with_capacity(count);
         let mut off = cd_off;
@@ -467,7 +467,7 @@ impl<'a> Zip<'a> {
     /// Unpack one file; it may not be bigger than `max` bytes.
     pub fn read(&self, e: &ZipEntry, max: usize) -> Result<Vec<u8>, String> {
         if e.flags & 1 != 0 {
-            return Err("Password-protected ZIPs are not supported".into());
+            return Err(crate::i18n::tr("import_inflate.password_unsupported").into());
         }
         if e.usize_ > max {
             return Err(InflateError::TooBig.to_string());
@@ -489,7 +489,7 @@ impl<'a> Zip<'a> {
                 body.to_vec()
             }
             8 => inflate(body, e.usize_).map_err(|x| x.to_string())?,
-            _ => return Err("This ZIP compression method is not supported".into()),
+            _ => return Err(crate::i18n::tr("import_inflate.method_unsupported").into()),
         };
         if out.len() != e.usize_ {
             return Err(BAD_ZIP.into());

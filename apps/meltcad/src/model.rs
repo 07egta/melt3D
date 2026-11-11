@@ -157,20 +157,20 @@ impl Kind {
     /// What the size numbers mean, for the inspector.
     pub fn size_labels(self) -> [&'static str; 3] {
         match self {
-            Kind::Sphere => ["Radius", "", ""],
-            Kind::Box => ["Width", "Depth", "Height"],
-            Kind::Cylinder => ["Radius", "Height", ""],
-            Kind::Torus => ["Major radius", "Minor radius", ""],
-            Kind::Cone => ["Radius", "Height", ""],
-            Kind::Extrude => ["Height", "", ""],
-            Kind::Prism3 | Kind::PrismN | Kind::Star => ["Outer radius", "Height", ""],
-            Kind::Octa | Kind::Tetra | Kind::Hemi => ["Radius", "", ""],
-            Kind::Pyramid => ["Base radius", "Height", ""],
-            Kind::Capsule => ["Radius", "Length", ""],
-            Kind::Tube => ["Outer radius", "Wall", "Height"],
-            Kind::Wedge => ["Width", "Depth", "Height"],
+            Kind::Sphere => [crate::i18n::tr("size.radius"), "", ""],
+            Kind::Box => [crate::i18n::tr("size.width"), crate::i18n::tr("size.depth"), crate::i18n::tr("size.height")],
+            Kind::Cylinder => [crate::i18n::tr("size.radius"), crate::i18n::tr("size.height"), ""],
+            Kind::Torus => [crate::i18n::tr("size.major_radius"), crate::i18n::tr("size.minor_radius"), ""],
+            Kind::Cone => [crate::i18n::tr("size.radius"), crate::i18n::tr("size.height"), ""],
+            Kind::Extrude => [crate::i18n::tr("size.height"), "", ""],
+            Kind::Prism3 | Kind::PrismN | Kind::Star => [crate::i18n::tr("size.outer_radius"), crate::i18n::tr("size.height"), ""],
+            Kind::Octa | Kind::Tetra | Kind::Hemi => [crate::i18n::tr("size.radius"), "", ""],
+            Kind::Pyramid => [crate::i18n::tr("size.base_radius"), crate::i18n::tr("size.height"), ""],
+            Kind::Capsule => [crate::i18n::tr("size.radius"), crate::i18n::tr("size.length"), ""],
+            Kind::Tube => [crate::i18n::tr("size.outer_radius"), crate::i18n::tr("size.wall"), crate::i18n::tr("size.height")],
+            Kind::Wedge => [crate::i18n::tr("size.width"), crate::i18n::tr("size.depth"), crate::i18n::tr("size.height")],
             Kind::Revolve => ["", "", ""],
-            Kind::Loft => ["Height", "", ""],
+            Kind::Loft => [crate::i18n::tr("size.height"), "", ""],
             Kind::Curve => ["", "", ""],
             Kind::Sweep => ["", "", ""],
             // (the size is the model's size in mm, shown by the mesh inspector, not edited)
@@ -207,10 +207,10 @@ impl Kind {
     /// Labels of the four extra numbers (`Shape::params`); empty = unused.
     pub fn param_labels(self) -> [&'static str; 4] {
         match self {
-            Kind::PrismN => ["Sides", "", "", ""],
-            Kind::Pyramid => ["Sides", "", "", ""],
-            Kind::Star => ["Points", "Inner ratio", "", ""],
-            Kind::Revolve => ["Angle", "", "", ""],
+            Kind::PrismN => [crate::i18n::tr("size.sides"), "", "", ""],
+            Kind::Pyramid => [crate::i18n::tr("size.sides"), "", "", ""],
+            Kind::Star => [crate::i18n::tr("size.points"), crate::i18n::tr("size.inner_ratio"), "", ""],
+            Kind::Revolve => [crate::i18n::tr("size.angle"), "", "", ""],
             _ => ["", "", "", ""],
         }
     }
@@ -690,10 +690,10 @@ impl Shape {
     /// height, material and the other loft profile remain unchanged.
     pub fn set_sketch_outline(&mut self, top: bool, points: Vec<[f32; 2]>) -> Result<bool, String> {
         if !self.kind.uses_outline() || (top && !self.kind.uses_outline2()) {
-            return Err("この形には編集できる輪かくがありません".to_string());
+            return Err(crate::i18n::tr("model.err_no_editable_outline").to_string());
         }
         if points.iter().any(|p| p.iter().any(|v| !v.is_finite() || v.abs() > crate::sketch::COORD_MAX)) {
-            return Err("輪かくの座標は±2000mm以内にしてください".to_string());
+            return Err(crate::i18n::tr("model.err_outline_coord_range").to_string());
         }
         let checked = crate::sketch::validate_profile(&points).map_err(|e| e.message())?;
         if checked.len() != points.len() {
@@ -886,9 +886,9 @@ impl BlendMode {
     pub const ALL: [BlendMode; 3] = [BlendMode::Smooth, BlendMode::Round, BlendMode::Gooey];
     pub fn label(self) -> &'static str {
         match self {
-            BlendMode::Smooth => "Smooth",
-            BlendMode::Round => "Round",
-            BlendMode::Gooey => "Gooey",
+            BlendMode::Smooth => crate::i18n::tr("model.blend_smooth"),
+            BlendMode::Round => crate::i18n::tr("model.blend_round"),
+            BlendMode::Gooey => crate::i18n::tr("model.blend_gooey"),
         }
     }
     pub fn id(self) -> f32 {
@@ -970,9 +970,9 @@ impl Environment {
         let l = |yaw, pitch, power, color| Light { yaw, pitch, power, color };
         let base = Environment::studio();
         vec![
-            ("スタジオ", base.clone()),
+            (crate::i18n::tr("model.preset_studio"), base.clone()),
             (
-                "ひるま",
+                crate::i18n::tr("model.preset_daytime"),
                 Environment {
                     sky_top: [0.45, 0.65, 0.95],
                     sky_horizon: [0.80, 0.88, 0.97],
@@ -983,7 +983,7 @@ impl Environment {
                 },
             ),
             (
-                "ゆうやけ",
+                crate::i18n::tr("model.preset_sunset"),
                 Environment {
                     sky_top: [0.35, 0.28, 0.55],
                     sky_horizon: [1.0, 0.55, 0.32],
@@ -995,7 +995,7 @@ impl Environment {
                 },
             ),
             (
-                "よる",
+                crate::i18n::tr("model.preset_night"),
                 Environment {
                     sky_top: [0.06, 0.08, 0.20],
                     sky_horizon: [0.14, 0.18, 0.38],
@@ -1007,7 +1007,7 @@ impl Environment {
                 },
             ),
             (
-                "キャンディ",
+                crate::i18n::tr("model.preset_candy"),
                 Environment {
                     sky_top: [1.0, 0.82, 0.92],
                     sky_horizon: [1.0, 0.93, 0.80],
@@ -1018,7 +1018,7 @@ impl Environment {
                 },
             ),
             (
-                "しろ",
+                crate::i18n::tr("model.preset_white"),
                 Environment {
                     sky_top: [0.97, 0.97, 0.98],
                     sky_horizon: [0.93, 0.93, 0.94],
@@ -1121,7 +1121,7 @@ impl Scene {
     pub fn try_to_json(&self) -> Result<String, String> {
         let _guard = crate::mesh::SaveGuard::begin();
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| serde_json::to_string_pretty(self)))
-            .map_err(|_| "作品のシリアライズに失敗しました".to_owned())?
+            .map_err(|_| crate::i18n::tr("model.err_serialize").to_owned())?
             .map_err(|e| e.to_string())
     }
     /// A scene from JSON, with every number made safe (a damaged or hostile file never panics).
@@ -1140,20 +1140,12 @@ impl Scene {
         // oversized design and then silently discarding its groups or shapes
         // makes the next Save permanently destroy the original work.
         if s.groups.len() > MAX_GROUPS {
-            return Err(format!(
-                "This project contains {} groups (maximum {MAX_GROUPS}). Nothing was loaded; the original file was preserved.",
-                s.groups.len()
-            ));
+            return Err(crate::i18n::fill("model.too_many_groups", &[&s.groups.len(), &MAX_GROUPS]));
         }
-        let shapes = s
-            .groups
-            .iter()
-            .try_fold(0usize, |total, g| total.checked_add(g.shapes.len()))
-            .ok_or("This project has too many shapes; the original file was preserved")?;
+        let shapes =
+            s.groups.iter().try_fold(0usize, |total, g| total.checked_add(g.shapes.len())).ok_or(crate::i18n::tr("model.too_many_shapes_short"))?;
         if shapes > MAX_SHAPES {
-            return Err(format!(
-                "This project contains {shapes} shapes (maximum {MAX_SHAPES}). Nothing was loaded; the original file was preserved."
-            ));
+            return Err(crate::i18n::fill("model.too_many_shapes", &[&shapes, &MAX_SHAPES]));
         }
         let notes = s.sanitize_notes();
         Ok((s, notes))
@@ -1593,16 +1585,13 @@ impl Scene {
         }
         let mut notes = Vec::new();
         if lost > 0 {
-            notes.push(format!("こわれていて読めないメッシュが{lost}個あったので、取りのぞきました"));
+            notes.push(crate::i18n::fill("model.note_broken_meshes_removed", &[&lost]));
         }
         if over > 0 {
-            notes.push(format!(
-                "メッシュが多すぎるので、{over}個を取りのぞきました（{}個・データ量に上限があります）",
-                crate::mesh::MAX_VOLUME_SHAPES
-            ));
+            notes.push(crate::i18n::fill("model.note_too_many_meshes", &[&over, &crate::mesh::MAX_VOLUME_SHAPES]));
         }
         if broken_furniture > 0 {
-            notes.push(format!("家具プリセットの部品が変わった{broken_furniture}組は、形を残して通常のグループとして開きました"));
+            notes.push(crate::i18n::fill("model.note_furniture_changed", &[&broken_furniture]));
         }
         notes
     }
@@ -1945,6 +1934,7 @@ mod tests {
 
     #[test]
     fn opening_one_group_with_513_shapes_fails_without_truncation() {
+        crate::i18n::set_language("en");
         let mut sc = Scene::default();
         let shape = sc.groups[0].shapes[0].clone();
         sc.groups[0].shapes = vec![shape; MAX_SHAPES + 1];
@@ -1956,6 +1946,7 @@ mod tests {
 
     #[test]
     fn opening_97_groups_fails_instead_of_discarding_the_last_group() {
+        crate::i18n::set_language("en");
         let mut sc = Scene { groups: Vec::new(), ..Scene::default() };
         for i in 0..=MAX_GROUPS {
             sc.groups.push(Group::new(format!("Group {}", i + 1)));

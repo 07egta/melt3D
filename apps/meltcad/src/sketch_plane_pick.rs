@@ -127,7 +127,11 @@ impl App {
         p.add(Gfx::convex_polygon(pts, style::ACCENT.gamma_multiply(0.22), Stroke::new(1.6, style::ACCENT)));
         if let Some(c) = self.cam.project(rect, hit) {
             p.circle_filled(c, 3.0, Color32::WHITE);
-            tag(p, c + vec2(14.0, 12.0), if face { "Draw on this face" } else { "Draw on the floor" });
+            tag(
+                p,
+                c + vec2(14.0, 12.0),
+                if face { crate::i18n::tr("sketch_plane_pick.draw_on_face") } else { crate::i18n::tr("sketch_plane_pick.draw_on_floor") },
+            );
         }
     }
 
