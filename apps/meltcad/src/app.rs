@@ -821,11 +821,11 @@ impl App {
             return;
         }
         if self.scene.shape_count() >= MAX_SHAPES {
-            self.say(ctx, format!("Up to {MAX_SHAPES} shapes"));
+            self.say(ctx, crate::i18n::fill("limit.shapes", &[&MAX_SHAPES]));
             return;
         }
         let Some(g) = self.target_group() else {
-            self.say(ctx, "This is a linked copy. Select its source or Unlink it before adding a shape");
+            self.say(ctx, crate::i18n::tr("link.no_add"));
             return;
         };
         // beside the selected shape so the two melt together; else at the view's centre
@@ -1275,7 +1275,7 @@ impl App {
                 let base = self.scene.groups[g].depth;
                 let deepest = self.scene.groups[g..e].iter().map(|x| x.depth - base).max().unwrap_or(0);
                 if self.scene.groups[g2].depth.saturating_add(deepest) > crate::model::MAX_DEPTH {
-                    self.notice = Some("A Parent Group cannot go inside another group".into());
+                    self.notice = Some(crate::i18n::tr("group.parent_inside").into());
                     return;
                 }
                 // (the place among the groups that stay, and the depth of the group it lands beside)
@@ -1293,7 +1293,7 @@ impl App {
     /// A row dropped onto the middle of a group's row: it goes inside that group.
     pub fn move_layer_into(&mut self, from: Pick, into: usize) -> Result<(), &'static str> {
         if !self.allow_scene_structure_change() {
-            return Err("Finish or cancel the active command first");
+            return Err(crate::i18n::tr("busy.command"));
         }
         match from {
             Pick::Shape(g, s) => {
@@ -1306,7 +1306,7 @@ impl App {
                 Ok(())
             }
             Pick::Group(g) => {
-                let at = self.scene.move_group_into(g, into).ok_or("A group cannot go inside itself, or more than 4 levels deep")?;
+                let at = self.scene.move_group_into(g, into).ok_or(crate::i18n::tr("group.too_deep"))?;
                 self.folded.clear();
                 self.multi.clear();
                 self.sel = Some(Pick::Group(at));
@@ -1320,7 +1320,7 @@ impl App {
     /// the picked groups (with what is nested in them) nest in it.
     pub fn move_picks_into(&mut self, picks: &[Pick], into: usize) -> Result<(), &'static str> {
         if !self.allow_scene_structure_change() {
-            return Err("Finish or cancel the active command first");
+            return Err(crate::i18n::tr("busy.command"));
         }
         let n = self.scene.groups.len();
         if into >= n {
@@ -1336,7 +1336,7 @@ impl App {
             }
         }
         if ranges.iter().any(|&(a, b)| (a..b).contains(&into)) {
-            return Err("A group cannot go inside itself, or more than 4 levels deep");
+            return Err(crate::i18n::tr("group.too_deep"));
         }
         let mut shapes: Vec<(usize, usize)> = picks
             .iter()
@@ -1359,7 +1359,7 @@ impl App {
             let g = pending.remove(0);
             let e = self.scene.subtree_end(g);
             let Some(at) = self.scene.move_group_into(g, target) else {
-                result = Err("A group cannot go inside itself, or more than 4 levels deep");
+                result = Err(crate::i18n::tr("group.too_deep"));
                 break;
             };
             let remap = |i: usize| -> usize {
@@ -1481,7 +1481,7 @@ impl App {
         if let Some(stem) = self.path.as_ref().and_then(|p| p.file_stem()) {
             return stem.to_string_lossy().into_owned();
         }
-        if self.doc_title.is_empty() { "Untitled".into() } else { self.doc_title.clone() }
+        if self.doc_title.is_empty() { crate::i18n::tr("status.untitled").into() } else { self.doc_title.clone() }
     }
 
     /// A new name typed into the title. Without a file it is only remembered (the first save
@@ -1504,12 +1504,12 @@ impl App {
         let ext = old.extension().map(|e| e.to_string_lossy().into_owned()).unwrap_or_else(|| "meltcad".into());
         let new = old.with_file_name(format!("{name}.{ext}"));
         if new.exists() {
-            self.say(ctx, format!("There is already a file named {name}"));
+            self.say(ctx, crate::i18n::fill("file.exists", &[&name]));
             return;
         }
         match std::fs::rename(&old, &new) {
             Ok(()) => self.path = Some(new),
-            Err(e) => self.say(ctx, format!("Could not rename: {e}")),
+            Err(e) => self.say(ctx, crate::i18n::fill("file.rename_failed", &[&e])),
         }
     }
 
@@ -1519,12 +1519,12 @@ impl App {
 
     fn try_save(&mut self, ctx: &egui::Context, ask: bool) -> bool {
         if self.native_job.is_some() || self.queued_open.is_some() {
-            self.say(ctx, "Wait for the other file job to finish before saving");
+            self.say(ctx, crate::i18n::tr("file.busy_save"));
             return false;
         }
         let pending_solid = self.sk.on && self.sk.separate;
         if (self.sketch_has_draft() || pending_solid) && (!self.sketch_confirm(ctx) || self.sketch_has_draft() || (self.sk.on && self.sk.separate)) {
-            self.say(ctx, "Finish or cancel the current sketch or solid operation before saving".to_string());
+            self.say(ctx, crate::i18n::tr("file.busy_sketch_save").to_string());
             return false;
         }
         let path = match (&self.path, ask) {
@@ -1540,7 +1540,7 @@ impl App {
                 true // started, NOT yet saved successfully
             }
             Err(e) => {
-                self.say(ctx, format!("Could not start saving: {e}"));
+                self.say(ctx, crate::i18n::fill("file.save_start_failed", &[&e]));
                 false
             }
         }
@@ -1569,7 +1569,7 @@ impl App {
             && let Some(queued) = self.queued_open.take()
         {
             if self.track_scene() != queued.base_revision {
-                self.say(ctx, "The design changed while the open was waiting, so it was cancelled");
+                self.say(ctx, crate::i18n::tr("file.open_cancelled"));
             } else {
                 match crate::document_job::Job::open(ctx, queued.path.clone(), queued.base_revision) {
                     Ok(job) => self.native_job = Some(job),
@@ -1593,9 +1593,9 @@ impl App {
                 (crate::document_job::Kind::Open, Ok(crate::document_job::Completed::Opened { scene, path, notes })) => {
                     if self.track_scene() == base_revision {
                         self.install_scene(scene, Some(path), notes);
-                        self.say(ctx, "Opened");
+                        self.say(ctx, crate::i18n::tr("file.opened"));
                     } else {
-                        self.say(ctx, "The design changed while opening, so the loaded file was not applied");
+                        self.say(ctx, crate::i18n::tr("file.open_not_applied"));
                     }
                 }
                 (crate::document_job::Kind::Save, Ok(crate::document_job::Completed::Saved { path })) => {
@@ -1611,7 +1611,7 @@ impl App {
                             self.notice = Some(format!("{}{e}", i18n::tr("error.recovery_cleanup")));
                         }
                     }
-                    self.say(ctx, if same { "Saved" } else { "Edited while saving: the latest changes are not saved yet" });
+                    self.say(ctx, if same { crate::i18n::tr("file.saved") } else { crate::i18n::tr("file.saved_stale") });
                     if let Some(next) = self.after_save.take() {
                         if same {
                             self.finish_pending_file_action(ctx, next);
@@ -1620,17 +1620,17 @@ impl App {
                         }
                     }
                 }
-                (_, Ok(_)) => self.say(ctx, "The file job returned an unexpected result"),
+                (_, Ok(_)) => self.say(ctx, crate::i18n::tr("file.unexpected")),
                 (_, Err(e)) => {
                     if kind == crate::document_job::Kind::Save {
                         self.pending_file_action = self.after_save.take();
                     }
                     let text = if e == crate::export_mesh::CANCELLED {
-                        "Stopped".into()
+                        crate::i18n::tr("job.stopped").into()
                     } else if kind == crate::document_job::Kind::Open {
-                        format!("Could not open: {e}")
+                        crate::i18n::fill("file.open_failed", &[&e])
                     } else {
-                        format!("Could not save: {e}")
+                        crate::i18n::fill("file.save_failed", &[&e])
                     };
                     self.say(ctx, text);
                 }
@@ -1645,8 +1645,8 @@ impl App {
         if self.queued_open.is_some() {
             egui::Area::new(egui::Id::new("native_file_queue")).anchor(egui::Align2::RIGHT_BOTTOM, [-18.0, -24.0]).show(ctx, |ui| {
                 style::card().show(ui, |ui| {
-                    ui.label("Waiting for another heavy job to finish before opening (memory guard)");
-                    if ui.button("Cancel open").clicked() {
+                    ui.label(crate::i18n::tr("file.wait_heavy"));
+                    if ui.button(crate::i18n::tr("file.cancel_open")).clicked() {
                         self.queued_open = None;
                     }
                 });
@@ -1659,8 +1659,8 @@ impl App {
                 ui.set_width(325.0);
                 ui.label(
                     egui::RichText::new(match job.kind {
-                        crate::document_job::Kind::Open => "Opening the design…",
-                        crate::document_job::Kind::Save => "Saving the design…",
+                        crate::document_job::Kind::Open => crate::i18n::tr("file.opening"),
+                        crate::document_job::Kind::Save => crate::i18n::tr("file.saving"),
                     })
                     .strong(),
                 );
@@ -1669,13 +1669,13 @@ impl App {
                 ui.horizontal(|ui| {
                     ui.label(format!("{:.1} s", job.elapsed()));
                     if job.can_cancel() {
-                        if ui.button("Stop").clicked() {
+                        if ui.button(crate::i18n::tr("action.stop")).clicked() {
                             let _ = job.cancel();
                         }
                     } else if job.is_committing() {
-                        ui.label("This last step cannot be stopped, to protect the original file");
+                        ui.label(crate::i18n::tr("file.cannot_stop"));
                     } else {
-                        ui.label("Waiting for the stop to finish…");
+                        ui.label(crate::i18n::tr("file.stopping"));
                     }
                 });
             });
@@ -1852,37 +1852,37 @@ impl App {
                         crate::settings_ui::record_menu_anchor(&ctx, logo.id);
                     }
                     egui::Popup::menu(&logo).show(|ui| {
-                        if ui.button("New").clicked() {
+                        if ui.button(crate::i18n::tr("menu.new")).clicked() {
                             self.new_scene(Scene::default());
                             ui.close();
                         }
-                        if ui.button(style::keys("Open…  Ctrl+O")).clicked() {
+                        if ui.button(style::keys(crate::i18n::tr("menu.open"))).clicked() {
                             self.open_dialog(&ctx);
                             ui.close();
                         }
-                        if ui.button("Puffy Text…").on_hover_text("Turn Japanese or English letters into puffy solids").clicked() {
+                        if ui.button(crate::i18n::tr("menu.puffy_text")).on_hover_text(crate::i18n::tr("menu.puffy_text.tip")).clicked() {
                             crate::puffy_text_ui::open(self, &ctx);
                             ui.close();
                         }
-                        if ui.button("Chess Set…").on_hover_text("Chess pieces in three designs").clicked() {
+                        if ui.button(crate::i18n::tr("menu.chess")).on_hover_text(crate::i18n::tr("menu.chess.tip")).clicked() {
                             crate::chess_dialog::open(&ctx, self);
                             ui.close();
                         }
-                        if ui.button(style::keys("Save  Ctrl+S")).clicked() {
+                        if ui.button(style::keys(crate::i18n::tr("menu.save"))).clicked() {
                             self.save(&ctx, false);
                             ui.close();
                         }
-                        if ui.button("Save as…").clicked() {
+                        if ui.button(crate::i18n::tr("menu.save_as")).clicked() {
                             self.save(&ctx, true);
                             ui.close();
                         }
                         ui.separator();
-                        if ui.button("Export…").clicked() {
+                        if ui.button(crate::i18n::tr("menu.export_x")).clicked() {
                             crate::export_dialog::open_with(&ctx, None, crate::export_dialog::Defaults::from_preferences(&self.preferences));
                             ui.close();
                         }
                         ui.separator();
-                        let about = ui.button("About Melt 3D");
+                        let about = ui.button(crate::i18n::tr("menu.about"));
                         #[cfg(test)]
                         crate::settings_ui::record_menu(&ctx, "about", about.rect);
                         if about.clicked() {
@@ -1899,80 +1899,80 @@ impl App {
                     });
                     style::vsep(ui);
                     style::menu_button(ui, i18n::tr("menu.file"), false, |ui| {
-                        if ui.button("New").clicked() {
+                        if ui.button(crate::i18n::tr("menu.new")).clicked() {
                             self.new_scene(Scene::default());
                             ui.close();
                         }
-                        if ui.button(style::keys("Open…  Ctrl+O")).clicked() {
+                        if ui.button(style::keys(crate::i18n::tr("menu.open"))).clicked() {
                             self.open_dialog(&ctx);
                             ui.close();
                         }
                         if ui
-                            .add_enabled(!self.scene_structure_locked(), egui::Button::new("Add file…"))
-                            .on_hover_text("Put another Melt 3D file into this one. It melts with what is already here")
+                            .add_enabled(!self.scene_structure_locked(), egui::Button::new(crate::i18n::tr("menu.add_file")))
+                            .on_hover_text(crate::i18n::tr("menu.add_file.tip"))
                             .clicked()
                         {
                             self.add_file_dialog(&ctx);
                             ui.close();
                         }
-                        if ui.add_enabled(!self.scene_structure_locked(), egui::Button::new("Import SVG…")).clicked() {
+                        if ui.add_enabled(!self.scene_structure_locked(), egui::Button::new(crate::i18n::tr("menu.import_svg"))).clicked() {
                             crate::svg_dialog::open(&ctx);
                             ui.close();
                         }
                         if ui
-                            .add_enabled(!self.scene_structure_locked(), egui::Button::new("Import mesh…"))
+                            .add_enabled(!self.scene_structure_locked(), egui::Button::new(crate::i18n::tr("menu.import_mesh")))
                             .on_hover_text("STL, OBJ, 3MF, PLY, GLB")
                             .clicked()
                         {
                             crate::mesh_dialog::open(&ctx, self.document_generation());
                             ui.close();
                         }
-                        if ui.button(style::keys("Save  Ctrl+S")).clicked() {
+                        if ui.button(style::keys(crate::i18n::tr("menu.save"))).clicked() {
                             self.save(&ctx, false);
                             ui.close();
                         }
-                        if ui.button("Save as…").clicked() {
+                        if ui.button(crate::i18n::tr("menu.save_as")).clicked() {
                             self.save(&ctx, true);
                             ui.close();
                         }
                         ui.separator();
-                        if ui.button("Export…").on_hover_text("STL, 3MF, OBJ, PLY, GLB").clicked() {
+                        if ui.button(crate::i18n::tr("menu.export_x")).on_hover_text("STL, 3MF, OBJ, PLY, GLB").clicked() {
                             crate::export_dialog::open_with(&ctx, None, crate::export_dialog::Defaults::from_preferences(&self.preferences));
                             ui.close();
                         }
-                        if ui.button(style::keys("Export again with last settings  Ctrl+E")).clicked() {
+                        if ui.button(style::keys(crate::i18n::tr("menu.export_again"))).clicked() {
                             self.export_stl(&ctx);
                             ui.close();
                         }
-                        if ui.button("Export image (PNG)").clicked() {
+                        if ui.button(crate::i18n::tr("menu.export_image")).clicked() {
                             self.start_png(&ctx);
                             ui.close();
                         }
                     });
                     style::menu_button(ui, i18n::tr("menu.edit"), false, |ui| {
-                        if ui.button(style::keys("Copy  Ctrl+C")).clicked() {
+                        if ui.button(style::keys(crate::i18n::tr("menu.copy"))).clicked() {
                             self.copy(&ctx);
                             ui.close();
                         }
                         ui.add_enabled_ui(!self.scene_structure_locked(), |ui| {
-                            if ui.button(style::keys("Cut  Ctrl+X")).clicked() {
+                            if ui.button(style::keys(crate::i18n::tr("menu.cut"))).clicked() {
                                 self.cut(&ctx);
                                 ui.close();
                             }
-                            if ui.button(style::keys("Paste  Ctrl+V")).clicked() {
+                            if ui.button(style::keys(crate::i18n::tr("menu.paste"))).clicked() {
                                 self.paste(&ctx, None);
                                 ui.close();
                             }
                             ui.separator();
-                            if ui.button(style::keys("Duplicate  Ctrl+D")).clicked() {
+                            if ui.button(style::keys(crate::i18n::tr("menu.duplicate"))).clicked() {
                                 self.duplicate();
                                 ui.close();
                             }
-                            if ui.button("Array copy…").clicked() {
+                            if ui.button(crate::i18n::tr("menu.array")).clicked() {
                                 crate::array::open(&ctx);
                                 ui.close();
                             }
-                            ui.menu_button("Pattern", |ui| {
+                            ui.menu_button(crate::i18n::tr("tool.pattern"), |ui| {
                                 for k in crate::pattern::PatternKind::ALL {
                                     if ui.button(k.label()).on_hover_text(k.hint()).clicked() {
                                         self.set_pattern_kind(&ctx, k);
@@ -1980,31 +1980,31 @@ impl App {
                                     }
                                 }
                                 ui.separator();
-                                if ui.button("Clear pattern").clicked() {
+                                if ui.button(crate::i18n::tr("menu.clear_pattern")).clicked() {
                                     self.clear_pattern();
                                     ui.close();
                                 }
                             });
-                            if ui.button("Make instance").on_hover_text("Linked copy: edits to the original update it too").clicked() {
+                            if ui.button(crate::i18n::tr("menu.instance")).on_hover_text(crate::i18n::tr("menu.instance.tip")).clicked() {
                                 self.make_instance(&ctx);
                                 ui.close();
                             }
-                            if ui.button("Mirror copy").clicked() {
+                            if ui.button(crate::i18n::tr("inspector.mirror")).clicked() {
                                 self.mirror_copy();
                                 ui.close();
                             }
-                            if ui.button("Delete  Del").clicked() {
+                            if ui.button(crate::i18n::tr("menu.delete")).clicked() {
                                 self.delete_selected();
                                 ui.close();
                             }
                         });
                         ui.separator();
-                        if ui.button("Select none  Esc").clicked() {
+                        if ui.button(crate::i18n::tr("menu.select_none")).clicked() {
                             self.sel = None;
                             self.multi.clear();
                             ui.close();
                         }
-                        if ui.button("Show all hidden").clicked() {
+                        if ui.button(crate::i18n::tr("menu.show_hidden")).clicked() {
                             for g in &mut self.scene.groups {
                                 g.visible = true;
                                 for sh in &mut g.shapes {
@@ -2017,12 +2017,12 @@ impl App {
                     style::menu_button(ui, i18n::tr("menu.view"), false, |ui| {
                         let pi = std::f32::consts::PI;
                         for (name, yaw, pitch) in [
-                            ("Front  1", 0.0, 0.0),
-                            ("Right  3", pi / 2.0, 0.0),
-                            ("Top  7", self.cam.yaw, pi / 2.0),
-                            ("Back  Ctrl+1", pi, 0.0),
-                            ("Left  Ctrl+3", -pi / 2.0, 0.0),
-                            ("Bottom  Ctrl+7", self.cam.yaw, -pi / 2.0),
+                            (crate::i18n::tr("menu.view.front"), 0.0, 0.0),
+                            (crate::i18n::tr("menu.view.right"), pi / 2.0, 0.0),
+                            (crate::i18n::tr("menu.view.top"), self.cam.yaw, pi / 2.0),
+                            (crate::i18n::tr("menu.view.back"), pi, 0.0),
+                            (crate::i18n::tr("menu.view.left"), -pi / 2.0, 0.0),
+                            (crate::i18n::tr("menu.view.bottom"), self.cam.yaw, -pi / 2.0),
                         ] {
                             if ui.button(style::keys(name)).clicked() {
                                 self.fly_look(yaw, pitch);
@@ -2030,14 +2030,14 @@ impl App {
                             }
                         }
                         ui.separator();
-                        if ui.button("Turn left  Alt+←").clicked() {
+                        if ui.button(crate::i18n::tr("menu.view.turn_left")).clicked() {
                             self.cam.yaw -= 0.26;
                         }
-                        if ui.button("Turn right  Alt+→").clicked() {
+                        if ui.button(crate::i18n::tr("menu.view.turn_right")).clicked() {
                             self.cam.yaw += 0.26;
                         }
                         ui.separator();
-                        if ui.button(if self.cam.ortho { "Perspective view  5" } else { "Flat (ortho) view  5" }).clicked() {
+                        if ui.button(if self.cam.ortho { crate::i18n::tr("menu.view.persp") } else { crate::i18n::tr("menu.view.ortho") }).clicked() {
                             self.cam.ortho = !self.cam.ortho;
                             ui.close();
                         }
@@ -2048,11 +2048,11 @@ impl App {
                                 }
                             }
                         });
-                        if ui.button("Frame all  Home").clicked() {
+                        if ui.button(crate::i18n::tr("menu.view.frame_all")).clicked() {
                             self.frame_view(false);
                             ui.close();
                         }
-                        if ui.button("Frame selection  Shift+F").clicked() {
+                        if ui.button(crate::i18n::tr("menu.view.frame_sel")).clicked() {
                             self.frame_view(true);
                             ui.close();
                         }
@@ -2062,7 +2062,7 @@ impl App {
                     style::vsep(ui);
                     if ui
                         .add_enabled(!self.scene_structure_locked() || self.sk.live.is_some(), |ui: &mut Ui| {
-                            style::icon_button(ui, 32.0, &style::keys("Undo (Ctrl+Z)"), false, glyphs::undo)
+                            style::icon_button(ui, 32.0, &style::keys(crate::i18n::tr("top.undo.tip")), false, glyphs::undo)
                         })
                         .clicked()
                     {
@@ -2070,7 +2070,7 @@ impl App {
                     }
                     if ui
                         .add_enabled(!self.scene_structure_locked(), |ui: &mut Ui| {
-                            style::icon_button(ui, 32.0, &style::keys("Redo (Ctrl+Shift+Z)"), false, glyphs::redo)
+                            style::icon_button(ui, 32.0, &style::keys(crate::i18n::tr("top.redo.tip")), false, glyphs::redo)
                         })
                         .clicked()
                     {
@@ -2087,20 +2087,20 @@ impl App {
                             self.open_precise(&ctx);
                         }
                         style::menu_button(ui, i18n::tr("menu.export"), true, |ui| {
-                            if ui.button("Export…").on_hover_text("STL, 3MF, OBJ, PLY, GLB. Detail, units, color").clicked() {
+                            if ui.button(crate::i18n::tr("menu.export_x")).on_hover_text(crate::i18n::tr("export.menu.tip")).clicked() {
                                 crate::export_dialog::open_with(&ctx, None, crate::export_dialog::Defaults::from_preferences(&self.preferences));
                                 ui.close();
                             }
-                            if ui.button("Export again").on_hover_text(style::keys("Ctrl+E")).clicked() {
+                            if ui.button(crate::i18n::tr("export.again")).on_hover_text(style::keys("Ctrl+E")).clicked() {
                                 self.export_stl(&ctx);
                                 ui.close();
                             }
-                            if ui.button("Image (PNG)").on_hover_text("Save as seen on screen").clicked() {
+                            if ui.button(crate::i18n::tr("export.image")).on_hover_text(crate::i18n::tr("export.image.tip")).clicked() {
                                 self.start_png(&ctx);
                                 ui.close();
                             }
                             ui.separator();
-                            if ui.button("Print check").on_hover_text("Size, volume, holes").clicked() {
+                            if ui.button(crate::i18n::tr("export.print_check")).on_hover_text(crate::i18n::tr("export.print_check.tip")).clicked() {
                                 self.print_check(&ctx);
                                 ui.close();
                             }
@@ -2110,8 +2110,8 @@ impl App {
                         if bar.width() >= crate::ui_layout::NARROW_HEADER {
                             let eff = self.input_dev.device(self.input_seen);
                             let items = [
-                                ("Mouse", "Wheel zooms, middle-drag turns, right-drag slides"),
-                                ("Trackpad", "Two fingers turn (Shift: slide), pinch zooms"),
+                                (crate::i18n::tr("device.mouse"), crate::i18n::tr("device.mouse.tip")),
+                                (crate::i18n::tr("device.trackpad"), crate::i18n::tr("device.trackpad.tip")),
                             ];
                             // nothing is chosen yet: the highlighted one is what the scrolling looked like
                             let cur = match eff {
@@ -2163,7 +2163,7 @@ impl App {
                             style::DIM,
                         );
                         let hit = ui.interact(shown.expand2(egui::vec2(8.0, 6.0)), egui::Id::new("doc_name"), egui::Sense::click());
-                        let hit = hit.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text("Click to rename this design");
+                        let hit = hit.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(crate::i18n::tr("top.rename.tip"));
                         if hit.clicked() {
                             self.title_edit = Some(self.doc_name());
                         }
@@ -2341,11 +2341,11 @@ impl App {
                                     }
                                 }
                                 ui.separator();
-                                if ui.selectable_label(false, "Linked copy").clicked() {
+                                if ui.selectable_label(false, crate::i18n::tr("link.copy")).clicked() {
                                     self.make_instance(&ctx);
                                     ui.close();
                                 }
-                                if ui.selectable_label(false, "Remove pattern").clicked() {
+                                if ui.selectable_label(false, crate::i18n::tr("pattern.remove")).clicked() {
                                     self.clear_pattern();
                                     ui.close();
                                 }
@@ -2432,7 +2432,7 @@ impl App {
                     // a narrow view gets a narrower card that scrolls instead of running off it
                     let narrow = rect.width() < 260.0;
                     ui.set_width((rect.width() - 56.0).clamp(94.0, 300.0));
-                    ui.label(RichText::new("Controls").strong().size(14.0));
+                    ui.label(RichText::new(crate::i18n::tr("keys.title")).strong().size(14.0));
                     // the first-use box practice and the hidden status hints come back from here
                     ui.horizontal_wrapped(|ui| {
                         if ui.button(i18n::tr("guide.open")).on_hover_text(i18n::tr("guide.open.tip")).clicked() {
@@ -2444,26 +2444,30 @@ impl App {
                         }
                     });
                     ui.separator();
-                    egui::ScrollArea::vertical().max_height((rect.height() - 96.0).max(64.0)).show(ui, |ui| {
+                    // as tall as the list needs when the view has the room (the Area alone would keep its small first height)
+                    let list_h = (rect.height() - 128.0).max(64.0);
+                    egui::ScrollArea::vertical().max_height(list_h).min_scrolled_height(list_h).show(ui, |ui| {
                         for (k, v) in [
-                            ("Middle drag", "Orbit"),
-                            ("Right drag", "Pan"),
-                            ("Wheel", "Zoom to cursor"),
-                            ("Left drag (empty)", "Orbit"),
-                            ("Click", "Select  Ctrl: add/remove  Shift: add/remove"),
-                            ("Double click", "Focus on shape"),
-                            ("Drawing: left click → right click", "Place point → finish (all draw tools)"),
-                            ("F", "Find shapes, library, commands"),
-                            ("Shift+F / Home", "Frame selection / Frame all"),
-                            ("1 3 7 (Ctrl: opposite)", "Front / Right / Top"),
-                            ("5", "Perspective ⇄ Ortho"),
-                            ("Tab", "Add ⇄ Subtract"),
-                            ("Ctrl + drag", "1 mm / 15° steps"),
-                            ("Arrow keys", "Move 1 mm (Shift: 10 mm)"),
-                            ("Ctrl+C / X / V", "Copy / Cut / Paste"),
-                            ("Ctrl+D / Delete", "Duplicate / Delete"),
-                            ("Ctrl+G", "Group the selected shapes"),
-                            ("Ctrl+Z / Ctrl+Shift+Z", "Undo / Redo"),
+                            (crate::i18n::tr("keys.middle_drag"), crate::i18n::tr("keys.orbit")),
+                            (crate::i18n::tr("keys.right_drag"), crate::i18n::tr("keys.pan")),
+                            (crate::i18n::tr("keys.wheel"), crate::i18n::tr("keys.zoom")),
+                            (crate::i18n::tr("keys.left_drag_empty"), crate::i18n::tr("keys.box_select")),
+                            (crate::i18n::tr("keys.left_drag_shape"), crate::i18n::tr("keys.move_floor")),
+                            (crate::i18n::tr("keys.alt_drag"), crate::i18n::tr("keys.orbit")),
+                            (crate::i18n::tr("keys.click"), crate::i18n::tr("keys.select")),
+                            (crate::i18n::tr("keys.double_click"), crate::i18n::tr("keys.focus")),
+                            (crate::i18n::tr("keys.drawing"), crate::i18n::tr("keys.drawing.v")),
+                            ("F", crate::i18n::tr("keys.find")),
+                            ("Shift+F / Home", crate::i18n::tr("keys.frame")),
+                            (crate::i18n::tr("keys.views.k"), crate::i18n::tr("keys.views")),
+                            ("5", crate::i18n::tr("keys.persp")),
+                            ("Tab", crate::i18n::tr("keys.add_sub")),
+                            (crate::i18n::tr("keys.ctrl_drag"), crate::i18n::tr("keys.steps")),
+                            (crate::i18n::tr("keys.arrows"), crate::i18n::tr("keys.nudge")),
+                            ("Ctrl+C / X / V", crate::i18n::tr("keys.clipboard")),
+                            ("Ctrl+D / Delete", crate::i18n::tr("keys.dup_del")),
+                            ("Ctrl+G", crate::i18n::tr("keys.group")),
+                            ("Ctrl+Z / Ctrl+Shift+Z", crate::i18n::tr("keys.undo")),
                         ] {
                             if narrow {
                                 ui.label(RichText::new(style::keys(k)).size(12.0).color(style::ACCENT));
@@ -2635,8 +2639,8 @@ impl App {
         let res =
             crate::png::encode_rgba((x1 - x0) as u32, (y1 - y0) as u32, &rgba).and_then(|b| std::fs::write(&cap.path, b).map_err(|e| e.to_string()));
         match res {
-            Ok(()) => self.say(ctx, "Image saved"),
-            Err(e) => self.say(ctx, format!("Could not save image: {e}")),
+            Ok(()) => self.say(ctx, crate::i18n::tr("image.saved")),
+            Err(e) => self.say(ctx, crate::i18n::fill("image.save_failed", &[&e])),
         }
     }
 
@@ -2888,7 +2892,7 @@ impl App {
         reply: std::sync::mpsc::Sender<Result<serde_json::Value, String>>,
     ) -> Result<(), String> {
         if self.render_job.is_some() {
-            let e = "A picture is already being drawn; wait for it to finish".to_owned();
+            let e = crate::i18n::tr("picture.busy").to_owned();
             let _ = reply.send(Err(e.clone()));
             return Err(e);
         }
@@ -2936,9 +2940,9 @@ impl App {
             match result {
                 Ok(value) => {
                     let path = value.get("png").or_else(|| value.get("gif")).and_then(serde_json::Value::as_str).unwrap_or_default();
-                    self.say(ctx, format!("Saved {path}"));
+                    self.say(ctx, crate::i18n::fill("saved.path", &[&path]));
                 }
-                Err(e) => self.say(ctx, format!("Picture not saved: {e}")),
+                Err(e) => self.say(ctx, crate::i18n::fill("picture.failed", &[&e])),
             }
         } else if self.render_job.is_some() {
             ctx.request_repaint_after(std::time::Duration::from_millis(120));
@@ -3035,7 +3039,7 @@ impl App {
             if let Some(result) = self.recovery.poll_checkpoint()
                 && let Err(e) = result
             {
-                self.notice = Some(format!("Could not save auto-recovery data: {e}"));
+                self.notice = Some(crate::i18n::fill("recovery.save_failed", &[&e]));
             }
             // Finding out whether the scene changed compares all of it, so it is only done when
             // a checkpoint is due (`start_checkpoint` would ignore the answer otherwise).
@@ -3044,7 +3048,7 @@ impl App {
                 let rev = self.track_scene();
                 let changed = self.has_unsaved_work();
                 if let Err(e) = self.recovery.start_checkpoint(&self.scene, self.path.as_deref(), changed, rev, now) {
-                    self.notice = Some(format!("Could not save auto-recovery data: {e}"));
+                    self.notice = Some(crate::i18n::fill("recovery.save_failed", &[&e]));
                 }
             }
             ctx.request_repaint_after(self.recovery.wait(now));
@@ -3958,7 +3962,8 @@ mod tests {
             }
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
-        assert!(app.status.0.contains("Could not open"), "{:?}", app.status);
+        let opening = i18n::tr("file.open_failed").split('{').next().unwrap_or_default();
+        assert!(!opening.is_empty() && app.status.0.contains(opening), "{:?}", app.status);
         assert!((app.status.1 - 60.0).abs() < 1.0, "shown at the time it happened, not at start-up (#219): {:?}", app.status);
     }
 
@@ -4550,7 +4555,7 @@ mod title_tests {
         app.doc_title = "Foo".into();
         app.title_edit = Some("Fo".into());
         app.apply_file_action(super::PendingFileAction::New(crate::model::Scene::default()));
-        assert_eq!(app.doc_name(), "Untitled");
+        assert_eq!(app.doc_name(), crate::i18n::tr("status.untitled"));
         assert!(app.title_edit.is_none());
     }
 

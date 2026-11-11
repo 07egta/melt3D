@@ -29,12 +29,12 @@ impl Piece {
     }
     pub fn name(self) -> &'static str {
         match self {
-            Piece::King => "キング",
-            Piece::Queen => "クイーン",
-            Piece::Rook => "ルーク",
-            Piece::Bishop => "ビショップ",
-            Piece::Knight => "ナイト",
-            Piece::Pawn => "ポーン",
+            Piece::King => crate::i18n::tr("chess.piece_king"),
+            Piece::Queen => crate::i18n::tr("chess.piece_queen"),
+            Piece::Rook => crate::i18n::tr("chess.piece_rook"),
+            Piece::Bishop => crate::i18n::tr("chess.piece_bishop"),
+            Piece::Knight => crate::i18n::tr("chess.piece_knight"),
+            Piece::Pawn => crate::i18n::tr("chess.piece_pawn"),
         }
     }
     fn from_key(s: &str) -> Option<Self> {
@@ -78,9 +78,9 @@ impl Design {
     }
     pub fn name(self) -> &'static str {
         match self {
-            Design::Classic => "クラシック",
-            Design::Minimal => "ミニマル",
-            Design::Organic => "有機的",
+            Design::Classic => crate::i18n::tr("chess.design_classic"),
+            Design::Minimal => crate::i18n::tr("chess.design_minimal"),
+            Design::Organic => crate::i18n::tr("chess.design_organic"),
         }
     }
     fn from_key(s: &str) -> Option<Self> {
@@ -99,7 +99,7 @@ impl Side {
         if self == Side::White { "W" } else { "D" }
     }
     pub fn name(self) -> &'static str {
-        if self == Side::White { "白" } else { "黒" }
+        if self == Side::White { crate::i18n::tr("chess.side_white") } else { crate::i18n::tr("chess.side_black") }
     }
     fn from_key(s: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|d| d.key() == s)
@@ -241,13 +241,13 @@ fn add_king(g: &mut Group, m: Material, at: [f32; 2], h: f32, r: f32, s: Setting
     let bar = (r * 0.28 + 0.045 * h * s.ornament).max(1.2);
     let upright_z = 0.87 * h;
     // The bottom is 0.74*h, so it intersects even the minimal pedestal (top 0.77*h).
-    block(g, m, "十字・たて", [at[0], at[1], upright_z], [bar, bar, 0.26 * h], bar * 0.13);
-    block(g, m, "十字・よこ", [at[0], at[1], 0.89 * h], [r * 1.04, bar, bar], bar * 0.12);
+    block(g, m, crate::i18n::tr("chess.cross_upright"), [at[0], at[1], upright_z], [bar, bar, 0.26 * h], bar * 0.13);
+    block(g, m, crate::i18n::tr("chess.cross_sideways"), [at[0], at[1], 0.89 * h], [r * 1.04, bar, bar], bar * 0.12);
     if s.design == Design::Classic && s.ornament > 0.15 {
         revolve(
             g,
             m,
-            "王冠の台座",
+            crate::i18n::tr("chess.crown_base"),
             at,
             &[[0.0, 0.73 * h], [0.49 * r, 0.73 * h], [0.57 * r, 0.76 * h], [0.58 * r, 0.82 * h], [0.38 * r, 0.83 * h], [0.0, 0.83 * h]],
         );
@@ -257,7 +257,7 @@ fn add_queen(g: &mut Group, m: Material, at: [f32; 2], h: f32, r: f32, s: Settin
     revolve(
         g,
         m,
-        "女王の冠",
+        crate::i18n::tr("chess.queen_crown"),
         at,
         &[
             [0.0, 0.77 * h],
@@ -273,18 +273,24 @@ fn add_queen(g: &mut Group, m: Material, at: [f32; 2], h: f32, r: f32, s: Settin
     let mut finial = Shape::new(Kind::Cylinder, [at[0], at[1], 0.916 * h], m);
     finial.size[0] = (0.22 * r).max(0.8);
     finial.size[1] = 0.115 * h;
-    push(g, finial, "王冠の中央の支柱");
+    push(g, finial, crate::i18n::tr("chess.crown_center_post"));
     let beads = if s.design == Design::Minimal { 4 } else { 6 };
     let small = (0.030 * h + 0.02 * r * s.ornament).max(0.65);
     for i in 0..beads {
         let a = TAU * i as f32 / beads as f32;
-        ball(g, m, "冠の飾り", [at[0] + a.cos() * 0.70 * r, at[1] + a.sin() * 0.70 * r, 0.944 * h], small);
+        ball(g, m, crate::i18n::tr("chess.crown_ornament"), [at[0] + a.cos() * 0.70 * r, at[1] + a.sin() * 0.70 * r, 0.944 * h], small);
     }
-    ball(g, m, "女王の宝珠", [at[0], at[1], 0.95 * h], 0.050 * h);
+    ball(g, m, crate::i18n::tr("chess.queen_orb"), [at[0], at[1], 0.95 * h], 0.050 * h);
 }
 fn add_rook(g: &mut Group, m: Material, at: [f32; 2], h: f32, r: f32, s: Settings) {
     // A recognisable crenellated castle tower, rather than a cylinder icon.
-    revolve(g, m, "城壁のへり", at, &[[0.0, 0.75 * h], [0.68 * r, 0.75 * h], [0.84 * r, 0.80 * h], [0.84 * r, 0.88 * h], [0.0, 0.88 * h]]);
+    revolve(
+        g,
+        m,
+        crate::i18n::tr("chess.battlement_rim"),
+        at,
+        &[[0.0, 0.75 * h], [0.68 * r, 0.75 * h], [0.84 * r, 0.80 * h], [0.84 * r, 0.88 * h], [0.0, 0.88 * h]],
+    );
     let n = if s.design == Design::Organic { 6 } else { 4 };
     for i in 0..n {
         let a = TAU * (i as f32 + 0.5) / n as f32;
@@ -295,9 +301,9 @@ fn add_rook(g: &mut Group, m: Material, at: [f32; 2], h: f32, r: f32, s: Setting
             let mut post = Shape::new(Kind::Capsule, [pos[0], pos[1], 0.915 * h], m);
             post.size[0] = rad;
             post.size[1] = (0.13 * h - 2.0 * rad).max(0.3);
-            push(g, post, "有機的な城壁");
+            push(g, post, crate::i18n::tr("chess.organic_battlement"));
         } else {
-            block(g, m, "城壁の凸", pos, [0.49 * r, 0.49 * r, (0.125 + 0.035 * s.ornament) * h], r * 0.04);
+            block(g, m, crate::i18n::tr("chess.battlement_tooth"), pos, [0.49 * r, 0.49 * r, (0.125 + 0.035 * s.ornament) * h], r * 0.04);
         }
     }
 }
@@ -305,7 +311,7 @@ fn add_bishop(g: &mut Group, m: Material, at: [f32; 2], h: f32, r: f32, s: Setti
     revolve(
         g,
         m,
-        "司教帽",
+        crate::i18n::tr("chess.bishop_hat"),
         at,
         &[[0.0, 0.62 * h], [0.43 * r, 0.62 * h], [0.61 * r, 0.74 * h], [0.51 * r, 0.84 * h], [0.24 * r, 0.945 * h], [0.0, 0.986 * h]],
     );
@@ -316,10 +322,10 @@ fn add_bishop(g: &mut Group, m: Material, at: [f32; 2], h: f32, r: f32, s: Setti
         cut.rot = [0.0, -32.0, 0.0];
         cut.op = Op::Subtract;
         cut.blend = 0.0;
-        cut.name = "司教帽の斜めの溝".into();
+        cut.name = crate::i18n::tr("chess.bishop_hat_groove").into();
         g.shapes.push(cut);
     }
-    ball(g, m, "帽子の先", [at[0], at[1], 0.976 * h], (0.018 + 0.006 * s.ornament) * h.max(24.0));
+    ball(g, m, crate::i18n::tr("chess.hat_tip"), [at[0], at[1], 0.976 * h], (0.018 + 0.006 * s.ornament) * h.max(24.0));
 }
 fn add_knight(g: &mut Group, m: Material, at: [f32; 2], h: f32, r: f32, s: Settings) {
     // An upright horse's head, not a flat horse image:
@@ -349,24 +355,24 @@ fn add_knight(g: &mut Group, m: Material, at: [f32; 2], h: f32, r: f32, s: Setti
     head.size[0] = 1.23 * r;
     head.rot = [90.0, 0.0, 0.0];
     head.round = if s.design == Design::Minimal { 0.3 } else { (r * 0.09).min(1.1) };
-    push(g, head, "立体的な馬の頭");
+    push(g, head, crate::i18n::tr("chess.horse_head_3d"));
     for side in [-1.0_f32, 1.0] {
         let cheek = [at[0] - 0.06 * r, at[1] + side * 0.42 * r, 0.705 * h];
-        ball(g, m, "馬の頬", cheek, 0.40 * r);
+        ball(g, m, crate::i18n::tr("chess.horse_cheek"), cheek, 0.40 * r);
         let eye = [at[0] + 0.04 * r, at[1] + side * 0.77 * r, 0.72 * h];
         let rad = (r * (0.08 + 0.065 * s.ornament)).max(0.7);
-        ball(g, m, "馬の目", eye, rad);
+        ball(g, m, crate::i18n::tr("chess.horse_eye"), eye, rad);
     }
-    ball(g, m, "鼻先", [at[0] + 0.42 * r, at[1], 0.69 * h], 0.32 * r);
+    ball(g, m, crate::i18n::tr("chess.horse_muzzle"), [at[0] + 0.42 * r, at[1], 0.69 * h], 0.32 * r);
     if s.design != Design::Minimal && s.ornament > 0.2 {
         for i in 0..3 {
             let t = i as f32;
-            ball(g, m, "たてがみ", [at[0] - 0.54 * r, at[1], (0.63 + 0.085 * t) * h], 0.17 * r * s.ornament.max(0.4));
+            ball(g, m, crate::i18n::tr("chess.horse_mane"), [at[0] - 0.54 * r, at[1], (0.63 + 0.085 * t) * h], 0.17 * r * s.ornament.max(0.4));
         }
     }
 }
 fn add_pawn(g: &mut Group, m: Material, at: [f32; 2], h: f32) {
-    ball(g, m, "ポーンの球", [at[0], at[1], 0.80 * h], 0.20 * h);
+    ball(g, m, crate::i18n::tr("chess.pawn_ball"), [at[0], at[1], 0.80 * h], 0.20 * h);
 }
 
 /// Return a complete editable SDF group placed with its base on Z=0.
@@ -382,7 +388,7 @@ pub fn make_piece(settings: Settings, at: [f32; 2], square: &str) -> Group {
         Piece::Knight => 0.53,
         Piece::Pawn => 0.65,
     } * h;
-    let mut g = Group::new(format!("Chess/{}/{}/{} ({})", s.side.name(), s.piece.name(), square, s.design.name()));
+    let mut g = Group::new(crate::i18n::fill("chess.group_name", &[&s.side.name(), &s.piece.name(), &square, &s.design.name()]));
     let m = material(s.side);
     revolve(&mut g, m, &marker(&s), at, &pedestal(r, top, s.design, s.ornament));
     match s.piece {
@@ -405,10 +411,10 @@ pub fn board_width(s: Settings) -> f32 {
 fn board(s: Settings, at: [f32; 2]) -> Group {
     let pitch = square_pitch(s);
     let w = board_width(s);
-    let mut g = Group::new("Chess/盤面 (8×8)");
+    let mut g = Group::new(crate::i18n::tr("chess.board_group"));
     let cream = Material::plain([0.83, 0.76, 0.62], 0.57, 0.0);
     let dark = Material::plain([0.30, 0.34, 0.40], 0.55, 0.0);
-    block(&mut g, cream, "盤面・土台", [at[0], at[1], -3.0], [w, w, 4.0], 0.6);
+    block(&mut g, cream, crate::i18n::tr("chess.board_base"), [at[0], at[1], -3.0], [w, w, 4.0], 0.6);
     for rank in 0..8 {
         for file in 0..8 {
             // a1 is dark and h1 is light; queens stand on their own colour.
@@ -417,7 +423,7 @@ fn board(s: Settings, at: [f32; 2]) -> Group {
             }
             let x = at[0] + (file as f32 - 3.5) * pitch;
             let y = at[1] + (rank as f32 - 3.5) * pitch;
-            block(&mut g, dark, "濃いマス", [x, y, -0.85], [pitch - 0.12, pitch - 0.12, 0.40], 0.0);
+            block(&mut g, dark, crate::i18n::tr("chess.dark_square"), [x, y, -0.85], [pitch - 0.12, pitch - 0.12, 0.40], 0.0);
         }
     }
     g
@@ -458,7 +464,7 @@ pub fn insert_set(scene: &mut Scene, s: Settings, at: [f32; 2]) -> Result<usize,
     let cur_shapes = if fresh { 0 } else { scene.shape_count() };
     let count: usize = groups.iter().map(|g| g.shapes.len()).sum();
     if cur_groups + groups.len() > MAX_GROUPS || cur_shapes + count > MAX_SHAPES {
-        return Err(format!("チェスセットを置くには、{}グループ・{}形の空きが必要です", groups.len(), count));
+        return Err(crate::i18n::fill("chess.set_space_needed", &[&groups.len(), &count]));
     }
     if fresh {
         scene.groups.clear();
@@ -470,9 +476,9 @@ pub fn insert_set(scene: &mut Scene, s: Settings, at: [f32; 2]) -> Result<usize,
 
 /// Add a single individually editable piece to the scene.
 pub fn insert_piece(scene: &mut Scene, s: Settings, at: [f32; 2]) -> Result<usize, String> {
-    let g = make_piece(s, at, "単体");
+    let g = make_piece(s, at, crate::i18n::tr("chess.single"));
     if scene.groups.len() >= MAX_GROUPS || scene.shape_count() + g.shapes.len() > MAX_SHAPES {
-        return Err("グループ数または形の数が上限です".into());
+        return Err(crate::i18n::tr("chess.limit_groups_or_shapes").into());
     }
     let i = scene.groups.len();
     scene.groups.push(g);
@@ -482,17 +488,17 @@ pub fn insert_piece(scene: &mut Scene, s: Settings, at: [f32; 2]) -> Result<usiz
 /// Replace only the selected Chess piece, keeping its position and group identity.
 /// Returns false rather than overwriting a hand-built/non-chess group.
 pub fn rebuild_piece(scene: &mut Scene, group_index: usize, s: Settings) -> Result<(), String> {
-    let old = scene.groups.get(group_index).ok_or("駒が見つかりません")?;
+    let old = scene.groups.get(group_index).ok_or(crate::i18n::tr("chess.piece_not_found"))?;
     if preset_of(old).is_none() {
-        return Err("チェスの駒を選択してください".into());
+        return Err(crate::i18n::tr("chess.select_piece").into());
     }
-    let core = old.shapes.first().ok_or("駒の本体が見つかりません")?;
+    let core = old.shapes.first().ok_or(crate::i18n::tr("chess.piece_body_not_found"))?;
     let at = [core.pos[0], core.pos[1]];
     let label = old.name.clone();
     let mut new = make_piece(s, at, &label);
     let capacity = scene.shape_count() - old.shapes.len() + new.shapes.len();
     if capacity > MAX_SHAPES {
-        return Err("形の数が上限です".into());
+        return Err(crate::i18n::tr("chess.limit_shapes").into());
     }
     new.name = label;
     // Do not break group UID, linked patterns, visibility or user-controlled blending.

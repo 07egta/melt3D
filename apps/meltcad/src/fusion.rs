@@ -81,12 +81,12 @@ fn ball(g: &mut Group, x: f32, y: f32, z: f32, r: f32) {
 
 pub fn sample(count: usize) -> Option<Item> {
     let name = match count {
-        3 => "Smooth Fusion · 3連ブロブ",
-        4 => "Smooth Fusion · 四つ葉",
-        5 => "Smooth Fusion · ウェーブ",
-        6 => "Smooth Fusion · 分岐",
-        7 => "Smooth Fusion · ミックス",
-        8 => "Smooth Fusion · クラウド",
+        3 => crate::i18n::tr("fusion.preset_triple_blob"),
+        4 => crate::i18n::tr("fusion.preset_four_leaf"),
+        5 => crate::i18n::tr("fusion.preset_wave"),
+        6 => crate::i18n::tr("fusion.preset_branch"),
+        7 => crate::i18n::tr("fusion.preset_mix"),
+        8 => crate::i18n::tr("fusion.preset_cloud"),
         _ => return None,
     };
     let mut g = Group::new(name);
@@ -151,7 +151,7 @@ pub fn sample(count: usize) -> Option<Item> {
             "スムーズフュージョン".into(),
             "なめらか合体".into(),
             "ぷっくり".into(),
-            format!("{count}個"),
+            crate::i18n::fill("fusion.count", &[&count]),
         ],
         group: g,
     })

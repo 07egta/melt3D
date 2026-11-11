@@ -19,9 +19,9 @@ impl Preset {
 
     pub fn label(self) -> &'static str {
         match self {
-            Preset::Wave => "波型",
-            Preset::Ring => "リング型",
-            Preset::S => "S字型",
+            Preset::Wave => crate::i18n::tr("organic_tube.preset_wave_x"),
+            Preset::Ring => crate::i18n::tr("organic_tube.preset_ring_x"),
+            Preset::S => crate::i18n::tr("organic_tube.preset_s_x"),
         }
     }
 
@@ -36,9 +36,9 @@ impl Preset {
     /// The preset is a fully editable native curve with radius at every node.
     pub fn shape(self) -> Shape {
         let (name, color) = match self {
-            Preset::Wave => ("Organic Tube · Wave", [0.54, 0.79, 0.99]),
-            Preset::Ring => ("Organic Tube · Ring", [0.94, 0.62, 0.78]),
-            Preset::S => ("Organic Tube · S", [0.65, 0.90, 0.72]),
+            Preset::Wave => (crate::i18n::tr("organic_tube.preset_wave"), [0.54, 0.79, 0.99]),
+            Preset::Ring => (crate::i18n::tr("organic_tube.preset_ring"), [0.94, 0.62, 0.78]),
+            Preset::S => (crate::i18n::tr("organic_tube.preset_s"), [0.65, 0.90, 0.72]),
         };
         let mut sh = Shape::new(Kind::Curve, [0.0, 0.0, 34.0], Material::plain(color, 0.34, 0.0));
         sh.name = name.to_owned();
@@ -90,7 +90,7 @@ impl App {
     /// silently fuse it with an existing selected object.
     pub fn add_organic_tube(&mut self, ctx: &egui::Context, preset: Preset) {
         if self.scene.shape_count() >= MAX_SHAPES || self.scene.groups.len() >= MAX_GROUPS {
-            self.say(ctx, "形またはグループの上限です。不要な形を減らしてください");
+            self.say(ctx, crate::i18n::tr("organic_tube.limit"));
             return;
         }
         self.finish_drawing();
@@ -98,7 +98,7 @@ impl App {
         self.ct.draw_shape = None;
         self.sketch_off();
         self.set_pipe_tool(false);
-        let mut group = Group::new(format!("Organic Tube · {}", preset.label()));
+        let mut group = Group::new(crate::i18n::fill("organic_tube.group_name", &[&preset.label()]));
         group.shapes.push(preset.shape());
         let g = self.scene.groups.len();
         self.scene.groups.push(group);
@@ -108,7 +108,7 @@ impl App {
         self.ct.hover = None;
         self.ct.drag = None;
         self.frame_view(true);
-        self.say(ctx, format!("Organic Tube {}を追加。点をドラッグ／太さを調整できます", preset.label()));
+        self.say(ctx, crate::i18n::fill("organic_tube.added", &[&preset.label()]));
     }
 }
 

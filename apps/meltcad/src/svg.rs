@@ -95,7 +95,7 @@ pub fn load_file(path: &std::path::Path) -> Result<Artwork, String> {
 
 pub fn parse_bytes(bytes: &[u8]) -> Result<Artwork, String> {
     if bytes.len() > MAX_BYTES {
-        return Err("File is too big (up to 2 MB)".into());
+        return Err(crate::i18n::tr("svg.too_big").into());
     }
     parse(&String::from_utf8_lossy(bytes))
 }
@@ -103,11 +103,11 @@ pub fn parse_bytes(bytes: &[u8]) -> Result<Artwork, String> {
 /// Parse SVG text into outlines.
 pub fn parse(text: &str) -> Result<Artwork, String> {
     if text.len() > MAX_BYTES {
-        return Err("File is too big (up to 2 MB)".into());
+        return Err(crate::i18n::tr("svg.too_big").into());
     }
     let mut pos = 0;
     if next_tag(text, &mut pos).is_none_or(|tag| tag.closing || tag.name != "svg") {
-        return Err("This doesn't look like an SVG file".into());
+        return Err(crate::i18n::tr("svg.not_svg").into());
     }
     let ids = collect_ids(text);
     let mut limited = false;
@@ -116,13 +116,13 @@ pub fn parse(text: &str) -> Result<Artwork, String> {
     let rough = walk(text, None, &ids, &mut limited, &mut unresolved);
     let Some((lo, hi)) = bounds(rough.iter().flat_map(|r| r.polys.iter().flatten())) else {
         if unresolved {
-            return Err("A referenced SVG shape is missing or refers to itself. Expand the references into shapes in your SVG editor".into());
+            return Err(crate::i18n::tr("svg.missing_reference").into());
         }
-        return Err("No filled shape found (line-only drawings can't be read)".into());
+        return Err(crate::i18n::tr("svg.no_filled_line_only").into());
     };
     let side = (hi.0 - lo.0).max(hi.1 - lo.1);
     if side.is_nan() || side <= 1e-9 || !side.is_finite() {
-        return Err("Shape is too small to read".into());
+        return Err(crate::i18n::tr("svg.too_small").into());
     }
     // pass 2: curves flattened to ~0.05 mm for a 60 mm picture
     let tol = FLAT_TOL_MM / (REF_MM / side);
@@ -130,10 +130,10 @@ pub fn parse(text: &str) -> Result<Artwork, String> {
     let mut art = build_artwork(&raws, side)?;
     art.warnings = unsupported_features(text);
     if limited {
-        art.warnings.push("SVG complexity limit reached; some details were not loaded".into());
+        art.warnings.push(crate::i18n::tr("svg.complexity_limit").into());
     }
     if unresolved {
-        art.warnings.push("Skipped SVG references whose target is missing or refers to itself".into());
+        art.warnings.push(crate::i18n::tr("svg.skipped_references").into());
     }
     Ok(art)
 }
@@ -166,7 +166,7 @@ fn unsupported_features(src: &str) -> Vec<String> {
             tags.insert("stroke".into());
         }
     }
-    tags.into_iter().map(|t| format!("Unsupported SVG element or setting: {t} (not loaded)")).collect()
+    tags.into_iter().map(|t| crate::i18n::fill("svg.unsupported_element", &[&t])).collect()
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1983,6 +1983,7 @@ mod tests {
 
     #[test]
     fn missing_and_cyclic_references_report_partial_imports() {
+        crate::i18n::set_language("en");
         for reference in
             [r##"<use href="#missing"/>"##, r##"<defs><g id="a"><use href="#b"/></g><g id="b"><use href="#a"/></g></defs><use href="#a"/>"##]
         {
@@ -1999,6 +2000,7 @@ mod tests {
 
     #[test]
     fn reference_budget_counts_repeated_non_geometry_bytes() {
+        crate::i18n::set_language("en");
         let source = wrap(&format!(
             r##"<rect width="10" height="10"/><defs><g id="payload"><!-- {} --></g></defs>{}<rect x="40" width="10" height="10"/>"##,
             "x".repeat(250_000),
@@ -2110,6 +2112,7 @@ mod tests {
 
     #[test]
     fn empty_use_trees_are_bounded_even_when_they_generate_no_points() {
+        crate::i18n::set_language("en");
         let mut body = String::from(r#"<rect width="10" height="10"/><defs><g id="n0"/>"#);
         for i in 1..=8 {
             let refs = format!(r##"<use href="#n{}"/>"##, i - 1).repeat(8);

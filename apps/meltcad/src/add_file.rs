@@ -85,7 +85,7 @@ fn merge_reserving(
     reserve: u32,
 ) -> Result<usize, String> {
     if other.groups.is_empty() {
-        return Err("That file has nothing in it".into());
+        return Err(crate::i18n::tr("add_file.empty_file").into());
     }
     if scene.groups.len() + other.groups.len() + 1 > MAX_GROUPS {
         return Err(format!("Up to {MAX_GROUPS} groups"));
@@ -96,7 +96,7 @@ fn merge_reserving(
     crate::mesh::can_add(scene, other.groups.iter().flat_map(|g| g.shapes.iter()))?;
     let offset = max_uid(scene).max(reserve);
     if offset.checked_add(max_uid(&other)).is_none() {
-        return Err("Too many identifiers to add this file safely".into());
+        return Err(crate::i18n::tr("add_file.too_many_names").into());
     }
     // The animation of the added shapes comes along: their tracks follow the shifted identifiers.
     let mut theirs = std::mem::take(&mut other.anim);
@@ -107,12 +107,12 @@ fn merge_reserving(
     }
     theirs.tracks.retain(|t| shapes_in.contains(&t.uid));
     if scene.anim.tracks.len() + theirs.tracks.len() > crate::anim::MAX_TRACKS {
-        return Err(format!("Up to {} animated shapes", crate::anim::MAX_TRACKS));
+        return Err(crate::i18n::fill("add_file.max_animated", &[&crate::anim::MAX_TRACKS]));
     }
     let at = at.min(scene.groups.len());
     let mut block: Vec<Group> = Vec::new();
     let title: String = name.chars().filter(|c| !c.is_control()).take(MAX_NAME_CHARS).collect();
-    let mut parent = Group::new(if title.trim().is_empty() { "Added file".to_string() } else { title.clone() });
+    let mut parent = Group::new(if title.trim().is_empty() { crate::i18n::tr("add_file.default_group_title").to_string() } else { title.clone() });
     parent.blend = ADDED_BLEND;
     parent.depth = depth;
     parent.piece = Some(Piece { file: title, path: path.map(|p| p.to_string_lossy().into_owned()) });
@@ -144,9 +144,9 @@ pub fn add_file(scene: &mut Scene, path: &Path) -> Result<usize, String> {
 /// Read the file of piece `gi` again and put it in the piece's place. The piece keeps its melt
 /// amount, its +/- and whether it is shown. Nothing changes when the file cannot be read or does not fit.
 pub fn reload_piece(scene: &mut Scene, gi: usize) -> Result<(), String> {
-    let old = scene.groups.get(gi).cloned().ok_or("No such group")?;
-    let piece = old.piece.clone().ok_or("This group is not a piece of a file")?;
-    let path = piece.path.clone().ok_or("Where this piece came from is not known. Use Save as file… first")?;
+    let old = scene.groups.get(gi).cloned().ok_or(crate::i18n::tr("add_file.no_group"))?;
+    let piece = old.piece.clone().ok_or(crate::i18n::tr("add_file.not_a_piece"))?;
+    let path = piece.path.clone().ok_or(crate::i18n::tr("add_file.piece_path_unknown"))?;
     let (other, _notes) = crate::recovery::read_project(Path::new(&path))?;
     let end = scene.subtree_end(gi);
     let removed: Vec<Group> = scene.groups.drain(gi..end).collect();
@@ -231,9 +231,9 @@ fn outside_sources(scene: &Scene, first: usize, end: usize) -> Vec<(usize, usize
 /// Write piece `gi` (what is inside it) into its own file at `path`, and remember that file for it.
 /// The piece's animation goes with it, and so do groups outside it that its copies and patterns use.
 pub fn save_piece(scene: &mut Scene, gi: usize, path: &Path) -> Result<(), String> {
-    let g = scene.groups.get(gi).ok_or("No such group")?;
+    let g = scene.groups.get(gi).ok_or(crate::i18n::tr("add_file.no_group"))?;
     if g.piece.is_none() {
-        return Err("This group is not a piece of a file".into());
+        return Err(crate::i18n::tr("add_file.not_a_piece").into());
     }
     let end = scene.subtree_end(gi);
     // When shapes were added directly to the Piece wrapper, preserve that
@@ -293,29 +293,31 @@ impl App {
     pub(crate) fn piece_card(&mut self, ui: &mut egui::Ui, g: usize) {
         let Some(piece) = self.scene.groups.get(g).and_then(|x| x.piece.clone()) else { return };
         let ctx = ui.ctx().clone();
-        ui.label(egui::RichText::new(format!("Piece of the big file: {}", piece.file)).size(12.0).color(crate::style::DIM))
-            .on_hover_text("A whole file you added. It melts with the other pieces and shapes of this scene");
+        ui.label(egui::RichText::new(crate::i18n::fill("add_file.piece_of_file", &[&piece.file])).size(12.0).color(crate::style::DIM))
+            .on_hover_text(crate::i18n::tr("add_file.whole_file_tip"));
         let free = !self.scene_structure_locked();
         ui.horizontal_wrapped(|ui| {
-            if crate::style::pill_enabled(ui, "Reload", false, free && piece.path.is_some())
-                .on_hover_text("Read the file again and replace this piece with it")
+            if crate::style::pill_enabled(ui, crate::i18n::tr("add_file.reload_button"), false, free && piece.path.is_some())
+                .on_hover_text(crate::i18n::tr("add_file.reload_tip"))
                 .clicked()
             {
                 match reload_piece(&mut self.scene, g) {
                     Ok(()) => {
                         self.sel = Some(Pick::Group(g));
-                        self.say(&ctx, "Read the file again");
+                        self.say(&ctx, crate::i18n::tr("add_file.reloaded"));
                     }
-                    Err(e) => self.say(&ctx, format!("Could not reload: {e}")),
+                    Err(e) => self.say(&ctx, crate::i18n::fill("add_file.reload_failed", &[&e])),
                 }
             }
-            if crate::style::pill_enabled(ui, "Save as file…", false, free).on_hover_text("Write this piece into a file of its own").clicked()
+            if crate::style::pill_enabled(ui, crate::i18n::tr("add_file.save_button"), false, free)
+                .on_hover_text(crate::i18n::tr("add_file.save_tip"))
+                .clicked()
                 && let Some(path) =
                     rfd::FileDialog::new().add_filter("Melt 3D", &["meltcad"]).set_file_name(format!("{}.meltcad", piece.file)).save_file()
             {
                 match save_piece(&mut self.scene, g, &path) {
-                    Ok(()) => self.say(&ctx, "Saved the piece as a file"),
-                    Err(e) => self.say(&ctx, format!("Could not save: {e}")),
+                    Ok(()) => self.say(&ctx, crate::i18n::tr("add_file.saved")),
+                    Err(e) => self.say(&ctx, crate::i18n::fill("add_file.save_failed", &[&e])),
                 }
             }
         });
@@ -329,9 +331,9 @@ impl App {
             Ok(at) => {
                 self.sel = Some(Pick::Group(at));
                 self.frame_view(false);
-                self.say(ctx, "Added the file. It melts with what was already here");
+                self.say(ctx, crate::i18n::tr("add_file.added"));
             }
-            Err(e) => self.say(ctx, format!("Could not add the file: {e}")),
+            Err(e) => self.say(ctx, crate::i18n::fill("add_file.add_failed", &[&e])),
         }
     }
 }

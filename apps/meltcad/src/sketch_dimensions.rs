@@ -159,9 +159,9 @@ impl Dimensions {
 
     pub fn labels(&self) -> [&'static str; 2] {
         match self.target {
-            Target::Rectangle { .. } => ["Width", "Height"],
-            Target::Circle { .. } => ["Radius", "Diameter"],
-            Target::Segment { .. } => ["Length", "Angle"],
+            Target::Rectangle { .. } => [crate::i18n::tr("sketch_dimensions.width"), crate::i18n::tr("sketch_dimensions.height")],
+            Target::Circle { .. } => [crate::i18n::tr("sketch_dimensions.radius"), crate::i18n::tr("sketch_dimensions.diameter")],
+            Target::Segment { .. } => [crate::i18n::tr("sketch_dimensions.length"), crate::i18n::tr("sketch_dimensions.angle")],
             Target::Point { .. } => ["X", "Y"],
         }
     }
@@ -196,15 +196,15 @@ impl Dimensions {
     }
 
     fn parse(&self, index: usize) -> Result<f32, String> {
-        let Some(value) = self.fields.get(index) else { return Err("Input field not found".into()) };
+        let Some(value) = self.fields.get(index) else { return Err(crate::i18n::tr("sketch_dimensions.field_not_found").into()) };
         if value.len() > 32 {
-            return Err("Enter a number of 32 characters or fewer".into());
+            return Err(crate::i18n::tr("sketch_dimensions.too_long").into());
         }
         let Ok(n) = value.trim().parse::<f32>() else {
-            return Err("Enter a valid number".into());
+            return Err(crate::i18n::tr("sketch_dimensions.not_a_number").into());
         };
         if !n.is_finite() {
-            return Err("Enter a finite number".into());
+            return Err(crate::i18n::tr("sketch_dimensions.not_finite").into());
         }
         Ok(n)
     }
@@ -217,11 +217,11 @@ impl Dimensions {
             Target::Rectangle { anchor, edge } => {
                 let (w, h) = (self.parse(0)?, self.parse(1)?);
                 if w <= sketch::MIN_SIDE || h <= sketch::MIN_SIDE {
-                    return Err("Width and height must be greater than 0.5 mm".into());
+                    return Err(crate::i18n::tr("sketch_dimensions.rect_too_small").into());
                 }
                 let b = [anchor[0] + sign(edge[0] - anchor[0]) * w, anchor[1] + sign(edge[1] - anchor[1]) * h];
                 if !finite_point(anchor) || !finite_point(b) {
-                    return Err("Coordinate is outside the sketch area".into());
+                    return Err(crate::i18n::tr("sketch_dimensions.coord_outside").into());
                 }
                 let p = sketch::rect_profile(anchor, b).map_err(sketch::SketchError::message)?;
                 Ok((Some(p), None, None))
@@ -230,19 +230,19 @@ impl Dimensions {
                 let input = self.parse(changed.min(1))?;
                 let radius = if changed == 0 { input } else { input / 2.0 };
                 if radius <= sketch::MIN_SIDE {
-                    return Err("Radius must be greater than 0.5 mm".into());
+                    return Err(crate::i18n::tr("sketch_dimensions.radius_too_small").into());
                 }
                 let old = (edge[0] - center[0]).hypot(edge[1] - center[1]);
                 if old < sketch::MIN_SIDE {
-                    return Err("Can't determine circle orientation".into());
+                    return Err(crate::i18n::tr("sketch_dimensions.circle_orientation").into());
                 }
                 let b = [center[0] + (edge[0] - center[0]) * radius / old, center[1] + (edge[1] - center[1]) * radius / old];
                 if !finite_point(center) || !finite_point(b) {
-                    return Err("Coordinate is outside the sketch area".into());
+                    return Err(crate::i18n::tr("sketch_dimensions.coord_outside").into());
                 }
                 let p = sketch::circle_profile(center, b).map_err(sketch::SketchError::message)?;
                 if !p.iter().copied().all(finite_point) {
-                    return Err("Circle is outside the sketch area".into());
+                    return Err(crate::i18n::tr("sketch_dimensions.circle_outside").into());
                 }
                 let other = if changed == 0 { number(radius * 2.0) } else { number(radius) };
                 Ok((Some(p), None, Some(other)))
@@ -251,30 +251,30 @@ impl Dimensions {
                 let length = self.parse(0)?;
                 let angle = self.parse(1)?;
                 if length <= sketch::MIN_SIDE || angle.abs() > 36000.0 {
-                    return Err("Length must be greater than 0.5 mm and angle within ±36000°".into());
+                    return Err(crate::i18n::tr("sketch_dimensions.segment_range").into());
                 }
                 let rad = angle.to_radians();
                 let b = [start[0] + length * rad.cos(), start[1] + length * rad.sin()];
                 if !finite_point(b) || points.get(index).is_none() {
-                    return Err("Point is outside the sketch area".into());
+                    return Err(crate::i18n::tr("sketch_dimensions.point_outside").into());
                 }
                 // the same check as placing the point with the mouse
                 if prevent_cross && index >= 2 && sketch::crosses_polyline(&points[..index], start, b, false) {
-                    return Err("The outline crosses at this point".into());
+                    return Err(crate::i18n::tr("sketch_dimensions.crosses_here").into());
                 }
                 Ok((None, Some((index, b)), None))
             }
             Target::Point { index } => {
                 let b = [self.parse(0)?, self.parse(1)?];
                 if !finite_point(b) || points.get(index).is_none() {
-                    return Err("X and Y must be within ±2000 mm".into());
+                    return Err(crate::i18n::tr("sketch_dimensions.xy_range").into());
                 }
                 if let Some(previous) = index.checked_sub(1).and_then(|i| points.get(i)) {
                     if (previous[0] - b[0]).hypot(previous[1] - b[1]) < 1e-3 {
-                        return Err("Place it apart from the previous point".into());
+                        return Err(crate::i18n::tr("sketch_dimensions.too_close").into());
                     }
                     if prevent_cross && index >= 2 && sketch::crosses_polyline(&points[..index], *previous, b, false) {
-                        return Err("The outline crosses at this point".into());
+                        return Err(crate::i18n::tr("sketch_dimensions.crosses_here").into());
                     }
                 }
                 Ok((None, Some((index, b)), None))
@@ -328,7 +328,7 @@ impl Dimensions {
             _ => 0,
         };
         if self.fields.iter().take(needed).any(|f| !f.trim().parse::<f32>().is_ok_and(f32::is_finite)) {
-            self.error = Some("Type a number for each size".into());
+            self.error = Some(crate::i18n::tr("sketch_dimensions.fill_sizes").into());
             return false;
         }
         match &mut self.target {
@@ -483,6 +483,7 @@ mod tab_segment_tests {
 
     #[test]
     fn a_tab_segment_types_length_and_angle_and_esc_takes_it_away() {
+        crate::i18n::set_language("en");
         let mut points = vec![[0.0, 0.0], [10.0, 0.0]];
         let Some(mut d) = Dimensions::for_new_segment(&points) else { panic!("segment") };
         assert_eq!(d.labels(), ["Length", "Angle"]);

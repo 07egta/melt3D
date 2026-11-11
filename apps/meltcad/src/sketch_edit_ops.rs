@@ -24,14 +24,14 @@ pub enum EditError {
 impl EditError {
     pub fn message(self) -> &'static str {
         match self {
-            EditError::InvalidOutline => "Original outline is invalid. Fix crossings or tiny segments first",
-            EditError::InvalidValue => "Distance and radius must be finite values greater than 0",
-            EditError::TooFewEdges => "Cannot remove more edges",
-            EditError::Parallel => "Nearly parallel lines have no safe intersection",
-            EditError::CannotTrim => "This edge can't be trimmed; neighbors don't connect safely",
-            EditError::TooLarge => "Distance or radius too large, or corners too short",
-            EditError::TooManyPoints => "Keeping curve accuracy would exceed the point limit",
-            EditError::InvalidResult => "Can't apply: would create self-intersections, flipped outline, or tiny segments",
+            EditError::InvalidOutline => crate::i18n::tr("sketch_edit_ops.err_invalid_outline"),
+            EditError::InvalidValue => crate::i18n::tr("sketch_edit_ops.err_invalid_value"),
+            EditError::TooFewEdges => crate::i18n::tr("sketch_edit_ops.err_too_few_edges"),
+            EditError::Parallel => crate::i18n::tr("sketch_edit_ops.err_parallel"),
+            EditError::CannotTrim => crate::i18n::tr("sketch_edit_ops.err_cannot_trim"),
+            EditError::TooLarge => crate::i18n::tr("sketch_edit_ops.err_too_large"),
+            EditError::TooManyPoints => crate::i18n::tr("sketch_edit_ops.err_too_many_points"),
+            EditError::InvalidResult => crate::i18n::tr("sketch_edit_ops.err_invalid_result"),
         }
     }
 }

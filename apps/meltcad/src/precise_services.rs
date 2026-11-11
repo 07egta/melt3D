@@ -49,7 +49,7 @@ pub fn services(parent: AsyncFileDialog) -> Services {
             }
             let future = dialog
                 .add_filter(
-                    "Designs, CAD files and meshes",
+                    crate::i18n::tr("precise_services.filter_all"),
                     &[
                         io::DESIGN_EXT,
                         io::LEGACY_DESIGN_EXTS[0],
@@ -63,7 +63,7 @@ pub fn services(parent: AsyncFileDialog) -> Services {
                         "iges",
                         "IGS",
                         "IGES",
-                        "FCStd",
+                        crate::i18n::tr("precise_services.fcstd"),
                         "fcstd",
                         "3dm",
                         "3DM",
@@ -79,13 +79,19 @@ pub fn services(parent: AsyncFileDialog) -> Services {
                         "GLTF",
                     ],
                 )
-                .add_filter("SolidCraft design (container or JSON)", &[io::DESIGN_EXT, io::LEGACY_DESIGN_EXTS[0], io::LEGACY_DESIGN_EXTS[1], "json"])
+                .add_filter(
+                    crate::i18n::tr("precise_services.filter_design"),
+                    &[io::DESIGN_EXT, io::LEGACY_DESIGN_EXTS[0], io::LEGACY_DESIGN_EXTS[1], "json"],
+                )
                 .add_filter("STEP", &["step", "stp", "STEP", "STP"])
                 .add_filter("IGES", &["igs", "iges", "IGS", "IGES"])
-                .add_filter("FreeCAD and Rhino", &["FCStd", "fcstd", "3dm", "3DM"])
-                .add_filter("Mesh (3MF, STL, OBJ, glTF)", &["3mf", "3MF", "stl", "STL", "obj", "OBJ", "glb", "GLB", "gltf", "GLTF"])
-                .add_filter("Sketch drawings (DXF, SVG)", &["dxf", "DXF", "svg", "SVG"])
-                .add_filter("All files", &["*"])
+                .add_filter(crate::i18n::tr("precise_services.filter_cad"), &[crate::i18n::tr("precise_services.fcstd"), "fcstd", "3dm", "3DM"])
+                .add_filter(
+                    crate::i18n::tr("precise_services.filter_mesh"),
+                    &["3mf", "3MF", "stl", "STL", "obj", "OBJ", "glb", "GLB", "gltf", "GLTF"],
+                )
+                .add_filter(crate::i18n::tr("precise_services.filter_sketch"), &["dxf", "DXF", "svg", "SVG"])
+                .add_filter(crate::i18n::tr("precise_services.filter_any"), &["*"])
                 .pick_file();
             Box::pin(async move { future.await.map(|p| p.path().to_string_lossy().into_owned()) })
         })),
@@ -100,12 +106,12 @@ pub fn services(parent: AsyncFileDialog) -> Services {
                 }
             }
             let all: Vec<&str> = all.iter().map(String::as_str).collect();
-            let future = file_parent.clone().add_filter(label, &all).add_filter("All files", &["*"]).pick_file();
+            let future = file_parent.clone().add_filter(label, &all).add_filter(crate::i18n::tr("precise_services.filter_any"), &["*"]).pick_file();
             Box::pin(async move { future.await.map(|p| p.path().to_string_lossy().into_owned()) })
         })),
         pick_program: Some(Box::new(move || {
-            let dialog = program_parent.clone().set_title("Choose your slicer");
-            let dialog = if cfg!(target_os = "windows") { dialog.add_filter("Programs", &["exe"]) } else { dialog };
+            let dialog = program_parent.clone().set_title(crate::i18n::tr("precise_services.choose_slicer"));
+            let dialog = if cfg!(target_os = "windows") { dialog.add_filter(crate::i18n::tr("precise_services.programs"), &["exe"]) } else { dialog };
             let future = dialog.pick_file();
             Box::pin(async move { future.await.map(|p| p.path().to_string_lossy().into_owned()) })
         })),
@@ -113,12 +119,16 @@ pub fn services(parent: AsyncFileDialog) -> Services {
             let dialog = parent.clone().set_file_name(name);
             let dialog = if exts == [io::DESIGN_EXT, "json"] {
                 if name.ends_with(".json") {
-                    dialog.add_filter("Plain JSON design", &["json"]).add_filter("SolidCraft container", &[io::DESIGN_EXT])
+                    dialog
+                        .add_filter(crate::i18n::tr("precise_services.filter_json"), &["json"])
+                        .add_filter(crate::i18n::tr("precise_services.filter_container"), &[io::DESIGN_EXT])
                 } else {
-                    dialog.add_filter("SolidCraft container", &[io::DESIGN_EXT]).add_filter("Plain JSON design", &["json"])
+                    dialog
+                        .add_filter(crate::i18n::tr("precise_services.filter_container"), &[io::DESIGN_EXT])
+                        .add_filter(crate::i18n::tr("precise_services.filter_json"), &["json"])
                 }
             } else {
-                dialog.add_filter("File", exts)
+                dialog.add_filter(crate::i18n::tr("precise_services.file"), exts)
             };
             let future = dialog.save_file();
             Box::pin(async move { future.await.map(|p| p.path().to_string_lossy().into_owned()) })
