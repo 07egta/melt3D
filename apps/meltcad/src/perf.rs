@@ -588,9 +588,8 @@ pub fn quality_menu(ui: &mut egui::Ui, menu: &mut MenuState, extra: impl FnOnce(
             ui.selectable_value(&mut menu.quality, q, q.label()).on_hover_text(q.hint());
         }
         ui.separator();
-        ui.checkbox(&mut menu.hud, crate::i18n::tr("quality.hud"))
-            .on_hover_text("Shows frames per second, CPU and GPU time, and the draw scale over the view");
-        if ui.button(crate::i18n::tr("quality.speed_test")).on_hover_text("Draws a few scenes and shows this machine's speed in a table").clicked() {
+        ui.checkbox(&mut menu.hud, crate::i18n::tr("quality.hud")).on_hover_text(crate::i18n::tr("perf.tip_overlay"));
+        if ui.button(crate::i18n::tr("quality.speed_test")).on_hover_text(crate::i18n::tr("perf.tip_speed_test")).clicked() {
             menu.bench = true;
             ui.close();
         }

@@ -693,7 +693,7 @@ impl App {
             _ => match self.scene.groups.len().checked_sub(1) {
                 Some(g) => g,
                 None => {
-                    self.scene.groups.push(Group::new("Group 1"));
+                    self.scene.groups.push(Group::new(crate::i18n::tr("curve_tool.group_1")));
                     0
                 }
             },
@@ -977,17 +977,25 @@ impl App {
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(crate::i18n::tr("curve.section")).color(style::DIM).size(12.0));
                 if style::pill(ui, crate::i18n::tr("inspector.round"), sh.size[2] < 1.5)
-                    .on_hover_text("丸いSection。幅の比率で楕円にもできます")
+                    .on_hover_text(crate::i18n::tr("curve_tool.section_round_hint"))
                     .clicked()
                 {
                     sh.size[2] = 1.0;
                 }
-                if style::pill(ui, crate::i18n::tr("curve.soft_square"), sh.size[2] >= 1.5).on_hover_text("四隅が滑らかな角丸状のSection").clicked()
+                if style::pill(ui, crate::i18n::tr("curve.soft_square"), sh.size[2] >= 1.5)
+                    .on_hover_text(crate::i18n::tr("curve_tool.section_soft_square_hint"))
+                    .clicked()
                 {
                     sh.size[2] = 2.0;
                 }
             });
-            style::labeled_slider(ui, "断面の幅", &mut sh.size[1], 0.45..=1.0, "1 = 円、0.45 = 細長い楕円 / 角丸断面");
+            style::labeled_slider(
+                ui,
+                crate::i18n::tr("curve_tool.section_width_label"),
+                &mut sh.size[1],
+                0.45..=1.0,
+                crate::i18n::tr("curve_tool.section_width_hint"),
+            );
             if !(sh.params[3].is_finite() && sh.params[3] > 0.0) {
                 sh.params[3] = 1.0;
             }

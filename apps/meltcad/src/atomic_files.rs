@@ -54,7 +54,7 @@ fn rollback(entries: &mut [Staged]) -> String {
             // Replace the just-installed output directly. Removing the destination first
             // would recreate the same missing-path window this staging code is meant to avoid.
             if let Err(e) = std::fs::rename(backup, &entry.destination) {
-                errors.push(format!("Could not restore {}: {e} (backup: {})", entry.destination.display(), backup.display()));
+                errors.push(crate::i18n::fill("atomic_files.restore_failed", &[&entry.destination.display(), &e, &backup.display()]));
             } else {
                 entry.backup = None;
                 entry.installed = false;
@@ -74,19 +74,19 @@ fn install(entry: &mut Staged) -> Result<(), String> {
     match std::fs::symlink_metadata(&entry.destination) {
         Ok(m) => {
             if !m.is_file() {
-                return Err(format!("The destination is not a file: {}", entry.destination.display()));
+                return Err(crate::i18n::fill("atomic_files.not_a_file", &[&entry.destination.display()]));
             }
             let backup = sibling(&entry.destination, "backup");
             // Keep the original path present until the staged replacement is ready.
             // A copy also leaves a recovery source if a later file in this multi-file
             // transaction fails after this destination has already been replaced.
-            backup_file(&entry.destination, &backup).map_err(|e| format!("Could not protect the old file: {e}"))?;
+            backup_file(&entry.destination, &backup).map_err(|e| crate::i18n::fill("atomic_files.protect_failed", &[&e]))?;
             entry.backup = Some(backup);
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => return Err(format!("Could not check the destination: {e}")),
+        Err(e) => return Err(crate::i18n::fill("atomic_files.check_failed", &[&e])),
     }
-    std::fs::rename(&entry.temp, &entry.destination).map_err(|e| format!("Could not finish the output file: {e}"))?;
+    std::fs::rename(&entry.temp, &entry.destination).map_err(|e| crate::i18n::fill("atomic_files.finish_failed", &[&e]))?;
     entry.installed = true;
     Ok(())
 }
@@ -100,7 +100,7 @@ pub fn write_files(
     on_progress: &dyn Fn(f32),
 ) -> Result<u64, String> {
     if files.is_empty() {
-        return Err("There are no files to write".into());
+        return Err(crate::i18n::tr("atomic_files.no_files").into());
     }
     let mut entries: Vec<Staged> = Vec::new();
     let mut seen = std::collections::HashSet::new();
@@ -108,7 +108,7 @@ pub fn write_files(
     let mut written = 0_u64;
     for (destination, data) in files {
         if !seen.insert(destination.clone()) {
-            return Err(format!("Two outputs share a destination: {}", destination.display()));
+            return Err(crate::i18n::fill("atomic_files.shared_destination", &[&destination.display()]));
         }
         if cancelled() {
             return Err(crate::export_mesh::CANCELLED.into());
@@ -118,17 +118,17 @@ pub fn write_files(
             .create_new(true)
             .write(true)
             .open(&temp)
-            .map_err(|e| format!("Could not create a work file {}: {e}", temp.display()))?;
+            .map_err(|e| crate::i18n::fill("atomic_files.work_file_failed", &[&temp.display(), &e]))?;
         entries.push(Staged { destination: destination.clone(), temp, backup: None, installed: false });
         for chunk in data.chunks(256 * 1024) {
             if cancelled() {
                 return Err(crate::export_mesh::CANCELLED.into());
             }
-            file.write_all(chunk).map_err(|e| format!("Write failed: {e}"))?;
+            file.write_all(chunk).map_err(|e| crate::i18n::fill("atomic_files.write_failed", &[&e]))?;
             written += chunk.len() as u64;
             on_progress(written as f32 / total.max(1) as f32);
         }
-        file.sync_all().map_err(|e| format!("Could not prepare the file for commit: {e}"))?;
+        file.sync_all().map_err(|e| crate::i18n::fill("atomic_files.commit_prepare_failed", &[&e]))?;
     }
     if cancelled() || !begin_commit() {
         return Err(crate::export_mesh::CANCELLED.into());

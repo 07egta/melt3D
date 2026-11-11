@@ -222,7 +222,7 @@ impl App {
         cfg.sanitize();
         let pos = stroke::centre(&nodes);
         let mut sh = Shape::new(Kind::Curve, pos, Material::plain(cfg.color, 0.4, 0.0));
-        sh.name = "Pipe".to_string();
+        sh.name = crate::i18n::tr("pipe_tool.name").to_string();
         sh.path = nodes.iter().map(|p| [p[0] - pos[0], p[1] - pos[1], p[2] - pos[2], cfg.radius]).collect();
         sh.params = [0.0, 1.0, 0.0, 1.0];
         sh.blend = 2.0;

@@ -212,7 +212,7 @@ pub fn open_check_with(ctx: &egui::Context, defaults: Defaults) {
 /// Ctrl+E: export again with the last settings (the card opens the first time).
 pub fn quick(app: &mut App, ctx: &egui::Context) {
     if is_running(ctx) {
-        app.say(ctx, "Export is already running");
+        app.say(ctx, crate::i18n::tr("export_dialog.already_running"));
         return;
     }
     match last(ctx) {
@@ -227,15 +227,15 @@ pub fn quick(app: &mut App, ctx: &egui::Context) {
 
 fn jp_error(e: &str) -> String {
     if e == CANCELLED {
-        "Cancelled".into()
+        crate::i18n::tr("export_dialog.cancelled").into()
     } else if e.contains("too big for this precision") || e.contains("too fine for this model") || e.contains("too many triangles") {
-        "Too big at this detail level. Try a coarser setting".into()
+        crate::i18n::tr("export_dialog.too_big").into()
     } else if e.contains("nothing to export") || e.contains("shapes are empty") || e.contains("no size") {
-        "Nothing to export".into()
+        crate::i18n::tr("export_dialog.nothing").into()
     } else if e.contains("nothing is selected") || e.contains("selection is gone") {
-        "Select shapes first, then export".into()
+        crate::i18n::tr("export_dialog.select_first").into()
     } else {
-        format!("Export failed ({e})")
+        crate::i18n::fill("export_dialog.failed", &[&e])
     }
 }
 
@@ -323,7 +323,7 @@ fn has_custom_settings(o: &Options) -> bool {
 fn start_with(app: &mut App, ctx: &egui::Context, o: Options) -> bool {
     let o = o.sanitized();
     if o.scope == Scope::Selected && app.sel.is_none() {
-        app.say(ctx, "Select shapes first, then export");
+        app.say(ctx, crate::i18n::tr("export_dialog.select_first"));
         return false;
     }
     let Some(mut path) =
@@ -339,7 +339,7 @@ fn start_with(app: &mut App, ctx: &egui::Context, o: Options) -> bool {
 
 fn start_job(app: &mut App, ctx: &egui::Context, o: Options, path: PathBuf) -> bool {
     if is_running(ctx) {
-        app.say(ctx, "Export is already running");
+        app.say(ctx, crate::i18n::tr("export_dialog.already_running"));
         return false;
     }
     let permit = match crate::work_budget::try_acquire(ctx) {
@@ -372,12 +372,9 @@ fn running_card(app: &mut App, ctx: &egui::Context) {
                 let closed = if r.closed { "" } else { " ⚠ Has holes" };
                 app.say(
                     ctx,
-                    format!(
-                        "Exported: {} (triangles {} · {} · {:.1} sec){closed}",
-                        job.label,
-                        count_text(r.tris as f64),
-                        bytes_text(r.bytes as f64),
-                        r.secs
+                    crate::i18n::fill(
+                        "export_dialog.done",
+                        &[&job.label, &(count_text(r.tris as f64)), &(bytes_text(r.bytes as f64)), &format!("{:.1}", r.secs), &closed],
                     ),
                 );
             }
@@ -391,7 +388,7 @@ fn running_card(app: &mut App, ctx: &egui::Context) {
         |ui| {
             style::card().show(ui, |ui| {
                 ui.set_width(340.0);
-                ui.label(RichText::new(format!("Exporting… {}", job.label)).strong().size(13.5));
+                ui.label(RichText::new(crate::i18n::fill("export_dialog.exporting", &[&job.label])).strong().size(13.5));
                 ui.label(RichText::new(job.phase_name()).size(11.5).color(style::DIM));
                 let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 10.0), egui::Sense::hover());
                 ui.painter().rect_filled(rect, 5.0, style::PANEL_DARK);
@@ -403,7 +400,7 @@ fn running_card(app: &mut App, ctx: &egui::Context) {
                     ui.label(RichText::new(format!("{:.0}%  {:.0} sec", job.fraction() * 100.0, job.elapsed())).size(11.5).color(style::DIM));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if job.can_cancel() {
-                            if style::pill(ui, "Cancel", false).clicked() {
+                            if style::pill(ui, crate::i18n::tr("export_dialog.cancel"), false).clicked() {
                                 job.cancel();
                             }
                         } else {
@@ -477,11 +474,11 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
     egui::Area::new(egui::Id::new("export_area")).order(egui::Order::Foreground).anchor(Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
         style::card().show(ui, |ui| {
             ui.set_width(440.0_f32.min((ctx.content_rect().width() - 32.0).max(200.0)));
-            ui.label(RichText::new("Export").strong().size(15.0));
+            ui.label(RichText::new(crate::i18n::tr("export_dialog.title")).strong().size(15.0));
             // Keep the action buttons on screen at the smallest supported window, also when a
             // print check, advanced settings or a long message add rows: the rest scrolls.
             egui::ScrollArea::vertical().id_salt("ex_card_scroll").max_height((ctx.content_rect().height() - 132.0).max(120.0)).show(ui, |ui| {
-                ui.label(RichText::new("Makes a file for 3D printers and other software").size(11.5).color(style::DIM));
+                ui.label(RichText::new(crate::i18n::tr("export_dialog.intro")).size(11.5).color(style::DIM));
                 ui.add_space(4.0);
                 let o = &mut d.opts;
 
@@ -489,9 +486,9 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
                 ui.label(RichText::new("① What is it for?").strong().size(12.5));
                 ui.horizontal_wrapped(|ui| {
                     for (format, label, hint) in [
-                        (Format::Stl, "3D print", "STL: no colour. Works with most 3D printers"),
-                        (Format::ThreeMf, "Colour print", "3MF: keeps colour and size"),
-                        (Format::Glb, "Other apps", "GLB: for web and CG apps"),
+                        (Format::Stl, "3D print", crate::i18n::tr("export_dialog.format_stl_tip")),
+                        (Format::ThreeMf, crate::i18n::tr("export_dialog.format_3mf_label"), "3MF: keeps colour and size"),
+                        (Format::Glb, crate::i18n::tr("export_dialog.format_glb_label"), crate::i18n::tr("export_dialog.format_glb_tip")),
                     ] {
                         if style::pill(ui, label, o.format == format).on_hover_text(hint).clicked() {
                             choose_format(o, format);
@@ -499,10 +496,10 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
                     }
                 });
                 let explanation = match o.format {
-                    Format::Stl | Format::StlAscii => "STL is saved without colour",
+                    Format::Stl | Format::StlAscii => crate::i18n::tr("export_dialog.note_stl"),
                     Format::ThreeMf => "3MF also keeps colour and size",
-                    Format::Glb => "GLB also keeps colour and material",
-                    _ => "Another file type is selected (you can change it in advanced settings)",
+                    Format::Glb => crate::i18n::tr("export_dialog.note_glb"),
+                    _ => crate::i18n::tr("export_dialog.note_other"),
                 };
                 ui.label(RichText::new(explanation).size(11.5).color(style::DIM));
                 ui.add_space(8.0);
@@ -510,9 +507,9 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
                 ui.label(RichText::new("② Finish detail").strong().size(12.5));
                 ui.horizontal(|ui| {
                     for (label, tol, hint) in [
-                        ("Standard (recommended)", 0.2_f32, "Balance of quality and time"),
-                        ("Fine", 0.1, "For fine shapes. Takes longer"),
-                        ("Fast / light", 0.5, "For checking. Thin parts may disappear"),
+                        (crate::i18n::tr("export_dialog.detail_standard"), 0.2_f32, crate::i18n::tr("export_dialog.detail_standard_tip")),
+                        (crate::i18n::tr("export_dialog.detail_fine"), 0.1, crate::i18n::tr("export_dialog.detail_fine_tip")),
+                        (crate::i18n::tr("export_dialog.detail_fast"), 0.5, crate::i18n::tr("export_dialog.detail_fast_tip")),
                     ] {
                         if style::pill(ui, label, (o.tolerance - tol).abs() < 1e-4).on_hover_text(hint).clicked() {
                             o.tolerance = tol;
@@ -520,24 +517,33 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
                     }
                 });
                 if quality_preset(o.tolerance).is_none() {
-                    ui.label(RichText::new(format!("Detail {:.3} mm (change in advanced settings)", o.tolerance)).size(11.5).color(style::KEEP));
+                    ui.label(
+                        RichText::new(crate::i18n::fill("export_dialog.detail_value", &[&format!("{:.3}", o.tolerance)]))
+                            .size(11.5)
+                            .color(style::KEEP),
+                    );
                 }
                 ui.add_space(8.0);
 
                 ui.label(RichText::new("③ What to export?").strong().size(12.5));
                 ui.horizontal(|ui| {
-                    if style::pill(ui, "Visible shapes", o.scope == Scope::Visible).clicked() {
+                    if style::pill(ui, crate::i18n::tr("export_dialog.scope_visible"), o.scope == Scope::Visible).clicked() {
                         o.scope = Scope::Visible;
                     }
-                    if style::pill_enabled(ui, "Selected only", o.scope == Scope::Selected, app.sel.is_some()).clicked() {
+                    if style::pill_enabled(ui, crate::i18n::tr("export_dialog.scope_selected"), o.scope == Scope::Selected, app.sel.is_some())
+                        .clicked()
+                    {
                         o.scope = Scope::Selected;
                     }
-                    if style::pill(ui, "All", o.scope == Scope::All).on_hover_text("Includes hidden shapes").clicked() {
+                    if style::pill(ui, crate::i18n::tr("export_dialog.scope_all"), o.scope == Scope::All)
+                        .on_hover_text(crate::i18n::tr("export_dialog.scope_all_tip"))
+                        .clicked()
+                    {
                         o.scope = Scope::All;
                     }
                 });
                 if o.scope == Scope::Selected && app.sel.is_none() {
-                    ui.label(RichText::new("Select a shape first, or switch to 'Visible shapes'").size(11.5).color(style::KEEP));
+                    ui.label(RichText::new(crate::i18n::tr("export_dialog.need_selection")).size(11.5).color(style::KEEP));
                 }
                 ui.add_space(6.0);
 
@@ -548,45 +554,56 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
                             let raw = e.raw_tris(tol);
                             let secs = e.secs(tol, o.lighten != Lighten::Off);
                             if raw > (MAX_VERTS as f64) * 1.8 {
-                                ui.label(RichText::new("Too fine. Try 'Fast / light'").size(11.5).color(style::CUT));
+                                ui.label(RichText::new(crate::i18n::tr("export_dialog.too_fine")).size(11.5).color(style::CUT));
                             } else {
                                 let col = if raw > 4.0e6 || secs > 60.0 { style::KEEP } else { style::DIM };
                                 ui.label(
-                                    RichText::new(format!("About {} · max about {}", time_text(secs), bytes_text(raw * bytes_per_tri(o.format))))
-                                        .size(11.5)
-                                        .color(col),
+                                    RichText::new(crate::i18n::fill(
+                                        "export_dialog.estimate",
+                                        &[&(time_text(secs)), &(bytes_text(raw * bytes_per_tri(o.format)))],
+                                    ))
+                                    .size(11.5)
+                                    .color(col),
                                 );
                             }
-                            ui.label(RichText::new(format!("Size: {}", size_text(e.size))).size(11.5).color(style::DIM));
+                            ui.label(
+                                RichText::new(crate::i18n::fill("export_dialog.size_value", &[&(size_text(e.size))])).size(11.5).color(style::DIM),
+                            );
                         }
                         Err(_) => {
-                            ui.label(RichText::new("Couldn't check the size. Check the shape").size(11.5).color(style::KEEP));
+                            ui.label(RichText::new(crate::i18n::tr("export_dialog.size_error")).size(11.5).color(style::KEEP));
                         }
                     }
                 } else if d.est.running() {
-                    ui.label(RichText::new("Checking size…").size(11.5).color(style::DIM));
+                    ui.label(RichText::new(crate::i18n::tr("export_dialog.size_checking")).size(11.5).color(style::DIM));
                 }
 
                 ui.add_space(6.0);
-                if style::pill(ui, if d.advanced { "Hide advanced ▲" } else { "Show advanced ▼" }, d.advanced).clicked() {
+                if style::pill(
+                    ui,
+                    if d.advanced { crate::i18n::tr("export_dialog.hide_advanced") } else { crate::i18n::tr("export_dialog.show_advanced") },
+                    d.advanced,
+                )
+                .clicked()
+                {
                     d.advanced = !d.advanced;
                 }
                 if d.advanced {
                     egui::ScrollArea::vertical().id_salt("ex_advanced_scroll").max_height(200.0).show(ui, |ui| {
                         // file type
-                        row(ui, "File type", |ui| {
+                        row(ui, crate::i18n::tr("export_dialog.file_type"), |ui| {
                             let items: Vec<(&str, &str)> = Format::ALL
                                 .iter()
                                 .map(|f| {
                                     (
                                         f.label(),
                                         match f {
-                                            Format::Stl => "For 3D printing (no colour, small)",
-                                            Format::ThreeMf => "For slicers (colour and units)",
-                                            Format::Obj => "Coloured (also makes an MTL file)",
-                                            Format::Ply => "Coloured (vertex colour)",
+                                            Format::Stl => crate::i18n::tr("export_dialog.type_stl_tip"),
+                                            Format::ThreeMf => crate::i18n::tr("export_dialog.type_3mf_tip"),
+                                            Format::Obj => crate::i18n::tr("export_dialog.type_obj_tip"),
+                                            Format::Ply => crate::i18n::tr("export_dialog.type_ply_tip"),
                                             Format::Glb => "glTF 2.0 (for apps and web; colour and gloss)",
-                                            Format::StlAscii => "Text STL (bigger file)",
+                                            Format::StlAscii => crate::i18n::tr("export_dialog.type_stl_ascii_tip"),
                                         },
                                     )
                                 })
@@ -600,10 +617,10 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
                         });
 
                         // precision
-                        row(ui, "Detail by number", |ui| {
+                        row(ui, crate::i18n::tr("export_dialog.detail_by_number"), |ui| {
                             for t in [0.05f32, 0.1, 0.2, 0.5] {
                                 let on = (o.tolerance - t).abs() < 1e-4;
-                                if style::pill(ui, &format!("{t}"), on).on_hover_text("Cell size (mm). Smaller is finer but heavier").clicked() {
+                                if style::pill(ui, &format!("{t}"), on).on_hover_text(crate::i18n::tr("export_dialog.cell_size_tip")).clicked() {
                                     o.tolerance = t;
                                 }
                             }
@@ -617,40 +634,50 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
                                     .max_decimals(3),
                             );
                         });
-                        row(ui, "Units", |ui| {
-                            let items: Vec<(&str, &str)> =
-                                Units::ALL.iter().map(|u| (u.label(), if o.format == Format::Glb { "GLB is always in m" } else { "" })).collect();
+                        row(ui, crate::i18n::tr("export_dialog.units"), |ui| {
+                            let items: Vec<(&str, &str)> = Units::ALL
+                                .iter()
+                                .map(|u| (u.label(), if o.format == Format::Glb { crate::i18n::tr("export_dialog.glb_units") } else { "" }))
+                                .collect();
                             let cur = Units::ALL.iter().position(|u| *u == o.units);
                             if let Some(i) = style::segmented(ui, "ex_units", &items, cur, false)
                                 && let Some(u) = Units::ALL.get(i)
                             {
                                 o.units = *u;
                             }
-                            ui.label(RichText::new("Size").color(style::DIM).size(12.0));
+                            ui.label(RichText::new(crate::i18n::tr("export_dialog.size_label")).color(style::DIM).size(12.0));
                             style::field_sized(
                                 ui,
                                 [68.0, 22.0],
                                 egui::DragValue::new(&mut o.scale_pct).speed(1.0).range(1.0..=10000.0).suffix(" %").max_decimals(1),
                             );
                         });
-                        row(ui, "Up direction", |ui| {
-                            let items = [("Z (as is)", "3D printer style"), ("Y (OBJ / GLB style)", "Turns Z-up into Y-up")];
+                        row(ui, crate::i18n::tr("export_dialog.up_direction"), |ui| {
+                            let items = [
+                                (crate::i18n::tr("export_dialog.up_z"), "3D printer style"),
+                                (crate::i18n::tr("export_dialog.up_y"), crate::i18n::tr("export_dialog.up_y_tip")),
+                            ];
                             if let Some(i) = style::segmented(ui, "ex_up", &items, Some(usize::from(o.up == Up::Y)), false) {
                                 o.up = if i == 1 { Up::Y } else { Up::Z };
                             }
                         });
-                        row(ui, "Smooth", |ui| {
-                            let items = [("None", ""), ("A little", ""), ("Normal", ""), ("Strong", "")];
+                        row(ui, crate::i18n::tr("export_dialog.smooth"), |ui| {
+                            let items = [
+                                (crate::i18n::tr("export_dialog.smooth_none"), ""),
+                                (crate::i18n::tr("export_dialog.smooth_little"), ""),
+                                (crate::i18n::tr("export_dialog.smooth_normal"), ""),
+                                (crate::i18n::tr("export_dialog.smooth_strong"), ""),
+                            ];
                             if let Some(i) = style::segmented(ui, "ex_smooth", &items, Some(usize::from(o.smooth.min(3))), false) {
                                 o.smooth = i as u8;
                             }
-                            ui.label(RichText::new("Corners stay as they are").size(11.0).color(style::DIM));
+                            ui.label(RichText::new(crate::i18n::tr("export_dialog.smooth_tip")).size(11.0).color(style::DIM));
                         });
-                        row(ui, "Triangles", |ui| {
+                        row(ui, crate::i18n::tr("export_dialog.triangles"), |ui| {
                             let items = [
-                                ("As is", "All cells as triangles"),
-                                ("Merge flat areas", "Flat faces into big triangles (shape stays the same)"),
-                                ("Reduce count", "Set a triangle count to make it lighter"),
+                                (crate::i18n::tr("export_dialog.tri_as_is"), crate::i18n::tr("export_dialog.tri_as_is_tip")),
+                                (crate::i18n::tr("export_dialog.tri_merge"), crate::i18n::tr("export_dialog.tri_merge_tip")),
+                                (crate::i18n::tr("export_dialog.tri_reduce"), crate::i18n::tr("export_dialog.tri_reduce_tip")),
                             ];
                             let cur = match o.lighten {
                                 Lighten::Off => 0,
@@ -669,23 +696,27 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
                             }
                         });
                         if let Lighten::Target(n) = &mut o.lighten {
-                            row(ui, "Guide", |ui| {
+                            row(ui, crate::i18n::tr("export_dialog.guide"), |ui| {
                                 style::field_sized(ui, [110.0, 22.0], egui::DragValue::new(n).speed(500.0).range(100..=50_000_000).suffix(" pcs"));
                             });
                         }
                         ui.horizontal(|ui| {
                             ui.add_enabled_ui(o.format.has_colour(), |ui| {
-                                style::switch(ui, &mut o.colour, "Include colour");
+                                style::switch(ui, &mut o.colour, crate::i18n::tr("export_dialog.include_colour"));
                             });
-                            style::switch(ui, &mut o.ignore_paint, "Ignore painted colours");
+                            style::switch(ui, &mut o.ignore_paint, crate::i18n::tr("export_dialog.ignore_paint"));
                         });
                         if !o.format.has_colour() {
-                            ui.label(RichText::new("STL can't include colour").size(11.0).color(style::DIM));
+                            ui.label(RichText::new(crate::i18n::tr("export_dialog.stl_no_colour")).size(11.0).color(style::DIM));
                         }
 
                         if let Some(Ok(e)) = d.est.result() {
                             let tris = e.raw_tris(f64::from(o.tolerance.clamp(MIN_TOLERANCE, MAX_TOLERANCE)));
-                            ui.label(RichText::new(format!("Triangles, about {}", count_text(tris))).size(11.5).color(style::DIM));
+                            ui.label(
+                                RichText::new(crate::i18n::fill("export_dialog.triangles_about", &[&(count_text(tris))]))
+                                    .size(11.5)
+                                    .color(style::DIM),
+                            );
                         }
                     });
                 }
@@ -693,14 +724,14 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
                 // the print check
                 ui.add_space(4.0);
                 ui.horizontal(|ui| {
-                    if style::pill_enabled(ui, "Print check", false, !d.check.running())
+                    if style::pill_enabled(ui, crate::i18n::tr("export_dialog.print_check"), false, !d.check.running())
                         .on_hover_text("size, volume, holes, thin spots, overhangs")
                         .clicked()
                     {
                         check = true;
                     }
                     if d.check.running() {
-                        ui.label(RichText::new("Checking…").size(11.5).color(style::DIM));
+                        ui.label(RichText::new(crate::i18n::tr("export_dialog.checking")).size(11.5).color(style::DIM));
                     }
                 });
                 match d.check.result() {
@@ -718,18 +749,20 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
             ui.add_space(4.0);
             ui.horizontal(|ui| {
                 ui.add_enabled_ui(!busy, |ui| {
-                    let b = egui::Button::new(RichText::new(format!("Export ({})…", d.opts.format.label())).strong().color(Color32::WHITE))
-                        .fill(style::ACCENT_SOFT)
-                        .stroke(Stroke::new(1.0, style::ACCENT));
+                    let b = egui::Button::new(
+                        RichText::new(crate::i18n::fill("export_dialog.export_button", &[&d.opts.format.label()])).strong().color(Color32::WHITE),
+                    )
+                    .fill(style::ACCENT_SOFT)
+                    .stroke(Stroke::new(1.0, style::ACCENT));
                     if ui.add(b).clicked() {
                         go = true;
                     }
                 });
-                if ui.button("Close").clicked() {
+                if ui.button(crate::i18n::tr("export_dialog.close")).clicked() {
                     close = true;
                 }
                 if busy {
-                    ui.label(RichText::new("Export is already running").size(11.5).color(style::DIM));
+                    ui.label(RichText::new(crate::i18n::tr("export_dialog.already_running")).size(11.5).color(style::DIM));
                 }
             });
         });
@@ -755,27 +788,23 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
 
 fn print_check_lines(ui: &mut egui::Ui, c: &PrintCheck) {
     let small = |t: String, col: Color32| RichText::new(t).size(11.5).color(col);
-    ui.label(small(format!("Size {}  volume {:.1} cm³", size_text(c.size), c.volume_cm3), style::DIM));
+    ui.label(small(crate::i18n::fill("export_dialog.size_volume", &[&(size_text(c.size)), &format!("{:.1}", c.volume_cm3)]), style::DIM));
     if c.closed {
-        ui.label(small("Surface: closed (OK to print)".into(), style::ADD));
+        ui.label(small(crate::i18n::tr("export_dialog.surface_ok").into(), style::ADD));
     } else {
-        ui.label(small("Surface: has holes (overlap shapes or make the blend stronger)".into(), style::CUT));
+        ui.label(small(crate::i18n::tr("export_dialog.surface_holes").into(), style::CUT));
     }
     if c.thin_pct >= 0.5 {
         let t = c.thinnest.map(|t| format!(", thinnest spot about {t:.1} mm")).unwrap_or_default();
-        ui.label(small(
-            format!("Thin spots: about {:.0}% is thinner than {} mm{t} (may bend or fail to print)", c.thin_pct, export_job::THIN_MM),
-            style::KEEP,
-        ));
+        ui.label(small(crate::i18n::fill("export_dialog.thin_spots", &[&format!("{:.0}", c.thin_pct), &export_job::THIN_MM, &t]), style::KEEP));
     } else {
-        ui.label(small(format!("Thin spots: none (at least {} mm)", export_job::THIN_MM), style::ADD));
+        ui.label(small(crate::i18n::fill("export_dialog.thin_none", &[&export_job::THIN_MM]), style::ADD));
     }
     let col = if c.overhang_pct > 20.0 { style::KEEP } else { style::DIM };
     ui.label(small(
-        format!(
-            "Overhang: about {:.0}% of faces tilt more than 45° ({})",
-            c.overhang_pct,
-            if c.overhang_pct > 5.0 { "Might need supports" } else { "Not needed" }
+        crate::i18n::fill(
+            "export_dialog.overhang",
+            &[&format!("{:.0}", c.overhang_pct), &(if c.overhang_pct > 5.0 { "Might need supports" } else { "Not needed" })],
         ),
         col,
     ));
@@ -856,6 +885,7 @@ mod tests {
     fn the_card_estimates_checks_and_exports_with_a_bar() {
         let ctx = egui::Context::default();
         let mut app = App::new(true, None);
+        crate::i18n::set_language("en");
         open(&ctx, Some(ExportFormat::ThreeMf));
         frame(&mut app, &ctx);
         let d = ctx.data(|m| m.get_temp::<Dlg>(id())).unwrap();

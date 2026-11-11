@@ -37,7 +37,7 @@ impl Job {
         let result = match self.rx.try_recv() {
             Ok(result) => result,
             Err(TryRecvError::Empty) => return None,
-            Err(TryRecvError::Disconnected) => Err("The picture job stopped unexpectedly".to_owned()),
+            Err(TryRecvError::Disconnected) => Err(crate::i18n::tr("render_job.unexpected_stop").to_owned()),
         };
         if let Some(reply) = self.reply.take() {
             let _ = reply.send(result.clone());
@@ -69,11 +69,11 @@ pub fn start(ctx: &egui::Context, scene: Scene, path: PathBuf, work: Work, reply
         .name("yura-control-picture".into())
         .spawn(move || {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| draw(&scene, &path, work, &worker_cancel)))
-                .unwrap_or_else(|_| Err("The picture job stopped partway through".to_owned()));
+                .unwrap_or_else(|_| Err(crate::i18n::tr("render_job.stopped_partway").to_owned()));
             drop(permit);
             let _ = tx.send(result);
         })
-        .map_err(|e| format!("Could not start the picture job: {e}"))?;
+        .map_err(|e| crate::i18n::fill("render_job.start_failed", &[&e]))?;
     Ok(Job { rx, cancel, reply: Some(reply) })
 }
 
@@ -99,13 +99,13 @@ fn draw(scene: &Scene, path: &Path, work: Work, cancel: &AtomicBool) -> Result<V
 /// the destination. Nothing is published if the job was stopped or the write failed.
 fn publish(path: &Path, bytes: &[u8], cancel: &AtomicBool) -> Result<(), String> {
     if bytes.is_empty() {
-        return Err("The picture came out empty".into());
+        return Err(crate::i18n::tr("render_job.empty").into());
     }
     if cancel.load(Ordering::Acquire) {
         return Err("Stopped".into());
     }
     let parent = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or_else(|| Path::new("."));
-    let name = path.file_name().ok_or_else(|| "The output location has no file name".to_owned())?;
+    let name = path.file_name().ok_or_else(|| crate::i18n::tr("render_job.no_file_name").to_owned())?;
     let mut file = None;
     let mut temp = PathBuf::new();
     for _ in 0..16 {
@@ -119,11 +119,11 @@ fn publish(path: &Path, bytes: &[u8], cancel: &AtomicBool) -> Result<(), String>
                 break;
             }
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(e) => return Err(format!("Cannot write {}: {e}", path.display())),
+            Err(e) => return Err(crate::i18n::fill("render_job.cannot_write", &[&path.display(), &e])),
         }
     }
     let Some(mut file) = file else {
-        return Err(format!("Cannot create a work file for {}", path.display()));
+        return Err(crate::i18n::fill("render_job.no_work_file", &[&path.display()]));
     };
     let written = (|| -> std::io::Result<()> {
         for chunk in bytes.chunks(256 * 1024) {
@@ -139,7 +139,7 @@ fn publish(path: &Path, bytes: &[u8], cancel: &AtomicBool) -> Result<(), String>
         Ok(()) if cancel.load(Ordering::Acquire) => Some("Stopped".to_owned()),
         Ok(()) => None,
         Err(e) if e.kind() == std::io::ErrorKind::Interrupted => Some("Stopped".to_owned()),
-        Err(e) => Some(format!("Cannot write {}: {e}", path.display())),
+        Err(e) => Some(crate::i18n::fill("render_job.cannot_write", &[&path.display(), &e])),
     };
     if let Some(error) = error {
         let _ = std::fs::remove_file(&temp);
@@ -147,7 +147,7 @@ fn publish(path: &Path, bytes: &[u8], cancel: &AtomicBool) -> Result<(), String>
     }
     if let Err(e) = std::fs::rename(&temp, path) {
         let _ = std::fs::remove_file(&temp);
-        return Err(format!("Cannot finish {}: {e}", path.display()));
+        return Err(crate::i18n::fill("render_job.cannot_finish", &[&path.display(), &e]));
     }
     Ok(())
 }

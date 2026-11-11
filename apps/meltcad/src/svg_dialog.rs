@@ -70,7 +70,7 @@ impl<T: Send + 'static> SvgJob<T> {
         let j = job.clone();
         let spawned = std::thread::Builder::new().name("meltcad-svg-import".into()).spawn(move || {
             let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(&j.cancel, &j.progress)))
-                .unwrap_or_else(|_| Err("The SVG load stopped partway through".into()));
+                .unwrap_or_else(|_| Err(crate::i18n::tr("svg_dialog.load_stopped").into()));
             let res = if j.cancel.load(Ordering::Relaxed) { Err(crate::import_mesh::IMPORT_CANCELLED.into()) } else { res };
             drop(permit); // free the budget before the UI can see a completed read
             if let Ok(mut slot) = j.slot.lock() {
@@ -80,7 +80,7 @@ impl<T: Send + 'static> SvgJob<T> {
         if let Err(e) = spawned
             && let Ok(mut slot) = job.slot.lock()
         {
-            *slot = Some(Err(format!("Couldn't start the SVG load: {e}")));
+            *slot = Some(Err(crate::i18n::fill("svg_dialog.load_start_failed", &[&e])));
         }
         job
     }
@@ -157,12 +157,12 @@ fn start(d: &mut Dlg, ctx: &egui::Context, source: Source) {
         }
         let mut notes = Vec::new();
         if art.dropped > 0 {
-            notes.push(format!("Skipped {} tiny or extra outlines", art.dropped));
+            notes.push(crate::i18n::fill("svg_dialog.outlines_skipped", &[&art.dropped]));
         }
         notes.extend(art.warnings.iter().cloned());
         let name = match &source {
             Source::File(path) => stem(path),
-            Source::Sample => "Sample star".into(),
+            Source::Sample => crate::i18n::tr("svg_dialog.sample_star").into(),
         };
         progress.store(1000, Ordering::Relaxed);
         Ok(Loaded { art, preview, name, notes: notes.join("\n") })
@@ -228,35 +228,35 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
     let modal = egui::Modal::new(egui::Id::new("svg_import_area")).frame(egui::Frame::new()).show(ctx, |ui| {
         style::card().show(ui, |ui| {
             ui.set_width((ctx.content_rect().width() - 64.0).clamp(240.0, 380.0));
-            ui.label(RichText::new("Import SVG").strong().size(16.0));
-            ui.label(RichText::new("Turn filled outlines into a solid. Holes stay open.").size(12.0).color(style::DIM));
+            ui.label(RichText::new(crate::i18n::tr("svg_dialog.title")).strong().size(16.0));
+            ui.label(RichText::new(crate::i18n::tr("svg_dialog.solid_hint")).size(12.0).color(style::DIM));
             ui.add_space(4.0);
             egui::ScrollArea::vertical().max_height((ctx.content_rect().height() - 170.0).max(140.0)).show(ui, |ui| {
                 ui.horizontal_wrapped(|ui| {
                     if !busy
-                        && style::pill(ui, "Choose SVG…", false).clicked()
+                        && style::pill(ui, crate::i18n::tr("svg_dialog.choose_button"), false).clicked()
                         && let Some(p) = rfd::FileDialog::new().add_filter("SVG", &["svg"]).pick_file()
                     {
                         start(&mut d, ctx, Source::File(p));
                     }
-                    if !busy && style::pill(ui, "Try a sample", false).clicked() {
+                    if !busy && style::pill(ui, crate::i18n::tr("svg_dialog.sample_button"), false).clicked() {
                         start(&mut d, ctx, Source::Sample);
                     }
                 });
                 if d.art.is_some() {
                     ui.label(RichText::new(&d.name).strong());
                 } else {
-                    ui.label(RichText::new("You can also drop a .svg file into the window.").size(12.0).color(style::DIM));
+                    ui.label(RichText::new(crate::i18n::tr("svg_dialog.drop_hint")).size(12.0).color(style::DIM));
                 }
                 preview(ui, &d);
                 if let Some(job) = &d.job {
                     ui.add(egui::ProgressBar::new(job.fraction()).show_percentage());
                     let phase = if job.cancelled() {
-                        "Stopping…"
+                        crate::i18n::tr("svg_dialog.stopping")
                     } else if job.fraction() < 0.5 {
-                        "Reading and checking the SVG…"
+                        crate::i18n::tr("svg_dialog.reading")
                     } else {
-                        "Building the preview…"
+                        crate::i18n::tr("svg_dialog.building")
                     };
                     ui.label(RichText::new(phase).size(12.0).color(style::DIM));
                 }
@@ -275,11 +275,11 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
                         ))
                         .size(12.0),
                     );
-                    ui.label(RichText::new("Red outlines mark holes.").size(12.0).color(style::DIM));
+                    ui.label(RichText::new(crate::i18n::tr("svg_dialog.holes_hint")).size(12.0).color(style::DIM));
                 }
                 if !d.msg.is_empty() {
                     ui.add_space(2.0);
-                    ui.label(RichText::new("Import notes").strong().color(style::KEEP));
+                    ui.label(RichText::new(crate::i18n::tr("svg_dialog.notes_heading")).strong().color(style::KEEP));
                     for line in d.msg.lines() {
                         ui.label(RichText::new(line).size(12.0).color(style::KEEP));
                     }
@@ -287,43 +287,43 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
                 ui.add_space(4.0);
                 ui.add_enabled_ui(d.art.is_some() && !busy && !app.scene_structure_locked(), |ui| {
                     egui::Grid::new("svg_import_grid").num_columns(2).spacing([10.0, 7.0]).show(ui, |ui| {
-                        ui.label("Longest side");
+                        ui.label(crate::i18n::tr("svg_dialog.longest_side"));
                         style::field(ui, egui::DragValue::new(&mut d.target).speed(0.5).range(1.0..=500.0).suffix(" mm").max_decimals(1))
-                            .on_hover_text("Width or height, whichever is longer. The aspect ratio stays fixed.");
+                            .on_hover_text(crate::i18n::tr("svg_dialog.longest_side_tip"));
                         ui.end_row();
-                        ui.label("Extrude height");
+                        ui.label(crate::i18n::tr("svg_dialog.extrude_height"));
                         style::field(ui, egui::DragValue::new(&mut d.height).speed(0.2).range(0.5..=200.0).suffix(" mm").max_decimals(1));
                         ui.end_row();
-                        ui.label("Round edges");
+                        ui.label(crate::i18n::tr("svg_dialog.round_edges"));
                         let max_round = (d.height * 0.5).min(20.0);
                         d.round = d.round.min(max_round);
                         style::field(ui, egui::DragValue::new(&mut d.round).speed(0.05).range(0.0..=max_round).suffix(" mm").max_decimals(2))
-                            .on_hover_text("Optional. Start at 0 mm to preserve fine details.");
+                            .on_hover_text(crate::i18n::tr("svg_dialog.extrude_tip"));
                         ui.end_row();
                     });
                     ui.horizontal_wrapped(|ui| {
                         if let Some(a) = &d.art {
                             let natural = a.natural_mm[0].max(a.natural_mm[1]);
-                            if style::pill(ui, "Original size", false)
+                            if style::pill(ui, crate::i18n::tr("svg_dialog.original_size"), false)
                                 .on_hover_text(format!("{:.1} × {:.1} mm (maximum 500 mm)", a.natural_mm[0], a.natural_mm[1]))
                                 .clicked()
                             {
                                 d.target = natural.clamp(1.0, 500.0);
                             }
                         }
-                        ui.checkbox(&mut d.flip, "Flip vertically");
+                        ui.checkbox(&mut d.flip, crate::i18n::tr("svg_dialog.flip_vertical"));
                     });
                 });
             });
             ui.add_space(6.0);
             ui.horizontal(|ui| {
                 if let Some(job) = &d.job {
-                    if style::pill(ui, "Stop loading", false).clicked() {
+                    if style::pill(ui, crate::i18n::tr("svg_dialog.stop_loading"), false).clicked() {
                         job.cancel();
                     }
                 } else {
                     ui.add_enabled_ui(d.art.is_some(), |ui| {
-                        let b = egui::Button::new(RichText::new("Import solid").strong().color(Color32::WHITE))
+                        let b = egui::Button::new(RichText::new(crate::i18n::tr("svg_dialog.import_button")).strong().color(Color32::WHITE))
                             .fill(style::ACCENT_SOFT)
                             .stroke(Stroke::new(1.0, style::ACCENT));
                         if ui.add_sized([126.0, 32.0], b).clicked() {
@@ -331,7 +331,11 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
                         }
                     });
                 }
-                if ui.add_sized([80.0, 32.0], egui::Button::new("Cancel")).on_hover_text("Cancel import · Esc").clicked() {
+                if ui
+                    .add_sized([80.0, 32.0], egui::Button::new(crate::i18n::tr("svg_dialog.cancel_button")))
+                    .on_hover_text(crate::i18n::tr("svg_dialog.cancel_tip"))
+                    .clicked()
+                {
                     close = true;
                 }
             });
@@ -399,7 +403,7 @@ fn preview(ui: &mut egui::Ui, d: &Dlg) {
         p.text(
             rect.center(),
             Align2::CENTER_CENTER,
-            "Choose an SVG to preview its outlines",
+            crate::i18n::tr("svg_dialog.choose_first"),
             egui::FontId::proportional(12.5),
             Color32::from_gray(86),
         );
@@ -429,12 +433,12 @@ fn import(app: &mut App, ctx: &egui::Context, d: &Dlg) -> bool {
     }
     let Some(art) = &d.art else { return false };
     if app.scene.groups.len() >= MAX_GROUPS {
-        app.say(ctx, format!("Up to {MAX_GROUPS} groups"));
+        app.say(ctx, crate::i18n::fill("svg_dialog.max_groups", &[&MAX_GROUPS]));
         return false;
     }
     let room = MAX_SHAPES.saturating_sub(app.scene.shape_count());
     if room == 0 {
-        app.say(ctx, format!("Up to {MAX_SHAPES} shapes"));
+        app.say(ctx, crate::i18n::fill("svg_dialog.max_shapes", &[&MAX_SHAPES]));
         return false;
     }
     let o = BuildOpts { target_mm: d.target, height_mm: d.height, round_mm: d.round, flip: d.flip, at: [app.cam.target[0], app.cam.target[1]] };
@@ -442,13 +446,13 @@ fn import(app: &mut App, ctx: &egui::Context, d: &Dlg) -> bool {
     let (groups, note) = svg::build_group(art, &d.name, &o, room, groups_room);
     let n: usize = groups.iter().map(|g| g.shapes.len()).sum();
     if n == 0 {
-        app.say(ctx, note.unwrap_or_else(|| "No shapes could be added".into()));
+        app.say(ctx, note.unwrap_or_else(|| crate::i18n::tr("svg_dialog.no_shapes").into()));
         return false;
     }
     let first = app.scene.groups.len();
     app.scene.groups.extend(groups);
     app.sel = Some(Pick::Group(first));
-    app.say(ctx, note.unwrap_or_else(|| format!("Added SVG ({n} shapes)")));
+    app.say(ctx, note.unwrap_or_else(|| crate::i18n::fill("svg_dialog.added", &[&n])));
     true
 }
 

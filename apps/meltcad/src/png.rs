@@ -17,10 +17,10 @@ const MAX_STORED_BLOCK: usize = 65_535;
 /// as a PNG file held in memory.
 pub fn encode_rgba(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>, String> {
     if width == 0 || height == 0 {
-        return Err(format!("PNG size must be non-zero, got {width}x{height}"));
+        return Err(crate::i18n::fill("png.err_zero_size", &[&width, &height]));
     }
     if width > MAX_SIDE || height > MAX_SIDE {
-        return Err(format!("PNG sides must be at most {MAX_SIDE} pixels, got {width}x{height}"));
+        return Err(crate::i18n::fill("png.err_max_side", &[&MAX_SIDE, &width, &height]));
     }
 
     let w = usize::try_from(width).map_err(|_| "width does not fit in usize".to_string())?;
@@ -83,7 +83,7 @@ fn zlib_stored(data: &[u8]) -> Result<Vec<u8>, String> {
 
 /// Appends one PNG chunk: length, type, data, CRC over type and data.
 fn write_chunk(out: &mut Vec<u8>, kind: &[u8], data: &[u8]) -> Result<(), String> {
-    let len = u32::try_from(data.len()).map_err(|_| "PNG chunk too large".to_string())?;
+    let len = u32::try_from(data.len()).map_err(|_| crate::i18n::tr("png.err_chunk_too_large").to_string())?;
     out.extend_from_slice(&len.to_be_bytes());
     out.extend_from_slice(kind);
     out.extend_from_slice(data);

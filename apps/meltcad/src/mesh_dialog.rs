@@ -44,7 +44,7 @@ impl<T: Send + 'static> Job<T> {
         let j = job.clone();
         let spawned = std::thread::Builder::new().name(name.into()).spawn(move || {
             let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(&j.cancel, &j.progress)))
-                .unwrap_or_else(|_| Err("Stopped partway through".into()));
+                .unwrap_or_else(|_| Err(crate::i18n::tr("mesh_dialog.stopped_partway").into()));
             let res = if j.cancel.load(Ordering::Relaxed) { Err(crate::import_mesh::IMPORT_CANCELLED.into()) } else { res };
             drop(permit); // free the budget before the UI can see a completed read
             if let Ok(mut slot) = j.slot.lock() {
@@ -54,7 +54,7 @@ impl<T: Send + 'static> Job<T> {
         if let Err(e) = spawned
             && let Ok(mut slot) = job.slot.lock()
         {
-            *slot = Some(Err(format!("Couldn't start loading: {e}")));
+            *slot = Some(Err(crate::i18n::fill("mesh_dialog.load_start_failed", &[&e])));
         }
         job
     }
@@ -146,7 +146,7 @@ fn check_rebake_source(original: &Shape, file_name: &str, mesh_hash: u64) -> Res
     if let Some(src) = &original.mesh_source {
         if src.mesh_hash != 0 {
             if src.mesh_hash != mesh_hash {
-                return Err("The original file has changed. Can't overwrite with a different model".into());
+                return Err(crate::i18n::tr("mesh_dialog.original_changed").into());
             }
             return Ok(());
         }
@@ -155,12 +155,12 @@ fn check_rebake_source(original: &Shape, file_name: &str, mesh_hash: u64) -> Res
             .and_then(|s| s.to_str())
             .filter(|s| !s.is_empty())
             .or_else(|| (!original.source.is_empty()).then_some(original.source.as_str()))
-            .ok_or("This old mesh has no identifiable source. Please import the original mesh again")?;
+            .ok_or(crate::i18n::tr("mesh_dialog.old_mesh_no_source"))?;
         if expected != file_name {
-            return Err("File name doesn't match the original mesh. Pick the original file".into());
+            return Err(crate::i18n::tr("mesh_dialog.name_mismatch_pick").into());
         }
     } else if original.source.is_empty() || original.source != file_name {
-        return Err("File name doesn't match. Pick the original file".into());
+        return Err(crate::i18n::tr("mesh_dialog.name_mismatch_short").into());
     }
     Ok(())
 }
@@ -205,7 +205,7 @@ fn rebake_work(path: &Path, orig: &Shape, old: &Volume, resolution: u32, c: &Bak
 
 fn launch_rebake(req: &mut RebakeRequest, ctx: &egui::Context) {
     let Some(path) = req.path.clone() else {
-        req.msg = "Please pick the original mesh file again".into();
+        req.msg = crate::i18n::tr("mesh_dialog.pick_again_msg").into();
         return;
     };
     let Some(old) = req.original.volume.clone() else { return };
@@ -252,7 +252,7 @@ fn rebake_panel(app: &mut App, ctx: &egui::Context) {
                 req.job = None;
                 // Reject stale results and replacements that would exceed the scene volume budget.
                 if app.scene.shape(req.group, req.shape) != Some(&req.original) {
-                    req.msg = "The target changed while editing. Please run it again".into();
+                    req.msg = crate::i18n::tr("mesh_dialog.target_changed").into();
                 } else {
                     let mut candidate = app.scene.clone();
                     if let Some(sh) = candidate.shape_mut(req.group, req.shape) {
@@ -285,17 +285,20 @@ fn rebake_panel(app: &mut App, ctx: &egui::Context) {
     }
     let mut start = false;
     let mut pick = false;
-    egui::Window::new("Re-bake mesh").collapsible(false).resizable(false).show(ctx, |ui| {
+    egui::Window::new(crate::i18n::tr("mesh_dialog.rebake_title")).collapsible(false).resizable(false).show(ctx, |ui| {
         let Some(vol) = req.original.volume.as_ref() else {
-            ui.label("No distance data");
+            ui.label(crate::i18n::tr("mesh_dialog.no_distance_data"));
             return;
         };
         let size = [0, 1, 2].map(|a| req.original.size[a] * req.original.scale[a]);
         let effective = [0, 1, 2].map(|a| vol.cell * req.original.scale[a]);
-        ui.label(format!("Current actual cell width: X {:.3} / Y {:.3} / Z {:.3} mm", effective[0], effective[1], effective[2]));
-        ui.label(format!("Target: {}", req.original.name));
+        ui.label(crate::i18n::fill(
+            "mesh_dialog.actual_cell_width",
+            &[&format!("{:.3}", effective[0]), &format!("{:.3}", effective[1]), &format!("{:.3}", effective[2])],
+        ));
+        ui.label(crate::i18n::fill("mesh_dialog.target_label", &[&req.original.name]));
         ui.horizontal(|ui| {
-            ui.label("Detail:");
+            ui.label(crate::i18n::tr("mesh_dialog.detail_colon"));
             for r in [64, 96, 128, 160, 192, 256] {
                 ui.selectable_value(&mut req.res, r, r.to_string());
             }
@@ -303,38 +306,40 @@ fn rebake_panel(app: &mut App, ctx: &egui::Context) {
         let e = mesh_import::estimate(size, 100_000, req.res);
         let budget = crate::mesh::Usage::of(app.scene.groups.iter().flat_map(|g| g.shapes.iter()));
         let remaining = crate::mesh::MAX_TOTAL_NODES.saturating_sub(budget.nodes.saturating_sub(vol.nodes()));
-        ui.label(format!("Estimated nodes: {} / limit {}, working distance array about {:.1} MB", e.nodes, remaining, e.nodes as f64 * 4.0 / 1e6));
+        ui.label(crate::i18n::fill("mesh_dialog.estimate_nodes", &[&e.nodes, &remaining, &format!("{:.1}", e.nodes as f64 * 4.0 / 1e6)]));
         let projected_cell = size.into_iter().fold(0.0_f32, f32::max) / req.res as f32;
         let min_dim = size.into_iter().fold(f32::INFINITY, f32::min);
         if min_dim < 3.0 * projected_cell {
-            ui.colored_label(style::CUT, "Note: thin parts are close to the cell width and may disappear");
+            ui.colored_label(style::CUT, crate::i18n::tr("mesh_dialog.thin_parts_note"));
         }
         if e.nodes > remaining {
-            ui.colored_label(style::CUT, "Over the memory or scene limit. Lower the detail");
+            ui.colored_label(style::CUT, crate::i18n::tr("mesh_dialog.over_limit"));
         }
         if let Some(p) = &req.path {
-            ui.label(format!("Original file: {}", p.display()));
+            ui.label(crate::i18n::fill("mesh_dialog.original_file_path", &[&p.display()]));
         } else {
-            ui.colored_label(style::CUT, "Original file location unknown. Please pick it again");
+            ui.colored_label(style::CUT, crate::i18n::tr("mesh_dialog.original_location_unknown"));
         }
         if let Some(j) = &req.job {
-            ui.label(format!(
-                "Recalculating {:.0}% / {:.1} sec",
-                j.ctl.progress.load(Ordering::Relaxed) as f32 / 10.0,
-                j.started.elapsed().as_secs_f64()
+            ui.label(crate::i18n::fill(
+                "mesh_dialog.recalc_progress",
+                &[&format!("{:.0}", j.ctl.progress.load(Ordering::Relaxed) as f32 / 10.0), &format!("{:.1}", j.started.elapsed().as_secs_f64())],
             ));
-            if ui.button("Stop").clicked() {
+            if ui.button(crate::i18n::tr("mesh_dialog.stop_button")).clicked() {
                 j.ctl.cancel.store(true, Ordering::Relaxed);
             }
         } else {
             ui.horizontal(|ui| {
-                if ui.button("Pick original file again…").clicked() {
+                if ui.button(crate::i18n::tr("mesh_dialog.pick_again_button")).clicked() {
                     pick = true;
                 }
-                if ui.add_enabled(req.path.is_some() && e.nodes <= remaining, egui::Button::new("Start re-bake")).clicked() {
+                if ui
+                    .add_enabled(req.path.is_some() && e.nodes <= remaining, egui::Button::new(crate::i18n::tr("mesh_dialog.start_rebake")))
+                    .clicked()
+                {
                     start = true;
                 }
-                if ui.button("Close").clicked() {
+                if ui.button(crate::i18n::tr("mesh_dialog.close_button")).clicked() {
                     close = true;
                 }
             });
@@ -428,7 +433,7 @@ pub fn cancel(ctx: &egui::Context) -> bool {
     });
     let had_request = dialog.is_some() || rebake.is_some();
     if let Some(d) = dialog {
-        cancel_dialog(&d, "SolidCraft の取り込みを取り消しました");
+        cancel_dialog(&d, crate::i18n::tr("mesh_dialog.cancelled_import"));
     }
     if let Some(req) = rebake
         && let Some(job) = req.job
@@ -443,7 +448,7 @@ pub fn cancel(ctx: &egui::Context) -> bool {
 /// `generation` is the document it was started for (see `App::document_generation`).
 pub fn open_solid(ctx: &egui::Context, loaded: Loaded, generation: u64) -> Result<SolidImport, String> {
     if is_open(ctx) {
-        return Err("先にメッシュの取り込みや再計算を完了するか、取り消してください".into());
+        return Err(crate::i18n::tr("mesh_dialog.finish_first").into());
     }
     let completion = SolidImport::new();
     let st =
@@ -470,11 +475,11 @@ pub fn open_path(ctx: &egui::Context, path: PathBuf, generation: u64) {
         // (a pending SolidCraft transfer is cancelled below instead, as before)
         if d.open && d.completion.is_none() && (d.reading.is_some() || d.bake.is_some()) {
             let mut d = d;
-            d.msg = "Busy. Stop the current job and wait for it to end before opening another file".into();
+            d.msg = crate::i18n::tr("mesh_dialog.busy_open").into();
             ctx.data_mut(|m| m.insert_temp(id(), d));
             return;
         }
-        cancel_dialog(&d, "別のメッシュの読み込みに切り替えたため、SolidCraft の取り込みを取り消しました");
+        cancel_dialog(&d, crate::i18n::tr("mesh_dialog.cancelled_switch_mesh"));
     }
     let p = path.clone();
     let d = Dlg {
@@ -524,7 +529,7 @@ fn size_text(s: [f32; 3]) -> String {
 
 /// Friendly words for an error from the readers or the bake.
 fn jp_error(e: &str) -> String {
-    if e == ERR_CANCEL || e == crate::import_mesh::IMPORT_CANCELLED { "Cancelled".into() } else { e.to_string() }
+    if e == ERR_CANCEL || e == crate::import_mesh::IMPORT_CANCELLED { crate::i18n::tr("mesh_dialog.cancelled").into() } else { e.to_string() }
 }
 
 fn start_bake(d: &mut Dlg, ctx: &egui::Context) {
@@ -552,13 +557,13 @@ fn start_bake(d: &mut Dlg, ctx: &egui::Context) {
 /// The shape and group of a baked mesh go into the scene, or the card keeps a visible reason.
 fn finish(app: &mut App, ctx: &egui::Context, b: &BakeJob, baked: &Baked) -> Result<(), String> {
     if !app.allow_scene_structure_change() {
-        return Err("編集中のスケッチや立体を確定するか、取り消してから取り込んでください".into());
+        return Err(crate::i18n::tr("mesh_dialog.finish_sketch_first").into());
     }
     if app.scene.groups.len() >= MAX_GROUPS {
-        return Err(format!("Up to {MAX_GROUPS} groups"));
+        return Err(crate::i18n::fill("mesh_dialog.max_groups", &[&MAX_GROUPS]));
     }
     if app.scene.shape_count() >= MAX_SHAPES {
-        return Err(format!("Up to {MAX_SHAPES} shapes"));
+        return Err(crate::i18n::fill("mesh_dialog.max_shapes", &[&MAX_SHAPES]));
     }
     if let Some(why) = mesh_import::refuse(&app.scene, baked.volume.nodes()) {
         return Err(why.into());
@@ -590,9 +595,9 @@ fn finish(app: &mut App, ctx: &egui::Context, b: &BakeJob, baked: &Baked) -> Res
     let secs = baked.stats.bvh_secs + baked.stats.sign_secs + baked.stats.dist_secs;
     if b.original {
         app.tab = crate::app::Tab::Melt;
-        app.say(ctx, format!("SolidCraft の立体を取り込みました（{}・{secs:.1} 秒）", size_text(baked.size)));
+        app.say(ctx, crate::i18n::fill("mesh_dialog.imported_solid", &[&(size_text(baked.size)), &format!("{:.1}", secs)]));
     } else {
-        app.say(ctx, format!("Added mesh: {} ({} · {:.1} sec)", b.loaded.file_name, size_text(baked.size), secs));
+        app.say(ctx, crate::i18n::fill("mesh_dialog.mesh_added", &[&b.loaded.file_name, &(size_text(baked.size)), &format!("{:.1}", secs)]));
     }
     Ok(())
 }
@@ -616,7 +621,7 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
             Some(Ok(l)) => {
                 if job.cancelled() {
                     d.reading = None;
-                    d.msg = "Cancelled".into();
+                    d.msg = crate::i18n::tr("mesh_dialog.cancelled").into();
                     ctx.data_mut(|m| m.insert_temp(id(), d));
                     return;
                 }
@@ -648,7 +653,7 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
             Some(Ok(baked)) => {
                 d.bake = None;
                 if b.ctl.cancel.load(Ordering::Relaxed) || b.job.cancelled() {
-                    d.msg = "Cancelled".into();
+                    d.msg = crate::i18n::tr("mesh_dialog.cancelled").into();
                 } else {
                     match finish(app, ctx, &b, &baked) {
                         Ok(()) => inserted = true,
@@ -684,40 +689,37 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
         style::card().show(ui, |ui| {
             ui.set_width(380.0);
             if original {
-                ui.label(RichText::new("SolidCraft の立体を Melt に取り込み中").strong().size(15.0));
-                ui.label(RichText::new("大きさと位置を保って、メルトできる形に変換します。").size(11.5).color(style::DIM));
+                ui.label(RichText::new(crate::i18n::tr("mesh_dialog.importing_title")).strong().size(15.0));
+                ui.label(RichText::new(crate::i18n::tr("mesh_dialog.importing_note")).size(11.5).color(style::DIM));
             } else {
-                ui.label(RichText::new("Import mesh").strong().size(15.0));
-                ui.label(RichText::new("Loads STL, OBJ, 3MF, PLY and GLB solids. Melt or cut them like other shapes").size(11.5).color(style::DIM));
+                ui.label(RichText::new(crate::i18n::tr("mesh_dialog.import_title")).strong().size(15.0));
+                ui.label(RichText::new(crate::i18n::tr("mesh_dialog.import_desc")).size(11.5).color(style::DIM));
             }
             ui.add_space(4.0);
             if let Some(b) = d.bake.clone() {
                 baking(ui, &b);
             } else if busy_read {
-                ui.label(RichText::new("Reading the file…").color(style::DIM));
+                ui.label(RichText::new(crate::i18n::tr("mesh_dialog.reading_file")).color(style::DIM));
                 if let Some((job, _)) = &d.reading {
                     ui.add(egui::ProgressBar::new(job.fraction()).show_percentage());
                     if job.cancelled() {
-                        ui.label("Waiting for the stop to finish (memory is freed after parsing)…");
+                        ui.label(crate::i18n::tr("mesh_dialog.waiting_stop_memory"));
                     }
                 }
                 if let Some((_, p)) = &d.reading {
                     ui.label(RichText::new(p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()).size(11.5).color(style::DIM));
                 }
             } else if d.waiting {
-                ui.label(RichText::new("前の作業が終わるのを待っています…").size(12.0).color(style::DIM));
+                ui.label(RichText::new(crate::i18n::tr("mesh_dialog.waiting")).size(12.0).color(style::DIM));
             } else if original {
                 if let Some(loaded) = &d.loaded {
-                    ui.label(RichText::new(format!("立体の大きさ: {}", size_text(loaded.size))).size(12.0));
+                    ui.label(RichText::new(crate::i18n::fill("mesh_dialog.solid_size", &[&(size_text(loaded.size))])).size(12.0));
                 }
-                ui.label(RichText::new("SolidCraft の作業は残っています。もう一度試すか、取り消して編集に戻れます。").size(11.5).color(style::DIM));
+                ui.label(RichText::new(crate::i18n::tr("mesh_dialog.work_remains")).size(11.5).color(style::DIM));
                 ui.horizontal(|ui| {
-                    ui.label("細かさ");
+                    ui.label(crate::i18n::tr("mesh_dialog.detail_label_x"));
                     for res in RES_CHOICES {
-                        if style::pill(ui, &res.to_string(), d.st.res == res)
-                            .on_hover_text("大きいほど滑らかになります。容量の上限で失敗したときは小さくして再試行できます")
-                            .clicked()
-                        {
+                        if style::pill(ui, &res.to_string(), d.st.res == res).on_hover_text(crate::i18n::tr("mesh_dialog.detail_hover")).clicked() {
                             d.st.res = res;
                         }
                     }
@@ -734,36 +736,36 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
                 if original && d.reading.is_none() {
                     if d.bake.is_none() && !d.waiting {
                         ui.add_enabled_ui(d.loaded.is_some() && !app.scene_structure_locked(), |ui| {
-                            if style::pill(ui, "もう一度", true).clicked() {
+                            if style::pill(ui, crate::i18n::tr("mesh_dialog.try_again"), true).clicked() {
                                 go = true;
                             }
                         });
                     }
-                    if ui.button("取消").clicked() {
+                    if ui.button(crate::i18n::tr("mesh_dialog.cancel")).clicked() {
                         close = true;
                     }
                 } else if let Some(b) = &d.bake {
-                    if style::pill(ui, "Stop", false).clicked() {
+                    if style::pill(ui, crate::i18n::tr("mesh_dialog.stop_button"), false).clicked() {
                         b.ctl.cancel.store(true, Ordering::Relaxed);
                         b.job.cancel();
                     }
                     if b.ctl.cancel.load(Ordering::Relaxed) {
-                        ui.label("Waiting for the stop to finish…");
+                        ui.label(crate::i18n::tr("mesh_dialog.waiting_stop"));
                     }
                 } else if let Some((job, _)) = &d.reading {
-                    if style::pill(ui, "Stop", false).clicked() {
+                    if style::pill(ui, crate::i18n::tr("mesh_dialog.stop_button"), false).clicked() {
                         job.cancel();
                     }
                 } else {
                     ui.add_enabled_ui(d.loaded.is_some() && !app.scene_structure_locked(), |ui| {
-                        let b = egui::Button::new(RichText::new("Load").strong().color(Color32::WHITE))
+                        let b = egui::Button::new(RichText::new(crate::i18n::tr("mesh_dialog.load_button")).strong().color(Color32::WHITE))
                             .fill(style::ACCENT_SOFT)
                             .stroke(Stroke::new(1.0, style::ACCENT));
                         if ui.add(b).clicked() {
                             go = true;
                         }
                     });
-                    if ui.button("Cancel").clicked() {
+                    if ui.button(crate::i18n::tr("mesh_dialog.cancel_button")).clicked() {
                         close = true;
                     }
                 }
@@ -785,7 +787,7 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
         }
     }
     if close {
-        cancel_dialog(&d, "SolidCraft の取り込みを取り消しました");
+        cancel_dialog(&d, crate::i18n::tr("mesh_dialog.cancelled_import"));
         return;
     }
     ctx.data_mut(|m| m.insert_temp(id(), d));
@@ -801,11 +803,11 @@ fn estimate_of(l: &Loaded, st: &Settings) -> mesh_import::Estimate {
 
 fn baking(ui: &mut egui::Ui, b: &BakeJob) {
     if b.original {
-        ui.label(RichText::new("立体の表面までの距離を計算しています").size(13.0));
-        ui.label(RichText::new(format!("大きさ: {}", size_text(b.loaded.size))).size(11.5).color(style::DIM));
+        ui.label(RichText::new(crate::i18n::tr("mesh_dialog.calculating")).size(13.0));
+        ui.label(RichText::new(crate::i18n::fill("mesh_dialog.size", &[&(size_text(b.loaded.size))])).size(11.5).color(style::DIM));
     } else {
-        ui.label(RichText::new(format!("Measuring the shape… {}", b.loaded.file_name)).size(13.0));
-        ui.label(RichText::new("Calculating distance to the surrounding space").size(11.5).color(style::DIM));
+        ui.label(RichText::new(crate::i18n::fill("mesh_dialog.measuring_shape", &[&b.loaded.file_name])).size(13.0));
+        ui.label(RichText::new(crate::i18n::tr("mesh_dialog.calc_distance")).size(11.5).color(style::DIM));
     }
     let frac = (b.ctl.progress.load(Ordering::Relaxed) as f32 / 1000.0).clamp(0.0, 1.0);
     let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 10.0), egui::Sense::hover());
@@ -814,13 +816,13 @@ fn baking(ui: &mut egui::Ui, b: &BakeJob) {
     if w > 1.0 {
         ui.painter().rect_filled(egui::Rect::from_min_size(rect.min, egui::vec2(w, rect.height())), 5.0, style::ACCENT);
     }
-    let unit = if b.original { "秒" } else { "sec" };
+    let unit = if b.original { crate::i18n::tr("mesh_dialog.unit_sec") } else { "sec" };
     ui.label(RichText::new(format!("{:.0}%  {:.0} {unit}", frac * 100.0, b.started.elapsed().as_secs_f64())).size(11.5).color(style::DIM));
 }
 
 fn options(ui: &mut egui::Ui, d: &mut Dlg, app: &App, pick: &mut bool) {
     ui.horizontal(|ui| {
-        if style::pill(ui, "Choose file…", false).clicked() {
+        if style::pill(ui, crate::i18n::tr("mesh_dialog.choose_file"), false).clicked() {
             *pick = true;
         }
     });
@@ -833,13 +835,17 @@ fn options(ui: &mut egui::Ui, d: &mut Dlg, app: &App, pick: &mut bool) {
         RichText::new(format!("{} · {} · triangles {}{}", l.file_name, imp.format.label(), count_text(imp.mesh.triangles.len()), dropped)).size(12.5),
     );
     let y_up = d.st.up.is_y(imp.format);
-    ui.label(RichText::new(format!("Original size {}", size_text(mesh_import::upright_size(l.size, y_up)))).size(11.5).color(style::DIM));
+    ui.label(
+        RichText::new(crate::i18n::fill("mesh_dialog.original_size_value", &[&(size_text(mesh_import::upright_size(l.size, y_up)))]))
+            .size(11.5)
+            .color(style::DIM),
+    );
     for n in &imp.notes {
         ui.label(RichText::new(format!("· {n}")).size(11.5).color(style::KEEP));
     }
     ui.add_space(2.0);
     egui::Grid::new("mesh_import_grid").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
-        ui.label(RichText::new("Target size").color(style::DIM));
+        ui.label(RichText::new(crate::i18n::tr("mesh_dialog.target_size")).color(style::DIM));
         ui.horizontal(|ui| {
             ui.add(
                 egui::DragValue::new(&mut d.st.target_mm)
@@ -848,13 +854,16 @@ fn options(ui: &mut egui::Ui, d: &mut Dlg, app: &App, pick: &mut bool) {
                     .suffix(" mm")
                     .max_decimals(1),
             )
-            .on_hover_text("Length of the longest side");
-            if style::pill(ui, "Original size", false).on_hover_text("Keeps the file's size (capped at 200 mm if bigger)").clicked() {
+            .on_hover_text(crate::i18n::tr("mesh_dialog.longest_side_hint"));
+            if style::pill(ui, crate::i18n::tr("mesh_dialog.original_size_button"), false)
+                .on_hover_text(crate::i18n::tr("mesh_dialog.original_size_hint"))
+                .clicked()
+            {
                 d.st.target_mm = mesh_import::default_target(l.size);
             }
         });
         ui.end_row();
-        ui.label(RichText::new("Orientation").color(style::DIM));
+        ui.label(RichText::new(crate::i18n::tr("mesh_dialog.orientation")).color(style::DIM));
         let items: Vec<(&str, &str)> = Up::ALL.iter().map(|u| (u.label(), u.hint())).collect();
         let cur = Up::ALL.iter().position(|u| *u == d.st.up);
         if let Some(i) = style::segmented(ui, "mesh_up", &items, cur, false)
@@ -865,17 +874,15 @@ fn options(ui: &mut egui::Ui, d: &mut Dlg, app: &App, pick: &mut bool) {
         ui.end_row();
         ui.label("");
         ui.vertical(|ui| {
-            style::checkbox(ui, &mut d.st.floor, "Place on floor").on_hover_text("Lines the bottom up with the floor (height 0)");
-            style::checkbox(ui, &mut d.st.centre, "Centre it").on_hover_text("Puts it in the middle of the view. Off keeps the file's position");
+            style::checkbox(ui, &mut d.st.floor, crate::i18n::tr("mesh_dialog.place_on_floor"))
+                .on_hover_text(crate::i18n::tr("mesh_dialog.place_on_floor_hint"));
+            style::checkbox(ui, &mut d.st.centre, crate::i18n::tr("mesh_dialog.centre_it")).on_hover_text(crate::i18n::tr("mesh_dialog.centre_hint"));
         });
         ui.end_row();
-        ui.label(RichText::new("Detail").color(style::DIM));
+        ui.label(RichText::new(crate::i18n::tr("mesh_dialog.detail_label")).color(style::DIM));
         ui.horizontal(|ui| {
             for r in RES_CHOICES {
-                if style::pill(ui, &r.to_string(), d.st.res == r)
-                    .on_hover_text("Cells across the longest side. Bigger is smoother but heavier")
-                    .clicked()
-                {
+                if style::pill(ui, &r.to_string(), d.st.res == r).on_hover_text(crate::i18n::tr("mesh_dialog.detail_hint")).clicked() {
                     d.st.res = r;
                 }
             }
@@ -886,7 +893,9 @@ fn options(ui: &mut egui::Ui, d: &mut Dlg, app: &App, pick: &mut bool) {
     let refuse = mesh_import::refuse(&app.scene, e.nodes);
     let col = if refuse.is_some() { style::CUT } else { style::DIM };
     ui.label(
-        RichText::new(format!("About {} · file {} · cells {}", time_text(e.secs), bytes_text(e.bytes), count_text(e.nodes))).size(11.5).color(col),
+        RichText::new(crate::i18n::fill("mesh_dialog.estimate_summary", &[&(time_text(e.secs)), &(bytes_text(e.bytes)), &(count_text(e.nodes))]))
+            .size(11.5)
+            .color(col),
     );
     if let Some(why) = refuse {
         ui.label(RichText::new(why).size(11.5).color(style::CUT));
@@ -896,39 +905,41 @@ fn options(ui: &mut egui::Ui, d: &mut Dlg, app: &App, pick: &mut bool) {
 /// The part of the inspector for a mesh shape: where it came from, how big it is, how fine.
 pub fn inspector(ui: &mut egui::Ui, sh: &mut crate::model::Shape) {
     ui.horizontal_wrapped(|ui| {
-        ui.label(RichText::new("Original file").color(style::DIM).size(12.0));
+        ui.label(RichText::new(crate::i18n::tr("mesh_dialog.original_file_label")).color(style::DIM).size(12.0));
         ui.label(RichText::new(if sh.source.is_empty() { "(unknown)" } else { &sh.source }).size(12.0));
     });
     let now = [sh.size[0] * sh.scale[0], sh.size[1] * sh.scale[1], sh.size[2] * sh.scale[2]];
     ui.horizontal_wrapped(|ui| {
-        ui.label(RichText::new("Size").color(style::DIM).size(12.0));
+        ui.label(RichText::new(crate::i18n::tr("mesh_dialog.size_label")).color(style::DIM).size(12.0));
         ui.label(RichText::new(size_text(now)).size(12.0));
     });
     if let Some(v) = &sh.volume {
         ui.horizontal_wrapped(|ui| {
-            ui.label(RichText::new("Detail").color(style::DIM).size(12.0));
+            ui.label(RichText::new(crate::i18n::tr("mesh_dialog.detail_label")).color(style::DIM).size(12.0));
             ui.label(
-                RichText::new(format!(
-                    "Saved cell {:.3} mm / actual cell X {:.3} Y {:.3} Z {:.3} mm  {}×{}×{}",
-                    v.cell,
-                    v.cell * sh.scale[0],
-                    v.cell * sh.scale[1],
-                    v.cell * sh.scale[2],
-                    v.dims[0],
-                    v.dims[1],
-                    v.dims[2]
+                RichText::new(crate::i18n::fill(
+                    "mesh_dialog.saved_cell_info",
+                    &[
+                        &format!("{:.3}", v.cell),
+                        &format!("{:.3}", v.cell * sh.scale[0]),
+                        &format!("{:.3}", v.cell * sh.scale[1]),
+                        &format!("{:.3}", v.cell * sh.scale[2]),
+                        &(v.dims[0]),
+                        &(v.dims[1]),
+                        &(v.dims[2]),
+                    ],
                 ))
                 .size(12.0),
             );
         });
     } else {
-        ui.label(RichText::new("No data").size(12.0).color(style::CUT));
+        ui.label(RichText::new(crate::i18n::tr("mesh_dialog.no_data")).size(12.0).color(style::CUT));
     }
-    if sh.volume.is_some() && ui.button("Raise resolution / re-bake…").clicked() {
+    if sh.volume.is_some() && ui.button(crate::i18n::tr("mesh_dialog.raise_resolution")).clicked() {
         // The inspector is invoked from the selected shape; resolve its location in panel code.
         ui.ctx().data_mut(|m| m.insert_temp(egui::Id::new("rebake_inspector_clicked"), true));
     }
-    if sh.scale != [1.0; 3] && style::pill(ui, "Restore original size", false).clicked() {
+    if sh.scale != [1.0; 3] && style::pill(ui, crate::i18n::tr("mesh_dialog.restore_size"), false).clicked() {
         sh.scale = [1.0; 3];
     }
 }
@@ -1139,6 +1150,7 @@ mod tests {
     fn insertion_rejections_stay_visible_and_can_be_retried() {
         let ctx = egui::Context::default();
         let mut app = App::new(true, None);
+        crate::i18n::set_language("en");
         while app.scene.groups.len() < MAX_GROUPS {
             app.scene.groups.push(Group::new("existing"));
         }

@@ -1003,7 +1003,7 @@ impl App {
                 reselect = self.scene.outdent_group(g);
             }
             if style::pill(ui, i18n::tr("inspector.group.wrap"), false).on_hover_text(i18n::tr("inspector.group.wrap.tip")).clicked() {
-                let base = format!("Group {}", self.scene.groups.len() + 1);
+                let base = crate::i18n::fill("panels.group_name", &[&(self.scene.groups.len() + 1)]);
                 let name = self.scene.unique_group_name(&base);
                 reselect = self.scene.wrap_in_group(g, name);
             }

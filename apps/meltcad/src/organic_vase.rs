@@ -62,9 +62,9 @@ impl Design {
 
     pub fn name(self) -> &'static str {
         match self {
-            Self::Flow => "Organic Vase — Flow",
-            Self::Ripple => "Organic Vase — Ripple",
-            Self::Pebble => "Organic Vase — Pebble",
+            Self::Flow => crate::i18n::tr("organic_vase.name_flow"),
+            Self::Ripple => crate::i18n::tr("organic_vase.name_ripple"),
+            Self::Pebble => crate::i18n::tr("organic_vase.name_pebble"),
         }
     }
 
@@ -274,14 +274,14 @@ pub fn inspector(ui: &mut egui::Ui, shape: &mut Shape) {
     let Some(old) = shape.vase else { return };
     let mut value = old;
     ui.separator();
-    ui.label(egui::RichText::new("Organic Vase｜有機的な花瓶").strong().size(14.0));
+    ui.label(egui::RichText::new(crate::i18n::tr("organic_vase.heading")).strong().size(14.0));
     ui.horizontal_wrapped(|ui| {
-        ui.label(egui::RichText::new("形のサンプル").small());
+        ui.label(egui::RichText::new(crate::i18n::tr("organic_vase.shape_samples")).small());
         for design in Design::ALL {
             let name = match design {
-                Design::Flow => "Flow",
-                Design::Ripple => "Ripple",
-                Design::Pebble => "Pebble",
+                Design::Flow => crate::i18n::tr("organic_vase.design_flow"),
+                Design::Ripple => crate::i18n::tr("organic_vase.design_ripple"),
+                Design::Pebble => crate::i18n::tr("organic_vase.design_pebble"),
             };
             if ui.button(name).on_hover_text(design.name()).clicked() {
                 value = design.params();
@@ -295,16 +295,16 @@ pub fn inspector(ui: &mut egui::Ui, shape: &mut Shape) {
             ui.end_row();
         };
         field("高さ", &mut value.height, 380.0);
-        field("最大直径", &mut value.diameter, 240.0);
-        field("口径", &mut value.mouth_diameter, 240.0);
-        field("底の幅", &mut value.base_diameter, 240.0);
+        field(crate::i18n::tr("organic_vase.max_diameter"), &mut value.diameter, 240.0);
+        field(crate::i18n::tr("organic_vase.mouth_diameter"), &mut value.mouth_diameter, 240.0);
+        field(crate::i18n::tr("organic_vase.base_width"), &mut value.base_diameter, 240.0);
         field("壁厚", &mut value.wall, 16.0);
-        field("波の高さ", &mut value.wave_strength, 6.0);
+        field(crate::i18n::tr("organic_vase.wave_height"), &mut value.wave_strength, 6.0);
     });
-    ui.add(egui::Slider::new(&mut value.side_wave, 0.0..=1.0).text("側面のうねり"));
-    ui.add(egui::Slider::new(&mut value.waist, 0.0..=1.0).text("くびれ"));
-    ui.add(egui::Slider::new(&mut value.roundness, 0.0..=1.0).text("丸み"));
-    ui.add(egui::Slider::new(&mut value.waves, 0..=16).text("円周の波の数"));
+    ui.add(egui::Slider::new(&mut value.side_wave, 0.0..=1.0).text(crate::i18n::tr("organic_vase.side_wave")));
+    ui.add(egui::Slider::new(&mut value.waist, 0.0..=1.0).text(crate::i18n::tr("organic_vase.waist")));
+    ui.add(egui::Slider::new(&mut value.roundness, 0.0..=1.0).text(crate::i18n::tr("organic_vase.roundness")));
+    ui.add(egui::Slider::new(&mut value.waves, 0..=16).text(crate::i18n::tr("organic_vase.waves_around")));
 
     if value != old {
         // Keep the vase standing on the same floor while its height changes.
@@ -322,13 +322,13 @@ pub fn inspector(ui: &mut egui::Ui, shape: &mut Shape) {
     if minimum < FDM_WALL_WARNING_MM {
         ui.colored_label(
             egui::Color32::from_rgb(237, 174, 78),
-            format!("⚠ 推定最小肉厚 {:.2} mm（底から約 {:.0} mm、0.8 mm未満）", minimum, thickness.height_mm),
+            crate::i18n::fill("organic_vase.min_wall_warning", &[&format!("{:.2}", minimum), &format!("{:.0}", thickness.height_mm)]),
         );
-        ui.small("壁厚を増やすか、波・くびれを弱めてください。スライサーでも確認してください。");
+        ui.small(crate::i18n::tr("organic_vase.wall_warning_tip"));
     } else {
-        ui.label(format!("推定最小肉厚 {:.2} mm（底から約 {:.0} mm）", minimum, thickness.height_mm));
+        ui.label(crate::i18n::fill("organic_vase.min_wall_info", &[&format!("{:.2}", minimum), &format!("{:.0}", thickness.height_mm)]));
     }
-    ui.small("底は閉じて中は空洞です。実際の印刷可否はノズル径・スライサー設定で確認してください。");
+    ui.small(crate::i18n::tr("organic_vase.hollow_note"));
 }
 
 #[cfg(test)]

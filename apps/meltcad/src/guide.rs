@@ -158,7 +158,7 @@ impl Guide {
     pub fn begin(&mut self) {
         self.panel_open = true;
         self.practice = Practice::NewScene;
-        self.actions = 1; // "箱を作ってみる" click
+        self.actions = 1; // crate::i18n::tr("guide.try_box_button") click
         self.started = Some(Instant::now());
         self.elapsed_seconds = None;
     }

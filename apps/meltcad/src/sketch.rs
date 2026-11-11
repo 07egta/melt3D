@@ -47,21 +47,19 @@ pub enum SketchError {
 impl SketchError {
     pub fn message(self) -> String {
         match self {
-            SketchError::TooFewPoints => "Needs at least 3 points".to_string(),
-            SketchError::BadNumber => "Invalid number. Please redraw".to_string(),
-            SketchError::TooManyPoints => format!("Too many points (up to {MAX_OUTLINE})"),
-            SketchError::TooSmall => "Too small (almost a line). Draw a larger shape".to_string(),
-            SketchError::SelfIntersect => "Lines cross. Redraw without crossings".to_string(),
-            SketchError::HoleOutside => "Hole outlines must be inside the outer outline".to_string(),
-            SketchError::HoleOverlap => "Holes overlap. Separate them (holes cannot contain holes)".to_string(),
-            SketchError::ContoursTouch => "Outlines cross or touch. Keep the outer edge and holes at least 0.05 mm apart".to_string(),
-            SketchError::TooManyHoles => format!("Up to {MAX_HOLES} holes"),
-            SketchError::HoleMisaligned => {
-                "Hole and outer outline don't match in height or orientation. Use the same plane and extrude height".to_string()
-            }
-            SketchError::LeftOfAxis => "Extends past the center axis on the left. Draw on the right side".to_string(),
-            SketchError::NeedsVerticalPlane => "Revolve needs a sketch on the Front or Side plane".to_string(),
-            SketchError::PathTooShort => "Path too short. Place at least 2 points, spaced apart".to_string(),
+            SketchError::TooFewPoints => crate::i18n::tr("sketch.too_few_points").to_string(),
+            SketchError::BadNumber => crate::i18n::tr("sketch.bad_number").to_string(),
+            SketchError::TooManyPoints => crate::i18n::fill("sketch.too_many_points", &[&MAX_OUTLINE]),
+            SketchError::TooSmall => crate::i18n::tr("sketch.too_small").to_string(),
+            SketchError::SelfIntersect => crate::i18n::tr("sketch.self_intersect").to_string(),
+            SketchError::HoleOutside => crate::i18n::tr("sketch.hole_outside").to_string(),
+            SketchError::HoleOverlap => crate::i18n::tr("sketch.hole_overlap").to_string(),
+            SketchError::ContoursTouch => crate::i18n::tr("sketch.contours_touch").to_string(),
+            SketchError::TooManyHoles => crate::i18n::fill("sketch.too_many_holes", &[&MAX_HOLES]),
+            SketchError::HoleMisaligned => crate::i18n::tr("sketch.hole_mismatch").to_string(),
+            SketchError::LeftOfAxis => crate::i18n::tr("sketch.left_of_axis").to_string(),
+            SketchError::NeedsVerticalPlane => crate::i18n::tr("sketch.needs_vertical_plane").to_string(),
+            SketchError::PathTooShort => crate::i18n::tr("sketch.path_too_short").to_string(),
         }
     }
 }
@@ -278,15 +276,15 @@ pub enum SnapKind {
 impl SnapKind {
     pub fn label(self) -> &'static str {
         match self {
-            Self::Origin => "Origin",
-            Self::Endpoint => "Endpoint",
-            Self::Intersection => "Intersection",
-            Self::Center => "Center",
-            Self::Midpoint => "Midpoint",
-            Self::Horizontal => "Horizontal",
-            Self::Vertical => "Vertical",
+            Self::Origin => crate::i18n::tr("sketch.origin"),
+            Self::Endpoint => crate::i18n::tr("sketch.endpoint"),
+            Self::Intersection => crate::i18n::tr("sketch.intersection"),
+            Self::Center => crate::i18n::tr("sketch.center"),
+            Self::Midpoint => crate::i18n::tr("sketch.midpoint"),
+            Self::Horizontal => crate::i18n::tr("sketch.horizontal"),
+            Self::Vertical => crate::i18n::tr("sketch.vertical"),
             Self::Angle => "15°",
-            Self::Grid => "Grid",
+            Self::Grid => crate::i18n::tr("sketch.grid"),
         }
     }
 

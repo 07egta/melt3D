@@ -77,14 +77,14 @@ impl Random {
 pub fn generate(settings: Settings) -> Group {
     let p = settings.sanitized();
     let mut rng = Random::new(p.seed);
-    let mut group = Group::new(format!("Organic Blob · {}", p.seed));
+    let mut group = Group::new(crate::i18n::fill("organic_blob.group_name", &[&p.seed]));
     let mat = Material::plain([0.83, 0.69, 0.96], 0.27, 0.04);
     // Keep the bottom roughly above Z=0 even at the maximum height/seed.
     let centre_z = 46.0 * p.aspect;
     let centre = [0.0, 0.0, centre_z];
 
     let mut core = Shape::new(Kind::Sphere, centre, mat);
-    core.name = "中心の球".into();
+    core.name = crate::i18n::tr("organic_blob.core_name").into();
     core.size = [BASE_RADIUS; 3];
     core.scale = [1.0, 1.0, p.aspect];
     core.blend = 0.0;
@@ -104,7 +104,7 @@ pub fn generate(settings: Settings) -> Group {
         let radius = BASE_RADIUS * (0.32 + p.detail * 0.11 + (rng.next() - 0.5) * p.detail * 0.14);
         let mut lobe =
             Shape::new(Kind::Sphere, [centre[0] + dir[0] * distance, centre[1] + dir[1] * distance, centre[2] + dir[2] * distance * p.aspect], mat);
-        lobe.name = format!("ふくらみ {:02}", i + 1);
+        lobe.name = crate::i18n::fill("organic_blob.lobe_name", &[&format!("{:02}", i + 1)]);
         lobe.size = [radius.max(3.0); 3];
         lobe.scale = [1.0, 1.0, p.aspect];
         // The positive smoothing radius makes joints continuously curved; each
@@ -135,10 +135,10 @@ fn preview_scene(settings: Settings) -> Scene {
 pub fn insert(app: &mut App, ctx: &egui::Context, settings: Settings) -> Result<(), String> {
     let mut group = generate(settings);
     if app.scene.groups.len() >= MAX_GROUPS {
-        return Err(format!("グループは{MAX_GROUPS}個までです"));
+        return Err(crate::i18n::fill("organic_blob.group_limit", &[&MAX_GROUPS]));
     }
     if app.scene.shape_count().saturating_add(group.shapes.len()) > MAX_SHAPES {
-        return Err(format!("形は{MAX_SHAPES}個までです"));
+        return Err(crate::i18n::fill("organic_blob.shape_limit", &[&MAX_SHAPES]));
     }
     let (centre, radius) = crate::gpu::bounds(&app.scene, None);
     let own = preview_scene(settings);
@@ -153,7 +153,7 @@ pub fn insert(app: &mut App, ctx: &egui::Context, settings: Settings) -> Result<
     app.scene.groups.push(group);
     app.sel = Some(Pick::Group(app.scene.groups.len() - 1));
     app.frame_view(false);
-    app.say(ctx, "Organic Blobを追加しました。グループ内の球を自由に動かしたり大きさを変えられます");
+    app.say(ctx, crate::i18n::tr("organic_blob.added"));
     Ok(())
 }
 
@@ -212,7 +212,7 @@ fn start_preview(ctx: &egui::Context, settings: Settings) -> Result<PreviewTask,
             }
             ctx2.request_repaint();
         })
-        .map_err(|e| format!("プレビューを開始できません: {e}"))?;
+        .map_err(|e| crate::i18n::fill("organic_blob.preview_start_error", &[&e]))?;
     Ok(PreviewTask { done })
 }
 
@@ -228,7 +228,7 @@ fn refresh_preview(ctx: &egui::Context, d: &mut Dialog) {
                     let image = egui::ColorImage::from_rgba_unmultiplied([PREVIEW_SIZE, PREVIEW_SIZE], &pixels);
                     d.preview = Some(ctx.load_texture("organic_blob_preview", image, TextureOptions::LINEAR));
                 } else {
-                    d.error = "プレビューを表示できません。形の追加と編集はできます".into();
+                    d.error = crate::i18n::tr("organic_blob.preview_error").into();
                 }
             }
         }
@@ -259,8 +259,8 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
     egui::Area::new(egui::Id::new("organic_blob_area")).order(egui::Order::Foreground).anchor(Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
         style::card().show(ui, |ui| {
             ui.set_width(372.0);
-            ui.label(RichText::new("Organic Blob · ぷっくりブロブ").strong().size(15.0));
-            ui.label(RichText::new("やわらかい球のふくらみを、滑らかにつなげます").color(style::DIM).size(11.5));
+            ui.label(RichText::new(crate::i18n::tr("organic_blob.title")).strong().size(15.0));
+            ui.label(RichText::new(crate::i18n::tr("organic_blob.subtitle")).color(style::DIM).size(11.5));
             ui.vertical_centered(|ui| {
                 let (rect, _) = ui.allocate_exact_size(Vec2::splat(160.0), egui::Sense::hover());
                 ui.painter().rect_filled(rect, 12.0, style::PANEL_DARK);
@@ -272,37 +272,39 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
                         Color32::WHITE,
                     );
                 } else {
-                    ui.painter().text(rect.center(), Align2::CENTER_CENTER, "プレビューを計算中…", egui::FontId::proportional(12.0), style::DIM);
+                    ui.painter().text(
+                        rect.center(),
+                        Align2::CENTER_CENTER,
+                        crate::i18n::tr("organic_blob.preview_calculating"),
+                        egui::FontId::proportional(12.0),
+                        style::DIM,
+                    );
                 }
                 if d.preview_for != Some(d.settings) {
-                    ui.label(RichText::new("小さなプレビューを更新中…").size(10.5).color(style::DIM));
+                    ui.label(RichText::new(crate::i18n::tr("organic_blob.preview_updating")).size(10.5).color(style::DIM));
                 } else {
-                    ui.label(RichText::new("SDFの簡易陰影プレビュー").size(10.5).color(style::DIM));
+                    ui.label(RichText::new(crate::i18n::tr("organic_blob.sdf_preview_note")).size(10.5).color(style::DIM));
                 }
             });
             ui.add_space(4.0);
             ui.add(egui::Slider::new(&mut d.settings.bulge, 0.0..=1.0).text("ふくらみ").fixed_decimals(2))
-                .on_hover_text("大きくするほど、ふくらみが外側へ飛び出します");
-            ui.add(egui::Slider::new(&mut d.settings.detail, 0.0..=1.0).text("凹凸・ばらつき").fixed_decimals(2))
-                .on_hover_text("ふくらみの数と大小のばらつきを変えます");
-            ui.add(egui::Slider::new(&mut d.settings.roundness, 0.0..=1.0).text("丸み・なめらかさ").fixed_decimals(2))
-                .on_hover_text("球同士のなめらかな接合幅を変えます（既存のSDFメルト）");
-            ui.add(egui::Slider::new(&mut d.settings.aspect, 0.60..=1.75).text("縦横比（高さ／幅）").fixed_decimals(2))
-                .on_hover_text("1.0は球形、1より大きいと縦長、小さいと平たい形");
+                .on_hover_text(crate::i18n::tr("organic_blob.bulge_hint"));
+            ui.add(egui::Slider::new(&mut d.settings.detail, 0.0..=1.0).text(crate::i18n::tr("organic_blob.detail")).fixed_decimals(2))
+                .on_hover_text(crate::i18n::tr("organic_blob.detail_hint"));
+            ui.add(egui::Slider::new(&mut d.settings.roundness, 0.0..=1.0).text(crate::i18n::tr("organic_blob.roundness")).fixed_decimals(2))
+                .on_hover_text(crate::i18n::tr("organic_blob.roundness_hint"));
+            ui.add(egui::Slider::new(&mut d.settings.aspect, 0.60..=1.75).text(crate::i18n::tr("organic_blob.aspect")).fixed_decimals(2))
+                .on_hover_text(crate::i18n::tr("organic_blob.aspect_hint"));
             ui.horizontal(|ui| {
-                ui.label("シード");
+                ui.label(crate::i18n::tr("organic_blob.seed"));
                 ui.add(egui::DragValue::new(&mut d.settings.seed).range(0..=u32::MAX).speed(1.0));
-                if ui.button("別の形 ↻").clicked() {
+                if ui.button(crate::i18n::tr("organic_blob.new_shape")).clicked() {
                     d.settings.seed = d.settings.seed.wrapping_add(1);
                 }
             });
-            ui.label(
-                RichText::new(format!("編集できる球 {}個で生成（高解像度メッシュ化はしません）", d.settings.lobe_count() + 1))
-                    .size(11.0)
-                    .color(style::DIM),
-            );
+            ui.label(RichText::new(crate::i18n::fill("organic_blob.editable_count", &[&(d.settings.lobe_count() + 1)])).size(11.0).color(style::DIM));
             if app.scene.melt.amount <= 0.0 {
-                ui.label(RichText::new("メルト量が0です。滑らかな融合にはメルト量を上げてください").size(11.0).color(style::CUT));
+                ui.label(RichText::new(crate::i18n::tr("organic_blob.melt_zero_warning")).size(11.0).color(style::CUT));
             }
             if !d.error.is_empty() {
                 ui.label(RichText::new(&d.error).color(style::CUT));
@@ -310,7 +312,7 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
             ui.horizontal(|ui| {
                 if ui
                     .add(
-                        egui::Button::new(RichText::new("ブロブを追加").strong().color(Color32::WHITE))
+                        egui::Button::new(RichText::new(crate::i18n::tr("organic_blob.add_button")).strong().color(Color32::WHITE))
                             .fill(style::ACCENT_SOFT)
                             .stroke(egui::Stroke::new(1.0, style::ACCENT)),
                     )
@@ -318,11 +320,11 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
                 {
                     apply = true;
                 }
-                if ui.button("やめる").clicked() {
+                if ui.button(crate::i18n::tr("organic_blob.stop")).clicked() {
                     close = true;
                 }
             });
-            ui.label(RichText::new("追加後は通常の形として、移動・変形・複製・削除できます").size(10.5).color(style::DIM));
+            ui.label(RichText::new(crate::i18n::tr("organic_blob.after_add_note")).size(10.5).color(style::DIM));
         });
     });
 
