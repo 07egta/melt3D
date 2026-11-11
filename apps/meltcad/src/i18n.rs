@@ -3613,6 +3613,13 @@ const TABLE: &[Entry] = &[
     e!("sketch_live.plane_gap", "スケッチ面の間隔 {0} mm", "{0} mm between sketch planes"),
     e!("sketch_live.max_shapes", "形は {0} 個までです", "Up to {0} shapes"),
     e!("palette.shortcut_taken", "{0} はすでに {1} に使われています", "{0} is already used by {1}"),
+    e!("scene.lock", "ロックする（動かせなく・選べなくします）", "Lock (it cannot be picked or moved)"),
+    e!("scene.unlock", "ロックを外す", "Unlock"),
+    e!(
+        "scene.locked_by_group",
+        "上のグループがロック中です。グループの鍵を押すと外れます",
+        "Locked by the group above. Press the padlock of that group to unlock"
+    ),
 ];
 
 fn index() -> &'static HashMap<&'static str, &'static Entry> {

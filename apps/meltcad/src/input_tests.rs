@@ -1977,3 +1977,51 @@ fn zoom_past_a_foreground_shape_refreshes_hover_under_a_stationary_pointer() {
     assert_eq!(expected, Some(Pick::Shape(0, 0)), "the original shape is now visible behind it");
     assert_eq!(r.app.hover, expected, "zoom refreshes hover without a mouse move");
 }
+
+#[test]
+fn a_locked_shape_or_group_is_not_picked_or_moved_and_the_lock_is_saved() {
+    let mut r = Rig::new();
+    r.app.scene.groups[0].shapes[0].pos = [-35.0, 0.0, 20.0];
+    r.app.scene.groups[0].shapes.push(Shape::new(Kind::Box, [45.0, 0.0, 20.0], Material::default()));
+    r.app.sel = None;
+    r.frame(vec![]);
+    let rect = r.app.view_rect;
+    let grab = r.app.cam.project(rect, [45.0, 0.0, 20.0]).expect("visible") + vec2(0.0, 14.0);
+
+    // a locked shape: a drag on it moves nothing and selects nothing
+    r.app.scene.groups[0].shapes[1].locked = true;
+    r.frame(vec![]);
+    assert!(!r.app.body_drag_moves(rect, grab));
+    r.drag(grab, grab + vec2(70.0, 10.0));
+    assert_eq!(r.app.scene.groups[0].shapes[1].pos, [45.0, 0.0, 20.0], "a locked shape stays");
+    assert!(!r.app.is_pick_selected(Pick::Shape(0, 1)), "and is not selected");
+
+    // a selection made any other way is dropped too
+    r.app.sel = Some(Pick::Shape(0, 1));
+    r.frame(vec![]);
+    assert_eq!(r.app.sel, None);
+
+    // the lock is saved, and a file without it opens unlocked
+    let text = r.app.scene.to_json();
+    assert!(text.contains("\"locked\""));
+    let back = crate::model::Scene::from_json(&text).expect("reads back");
+    assert!(back.groups[0].shapes[1].locked && !back.groups[0].shapes[0].locked);
+    assert!(!crate::model::Scene::default().to_json().contains("locked"), "an unlocked scene's file is unchanged");
+
+    // unlocking brings the drag back
+    r.app.scene.groups[0].shapes[1].locked = false;
+    r.frame(vec![]);
+    assert!(r.app.body_drag_moves(rect, grab));
+
+    // a locked group locks everything in it, and the groups nested in it
+    r.app.scene.groups[0].locked = true;
+    let mut child = crate::model::Group::new("child");
+    child.depth = 1;
+    r.app.scene.groups.push(child);
+    r.frame(vec![]);
+    assert!(r.app.scene.is_locked(Pick::Shape(0, 0)) && r.app.scene.is_locked(Pick::Group(1)));
+    assert!(!r.app.body_drag_moves(rect, grab));
+    r.app.sel = Some(Pick::Group(0));
+    r.frame(vec![]);
+    assert_eq!(r.app.sel, None, "a locked group is not selected");
+}

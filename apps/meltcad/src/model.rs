@@ -424,6 +424,9 @@ pub struct Shape {
     pub blend: f32,
     pub material: Material,
     pub visible: bool,
+    /// Locked: it stays where it is, and clicks and drags in the view and the list do not pick it.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub locked: bool,
     /// A sketch line: drawn on the screen as a line, never part of the solid (not rendered, not
     /// exported, not measured). Extrude, Loft or Revolve turn it into a solid.
     #[serde(default, skip_serializing_if = "is_false")]
@@ -583,6 +586,7 @@ impl Shape {
             blend: 6.0,
             material,
             visible: true,
+            locked: false,
             guide: false,
             guide_plane: None,
             outline: kind.default_outline(),
@@ -776,6 +780,9 @@ pub struct Group {
     /// How far the whole group melts into the groups before it, in mm.
     pub blend: f32,
     pub visible: bool,
+    /// Locked: nothing in the group (or the groups nested in it) can be picked or moved.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub locked: bool,
     pub shapes: Vec<Shape>,
     /// How deep the group sits in the outline: it is part of the nearest group above it with a smaller depth.
     #[serde(default, skip_serializing_if = "is_zero_u8")]
@@ -852,6 +859,7 @@ impl Group {
             op: Op::Add,
             blend: 0.0,
             visible: true,
+            locked: false,
             shapes: Vec::new(),
             depth: 0,
             sketch_holes: false,
@@ -1189,6 +1197,28 @@ impl Scene {
             e += 1;
         }
         e
+    }
+
+    /// Whether group `g` is locked, by its own lock or the lock of a group it sits in.
+    pub fn group_locked(&self, g: usize) -> bool {
+        let mut at = Some(g);
+        // the outline is at most MAX_DEPTH deep, so this ends
+        for _ in 0..=usize::from(MAX_DEPTH) {
+            let Some(i) = at else { return false };
+            if self.groups.get(i).is_some_and(|x| x.locked) {
+                return true;
+            }
+            at = self.parent_of(i);
+        }
+        false
+    }
+
+    /// Whether a pick is locked: a shape by its own lock or its group's, a group by its own or a parent's.
+    pub fn is_locked(&self, pick: Pick) -> bool {
+        match pick {
+            Pick::Group(g) => self.group_locked(g),
+            Pick::Shape(g, s) => self.shape(g, s).is_some_and(|x| x.locked) || self.group_locked(g),
+        }
     }
 
     /// The group `g` sits in, if any.

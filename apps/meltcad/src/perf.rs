@@ -36,6 +36,7 @@ pub(crate) fn same_shape_for_cache(a: &Shape, b: &Shape) -> bool {
             blend,
             material,
             visible: _,
+            locked: _,
             guide: _,
             guide_plane: _,
             outline: _,

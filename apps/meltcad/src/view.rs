@@ -765,6 +765,9 @@ impl App {
             return None;
         }
         let (g, s) = self.shape_at(rect, p)?;
+        if self.scene.is_locked(Pick::Shape(g, s)) {
+            return None;
+        }
         // the same pick a click makes: a puffy letter is one thing
         let want = if self.scene.groups.get(g).is_some_and(|gr| gr.puffy_text.is_some()) { Pick::Group(g) } else { as_pick(g, s) };
         let selected = self.is_pick_selected(want) || self.is_pick_selected(Pick::Group(g));
@@ -778,14 +781,15 @@ impl App {
 
     /// Shift + click: add the thing under the point to the selection, or take it out again.
     fn toggle_at(&mut self, rect: Rect, p: Pos2) {
-        if let Some((g, s)) = self.shape_at(rect, p) {
+        if let Some((g, s)) = self.shape_at(rect, p).filter(|&(g, s)| !self.scene.is_locked(Pick::Shape(g, s))) {
             self.select_pick(Some(as_pick(g, s)), true);
         }
     }
 
     fn pick_at(&mut self, rect: Rect, p: Pos2, keep: bool, additive: bool) {
         // a sketch line near the click wins over what lies behind it
-        let hit = self.guide_at(rect, p).or_else(|| self.shape_at(rect, p));
+        // a locked shape is not picked: the click counts as a click on nothing
+        let hit = self.guide_at(rect, p).or_else(|| self.shape_at(rect, p)).filter(|&(g, s)| !self.scene.is_locked(Pick::Shape(g, s)));
         match hit {
             Some((g, s)) => {
                 // Treat all glyph contours as one selectable letter. The glyph's

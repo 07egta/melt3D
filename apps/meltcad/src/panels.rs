@@ -350,10 +350,11 @@ impl App {
                 let g = &self.scene.groups[gi];
                 (g.name.clone(), g.op, g.visible, g.shapes.len())
             };
+            let glock = (self.scene.groups[gi].locked, self.scene.group_locked(gi));
             let tip = row_parent_tip(&self.scene, Pick::Group(gi));
             let id = ui.id().with(("g", gi));
             let badge = badges.get(gi).cloned().unwrap_or_default();
-            let row = self.row(ui, id, sel, depth, name, Pick::Group(gi), op, visible, glyphs::group, !folded, true, &badge, tip);
+            let row = self.row(ui, id, sel, depth, name, Pick::Group(gi), op, visible, glock, glyphs::group, !folded, true, &badge, tip);
             if row.chevron {
                 if folded {
                     self.folded.remove(&gi);
@@ -377,6 +378,9 @@ impl App {
             if row.eye {
                 self.scene.groups[gi].visible = !visible;
             }
+            if row.lock {
+                self.scene.groups[gi].locked = !glock.0;
+            }
             if row.op {
                 self.scene.groups[gi].op = op.next();
             }
@@ -384,6 +388,7 @@ impl App {
                 for si in 0..nshapes {
                     let Some(s) = self.scene.shape(gi, si) else { continue };
                     let (name, op, visible, material) = (s.name.clone(), s.op, s.visible, s.material);
+                    let slock = (s.locked, s.locked || glock.1);
                     // a solid from SolidCraft says so (double click opens it there); a patterned
                     // shape shows how many copies it makes
                     let badge: String = if s.solid.is_some() {
@@ -406,6 +411,7 @@ impl App {
                         Pick::Shape(gi, si),
                         op,
                         visible,
+                        slock,
                         move |p, r, _| materials::swatch(p, r.center(), 8.5, &material),
                         false,
                         false,
@@ -434,6 +440,11 @@ impl App {
                         && let Some(s) = self.scene.shape_mut(gi, si)
                     {
                         s.visible = !visible;
+                    }
+                    if row.lock
+                        && let Some(s) = self.scene.shape_mut(gi, si)
+                    {
+                        s.locked = !slock.0;
                     }
                     if row.op {
                         if self.sk.live == Some((gi, si)) {
@@ -622,6 +633,8 @@ impl App {
         pick: Pick,
         op: Op,
         visible: bool,
+        // (locked itself, locked by its own lock or a group above)
+        lock: (bool, bool),
         icon: impl FnOnce(&egui::Painter, Rect, Color32),
         chevron_open: bool,
         has_chevron: bool,
@@ -686,7 +699,8 @@ impl App {
         x += 26.0;
         let eye = Rect::from_center_size(egui::pos2(rect.right() - 18.0, rect.center().y), vec2(22.0, 22.0));
         let opr = Rect::from_center_size(egui::pos2(rect.right() - 44.0, rect.center().y), vec2(22.0, 22.0));
-        let name_rect = Rect::from_min_max(egui::pos2(x, rect.top()), egui::pos2(opr.left() - 4.0, rect.bottom()));
+        let lockr = Rect::from_center_size(egui::pos2(rect.right() - 70.0, rect.center().y), vec2(22.0, 22.0));
+        let name_rect = Rect::from_min_max(egui::pos2(x, rect.top()), egui::pos2(lockr.left() - 4.0, rect.bottom()));
         if self.renaming == Some(pick) {
             let mut text = name.clone();
             let r = ui.put(name_rect.shrink2(vec2(0.0, 3.0)), egui::TextEdit::singleline(&mut text).font(FontId::proportional(13.0)));
@@ -713,7 +727,7 @@ impl App {
                 ui.data_mut(|d| d.remove::<bool>(started));
             }
         } else if seen {
-            let col = if visible { style::TEXT } else { style::DIM };
+            let col = if visible && !lock.1 { style::TEXT } else { style::DIM };
             let clipped = ui.painter().with_clip_rect(name_rect);
             let used = clipped.text(egui::pos2(name_rect.left(), rect.center().y), Align2::LEFT_CENTER, &name, FontId::proportional(13.0), col);
             if badge == style::SOLID_BADGE {
@@ -725,19 +739,37 @@ impl App {
         }
         let er = ui.interact(eye, id.with("e"), Sense::click());
         let orr = ui.interact(opr, id.with("o"), Sense::click());
+        let lr = ui.interact(lockr, id.with("l"), Sense::click()).on_hover_text(i18n::tr(if lock.0 {
+            "scene.unlock"
+        } else if lock.1 {
+            "scene.locked_by_group"
+        } else {
+            "scene.lock"
+        }));
         if seen {
-            for r in [&er, &orr] {
+            for r in [&er, &orr, &lr] {
                 if r.hovered() {
                     ui.painter().rect_filled(r.rect, 7.0, Color32::from_white_alpha(22));
                 }
             }
         }
-        let near = selected || resp.hovered() || er.hovered() || orr.hovered();
+        let near = selected || resp.hovered() || er.hovered() || orr.hovered() || lr.hovered();
         if seen {
             // a quiet list: the eye and the join/cut mark show on the row under the mouse or the
             // picked one, and always when they say something unusual (hidden, cut, paint, overlap)
             if near || !visible {
                 glyphs::eye(ui.painter(), eye, visible, if er.hovered() { Color32::WHITE } else { style::DIM });
+            }
+            // the padlock shows the same way: bright for its own lock, dim for a lock from a group above
+            if near || lock.1 {
+                let ink = if lr.hovered() {
+                    Color32::WHITE
+                } else if lock.0 {
+                    style::ACCENT
+                } else {
+                    style::DIM
+                };
+                glyphs::lock(ui.painter(), lockr, lock.1, ink);
             }
             if near || op != Op::Add {
                 let opcol = style::op_color(op);
@@ -745,10 +777,13 @@ impl App {
             }
         }
         out.eye = er.clicked();
-        out.op = orr.clicked();
-        out.select = resp.clicked() && !out.eye && !out.op;
-        out.drag_started = !locked && resp.drag_started() && !out.eye && !out.op;
-        if resp.double_clicked() && !out.eye && !out.op {
+        out.op = orr.clicked() && !lock.1;
+        out.lock = lr.clicked();
+        let aside = out.eye || orr.clicked() || out.lock;
+        // a locked row is not picked or dragged; its eye and its padlock still work
+        out.select = resp.clicked() && !aside && !lock.1;
+        out.drag_started = !locked && !lock.1 && resp.drag_started() && !aside;
+        if resp.double_clicked() && !aside && !lock.1 {
             // a solid from SolidCraft opens there again; anything else gets renamed
             match pick {
                 Pick::Shape(g, s) if self.scene.shape(g, s).is_some_and(|x| x.solid.is_some()) => {
@@ -1865,6 +1900,7 @@ struct RowResult {
     select: bool,
     eye: bool,
     op: bool,
+    lock: bool,
     chevron: bool,
     drag_started: bool,
 }

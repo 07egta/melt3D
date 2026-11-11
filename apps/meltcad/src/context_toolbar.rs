@@ -98,8 +98,15 @@ impl App {
             self.multi.clear();
             self.multi_for = self.sel;
         }
+        // a locked shape or group is never selected, whatever picked it
+        if self.sel.is_some_and(|p| self.scene.is_locked(p)) {
+            self.multi.retain(|p| !self.scene.is_locked(*p));
+            self.sel = if self.multi.is_empty() { None } else { Some(self.multi.remove(0)) };
+            self.multi_for = self.sel;
+        }
         self.multi.retain(|p| {
             Some(*p) != self.sel
+                && !self.scene.is_locked(*p)
                 && match *p {
                     Pick::Shape(g, s) => self.scene.shape(g, s).is_some(),
                     Pick::Group(g) => g < self.scene.groups.len(),
