@@ -518,10 +518,10 @@ impl App {
                     st.msg.clear();
                     changed = true;
                 }
-                Err(Conflict::BuiltIn(name)) => st.msg = format!("{} is already used by {name}", sc.badge()),
+                Err(Conflict::BuiltIn(name)) => st.msg = crate::i18n::fill("palette.shortcut_taken", &[&sc.badge(), &name]),
                 Err(Conflict::Custom(other)) => {
                     let name = other.split_once(':').map_or(other.as_str(), |(_, l)| l);
-                    st.msg = format!("{} is already used by {name}", sc.badge());
+                    st.msg = crate::i18n::fill("palette.shortcut_taken", &[&sc.badge(), &name]);
                 }
             }
         }
@@ -613,7 +613,9 @@ impl App {
                             let more = egui::Rect::from_center_size(egui::pos2(rc.right() - 14.0, rc.center().y), Vec2::splat(22.0));
                             let pin = more.translate(Vec2::new(-24.0, 0.0));
                             let pinned = prefs.is_pinned(&eid);
-                            let more_r = ui.interact(more, egui::Id::new(("pal_more", i)), egui::Sense::click()).on_hover_text("Set shortcut");
+                            let more_r = ui
+                                .interact(more, egui::Id::new(("pal_more", i)), egui::Sense::click())
+                                .on_hover_text(crate::i18n::tr("palette.set_shortcut"));
                             let pin_r = ui.interact(pin, egui::Id::new(("pal_pin", i)), egui::Sense::click()).on_hover_text(if pinned {
                                 crate::i18n::tr("palette.unpin")
                             } else {

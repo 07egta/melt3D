@@ -3582,6 +3582,37 @@ const TABLE: &[Entry] = &[
         "Initial layout. Made as separate pieces; the board can also be edited"
     ),
     e!("chess_dialog.close", "閉じる", "Close"),
+    e!("designer_bag.ui_height", "高さ", "Height"),
+    e!("designer_bag.ui_depth", "奥行き", "Depth"),
+    e!("designer_chair.ui_title", "Designer Chair", "Designer Chair"),
+    e!("designer_lamp.ui_wall", "壁厚", "Wall thickness"),
+    e!("designer_lamp.ui_glow", "発光", "Glow"),
+    e!("export_dialog.step1", "① 何に使う？", "① What is it for?"),
+    e!("export_dialog.step2", "② 仕上がりの細かさ", "② Finish detail"),
+    e!("export_dialog.step3", "③ 何を書き出す？", "③ What to export?"),
+    e!("export_dialog.check_tip", "大きさ・体積・穴・薄い所・張り出し", "size, volume, holes, thin spots, overhangs"),
+    e!("export_dialog.supports_maybe", "サポートが要るかも", "Might need supports"),
+    e!("export_dialog.supports_no", "不要", "Not needed"),
+    e!("organic_blob.ui_bulge", "ふくらみ", "Bulge"),
+    e!(
+        "curve_tool.round_tip",
+        "1 = ボールのように丸く / 0 = 平らに切る。間の値も使えます",
+        "1 = round like a ball / 0 = cut flat. Values in between work too"
+    ),
+    e!(
+        "designer_bag.ui_design_wall",
+        "設計壁厚 {0} mm（実際の最薄部はプリントチェックで確認）",
+        "Design wall {0} mm (check the real thinnest spot with Print check)"
+    ),
+    e!(
+        "designer_chair.ui_too_many",
+        "これ以上パーツを増やせません（シーンは{0}個まで）。不要な形を削除してください。",
+        "No room for more parts (a scene holds up to {0}). Delete shapes you do not need."
+    ),
+    e!("pattern_ui.copies_count", "{0} 個のコピー（最大 {1}）", "{0} copies (up to {1})"),
+    e!("sketch_live.plane_gap", "スケッチ面の間隔 {0} mm", "{0} mm between sketch planes"),
+    e!("sketch_live.max_shapes", "形は {0} 個までです", "Up to {0} shapes"),
+    e!("palette.shortcut_taken", "{0} はすでに {1} に使われています", "{0} is already used by {1}"),
 ];
 
 fn index() -> &'static HashMap<&'static str, &'static Entry> {

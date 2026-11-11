@@ -483,7 +483,7 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
                 let o = &mut d.opts;
 
                 // Most people only need a purpose, a quality preset and the output scope.
-                ui.label(RichText::new("① What is it for?").strong().size(12.5));
+                ui.label(RichText::new(crate::i18n::tr("export_dialog.step1")).strong().size(12.5));
                 ui.horizontal_wrapped(|ui| {
                     for (format, label, hint) in [
                         (Format::Stl, "3D print", crate::i18n::tr("export_dialog.format_stl_tip")),
@@ -504,7 +504,7 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
                 ui.label(RichText::new(explanation).size(11.5).color(style::DIM));
                 ui.add_space(8.0);
 
-                ui.label(RichText::new("② Finish detail").strong().size(12.5));
+                ui.label(RichText::new(crate::i18n::tr("export_dialog.step2")).strong().size(12.5));
                 ui.horizontal(|ui| {
                     for (label, tol, hint) in [
                         (crate::i18n::tr("export_dialog.detail_standard"), 0.2_f32, crate::i18n::tr("export_dialog.detail_standard_tip")),
@@ -525,7 +525,7 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
                 }
                 ui.add_space(8.0);
 
-                ui.label(RichText::new("③ What to export?").strong().size(12.5));
+                ui.label(RichText::new(crate::i18n::tr("export_dialog.step3")).strong().size(12.5));
                 ui.horizontal(|ui| {
                     if style::pill(ui, crate::i18n::tr("export_dialog.scope_visible"), o.scope == Scope::Visible).clicked() {
                         o.scope = Scope::Visible;
@@ -725,7 +725,7 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
                 ui.add_space(4.0);
                 ui.horizontal(|ui| {
                     if style::pill_enabled(ui, crate::i18n::tr("export_dialog.print_check"), false, !d.check.running())
-                        .on_hover_text("size, volume, holes, thin spots, overhangs")
+                        .on_hover_text(crate::i18n::tr("export_dialog.check_tip"))
                         .clicked()
                     {
                         check = true;
@@ -804,7 +804,10 @@ fn print_check_lines(ui: &mut egui::Ui, c: &PrintCheck) {
     ui.label(small(
         crate::i18n::fill(
             "export_dialog.overhang",
-            &[&format!("{:.0}", c.overhang_pct), &(if c.overhang_pct > 5.0 { "Might need supports" } else { "Not needed" })],
+            &[
+                &format!("{:.0}", c.overhang_pct),
+                &(if c.overhang_pct > 5.0 { crate::i18n::tr("export_dialog.supports_maybe") } else { crate::i18n::tr("export_dialog.supports_no") }),
+            ],
         ),
         col,
     ));

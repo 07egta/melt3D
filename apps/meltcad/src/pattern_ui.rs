@@ -614,7 +614,7 @@ impl App {
         let missing = pat.follows().is_some() && pattern::natural_count(&pat, &self.scene) == 0;
         ui.horizontal(|ui| {
             style::row_label(ui, crate::i18n::tr("pattern.current_count"));
-            ui.label(RichText::new(format!("{n} copies (up to {})", pattern::MAX_INSTANCES)).strong().size(13.0));
+            ui.label(RichText::new(crate::i18n::fill("pattern_ui.copies_count", &[&n, &pattern::MAX_INSTANCES])).strong().size(13.0));
         });
         if capped {
             ui.label(RichText::new(pattern::TOO_MANY).size(12.0).color(style::CUT));

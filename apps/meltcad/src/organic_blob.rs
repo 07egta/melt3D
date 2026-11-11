@@ -287,7 +287,7 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
                 }
             });
             ui.add_space(4.0);
-            ui.add(egui::Slider::new(&mut d.settings.bulge, 0.0..=1.0).text("ふくらみ").fixed_decimals(2))
+            ui.add(egui::Slider::new(&mut d.settings.bulge, 0.0..=1.0).text(crate::i18n::tr("organic_blob.ui_bulge")).fixed_decimals(2))
                 .on_hover_text(crate::i18n::tr("organic_blob.bulge_hint"));
             ui.add(egui::Slider::new(&mut d.settings.detail, 0.0..=1.0).text(crate::i18n::tr("organic_blob.detail")).fixed_decimals(2))
                 .on_hover_text(crate::i18n::tr("organic_blob.detail_hint"));

@@ -412,7 +412,7 @@ impl App {
                 }
             });
         });
-        if ui.button("Open log").on_hover_text(crate::gpu_log::path().display().to_string()).clicked() {
+        if ui.button(crate::i18n::tr("gpu_ui.open_log")).on_hover_text(crate::gpu_log::path().display().to_string()).clicked() {
             if let Err(e) = open_file(&crate::gpu_log::path()) {
                 self.gpu.note = Some(e);
             }

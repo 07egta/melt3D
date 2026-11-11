@@ -967,7 +967,7 @@ impl App {
                 let mut roundness = 1.0 - sh.params[2].clamp(0.0, 1.0);
                 if ui
                     .add(egui::Slider::new(&mut roundness, 0.0..=1.0).text(crate::i18n::tr("curve.end_round")))
-                    .on_hover_text("1 = round like a ball / 0 = cut flat. Values in between work too")
+                    .on_hover_text(crate::i18n::tr("curve_tool.round_tip"))
                     .changed()
                 {
                     sh.params[2] = 1.0 - roundness;

@@ -358,7 +358,7 @@ pub fn inspector(ui: &mut egui::Ui, g: &mut Group) {
     let Some(original) = g.bag.clone() else { return };
     let mut c = original.clone();
     ui.add_space(5.0);
-    ui.label(egui::RichText::new("Designer Bag | 寸法・形状").strong());
+    ui.label(egui::RichText::new(crate::i18n::tr("designer_bag.size_heading")).strong());
     ui.horizontal_wrapped(|ui| {
         for (style, label) in [(BagStyle::Tote, "トート"), (BagStyle::HalfMoon, "半円"), (BagStyle::Origami, "折り紙")] {
             if style::pill(ui, label, c.style == style).clicked() {
@@ -366,31 +366,47 @@ pub fn inspector(ui: &mut egui::Ui, g: &mut Group) {
             }
         }
     });
-    style::labeled_slider(ui, "横幅", &mut c.width, 35.0..=280.0, "バッグ本体の幅（mm）");
-    style::labeled_slider(ui, "高さ", &mut c.height, 30.0..=240.0, "持ち手を除く高さ（mm）");
-    style::labeled_slider(ui, "奥行き", &mut c.depth, 18.0..=150.0, "本体の前後の厚み（mm）");
-    style::labeled_slider(ui, "壁厚", &mut c.wall, 1.2..=8.0, "中空にした本体の壁の厚さ（mm）");
-    style::labeled_slider(ui, "持ち手長さ", &mut c.handle_length, 12.0..=150.0, "バッグ上端からの持ち手の立ち上がり（mm）");
-    style::labeled_slider(ui, "持ち手太さ", &mut c.handle_thickness, 2.4..=15.0, "持ち手の直径（mm）");
-    style::labeled_slider(ui, "持ち手曲率", &mut c.handle_curve, 0.55..=2.2, "アーチの膨らみ方");
+    style::labeled_slider(ui, crate::i18n::tr("designer_bag.width_label"), &mut c.width, 35.0..=280.0, crate::i18n::tr("designer_bag.width_hint"));
+    style::labeled_slider(ui, crate::i18n::tr("designer_bag.ui_height"), &mut c.height, 30.0..=240.0, crate::i18n::tr("designer_bag.height_hint"));
+    style::labeled_slider(ui, crate::i18n::tr("designer_bag.ui_depth"), &mut c.depth, 18.0..=150.0, crate::i18n::tr("designer_bag.depth_hint"));
+    style::labeled_slider(ui, crate::i18n::tr("designer_bag.wall_label"), &mut c.wall, 1.2..=8.0, crate::i18n::tr("designer_bag.wall_hint"));
+    style::labeled_slider(
+        ui,
+        crate::i18n::tr("designer_bag.handle_length_label"),
+        &mut c.handle_length,
+        12.0..=150.0,
+        crate::i18n::tr("designer_bag.handle_length_hint"),
+    );
+    style::labeled_slider(
+        ui,
+        crate::i18n::tr("designer_bag.handle_thickness_label"),
+        &mut c.handle_thickness,
+        2.4..=15.0,
+        crate::i18n::tr("designer_bag.handle_thickness_hint"),
+    );
+    style::labeled_slider(
+        ui,
+        crate::i18n::tr("designer_bag.handle_curve_label"),
+        &mut c.handle_curve,
+        0.55..=2.2,
+        crate::i18n::tr("designer_bag.handle_curve_hint"),
+    );
     c.sanitize();
     if c != original {
         rebuild(g, c.clone());
     }
     if c.wall < 1.6 || c.handle_thickness < 3.0 {
-        ui.label(egui::RichText::new("薄い部分があります。印刷前に肉厚を確認してください").color(style::KEEP).size(11.5));
+        ui.label(egui::RichText::new(crate::i18n::tr("designer_bag.thin_wall_warning")).color(style::KEEP).size(11.5));
     } else {
-        ui.label(egui::RichText::new(format!("設計壁厚 {:.1} mm（実際の最薄部はプリントチェックで確認）", c.wall)).color(style::DIM).size(11.5));
+        ui.label(egui::RichText::new(crate::i18n::fill("designer_bag.ui_design_wall", &[&format!("{:.1}", c.wall)])).color(style::DIM).size(11.5));
     }
-    if style::pill(ui, "プリントチェック", false).on_hover_text("シーン全体のメッシュ肉厚・穴・張り出しを確認").clicked()
+    if style::pill(ui, crate::i18n::tr("designer_bag.print_check_button"), false)
+        .on_hover_text(crate::i18n::tr("designer_bag.print_check_hint"))
+        .clicked()
     {
         crate::export_dialog::open_check(ui.ctx());
     }
-    ui.label(
-        egui::RichText::new("パーツ別の編集は左のツリーで「本体」「底面」「持ち手」を選択。寸法を変えるとパーツ形状を再生成します。")
-            .color(style::DIM)
-            .size(11.5),
-    );
+    ui.label(egui::RichText::new(crate::i18n::tr("designer_bag.edit_parts_help")).color(style::DIM).size(11.5));
 }
 
 #[cfg(test)]

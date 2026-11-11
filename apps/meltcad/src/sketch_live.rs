@@ -98,7 +98,7 @@ impl App {
     /// The outline is closed (or the sweep path is drawn): put the solid into the scene.
     pub(crate) fn live_begin(&mut self) -> bool {
         if self.scene.shape_count() >= MAX_SHAPES {
-            self.sk.msg = format!("Up to {MAX_SHAPES} shapes");
+            self.sk.msg = crate::i18n::fill("sketch_live.max_shapes", &[&MAX_SHAPES]);
             return false;
         }
         let built = match self.build_shape() {
@@ -423,7 +423,7 @@ impl App {
         changed |= self.saved_sketch_inputs(ui);
         let saved_loft = make == Make::Loft && self.sk.secondary_sketch.is_some();
         if saved_loft {
-            ui.label(format!("{:.2} mm between sketch planes", self.sk.height));
+            ui.label(crate::i18n::fill("sketch_live.plane_gap", &[&format!("{:.2}", self.sk.height)]));
         }
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
