@@ -24,7 +24,7 @@ use crate::sketch_edit_ops::{self, EditError};
 use crate::style;
 
 /// Pixels within which a click on the first point closes the outline.
-const CLOSE_PX: f32 = 11.0;
+const CLOSE_PX: f32 = 16.0;
 /// Pixels within which the mouse is on a point of an outline being edited.
 const POINT_PX: f32 = 12.0;
 /// Pixels within which the mouse is on a line of an outline being edited.

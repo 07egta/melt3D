@@ -678,7 +678,9 @@ impl App {
         }
         let mut x = rect.left() + tree_indent(level);
         if has_chevron {
-            let cr = Rect::from_center_size(egui::pos2(x + 6.0, rect.center().y), vec2(16.0, 20.0));
+            // the triangle is small, the place to press is not: as tall as the row, and as wide as fits
+            // between the grip and the icon
+            let cr = Rect::from_center_size(egui::pos2(x + 6.0, rect.center().y), vec2(20.0, rect.height().max(20.0)));
             let r = ui.interact(cr, id.with("c"), Sense::click());
             if seen {
                 let c = cr.center();

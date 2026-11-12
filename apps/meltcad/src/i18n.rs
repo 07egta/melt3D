@@ -162,7 +162,11 @@ const TABLE: &[Entry] = &[
         "Join: the new shape is added to the model (Tab flips Add / Cut)"
     ),
     e!("tool.op.cut.tip", "新しい形でモデルに穴をあけます", "Cut: the new shape carves a hole out of the model"),
-    e!("tool.op.paint.tip", "形は変えず、触れた場所の色と素材だけを変えます", "Paint: the new shape only changes the colour where it touches"),
+    e!(
+        "tool.op.paint.tip",
+        "形は変えず、触れた場所の色と素材だけを変えます",
+        "Paint: the new shape only changes the colour and material where it touches"
+    ),
     e!("tool.op.overlap.tip", "新しい形とモデルが重なる部分だけを残します", "Overlap: keep only the part where the new shape and the model meet"),
     e!("tool.group.new", "新しいグループ", "New group", "新建组", "새 그룹", "Neue Gruppe", "Nouveau groupe", "Grupo nuevo"),
     e!("tool.group.new.tip", "選択した形をまとめる新しいグループを作ります", "New group"),
@@ -270,7 +274,7 @@ const TABLE: &[Entry] = &[
     e!(
         "inspector.locked",
         "実行中のコマンドカードを終えてから、他の形を編集してください",
-        "Use the active command card. Finish or cancel to edit other shapes."
+        "Finish or cancel the active command card first, then edit other shapes."
     ),
     e!("inspector.title.shape", "形", "Shape", "形状", "셰이프", "Form", "Forme", "Forma"),
     e!("inspector.more.kind", "くわしく: 別の形に入れかえる", "More: change to another kind"),
@@ -373,7 +377,7 @@ const TABLE: &[Entry] = &[
     e!(
         "inspector.twist.preview_note",
         "ドラッグ中は軽量表示、停止後は高品質表示。保存や3D書き出しは元データから計算します。",
-        "A light preview while you drag; saving and 3D export are computed from the original shape"
+        "Light preview while you drag, full quality after you stop. Saving and 3D export use the original shape"
     ),
     e!("inspector.swell", "ふくらみ", "Swell", "鼓起", "부풀림", "Wölbung", "Renflement", "Hinchazón"),
     e!(
@@ -439,7 +443,7 @@ const TABLE: &[Entry] = &[
     e!(
         "inspector.melt_preset.edit_tip",
         "本数や垂れ方を変更。手動で動かした液だれは再生成されます",
-        "Change the count and sag; drips you moved by hand are made again"
+        "Change the count or sag. Drips you moved by hand will be regenerated"
     ),
     e!("inspector.part.chair", "Designer Chair の個別パーツ", "Designer Chair part"),
     e!("inspector.part.chair_settings", "椅子全体の設定", "Chair settings"),
@@ -551,7 +555,11 @@ const TABLE: &[Entry] = &[
     e!("guide.hint.edit", "輪かくの点をドラッグして編集", "Drag the outline's points to edit it"),
     e!("guide.hint.edit.keys", "線をクリック: 点を追加 / Delete: 点を削除 / Esc: 終了", "Click a line: add point / Delete: remove point / Esc: done"),
     e!("guide.hint.empty", "ツールの「スケッチ」から形を描こう", "Start with Sketch in the tools"),
-    e!("guide.hint.empty.keys", "左クリック: 選ぶ / 中ドラッグ: 視点を回す / F1: 操作一覧", "Left-click: select / Middle drag: orbit / F1: controls"),
+    e!(
+        "guide.hint.empty.keys",
+        "左クリック: 選ぶ / 中ドラッグか Alt+ドラッグ: 視点を回す / F1: 操作一覧",
+        "Left-click: select / Middle drag or Alt+drag: orbit / F1: controls"
+    ),
     e!("guide.hint.hole", "輪かくの内側に穴を描く", "Draw a hole inside the outline"),
     e!("guide.hint.hole.keys", "左クリックかドラッグ / 右クリック: 確定 / Esc: 戻る", "Left-click or drag / Right-click: finish / Esc: back"),
     e!("guide.hint.line", "線の点を順番にクリック", "Click the line's points in order"),
@@ -2802,11 +2810,7 @@ const TABLE: &[Entry] = &[
         "元の輪郭が正しくありません。交差している部分や短すぎる線分を先に直してください",
         "Original outline is invalid. Fix crossings or tiny segments first"
     ),
-    e!(
-        "sketch_edit_ops.err_invalid_value",
-        "距離と半径は 0 より大きい数値にしてください",
-        "Distance and radius must be finite values greater than 0"
-    ),
+    e!("sketch_edit_ops.err_invalid_value", "距離と半径は 0 より大きい数値にしてください", "Distance and radius must be numbers greater than 0"),
     e!("sketch_edit_ops.err_too_few_edges", "これ以上、辺を削除できません", "Cannot remove more edges"),
     e!("sketch_edit_ops.err_parallel", "ほぼ平行な線は、安全に交わる点を作れません", "Nearly parallel lines have no safe intersection"),
     e!(
@@ -3382,11 +3386,7 @@ const TABLE: &[Entry] = &[
     e!("melt_preset.err_no_group_editing", "編集中のグループがありません", "No group is being edited"),
     e!("melt_preset.err_max_groups", "グループは{0}個までです", "Up to {0} groups"),
     e!("melt_preset.heading", "Melt — とろける形状", "Melt — melting shape"),
-    e!(
-        "melt_preset.intro",
-        "球・箱から、重力で垂れる水飴のような形を作ります",
-        "Make melting, syrup-like shapes that drip from a sphere or box under gravity"
-    ),
+    e!("melt_preset.intro", "球・箱から、重力で垂れる水飴のような形を作ります", "Make syrupy shapes that drip under gravity from a sphere or box"),
     e!("melt_preset.section_base", "元の形", "Original shape"),
     e!("melt_preset.sphere_diameter", "球の直径 (mm)", "Sphere diameter (mm)"),
     e!("melt_preset.width", "幅", "Width"),
@@ -3810,7 +3810,7 @@ mod tests {
     fn a_missing_translation_falls_back_to_english_then_japanese() {
         // `inspector.locked` has Japanese and English but no German yet.
         let _de = lang("de");
-        assert_eq!(tr("inspector.locked"), "Use the active command card. Finish or cancel to edit other shapes.");
+        assert_eq!(tr("inspector.locked"), "Finish or cancel the active command card first, then edit other shapes.");
         // `tool.op.add.tip` likewise has no Korean.
         let _ko = lang("ko");
         assert_eq!(tr("tool.op.add.tip"), "Join: the new shape is added to the model (Tab flips Add / Cut)");
