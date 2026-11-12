@@ -25,10 +25,10 @@ pub fn delays(count: usize, cs: f32) -> Vec<u16> {
 #[cfg(test)]
 pub fn encode_timed(w: usize, h: usize, frames: &[Vec<u8>], delays: &[u16]) -> Result<Vec<u8>, String> {
     if delays.len() != frames.len() {
-        return Err("Every frame needs a delay".into());
+        return Err(crate::i18n::tr("gif.err_delay").into());
     }
     if frames.is_empty() {
-        return Err("Bad picture size".into());
+        return Err(crate::i18n::tr("gif.err_size").into());
     }
     let mut writer = Writer::new(w, h)?;
     for (f, &delay_cs) in frames.iter().zip(delays) {
@@ -64,11 +64,11 @@ impl Writer {
     /// global table can be the first picture's palette.
     pub fn new(w: usize, h: usize) -> Result<Writer, String> {
         if w == 0 || h == 0 || w > 4096 || h > 4096 {
-            return Err("Bad picture size".into());
+            return Err(crate::i18n::tr("gif.err_size").into());
         }
-        let pixels = w.checked_mul(h).ok_or("Bad picture size")?;
+        let pixels = w.checked_mul(h).ok_or(crate::i18n::tr("gif.err_size"))?;
         if pixels.checked_mul(4).is_none() {
-            return Err("Bad picture size".into());
+            return Err(crate::i18n::tr("gif.err_size").into());
         }
         Ok(Writer {
             w,
@@ -109,7 +109,7 @@ impl Writer {
     /// Write one RGBA picture, shown for `delay_cs` hundredths of a second.
     pub fn push(&mut self, rgba: &[u8], delay_cs: u16) -> Result<(), String> {
         if rgba.len() != self.picture_len() {
-            return Err("A frame has the wrong size".into());
+            return Err(crate::i18n::tr("gif.err_frame_size").into());
         }
         if !self.started {
             // The first picture's palette is the global table: a one-picture GIF, or an animation

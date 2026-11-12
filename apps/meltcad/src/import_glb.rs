@@ -129,23 +129,23 @@ pub(crate) fn appearance_glb(bytes: &[u8]) -> crate::import_mesh::AppearanceInfo
             || mat.get("occlusionTexture").is_some()
             || mat.get("emissiveTexture").is_some()
         {
-            out.notes.push("GLB image textures (base colour, normals, etc.) can't be loaded. A plain colour is used instead".into());
+            out.notes.push(crate::i18n::tr("import_glb.image_texture_note").into());
         }
         if mat.get("extensions").is_some() {
-            out.notes.push("GLB extended materials can't be fully reproduced".into());
+            out.notes.push(crate::i18n::tr("import_glb.extended_material_note").into());
         }
         if rgba[3] < 1.0 || mat.get("alphaMode").and_then(Value::as_str).is_some_and(|a| a != "OPAQUE") {
-            out.notes.push("GLB transparency is approximated as glass (not the same as alpha blending)".into());
+            out.notes.push(crate::i18n::tr("import_glb.transparency_note").into());
         }
         if mat.get("emissiveFactor").is_some() {
-            out.notes.push("GLB glow colours are not reproduced".into());
+            out.notes.push(crate::i18n::tr("import_glb.glow_note").into());
         }
     }
     if vertex_colours {
-        out.notes.push("GLB vertex colours (COLOR_0) can't be turned into a single-colour SDF".into());
+        out.notes.push(crate::i18n::tr("import_glb.vertex_colour_note").into());
     }
     if out.material.is_none() && vertex_colours {
-        out.notes.push("GLB has only vertex colours, so the default material is used".into());
+        out.notes.push(crate::i18n::tr("import_glb.vertex_only_note").into());
     }
     out
 }
@@ -186,7 +186,7 @@ impl Accessor {
     fn open(json: &Value, bin: &[u8], index: usize) -> Result<Accessor, String> {
         let a = json.get("accessors").and_then(|x| x.get(index)).ok_or(BAD_GLB)?;
         if a.get("sparse").is_some() {
-            return Err("Sparse GLB data is not supported".into());
+            return Err(crate::i18n::tr("import_glb.sparse_unsupported").into());
         }
         let count = usz(a.get("count")).ok_or(BAD_GLB)?;
         if count > MAX_VERTICES.max(MAX_TRIANGLES * 3) {
@@ -203,7 +203,7 @@ impl Accessor {
         let csize = Self::comp_size(ctype).ok_or(BAD_GLB)?;
         let view = json.get("bufferViews").and_then(|x| x.get(usz(a.get("bufferView")).unwrap_or(usize::MAX))).ok_or(BAD_GLB)?;
         if usz(view.get("buffer")).unwrap_or(0) != 0 {
-            return Err("Data stored outside the GLB is not supported".into());
+            return Err(crate::i18n::tr("import_glb.external_data_unsupported").into());
         }
         let view_off = usz(view.get("byteOffset")).unwrap_or(0);
         let view_len = usz(view.get("byteLength")).ok_or(BAD_GLB)?;
@@ -310,7 +310,7 @@ fn read_primitive(json: &Value, bin: &[u8], prim: &Value) -> Result<Option<Part>
         return Ok(None); // points and lines
     }
     if prim.get("extensions").is_some_and(|e| e.get("KHR_draco_mesh_compression").is_some() || e.get("EXT_meshopt_compression").is_some()) {
-        return Err("Compressed GLB (Draco etc.) is not supported".into());
+        return Err(crate::i18n::tr("import_glb.compressed_unsupported").into());
     }
     let Some(pos_index) = usz(prim.get("attributes").and_then(|a| a.get("POSITION"))) else { return Ok(None) };
     let acc = Accessor::open(json, bin, pos_index)?;
@@ -398,11 +398,11 @@ impl Walk<'_> {
 
     fn node(&mut self, index: usize, parent: &Affine, depth: usize) -> Result<(), String> {
         if depth > MAX_DEPTH {
-            return Err("The GLB nodes are nested too deeply".into());
+            return Err(crate::i18n::tr("import_glb.nodes_too_deep").into());
         }
         self.visits += 1;
         if self.visits > MAX_NODE_VISITS {
-            return Err("Too many nodes in the GLB".into());
+            return Err(crate::i18n::tr("import_glb.too_many_nodes").into());
         }
         let Some(n) = self.json.get("nodes").and_then(|x| x.get(index)) else { return Err(BAD_GLB.into()) };
         let m = parent.after(&node_matrix(n)?);
@@ -425,7 +425,7 @@ pub fn read_glb(b: &[u8]) -> Result<ImportedMesh, String> {
         return Err(BAD_GLB.into());
     }
     if u32at(b, 4) != Some(2) {
-        return Err("Only glTF 2.0 GLB is supported".into());
+        return Err(crate::i18n::tr("import_glb.version_unsupported").into());
     }
     let total = u32at(b, 8).ok_or(BAD_GLB)? as usize;
     if total > b.len() || total < 12 {
@@ -456,12 +456,12 @@ pub fn read_glb(b: &[u8]) -> Result<ImportedMesh, String> {
     if let Some(req) = json.get("extensionsRequired").and_then(Value::as_array)
         && req.iter().filter_map(Value::as_str).any(|e| matches!(e, "KHR_draco_mesh_compression" | "EXT_meshopt_compression"))
     {
-        return Err("Compressed GLB (Draco etc.) is not supported".into());
+        return Err(crate::i18n::tr("import_glb.compressed_unsupported").into());
     }
     if let Some(buffers) = json.get("buffers").and_then(Value::as_array)
         && (buffers.len() > 1 || buffers.first().is_some_and(|b0| b0.get("uri").is_some()))
     {
-        return Err("Data stored outside the GLB is not supported".into());
+        return Err(crate::i18n::tr("import_glb.external_data_unsupported").into());
     }
     let mut w = Walk { json: &json, bin, visits: 0, out: ImportedMesh::default() };
     let scene_nodes: Option<Vec<usize>> = {
@@ -511,7 +511,7 @@ pub fn read_glb(b: &[u8]) -> Result<ImportedMesh, String> {
         for c in p.iter_mut() {
             *c *= 1000.0;
             if !c.is_finite() || c.abs() > crate::import_mesh::MAX_COORD {
-                return Err("The GLB is too large".into());
+                return Err(crate::i18n::tr("import_glb.too_large").into());
             }
         }
     }
@@ -780,6 +780,7 @@ mod tests {
     }
     #[test]
     fn glb_pbr_colour_and_unsupported_textures_are_explained() {
+        crate::i18n::set_language("en");
         let mut doc = tri_doc(json!([{"mesh":0}]), json!([0]));
         doc["materials"] = json!([{"pbrMetallicRoughness": {"baseColorFactor":[0.5,0.0,0.0,1.0],"roughnessFactor":0.25,"metallicFactor":0.75}}]);
         doc["meshes"][0]["primitives"][0]["material"] = json!(0);

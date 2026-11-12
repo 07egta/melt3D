@@ -73,6 +73,8 @@ pub const CONTROL_IDS: &[&str] = &[
     "settings.nav.melt",
     "settings.nav.cad",
     "settings.orbit",
+    "settings.drag_moves.on",
+    "settings.drag_moves.off",
     "settings.autosave",
     "settings.export.format.stl",
     "settings.export.format.3mf",
@@ -243,6 +245,11 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
                             ui.add(egui::Slider::new(&mut next.orbit_sensitivity, MIN_ORBIT..=MAX_ORBIT).step_by(0.05).suffix("×").max_decimals(2));
                         record(ui.ctx(), "settings.orbit", resp.rect);
                     });
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(tr("settings.drag_moves")).size(12.5).color(style::TEXT));
+                        next.drag_moves = bool_pair(ui, "settings.drag_moves", next.drag_moves);
+                    });
+                    ui.label(RichText::new(tr("settings.drag_moves_help")).size(11.0).color(style::DIM));
 
                     section(ui, "settings.saving", "settings.saving_hint");
                     ui.horizontal(|ui| {

@@ -11,7 +11,7 @@
 
 use serde_json::{Map, Value, json};
 
-use crate::model::{Group, Kind, MAX_GROUPS, MAX_OUTLINE, MAX_PATH, MAX_SHAPES, Material, Op, Scene, Shape};
+use crate::model::{Group, Kind, MAX_GROUPS, MAX_OUTLINE, MAX_PATH, MAX_SHAPES, Material, Op, Pick, Scene, Shape};
 use crate::pattern::Pattern;
 use crate::sketch::{self, Frame};
 use crate::sketch_saved;
@@ -25,11 +25,12 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("scene.set", "Replace the scene: {scene: {...}}"),
     ("scene.new", "Empty scene (or {sphere: true} for the starting sphere)"),
     ("shape.add", "{kind, group?, name?, pos?, size?, rot?, scale?, color?, op?, blend?, round?, shell?, material?, outline?, params?}"),
-    ("shape.set", "{group, shape, ...any shape field}: change a shape"),
+    ("shape.set", "{group, shape, ...any shape field}: change a shape (locked: true keeps it from being picked or moved in the window)"),
     ("shape.delete", "{group, shape}"),
     ("group.add", "{name?, op?, blend?}"),
-    ("group.set", "{group, name?, op?, blend?, visible?}"),
+    ("group.set", "{group, name?, op?, blend?, visible?, locked?}"),
     ("group.delete", "{group}"),
+    ("floor.place", "{group, shape?}: move one shape, or a whole group, straight down or up so its lowest point rests on the floor"),
     (
         "pattern.set",
         "{group, shape?, pattern: {...}|null}: live pattern on a whole group (no shape) or on one shape (shape); {Mirror:{axes,centre}} etc.",
@@ -130,6 +131,21 @@ fn run(scene: &mut Scene, cmd: &Value) -> Result<Value, String> {
             // the groups inside it move up one step, as when the group is deleted on screen
             scene.remove_group(g);
             Ok(json!({"deleted": g}))
+        }
+        "floor.place" => {
+            reject_unknown(obj, &["group", "shape"], "floor.place")?;
+            let (g, s) = pattern_target(obj)?;
+            if g >= scene.groups.len() {
+                return Err("No such group".into());
+            }
+            let pick = match s {
+                Some(s) if s < scene.groups[g].shapes.len() => Pick::Shape(g, s),
+                Some(_) => return Err("No such shape".into()),
+                None => Pick::Group(g),
+            };
+            let targets = crate::floor::targets(scene, &[pick]);
+            let moved = crate::floor::drop(scene, &targets).map_err(String::from)?;
+            Ok(json!({"moved": moved}))
         }
         "pattern.set" => {
             reject_unknown(obj, &["group", "shape", "pattern"], "pattern")?;
@@ -300,10 +316,10 @@ fn summary(scene: &Scene) -> Value {
                 .iter()
                 .enumerate()
                 .map(|(si, s)| {
-                    json!({"shape": si, "name": s.name, "kind": format!("{:?}", s.kind), "op": format!("{:?}", s.op), "pos": s.pos, "size": s.size, "sketch": s.guide, "pattern": s.pattern.as_ref().map(|p| format!("{:?}", p.kind()))})
+                    json!({"shape": si, "name": s.name, "kind": format!("{:?}", s.kind), "op": format!("{:?}", s.op), "pos": s.pos, "size": s.size, "locked": s.locked, "sketch": s.guide, "pattern": s.pattern.as_ref().map(|p| format!("{:?}", p.kind()))})
                 })
                 .collect();
-            json!({"group": gi, "name": g.name, "op": format!("{:?}", g.op), "blend": g.blend, "visible": g.visible, "pattern": g.pattern.as_ref().map(|p| format!("{:?}", p.kind())), "shapes": shapes})
+            json!({"group": gi, "name": g.name, "op": format!("{:?}", g.op), "blend": g.blend, "visible": g.visible, "locked": g.locked, "pattern": g.pattern.as_ref().map(|p| format!("{:?}", p.kind())), "shapes": shapes})
         })
         .collect();
     json!({"groups": groups, "shape_count": scene.shape_count(), "melt": {"amount": scene.melt.amount}})
@@ -355,7 +371,7 @@ fn merge(base: &mut Value, patch: &Value) {
 /// The shape fields of a command (`color` is the short way to say `material.color`).
 /// What every command may carry besides its own fields.
 const META_KEYS: [&str; 3] = ["cmd", "token", "id"];
-const SHAPE_KEYS: [&str; 27] = [
+const SHAPE_KEYS: [&str; 28] = [
     "name",
     "kind",
     "size",
@@ -367,6 +383,7 @@ const SHAPE_KEYS: [&str; 27] = [
     "blend",
     "material",
     "visible",
+    "locked",
     "guide",
     "guide_plane",
     "outline",
@@ -490,10 +507,10 @@ fn shape_set(scene: &mut Scene, obj: &Map<String, Value>) -> Result<Value, Strin
 }
 
 fn patch_group(g: &mut Group, obj: &Map<String, Value>) -> Result<(), String> {
-    reject_unknown(obj, &["group", "name", "op", "blend", "visible"], "group")?;
+    reject_unknown(obj, &["group", "name", "op", "blend", "visible", "locked"], "group")?;
     let mut v = serde_json::to_value(&*g).map_err(|e| e.to_string())?;
     let mut p = Map::new();
-    for key in ["name", "op", "blend", "visible"] {
+    for key in ["name", "op", "blend", "visible", "locked"] {
         if let Some(x) = obj.get(key) {
             p.insert(key.into(), x.clone());
         }
@@ -1343,6 +1360,12 @@ mod tests {
             json!({"cmd": "shape.add", "kind": "Sphere", "visble": false}),
             json!({"cmd": "shape.add", "kind": "Sphere", "material": {"colr": [1, 0, 0]}}),
             json!({"cmd": "group.set", "group": 0, "visble": false}),
+            json!({"cmd": "group.set", "group": 0, "locked": "yes"}),
+            json!({"cmd": "floor.place"}),
+            json!({"cmd": "floor.place", "group": 99}),
+            json!({"cmd": "floor.place", "group": 0, "shape": 99}),
+            json!({"cmd": "floor.place", "group": 0, "shape": -1, "extra": 1}),
+            json!({"cmd": "shape.set", "group": 0, "shape": 0, "locked": 3}),
             json!({"cmd": "group.add", "nmae": "x"}),
             json!({"cmd": "piece.reload"}),
             json!({"cmd": "piece.reload", "group": 99999}),

@@ -171,7 +171,7 @@ impl GpuStatus {
         let message = message.into();
         g.last_error = Some(message.clone());
         if early && matches!(g.state, State::Ready { .. }) && g.runtime_errors >= RUNTIME_ERROR_LIMIT {
-            g.state = State::Failed { message: format!("Error while drawing, {} times: {}", g.runtime_errors, message) };
+            g.state = State::Failed { message: crate::i18n::fill("gpu_status.draw_error", &[&g.runtime_errors, &message]) };
             return true;
         }
         false
@@ -212,7 +212,7 @@ pub fn elapsed_text(secs: u64) -> String {
 
 /// The line of the waiting card.
 pub fn compiling_text(secs: u64) -> String {
-    format!("Preparing graphics… the first run can take a while (elapsed {})", elapsed_text(secs))
+    crate::i18n::fill("gpu_status.preparing", &[&(elapsed_text(secs))])
 }
 
 /// Seconds of waiting after which the card also offers the ways out (simple view, other backend).
@@ -222,9 +222,9 @@ pub const OFFER_WAYS_OUT_AFTER_SECS: u64 = 20;
 pub fn describe_wgpu_error(stage: &str, err: &egui_wgpu::wgpu::Error) -> String {
     use egui_wgpu::wgpu::Error;
     let (kind, text) = match err {
-        Error::OutOfMemory { .. } => ("Out of memory (OutOfMemory)", err.to_string()),
-        Error::Validation { description, .. } => ("Validation error (Validation)", description.clone()),
-        Error::Internal { description, .. } => ("Internal error (Internal)", description.clone()),
+        Error::OutOfMemory { .. } => (crate::i18n::tr("gpu_status.err_oom"), err.to_string()),
+        Error::Validation { description, .. } => (crate::i18n::tr("gpu_status.err_validation"), description.clone()),
+        Error::Internal { description, .. } => (crate::i18n::tr("gpu_status.err_internal"), description.clone()),
     };
     let mut out = format!("{stage}: {kind}: {}", text.trim());
     // the lower-level causes often carry the compiler's own message
@@ -386,6 +386,7 @@ mod tests {
 
     #[test]
     fn the_waiting_text_counts_the_seconds() {
+        crate::i18n::set_language("en");
         assert_eq!(compiling_text(12), "Preparing graphics… the first run can take a while (elapsed 12 s)");
         assert_eq!(elapsed_text(0), "0 s");
         assert_eq!(elapsed_text(59), "59 s");
@@ -411,6 +412,7 @@ mod tests {
 
     #[test]
     fn wgpu_errors_read_with_their_stage_and_cause() {
+        crate::i18n::set_language("en");
         use egui_wgpu::wgpu::Error;
         let v = Error::Validation { source: "inner cause".into(), description: "Shader error: bad".into() };
         let t = describe_wgpu_error("Shader", &v);

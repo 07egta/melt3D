@@ -364,12 +364,12 @@ fn read_obj(b: &[u8]) -> Result<ImportedMesh, String> {
                         return Err(BAD_INDEX.into());
                     }
                     if idx.len() >= MAX_FACE_CORNERS {
-                        return Err("A face has too many vertices".into());
+                        return Err(crate::i18n::tr("import_mesh.face_too_many_verts").into());
                     }
                     idx.push(at as u32);
                 }
                 if idx.len() < 3 {
-                    return Err("A face has fewer than 3 vertices".into());
+                    return Err(crate::i18n::tr("import_mesh.face_too_few_verts").into());
                 }
                 for t in crate::polygon::triangulate(&m.positions, &idx) {
                     if m.triangles.len() >= MAX_TRIANGLES {
@@ -567,11 +567,11 @@ fn read_ply(b: &[u8]) -> Result<ImportedMesh, String> {
         // declared count without any validation (even one billion iterations
         // for a roughly 60-byte PLY header). Such rows have no information.
         if el.count > 0 && el.props.is_empty() {
-            return Err("A PLY element with rows must declare properties".into());
+            return Err(crate::i18n::tr("import_mesh.ply_props_missing").into());
         }
         // Unknown elements need a limit too, not only vertices/faces.
         if el.count > MAX_VERTICES.max(MAX_TRIANGLES * 2) {
-            return Err("Too many elements in the PLY".into());
+            return Err(crate::i18n::tr("import_mesh.ply_too_many_elements").into());
         }
         let min_row: usize = if enc == Enc::Ascii { 1 } else { el.props.iter().map(|p| p.list.map_or(p.ty.size(), Ty::size)).sum() };
         if el.count.checked_mul(min_row.max(1)).is_none_or(|need| need > remaining) {
@@ -591,7 +591,7 @@ fn read_ply(b: &[u8]) -> Result<ImportedMesh, String> {
         let col = |name: &str| el.props.iter().position(|p| p.name == name && p.list.is_none());
         let (cx, cy, cz) = (col("x"), col("y"), col("z"));
         if is_vertex && (cx.is_none() || cy.is_none() || cz.is_none()) {
-            return Err("The PLY has no x y z coordinates".into());
+            return Err(crate::i18n::tr("import_mesh.ply_no_xyz").into());
         }
         for _ in 0..el.count {
             let mut p = [0f64; 3];
@@ -613,7 +613,7 @@ fn read_ply(b: &[u8]) -> Result<ImportedMesh, String> {
                     Some(ct) => {
                         let k = v.next(ct)?;
                         if !(0.0..=1.0e6).contains(&k) {
-                            return Err("The PLY face vertex count is wrong".into());
+                            return Err(crate::i18n::tr("import_mesh.ply_face_count").into());
                         }
                         let keep = is_face && (prop.name == "vertex_indices" || prop.name == "vertex_index");
                         for _ in 0..k as usize {
@@ -940,7 +940,7 @@ fn appearance_obj(bytes: &[u8]) -> AppearanceInfo {
         matches!(it.next(), Some(b"mtllib" | b"usemtl"))
     });
     if names_materials {
-        out.notes.push("The OBJ's material file (.mtl) is not read, so its colours and materials are not kept".into());
+        out.notes.push(crate::i18n::tr("import_mesh.obj_mtl_not_read").into());
     }
     // `v x y z r g b`: vertex colours. A shape has one colour, so it takes their average and says so (#190)
     let (mut sum, mut n, mut first, mut varies) = ([0f64; 3], 0u64, None::<[f32; 3]>, false);
@@ -993,7 +993,7 @@ fn appearance_ply(bytes: &[u8]) -> AppearanceInfo {
         w.next() == Some("property") && matches!(w.last(), Some("red" | "green" | "blue" | "diffuse_red" | "diffuse_green" | "diffuse_blue"))
     });
     if coloured {
-        out.notes.push("The PLY's vertex colours are not kept; the shape gets one colour".into());
+        out.notes.push(crate::i18n::tr("import_mesh.ply_vertex_colours").into());
     }
     out
 }
@@ -1003,7 +1003,7 @@ pub fn import_bytes(bytes: &[u8], name: &str, opts: &ImportOptions) -> Result<Im
     if bytes.len() > MAX_FILE_BYTES {
         return Err(TOO_BIG_FILE.into());
     }
-    let format = sniff(bytes, name).ok_or("Can't tell this file's format (supports STL, OBJ, PLY, 3MF, GLB)")?;
+    let format = sniff(bytes, name).ok_or(crate::i18n::tr("import_mesh.format_unknown"))?;
     // Text formats may start with a byte-order mark, which is not part of the model: left in
     // place it hid the first OBJ vertex, so every face named the wrong corner. Binary
     // containers (3MF, GLB, a binary STL) keep every byte they have.
@@ -1034,24 +1034,24 @@ pub fn import_bytes(bytes: &[u8], name: &str, opts: &ImportOptions) -> Result<Im
     let health = mesh.health();
     let mut notes = appearance_info.notes;
     if appearance_info.varies {
-        notes.push("Several colours or materials found. SDF can't keep colours per face, so one main colour is used (the original colour split is not saved)".into());
+        notes.push(crate::i18n::tr("import_mesh.several_colours").into());
     }
     if health.open_edges > 0 {
-        notes.push(format!("There are holes (open edges: {}). The shape is loaded approximately", health.open_edges));
+        notes.push(crate::i18n::fill("import_mesh.holes", &[&health.open_edges]));
     }
     if health.nonmanifold_edges > 0 {
-        notes.push(format!("Some edges have 3 or more faces meeting ({} edges)", health.nonmanifold_edges));
+        notes.push(crate::i18n::fill("import_mesh.nonmanifold_edges", &[&health.nonmanifold_edges]));
     }
     if health.inconsistent_winding_edges > 0 {
-        notes.push(format!("Some faces are turned the wrong way ({} edges). Inside and outside may be mixed up", health.inconsistent_winding_edges));
+        notes.push(crate::i18n::fill("import_mesh.inconsistent_winding", &[&health.inconsistent_winding_edges]));
     }
     if dropped_triangles > 0 {
-        notes.push(format!("Removed {dropped_triangles} zero-area triangles"));
+        notes.push(crate::i18n::fill("import_mesh.removed_zero_area", &[&dropped_triangles]));
     }
     let s = mesh.size();
     let longest = s.into_iter().fold(0.0f32, f32::max);
     if longest > 0.0 && s.iter().any(|d| *d < longest * 1e-6) {
-        notes.push("Flat shape (no thickness)".to_string());
+        notes.push(crate::i18n::tr("import_mesh.flat_shape").to_string());
     }
     Ok(Imported { mesh, appearance: appearance_info.material, format, turned_y_up: y_up, dropped_triangles, health, notes })
 }
@@ -1079,7 +1079,7 @@ pub fn import_file_with_control(
     if cancelled() {
         return Err(IMPORT_CANCELLED.into());
     }
-    let mut f = std::fs::File::open(path).map_err(|e| format!("Can't open the file: {e}"))?;
+    let mut f = std::fs::File::open(path).map_err(|e| crate::i18n::fill("import_mesh.open_error", &[&e]))?;
     let len = f.metadata().map(|m| m.len()).unwrap_or(0);
     if len > MAX_FILE_BYTES as u64 {
         return Err(TOO_BIG_FILE.into());
@@ -1090,7 +1090,7 @@ pub fn import_file_with_control(
         if cancelled() {
             return Err(IMPORT_CANCELLED.into());
         }
-        let n = f.read(&mut buf).map_err(|e| format!("Can't read the file: {e}"))?;
+        let n = f.read(&mut buf).map_err(|e| crate::i18n::fill("import_mesh.read_error", &[&e]))?;
         if n == 0 {
             break;
         }
@@ -1121,6 +1121,7 @@ pub mod tests {
 
     #[test]
     fn obj_vertex_colours_give_the_shape_their_colour() {
+        crate::i18n::set_language("en");
         let obj = b"v 0 0 0 1 0 0\nv 10 0 0 1 0 0\nv 0 10 0 1 0 0\nv 0 0 10 1 0 0\nf 1 3 2\nf 1 2 4\nf 2 3 4\nf 3 1 4\n";
         let got = import_bytes(obj, "red.obj", &ImportOptions { y_up: Some(false) }).expect("reads");
         let m = got.appearance.expect("the vertex colour is kept (#190)");
@@ -1385,6 +1386,7 @@ pub mod tests {
 
     #[test]
     fn colours_that_cannot_be_kept_are_reported() {
+        crate::i18n::set_language("en");
         let obj = "mtllib a.mtl\nv 0 0 0\nv 1 0 0\nv 0 1 0\nusemtl red\nf 1 2 3\n";
         let r = import_bytes(obj.as_bytes(), "a.obj", &opts()).unwrap();
         assert!(r.notes.iter().any(|n| n.contains(".mtl")), "{:?}", r.notes);
@@ -1624,6 +1626,7 @@ pub mod tests {
 
     #[test]
     fn open_boxes_report_holes_and_flat_meshes_are_noted() {
+        crate::i18n::set_language("en");
         let mut b = box_mesh([0.0; 3], [1.0; 3]);
         b.triangles.truncate(10);
         let bytes = export_formats::stl_binary(&to_trimesh(&b), "o");

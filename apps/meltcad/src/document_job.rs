@@ -78,11 +78,11 @@ impl Job {
             .name("yura-native-document".into())
             .spawn(move || {
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| task(&s, &p)))
-                    .unwrap_or_else(|_| Err("The file job stopped partway through".into()));
+                    .unwrap_or_else(|_| Err(crate::i18n::tr("document_job.stopped_partway").into()));
                 drop(permit);
                 let _ = tx.send(result);
             })
-            .map_err(|e| format!("Could not start the file job: {e}"))?;
+            .map_err(|e| crate::i18n::fill("document_job.start_failed", &[&e]))?;
         Ok(Self { rx, state, progress, kind, base_revision, started: Instant::now(), cancelled_at: None })
     }
 
@@ -113,7 +113,7 @@ impl Job {
             check_cancel(state)?;
             let text = scene.try_to_json()?;
             if too_large_to_publish(text.len()) {
-                return Err(format!("The design is too large (max {} MiB)", MAX_DOCUMENT_BYTES / (1024 * 1024)));
+                return Err(crate::i18n::fill("document_job.too_large", &[&(MAX_DOCUMENT_BYTES / (1024 * 1024))]));
             }
             progress.store(450, Ordering::Relaxed);
             check_cancel(state)?;
@@ -134,7 +134,7 @@ impl Job {
             Ok(_) if cancelled(&self.state) => Some(Err(crate::export_mesh::CANCELLED.into())),
             Ok(res) => Some(res),
             Err(TryRecvError::Empty) => None,
-            Err(TryRecvError::Disconnected) => Some(Err("The file job stopped unexpectedly".into())),
+            Err(TryRecvError::Disconnected) => Some(Err(crate::i18n::tr("document_job.stopped_unexpected").into())),
         }
     }
 
@@ -165,16 +165,16 @@ impl Job {
 
     pub fn phase_name(&self) -> &'static str {
         if self.is_committing() {
-            return "Finishing the file (cannot be stopped, to protect the original)";
+            return crate::i18n::tr("document_job.finishing_no_stop");
         }
         if !self.can_cancel() {
-            return "Waiting for the stop to finish…";
+            return crate::i18n::tr("document_job.waiting_stop");
         }
         match (self.kind, self.fraction() < 0.5) {
-            (Kind::Open, true) => "Reading the file",
-            (Kind::Open, false) => "Checking the shape data",
-            (Kind::Save, true) => "Preparing the save data",
-            (Kind::Save, false) => "Preparing the finished file",
+            (Kind::Open, true) => crate::i18n::tr("document_job.reading_file"),
+            (Kind::Open, false) => crate::i18n::tr("document_job.checking_shape"),
+            (Kind::Save, true) => crate::i18n::tr("document_job.preparing_save"),
+            (Kind::Save, false) => crate::i18n::tr("document_job.preparing_finished"),
         }
     }
 }

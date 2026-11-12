@@ -24,7 +24,7 @@ use crate::sketch_edit_ops::{self, EditError};
 use crate::style;
 
 /// Pixels within which a click on the first point closes the outline.
-const CLOSE_PX: f32 = 11.0;
+const CLOSE_PX: f32 = 16.0;
 /// Pixels within which the mouse is on a point of an outline being edited.
 const POINT_PX: f32 = 12.0;
 /// Pixels within which the mouse is on a line of an outline being edited.
@@ -55,24 +55,24 @@ impl PlaneSel {
         [PlaneSel::Floor, PlaneSel::Front, PlaneSel::Side, PlaneSel::OnShape, PlaneSel::Height, PlaneSel::Camera, PlaneSel::Custom];
     pub fn label(self) -> &'static str {
         match self {
-            PlaneSel::Floor => "XY (Floor)",
-            PlaneSel::Front => "XZ (Front)",
-            PlaneSel::Side => "YZ (Side)",
-            PlaneSel::OnShape => "On selected shape",
-            PlaneSel::Height => "Set height",
-            PlaneSel::Camera => "Parallel to camera",
-            PlaneSel::Custom => "Custom plane",
+            PlaneSel::Floor => crate::i18n::tr("sketch_ui.plane_floor_name"),
+            PlaneSel::Front => crate::i18n::tr("sketch_ui.plane_front_name"),
+            PlaneSel::Side => crate::i18n::tr("sketch_ui.plane_side_name"),
+            PlaneSel::OnShape => crate::i18n::tr("sketch_ui.plane_onshape_name"),
+            PlaneSel::Height => crate::i18n::tr("sketch_ui.plane_height_name"),
+            PlaneSel::Camera => crate::i18n::tr("sketch_ui.plane_camera_name"),
+            PlaneSel::Custom => crate::i18n::tr("sketch_ui.plane_custom_name"),
         }
     }
     pub fn tip(self) -> &'static str {
         match self {
-            PlaneSel::Floor => "Sketch on the floor (XY). View from above",
-            PlaneSel::Front => "Sketch on the front (XZ). Extrudes toward you",
-            PlaneSel::Side => "Sketch on the side (YZ). Extrudes toward the right",
-            PlaneSel::OnShape => "Sketch on a horizontal plane at the top of the selected shape",
-            PlaneSel::Height => "Sketch on a horizontal XY plane at a set Z height",
-            PlaneSel::Camera => "Fixes a plane parallel to the current camera view through the camera target. Click again to re-take it",
-            PlaneSel::Custom => "Custom plane set by position XYZ and rotation XYZ. Settings are kept when returning from other planes",
+            PlaneSel::Floor => crate::i18n::tr("sketch_ui.plane_floor_tip"),
+            PlaneSel::Front => crate::i18n::tr("sketch_ui.plane_front_tip"),
+            PlaneSel::Side => crate::i18n::tr("sketch_ui.plane_side_tip"),
+            PlaneSel::OnShape => crate::i18n::tr("sketch_ui.plane_onshape_tip"),
+            PlaneSel::Height => crate::i18n::tr("sketch_ui.plane_height_tip"),
+            PlaneSel::Camera => crate::i18n::tr("sketch_ui.plane_camera_tip"),
+            PlaneSel::Custom => crate::i18n::tr("sketch_ui.plane_custom_tip"),
         }
     }
 }
@@ -92,20 +92,20 @@ impl Pen {
     pub const ALL: [Pen; 5] = [Pen::Polygon, Pen::Rect, Pen::Circle, Pen::Spline, Pen::Line];
     pub fn label(self) -> &'static str {
         match self {
-            Pen::Polygon => "Polygon",
-            Pen::Rect => "Rectangle",
-            Pen::Circle => "Circle",
-            Pen::Spline => "Spline",
-            Pen::Line => "Line",
+            Pen::Polygon => crate::i18n::tr("sketch_ui.pen_polygon"),
+            Pen::Rect => crate::i18n::tr("sketch_ui.pen_rect"),
+            Pen::Circle => crate::i18n::tr("sketch_ui.pen_circle"),
+            Pen::Spline => crate::i18n::tr("sketch_ui.pen_spline"),
+            Pen::Line => crate::i18n::tr("sketch_ui.pen_line"),
         }
     }
     pub fn tip(self) -> &'static str {
         match self {
-            Pen::Polygon => "Click to place corners, then close the polygon",
-            Pen::Rect => "Drag (or click twice) to draw a rectangle",
-            Pen::Circle => "Drag from the center outward to draw a circle",
-            Pen::Spline => "Draw a smooth closed curve through the clicked points",
-            Pen::Line => "Draw an open line to use as a sweep path",
+            Pen::Polygon => crate::i18n::tr("sketch_ui.pen_polygon_tip"),
+            Pen::Rect => crate::i18n::tr("sketch_ui.pen_rect_tip"),
+            Pen::Circle => crate::i18n::tr("sketch_ui.pen_circle_tip"),
+            Pen::Spline => crate::i18n::tr("sketch_ui.pen_spline_tip"),
+            Pen::Line => crate::i18n::tr("sketch_ui.pen_line_tip"),
         }
     }
 }
@@ -126,10 +126,10 @@ impl Make {
     pub const ALL: [Make; 4] = [Make::Extrude, Make::Revolve, Make::Loft, Make::Sweep];
     pub fn label(self) -> &'static str {
         match self {
-            Make::Extrude => "Extrude",
-            Make::Revolve => "Revolve",
-            Make::Loft => "Loft",
-            Make::Sweep => "Sweep",
+            Make::Extrude => crate::i18n::tr("sketch_ui.make_extrude"),
+            Make::Revolve => crate::i18n::tr("sketch_ui.make_revolve"),
+            Make::Loft => crate::i18n::tr("sketch_ui.make_loft"),
+            Make::Sweep => crate::i18n::tr("sketch_ui.make_sweep"),
         }
     }
     pub(crate) fn kind(self) -> Kind {
@@ -218,9 +218,9 @@ pub enum EditOp {
 impl EditOp {
     pub fn label(self) -> &'static str {
         match self {
-            Self::Trim => "Trim",
-            Self::Offset => "Offset",
-            Self::Fillet => "Fillet",
+            Self::Trim => crate::i18n::tr("sketch_ui.op_trim"),
+            Self::Offset => crate::i18n::tr("sketch_ui.op_offset"),
+            Self::Fillet => crate::i18n::tr("sketch_ui.op_fillet"),
         }
     }
 }
@@ -438,7 +438,7 @@ impl State {
             return;
         }
         if self.pts.len() >= limit {
-            self.msg = format!("Up to {limit} points");
+            self.msg = crate::i18n::fill("sketch_ui.msg_limit_points", &[&limit]);
             return;
         }
         if self.corners()
@@ -446,7 +446,7 @@ impl State {
             && self.pts.len() >= 2
             && sketch::crosses_polyline(&self.pts, last, p, false)
         {
-            self.msg = "A line there would cross another. Click a different spot".to_string();
+            self.msg = crate::i18n::tr("sketch_ui.msg_line_cross").to_string();
             return;
         }
         self.msg.clear();
@@ -800,7 +800,7 @@ impl App {
         if plane == PlaneSel::Camera {
             let (right, up, _) = self.cam.basis();
             let Some(frame) = Frame::from_axes(self.cam.target, right, up) else {
-                self.sk.msg = "Can't make a plane from the camera view. Adjust the view".to_string();
+                self.sk.msg = crate::i18n::tr("sketch_ui.msg_plane_from_camera").to_string();
                 return;
             };
             self.sk.camera_frame = frame;
@@ -813,11 +813,7 @@ impl App {
         self.sk.plane_square = false;
         self.sk.clear_drawing();
         self.sk.frame = self.sketch_plane();
-        self.sk.msg = if interrupted {
-            "Changing plane cleared unfinished points. Finished outlines and solids are unchanged".to_string()
-        } else {
-            String::new()
-        };
+        self.sk.msg = if interrupted { crate::i18n::tr("sketch_ui.msg_plane_changed").to_string() } else { String::new() };
         if plane == PlaneSel::Camera {
             // A stale camera fly-to would immediately undo the captured orientation.
             self.fly = None;
@@ -843,7 +839,7 @@ impl App {
     /// moving/turning the plane moves the entire uncommitted sketch with it.
     pub fn sketch_edit_custom_plane(&mut self, origin: V3, angles: V3) -> bool {
         let Some(frame) = Frame::oriented(origin, angles) else {
-            self.sk.msg = "Plane position or angle is invalid".to_string();
+            self.sk.msg = crate::i18n::tr("sketch_ui.msg_plane_invalid").to_string();
             return false;
         };
         self.sk.custom_frame = frame;
@@ -1079,7 +1075,7 @@ impl App {
                     self.sk.make = Make::Sweep;
                     self.sk.frame = self.sk.pframe;
                 } else {
-                    self.sk.msg = format!("Path saved with {} points. Draw an outline and use Sweep", self.sk.path.len());
+                    self.sk.msg = crate::i18n::fill("sketch_ui.msg_path_saved", &[&self.sk.path.len()]);
                 }
             }
         }
@@ -1092,11 +1088,11 @@ impl App {
             return self.sk.live.is_none();
         }
         if self.scene.shape_count().saturating_add(1 + self.sk.holes.len()) > MAX_SHAPES {
-            self.sk.msg = format!("Up to {MAX_SHAPES} shapes");
+            self.sk.msg = crate::i18n::fill("sketch_ui.msg_limit_shapes", &[&MAX_SHAPES]);
             return false;
         }
         if !self.sk.holes.is_empty() && self.sk.make != Make::Extrude {
-            self.sk.msg = "Sketches with holes can only be extruded".to_string();
+            self.sk.msg = crate::i18n::tr("sketch_ui.msg_holes_extrude_only").to_string();
             return false;
         }
         if let Err(e) = sketch::validate_holes(&self.sk.profile, &self.sk.holes) {
@@ -1104,7 +1100,7 @@ impl App {
             return false;
         }
         if !self.sk.holes.is_empty() && self.scene.groups.len() >= crate::model::MAX_GROUPS {
-            self.sk.msg = "Group limit reached".to_string();
+            self.sk.msg = crate::i18n::tr("sketch_ui.msg_group_limit").to_string();
             return false;
         }
         let built = match self.build_shape() {
@@ -1128,7 +1124,7 @@ impl App {
         let mut cutouts = Vec::new();
         for (i, contour) in self.sk.holes.iter().enumerate() {
             let Ok(mut hole) = sketch::extrude(&self.sk.pframe, contour, self.sk.height, self.sk.flip) else {
-                self.sk.msg = "Failed to extrude holes".to_string();
+                self.sk.msg = crate::i18n::tr("sketch_ui.msg_holes_failed").to_string();
                 return false;
             };
             if self.sk.both {
@@ -1136,7 +1132,7 @@ impl App {
             }
             let mut cutter = Shape::new(Kind::Extrude, hole.pos, sh.material);
             sketch::apply(&hole, &mut cutter);
-            cutter.name = format!("Hole {}", i + 1);
+            cutter.name = crate::i18n::fill("sketch_ui.hole_name", &[&(i + 1)]);
             cutter.op = Op::Subtract;
             cutter.blend = 0.0;
             cutouts.push(cutter);
@@ -1145,7 +1141,7 @@ impl App {
         let Some(g) = (if self.sk.holes.is_empty() {
             self.target_group()
         } else {
-            let mut group = crate::model::Group::new("Extrude with holes");
+            let mut group = crate::model::Group::new(crate::i18n::tr("sketch_ui.group_extrude_holes"));
             group.sketch_holes = true;
             group.op = self.new_op;
             self.scene.groups.push(group);
@@ -1163,7 +1159,7 @@ impl App {
             self.sk.on = false;
         }
         self.sk.frame = self.sketch_plane();
-        self.say(ctx, format!("Created {} (use Edit Sketch to change the outline)", make.label()));
+        self.say(ctx, crate::i18n::fill("sketch_ui.msg_created", &[&make.label()]));
         if make == Make::Extrude {
             self.guide.extruded();
         }
@@ -1454,8 +1450,11 @@ impl App {
     /// The button in the shape panel: edit this shape's outline (or stop).
     pub fn sketch_edit_button(&mut self, ui: &mut Ui, g: usize, s: usize) {
         let editing = self.sk.edit.as_ref().is_some_and(|e| e.g == g && e.s == s);
-        let tip = "Edit this shape's outline by moving its points in the viewport";
-        if style::pill(ui, if editing { "Finish Editing" } else { "Edit Sketch" }, editing).on_hover_text(tip).clicked() {
+        let tip = crate::i18n::tr("sketch_ui.edit_outline_tip");
+        if style::pill(ui, if editing { crate::i18n::tr("sketch_ui.finish_editing") } else { crate::i18n::tr("sketch_ui.edit_sketch") }, editing)
+            .on_hover_text(tip)
+            .clicked()
+        {
             if editing {
                 self.edit_release();
                 self.sk.edit = None;
@@ -1556,7 +1555,7 @@ impl App {
                     self.sk.pframe = frame;
                     self.sk.frame = frame;
                     self.sk.stage = Stage::Ready;
-                    self.sk.msg = "Offset outline created. Make it solid or press Esc to discard".to_owned();
+                    self.sk.msg = crate::i18n::tr("sketch_ui.msg_offset_created").to_owned();
                 } else if let Some((outline, _)) = self.edit_outline_mut() {
                     *outline = points;
                     self.sk.msg.clear();
@@ -1641,7 +1640,7 @@ impl App {
                 }
             }
             Some(Err(err)) => self.sk.msg = err,
-            None => self.sk.msg = "Shape to edit not found".to_string(),
+            None => self.sk.msg = crate::i18n::tr("sketch_ui.msg_shape_not_found").to_string(),
         }
     }
 
@@ -1698,7 +1697,7 @@ impl App {
                     e.edge_sel = Some(i);
                 }
                 if !added {
-                    self.sk.msg = format!("Up to {MAX_OUTLINE} points");
+                    self.sk.msg = crate::i18n::fill("sketch_ui.msg_limit_outline_points", &[&MAX_OUTLINE]);
                 }
             }
             None => {
@@ -2089,7 +2088,7 @@ impl App {
                         let text = if pen == Pen::Rect {
                             format!("{} × {} mm", fmt((a[0] - c[0]).abs()), fmt((a[1] - c[1]).abs()))
                         } else {
-                            format!("Radius {} mm", fmt((a[0] - c[0]).hypot(a[1] - c[1])))
+                            crate::i18n::fill("sketch_ui.radius_mm_label", &[&(fmt((a[0] - c[0]).hypot(a[1] - c[1])))])
                         };
                         tag(p, pc + vec2(14.0, 12.0), &text);
                     }
@@ -2295,15 +2294,16 @@ impl App {
         let mut done = false;
         let loft = self.sk.edit.as_ref().and_then(|e| self.scene.shape(e.g, e.s)).is_some_and(|s| s.kind == Kind::Loft);
         ui.horizontal_wrapped(|ui| {
-            ui.label(egui::RichText::new("Edit Sketch").strong().color(style::ACCENT));
-            if style::pill(ui, "Done", false).on_hover_text("Finish editing (Enter / Esc)").clicked() {
+            ui.label(egui::RichText::new(crate::i18n::tr("sketch_ui.edit_sketch")).strong().color(style::ACCENT));
+            if style::pill(ui, crate::i18n::tr("sketch_ui.done"), false).on_hover_text(crate::i18n::tr("sketch_ui.done_tip")).clicked() {
                 done = true;
             }
         });
         if loft {
             let cur = self.sk.edit.as_ref().map(|e| e.which);
             ui.horizontal_wrapped(|ui| {
-                for (w, label) in [(Which::Main, "Bottom outline"), (Which::Top, "Top outline")] {
+                for (w, label) in [(Which::Main, crate::i18n::tr("sketch_ui.outline_bottom")), (Which::Top, crate::i18n::tr("sketch_ui.outline_top"))]
+                {
                     if style::pill(ui, label, cur == Some(w)).clicked()
                         && let Some(e) = self.sk.edit.as_mut()
                     {
@@ -2321,7 +2321,7 @@ impl App {
             });
         }
         ui.horizontal_wrapped(|ui| {
-            ui.label("Edit:");
+            ui.label(crate::i18n::tr("sketch_ui.edit_label"));
             for op in [EditOp::Trim, EditOp::Offset, EditOp::Fillet] {
                 if style::pill(ui, op.label(), self.sk.edit_op == Some(op)).clicked() {
                     self.sk.edit_op = if self.sk.edit_op == Some(op) { None } else { Some(op) };
@@ -2333,36 +2333,37 @@ impl App {
         if let Some(op) = self.sk.edit_op {
             if op != EditOp::Trim {
                 ui.horizontal_wrapped(|ui| {
-                    ui.label(if op == EditOp::Offset { "Distance (mm, negative = inward)" } else { "Radius (mm)" });
+                    ui.label(if op == EditOp::Offset {
+                        crate::i18n::tr("sketch_ui.offset_distance_label")
+                    } else {
+                        crate::i18n::tr("sketch_ui.radius_label")
+                    });
                     ui.add(egui::DragValue::new(&mut self.sk.edit_value).speed(0.1));
                 });
             }
             hint(
                 ui,
                 match op {
-                    EditOp::Trim => "Click a short edge to remove. Neighbor edges extend to keep the outline closed",
-                    EditOp::Offset => "A green preview shows the offset. The original solid is kept",
-                    EditOp::Fillet => "Click a vertex to round. Check the green arc",
+                    EditOp::Trim => crate::i18n::tr("sketch_ui.trim_tip"),
+                    EditOp::Offset => crate::i18n::tr("sketch_ui.offset_tip"),
+                    EditOp::Fillet => crate::i18n::tr("sketch_ui.fillet_tip"),
                 },
             );
             if let Some(Err(err)) = self.edit_preview() {
                 hint(ui, err.message());
             }
             ui.horizontal_wrapped(|ui| {
-                if style::pill_enabled(ui, "Apply", false, self.edit_preview().is_some_and(|p| p.is_ok())).clicked() {
+                if style::pill_enabled(ui, crate::i18n::tr("sketch_ui.apply"), false, self.edit_preview().is_some_and(|p| p.is_ok())).clicked() {
                     self.edit_commit_operation();
                 }
-                if style::pill(ui, "Cancel", false).clicked() {
+                if style::pill(ui, crate::i18n::tr("sketch_ui.cancel"), false).clicked() {
                     self.sk.edit_op = None;
                     self.sk.edit_index = None;
                 }
             });
         }
         let n = self.sk.edit.as_ref().and_then(|e| self.scene.shape(e.g, e.s).map(|s| sketch::outline_of(s, e.which).len())).unwrap_or(0);
-        hint(
-            ui,
-            &format!("Drag point: move  ·  Click line: add point  ·  Click point, Delete: remove  ·  Right-click: done  ·  {n}/{MAX_OUTLINE} points"),
-        );
+        hint(ui, &crate::i18n::fill("sketch_ui.edit_help_outline", &[&n, &MAX_OUTLINE]));
         hint(ui, "1 mm steps  ·  Shift = 10 mm  ·  Ctrl = 0.1 mm  ·  Shift+click line: set length  ·  Alt+drag: orbit");
         // Values are transient UI inputs. Geometry is changed only after a validated edit.
         let current =
@@ -2372,7 +2373,7 @@ impl App {
                 let mut x = outline[i][0];
                 let mut y = outline[i][1];
                 ui.horizontal_wrapped(|ui| {
-                    ui.label("Point X / Y (mm)");
+                    ui.label(crate::i18n::tr("sketch_ui.point_xy_label"));
                     let changed_x = ui.add(egui::DragValue::new(&mut x).speed(0.1).max_decimals(3)).changed();
                     let changed_y = ui.add(egui::DragValue::new(&mut y).speed(0.1).max_decimals(3)).changed();
                     if changed_x || changed_y {
@@ -2384,7 +2385,7 @@ impl App {
                 let mut w = size[0];
                 let mut h = size[1];
                 ui.horizontal_wrapped(|ui| {
-                    ui.label("Width / Height (mm)");
+                    ui.label(crate::i18n::tr("sketch_ui.size_wh_label"));
                     let cw = ui.add(egui::DragValue::new(&mut w).speed(0.1).range(0.5..=2000.0).max_decimals(3)).changed();
                     let ch = ui.add(egui::DragValue::new(&mut h).speed(0.1).range(0.5..=2000.0).max_decimals(3)).changed();
                     if cw || ch {
@@ -2394,7 +2395,7 @@ impl App {
             } else if let Some(diameter) = sketch::circle_diameter(&outline) {
                 let mut d = diameter;
                 ui.horizontal_wrapped(|ui| {
-                    ui.label("Diameter (mm)");
+                    ui.label(crate::i18n::tr("sketch_ui.diameter_label"));
                     if ui.add(egui::DragValue::new(&mut d).speed(0.1).range(1.0..=2000.0).max_decimals(3)).changed() {
                         self.precision_circle(d);
                     }
@@ -2405,7 +2406,7 @@ impl App {
                 let q = outline[(i + 1) % outline.len()];
                 let mut length = (q[0] - p[0]).hypot(q[1] - p[1]);
                 ui.horizontal_wrapped(|ui| {
-                    ui.label("Segment length (mm)");
+                    ui.label(crate::i18n::tr("sketch_ui.segment_length_label"));
                     if ui.add(egui::DragValue::new(&mut length).speed(0.1).range(0.5..=2000.0).max_decimals(3)).changed() {
                         self.precision_edge_length(i, length);
                     }
@@ -2431,14 +2432,14 @@ impl App {
             return;
         }
         ui.horizontal_wrapped(|ui| {
-            let title = if self.sk.keep_sketch { "Sketch" } else { self.sk.make.label() };
+            let title = if self.sk.keep_sketch { crate::i18n::tr("sketch_ui.sketch_title") } else { self.sk.make.label() };
             ui.label(egui::RichText::new(title).strong().color(style::ACCENT));
-            if style::pill(ui, "Cancel", false).on_hover_text("Cancel the current sketch or operation (Esc)").clicked() {
+            if style::pill(ui, crate::i18n::tr("sketch_ui.cancel"), false).on_hover_text(crate::i18n::tr("sketch_ui.cancel_tip")).clicked() {
                 off = true;
             }
         });
         if self.sk.keep_sketch {
-            hint(ui, "Left-click: place points  ·  Right-click: finish sketch  ·  Esc: cancel");
+            hint(ui, crate::i18n::tr("sketch_ui.sketch_hint"));
         }
         // the plane: one small icon, the choices behind it
         let plane_free = matches!(stage, Stage::Draw | Stage::SweepPath);
@@ -2456,8 +2457,8 @@ impl App {
                 }
                 if style::wide_button(
                     ui,
-                    "Pick plane",
-                    "Click a face of a shape or the ground to draw on it",
+                    crate::i18n::tr("sketch_ui.pick_plane"),
+                    crate::i18n::tr("sketch_ui.pick_plane_tip"),
                     self.sk.picking,
                     None,
                     crate::sketch_icons::pick_plane,
@@ -2469,9 +2470,14 @@ impl App {
                 if let Some(pl) = quick {
                     self.sketch_set_plane(pl);
                 }
-                let r = style::wide_button(ui, "More planes", "More planes: on the selected shape, at a height, custom", false, None, |p, r, ink| {
-                    crate::sketch_icons::plane(p, r, PlaneSel::Custom, ink)
-                });
+                let r = style::wide_button(
+                    ui,
+                    crate::i18n::tr("sketch_ui.more_planes"),
+                    crate::i18n::tr("sketch_ui.more_planes_tip"),
+                    false,
+                    None,
+                    |p, r, ink| crate::sketch_icons::plane(p, r, PlaneSel::Custom, ink),
+                );
                 let mut picked = None;
                 let mut head_on = false;
                 let mut copy = false;
@@ -2493,11 +2499,11 @@ impl App {
                         }
                     }
                     ui.separator();
-                    if ui.selectable_label(false, "View this plane head-on").clicked() {
+                    if ui.selectable_label(false, crate::i18n::tr("sketch_ui.plane_head_on")).clicked() {
                         head_on = true;
                         ui.close();
                     }
-                    if ui.selectable_label(false, "Copy this plane to custom plane").clicked() {
+                    if ui.selectable_label(false, crate::i18n::tr("sketch_ui.plane_copy_custom")).clicked() {
                         copy = true;
                         ui.close();
                     }
@@ -2515,7 +2521,7 @@ impl App {
             });
         }
         if plane_free && self.picking_now() {
-            hint(ui, "Click a face of a shape, or the ground, to start drawing there");
+            hint(ui, crate::i18n::tr("sketch_ui.plane_draw_hint"));
         }
         if plane_free && matches!(self.sk.plane, PlaneSel::Height | PlaneSel::Custom) {
             self.sketch_plane_settings(ui);
@@ -2551,14 +2557,23 @@ impl App {
                 ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
                 if matches!(pen, Pen::Spline | Pen::Line) {
                     let on = self.sk.smooth;
-                    let tip = if on { "Smooth curve through the points (click for straight lines)" } else { "Straight lines between points (click for a smooth curve)" };
-                    if style::wide_button(ui, if on { "Smooth" } else { "Sharp" }, tip, false, None, |p, r, ink| crate::sketch_icons::smooth(p, r, on, ink)).clicked() {
+                    let tip = if on { crate::i18n::tr("sketch_ui.smooth_tip_on") } else { crate::i18n::tr("sketch_ui.smooth_tip_off") };
+                    if style::wide_button(
+                        ui,
+                        if on { crate::i18n::tr("sketch_ui.smooth") } else { crate::i18n::tr("sketch_ui.sharp") },
+                        tip,
+                        false,
+                        None,
+                        |p, r, ink| crate::sketch_icons::smooth(p, r, on, ink),
+                    )
+                    .clicked()
+                    {
                         self.sk.smooth = !self.sk.smooth;
                     }
                 }
                 let snap = self.sk.angle_snap;
-                let tip = "Snap angles to 15°. Also snaps to endpoints, midpoints and crossings\nShift = 10 mm  ·  Ctrl = 0.1 mm\nBackspace: undo last point  ·  Esc: restart\nTab: type a length";
-                if style::wide_button(ui, "Angle snap 15°", tip, snap, None, crate::sketch_icons::snap).clicked() {
+                let tip = crate::i18n::tr("sketch_ui.snap_tip");
+                if style::wide_button(ui, crate::i18n::tr("sketch_ui.angle_snap"), tip, snap, None, crate::sketch_icons::snap).clicked() {
                     self.sk.angle_snap = !self.sk.angle_snap;
                 }
             });
@@ -2566,7 +2581,7 @@ impl App {
         self.dimension_card(ui);
         if stage == Stage::Ready && !self.sk.profile.is_empty() && !self.sk.separate {
             ui.horizontal_wrapped(|ui| {
-                hint(ui, &format!("Holes: {} / {}", self.sk.holes.len(), sketch::MAX_HOLES));
+                hint(ui, &crate::i18n::fill("sketch_ui.holes_count", &[&self.sk.holes.len(), &sketch::MAX_HOLES]));
                 if style::pill_enabled(ui, "+ Draw hole", false, self.sk.holes.len() < sketch::MAX_HOLES).clicked() {
                     self.sk.make = Make::Extrude;
                     if self.sk.pen == Pen::Line {
@@ -2575,7 +2590,7 @@ impl App {
                     self.sk.stage = Stage::Hole;
                     self.sk.clear_drawing();
                 }
-                if !self.sk.holes.is_empty() && style::pill(ui, "Remove last hole", false).clicked() {
+                if !self.sk.holes.is_empty() && style::pill(ui, crate::i18n::tr("sketch_ui.remove_last_hole"), false).clicked() {
                     self.sk.holes.pop();
                     self.sk.msg.clear();
                 }
@@ -2585,13 +2600,17 @@ impl App {
             ui.horizontal_wrapped(|ui| {
                 let valid = self.sk.dimension.as_ref().is_none_or(|d| d.error.is_none());
                 let can_finish = valid && (stage == Stage::Ready || !self.sk.pts.is_empty() || self.sk.anchor.is_some());
-                if style::pill_enabled(ui, "Finish Sketch", true, can_finish)
-                    .on_hover_text("Save this sketch (right-click). Select it afterwards for Extrude, Revolve, Loft or Sweep")
+                if style::pill_enabled(ui, crate::i18n::tr("sketch_ui.finish_sketch"), true, can_finish)
+                    .on_hover_text(crate::i18n::tr("sketch_ui.save_sketch_tip"))
                     .clicked()
                 {
                     self.sketch_confirm(ctx);
                 }
-                if stage == Stage::Ready && style::pill(ui, "Redraw", false).on_hover_text("Discard this draft and draw again").clicked() {
+                if stage == Stage::Ready
+                    && style::pill(ui, crate::i18n::tr("sketch_ui.redraw"), false)
+                        .on_hover_text(crate::i18n::tr("sketch_ui.discard_draft_tip"))
+                        .clicked()
+                {
                     self.sk.reset();
                 }
             });
@@ -2611,7 +2630,7 @@ impl App {
         match self.sk.plane {
             PlaneSel::Height => {
                 ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("Horizontal plane height Z").size(11.0).color(style::DIM));
+                    ui.label(egui::RichText::new(crate::i18n::tr("sketch_ui.horizontal_z_label")).size(11.0).color(style::DIM));
                     let mut z = self.sk.level_z;
                     if ui.add(egui::DragValue::new(&mut z).speed(0.25).range(-5000.0..=5000.0).suffix(" mm")).changed() {
                         self.sketch_set_level(z);
@@ -2622,7 +2641,7 @@ impl App {
                 let mut point = self.sk.custom_frame.origin;
                 let mut point_changed = false;
                 ui.horizontal_wrapped(|ui| {
-                    ui.label(egui::RichText::new("Through point").size(11.0).color(style::DIM));
+                    ui.label(egui::RichText::new(crate::i18n::tr("sketch_ui.through_point_label")).size(11.0).color(style::DIM));
                     for (axis, label) in ["X", "Y", "Z"].iter().enumerate() {
                         ui.label(*label);
                         point_changed |= ui.add(egui::DragValue::new(&mut point[axis]).speed(0.25).range(-5000.0..=5000.0).suffix(" mm")).changed();
@@ -2634,7 +2653,7 @@ impl App {
                 let mut angles = self.sk.custom_angles;
                 let mut angle_changed = false;
                 ui.horizontal_wrapped(|ui| {
-                    ui.label(egui::RichText::new("Rotation").size(11.0).color(style::DIM));
+                    ui.label(egui::RichText::new(crate::i18n::tr("sketch_ui.rotation_label")).size(11.0).color(style::DIM));
                     for (axis, label) in ["X", "Y", "Z"].iter().enumerate() {
                         ui.label(*label);
                         angle_changed |= ui.add(egui::DragValue::new(&mut angles[axis]).speed(0.25).range(-360.0..=360.0).suffix("°")).changed();
@@ -2644,15 +2663,15 @@ impl App {
                     self.sketch_edit_custom_plane(self.sk.custom_frame.origin, angles);
                 }
                 ui.horizontal_wrapped(|ui| {
-                    if style::pill(ui, "Camera target", false)
-                        .on_hover_text("Keep this plane's orientation, pass through the camera target")
+                    if style::pill(ui, crate::i18n::tr("sketch_ui.camera_target"), false)
+                        .on_hover_text(crate::i18n::tr("sketch_ui.camera_target_tip"))
                         .clicked()
                     {
                         self.sketch_edit_custom_plane(self.cam.target, self.sk.custom_angles);
                     }
                     let chosen = crate::view::targets(&self.scene, self.sel).into_iter().find_map(|(g, s)| self.scene.shape(g, s).map(|sh| sh.pos));
-                    if style::pill_enabled(ui, "Selected shape center", false, chosen.is_some())
-                        .on_hover_text("Keep this plane's orientation, pass through the selected shape's center")
+                    if style::pill_enabled(ui, crate::i18n::tr("sketch_ui.shape_center"), false, chosen.is_some())
+                        .on_hover_text(crate::i18n::tr("sketch_ui.shape_center_tip"))
                         .clicked()
                         && let Some(origin) = chosen
                     {
@@ -2662,14 +2681,14 @@ impl App {
                 hint(ui, "2D coordinates are kept while changing position or angle; the whole sketch moves with the plane");
             }
             _ => {
-                if style::pill(ui, "Copy this plane to custom plane", false)
-                    .on_hover_text("Duplicate the current plane as a custom plane that can be moved and rotated")
+                if style::pill(ui, crate::i18n::tr("sketch_ui.plane_copy_custom"), false)
+                    .on_hover_text(crate::i18n::tr("sketch_ui.duplicate_custom_tip"))
                     .clicked()
                 {
                     self.sketch_copy_plane_to_custom();
                 }
                 if self.sk.plane == PlaneSel::Camera {
-                    hint(ui, "This plane stays fixed when the camera orbits. Press Parallel to camera again for a new orientation");
+                    hint(ui, crate::i18n::tr("sketch_ui.plane_fixed_hint"));
                 }
             }
         }
@@ -2699,7 +2718,7 @@ impl App {
             return;
         };
         if !d.editing {
-            if style::pill(ui, "Re-enter dimensions (Tab)", false).clicked() {
+            if style::pill(ui, crate::i18n::tr("sketch_ui.reenter_dims"), false).clicked() {
                 d.begin_again();
             }
             return;
@@ -2740,7 +2759,7 @@ impl App {
         if let Some(error) = &d.error {
             ui.colored_label(style::CUT, error);
         }
-        hint(ui, "Tab: next field  ·  Enter: confirm  ·  Esc: cancel");
+        hint(ui, crate::i18n::tr("sketch_ui.tab_hint"));
     }
 
     /// The part of the card that asks what to make.
@@ -2749,15 +2768,15 @@ impl App {
         ui.separator();
         if !self.sk.separate {
             ui.horizontal_wrapped(|ui| {
-                ui.label(egui::RichText::new("Create").size(11.0).color(style::DIM));
+                ui.label(egui::RichText::new(crate::i18n::tr("sketch_ui.create_label")).size(11.0).color(style::DIM));
                 for m in Make::ALL {
                     let usable = (m != Make::Revolve || vertical) && (self.sk.holes.is_empty() || m == Make::Extrude);
                     let tip = match m {
-                        Make::Extrude => "Extrude the outline straight into a prism",
-                        Make::Revolve if vertical => "Revolve the outline around the vertical center axis to make a vase-like shape",
-                        Make::Revolve => "Revolve works on sketches drawn on the Front or Side plane",
-                        Make::Loft => "Blend smoothly from the bottom outline to the top outline",
-                        Make::Sweep => "Pull the outline along the drawn path",
+                        Make::Extrude => crate::i18n::tr("sketch_ui.make_extrude_tip"),
+                        Make::Revolve if vertical => crate::i18n::tr("sketch_ui.make_revolve_tip"),
+                        Make::Revolve => crate::i18n::tr("sketch_ui.make_revolve_plane_tip"),
+                        Make::Loft => crate::i18n::tr("sketch_ui.make_loft_tip"),
+                        Make::Sweep => crate::i18n::tr("sketch_ui.make_sweep_tip"),
                     };
                     if style::pill_enabled(ui, m.label(), self.sk.make == m, usable).on_hover_text(tip).clicked() {
                         self.sk.make = m;
@@ -2772,23 +2791,23 @@ impl App {
         let saved_loft = make == Make::Loft && self.sk.secondary_sketch.is_some();
         if matches!(make, Make::Extrude | Make::Loft) && !saved_loft {
             ui.horizontal_wrapped(|ui| {
-                ui.label("Height");
+                ui.label(crate::i18n::tr("sketch_ui.height_label"));
                 ui.add(egui::DragValue::new(&mut self.sk.height).speed(0.5).range(0.1..=2000.0).suffix(" mm"));
-                if style::pill(ui, "Flip", self.sk.flip).on_hover_text("Extrude to the opposite side of the plane").clicked() {
+                if style::pill(ui, crate::i18n::tr("sketch_ui.flip"), self.sk.flip).on_hover_text(crate::i18n::tr("sketch_ui.flip_tip")).clicked() {
                     self.sk.flip = !self.sk.flip;
                 }
-                if make == Make::Extrude && style::pill(ui, "Both sides", self.sk.both).clicked() {
+                if make == Make::Extrude && style::pill(ui, crate::i18n::tr("sketch_ui.both_sides"), self.sk.both).clicked() {
                     self.sk.both = !self.sk.both;
                 }
             });
         }
         if make == Make::Loft && !self.sk.separate {
             ui.horizontal_wrapped(|ui| {
-                ui.label(egui::RichText::new("Top outline").size(11.0).color(style::DIM));
-                if style::pill(ui, "Scaled copy", self.sk.loft_top == LoftTop::Scaled).clicked() {
+                ui.label(egui::RichText::new(crate::i18n::tr("sketch_ui.outline_top")).size(11.0).color(style::DIM));
+                if style::pill(ui, crate::i18n::tr("sketch_ui.scaled_copy"), self.sk.loft_top == LoftTop::Scaled).clicked() {
                     self.sk.loft_top = LoftTop::Scaled;
                 }
-                if style::pill(ui, "Draw another", self.sk.loft_top == LoftTop::Drawn).clicked() {
+                if style::pill(ui, crate::i18n::tr("sketch_ui.draw_another"), self.sk.loft_top == LoftTop::Drawn).clicked() {
                     self.sk.loft_top = LoftTop::Drawn;
                     if self.sk.profile2.is_empty() {
                         self.sk.stage = Stage::LoftTop;
@@ -2797,7 +2816,12 @@ impl App {
                 }
             });
             if self.sk.loft_top == LoftTop::Drawn
-                && style::pill(ui, if self.sk.profile2.is_empty() { "Draw top outline" } else { "Redraw top outline" }, false).clicked()
+                && style::pill(
+                    ui,
+                    if self.sk.profile2.is_empty() { crate::i18n::tr("sketch_ui.draw_top") } else { crate::i18n::tr("sketch_ui.redraw_top") },
+                    false,
+                )
+                .clicked()
             {
                 self.sk.stage = Stage::LoftTop;
                 self.sk.profile2.clear();
@@ -2805,20 +2829,36 @@ impl App {
             }
         }
         if make == Make::Loft && self.sk.loft_top == LoftTop::Scaled {
-            style::labeled_slider(ui, "Top scale", &mut self.sk.loft_scale, 0.1..=3.0, "Top outline size (ratio, bottom = 1)");
+            style::labeled_slider(
+                ui,
+                crate::i18n::tr("sketch_ui.top_scale_label"),
+                &mut self.sk.loft_scale,
+                0.1..=3.0,
+                crate::i18n::tr("sketch_ui.top_scale_tip"),
+            );
         }
         if make == Make::Sweep {
-            style::labeled_slider(ui, "Profile scale", &mut self.sk.sweep_scale, 0.2..=4.0, "Outline size scale");
+            style::labeled_slider(
+                ui,
+                crate::i18n::tr("sketch_ui.profile_scale_label"),
+                &mut self.sk.sweep_scale,
+                0.2..=4.0,
+                crate::i18n::tr("sketch_ui.profile_scale_tip"),
+            );
             if !self.sk.separate {
                 ui.horizontal_wrapped(|ui| {
                     let have = !self.sk.path.is_empty();
                     ui.label(
-                        egui::RichText::new(if have { format!("Path: {} points", self.sk.path.len()) } else { "No path yet".to_string() })
-                            .size(11.5)
-                            .color(style::DIM),
+                        egui::RichText::new(if have {
+                            crate::i18n::fill("sketch_ui.path_count", &[&self.sk.path.len()])
+                        } else {
+                            crate::i18n::tr("sketch_ui.no_path").to_string()
+                        })
+                        .size(11.5)
+                        .color(style::DIM),
                     );
-                    if style::pill(ui, if have { "Redraw path" } else { "Draw path" }, false)
-                        .on_hover_text("Draw the path (Enter to finish)")
+                    if style::pill(ui, if have { crate::i18n::tr("sketch_ui.redraw_path") } else { crate::i18n::tr("sketch_ui.draw_path") }, false)
+                        .on_hover_text(crate::i18n::tr("sketch_ui.draw_path_tip"))
                         .clicked()
                     {
                         self.sk.stage = Stage::SweepPath;
@@ -2836,9 +2876,10 @@ impl App {
                 Make::Loft => self.sk.loft_top == LoftTop::Scaled || !self.sk.profile2.is_empty(),
                 _ => true,
             };
-            let b = egui::Button::new(egui::RichText::new(format!("Make {}", make.label())).strong().color(Color32::WHITE))
-                .fill(style::ACCENT_SOFT)
-                .stroke(Stroke::new(1.0, style::ACCENT));
+            let b =
+                egui::Button::new(egui::RichText::new(crate::i18n::fill("sketch_ui.make_label", &[&make.label()])).strong().color(Color32::WHITE))
+                    .fill(style::ACCENT_SOFT)
+                    .stroke(Stroke::new(1.0, style::ACCENT));
             let reason = crate::i18n::tr(match make {
                 Make::Sweep if !ready => "guide.why.sweep_path",
                 Make::Loft if !ready => "guide.why.loft_top",
@@ -2850,7 +2891,9 @@ impl App {
             if ui.add_enabled(ready, b).on_hover_text(reason).on_disabled_hover_text(reason).clicked() {
                 self.sketch_confirm(ctx);
             }
-            if !self.sk.separate && style::pill(ui, "Redo", false).on_hover_text("Discard the outline and draw again (Esc)").clicked() {
+            if !self.sk.separate
+                && style::pill(ui, crate::i18n::tr("sketch_ui.redo"), false).on_hover_text(crate::i18n::tr("sketch_ui.redo_tip")).clicked()
+            {
                 self.sk.reset();
             }
         });
@@ -2863,13 +2906,13 @@ fn hint(ui: &mut Ui, text: &str) {
 
 fn pen_hint(pen: Pen, stage: Stage) -> &'static str {
     match (pen, stage) {
-        (_, Stage::LoftTop) if pen != Pen::Line => "Drawing the loft's top outline (bottom outline shown faintly)",
-        (Pen::Polygon, _) => "Left-click: place corner  ·  Right-click / first point / Enter: close",
-        (Pen::Rect, _) => "Drag (or click twice) to set opposite corners",
-        (Pen::Circle, _) => "Drag from center outward (or click twice) to set radius",
-        (Pen::Spline, _) => "Left-click: smooth curve through points  ·  Right-click / first point / Enter: close",
-        (Pen::Line, Stage::SweepPath) => "Drawing sweep path  ·  Left-click: point  ·  Right-click / Enter: finish",
-        (Pen::Line, _) => "Left-click: place point  ·  Right-click / Enter: finish (becomes sweep path)",
+        (_, Stage::LoftTop) if pen != Pen::Line => crate::i18n::tr("sketch_ui.loft_top_hint"),
+        (Pen::Polygon, _) => crate::i18n::tr("sketch_ui.polygon_hint"),
+        (Pen::Rect, _) => crate::i18n::tr("sketch_ui.rect_hint"),
+        (Pen::Circle, _) => crate::i18n::tr("sketch_ui.circle_hint"),
+        (Pen::Spline, _) => crate::i18n::tr("sketch_ui.spline_hint"),
+        (Pen::Line, Stage::SweepPath) => crate::i18n::tr("sketch_ui.sweep_path_hint"),
+        (Pen::Line, _) => crate::i18n::tr("sketch_ui.line_hint"),
     }
 }
 
@@ -3377,6 +3420,7 @@ mod tests {
     #[test]
     fn height_and_custom_planes_can_be_reselected_without_coordinate_drift() {
         let mut app = app();
+        crate::i18n::set_language("en");
         app.sel = None;
         app.set_sketch_tool(true);
         assert_eq!(app.sketch_plane(), Frame::floor());

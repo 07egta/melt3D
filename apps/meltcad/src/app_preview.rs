@@ -278,6 +278,11 @@ fn app_preview() {
             group("Shell", 1, Kind::Torus),
         ];
         app.sel = Some(Pick::Group(2));
+        // `YURA_LOCK=1` also locks a group and one shape, to show the padlocks
+        if std::env::var("YURA_LOCK").is_ok() {
+            app.scene.groups[3].locked = true;
+            app.scene.groups[0].shapes[0].locked = true;
+        }
         app.tab = Tab::Shape;
         // A preview must show the list, not another session's recovery prompt.
         for _ in 0..8 {

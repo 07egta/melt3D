@@ -222,7 +222,7 @@ impl App {
         cfg.sanitize();
         let pos = stroke::centre(&nodes);
         let mut sh = Shape::new(Kind::Curve, pos, Material::plain(cfg.color, 0.4, 0.0));
-        sh.name = "Pipe".to_string();
+        sh.name = crate::i18n::tr("pipe_tool.name").to_string();
         sh.path = nodes.iter().map(|p| [p[0] - pos[0], p[1] - pos[1], p[2] - pos[2], cfg.radius]).collect();
         sh.params = [0.0, 1.0, 0.0, 1.0];
         sh.blend = 2.0;
@@ -388,24 +388,24 @@ impl App {
                     ui.set_max_width((width - 24.0).max(24.0));
                     let cfg = &mut self.pt.cfg;
                     ui.horizontal_wrapped(|ui| {
-                        ui.label(egui::RichText::new("Pipe").strong().color(style::ACCENT));
+                        ui.label(egui::RichText::new(crate::i18n::tr("tool.pipe")).strong().color(style::ACCENT));
                         if self.pt.on {
-                            ui.label(egui::RichText::new("Drag once to draw a pipe").size(11.0).color(style::DIM));
-                            if style::pill(ui, "Stop", false).on_hover_text("Stop drawing pipes (Esc or right click)").clicked() {
+                            ui.label(egui::RichText::new(crate::i18n::tr("pipe.hint")).size(11.0).color(style::DIM));
+                            if style::pill(ui, crate::i18n::tr("action.stop"), false).on_hover_text(crate::i18n::tr("pipe.stop.tip")).clicked() {
                                 off = true;
                             }
                         } else {
-                            ui.label(egui::RichText::new("Fix the selected pipe").size(11.0).color(style::DIM));
-                            if style::pill(ui, "Done", false).on_hover_text("Put this card away (Esc)").clicked() {
+                            ui.label(egui::RichText::new(crate::i18n::tr("pipe.fix")).size(11.0).color(style::DIM));
+                            if style::pill(ui, crate::i18n::tr("action.done"), false).on_hover_text(crate::i18n::tr("pipe.done.tip")).clicked() {
                                 done = true;
                             }
                         }
                     });
-                    style::labeled_slider(ui, "Outer radius", &mut cfg.radius, 0.5..=40.0, "Outer radius of the pipe (mm)");
+                    style::labeled_slider(ui, crate::i18n::tr("pipe.radius"), &mut cfg.radius, 0.5..=40.0, crate::i18n::tr("pipe.radius.tip"));
                     ui.horizontal_wrapped(|ui| {
                         style::color_edit(ui, &mut cfg.color);
-                        let label = if self.pt.more { "Less" } else { "More…" };
-                        if style::pill(ui, label, self.pt.more).on_hover_text("Wall, ends, closed loop").clicked() {
+                        let label = if self.pt.more { crate::i18n::tr("action.less") } else { crate::i18n::tr("action.more") };
+                        if style::pill(ui, label, self.pt.more).on_hover_text(crate::i18n::tr("pipe.more.tip")).clicked() {
                             self.pt.more = !self.pt.more;
                         }
                     });
@@ -413,34 +413,41 @@ impl App {
                         return;
                     }
                     let max_wall = (cfg.radius - 0.1).clamp(0.0, 20.0);
-                    style::labeled_slider(ui, "Wall\nthickness", &mut cfg.wall, 0.0..=max_wall.max(0.1), "0 = solid rod / larger = hollow pipe (mm)");
+                    style::labeled_slider(
+                        ui,
+                        crate::i18n::tr("pipe.wall"),
+                        &mut cfg.wall,
+                        0.0..=max_wall.max(0.1),
+                        "0 = solid rod / larger = hollow pipe (mm)",
+                    );
                     ui.horizontal_wrapped(|ui| {
-                        if style::pill(ui, "Closed loop", cfg.closed).on_hover_text("Join the last and first node").clicked() {
+                        if style::pill(ui, crate::i18n::tr("pipe.loop"), cfg.closed).on_hover_text(crate::i18n::tr("pipe.loop.tip")).clicked() {
                             cfg.closed = !cfg.closed;
                         }
-                        ui.label(egui::RichText::new("Ends").size(11.0).color(style::DIM));
-                        if style::pill(ui, "Round", !cfg.open_ends).on_hover_text("Close the ends round").clicked() {
+                        ui.label(egui::RichText::new(crate::i18n::tr("pipe.ends")).size(11.0).color(style::DIM));
+                        if style::pill(ui, crate::i18n::tr("inspector.round"), !cfg.open_ends)
+                            .on_hover_text(crate::i18n::tr("pipe.ends.round.tip"))
+                            .clicked()
+                        {
                             cfg.open_ends = false;
                         }
-                        if style::pill(ui, "Flat", cfg.open_ends).on_hover_text("Cut the ends straight (shows the hole)").clicked() {
+                        if style::pill(ui, crate::i18n::tr("pipe.ends.flat"), cfg.open_ends)
+                            .on_hover_text(crate::i18n::tr("pipe.ends.flat.tip"))
+                            .clicked()
+                        {
                             cfg.open_ends = true;
                         }
                     });
                     if self.pt.on {
                         ui.horizontal_wrapped(|ui| {
-                            ui.label(egui::RichText::new("Trace plane").size(11.0).color(style::DIM));
+                            ui.label(egui::RichText::new(crate::i18n::tr("pipe.plane")).size(11.0).color(style::DIM));
                             for pl in Plane::ALL {
-                                if style::pill(ui, pl.label(), self.pt.plane == pl)
-                                    .on_hover_text("Where there is no shape, trace on this plane")
-                                    .clicked()
-                                {
+                                if style::pill(ui, pl.label(), self.pt.plane == pl).on_hover_text(crate::i18n::tr("pipe.plane.tip")).clicked() {
                                     self.pt.plane = pl;
                                 }
                             }
                         });
-                        ui.label(
-                            egui::RichText::new("Over a shape it follows the surface · middle drag turns the view").size(11.0).color(style::DIM),
-                        );
+                        ui.label(egui::RichText::new(crate::i18n::tr("pipe.note")).size(11.0).color(style::DIM));
                     }
                 });
             });

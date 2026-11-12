@@ -23,8 +23,8 @@ pub enum Base {
 impl Base {
     pub fn label(self) -> &'static str {
         match self {
-            Base::Sphere => "球体",
-            Base::Box => "箱",
+            Base::Sphere => crate::i18n::tr("melt_preset.base_sphere"),
+            Base::Box => crate::i18n::tr("melt_preset.base_box"),
         }
     }
 }
@@ -116,7 +116,7 @@ impl Settings {
     pub fn generate(&self, centre: [f32; 3], material: Material) -> Group {
         let mut cfg = self.clone();
         cfg.sanitize();
-        let mut group = Group::new("Melt（とろける形状）");
+        let mut group = Group::new(crate::i18n::tr("melt_preset.group_name"));
         group.melt_preset = Some(cfg.clone());
         let dims = cfg.body_dims();
         let mut body = Shape::new(
@@ -127,7 +127,7 @@ impl Settings {
             centre,
             material,
         );
-        body.name = "元の形状".into();
+        body.name = crate::i18n::tr("melt_preset.base_body_name").into();
         match cfg.base {
             Base::Sphere => {
                 body.size[0] = dims[0] * 0.5;
@@ -190,7 +190,7 @@ impl Settings {
             // in absolute world coordinates: picking, framing and export bounds
             // must remain stable even for a model far from the origin.
             let mut drip = Shape::new(Kind::Curve, centre, material);
-            drip.name = format!("液だれ {}", i + 1);
+            drip.name = crate::i18n::fill("melt_preset.drip_name", &[&(i + 1)]);
             drip.op = Op::Add;
             drip.blend = (r * (1.15 + cfg.viscosity * 0.55)).min(spacing * 0.18);
             drip.params = [0.0, 0.70, 0.0, 1.0]; // open, smooth, round ends, 1x thickness
@@ -295,7 +295,7 @@ fn preview_progress(ctx: &egui::Context, editor: &mut Editor, key: PreviewKey) {
                 editor.preview = Some(ctx.load_texture("melt-shape-preview", image, TextureOptions::LINEAR));
                 editor.preview_key = Some(key.clone());
             } else if pending_key == &key {
-                editor.error = Some("プレビュー画像を作れませんでした".into());
+                editor.error = Some(crate::i18n::tr("melt_preset.err_preview_image").into());
                 editor.failed_preview = Some(key.clone());
             }
             editor.running = None;
@@ -319,7 +319,7 @@ fn preview_progress(ctx: &egui::Context, editor: &mut Editor, key: PreviewKey) {
         editor.running = Some((key, output));
     } else {
         editor.failed_preview = Some(key);
-        editor.error = Some("プレビュースレッドを起動できませんでした".into());
+        editor.error = Some(crate::i18n::tr("melt_preset.err_preview_thread").into());
     }
 }
 
@@ -328,10 +328,10 @@ fn apply(app: &mut App, settings: &Settings, editing: Option<usize>) -> Result<(
     cfg.sanitize();
     let old = editing.and_then(|i| app.scene.groups.get(i));
     if editing.is_some() && old.is_none() {
-        return Err("編集対象のグループが見つかりません".into());
+        return Err(crate::i18n::tr("melt_preset.err_group_not_found").into());
     }
     if old.is_some_and(Group::is_linked) {
-        return Err("リンクコピーは元のグループを編集してください".into());
+        return Err(crate::i18n::tr("melt_preset.err_edit_link_source").into());
     }
     let material = old.and_then(|g| g.shapes.first()).map(|sh| sh.material).unwrap_or_else(syrup_material);
     let centre = old.and_then(|g| g.shapes.first()).map(|sh| sh.pos).unwrap_or_else(|| {
@@ -347,11 +347,11 @@ fn apply(app: &mut App, settings: &Settings, editing: Option<usize>) -> Result<(
     let prior = old.map_or(0, |g| g.shapes.len());
     let capacity = app.scene.shape_count().saturating_sub(prior).saturating_add(made.shapes.len());
     if capacity > MAX_SHAPES {
-        return Err(format!("形が{MAX_SHAPES}個を超えるため追加できません。本数を減らしてください"));
+        return Err(crate::i18n::fill("melt_preset.err_too_many_shapes", &[&MAX_SHAPES]));
     }
     if let Some(index) = editing {
         let Some(group) = app.scene.groups.get_mut(index) else {
-            return Err("編集中のグループがありません".into());
+            return Err(crate::i18n::tr("melt_preset.err_no_group_editing").into());
         };
         // Explicit Apply regenerates the group. Other attributes stay intact.
         group.shapes = made.shapes;
@@ -359,7 +359,7 @@ fn apply(app: &mut App, settings: &Settings, editing: Option<usize>) -> Result<(
         app.sel = Some(Pick::Group(index));
     } else {
         if app.scene.groups.len() >= MAX_GROUPS {
-            return Err(format!("グループは{MAX_GROUPS}個までです"));
+            return Err(crate::i18n::fill("melt_preset.err_max_groups", &[&MAX_GROUPS]));
         }
         app.scene.groups.push(made);
         app.sel = Some(Pick::Group(app.scene.groups.len() - 1));
@@ -380,39 +380,41 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
     let mut cancel = false;
     egui::Modal::new(id()).show(ctx, |ui| {
         ui.set_min_width(350.0);
-        ui.heading("Melt — とろける形状");
-        ui.label(RichText::new("球・箱から、重力で垂れる水飴のような形を作ります").small());
+        ui.heading(crate::i18n::tr("melt_preset.heading"));
+        ui.label(RichText::new(crate::i18n::tr("melt_preset.intro")).small());
         ui.horizontal(|ui| {
-            ui.label("元の形");
+            ui.label(crate::i18n::tr("melt_preset.section_base"));
             for kind in [Base::Sphere, Base::Box] {
                 ui.selectable_value(&mut editor.settings.base, kind, kind.label());
             }
         });
         if editor.settings.base == Base::Sphere {
-            ui.add(egui::Slider::new(&mut editor.settings.dimensions[0], 24.0..=180.0).text("球の直径 (mm)"));
+            ui.add(egui::Slider::new(&mut editor.settings.dimensions[0], 24.0..=180.0).text(crate::i18n::tr("melt_preset.sphere_diameter")));
         } else {
-            for (i, name) in ["幅", "奥行", "高さ"].iter().enumerate() {
+            for (i, name) in
+                [crate::i18n::tr("melt_preset.width"), crate::i18n::tr("melt_preset.depth"), crate::i18n::tr("melt_preset.height")].iter().enumerate()
+            {
                 ui.add(egui::Slider::new(&mut editor.settings.dimensions[i], 24.0..=180.0).text(format!("{name} (mm)")));
             }
         }
-        ui.checkbox(&mut editor.settings.keep_base_size, "元形状の大きさを維持");
-        ui.add(egui::Slider::new(&mut editor.settings.length, 6.0..=120.0).text("垂れの長さ (mm)"));
-        ui.add(egui::Slider::new(&mut editor.settings.diameter, MIN_DIAMETER..=20.0).text("太さ (mm)"));
-        ui.add(egui::Slider::new(&mut editor.settings.count, 1..=MAX_DRIPS).text("本数"));
-        ui.add(egui::Slider::new(&mut editor.settings.tilt_deg, 0.0..=55.0).text("下向きからの傾き (°)"));
-        ui.add(egui::Slider::new(&mut editor.settings.azimuth_deg, 0.0..=360.0).text("方向 (°)"));
-        ui.add(egui::Slider::new(&mut editor.settings.viscosity, 0.0..=1.0).text("粘り・ふくらみ"));
+        ui.checkbox(&mut editor.settings.keep_base_size, crate::i18n::tr("melt_preset.keep_base_size"));
+        ui.add(egui::Slider::new(&mut editor.settings.length, 6.0..=120.0).text(crate::i18n::tr("melt_preset.drip_length")));
+        ui.add(egui::Slider::new(&mut editor.settings.diameter, MIN_DIAMETER..=20.0).text(crate::i18n::tr("melt_preset.drip_thickness")));
+        ui.add(egui::Slider::new(&mut editor.settings.count, 1..=MAX_DRIPS).text(crate::i18n::tr("melt_preset.drip_count")));
+        ui.add(egui::Slider::new(&mut editor.settings.tilt_deg, 0.0..=55.0).text(crate::i18n::tr("melt_preset.drip_tilt")));
+        ui.add(egui::Slider::new(&mut editor.settings.azimuth_deg, 0.0..=360.0).text(crate::i18n::tr("melt_preset.drip_direction")));
+        ui.add(egui::Slider::new(&mut editor.settings.viscosity, 0.0..=1.0).text(crate::i18n::tr("melt_preset.viscosity")));
         ui.horizontal(|ui| {
-            ui.label("ランダムシード");
+            ui.label(crate::i18n::tr("melt_preset.random_seed"));
             ui.add(egui::DragValue::new(&mut editor.settings.seed).speed(1.0));
-            if ui.button("違う垂れ方").clicked() {
+            if ui.button(crate::i18n::tr("melt_preset.button_other_drips")).clicked() {
                 editor.settings.seed = editor.settings.seed.wrapping_add(1);
             }
         });
         editor.settings.sanitize();
         let actual = editor.settings.effective_diameter();
         if actual + 0.01 < editor.settings.diameter {
-            ui.label(RichText::new(format!("重なり防止のため太さを {:.1} mm に制限しています", actual)).color(Color32::YELLOW).small());
+            ui.label(RichText::new(crate::i18n::fill("melt_preset.thickness_capped", &[&format!("{:.1}", actual)])).color(Color32::YELLOW).small());
         }
         ui.separator();
         ui.horizontal(|ui| {
@@ -423,34 +425,41 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
             } else if let Some(tex) = &editor.preview {
                 ui.vertical(|ui| {
                     ui.image((tex.id(), egui::vec2(148.0, 148.0)));
-                    ui.label("更新中…");
+                    ui.label(crate::i18n::tr("melt_preset.updating"));
                 });
             } else {
                 ui.add(egui::Spinner::new());
-                ui.label("形のプレビューを準備中…");
+                ui.label(crate::i18n::tr("melt_preset.preparing_preview"));
             }
             ui.vertical(|ui| {
-                ui.label("実際のSDFを使ったプレビュー");
-                ui.label(RichText::new("端は丸く、元の形へ滑らかにつながります").small());
-                ui.label(RichText::new("各垂れは通常のCurveとして編集できます").small());
+                ui.label(crate::i18n::tr("melt_preset.sdf_preview"));
+                ui.label(RichText::new(crate::i18n::tr("melt_preset.hint_smooth_edges")).small());
+                ui.label(RichText::new(crate::i18n::tr("melt_preset.hint_curve_edit")).small());
                 if app.scene.melt.amount <= 0.0 {
-                    ui.label(RichText::new("シーン全体の「とけぐあい」が0です。接合をなめらかにするにはメルト設定を上げてください").small());
+                    ui.label(RichText::new(crate::i18n::tr("melt_preset.warn_melt_zero")).small());
                 }
             });
         });
-        ui.label(RichText::new("細い先端を出力する場合はメッシュ精度0.4mm以下を推奨します。").small());
+        ui.label(RichText::new(crate::i18n::tr("melt_preset.hint_mesh_precision")).small());
         if editor.editing.is_some() {
-            ui.label(RichText::new("再適用すると、このグループの手動変更や追加形状が置き換わります。").color(Color32::YELLOW).small());
+            ui.label(RichText::new(crate::i18n::tr("melt_preset.warn_reapply")).color(Color32::YELLOW).small());
         }
         if let Some(message) = &editor.error {
             ui.label(RichText::new(message).color(Color32::RED));
         }
         ui.separator();
         ui.horizontal(|ui| {
-            if ui.button(if editor.editing.is_some() { "設定を再適用" } else { "シーンに追加" }).clicked() {
+            if ui
+                .button(if editor.editing.is_some() {
+                    crate::i18n::tr("melt_preset.button_reapply")
+                } else {
+                    crate::i18n::tr("melt_preset.button_add_to_scene")
+                })
+                .clicked()
+            {
                 confirm = true;
             }
-            if ui.button("キャンセル").clicked() {
+            if ui.button(crate::i18n::tr("melt_preset.button_cancel")).clicked() {
                 cancel = true;
             }
         });
@@ -458,7 +467,7 @@ pub fn update(app: &mut App, ctx: &egui::Context) {
     if confirm {
         match apply(app, &editor.settings, editor.editing) {
             Ok(()) => {
-                app.say(ctx, "Meltプリセットを追加・更新しました");
+                app.say(ctx, crate::i18n::tr("melt_preset.added_message"));
                 ctx.data_mut(|d| d.remove::<Editor>(id()));
                 return;
             }

@@ -29,11 +29,11 @@ impl App {
     fn keep_guide(&mut self, points: &[[f32; 2]], closed: bool) -> bool {
         let editing = self.sk.guide_edit.filter(|(g, s)| self.scene.shape(*g, *s).is_some_and(|sh| sh.guide && sh.kind == Kind::Curve));
         if self.sk.guide_edit.is_some() && editing.is_none() {
-            self.sk.msg = "This sketch no longer exists. Cancel and select another sketch".into();
+            self.sk.msg = crate::i18n::tr("sketch_keep.sketch_gone_msg").into();
             return false;
         }
         if editing.is_none() && self.scene.shape_count() >= MAX_SHAPES {
-            self.sk.msg = format!("Up to {MAX_SHAPES} shapes");
+            self.sk.msg = crate::i18n::fill("sketch_keep.max_shapes_msg", &[&MAX_SHAPES]);
             return false;
         }
         let editing_shape = editing.and_then(|(g, s)| self.scene.shape(g, s)).cloned();
@@ -79,7 +79,7 @@ impl App {
         if let Some(d) = &mut self.sk.dimension {
             let profile = crate::sketch_dimensions::dim_profile(d, &mut self.sk.profile, &mut self.sk.profile2, &mut self.sk.holes);
             if !d.accept(&self.sk.pts, profile) {
-                self.sk.msg = d.error.clone().unwrap_or_else(|| "Check the dimensions before finishing".into());
+                self.sk.msg = d.error.clone().unwrap_or_else(|| crate::i18n::tr("sketch_keep.check_dims_msg").into());
                 return false;
             }
         }
@@ -107,7 +107,7 @@ impl App {
             };
             if saved {
                 self.set_sketch_tool(false);
-                self.say(ctx, "Sketch saved. Select it, then choose Extrude, Revolve, Loft or Sweep".to_string());
+                self.say(ctx, crate::i18n::tr("sketch_keep.saved_next_msg").to_string());
             }
             return saved;
         }
@@ -154,7 +154,7 @@ impl App {
             return false;
         }
         if self.sk.on && self.sk.keep_sketch && (!self.sk.profile.is_empty() || !self.sk.pts.is_empty() || self.sk.anchor.is_some()) {
-            self.sk.msg = "Finish Sketch first (right-click), then choose a solid operation".to_string();
+            self.sk.msg = crate::i18n::tr("sketch_keep.finish_first_msg").to_string();
             return true;
         }
         if m == Make::Sweep
@@ -172,7 +172,7 @@ impl App {
         let Some((g, s)) = found else { return false };
         self.sel = Some(Pick::Shape(g, s));
         let Some((frame, profile)) = self.curve_profile(g, s) else {
-            self.say(ctx, "Choose a closed sketch on one plane".to_string());
+            self.say(ctx, crate::i18n::tr("sketch_keep.choose_closed_msg").to_string());
             return true;
         };
         let holes = self.curve_holes(g, s, &frame);
@@ -216,15 +216,15 @@ impl App {
     /// keeps the actual distance and offset between parallel sketch planes.
     pub(crate) fn use_secondary_sketch(&mut self, g: usize, s: usize) -> bool {
         if !self.scene.groups.get(g).is_some_and(|group| group.visible) {
-            self.sk.msg = "Choose a visible, finished sketch".into();
+            self.sk.msg = crate::i18n::tr("sketch_keep.choose_visible_msg").into();
             return false;
         }
         if self.sk.source_sketch == Some((g, s)) {
-            self.sk.msg = "Choose a different sketch".into();
+            self.sk.msg = crate::i18n::tr("sketch_keep.choose_different_msg").into();
             return false;
         }
         let Some(sh) = self.scene.shape(g, s).filter(|sh| sh.guide && sh.visible && sh.kind == Kind::Curve) else {
-            self.sk.msg = "Choose a visible, finished sketch".into();
+            self.sk.msg = crate::i18n::tr("sketch_keep.choose_visible_msg").into();
             return false;
         };
         match self.sk.make {
@@ -273,14 +273,14 @@ impl App {
         let mut changed = false;
         if self.sk.make == Make::Loft {
             ui.horizontal_wrapped(|ui| {
-                ui.label("Top outline");
-                if crate::style::pill(ui, "Scaled copy", self.sk.loft_top == LoftTop::Scaled).clicked() {
+                ui.label(crate::i18n::tr("sketch_keep.loft_top_outline_label"));
+                if crate::style::pill(ui, crate::i18n::tr("sketch_keep.loft_scaled_pill"), self.sk.loft_top == LoftTop::Scaled).clicked() {
                     self.sk.loft_top = LoftTop::Scaled;
                     self.sk.secondary_sketch = None;
                     self.sk.profile2.clear();
                     changed = true;
                 }
-                if crate::style::pill(ui, "Saved sketch", self.sk.loft_top == LoftTop::Drawn).clicked() {
+                if crate::style::pill(ui, crate::i18n::tr("sketch_keep.loft_saved_pill"), self.sk.loft_top == LoftTop::Drawn).clicked() {
                     self.sk.loft_top = LoftTop::Drawn;
                     changed = true;
                 }
@@ -305,9 +305,9 @@ impl App {
         }
         let selected = self.sk.secondary_sketch;
         let label = candidates.iter().find(|(id, _)| Some(*id) == selected).map(|(_, label)| label.as_str()).unwrap_or(if closed {
-            "Choose a top sketch"
+            crate::i18n::tr("sketch_keep.choose_top_sketch")
         } else {
-            "Choose a saved path"
+            crate::i18n::tr("sketch_keep.choose_saved_path")
         });
         let mut picked = None;
         egui::ComboBox::from_id_salt("solid_saved_input").selected_text(label).width(ui.available_width().min(320.0)).show_ui(ui, |ui| {
@@ -323,9 +323,9 @@ impl App {
         if candidates.is_empty() {
             ui.add(
                 egui::Label::new(if closed {
-                    "Save a second sketch on a parallel plane, then choose Loft."
+                    crate::i18n::tr("sketch_keep.loft_need_parallel_msg")
                 } else {
-                    "Save an open sketch with Line first, then choose Sweep."
+                    crate::i18n::tr("sketch_keep.sweep_need_open_msg")
                 })
                 .wrap(),
             );
@@ -601,6 +601,7 @@ mod tests {
     fn loft_rejects_nonparallel_saved_sketch_without_changing_the_preview() {
         let ctx = egui::Context::default();
         let mut app = App::new(true, None);
+        crate::i18n::set_language("en");
         app.scene.groups.clear();
         let base = save_profile(&mut app, Frame::floor(), sketch::rect([0.0, 0.0], [20.0, 20.0]));
         let side = save_profile(&mut app, Frame::front(), sketch::rect([0.0, 0.0], [10.0, 20.0]));

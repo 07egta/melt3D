@@ -39,16 +39,16 @@ impl Up {
     pub const ALL: [Up; 3] = [Up::Auto, Up::Y, Up::Z];
     pub fn label(self) -> &'static str {
         match self {
-            Up::Auto => "Auto",
-            Up::Y => "Y up",
-            Up::Z => "Z up",
+            Up::Auto => crate::i18n::tr("mesh_import.up_auto"),
+            Up::Y => crate::i18n::tr("mesh_import.up_y"),
+            Up::Z => crate::i18n::tr("mesh_import.up_z"),
         }
     }
     pub fn hint(self) -> &'static str {
         match self {
-            Up::Auto => "Picks by file type (OBJ and GLB are Y up, others Z up)",
-            Up::Y => "Y-up data. Stands it up on import",
-            Up::Z => "Z-up data. Imported as is",
+            Up::Auto => crate::i18n::tr("mesh_import.up_auto_desc"),
+            Up::Y => crate::i18n::tr("mesh_import.up_y_desc"),
+            Up::Z => crate::i18n::tr("mesh_import.up_z_desc"),
         }
     }
     /// Is the file Y up?
@@ -117,7 +117,11 @@ pub fn load_with_control(path: &Path, cancel: &std::sync::atomic::AtomicBool, pr
     let imported = import_mesh::import_file_with_control(path, &ImportOptions { y_up: Some(false) }, cancel, progress)?;
     let size = imported.mesh.size();
     let file_name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    let stem = path.file_stem().map(|n| n.to_string_lossy().into_owned()).filter(|s| !s.is_empty()).unwrap_or_else(|| "Mesh".into());
+    let stem = path
+        .file_stem()
+        .map(|n| n.to_string_lossy().into_owned())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| crate::i18n::tr("mesh_import.default_name").into());
     Ok(Loaded { file_name, stem, imported, size })
 }
 
@@ -190,7 +194,7 @@ pub fn rebake(mesh: &ImportedMesh, y_up: bool, final_size: [f32; 3], res: u32, c
     let c = [0, 1, 2].map(|a| 0.5 * (lo[a] + hi[a]));
     let orig = m.size();
     if final_size.iter().any(|x| !x.is_finite() || *x <= 0.0) || orig.iter().any(|x| *x <= 0.0) {
-        return Err("Invalid dimensions".into());
+        return Err(crate::i18n::tr("mesh_import.invalid_dims").into());
     }
     let factors = [0, 1, 2].map(|a| final_size[a] / orig[a]);
     for p in &mut m.positions {
@@ -211,7 +215,7 @@ pub fn bake_original(mesh: &ImportedMesh, res: u32, ctl: &BakeControl) -> Result
     let centre = [0, 1, 2].map(|a| lo[a] + size[a] * 0.5);
     if size.iter().any(|x| !x.is_finite() || !(0.01..=2000.0).contains(x)) || centre.iter().any(|x| !x.is_finite() || !(-5000.0..=5000.0).contains(x))
     {
-        return Err("立体が Melt の対応範囲を超えています（各辺 0.01〜2000 mm、中心位置 ±5000 mm）。SolidCraft で寸法・位置を調整してください".into());
+        return Err(crate::i18n::tr("mesh_import.err_out_of_range").into());
     }
     let mut centered = mesh.clone();
     for p in &mut centered.positions {

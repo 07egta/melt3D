@@ -42,10 +42,10 @@ impl Backend {
     /// The name shown to people.
     pub fn label(self) -> &'static str {
         match self {
-            Backend::Vulkan => "Vulkan",
-            Backend::Dx12 => "DirectX 12",
-            Backend::Gl => "OpenGL",
-            Backend::Metal => "Metal",
+            Backend::Vulkan => crate::i18n::tr("backend.vulkan"),
+            Backend::Dx12 => crate::i18n::tr("backend.dx12"),
+            Backend::Gl => crate::i18n::tr("backend.gl"),
+            Backend::Metal => crate::i18n::tr("backend.metal"),
         }
     }
 
@@ -105,9 +105,7 @@ pub fn parse_choice(text: Option<&str>) -> Result<Choice, String> {
     match text.map(str::trim) {
         None | Some("") => Ok(Choice::Auto),
         Some(t) if t.eq_ignore_ascii_case("auto") => Ok(Choice::Auto),
-        Some(t) => Backend::parse(t)
-            .map(Choice::Fixed)
-            .ok_or_else(|| format!("MELTCAD_BACKEND={t} is not a known value (vulkan / dx12 / gl / metal / auto)")),
+        Some(t) => Backend::parse(t).map(Choice::Fixed).ok_or_else(|| crate::i18n::fill("backend.env_invalid", &[&t])),
     }
 }
 
@@ -334,7 +332,7 @@ pub fn relaunch_args(r: &Relaunch) -> (Vec<OsString>, Vec<(String, String)>) {
 
 /// Start this program again. The caller then closes its own window.
 pub fn relaunch(r: &Relaunch) -> Result<(), String> {
-    let exe = std::env::current_exe().map_err(|e| format!("Cannot find where the program is: {e}"))?;
+    let exe = std::env::current_exe().map_err(|e| crate::i18n::fill("backend.exe_not_found", &[&e]))?;
     let (args, envs) = relaunch_args(r);
     let mut cmd = std::process::Command::new(&exe);
     cmd.args(args);
@@ -346,7 +344,7 @@ pub fn relaunch(r: &Relaunch) -> Result<(), String> {
         }
     }
     crate::gpu_log::log(&format!("restarting {} with {r:?}", exe.display()));
-    cmd.spawn().map(|_| ()).map_err(|e| format!("Could not restart: {e}"))
+    cmd.spawn().map(|_| ()).map_err(|e| crate::i18n::fill("backend.restart_failed", &[&e]))
 }
 
 /// The backends tried before this run, from the environment.

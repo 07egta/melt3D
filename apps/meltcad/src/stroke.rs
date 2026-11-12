@@ -51,9 +51,9 @@ impl Plane {
 
     pub fn label(self) -> &'static str {
         match self {
-            Plane::Floor => "Floor",
-            Plane::Front => "Front",
-            Plane::Side => "Side",
+            Plane::Floor => crate::i18n::tr("stroke.plane_floor"),
+            Plane::Front => crate::i18n::tr("stroke.plane_front"),
+            Plane::Side => crate::i18n::tr("stroke.plane_side"),
         }
     }
 }

@@ -34,28 +34,28 @@ pub(crate) fn loop_normal(pts: &[V3]) -> Option<V3> {
 pub(crate) fn create(frame: Frame, points: &[[f32; 2]], holes: &[Vec<[f32; 2]>], closed: bool) -> Result<Shape, String> {
     let cap = if closed { MAX_OUTLINE } else { MAX_PATH };
     if points.len() > cap {
-        return Err(format!("A sketch can have up to {cap} points"));
+        return Err(crate::i18n::fill("sketch_saved.max_points", &[&cap]));
     }
     let points = if closed {
         sketch::validate_profile(points).map_err(|e| e.message())?
     } else {
         if !holes.is_empty() {
-            return Err("An open sketch path cannot have holes".into());
+            return Err(crate::i18n::tr("sketch_saved.open_path_no_holes").into());
         }
         sketch::open_line(points, false).map_err(|e| e.message())?
     };
     let holes = if closed { sketch::validate_holes(&points, holes).map_err(|e| e.message())? } else { Vec::new() };
     if !frame.origin.iter().all(|v| v.is_finite() && v.abs() <= 5000.0) || Frame::from_axes(frame.origin, frame.u, frame.v).is_none() {
-        return Err("Choose a finite, valid sketch plane".into());
+        return Err(crate::i18n::tr("sketch_saved.invalid_plane").into());
     }
     let world: Vec<V3> = points.iter().map(|p| frame.to_world(*p)).collect();
     if !world.iter().all(|p| p.iter().all(|x| x.is_finite())) {
-        return Err("Sketch coordinates must be finite".into());
+        return Err(crate::i18n::tr("sketch_saved.coords_finite").into());
     }
     let mut sh = Shape::new(Kind::Curve, frame.origin, Material { color: [0.98, 0.78, 0.3], ..Material::default() });
     sh.path = world.iter().map(|w| [w[0] - frame.origin[0], w[1] - frame.origin[1], w[2] - frame.origin[2], LINE_RADIUS]).collect();
     sh.params = [if closed { 1.0 } else { 0.0 }, 0.0, 0.0, 1.0];
-    sh.name = if closed { "Sketch" } else { "Sketch path" }.into();
+    sh.name = if closed { crate::i18n::tr("sketch_saved.name_sketch") } else { crate::i18n::tr("sketch_saved.name_sketch_path") }.into();
     sh.op = Op::Add;
     sh.blend = 0.0;
     sh.guide = true;
@@ -120,9 +120,9 @@ pub(crate) fn replace(
     closed: bool,
 ) -> Result<Shape, String> {
     if !original.guide || original.kind != Kind::Curve {
-        return Err("Choose a saved sketch".into());
+        return Err(crate::i18n::tr("sketch_saved.choose_saved").into());
     }
-    let old_frame = frame(original).ok_or("The saved sketch has no valid plane")?;
+    let old_frame = frame(original).ok_or(crate::i18n::tr("sketch_saved.no_plane"))?;
     let target = plane.unwrap_or(old_frame);
     let kept_holes = holes(original, &old_frame);
     let fresh = create(target, points, new_holes.unwrap_or(&kept_holes), closed)?;
@@ -131,7 +131,7 @@ pub(crate) fn replace(
     // Retain the existing transform while expressing the edited world points in local space.
     let local_plane = if plane.is_none() { original.guide_plane.as_ref().and_then(|p| Frame::from_axes([0.0; 3], p.u, p.v)) } else { None }
         .or_else(|| Frame::from_axes([0.0; 3], to_local(&result, target.to_world([1.0, 0.0])), to_local(&result, target.to_world([0.0, 1.0]))))
-        .ok_or("The sketch transform cannot represent this plane")?;
+        .ok_or(crate::i18n::tr("sketch_saved.transform_plane"))?;
     result.path = fresh
         .path
         .iter()
@@ -147,7 +147,7 @@ pub(crate) fn replace(
     if !result.path.iter().flatten().all(|v| v.is_finite() && v.abs() <= 5000.0)
         || !local_holes.iter().flatten().flatten().all(|v| v.is_finite() && v.abs() <= sketch::COORD_MAX)
     {
-        return Err("Edited sketch exceeds the coordinate limits of its transform".into());
+        return Err(crate::i18n::tr("sketch_saved.coord_limit").into());
     }
     result.params = fresh.params;
     result.curve_handles.clear();
@@ -162,10 +162,10 @@ pub(crate) fn replace(
 /// A saved open path, in world coordinates, without resampling its vertices.
 pub(crate) fn open_path(sh: &Shape) -> Result<Vec<V3>, String> {
     if sh.kind != Kind::Curve || curve::settings(&sh.params).0 {
-        return Err("Choose an open sketch path".into());
+        return Err(crate::i18n::tr("sketch_saved.choose_open_path").into());
     }
     if sh.path.len() > MAX_PATH {
-        return Err(format!("A sweep path can have up to {MAX_PATH} points"));
+        return Err(crate::i18n::fill("sketch_saved.sweep_max_points", &[&MAX_PATH]));
     }
     let path: Vec<_> = sh.path.iter().map(|n| to_world(sh, [n[0], n[1], n[2]])).collect();
     if !path.iter().flatten().all(|v| v.is_finite() && v.abs() <= 5000.0) {
@@ -179,17 +179,17 @@ pub(crate) fn open_path(sh: &Shape) -> Result<Vec<V3>, String> {
 
 /// Project a second saved sketch into the base axes, retaining actual spacing and offset.
 pub(crate) fn loft_top(base: &Frame, bottom: &[[f32; 2]], top: &Shape) -> Result<(Vec<[f32; 2]>, f32, bool), String> {
-    let (frame, profile) = profile(top).ok_or("The top sketch must be a closed, planar outline")?;
+    let (frame, profile) = profile(top).ok_or(crate::i18n::tr("sketch_saved.top_must_closed"))?;
     if !holes(top, &frame).is_empty() {
-        return Err("Loft needs an outline without holes".into());
+        return Err(crate::i18n::tr("sketch_saved.loft_no_holes").into());
     }
     let normal = base.normal();
     if sdf::dot(normal, frame.normal()).abs() < 0.9999 {
-        return Err("Choose a top sketch on a parallel plane".into());
+        return Err(crate::i18n::tr("sketch_saved.top_parallel").into());
     }
     let height = sdf::dot(sdf::sub(frame.origin, base.origin), normal);
     if !height.is_finite() || !(0.1..=2000.0).contains(&height.abs()) {
-        return Err("Place the second sketch 0.1–2000 mm from the first plane".into());
+        return Err(crate::i18n::tr("sketch_saved.second_distance").into());
     }
     let top: Vec<_> = profile.iter().map(|p| base.from_world(frame.to_world(*p))).collect();
     sketch::loft(base, bottom, &top, height.abs(), height < 0.0).map_err(|e| e.message())?;
