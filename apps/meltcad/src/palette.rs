@@ -26,6 +26,7 @@ pub enum Action {
     Cut,
     Paste,
     Duplicate,
+    PlaceOnFloor,
     MirrorCopy,
     Delete,
     Array,
@@ -77,6 +78,7 @@ impl Action {
             | Self::Cut
             | Self::Paste
             | Self::Duplicate
+            | Self::PlaceOnFloor
             | Self::MirrorCopy
             | Self::Delete
             | Self::Array
@@ -185,6 +187,7 @@ pub fn entries() -> Vec<Entry> {
         cmd(crate::i18n::tr("palette.cmd_cut"), "cut 切り取り", Action::Cut),
         cmd(crate::i18n::tr("palette.cmd_paste"), "paste はりつけ 貼りつけ", Action::Paste),
         cmd(crate::i18n::tr("palette.cmd_duplicate"), "duplicate clone ふくせい 複製", Action::Duplicate),
+        cmd(crate::i18n::tr("floor.button"), "floor ground drop land ゆか 床 おく 置く", Action::PlaceOnFloor),
         cmd(crate::i18n::tr("palette.cmd_mirror_copy"), "mirror symmetric みらー 左右コピー", Action::MirrorCopy),
         cmd(crate::i18n::tr("palette.cmd_delete"), "delete remove けす さくじょ 削除", Action::Delete),
         cmd(crate::i18n::tr("palette.cmd_array"), "array pattern repeat はいれつ ならべてコピー", Action::Array),
@@ -420,6 +423,7 @@ impl App {
             Action::Cut => self.cut(ctx),
             Action::Paste => self.paste(ctx, None),
             Action::Duplicate => self.duplicate(),
+            Action::PlaceOnFloor => self.place_on_floor(ctx),
             Action::MirrorCopy => self.mirror_copy(),
             Action::Delete => self.delete_selected(),
             Action::Array => crate::array::open(ctx),

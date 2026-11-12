@@ -11,7 +11,7 @@
 
 use serde_json::{Map, Value, json};
 
-use crate::model::{Group, Kind, MAX_GROUPS, MAX_OUTLINE, MAX_PATH, MAX_SHAPES, Material, Op, Scene, Shape};
+use crate::model::{Group, Kind, MAX_GROUPS, MAX_OUTLINE, MAX_PATH, MAX_SHAPES, Material, Op, Pick, Scene, Shape};
 use crate::pattern::Pattern;
 use crate::sketch::{self, Frame};
 use crate::sketch_saved;
@@ -30,6 +30,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("group.add", "{name?, op?, blend?}"),
     ("group.set", "{group, name?, op?, blend?, visible?, locked?}"),
     ("group.delete", "{group}"),
+    ("floor.place", "{group, shape?}: move one shape, or a whole group, straight down or up so its lowest point rests on the floor"),
     (
         "pattern.set",
         "{group, shape?, pattern: {...}|null}: live pattern on a whole group (no shape) or on one shape (shape); {Mirror:{axes,centre}} etc.",
@@ -130,6 +131,21 @@ fn run(scene: &mut Scene, cmd: &Value) -> Result<Value, String> {
             // the groups inside it move up one step, as when the group is deleted on screen
             scene.remove_group(g);
             Ok(json!({"deleted": g}))
+        }
+        "floor.place" => {
+            reject_unknown(obj, &["group", "shape"], "floor.place")?;
+            let (g, s) = pattern_target(obj)?;
+            if g >= scene.groups.len() {
+                return Err("No such group".into());
+            }
+            let pick = match s {
+                Some(s) if s < scene.groups[g].shapes.len() => Pick::Shape(g, s),
+                Some(_) => return Err("No such shape".into()),
+                None => Pick::Group(g),
+            };
+            let targets = crate::floor::targets(scene, &[pick]);
+            let moved = crate::floor::drop(scene, &targets).map_err(String::from)?;
+            Ok(json!({"moved": moved}))
         }
         "pattern.set" => {
             reject_unknown(obj, &["group", "shape", "pattern"], "pattern")?;
@@ -1345,6 +1361,10 @@ mod tests {
             json!({"cmd": "shape.add", "kind": "Sphere", "material": {"colr": [1, 0, 0]}}),
             json!({"cmd": "group.set", "group": 0, "visble": false}),
             json!({"cmd": "group.set", "group": 0, "locked": "yes"}),
+            json!({"cmd": "floor.place"}),
+            json!({"cmd": "floor.place", "group": 99}),
+            json!({"cmd": "floor.place", "group": 0, "shape": 99}),
+            json!({"cmd": "floor.place", "group": 0, "shape": -1, "extra": 1}),
             json!({"cmd": "shape.set", "group": 0, "shape": 0, "locked": 3}),
             json!({"cmd": "group.add", "nmae": "x"}),
             json!({"cmd": "piece.reload"}),

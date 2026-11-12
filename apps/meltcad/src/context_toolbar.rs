@@ -28,6 +28,7 @@ enum Action {
     Frame,
     Rename,
     Flip,
+    Floor,
 }
 
 impl Action {
@@ -49,6 +50,7 @@ impl Action {
             Self::Frame => crate::i18n::tr("context_toolbar.frame"),
             Self::Rename => crate::i18n::tr("context_toolbar.rename"),
             Self::Flip => crate::i18n::tr("context_toolbar.flip"),
+            Self::Floor => crate::i18n::tr("floor.button"),
         }
     }
     fn hint(self) -> &'static str {
@@ -69,6 +71,7 @@ impl Action {
             Self::Frame => crate::i18n::tr("context_toolbar.tip_frame"),
             Self::Rename => crate::i18n::tr("context_toolbar.tip_rename"),
             Self::Flip => crate::i18n::tr("context_toolbar.tip_flip"),
+            Self::Floor => crate::i18n::tr("floor.tip"),
         }
     }
 }
@@ -177,7 +180,7 @@ impl App {
             return vec![Action::Extrude, Action::EditSketch];
         }
         if !self.multi.is_empty() {
-            return vec![Action::AlignX, Action::AlignY, Action::AlignZ, Action::Group, Action::Duplicate, Action::Delete];
+            return vec![Action::AlignX, Action::AlignY, Action::AlignZ, Action::Floor, Action::Group, Action::Duplicate, Action::Delete];
         }
         if self.sk.edit.is_some() {
             return vec![Action::EndSketchEdit, Action::Delete];
@@ -187,12 +190,21 @@ impl App {
             && crate::sketch::editable(sh)
         {
             return if sh.kind == Kind::Extrude {
-                vec![Action::EditSketch, Action::ExtrudeSettings, Action::Move, Action::Rotate, Action::Scale, Action::Duplicate, Action::Delete]
+                vec![
+                    Action::EditSketch,
+                    Action::ExtrudeSettings,
+                    Action::Move,
+                    Action::Rotate,
+                    Action::Scale,
+                    Action::Floor,
+                    Action::Duplicate,
+                    Action::Delete,
+                ]
             } else {
-                vec![Action::EditSketch, Action::Move, Action::Rotate, Action::Scale, Action::Duplicate, Action::Delete]
+                vec![Action::EditSketch, Action::Move, Action::Rotate, Action::Scale, Action::Floor, Action::Duplicate, Action::Delete]
             };
         }
-        vec![Action::Move, Action::Rotate, Action::Scale, Action::Duplicate, Action::Delete]
+        vec![Action::Move, Action::Rotate, Action::Scale, Action::Floor, Action::Duplicate, Action::Delete]
     }
 
     /// A reason makes the action disabled rather than silently ignoring it.
@@ -290,6 +302,7 @@ impl App {
                 }
                 None
             }
+            Action::Floor => None,
             Action::Frame | Action::Rename | Action::Flip => {
                 if !self.multi.is_empty() && matches!(action, Action::Flip | Action::Frame) {
                     Some(crate::i18n::tr("context_toolbar.err_select_one_multi"))
@@ -331,6 +344,17 @@ impl App {
             Action::Frame => self.frame_view(true),
             Action::Rename => self.renaming = self.sel,
             Action::Flip => self.flip_op(),
+            Action::Floor => self.place_on_floor(ctx),
+        }
+    }
+
+    /// Put the selection on the floor: its lowest point comes to height 0.
+    pub(crate) fn place_on_floor(&mut self, ctx: &egui::Context) {
+        let targets = crate::floor::targets(&self.scene, &self.picks());
+        match crate::floor::drop(&mut self.scene, &targets) {
+            Ok(d) if d.abs() < 0.005 => self.say(ctx, crate::i18n::tr("floor.already")),
+            Ok(_) => self.say(ctx, crate::i18n::tr("floor.done")),
+            Err(why) => self.say(ctx, why),
         }
     }
 
@@ -477,7 +501,13 @@ mod tests {
     #[test]
     fn actions_follow_kind_and_preserve_original_shortcut_tools() {
         let mut app = App::new(true, None);
-        assert_eq!(app.toolbar_actions(), vec![Action::Move, Action::Rotate, Action::Scale, Action::Duplicate, Action::Delete]);
+        assert_eq!(app.toolbar_actions(), vec![Action::Move, Action::Rotate, Action::Scale, Action::Floor, Action::Duplicate, Action::Delete]);
+        // the floor button puts the starting sphere on the floor
+        let ctx = egui::Context::default();
+        app.scene.groups[0].shapes[0].pos[2] += 40.0;
+        app.run_toolbar_action(Action::Floor, &ctx);
+        let bottom = crate::floor::lowest(&app.scene, &[(0, 0)]).expect("a bottom");
+        assert!(bottom.abs() < 0.1, "bottom at {bottom}");
         let ctx = egui::Context::default();
         app.run_toolbar_action(Action::Rotate, &ctx);
         assert_eq!(app.tool, Tool::Rotate);
@@ -664,7 +694,7 @@ mod tests {
             app.select_pick(Some(Pick::Shape(0, i % 160)), false);
             app.sync_multi_selection();
             let actions = app.toolbar_actions();
-            assert_eq!(actions.len(), 5);
+            assert_eq!(actions.len(), 6);
             for action in actions {
                 let _ = app.disabled_reason(action);
             }

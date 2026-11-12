@@ -3620,6 +3620,20 @@ const TABLE: &[Entry] = &[
         "上のグループがロック中です。グループの鍵を押すと外れます",
         "Locked by the group above. Press the padlock of that group to unlock"
     ),
+    e!("floor.button", "床に置く", "Place on floor"),
+    e!(
+        "floor.tip",
+        "いちばん下が床（高さ 0）に付くように、まっすぐ上下に動かします",
+        "Moves it straight up or down until its lowest point touches the floor (height 0)"
+    ),
+    e!("floor.done", "床に置きました", "Placed on the floor"),
+    e!("floor.already", "もう床に付いています", "It is already on the floor"),
+    e!("floor.err_nothing", "床に置く形を選んでください", "Select a shape to place on the floor"),
+    e!(
+        "floor.err_no_surface",
+        "この選択は床に置けません（表面のある形を選んでください）",
+        "This selection cannot be placed on the floor (select a solid shape)"
+    ),
 ];
 
 fn index() -> &'static HashMap<&'static str, &'static Entry> {
