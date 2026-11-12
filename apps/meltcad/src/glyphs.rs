@@ -240,6 +240,21 @@ pub fn eye(p: &Painter, rect: Rect, open: bool, ink: Color32) {
     }
 }
 
+/// A padlock: closed when `locked`, with the shackle swung open otherwise.
+pub fn lock(p: &Painter, rect: Rect, locked: bool, ink: Color32) {
+    let f = frame(rect);
+    let s = pen(rect, ink);
+    let body = [(0.2, 0.46), (0.8, 0.46), (0.8, 0.9), (0.2, 0.9)];
+    polygon(p, f, &body, ink.gamma_multiply(if locked { 0.32 } else { 0.12 }), Stroke::NONE);
+    outline(p, f, &body, s);
+    if locked {
+        polyline(p, f, &[(0.32, 0.46), (0.32, 0.3), (0.4, 0.16), (0.5, 0.12), (0.6, 0.16), (0.68, 0.3), (0.68, 0.46)], s);
+        p.circle_filled(at(f, 0.5, 0.68), f.width() * 0.07, ink);
+    } else {
+        polyline(p, f, &[(0.32, 0.46), (0.32, 0.26), (0.22, 0.12), (0.1, 0.08), (0.0, 0.14), (-0.06, 0.28)], s);
+    }
+}
+
 /// Folder outline with a tab.
 pub fn group(p: &Painter, rect: Rect, ink: Color32) {
     let f = frame(rect);

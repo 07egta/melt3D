@@ -219,13 +219,13 @@ fn encode_stream(
     let total = count.min(u32::MAX as usize) as u32;
     for i in 0..count {
         if !progress(i as u32, total) {
-            return Err("Stopped".into());
+            return Err(crate::i18n::tr("cpu_render.stopped").into());
         }
         draw(i, &mut pic)?;
         writer.push(&pic, delay_of(i))?;
     }
     if !progress(total, total) {
-        return Err("Stopped".into());
+        return Err(crate::i18n::tr("cpu_render.stopped").into());
     }
     // the picture buffer above, plus the writer's index picture
     let peak = 1 + writer.peak_pictures();
@@ -243,7 +243,7 @@ pub fn animation_gif(
 ) -> Result<Vec<u8>, String> {
     let a = &scene.anim;
     if a.is_empty() {
-        return Err("No poses yet. Set a pose first".into());
+        return Err(crate::i18n::tr("cpu_render.no_poses").into());
     }
     let w = size.clamp(64, 640);
     let h = (w * 3 / 4).max(48);
@@ -282,7 +282,7 @@ pub fn animation_gif(
         frames.len(),
         |i| delays.get(i).copied().unwrap_or(2),
         |i, out| {
-            let Some(&f) = frames.get(i) else { return Err("Missing frame".into()) };
+            let Some(&f) = frames.get(i) else { return Err(crate::i18n::tr("cpu_render.missing_frame").into()) };
             let mut s = scene.clone();
             a.apply(&mut s, f);
             match (gpu.as_mut(), pic.as_ref()) {
@@ -293,7 +293,7 @@ pub fn animation_gif(
                     crate::gpu::set_view_flags(&mut globals, crate::perf::view_flags(false, false, pack.glow));
                     g.frame(pic, &globals, false);
                     if out.len() != (w * h * 4) {
-                        return Err("Bad picture size".into());
+                        return Err(crate::i18n::tr("cpu_render.bad_size").into());
                     }
                     g.read_into(pic, out);
                     Ok(())
@@ -309,7 +309,7 @@ pub fn animation_gif(
     // Encoding a complete set of frames may take time; cancellation can arrive
     // while the palette/LZW encoder runs, before the caller writes a file.
     if !progress(frames.len() as u32, frames.len() as u32) {
-        return Err("Stopped".into());
+        return Err(crate::i18n::tr("cpu_render.stopped").into());
     }
     Ok(gif)
 }
@@ -455,6 +455,7 @@ mod tests {
 
     #[test]
     fn a_stopped_gif_export_keeps_no_pictures_and_no_output() {
+        crate::i18n::set_language("en");
         let mut drawn = 0;
         let r = encode_stream(
             32,

@@ -22,7 +22,7 @@ pub struct Job {
 /// image has already rendered. Check cancellation again at the I/O boundary.
 fn save_gif_if_active(path: &std::path::Path, bytes: Vec<u8>, cancel: &AtomicBool) -> Result<String, String> {
     if cancel.load(Ordering::Acquire) {
-        return Err("Stopped".into());
+        return Err(crate::i18n::tr("job.stopped").into());
     }
     std::fs::write(path, bytes).map_err(|e| e.to_string())?;
     Ok(path.display().to_string())
@@ -77,15 +77,15 @@ impl App {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
             match job.rx.try_recv() {
                 Ok(result) => Some(result),
-                Err(TryRecvError::Disconnected) => Some(Err("GIF worker ended without a result".to_string())),
+                Err(TryRecvError::Disconnected) => Some(Err(crate::i18n::tr("gif.no_result").to_string())),
                 Err(TryRecvError::Empty) => None,
             }
         });
         if let Some(result) = finished {
             self.an.job = None;
             match result {
-                Ok(path) => self.say(ctx, format!("Saved {path}")),
-                Err(error) => self.say(ctx, format!("GIF not saved: {error}")),
+                Ok(path) => self.say(ctx, crate::i18n::fill("saved.path", &[&path])),
+                Err(error) => self.say(ctx, crate::i18n::fill("gif.failed", &[&error])),
             }
         }
     }
@@ -181,11 +181,11 @@ impl App {
                     ui.horizontal(|ui| {
                         let done = job.done.load(Ordering::Relaxed);
                         let total = job.total.load(Ordering::Relaxed);
-                        ui.label(format!("Making GIF {done}/{total}"));
-                        if ui.button("Cancel GIF").clicked() {
+                        ui.label(crate::i18n::fill("gif.making", &[&done, &total]));
+                        if ui.button(crate::i18n::tr("gif.cancel")).clicked() {
                             job.cancel.store(true, Ordering::Relaxed);
                         }
-                        if ui.button("Show timeline").clicked() {
+                        if ui.button(crate::i18n::tr("anim.show_timeline")).clicked() {
                             reopen_timeline = true;
                         }
                     });
@@ -226,59 +226,65 @@ impl App {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 8.0;
                     if ui
-                        .add_enabled(!editing, egui::Button::new(if self.an.playing { "Stop" } else { "Play" }))
-                        .on_hover_text("Play the animation (Space)")
-                        .on_disabled_hover_text("Finish or cancel the sketch or drag before playing")
+                        .add_enabled(
+                            !editing,
+                            egui::Button::new(if self.an.playing { crate::i18n::tr("action.stop") } else { crate::i18n::tr("anim.play") }),
+                        )
+                        .on_hover_text(crate::i18n::tr("anim.play.tip"))
+                        .on_disabled_hover_text(crate::i18n::tr("anim.busy_play"))
                         .clicked()
                     {
                         self.an.playing = !self.an.playing;
                         self.an.clock = self.an.frame as f32;
                         self.an.last_t = None;
                     }
-                    if ui.add_enabled(!editing, egui::Button::new("|<")).on_hover_text("Back to the first frame").clicked() {
+                    if ui.add_enabled(!editing, egui::Button::new("|<")).on_hover_text(crate::i18n::tr("anim.first")).clicked() {
                         self.an.playing = false;
                         go = Some(0);
                     }
                     let has_pose = self.scene.anim.key_frames().contains(&self.an.frame);
                     if ui
-                        .add_enabled(!editing, egui::Button::new(RichText::new("Set pose").color(style::ACCENT)))
-                        .on_hover_text("Keep the scene as it is now at this frame")
-                        .on_disabled_hover_text("Finish or cancel the sketch or drag before recording a pose")
+                        .add_enabled(!editing, egui::Button::new(RichText::new(crate::i18n::tr("anim.set_pose")).color(style::ACCENT)))
+                        .on_hover_text(crate::i18n::tr("anim.set_pose.tip"))
+                        .on_disabled_hover_text(crate::i18n::tr("anim.busy_pose"))
                         .clicked()
                     {
                         pose_now = true;
                     }
-                    if ui.add_enabled(!editing && has_pose, egui::Button::new("Delete pose")).on_hover_text("Forget the pose at this frame").clicked()
+                    if ui
+                        .add_enabled(!editing && has_pose, egui::Button::new(crate::i18n::tr("anim.delete_pose")))
+                        .on_hover_text(crate::i18n::tr("anim.delete_pose.tip"))
+                        .clicked()
                     {
                         delete_now = true;
                     }
-                    ui.label(RichText::new(format!("Frame {} / {}", self.an.frame + 1, length)).size(12.0).color(style::DIM));
+                    ui.label(RichText::new(crate::i18n::fill("anim.frame", &[&(self.an.frame + 1), &length])).size(12.0).color(style::DIM));
                     ui.separator();
                     let a = &mut self.scene.anim;
                     // Shortening below the last pose would squash poses together; delete them first.
                     let shortest = a.key_frames().last().map_or(2, |l| (l + 1).max(2));
-                    ui.label(RichText::new("Speed").size(12.0).color(style::DIM));
+                    ui.label(RichText::new(crate::i18n::tr("anim.speed")).size(12.0).color(style::DIM));
                     ui.add_enabled(!editing, egui::DragValue::new(&mut a.fps).range(1..=60).suffix(" fps"));
-                    ui.label(RichText::new("Length").size(12.0).color(style::DIM));
+                    ui.label(RichText::new(crate::i18n::tr("anim.length")).size(12.0).color(style::DIM));
                     ui.add_enabled(!editing, egui::DragValue::new(&mut a.length).range(shortest..=crate::anim::MAX_FRAMES).suffix(" frames"));
-                    ui.add_enabled(!editing, egui::Checkbox::new(&mut a.clay, "Clay"))
-                        .on_hover_text("Hold each pose for a few frames, like stop motion");
+                    ui.add_enabled(!editing, egui::Checkbox::new(&mut a.clay, crate::i18n::tr("anim.clay")))
+                        .on_hover_text(crate::i18n::tr("anim.clay.tip"));
                     ui.separator();
                     if let Some(job) = &self.an.job {
                         let (d, t) = (job.done.load(Ordering::Relaxed), job.total.load(Ordering::Relaxed));
-                        ui.label(RichText::new(format!("Making GIF {d}/{t}")).size(12.0).color(style::DIM));
-                        if ui.button("Cancel").clicked() {
+                        ui.label(RichText::new(crate::i18n::fill("gif.making2", &[&d, &t])).size(12.0).color(style::DIM));
+                        if ui.button(crate::i18n::tr("prefs.cancel")).clicked() {
                             job.cancel.store(true, Ordering::Relaxed);
                         }
                     } else if ui
-                        .add_enabled(!self.scene.anim.is_empty(), egui::Button::new("Export GIF"))
-                        .on_hover_text("Save the animation as a moving picture")
+                        .add_enabled(!self.scene.anim.is_empty(), egui::Button::new(crate::i18n::tr("gif.export")))
+                        .on_hover_text(crate::i18n::tr("gif.export.tip"))
                         .clicked()
                     {
                         start_gif = true;
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button("Close").clicked() {
+                        if ui.button(crate::i18n::tr("guide.done.close")).clicked() {
                             self.an.open = false;
                             self.an.playing = false;
                         }

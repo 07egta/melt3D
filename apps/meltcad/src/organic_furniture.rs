@@ -31,9 +31,9 @@ impl Design {
 
     pub fn label(self) -> &'static str {
         match self {
-            Self::Stool => "まるいスツール",
-            Self::SideTable => "サイドテーブル",
-            Self::Pedestal => "一本脚テーブル",
+            Self::Stool => crate::i18n::tr("organic_furniture.stool"),
+            Self::SideTable => crate::i18n::tr("organic_furniture.side_table"),
+            Self::Pedestal => crate::i18n::tr("organic_furniture.pedestal_table"),
         }
     }
 }
@@ -58,9 +58,9 @@ impl Legs {
     }
     pub fn label(self) -> &'static str {
         match self {
-            Self::Three => "3本",
-            Self::Four => "4本",
-            Self::Centre => "中央1本",
+            Self::Three => crate::i18n::tr("organic_furniture.legs_three"),
+            Self::Four => crate::i18n::tr("organic_furniture.legs_four"),
+            Self::Centre => crate::i18n::tr("organic_furniture.leg_center"),
         }
     }
 }
@@ -222,7 +222,7 @@ fn generate(mut p: Settings) -> Vec<Shape> {
     let m = material_of(p.design);
     let mut out = Vec::with_capacity(p.part_count());
 
-    let mut seat = part(Kind::Box, "座面".into(), 0, [0.0, 0.0, p.height - t * 0.5], m, 0.0);
+    let mut seat = part(Kind::Box, crate::i18n::tr("organic_furniture.seat").into(), 0, [0.0, 0.0, p.height - t * 0.5], m, 0.0);
     seat.size = [p.width + p.puff * 0.7, p.depth + p.puff * 0.7, t];
     seat.round = (t * 0.48 * p.roundness).min(p.width.min(p.depth) * 0.22);
     out.push(seat);
@@ -232,18 +232,26 @@ fn generate(mut p: Settings) -> Vec<Shape> {
         // Capsule spans approximately floor Z=0 up to the underside of the seat.
         // Overlap is independent of smooth-union strength (important when melt.amount=0).
         let top = under + radius * 0.72;
-        let mut leg = part(Kind::Capsule, format!("脚 {}", i + 1), out.len(), [x, y, top * 0.5], m, join);
+        let mut leg = part(Kind::Capsule, crate::i18n::fill("organic_furniture.leg_n", &[&(i + 1)]), out.len(), [x, y, top * 0.5], m, join);
         leg.size = [radius, (top - radius * 2.0).max(0.1), 1.0];
         out.push(leg);
 
-        let mut shoulder = part(Kind::Sphere, format!("脚の付け根 {}", i + 1), out.len(), [x, y, under - radius * 0.08], m, join);
+        let mut shoulder =
+            part(Kind::Sphere, crate::i18n::fill("organic_furniture.leg_joint_n", &[&(i + 1)]), out.len(), [x, y, under - radius * 0.08], m, join);
         shoulder.size = [radius * (1.35 + 0.16 * p.roundness) + p.puff * 0.28, 1.0, 1.0];
         out.push(shoulder);
     }
 
     if p.legs == Legs::Centre {
         let foot_height = (p.leg_diameter * 0.42).clamp(10.0, 45.0);
-        let mut foot = part(Kind::Cylinder, "一本脚の土台".into(), out.len(), [support_xy(p, 0)[0], support_xy(p, 0)[1], foot_height * 0.5], m, join);
+        let mut foot = part(
+            Kind::Cylinder,
+            crate::i18n::tr("organic_furniture.pedestal_base").into(),
+            out.len(),
+            [support_xy(p, 0)[0], support_xy(p, 0)[1], foot_height * 0.5],
+            m,
+            join,
+        );
         foot.size = [p.width.min(p.depth) * 0.29, foot_height, 1.0];
         foot.round = foot_height * 0.46 * p.roundness;
         out.push(foot);
@@ -288,9 +296,9 @@ fn transformed_parts(old: Settings, new: Settings, previous: &Shape) -> Vec<Shap
 
 /// Apply only when user edited a parameter; no SDF / scene rebuild on unchanged UI frames.
 pub fn update_group(g: &mut Group, mut settings: Settings) -> Result<(), &'static str> {
-    let old = g.organic_furniture.ok_or("このグループは家具プリセットではありません")?;
+    let old = g.organic_furniture.ok_or(crate::i18n::tr("organic_furniture.not_preset"))?;
     if !is_generated_group(g, &old) {
-        return Err("パーツの順序や数が変わっています。もとの形を残すため、自動更新はしません");
+        return Err(crate::i18n::tr("organic_furniture.parts_changed"));
     }
     settings.sanitize();
     if settings == old {
@@ -319,14 +327,14 @@ pub fn insert(app: &mut App, ctx: &egui::Context, design: Design) {
     let mut p = Settings::preset(design);
     p.sanitize();
     if app.scene.groups.len() >= MAX_GROUPS {
-        app.say(ctx, format!("グループは{MAX_GROUPS}個までです"));
+        app.say(ctx, crate::i18n::fill("organic_furniture.limit_groups", &[&MAX_GROUPS]));
         return;
     }
     if app.scene.shape_count().saturating_add(p.part_count()) > MAX_SHAPES {
-        app.say(ctx, format!("形は{MAX_SHAPES}個までです"));
+        app.say(ctx, crate::i18n::fill("organic_furniture.limit_shapes_short", &[&MAX_SHAPES]));
         return;
     }
-    let mut gr = Group::new(format!("Organic Furniture・{}", design.label()));
+    let mut gr = Group::new(crate::i18n::fill("organic_furniture.group_name", &[&design.label()]));
     gr.organic_furniture = Some(p);
     gr.shapes = generate(p);
     let at = [app.cam.target[0] + p.width * 0.60, app.cam.target[1]];
@@ -345,11 +353,11 @@ pub fn insert(app: &mut App, ctx: &egui::Context, design: Design) {
 pub fn inspector(app: &mut App, ui: &mut Ui, g: usize) {
     let Some(before) = app.scene.groups.get(g).and_then(|gr| gr.organic_furniture) else { return };
     ui.separator();
-    ui.label(RichText::new("Organic Furniture｜有機家具").strong().size(13.0));
-    ui.label(RichText::new("数字を動かすと形が変わります。すべてmm単位です。").size(11.0).color(style::DIM));
+    ui.label(RichText::new(crate::i18n::tr("organic_furniture.heading")).strong().size(13.0));
+    ui.label(RichText::new(crate::i18n::tr("organic_furniture.hint_units")).size(11.0).color(style::DIM));
     let mut p = before;
 
-    ui.label(RichText::new("デザインの出発点").color(style::DIM).size(11.5));
+    ui.label(RichText::new(crate::i18n::tr("organic_furniture.design_start")).color(style::DIM).size(11.5));
     ui.horizontal_wrapped(|ui| {
         for design in Design::ALL {
             if style::pill(ui, design.label(), p.design == design).clicked() && p.design != design {
@@ -358,7 +366,7 @@ pub fn inspector(app: &mut App, ui: &mut Ui, g: usize) {
         }
     });
     ui.horizontal(|ui| {
-        ui.label("脚の本数");
+        ui.label(crate::i18n::tr("organic_furniture.leg_count"));
         for mode in Legs::ALL {
             if style::pill(ui, mode.label(), p.legs == mode).clicked() {
                 p.legs = mode;
@@ -367,37 +375,40 @@ pub fn inspector(app: &mut App, ui: &mut Ui, g: usize) {
     });
     egui::Grid::new("organic_furniture_dims").num_columns(2).spacing([8.0, 5.0]).show(ui, |ui| {
         for (label, value, min, max) in [
-            ("座面の幅", &mut p.width, MIN_WIDTH, MAX_WIDTH),
-            ("座面の奥行", &mut p.depth, MIN_WIDTH, MAX_WIDTH),
-            ("高さ", &mut p.height, 65.0, 1000.0),
-            ("脚の太さ", &mut p.leg_diameter, 8.0, 300.0),
+            (crate::i18n::tr("organic_furniture.seat_width"), &mut p.width, MIN_WIDTH, MAX_WIDTH),
+            (crate::i18n::tr("organic_furniture.seat_depth"), &mut p.depth, MIN_WIDTH, MAX_WIDTH),
+            (crate::i18n::tr("organic_furniture.height"), &mut p.height, 65.0, 1000.0),
+            (crate::i18n::tr("organic_furniture.leg_thickness"), &mut p.leg_diameter, 8.0, 300.0),
         ] {
             ui.label(label);
             ui.add(egui::DragValue::new(value).speed(0.8).range(min..=max).suffix(" mm").max_decimals(1));
             ui.end_row();
         }
     });
-    style::labeled_slider(ui, "全体の丸み", &mut p.roundness, 0.0..=1.0, "0は控えめ、1は角と接合部がなめらか");
-    style::labeled_slider(ui, "膨張量", &mut p.puff, 0.0..=20.0, "座面と脚の付け根をぷっくりさせる (mm)。指定幅より少し大きくなります");
-    style::checkbox(ui, &mut p.symmetric, "左右対称").on_hover_text("オフにすると、脚を少しずらした非対称デザインになります");
-    ui.label(RichText::new("座面と脚は重ねて滑らかに結合します。パーツ個別の変形は、数値を再変更すると更新されます。").size(11.0).color(style::DIM));
+    style::labeled_slider(
+        ui,
+        crate::i18n::tr("organic_furniture.overall_roundness"),
+        &mut p.roundness,
+        0.0..=1.0,
+        crate::i18n::tr("organic_furniture.roundness_hint"),
+    );
+    style::labeled_slider(ui, crate::i18n::tr("organic_furniture.puff"), &mut p.puff, 0.0..=20.0, crate::i18n::tr("organic_furniture.puff_hint"));
+    style::checkbox(ui, &mut p.symmetric, crate::i18n::tr("organic_furniture.symmetric"))
+        .on_hover_text(crate::i18n::tr("organic_furniture.symmetric_hint"));
+    ui.label(RichText::new(crate::i18n::tr("organic_furniture.blend_note")).size(11.0).color(style::DIM));
 
     p.sanitize();
     if p != before {
         let resulting_shapes = app.scene.shape_count().saturating_sub(before.part_count()).saturating_add(p.part_count());
         if resulting_shapes > MAX_SHAPES {
-            app.notice = Some(format!("形は{MAX_SHAPES}個までです。ほかの形を減らしてください"));
+            app.notice = Some(crate::i18n::fill("organic_furniture.limit_shapes_reduce", &[&MAX_SHAPES]));
         } else if let Some(group) = app.scene.groups.get_mut(g)
             && let Err(e) = update_group(group, p)
         {
             app.notice = Some(e.to_string());
         }
     }
-    ui.label(
-        RichText::new("3Dプリントした形や実物の強度・転倒安全性は保証しません。家具として使う前に別途構造検証が必要です。")
-            .size(11.0)
-            .color(style::DIM),
-    );
+    ui.label(RichText::new(crate::i18n::tr("organic_furniture.safety_note")).size(11.0).color(style::DIM));
 }
 
 #[cfg(test)]

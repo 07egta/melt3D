@@ -137,7 +137,7 @@ impl Anim {
     pub fn capture(&mut self, scene: &mut Scene, frame: u32) -> Result<(), String> {
         let frame = frame.min(self.length.saturating_sub(1));
         if self.key_frames().len() >= MAX_KEYS && !self.key_frames().contains(&frame) {
-            return Err(format!("Up to {MAX_KEYS} poses"));
+            return Err(crate::i18n::fill("anim.max_poses", &[&MAX_KEYS]));
         }
         let ids: Vec<(usize, usize)> = scene.groups.iter().enumerate().flat_map(|(g, gr)| (0..gr.shapes.len()).map(move |s| (g, s))).collect();
         // Callers temporarily take Scene.anim out to avoid borrowing conflicts.
@@ -176,7 +176,7 @@ impl Anim {
         }
         put(&mut self.melt, frame, MeltKey { amount: scene.melt.amount, drip: scene.melt.drip, ripple: scene.melt.ripple });
         if skipped > 0 {
-            return Err(format!("Only {MAX_TRACKS} shapes can be animated; {skipped} shape(s) were not recorded"));
+            return Err(crate::i18n::fill("anim.max_tracks", &[&MAX_TRACKS, &skipped]));
         }
         Ok(())
     }

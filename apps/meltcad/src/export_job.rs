@@ -787,12 +787,12 @@ impl Job {
 
     pub fn phase_name(&self) -> &'static str {
         if self.writing.load(Ordering::Acquire) == 2 {
-            return "Writing the file (this last step cannot be stopped)…";
+            return crate::i18n::tr("export_job.writing_no_stop");
         }
         if self.writing.load(Ordering::Acquire) == 1 {
             return "Waiting for the stop to finish…";
         }
-        NAMES.get(self.progress.phase() as usize).copied().unwrap_or("Building…")
+        NAMES.get(self.progress.phase() as usize).copied().unwrap_or(crate::i18n::tr("export_job.building"))
     }
 }
 

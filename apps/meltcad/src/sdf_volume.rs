@@ -452,7 +452,7 @@ fn crossings_for_axis(tris: &[Tri], g: &Grid, axis: usize, threads: usize, ctl: 
                         }
                         let rows = (j1 - j0 + 1) * (k1 - k0 + 1);
                         if used.fetch_add(rows.min(1 << 20), Ordering::Relaxed) > MAX_CROSSINGS {
-                            return Err("Mesh is too complex to check inside and outside".into());
+                            return Err(crate::i18n::tr("sdf_volume.err_too_complex").into());
                         }
                         let sign: i8 = if n[axis] < 0.0 { 1 } else { -1 };
                         for kk in k0..=k1 {
@@ -477,13 +477,13 @@ fn crossings_for_axis(tris: &[Tri], g: &Grid, axis: usize, threads: usize, ctl: 
                 })
             })
             .collect();
-        handles.into_iter().map(|h| h.join().unwrap_or_else(|_| Err("Internal error".to_string()))).collect()
+        handles.into_iter().map(|h| h.join().unwrap_or_else(|_| Err(crate::i18n::tr("sdf_volume.err_internal").to_string()))).collect()
     });
     let mut all: Vec<Crossing> = Vec::new();
     for p in parts {
         all.extend(p?);
         if all.len() > MAX_CROSSINGS {
-            return Err("Mesh is too complex to check inside and outside".into());
+            return Err(crate::i18n::tr("sdf_volume.err_too_complex").into());
         }
     }
     all.sort_unstable_by(|x, y| x.0.cmp(&y.0).then(x.1.total_cmp(&y.1)));
@@ -600,7 +600,7 @@ pub fn bake_with(mesh: &ImportedMesh, opts: &BakeOptions, ctl: &BakeControl) -> 
         }
         res *= 0.93;
         if res < 4.0 {
-            return Err("Can't make the grid".into());
+            return Err(crate::i18n::tr("sdf_volume.err_grid").into());
         }
     };
     let origin = [0, 1, 2].map(|a| {
