@@ -184,8 +184,14 @@ impl App {
             });
         }
         let keep = crate::backend::kept_options(&std::env::args_os().collect::<Vec<_>>());
-        let r = Relaunch { choice: choice.map(|b| b.name().to_string()), tried: Vec::new(), file: self.path.clone(), keep };
-        match crate::backend::relaunch(&r) {
+        let request = Relaunch { choice: choice.map(|b| b.name().to_string()), tried: Vec::new(), file: self.path.clone(), keep };
+        let request = if current_failed && let Some(alternate) = choice {
+            let request = Relaunch { tried: crate::backend::tried_now(), ..request };
+            crate::backend::recovery_relaunch(cfg!(target_os = "windows"), alternate, current, request)
+        } else {
+            request
+        };
+        match crate::backend::relaunch(&request) {
             Ok(()) => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
             Err(e) => {
                 crate::gpu_log::log(&format!("restart failed: {e}"));
@@ -198,12 +204,11 @@ impl App {
     pub fn next_backend(&self) -> Option<Backend> {
         let mut settings = crate::backend::load();
         let mut tried = crate::backend::tried_now();
-        if let Some(b) = self.current_backend() {
+        let current = self.current_backend();
+        if let Some(b) = current {
             settings.note_failed(b);
-            if !tried.contains(&b) {
-                tried.push(b);
-            }
         }
+        crate::backend::record_attempt(&mut tried, current);
         let windows = cfg!(target_os = "windows");
         match crate::backend::plan(Choice::Auto, windows, &settings, &tried) {
             Some(crate::backend::Plan::Only(b)) => Some(b),

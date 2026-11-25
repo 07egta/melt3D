@@ -9,8 +9,17 @@ use std::sync::atomic::{AtomicU64, Ordering};
 static SERIAL: AtomicU64 = AtomicU64::new(0);
 
 fn sibling(path: &Path, kind: &str) -> PathBuf {
-    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "output".into());
-    path.with_file_name(format!(".{name}.yura-{kind}-{}-{}", std::process::id(), SERIAL.fetch_add(1, Ordering::Relaxed)))
+    // The destination may already use almost all of the filesystem's filename limit.
+    // Keep a recognizable prefix for manual backup recovery, but count Unicode scalars
+    // so even a four-byte character cannot make the work filename too long.
+    let name = path.file_name().map(|n| n.to_string_lossy()).unwrap_or_else(|| "output".into());
+    let prefix: String = name.chars().take(40).collect();
+    loop {
+        let candidate = format!(".{prefix}.yura-{kind}-{}-{}", std::process::id(), SERIAL.fetch_add(1, Ordering::Relaxed));
+        if !name.eq_ignore_ascii_case(&candidate) {
+            return path.with_file_name(candidate);
+        }
+    }
 }
 
 fn backup_file(source: &Path, backup: &Path) -> io::Result<()> {
@@ -195,6 +204,21 @@ mod tests {
         assert_eq!(bytes, 1000);
         assert_eq!(std::fs::read(&path).expect("new file"), vec![7; 1000]);
         assert_eq!(std::fs::read_dir(&dir).expect("dir").count(), 1);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn export_can_replace_a_file_with_a_long_valid_name() {
+        let dir = base();
+        std::fs::create_dir_all(&dir).expect("test directory");
+        let path = dir.join(format!("{}.stl", "a".repeat(246)));
+        std::fs::write(&path, b"old").expect("the filesystem accepts the chosen filename");
+
+        let bytes = write_files(&[(path.clone(), b"new export".to_vec())], &|| false, &|| true, &|_| {}).expect("commit");
+
+        assert_eq!(bytes, 10);
+        assert_eq!(std::fs::read(&path).expect("the export replaced the file"), b"new export");
+        assert_eq!(std::fs::read_dir(&dir).expect("dir").count(), 1, "no leaked stage or backup");
         let _ = std::fs::remove_dir_all(dir);
     }
 

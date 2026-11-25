@@ -1530,6 +1530,30 @@ mod tests {
     }
 
     #[test]
+    fn a_long_obj_name_commits_the_geometry_and_its_material_file() {
+        let dir = std::env::temp_dir().join(format!("yura_export_long_obj_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("test directory");
+        let path = dir.join(format!("{}.obj", "a".repeat(246)));
+        let material_path = obj_material_path(&path);
+        std::fs::write(&path, b"old geometry").expect("seed geometry");
+        std::fs::write(&material_path, b"old material").expect("seed material");
+
+        let scene = scene_of(vec![sphere_at(0.0, 10.0, red())]);
+        let options = opts(Format::Obj, 1.0);
+        let report = run(&scene, Picks::default(), &options, &path, &Progress::new(), &AtomicU8::new(0), Instant::now()).expect("export");
+
+        let obj = std::fs::read_to_string(&path).expect("read the exported geometry");
+        let mtl = std::fs::read_to_string(&material_path).expect("read the exported materials");
+        let material_name = material_path.file_name().expect("material name").to_string_lossy();
+        assert!(obj.lines().any(|line| line.strip_prefix("mtllib ") == Some(material_name.as_ref())));
+        assert_eq!(obj.lines().filter(|line| line.starts_with("f ")).count(), report.tris);
+        assert!(report.tris > 0 && mtl.contains("newmtl"));
+        assert_eq!((obj.len() + mtl.len()) as u64, report.bytes);
+        assert_eq!(std::fs::read_dir(&dir).expect("list").count(), 2, "no stage or backup remains");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn the_worker_reports_progress_and_can_be_cancelled() {
         let dir = std::env::temp_dir().join(format!("yura_export_c_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();

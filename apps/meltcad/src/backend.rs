@@ -309,6 +309,25 @@ pub struct Relaunch {
     pub keep: Vec<OsString>,
 }
 
+/// Record a failed backend for the rest of this launch, without adding duplicates.
+pub fn record_attempt(tried: &mut Vec<Backend>, current: Option<Backend>) {
+    if let Some(current) = current
+        && !tried.contains(&current)
+    {
+        tried.push(current);
+    }
+}
+
+/// Keep the recovery chain when the graphics failure card restarts the window.
+/// Windows Auto uses the remembered ranking to pick the alternate and can carry on if that
+/// device cannot even open a window. Other platforms have no ordered Auto recovery, so
+/// explicitly select the alternate there, while remembering earlier attempts for the card.
+pub fn recovery_relaunch(windows: bool, alternate: Backend, current: Option<Backend>, mut request: Relaunch) -> Relaunch {
+    record_attempt(&mut request.tried, current);
+    request.choice = if windows { None } else { Some(alternate.name().into()) };
+    request
+}
+
 /// The options of a command line a restart passes on: `--control` with its port.
 pub fn kept_options(args: &[OsString]) -> Vec<OsString> {
     let mut out = Vec::new();
@@ -513,6 +532,43 @@ mod tests {
             "no loop on an explicit choice"
         );
         assert_eq!(next_after_failure(Choice::Auto, false, &s, &[], Plan::Default), None, "the defaults are tried once");
+    }
+
+    #[test]
+    fn a_window_recovery_keeps_failed_modes_and_lets_windows_try_the_rest() {
+        // The first process already failed Vulkan before creating a DirectX 12 window.
+        // That window's shader then failed, and the user chose its recovery card.
+        let file = PathBuf::from("作品.meltcad");
+        let keep = vec!["--control".into(), "7777".into()];
+        let request = Relaunch { choice: None, tried: vec![Backend::Vulkan], file: Some(file.clone()), keep: keep.clone() };
+        let request = recovery_relaunch(true, Backend::Gl, Some(Backend::Dx12), request);
+        let (args, envs) = relaunch_args(&request);
+        assert_eq!(args, [keep, vec![file.into_os_string()]].concat());
+        assert_eq!(envs, vec![("MELTCAD_BACKEND".into(), String::new()), ("MELTCAD_BACKEND_TRIED".into(), "vulkan,dx12".into())]);
+
+        // An old saved "last successful" Vulkan must not be retried in this launch.
+        let settings = Settings { last_ok: Some(Backend::Vulkan), failed: vec![Backend::Dx12], easy: false };
+        let choice = parse_choice(Some(&envs[0].1)).expect("automatic choice");
+        let tried = parse_tried(Some(&envs[1].1));
+        let next = plan(choice, true, &settings, &tried).expect("OpenGL is left");
+        assert_eq!(next, Plan::Only(Backend::Gl));
+        assert_eq!(next_after_failure(choice, true, &settings, &tried, next), None, "no loop");
+
+        // If a second process still fails before showing a window, the automatic mode
+        // continues rather than stopping at the backend first selected by the card.
+        let request = Relaunch { choice: None, tried: Vec::new(), file: None, keep: Vec::new() };
+        let request = recovery_relaunch(true, Backend::Dx12, Some(Backend::Vulkan), request);
+        let settings = Settings::default();
+        assert_eq!(plan(Choice::Auto, true, &settings, &request.tried), Some(Plan::Only(Backend::Dx12)));
+        assert_eq!(next_after_failure(Choice::Auto, true, &settings, &request.tried, Plan::Only(Backend::Dx12)), Some(Plan::Only(Backend::Gl)));
+    }
+
+    #[test]
+    fn a_non_windows_window_recovery_forces_the_alternate_without_losing_its_attempts() {
+        let request = Relaunch { choice: None, tried: vec![Backend::Metal], file: None, keep: Vec::new() };
+        let request = recovery_relaunch(false, Backend::Gl, Some(Backend::Metal), request);
+        assert_eq!(request.choice.as_deref(), Some("gl"));
+        assert_eq!(request.tried, vec![Backend::Metal], "an already-recorded mode is not added twice");
     }
 
     #[test]

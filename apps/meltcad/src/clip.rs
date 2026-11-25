@@ -106,6 +106,10 @@ fn add_shapes(app: &mut App, mut shapes: Vec<Shape>) -> Result<String, String> {
     crate::mesh::can_add(&app.scene, shapes.iter())?;
     shifted(&mut shapes, STEP);
     for s in &mut shapes {
+        // A pasted shape is a new object. If it appears before its source in the
+        // scene, frame-end ID deduplication would otherwise let it steal the
+        // source's identity and any patterns or animation tracks pointing there.
+        s.uid = 0;
         s.name = format!("{} copy", s.name.trim_end_matches(" copy"));
     }
     let group = &mut app.scene.groups[g];
@@ -334,6 +338,65 @@ mod tests {
         assert_eq!(app.scene.groups[0].shapes[0].kind, Kind::Sphere);
         let reopened = Scene::from_json(&app.scene.to_json()).unwrap();
         assert_eq!(crate::pattern::link_source(&reopened, 2), Some(1));
+    }
+
+    #[test]
+    fn pasting_a_scene_keeps_its_patterns_on_the_imported_geometry_and_path() {
+        use crate::pattern::{self, PathMode};
+
+        for per_shape in [false, true] {
+            for pattern in [
+                Pattern::Geometry { source: Source::Shape(8), orient: false },
+                Pattern::Geometry { source: Source::Group(7), orient: false },
+                Pattern::Path { source: 8, count: 3, mode: PathMode::Even, step: 10.0, align: false },
+            ] {
+                let make_source = |x| {
+                    let mut group = Group::new("Path source");
+                    group.uid = 7;
+                    let mut guide = Shape::new(Kind::Sweep, [x, 0.0, 20.0], Default::default());
+                    guide.uid = 8;
+                    guide.path = vec![[0.0, 0.0, 0.0, 2.0], [20.0, 0.0, 0.0, 2.0]];
+                    group.shapes.push(guide);
+                    group
+                };
+                let mut follower = Group::new("Patterned shape");
+                let mut shape = Shape::new(Kind::Sphere, [0.0; 3], Default::default());
+                if per_shape {
+                    shape.pattern = Some(pattern.clone());
+                } else {
+                    follower.pattern = Some(pattern.clone());
+                }
+                follower.shapes.push(shape);
+                let incoming = Scene { groups: vec![make_source(100.0), follower], ..Scene::default() };
+                let instances = |scene: &Scene, gi| {
+                    let drawn = pattern::resolve(scene).into_iter().find(|g| g.gi == gi).expect("pattern group is visible");
+                    if per_shape { drawn.shape_insts.into_iter().next().expect("shape has a pattern") } else { drawn.insts }
+                };
+                let expected = instances(&incoming, 1);
+                assert!(!expected.is_empty());
+
+                let mut app = App::new(true, None);
+                app.scene.groups = vec![make_source(-100.0)]; // same local IDs, visibly different placement
+                app.sel = None;
+                let original = app.scene.groups[0].clone();
+                assert!(paste_text(&mut app, &incoming.to_json()).is_ok());
+                assert_eq!(app.scene.groups[0], original, "the destination's geometry is unchanged");
+                assert_ne!(app.scene.groups[1].shapes[0].uid, original.shapes[0].uid);
+                assert_eq!(instances(&app.scene, 2), expected, "{pattern:?}, per_shape={per_shape}");
+            }
+        }
+    }
+
+    #[test]
+    fn pasting_a_scene_rejects_overflow_in_a_shape_pattern_reference_before_editing() {
+        let mut app = App::new(true, None);
+        app.scene.groups[0].uid = 1;
+        let mut incoming = Scene::default();
+        incoming.groups[0].shapes[0].pattern = Some(Pattern::Geometry { source: Source::Shape(u32::MAX), orient: false });
+        let before = app.scene.clone();
+        let error = paste_text(&mut app, &incoming.to_json()).expect_err("a pattern reference cannot overflow");
+        assert_eq!(error, "Too many identifiers to paste safely");
+        assert_eq!(app.scene, before);
     }
 
     #[test]

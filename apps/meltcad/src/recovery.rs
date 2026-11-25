@@ -1,7 +1,6 @@
 //! Crash recovery and atomic project writes for the MELTCAD (YuraCAD) desktop app.
 //! Recovery snapshots are NOT project saves: restoring always opens an unsaved copy.
 
-use std::ffi::OsString;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
@@ -89,9 +88,12 @@ fn write_temp(path: &Path, bytes: &[u8]) -> io::Result<PathBuf> {
     let parent = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or_else(|| Path::new("."));
     let name = path.file_name().ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "The save location has no file name"))?;
     for _ in 0..16 {
-        let mut tmp_name = OsString::from(".");
-        tmp_name.push(name);
-        tmp_name.push(format!(".{}.tmp", unique_id()));
+        // A destination may already use almost the maximum filename length.
+        // The staged file needs only a short, unique name on the same filesystem.
+        let tmp_name = format!(".yura-project-{}.tmp", unique_id());
+        if name.eq_ignore_ascii_case(std::ffi::OsStr::new(&tmp_name)) {
+            continue;
+        }
         let tmp = parent.join(tmp_name);
         let mut file = match OpenOptions::new().write(true).create_new(true).open(&tmp) {
             Ok(file) => file,
@@ -641,6 +643,21 @@ mod tests {
         assert_eq!(err.kind(), io::ErrorKind::Other);
         assert_eq!(fs::read(&original).expect("read"), b"old project");
         assert_eq!(fs::read_dir(&root).expect("list").count(), 1, "failed temp file is deleted");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_project_with_a_long_valid_name_can_be_saved_and_reopened() {
+        let root = temp_root();
+        fs::create_dir_all(&root).expect("create root");
+        let path = root.join(format!("{}.meltcad", "a".repeat(242)));
+        fs::write(&path, b"old project").expect("the filesystem accepts the chosen filename");
+        let scene = edited();
+
+        save_project(&path, &scene).expect("save");
+
+        assert_eq!(read_project(&path).expect("reopen").0, scene);
+        assert_eq!(fs::read_dir(&root).expect("list").count(), 1, "no leaked temporary file");
         let _ = fs::remove_dir_all(root);
     }
 

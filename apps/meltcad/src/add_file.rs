@@ -25,10 +25,10 @@ pub(crate) fn max_uid(sc: &Scene) -> u32 {
         .unwrap_or(0);
     for g in &sc.groups {
         max = max.max(g.instance_of.unwrap_or(0));
-        match &g.pattern {
-            Some(Pattern::Path { source, .. }) => max = max.max(*source),
-            Some(Pattern::Geometry { source: Source::Shape(uid) | Source::Group(uid), .. }) => max = max.max(*uid),
-            _ => {}
+        for pattern in g.pattern.iter().chain(g.shapes.iter().filter_map(|s| s.pattern.as_ref())) {
+            if let Some(Source::Shape(uid) | Source::Group(uid)) = pattern.follows() {
+                max = max.max(uid);
+            }
         }
     }
     max
@@ -42,18 +42,19 @@ pub(crate) fn shift_uids(sc: &mut Scene, by: u32) {
             *u = u.saturating_add(by);
         }
     };
+    let bump_pattern = |pattern: &mut Option<Pattern>| match pattern {
+        Some(Pattern::Path { source, .. } | Pattern::Geometry { source: Source::Shape(source) | Source::Group(source), .. }) => bump(source),
+        _ => {}
+    };
     for g in &mut sc.groups {
         bump(&mut g.uid);
         if let Some(i) = &mut g.instance_of {
             bump(i);
         }
-        match &mut g.pattern {
-            Some(Pattern::Path { source, .. }) => bump(source),
-            Some(Pattern::Geometry { source: Source::Shape(u) | Source::Group(u), .. }) => bump(u),
-            _ => {}
-        }
+        bump_pattern(&mut g.pattern);
         for s in &mut g.shapes {
             bump(&mut s.uid);
+            bump_pattern(&mut s.pattern);
         }
     }
 }

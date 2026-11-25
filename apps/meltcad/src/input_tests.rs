@@ -206,6 +206,43 @@ impl Rig {
 }
 
 #[test]
+fn pasting_a_shape_into_an_earlier_group_does_not_steal_its_pattern() {
+    use crate::model::Group;
+    use crate::pattern::{self, Pattern, Source};
+
+    let mut r = Rig::new();
+    let mut source = Group::new("Source");
+    source.shapes.push(Shape::new(Kind::Box, [55.0, 0.0, 20.0], Material::default()));
+    r.app.scene.groups.push(source);
+    let uid = r.app.scene.ensure_shape_uid(1, 0).expect("the original has an identity");
+    let mut follower = Group::new("Pattern");
+    follower.shapes.push(Shape::new(Kind::Sphere, [0.0; 3], Material::default()));
+    follower.pattern = Some(Pattern::Geometry { source: Source::Shape(uid), orient: false });
+    r.app.scene.groups.push(follower);
+    let instances = |app: &App| pattern::resolve(&app.scene).into_iter().find(|group| group.gi == 2).expect("the pattern group is visible").insts;
+    let original_placement = instances(&r.app);
+    assert_eq!(original_placement.len(), 8, "the pattern follows the eight corners of the original box");
+
+    r.app.sel = Some(Pick::Shape(1, 0));
+    r.frame(vec![Event::Copy]);
+    let clipboard = r.app.clipboard.clone().expect("the editor copied the source");
+    r.app.sel = Some(Pick::Group(0));
+    let before_paste_undo = r.app.undo_depth();
+    r.frame(vec![Event::Paste(clipboard)]);
+    assert_eq!(r.app.sel, Some(Pick::Shape(0, 1)), "paste selected the new shape in the earlier group");
+    assert_eq!(r.app.undo_depth(), before_paste_undo + 1, "paste is one undo step");
+
+    r.key(egui::Key::ArrowRight);
+    assert_eq!(r.app.scene.shape(0, 1).expect("the copy exists").pos[0], 56.0, "the key moved the copy");
+    assert_eq!(instances(&r.app), original_placement, "moving the copy must not move the original's pattern");
+    assert_eq!(r.app.scene.shape_by_uid(uid), Some((1, 0)), "the original retains its identity");
+
+    r.app.sel = Some(Pick::Shape(1, 0));
+    r.key(egui::Key::ArrowRight);
+    assert_ne!(instances(&r.app), original_placement, "the pattern still follows the original's edits");
+}
+
+#[test]
 fn settings_is_the_last_item_in_the_app_menu_and_opens_the_window() {
     let mut r = Rig::new();
     r.full_ui = true;
